@@ -16,6 +16,14 @@
       "bundleIdentifier": "com.tradeready.app",
       "buildNumber": "1"
     },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.tradeready.app",
+      "versionCode": 1
+    },
     "plugins": [
       "expo-document-picker",
       "expo-mail-composer",
