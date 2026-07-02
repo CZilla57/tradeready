@@ -7,6 +7,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { enqueue, enqueueCollectionChanges, trySync } from "./sync";
+import { syncNotifications } from "./notifications";
 
 // Fields that must live in the iOS Keychain / Android Keystore rather than
 // plain AsyncStorage. Both load/saveSettings strip these out before hitting
@@ -61,6 +62,7 @@ export async function saveInvoices(invoices) {
   await AsyncStorage.setItem(KEYS.invoices, JSON.stringify(invoices));
   await enqueueCollectionChanges('invoices', old, invoices);
   trySync();
+  syncNotifications();
 }
 
 // --- Settings ---
@@ -89,6 +91,7 @@ export async function saveSettings(settings) {
   ]);
   await enqueue('settings', 'upsert', 'settings', publicSettings);
   trySync();
+  syncNotifications();
 }
 
 // --- Jobs ---

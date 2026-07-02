@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { supabase } from '../utils/supabase';
 import { initialSync, syncIfOnline } from '../utils/sync';
+import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
 
 const AuthContext = createContext(null);
 
@@ -10,15 +11,23 @@ export function AuthProvider({ children }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
+    setupNotifications();
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setInitializing(false);
-      if (session?.user?.id) initialSync(session.user.id);
+      if (session?.user?.id) {
+        initialSync(session.user.id);
+        requestPermissions().then(granted => { if (granted) syncNotifications(); });
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session?.user?.id) initialSync(session.user.id);
+      if (session?.user?.id) {
+        initialSync(session.user.id);
+        requestPermissions().then(granted => { if (granted) syncNotifications(); });
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -29,6 +38,7 @@ export function AuthProvider({ children }) {
     const sub = AppState.addEventListener('change', state => {
       if (state === 'active' && session?.user?.id) {
         syncIfOnline(session.user.id);
+        syncNotifications();
       }
     });
     return () => sub.remove();
