@@ -6,6 +6,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import { enqueue, enqueueCollectionChanges, trySync } from "./sync";
 
 // Fields that must live in the iOS Keychain / Android Keystore rather than
 // plain AsyncStorage. Both load/saveSettings strip these out before hitting
@@ -55,7 +56,11 @@ export async function loadInvoices() {
 }
 
 export async function saveInvoices(invoices) {
+  const oldRaw = await AsyncStorage.getItem(KEYS.invoices);
+  const old = oldRaw ? JSON.parse(oldRaw) : [];
   await AsyncStorage.setItem(KEYS.invoices, JSON.stringify(invoices));
+  await enqueueCollectionChanges('invoices', old, invoices);
+  trySync();
 }
 
 // --- Settings ---
@@ -74,7 +79,6 @@ export async function loadSettings() {
 }
 
 export async function saveSettings(settings) {
-  // Split sensitive fields out before writing to AsyncStorage
   const publicSettings = { ...settings };
   for (const field of SECURE_FIELDS) {
     delete publicSettings[field];
@@ -83,6 +87,8 @@ export async function saveSettings(settings) {
     AsyncStorage.setItem(KEYS.settings, JSON.stringify(publicSettings)),
     saveSecureFields(settings),
   ]);
+  await enqueue('settings', 'upsert', 'settings', publicSettings);
+  trySync();
 }
 
 // --- Jobs ---
@@ -97,7 +103,11 @@ export async function loadJobs() {
 }
 
 export async function saveJobs(jobs) {
+  const oldRaw = await AsyncStorage.getItem(KEYS.jobs);
+  const old = oldRaw ? JSON.parse(oldRaw) : [];
   await AsyncStorage.setItem(KEYS.jobs, JSON.stringify(jobs));
+  await enqueueCollectionChanges('jobs', old, jobs);
+  trySync();
 }
 
 // --- Customers ---
@@ -112,7 +122,11 @@ export async function loadCustomers() {
 }
 
 export async function saveCustomers(customers) {
+  const oldRaw = await AsyncStorage.getItem(KEYS.customers);
+  const old = oldRaw ? JSON.parse(oldRaw) : [];
   await AsyncStorage.setItem(KEYS.customers, JSON.stringify(customers));
+  await enqueueCollectionChanges('customers', old, customers);
+  trySync();
 }
 
 // --- Expenses ---
@@ -127,7 +141,11 @@ export async function loadExpenses() {
 }
 
 export async function saveExpenses(expenses) {
+  const oldRaw = await AsyncStorage.getItem(KEYS.expenses);
+  const old = oldRaw ? JSON.parse(oldRaw) : [];
   await AsyncStorage.setItem(KEYS.expenses, JSON.stringify(expenses));
+  await enqueueCollectionChanges('expenses', old, expenses);
+  trySync();
 }
 
 // --- Customer Notes ---
@@ -155,8 +173,11 @@ export async function loadNoteForCustomer(customerName) {
 
 export async function saveNoteForCustomer(customerName, note) {
   const notes = await loadCustomerNotes();
-  notes[customerName.trim().toLowerCase()] = note;
+  const key = customerName.trim().toLowerCase();
+  notes[key] = note;
   await saveCustomerNotes(notes);
+  await enqueue('customer_notes', 'upsert', key, note);
+  trySync();
 }
 
 // --- Defaults ---

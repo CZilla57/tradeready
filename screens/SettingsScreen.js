@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadSettings, saveSettings } from "../utils/storage";
+import { supabase } from "../utils/supabase";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
@@ -199,6 +200,18 @@ export default function SettingsScreen() {
 
         <Button label="Save settings" onPress={handleSave} loading={saving} />
 
+        <TouchableOpacity
+          style={styles.signOutBtn}
+          onPress={() =>
+            Alert.alert("Sign out", "Are you sure you want to sign out?", [
+              { text: "Cancel", style: "cancel" },
+              { text: "Sign out", style: "destructive", onPress: () => supabase.auth.signOut() },
+            ])
+          }
+        >
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -303,6 +316,16 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   addRuleBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
+  signOutBtn: {
+    marginTop: spacing.lg,
+    paddingVertical: 14,
+    alignItems: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.danger + "50",
+    backgroundColor: colors.dangerBg,
+  },
+  signOutText: { color: colors.danger, fontSize: fontSize.md, fontWeight: "600" },
   tradeGrid: {
     flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4,
   },

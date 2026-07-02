@@ -36,7 +36,9 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Text } from "react-native";
+import { Text, View, ActivityIndicator } from "react-native";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import AuthScreen from "./screens/AuthScreen";
  
 // Screens
 import InvoicesScreen              from "./screens/InvoicesScreen";
@@ -140,44 +142,70 @@ const TAB_ICONS = {
 };
  
 // ── Root ──────────────────────────────────────────────────────────────────────
- 
+
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarIcon: ({ focused }) => (
+          <Text style={{ fontSize: 20 }}>
+            {focused
+              ? TAB_ICONS[route.name]?.active
+              : TAB_ICONS[route.name]?.inactive}
+          </Text>
+        ),
+        tabBarActiveTintColor:   colors.accent,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
+        tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: "500" },
+      })}
+    >
+      <Tab.Screen name="Today"     component={TodayTab} />
+      <Tab.Screen name="Jobs"      component={JobsTab} />
+      <Tab.Screen name="Invoices"  component={InvoicesTab} />
+      <Tab.Screen name="Customers" component={CustomersTab} />
+      <Tab.Screen name="Money"     component={MoneyTab} />
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{
+          headerShown:      true,
+          title:            "Settings",
+          headerStyle:      { backgroundColor: colors.surface },
+          headerTitleStyle: { color: colors.textPrimary, fontWeight: "600" },
+        }}
+      />
+    </Tab.Navigator>
+  );
+}
+
+function RootNavigator() {
+  const { session, initializing } = useAuth();
+
+  if (initializing) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background }}>
+        <ActivityIndicator color={colors.accent} size="large" />
+      </View>
+    );
+  }
+
+  if (!session) return <AuthScreen />;
+
+  return (
+    <NavigationContainer>
+      <MainTabs />
+    </NavigationContainer>
+  );
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <Tab.Navigator
-          screenOptions={({ route }) => ({
-            headerShown: false,
-            tabBarIcon: ({ focused }) => (
-              <Text style={{ fontSize: 20 }}>
-                {focused
-                  ? TAB_ICONS[route.name]?.active
-                  : TAB_ICONS[route.name]?.inactive}
-              </Text>
-            ),
-            tabBarActiveTintColor:  colors.accent,
-            tabBarInactiveTintColor: colors.textMuted,
-            tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
-            tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: "500" },
-          })}
-        >
- 	  <Tab.Screen name="Today"     component={TodayTab} />
-          <Tab.Screen name="Jobs"      component={JobsTab} />
-          <Tab.Screen name="Invoices"  component={InvoicesTab} />
-          <Tab.Screen name="Customers" component={CustomersTab} />
-          <Tab.Screen name="Money"     component={MoneyTab} />
-          <Tab.Screen
-            name="Settings"
-            component={SettingsScreen}
-            options={{
-              headerShown:      true,
-              title:            "Settings",
-              headerStyle:      { backgroundColor: colors.surface },
-              headerTitleStyle: { color: colors.textPrimary, fontWeight: "600" },
-            }}
-          />
-        </Tab.Navigator>
-      </NavigationContainer>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }
