@@ -145,5 +145,6 @@ Write only the message, no commentary.`;
   });
 
   const data = await res.json();
+  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
   return data.content?.map((b) => b.text || "").join("") || "Could not generate message.";
 }
