@@ -58,8 +58,8 @@ export function buildPaymentLink(invoice, provider, providerKey) {
 
 // Calls your Vercel serverless function to get a real Stripe/Square/PayPal link.
 // Replace VERCEL_URL with your actual deployed backend URL.
-const VERCEL_URL = "https://your-project.vercel.app";
-const VERCEL_URL_IS_PLACEHOLDER = VERCEL_URL.includes("your-project");
+const VERCEL_URL = "https://backend-88mlg0243-tradeready1.vercel.app";
+const VERCEL_URL_IS_PLACEHOLDER = false;
 
 export async function fetchPaymentLink(invoice, provider, providerKey) {
   const endpoints = {
@@ -84,6 +84,7 @@ export async function fetchPaymentLink(invoice, provider, providerKey) {
       invoiceNumber: invoice.number,
       description: invoice.desc,
       customerEmail: invoice.email,
+      stripeKey: providerKey,
     }),
   });
 
