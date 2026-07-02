@@ -28,6 +28,12 @@
       "expo-document-picker",
       "expo-mail-composer",
       "@react-native-community/datetimepicker"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "2dcb243e-0753-4c9e-b411-da4a97faa5fa"
+      }
+    },
+    "owner": "czilla57"
   }
 }
