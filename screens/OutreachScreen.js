@@ -48,10 +48,19 @@ export default function OutreachScreen({ route, navigation }) {
 
       // Fetch the payment link from your Vercel backend
       try {
-        const link = await fetchPaymentLink(inv, s.provider, s.providerKey);
-        setPaymentLink(link);
-      } catch {
-        setPaymentLink("https://yourpaymentpage.com");
+        if (!s.providerKey) {
+          Alert.alert(
+            "Payment key missing",
+            "Go to Settings and paste your Stripe secret key (starts with sk_) to generate real payment links.",
+          );
+          setPaymentLink("");
+        } else {
+          const link = await fetchPaymentLink(inv, s.provider, s.providerKey);
+          setPaymentLink(link);
+        }
+      } catch (err) {
+        Alert.alert("Payment link error", err?.message || "Could not generate payment link. Check your Stripe key in Settings.");
+        setPaymentLink("");
       }
     }
     load();

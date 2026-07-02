@@ -58,7 +58,7 @@ export function buildPaymentLink(invoice, provider, providerKey) {
 
 // Calls your Vercel serverless function to get a real Stripe/Square/PayPal link.
 // Replace VERCEL_URL with your actual deployed backend URL.
-const VERCEL_URL = "https://backend-88mlg0243-tradeready1.vercel.app";
+const VERCEL_URL = "https://backend-tradeready1.vercel.app";
 const VERCEL_URL_IS_PLACEHOLDER = false;
 
 export async function fetchPaymentLink(invoice, provider, providerKey) {
@@ -89,12 +89,52 @@ export async function fetchPaymentLink(invoice, provider, providerKey) {
   });
 
   const data = await res.json();
-  if (data.error) throw new Error(data.error);
+  if (data.error) {
+    const msg = typeof data.error === "string"
+      ? data.error
+      : data.error?.message || JSON.stringify(data.error);
+    throw new Error(msg);
+  }
   return data.url;
 }
 
+function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan }) {
+  const days = daysPastDue(invoice.due);
+  const amt = formatCurrency(invoice.amount);
+  const overdueText = days > 0 ? `${days} days overdue` : days === 0 ? 'due today' : `due in ${Math.abs(days)} days`;
+
+  let planText = '';
+  if (paymentPlan?.enabled) {
+    const per = (invoice.amount / parseInt(paymentPlan.installments)).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+    planText = ` We can also arrange ${paymentPlan.installments} payments of ${per} ${paymentPlan.frequency.toLowerCase()} if that works better for you.`;
+  }
+
+  if (channel === 'text') {
+    return `Hi ${invoice.customer}, this is ${biz.businessName}. Invoice ${invoice.number} for ${amt} is ${overdueText}.${planText} Pay here: ${paymentLink} — ${biz.phone}`;
+  }
+
+  return `Subject: Payment reminder – ${invoice.number}
+
+Hi ${invoice.customer},
+
+I hope you're doing well. I'm reaching out regarding invoice ${invoice.number} for ${amt}, which is currently ${overdueText}.
+
+You can pay securely online here:
+Pay now → ${paymentLink}
+${planText ? `\n${planText}\n` : ''}
+If you have any questions or concerns, please don't hesitate to get in touch.
+
+${biz.paymentNotes ? `${biz.paymentNotes}\n\n` : ''}Best regards,
+${biz.contactName}
+${biz.businessName}
+${biz.phone}`;
+}
+
 // Calls the Anthropic API to generate a collection message.
+// Falls back to a pre-written template if no API key is set or the call fails.
 export async function generateOutreachMessage({ invoice, channel, biz, paymentLink, paymentPlan, apiKey }) {
+  if (!apiKey) return buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
+
   const days = daysPastDue(invoice.due);
   const amt = formatCurrency(invoice.amount);
   const isText = channel === "text";
@@ -130,21 +170,25 @@ ${
 
 Write only the message, no commentary.`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey || "",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
 
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-  return data.content?.map((b) => b.text || "").join("") || "Could not generate message.";
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    return data.content?.map((b) => b.text || "").join("") || buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
+  } catch {
+    return buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
+  }
 }
