@@ -234,13 +234,23 @@ function EstimateCard({ job, navigation }) {
     <Card style={styles.section}>
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Estimate</Text>
-        <TouchableOpacity
-          onPress={() =>
-            navigation.navigate("PricingCalculator", { jobId: job.id })
-          }
-        >
-          <Text style={styles.editLink}>Edit pricing</Text>
-        </TouchableOpacity>
+        <View style={styles.estimateHeaderActions}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate("PricingCalculator", { jobId: job.id })}
+          >
+            <Text style={styles.editLink}>Edit</Text>
+          </TouchableOpacity>
+          {job.status === "lead" && (
+            <>
+              <Text style={styles.editLinkSep}>·</Text>
+              <TouchableOpacity
+                onPress={() => navigation.navigate("SendEstimate", { jobId: job.id })}
+              >
+                <Text style={styles.editLink}>Send →</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       </View>
 
       <View style={styles.estimateRow}>
@@ -287,12 +297,17 @@ function EstimateCard({ job, navigation }) {
 
 function PrimaryAction({ job, navigation, onAdvance }) {
   const actions = {
-    lead: {
-      label: "Build estimate",
-      onPress: () =>
-        navigation.navigate("PricingCalculator", { jobId: job.id }),
-      variant: "primary",
-    },
+    lead: job.estimateTotal > 0
+      ? {
+          label: "Send estimate →",
+          onPress: () => navigation.navigate("SendEstimate", { jobId: job.id }),
+          variant: "primary",
+        }
+      : {
+          label: "Build estimate",
+          onPress: () => navigation.navigate("PricingCalculator", { jobId: job.id }),
+          variant: "primary",
+        },
     estimate_sent: {
       label: "Mark as approved by customer",
       onPress: onAdvance,
@@ -523,6 +538,8 @@ const styles = StyleSheet.create({
     textTransform: "uppercase", letterSpacing: 0.5,
   },
   editLink: { fontSize: fontSize.sm, color: colors.accent },
+  estimateHeaderActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  editLinkSep: { fontSize: fontSize.sm, color: colors.textMuted },
 
   // Job details
   jobTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 6 },

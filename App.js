@@ -11,6 +11,7 @@
 //   AddCustomer          → AddCustomerScreen     (modal, for "Add new customer" from AddJob)
 //   PricingCalculator    → PricingCalculatorScreen
 //   CreateInvoiceFromJob → CreateInvoiceFromJobScreen
+//   SendEstimate         → SendEstimateScreen
 //   Outreach             → OutreachScreen
 //
 // InvoicesTab:
@@ -59,6 +60,7 @@ import JobDetailScreen             from "./screens/JobDetailScreen";
 import AddJobScreen                from "./screens/AddJobScreen";
 import PricingCalculatorScreen     from "./screens/PricingCalculatorScreen";
 import CreateInvoiceFromJobScreen  from "./screens/CreateInvoiceFromJobScreen";
+import SendEstimateScreen          from "./screens/SendEstimateScreen";
 import CustomersScreen             from "./screens/CustomersScreen";
 import CustomerDetailScreen        from "./screens/CustomerDetailScreen";
 import AddCustomerScreen           from "./screens/AddCustomerScreen";
@@ -114,6 +116,7 @@ function JobsTab() {
       <JobStack.Screen name="AddJob"              component={AddJobScreen}               options={{ presentation: "modal" }} />
       <JobStack.Screen name="PricingCalculator"   component={PricingCalculatorScreen}    options={{ title: "Price this job" }} />
       <JobStack.Screen name="CreateInvoiceFromJob" component={CreateInvoiceFromJobScreen} options={{ title: "Create Invoice" }} />
+      <JobStack.Screen name="SendEstimate"         component={SendEstimateScreen}         options={{ title: "Send Estimate" }} />
       <JobStack.Screen name="AddCustomer"         component={AddCustomerScreen}          options={{ presentation: "modal" }} />
       <JobStack.Screen name="Outreach"            component={OutreachScreen}             options={{ title: "Outreach" }} />
     </JobStack.Navigator>

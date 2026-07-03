@@ -130,6 +130,117 @@ ${biz.businessName}
 ${biz.phone}`;
 }
 
+// ── Estimate messaging ─────────────────────────────────────────────────────
+
+function buildGenericEstimateMessage({ job, customer, channel, biz }) {
+  const laborCost = job.laborHours * job.laborRate;
+  const rawMaterialCost = (job.materials || []).reduce(
+    (s, m) => s + m.quantity * m.unitCost, 0
+  );
+  const materialCost = rawMaterialCost * (1 + job.materialMarkup / 100);
+  const overheadLine = job.estimateTotal - laborCost - materialCost;
+  const hasMaterials = (job.materials || []).length > 0;
+
+  if (channel === 'text') {
+    const parts = [
+      `Hi ${customer.name}, ${biz.businessName} here.`,
+      `Estimate for "${job.title}":`,
+      `Labor: ${formatCurrency(laborCost)}`,
+    ];
+    if (hasMaterials) parts.push(`Materials: ${formatCurrency(materialCost)}`);
+    parts.push(`Total: ${formatCurrency(job.estimateTotal)}.`);
+    parts.push(`Reply YES to approve or call ${biz.phone}.`);
+    return parts.join(' ');
+  }
+
+  const lines = [
+    `Subject: Estimate for ${job.title} – ${biz.businessName}`,
+    '',
+    `Hi ${customer.name},`,
+    '',
+    `Thank you for reaching out. Here's your estimate for ${job.title}:`,
+    '',
+    `  Labor (${job.laborHours} hrs @ $${job.laborRate}/hr)  ${formatCurrency(laborCost)}`,
+  ];
+  if (hasMaterials) {
+    lines.push(`  Materials (${job.materials.length} item${job.materials.length !== 1 ? 's' : ''})  ${formatCurrency(materialCost)}`);
+  }
+  if (overheadLine > 0) {
+    lines.push(`  Overhead & operating costs  ${formatCurrency(overheadLine)}`);
+  }
+  lines.push(`  ${'─'.repeat(36)}`);
+  lines.push(`  TOTAL ESTIMATE  ${formatCurrency(job.estimateTotal)}`);
+  if (job.description) lines.push('', job.description);
+  lines.push(
+    '',
+    'To approve this estimate, simply reply to this email or give me a call.',
+    'I can typically schedule work within a few business days of approval.',
+  );
+  if (biz.paymentNotes) lines.push('', biz.paymentNotes);
+  lines.push('', `Best regards,`, `${biz.contactName}`, `${biz.businessName}`, `${biz.phone}`);
+  return lines.join('\n');
+}
+
+export async function generateEstimateMessage({ job, customer, channel, biz, apiKey }) {
+  if (!apiKey) return buildGenericEstimateMessage({ job, customer, channel, biz });
+
+  const laborCost = job.laborHours * job.laborRate;
+  const rawMaterialCost = (job.materials || []).reduce(
+    (s, m) => s + m.quantity * m.unitCost, 0
+  );
+  const materialCost = rawMaterialCost * (1 + job.materialMarkup / 100);
+  const overheadLine = job.estimateTotal - laborCost - materialCost;
+  const hasMaterials = (job.materials || []).length > 0;
+
+  const breakdown = [
+    `Labor: ${job.laborHours} hrs @ $${job.laborRate}/hr = ${formatCurrency(laborCost)}`,
+    ...(hasMaterials ? [`Materials (${job.materials.length} items, with markup): ${formatCurrency(materialCost)}`] : []),
+    ...(overheadLine > 0 ? [`Overhead & operating costs: ${formatCurrency(overheadLine)}`] : []),
+    `Total estimate: ${formatCurrency(job.estimateTotal)}`,
+  ].join('\n');
+
+  const isText = channel === 'text';
+  const prompt = `Draft a ${isText ? 'text message (SMS)' : 'professional email'} from ${biz.businessName} (${biz.contactName}) presenting a job estimate to a customer.
+
+Customer: ${customer.name}${customer.email ? ` | ${customer.email}` : ''}${customer.phone ? ` | ${customer.phone}` : ''}
+Job: ${job.title}
+${job.description ? `Description: ${job.description}` : ''}
+
+Estimate breakdown:
+${breakdown}
+
+Business contact: ${biz.phone}${biz.email ? ` | ${biz.email}` : ''}
+${biz.paymentNotes ? `Payment terms: ${biz.paymentNotes}` : ''}
+
+${isText
+  ? 'For SMS: Keep under 300 characters. Include the job name, total, and how to approve. Friendly and professional.'
+  : 'For email: First line must be "Subject: [subject line]" then a blank line then the body. Include the full breakdown. Explain how to approve. Professional, warm tone.'
+}
+
+Write only the message, no commentary.`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 800,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    return data.content?.map(b => b.text || '').join('') || buildGenericEstimateMessage({ job, customer, channel, biz });
+  } catch {
+    return buildGenericEstimateMessage({ job, customer, channel, biz });
+  }
+}
+
 // Calls the Anthropic API to generate a collection message.
 // Falls back to a pre-written template if no API key is set or the call fails.
 export async function generateOutreachMessage({ invoice, channel, biz, paymentLink, paymentPlan, apiKey }) {
