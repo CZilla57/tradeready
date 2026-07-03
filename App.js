@@ -50,6 +50,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import { isOnboardingComplete } from "./utils/storage";
+import { setupNotifications } from "./utils/notifications";
  
 // Screens
 import InvoicesScreen              from "./screens/InvoicesScreen";
@@ -250,6 +251,7 @@ function RootNavigator() {
 }
 
 export default function App() {
+  useEffect(() => { setupNotifications(); }, []);
   return (
     <SafeAreaProvider>
       <AuthProvider>

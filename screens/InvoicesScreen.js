@@ -15,6 +15,7 @@ import {
 import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
+import { syncNotifications } from "../utils/notifications";
 import { getStatus, formatCurrency, formatDate } from "../utils/invoiceHelpers";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
@@ -68,6 +69,7 @@ export default function InvoicesScreen({ navigation }) {
           const updated = invoices.map((i) => (i.id === id ? { ...i, paid: true } : i));
           setInvoices(updated);
           await saveInvoices(updated);
+          syncNotifications(); // cancels this invoice's scheduled reminders
         },
       },
     ]);

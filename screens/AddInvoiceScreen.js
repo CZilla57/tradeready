@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadInvoices, saveInvoices } from "../utils/storage";
+import { syncNotifications } from "../utils/notifications";
 import { Button } from "../components/UI";
 import { colors, spacing, radius, fontSize } from "../utils/theme";
 
@@ -82,6 +83,7 @@ export default function AddInvoiceScreen({ route, navigation }) {
     }
 
     await saveInvoices(updated);
+    syncNotifications(); // fire-and-forget — reschedules all reminders
     setSaving(false);
     navigation.goBack();
   }

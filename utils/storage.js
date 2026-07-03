@@ -365,8 +365,8 @@ export function defaultSettings() {
     provider: "stripe",
     providerKey: "",
 
-    // Notifications
-    rules: [{ days: 7 }, { days: 14 }, { days: 30 }],
+    // Notifications — days after due date to send a reminder
+    rules: [{ days: 1 }, { days: 7 }],
 
     // AI
     anthropicKey: "",

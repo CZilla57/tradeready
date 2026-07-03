@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadSettings, saveSettings, clearSampleData } from "../utils/storage";
+import { syncNotifications } from "../utils/notifications";
 import { supabase } from "../utils/supabase";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import { TRADE_TYPES } from "../utils/pricingEngine";
@@ -65,6 +66,7 @@ export default function SettingsScreen() {
   async function handleSave() {
     setSaving(true);
     await saveSettings(s);
+    syncNotifications(); // reschedules based on updated rules
     setSaving(false);
     Alert.alert("Saved", "Your settings have been saved.");
   }
