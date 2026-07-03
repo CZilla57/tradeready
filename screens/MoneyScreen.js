@@ -36,6 +36,7 @@ import {
   Dimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { persistPhoto } from '../utils/photoStorage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { loadInvoices, loadExpenses, saveExpenses, loadJobs } from '../utils/storage';
@@ -490,7 +491,10 @@ const AddExpenseModal = ({ visible, onClose, onSave }) => {
             allowsEditing: true,
             aspect: [4, 3],
           });
-          if (!result.canceled) setReceiptUri(result.assets[0].uri);
+          if (!result.canceled) {
+            const permanent = await persistPhoto(result.assets[0].uri, 'receipts');
+            setReceiptUri(permanent);
+          }
         },
       },
       {
@@ -507,7 +511,10 @@ const AddExpenseModal = ({ visible, onClose, onSave }) => {
             allowsEditing: true,
             aspect: [4, 3],
           });
-          if (!result.canceled) setReceiptUri(result.assets[0].uri);
+          if (!result.canceled) {
+            const permanent = await persistPhoto(result.assets[0].uri, 'receipts');
+            setReceiptUri(permanent);
+          }
         },
       },
       { text: 'Cancel', style: 'cancel' },

@@ -14,7 +14,11 @@ import {
   Linking,
   Platform,
   ActivityIndicator,
+  Image,
+  Modal,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { persistPhoto, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers } from "../utils/storage";
@@ -295,6 +299,63 @@ function EstimateCard({ job, navigation }) {
   );
 }
 
+function PhotosCard({ photos, onAdd, onDelete }) {
+  const [viewerUri, setViewerUri] = useState(null);
+
+  return (
+    <Card style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>
+          Photos{photos.length > 0 ? ` (${photos.length})` : ""}
+        </Text>
+        <TouchableOpacity onPress={onAdd}>
+          <Text style={styles.editLink}>+ Add</Text>
+        </TouchableOpacity>
+      </View>
+
+      {photos.length === 0 ? (
+        <Text style={styles.noPhotosText}>
+          No photos yet. Tap Add to document before/after.
+        </Text>
+      ) : (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
+          {photos.map((uri, i) => (
+            <TouchableOpacity
+              key={i}
+              onPress={() => setViewerUri(uri)}
+              onLongPress={() =>
+                Alert.alert("Delete photo?", "This cannot be undone.", [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Delete", style: "destructive", onPress: () => onDelete(uri) },
+                ])
+              }
+              activeOpacity={0.85}
+            >
+              <Image source={{ uri }} style={styles.photoThumb} />
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
+      <Modal
+        visible={!!viewerUri}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewerUri(null)}
+      >
+        <View style={styles.viewerBg}>
+          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)}>
+            <Text style={styles.viewerCloseText}>✕</Text>
+          </TouchableOpacity>
+          {viewerUri && (
+            <Image source={{ uri: viewerUri }} style={styles.viewerImage} resizeMode="contain" />
+          )}
+        </View>
+      </Modal>
+    </Card>
+  );
+}
+
 function PrimaryAction({ job, navigation, onAdvance }) {
   const actions = {
     lead: job.estimateTotal > 0
@@ -439,6 +500,47 @@ export default function JobDetailScreen({ route, navigation }) {
     ]);
   }
 
+  async function handleAddPhoto() {
+    Alert.alert("Add Photo", null, [
+      {
+        text: "Take Photo",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          if (status !== "granted") {
+            Alert.alert("Permission needed", "Camera access is required to take a photo.");
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.8 });
+          if (!result.canceled) {
+            const uri = await persistPhoto(result.assets[0].uri, "job-photos");
+            await updateJob({ photos: [...(job.photos || []), uri] });
+          }
+        },
+      },
+      {
+        text: "Choose from Library",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (status !== "granted") {
+            Alert.alert("Permission needed", "Photo library access is required.");
+            return;
+          }
+          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.8 });
+          if (!result.canceled) {
+            const uri = await persistPhoto(result.assets[0].uri, "job-photos");
+            await updateJob({ photos: [...(job.photos || []), uri] });
+          }
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  async function handleDeletePhoto(uri) {
+    await updateJob({ photos: (job.photos || []).filter((p) => p !== uri) });
+    await deletePhoto(uri);
+  }
+
   // ── Loading state ──────────────────────────────────────────────────────
 
   if (loading) {
@@ -480,6 +582,11 @@ export default function JobDetailScreen({ route, navigation }) {
         <JobDetailsCard job={job} navigation={navigation} />
         {customer && <CustomerCard customer={customer} />}
         <EstimateCard job={job} navigation={navigation} />
+        <PhotosCard
+          photos={job.photos || []}
+          onAdd={handleAddPhoto}
+          onDelete={handleDeletePhoto}
+        />
 
         <Divider />
 
@@ -567,6 +674,37 @@ const styles = StyleSheet.create({
   estimateTotalLabel: { fontWeight: "700", color: colors.textPrimary },
   estimateTotalValue: { fontWeight: "700", fontSize: fontSize.lg },
   noEstimateText: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 4 },
+
+  // Photos
+  photoStrip: { marginTop: spacing.xs },
+  photoThumb: {
+    width: 88,
+    height: 88,
+    borderRadius: radius.md,
+    marginRight: spacing.sm,
+    backgroundColor: colors.border,
+  },
+  noPhotosText: { fontSize: fontSize.sm, color: colors.textMuted },
+  viewerBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  viewerImage: { width: "100%", height: "80%" },
+  viewerClose: {
+    position: "absolute",
+    top: 56,
+    right: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+  },
+  viewerCloseText: { color: "#fff", fontSize: 16, fontWeight: "600" },
 
   // Delete
   deleteBtn: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
