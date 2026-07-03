@@ -38,7 +38,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { loadInvoices, loadExpenses, saveExpenses } from '../utils/storage';
+import { loadInvoices, loadExpenses, saveExpenses, loadJobs } from '../utils/storage';
 import { colors, spacing, radius, fontSize, shadow } from '../utils/theme';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
@@ -103,6 +103,23 @@ const getDateRange = (filterId) => {
   }
 };
 
+// Get the comparison period immediately before the active filter
+const getPreviousRange = (filterId) => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  switch (filterId) {
+    case 'this_month':
+      return { start: new Date(year, month - 1, 1), end: new Date(year, month, 0, 23, 59, 59) };
+    case 'last_month':
+      return { start: new Date(year, month - 2, 1), end: new Date(year, month - 1, 0, 23, 59, 59) };
+    case 'this_year':
+      return { start: new Date(year - 1, 0, 1), end: new Date(year - 1, 11, 31, 23, 59, 59) };
+    default:
+      return null;
+  }
+};
+
 // Check if a date string falls within a range
 const isInRange = (dateString, start, end) => {
   const d = new Date(dateString);
@@ -129,9 +146,30 @@ const generateId = () => Date.now().toString() + Math.random().toString(36).subs
 
 // P&L summary card at the top of the screen
 // Shows income, expenses, and net profit with color coding
-const SummaryCard = ({ income, expenses, label, onAddExpense }) => {
+const SummaryCard = ({ income, expenses, prevIncome, prevExpenses, label, onAddExpense }) => {
   const profit = income - expenses;
+  const prevProfit = prevIncome !== null && prevExpenses !== null ? prevIncome - prevExpenses : null;
   const isPositive = profit >= 0;
+
+  function changePct(current, prev) {
+    if (prev === null || prev === 0) return null;
+    return Math.round(((current - prev) / Math.abs(prev)) * 100);
+  }
+
+  function ChangeLabel({ pct, inverse }) {
+    if (pct === null || pct === 0) return null;
+    const isUp = pct > 0;
+    const isGood = inverse ? !isUp : isUp;
+    return (
+      <Text style={[styles.changeLabel, { color: isGood ? colors.success : colors.danger }]}>
+        {isUp ? '↑' : '↓'} {Math.abs(pct)}%
+      </Text>
+    );
+  }
+
+  const incomeChange   = changePct(income, prevIncome);
+  const expensesChange = changePct(expenses, prevExpenses);
+  const profitChange   = changePct(profit, prevProfit);
 
   return (
     <View style={styles.summaryCard}>
@@ -149,6 +187,7 @@ const SummaryCard = ({ income, expenses, label, onAddExpense }) => {
           <Text style={[styles.summaryAmount, { color: colors.success }]}>
             {formatCurrency(income)}
           </Text>
+          <ChangeLabel pct={incomeChange} inverse={false} />
         </View>
 
         <View style={styles.summaryDivider} />
@@ -158,6 +197,7 @@ const SummaryCard = ({ income, expenses, label, onAddExpense }) => {
           <Text style={[styles.summaryAmount, { color: colors.danger }]}>
             {formatCurrency(expenses)}
           </Text>
+          <ChangeLabel pct={expensesChange} inverse={true} />
         </View>
 
         <View style={styles.summaryDivider} />
@@ -169,6 +209,7 @@ const SummaryCard = ({ income, expenses, label, onAddExpense }) => {
           }]}>
             {isPositive ? '' : '-'}{formatCurrency(profit)}
           </Text>
+          <ChangeLabel pct={profitChange} inverse={false} />
         </View>
       </View>
 
@@ -273,6 +314,95 @@ const MonthlyChart = ({ invoices, expenses }) => {
           </View>
         ))}
       </View>
+    </View>
+  );
+};
+
+// Accounts receivable + pipeline card — always reflects current state, not period-filtered
+const ReceivablesCard = ({ invoices, jobs }) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const unpaid = invoices.filter(inv => !inv.paid);
+  const totalOutstanding = unpaid.reduce((s, inv) => s + (parseFloat(inv.amount) || 0), 0);
+  const overdue = unpaid.filter(inv => inv.due && new Date(inv.due) < today);
+  const totalOverdue = overdue.reduce((s, inv) => s + (parseFloat(inv.amount) || 0), 0);
+
+  const pipelineJobs = jobs.filter(
+    j => ['lead','estimate_sent','approved','scheduled','in_progress','complete'].includes(j.status) && j.estimateTotal > 0
+  );
+  const pipelineValue = pipelineJobs.reduce((s, j) => s + j.estimateTotal, 0);
+
+  if (totalOutstanding === 0 && pipelineValue === 0) return null;
+
+  return (
+    <View style={styles.receivablesCard}>
+      <Text style={styles.receivablesTitle}>Money owed to you</Text>
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryColumn}>
+          <Text style={styles.summaryColumnLabel}>Outstanding</Text>
+          <Text style={styles.summaryAmount}>{formatCurrency(totalOutstanding)}</Text>
+          <Text style={styles.receivablesSub}>{unpaid.length} invoice{unpaid.length !== 1 ? 's' : ''}</Text>
+        </View>
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryColumn}>
+          <Text style={styles.summaryColumnLabel}>Overdue</Text>
+          <Text style={[styles.summaryAmount, { color: overdue.length > 0 ? colors.danger : colors.textMuted }]}>
+            {formatCurrency(totalOverdue)}
+          </Text>
+          <Text style={styles.receivablesSub}>{overdue.length} invoice{overdue.length !== 1 ? 's' : ''}</Text>
+        </View>
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryColumn}>
+          <Text style={styles.summaryColumnLabel}>Pipeline</Text>
+          <Text style={[styles.summaryAmount, { color: colors.accent }]}>{formatCurrency(pipelineValue)}</Text>
+          <Text style={styles.receivablesSub}>{pipelineJobs.length} job{pipelineJobs.length !== 1 ? 's' : ''}</Text>
+        </View>
+      </View>
+    </View>
+  );
+};
+
+// Top customers by revenue for the selected period
+const TopCustomersCard = ({ invoices, start, end }) => {
+  const revenueByCustomer = {};
+  invoices
+    .filter(inv => inv.paid && inv.due && isInRange(inv.due, start, end))
+    .forEach(inv => {
+      revenueByCustomer[inv.customer] = (revenueByCustomer[inv.customer] || 0) + (parseFloat(inv.amount) || 0);
+    });
+
+  const top = Object.entries(revenueByCustomer)
+    .map(([name, amount]) => ({ name, amount }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5);
+
+  if (top.length === 0) return null;
+
+  const maxAmount = top[0].amount;
+
+  return (
+    <View style={styles.categoryCard}>
+      <Text style={styles.sectionTitle}>Top Customers</Text>
+      {top.map((c, i) => (
+        <View key={c.name} style={styles.categoryBreakdownRow}>
+          <Text style={styles.topCustomerRank}>{i + 1}</Text>
+          <View style={styles.categoryBreakdownInfo}>
+            <View style={styles.categoryBreakdownHeader}>
+              <Text style={styles.categoryBreakdownLabel} numberOfLines={1}>{c.name}</Text>
+              <Text style={[styles.categoryBreakdownAmount, { color: colors.success }]}>
+                {formatCurrency(c.amount)}
+              </Text>
+            </View>
+            <View style={styles.categoryProgressBg}>
+              <View style={[
+                styles.categoryProgressFill,
+                { width: `${(c.amount / maxAmount) * 100}%`, backgroundColor: colors.success, opacity: 1 },
+              ]} />
+            </View>
+          </View>
+        </View>
+      ))}
     </View>
   );
 };
@@ -628,8 +758,9 @@ const AddExpenseModal = ({ visible, onClose, onSave }) => {
 
 export default function MoneyScreen() {
   // Core data state
-  const [invoices, setInvoices]   = useState([]); // loaded from AsyncStorage (the invoice list)
-  const [expenses, setExpenses]   = useState([]); // logged expenses
+  const [invoices, setInvoices]   = useState([]);
+  const [expenses, setExpenses]   = useState([]);
+  const [jobs, setJobs]           = useState([]);
   const [loading, setLoading]     = useState(true);
 
   // UI state
@@ -648,9 +779,10 @@ export default function MoneyScreen() {
 
   const loadData = async () => {
     try {
-      const [invs, exps] = await Promise.all([loadInvoices(), loadExpenses()]);
+      const [invs, exps, jbs] = await Promise.all([loadInvoices(), loadExpenses(), loadJobs()]);
       setInvoices(invs);
       setExpenses(exps);
+      setJobs(jbs);
     } catch (error) {
       console.error('MoneyScreen: failed to load data', error);
     } finally {
@@ -712,6 +844,19 @@ export default function MoneyScreen() {
     return { ...cat, total };
   }).filter(cat => cat.total > 0)
     .sort((a, b) => b.total - a.total);
+
+  // Previous period — for MoM/YoY comparison badges
+  const prevRange = getPreviousRange(activeFilter);
+  const prevFilteredIncome = prevRange
+    ? invoices
+        .filter(inv => inv.paid && inv.due && isInRange(inv.due, prevRange.start, prevRange.end))
+        .reduce((sum, inv) => sum + (parseFloat(inv.amount) || 0), 0)
+    : null;
+  const prevFilteredExpenseTotal = prevRange
+    ? expenses
+        .filter(exp => exp.date && isInRange(exp.date, prevRange.start, prevRange.end))
+        .reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0)
+    : null;
 
   // Active filter label for the summary card
   const activeFilterLabel = DATE_FILTERS.find(f => f.id === activeFilter)?.label || '';
@@ -780,9 +925,14 @@ export default function MoneyScreen() {
           <SummaryCard
             income={filteredIncome}
             expenses={filteredExpenseTotal}
+            prevIncome={prevFilteredIncome}
+            prevExpenses={prevFilteredExpenseTotal}
             label={activeFilterLabel}
             onAddExpense={() => setShowAddModal(true)}
           />
+
+          {/* Receivables + Pipeline */}
+          <ReceivablesCard invoices={invoices} jobs={jobs} />
 
           {/* Monthly Chart */}
           <MonthlyChart invoices={invoices} expenses={expenses} />
@@ -819,6 +969,9 @@ export default function MoneyScreen() {
               })}
             </View>
           )}
+
+          {/* Top Customers */}
+          <TopCustomersCard invoices={invoices} start={start} end={end} />
 
           {/* Empty state — no data yet */}
           {filteredIncome === 0 && filteredExpenseTotal === 0 && (
@@ -1103,6 +1256,48 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: fontSize.xs,
     marginTop: 6,
+  },
+
+  // ── MoM change label
+  changeLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+
+  // ── Receivables card
+  receivablesCard: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...shadow.card,
+  },
+  receivablesTitle: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: spacing.md,
+  },
+  receivablesSub: {
+    color: colors.textMuted,
+    fontSize: fontSize.xs,
+    marginTop: 2,
+  },
+
+  // ── Top customers rank number
+  topCustomerRank: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textMuted,
+    width: 20,
+    marginRight: spacing.sm,
+    textAlign: 'center',
   },
 
   // ── Category breakdown
