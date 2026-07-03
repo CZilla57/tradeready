@@ -18,7 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as MailComposer from "expo-mail-composer";
 import * as SMS from "expo-sms";
 import * as Clipboard from "expo-clipboard";
-import { loadInvoices, loadSettings } from "../utils/storage";
+import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import { getStatus, formatCurrency, generateOutreachMessage, fetchPaymentLink } from "../utils/invoiceHelpers";
 import { Badge, Button, Card, Divider } from "../components/UI";
 import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
@@ -49,7 +49,12 @@ export default function OutreachScreen({ route, navigation }) {
       // Skip payment link fetch for paid invoices
       if (inv?.paid) return;
 
-      // Fetch the payment link from your Vercel backend
+      // Reuse a cached link so we don't create duplicate Stripe objects on every visit
+      if (inv?.paymentLinkUrl) {
+        setPaymentLink(inv.paymentLinkUrl);
+        return;
+      }
+
       try {
         if (!s.providerKey) {
           Alert.alert(
@@ -60,6 +65,11 @@ export default function OutreachScreen({ route, navigation }) {
         } else {
           const link = await fetchPaymentLink(inv, s.provider, s.providerKey);
           setPaymentLink(link);
+          // Persist on the invoice so subsequent opens skip the Stripe API call
+          const allInvoices = await loadInvoices();
+          await saveInvoices(
+            allInvoices.map((i) => (i.id === inv.id ? { ...i, paymentLinkUrl: link } : i))
+          );
         }
       } catch (err) {
         Alert.alert("Payment link error", err?.message || "Could not generate payment link. Check your Stripe key in Settings.");

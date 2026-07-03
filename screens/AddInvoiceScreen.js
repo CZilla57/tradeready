@@ -63,7 +63,7 @@ export default function AddInvoiceScreen({ route, navigation }) {
     }
     setSaving(true);
     const invoices = await loadInvoices();
-    const invoice = {
+    const invoiceFields = {
       customer: customer.trim(),
       number: number.trim() || autoInvoiceNumber(invoices),
       amount: parseFloat(amount) || 0,
@@ -71,15 +71,14 @@ export default function AddInvoiceScreen({ route, navigation }) {
       email: email.trim(),
       phone: phone.trim(),
       desc: desc.trim(),
-      paid: false,
     };
 
     let updated;
     if (isEditing) {
-      updated = invoices.map((i) => (i.id === invoiceId ? { ...i, ...invoice } : i));
+      // Spread only editable fields so paid status is never silently reset
+      updated = invoices.map((i) => (i.id === invoiceId ? { ...i, ...invoiceFields } : i));
     } else {
-      invoice.id = String(Date.now());
-      updated = [...invoices, invoice];
+      updated = [...invoices, { ...invoiceFields, paid: false, id: String(Date.now()) }];
     }
 
     await saveInvoices(updated);

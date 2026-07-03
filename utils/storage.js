@@ -400,6 +400,20 @@ export async function clearSampleData() {
   ]);
 }
 
+// Wipes all local user data on sign-out so the next user to sign in on this
+// device cannot inherit another user's records or trigger an accidental cloud push.
+export async function clearAllUserData() {
+  await AsyncStorage.multiRemove([
+    ...Object.values(KEYS),
+    '__syncQueue',
+    '__lastSyncedAt',
+    'onboardingComplete',
+  ]);
+  for (const field of SECURE_FIELDS) {
+    try { await SecureStore.deleteItemAsync(field); } catch {}
+  }
+}
+
 // --- Daily Operations (Today Tab) ---
 
 export async function loadJobsForDate(dateString) {

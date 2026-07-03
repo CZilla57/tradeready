@@ -64,8 +64,7 @@ const VERCEL_URL_IS_PLACEHOLDER = false;
 export async function fetchPaymentLink(invoice, provider, providerKey) {
   const endpoints = {
     stripe: `${VERCEL_URL}/api/create-payment-link`,
-    square: `${VERCEL_URL}/api/create-square-link`,
-    paypal: `${VERCEL_URL}/api/create-paypal-link`,
+    // square and paypal have no backend implementation yet — fall through to buildPaymentLink
   };
 
   const endpoint = endpoints[provider];

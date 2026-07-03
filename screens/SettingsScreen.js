@@ -13,7 +13,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadSettings, saveSettings, clearSampleData } from "../utils/storage";
+import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { supabase } from "../utils/supabase";
 import { Button, SectionHeader, Divider } from "../components/UI";
@@ -261,7 +261,14 @@ export default function SettingsScreen() {
           onPress={() =>
             Alert.alert("Sign out", "Are you sure you want to sign out?", [
               { text: "Cancel", style: "cancel" },
-              { text: "Sign out", style: "destructive", onPress: () => supabase.auth.signOut() },
+              {
+                text: "Sign out",
+                style: "destructive",
+                onPress: async () => {
+                  await clearAllUserData();
+                  await supabase.auth.signOut();
+                },
+              },
             ])
           }
         >
