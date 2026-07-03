@@ -14,20 +14,24 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadInvoices, saveInvoices } from "../utils/storage";
+import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import { getStatus, formatCurrency, formatDate } from "../utils/invoiceHelpers";
+import { invoiceHtml } from "../utils/pdfTemplates";
+import { exportPdf } from "../utils/pdfExport";
 import { Badge, StatCard, EmptyState, Button } from "../components/UI";
 import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
 
 export default function InvoicesScreen({ navigation }) {
   const [invoices, setInvoices] = useState([]);
   const [search, setSearch] = useState("");
+  const [settings, setSettings] = useState({});
 
   // useFocusEffect reloads invoices every time you come back to this screen,
   // so changes made on other screens (like marking paid) show up immediately.
   useFocusEffect(
     useCallback(() => {
       loadInvoices().then(setInvoices);
+      loadSettings().then(setSettings);
     }, [])
   );
 
@@ -48,6 +52,12 @@ export default function InvoicesScreen({ navigation }) {
   const collected = invoices
     .filter((i) => i.paid)
     .reduce((sum, i) => sum + i.amount, 0);
+
+  async function handleExportPdf(inv) {
+    const html = invoiceHtml(inv, settings);
+    const filename = `Invoice-${inv.number || inv.id}-${inv.customer.replace(/\s+/g, "-")}`;
+    await exportPdf(html, filename);
+  }
 
   async function markPaid(id) {
     Alert.alert("Mark as paid?", "This will mark the invoice as collected.", [
@@ -97,6 +107,9 @@ export default function InvoicesScreen({ navigation }) {
             onPress={() => navigation.navigate("AddInvoice", { invoiceId: inv.id })}
           >
             <Text style={styles.editBtnText}>Edit</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.editBtn} onPress={() => handleExportPdf(inv)}>
+            <Text style={styles.editBtnText}>PDF</Text>
           </TouchableOpacity>
           {!inv.paid && (
             <TouchableOpacity style={styles.paidBtn} onPress={() => markPaid(inv.id)}>

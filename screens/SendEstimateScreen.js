@@ -15,6 +15,8 @@ import * as Clipboard from "expo-clipboard";
 import { loadJobs, loadCustomers, loadSettings, saveJobs } from "../utils/storage";
 import { formatCurrency } from "../utils/pricingEngine";
 import { generateEstimateMessage } from "../utils/invoiceHelpers";
+import { estimateHtml } from "../utils/pdfTemplates";
+import { exportPdf } from "../utils/pdfExport";
 import { Button, Card, Divider } from "../components/UI";
 import { colors, spacing, radius, fontSize } from "../utils/theme";
 
@@ -100,6 +102,13 @@ export default function SendEstimateScreen({ route, navigation }) {
       return;
     }
     await SMS.sendSMSAsync(data.customer.phone ? [data.customer.phone] : [], message);
+  }
+
+  async function handleExportPdf() {
+    const { job, customer, settings } = data;
+    const html = estimateHtml(job, customer, settings);
+    const filename = `Estimate-${job.title.replace(/\s+/g, "-")}-${customer.name.replace(/\s+/g, "-")}`;
+    await exportPdf(html, filename);
   }
 
   async function copyToClipboard() {
@@ -213,13 +222,16 @@ export default function SendEstimateScreen({ route, navigation }) {
           )}
         </Card>
 
-        {/* Copy / Regenerate */}
+        {/* Copy / Regenerate / PDF */}
         <View style={styles.actionRow}>
           <TouchableOpacity style={styles.actionBtn} onPress={copyToClipboard}>
             <Text style={styles.actionBtnText}>{copied ? "✓ Copied" : "Copy"}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.actionBtn} onPress={() => generate()}>
             <Text style={styles.actionBtnText}>↺ Regenerate</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={handleExportPdf}>
+            <Text style={styles.actionBtnText}>Save PDF</Text>
           </TouchableOpacity>
         </View>
 
