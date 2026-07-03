@@ -3,7 +3,7 @@
 // The status pipeline at the top lets the worker advance the job one step at a time.
 // Each status has a contextual primary action button at the bottom that changes based on pipeline position.
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -73,6 +73,15 @@ function formatTime(timeStr) {
   const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
   const period = hour >= 12 ? "PM" : "AM";
   return `${displayHour}:${m} ${period}`;
+}
+
+function formatElapsed(ms) {
+  const totalMins = Math.floor(ms / 60000);
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return "just now";
 }
 
 // Calculates the overhead + margin remainder so the breakdown always sums to the total.
@@ -356,6 +365,109 @@ function PhotosCard({ photos, onAdd, onDelete }) {
   );
 }
 
+const TIME_TRACKING_STATUSES = new Set([
+  "approved", "scheduled", "in_progress", "complete", "invoiced",
+]);
+
+function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }) {
+  const [, setTick] = useState(0);
+
+  const activeSession =
+    sessions.length > 0 && !sessions[sessions.length - 1].end
+      ? sessions[sessions.length - 1]
+      : null;
+  const isClocked = !!activeSession;
+
+  useEffect(() => {
+    if (!isClocked) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isClocked]);
+
+  const completedMs = sessions
+    .filter((s) => s.end)
+    .reduce((sum, s) => sum + (new Date(s.end) - new Date(s.start)), 0);
+
+  const liveMs = isClocked
+    ? completedMs + (Date.now() - new Date(activeSession.start).getTime())
+    : completedMs;
+
+  const totalSecs = Math.floor(liveMs / 1000);
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+
+  const timerStr = isClocked
+    ? h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+      : `${m}:${String(s).padStart(2, "0")}`
+    : h > 0
+    ? `${h}h ${String(m).padStart(2, "0")}m`
+    : liveMs > 0
+    ? `${m}m`
+    : "0m";
+
+  const trackedHours = liveMs / 3600000;
+  const overUnder =
+    estimatedHours > 0 ? trackedHours - estimatedHours : null;
+
+  const sessionCount =
+    sessions.filter((s) => s.end).length + (isClocked ? 1 : 0);
+
+  return (
+    <Card style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Time Tracking</Text>
+        {sessionCount > 0 && (
+          <Text style={styles.sessionCountText}>
+            {sessionCount} session{sessionCount !== 1 ? "s" : ""}
+          </Text>
+        )}
+      </View>
+
+      <View style={styles.timerRow}>
+        <View>
+          <Text style={[styles.timerDisplay, isClocked && styles.timerDisplayActive]}>
+            {timerStr}
+          </Text>
+          {estimatedHours > 0 && (
+            <Text style={styles.timerSub}>
+              est. {estimatedHours}h
+              {overUnder !== null && Math.abs(overUnder) >= 0.05 ? (
+                <Text
+                  style={{
+                    color: overUnder > 0 ? colors.danger : colors.success,
+                  }}
+                >
+                  {"  "}
+                  {overUnder > 0 ? "+" : ""}
+                  {overUnder.toFixed(1)}h
+                </Text>
+              ) : null}
+            </Text>
+          )}
+        </View>
+
+        <TouchableOpacity
+          style={[styles.clockBtn, isClocked && styles.clockBtnOut]}
+          onPress={isClocked ? onClockOut : onClockIn}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.clockBtnText, isClocked && styles.clockBtnTextOut]}>
+            {isClocked ? "⏹  Clock Out" : "▶  Clock In"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {isClocked && activeSession && (
+        <Text style={styles.clockedSince}>
+          Session started {formatElapsed(Date.now() - new Date(activeSession.start).getTime())} ago
+        </Text>
+      )}
+    </Card>
+  );
+}
+
 function PrimaryAction({ job, navigation, onAdvance }) {
   const actions = {
     lead: job.estimateTotal > 0
@@ -541,6 +653,22 @@ export default function JobDetailScreen({ route, navigation }) {
     await deletePhoto(uri);
   }
 
+  async function handleClockIn() {
+    const newSession = { start: new Date().toISOString(), end: null };
+    const timeSessions = [...(job.timeSessions || []), newSession];
+    const changes = { timeSessions };
+    if (job.status === "scheduled") changes.status = "in_progress";
+    await updateJob(changes);
+  }
+
+  async function handleClockOut() {
+    const now = new Date().toISOString();
+    const timeSessions = (job.timeSessions || []).map((s, i, arr) =>
+      i === arr.length - 1 && !s.end ? { ...s, end: now } : s
+    );
+    await updateJob({ timeSessions });
+  }
+
   // ── Loading state ──────────────────────────────────────────────────────
 
   if (loading) {
@@ -582,6 +710,14 @@ export default function JobDetailScreen({ route, navigation }) {
         <JobDetailsCard job={job} navigation={navigation} />
         {customer && <CustomerCard customer={customer} />}
         <EstimateCard job={job} navigation={navigation} />
+        {TIME_TRACKING_STATUSES.has(job.status) && (
+          <TimeTrackingCard
+            sessions={job.timeSessions || []}
+            estimatedHours={job.laborHours || 0}
+            onClockIn={handleClockIn}
+            onClockOut={handleClockOut}
+          />
+        )}
         <PhotosCard
           photos={job.photos || []}
           onAdd={handleAddPhoto}
@@ -705,6 +841,43 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   viewerCloseText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+
+  // Time tracking
+  sessionCountText: { fontSize: fontSize.xs, color: colors.textMuted },
+  timerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  timerDisplay: {
+    fontSize: 32,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    letterSpacing: -0.5,
+    fontVariant: ["tabular-nums"],
+  },
+  timerDisplayActive: { color: colors.accent },
+  timerSub: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
+  clockBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: colors.accentBg,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  clockBtnOut: {
+    backgroundColor: colors.dangerBg,
+    borderColor: colors.danger,
+  },
+  clockBtnText: {
+    fontSize: fontSize.sm,
+    fontWeight: "600",
+    color: colors.accent,
+  },
+  clockBtnTextOut: { color: colors.danger },
+  clockedSince: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 4 },
 
   // Delete
   deleteBtn: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },

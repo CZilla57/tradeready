@@ -26,6 +26,16 @@ import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers } from ".
 import { formatCurrency } from "../utils/pricingEngine";
 import { colors, spacing, radius, fontSize } from "../utils/theme";
  
+function trackedDisplay(sessions = []) {
+  const ms = sessions
+    .filter((s) => s.end)
+    .reduce((sum, s) => sum + (new Date(s.end) - new Date(s.start)), 0);
+  if (ms <= 0) return null;
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 // Default payment terms: 30 days from today
 function defaultDueDate() {
   const d = new Date();
@@ -83,6 +93,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
       setPhone(matchingCustomer?.phone || "");
       setDesc(j.title || "");
       setNumber(nextInvoiceNumber(invoices));
+      // desc stays as job title; tracked hours are shown as a read-only hint below
     } catch (err) {
       console.error("CreateInvoiceFromJobScreen: prefill failed", err);
     } finally {
@@ -167,6 +178,21 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
             </View>
           )}
  
+          {/* Tracked time hint */}
+          {job && (() => {
+            const tracked = trackedDisplay(job.timeSessions);
+            if (!tracked) return null;
+            const estH = job.laborHours || 0;
+            return (
+              <View style={styles.trackBanner}>
+                <Text style={styles.trackBannerText}>
+                  ⏱ Time tracked: {tracked}
+                  {estH > 0 ? ` (estimated ${estH}h)` : ""}. Adjust the amount above if needed.
+                </Text>
+              </View>
+            );
+          })()}
+
           <Field label="Customer name *" value={customer} onChange={setCustomer} placeholder="Jane Smith" />
           <Field label="Invoice #" value={number} onChange={setNumber} placeholder="INV-0001" />
  
@@ -274,6 +300,19 @@ const styles = StyleSheet.create({
   prefillBannerText: {
     fontSize: fontSize.sm,
     color: colors.accent,
+    lineHeight: 20,
+  },
+  trackBanner: {
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.textMuted,
+  },
+  trackBannerText: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
     lineHeight: 20,
   },
  
