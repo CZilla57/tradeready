@@ -73,7 +73,7 @@ export default function AuthScreen() {
       >
         <View style={styles.header}>
           <Text style={styles.appName}>TradeReady</Text>
-          <Text style={styles.tagline}>Run your trade. Get paid.</Text>
+          <Text style={styles.tagline}>Built to Work. Ready to Grow.</Text>
         </View>
 
         <View style={styles.card}>

@@ -12,7 +12,7 @@ import { syncNotifications } from "./notifications";
 // Fields that must live in the iOS Keychain / Android Keystore rather than
 // plain AsyncStorage. Both load/saveSettings strip these out before hitting
 // AsyncStorage and delegate to SecureStore.
-const SECURE_FIELDS = ["providerKey", "anthropicKey"];
+const SECURE_FIELDS = ["providerKey", "anthropicKey", "geminiKey"];
 
 async function loadSecureFields() {
   const result = {};
@@ -370,6 +370,7 @@ export function defaultSettings() {
 
     // AI
     anthropicKey: "",
+    geminiKey: "",
   };
 }
 

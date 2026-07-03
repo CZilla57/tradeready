@@ -231,9 +231,25 @@ export const TRADE_TYPES = [
   { id: "plumbing",    label: "Plumbing" },
   { id: "electrical",  label: "Electrical" },
   { id: "hvac",        label: "HVAC" },
+  { id: "carpenter",   label: "Carpentry" },
+  { id: "bricklayer",  label: "Bricklaying" },
+  { id: "plasterer",   label: "Plastering" },
   { id: "landscaping", label: "Landscaping" },
   { id: "cleaning",    label: "Cleaning" },
   { id: "painting",    label: "Painting" },
   { id: "handyman",    label: "Handyman" },
   { id: "other",       label: "Other" },
 ];
+
+const TRADE_NICKNAMES = {
+  plumbing:   "Dunny",
+  electrical: "Sparky",
+  hvac:       "Fridgie",
+  carpenter:  "Chippy",
+  bricklayer: "Brickie",
+  plasterer:  "Sheetie",
+};
+
+export function getTradeNickname(trade) {
+  return TRADE_NICKNAMES[trade] || "Tradie";
+}

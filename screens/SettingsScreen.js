@@ -19,6 +19,13 @@ import { Button, SectionHeader, Divider } from "../components/UI";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
 
+function formatPhone(raw) {
+  const digits = raw.replace(/\D/g, "").slice(0, 10);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
 const PROVIDERS = [
   { id: "stripe", label: "Stripe", hint: "Paste your Stripe Secret Key (starts with sk_)" },
   { id: "square", label: "Square", hint: "Paste your Square Access Token" },
@@ -68,16 +75,21 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
+      >
 
         {/* Business info */}
         <SectionHeader title="Your business" />
         <View style={styles.card}>
           <Field label="Business name" value={s.businessName} onChange={(v) => update("businessName", v)} />
           <Field label="Your name" value={s.contactName} onChange={(v) => update("contactName", v)} />
-          <Field label="Phone" value={s.phone} onChange={(v) => update("phone", v)} keyboardType="phone-pad" />
+          <Field label="Phone" value={s.phone} onChange={(v) => update("phone", formatPhone(v))} keyboardType="phone-pad" />
           <Field label="Email" value={s.email} onChange={(v) => update("email", v)} keyboardType="email-address" />
-          <Field label="Payment instructions" value={s.paymentNotes} onChange={(v) => update("paymentNotes", v)} multiline />
+          <Field label="Payment instructions" value={s.paymentNotes} onChange={(v) => update("paymentNotes", v)} multiline autoCapitalize="sentences" />
 
           {/* Trade type */}
           <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>Your trade</Text>
@@ -150,11 +162,30 @@ export default function SettingsScreen() {
 
         <Divider />
 
-        {/* Claude AI key */}
-        <SectionHeader title="AI (Claude API)" />
+        {/* AI Assistant */}
+        <SectionHeader title="AI Assistant" />
         <View style={styles.card}>
           <Text style={styles.providerHint}>
-            Paste your Anthropic API key to enable AI-generated estimates and outreach messages.
+            Groq API key — powers the AI chat tab (estimates, advice, invoice messages).
+            Get a free key at console.groq.com — no billing required.
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={s.geminiKey}
+            onChangeText={(v) => update("geminiKey", v)}
+            placeholder="gsk_..."
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+          <Text style={styles.keyNote}>
+            Stored only on your device. Never share this key.
+          </Text>
+        </View>
+        <View style={[styles.card, { marginTop: spacing.sm }]}>
+          <Text style={styles.providerHint}>
+            Anthropic (Claude) API key — used for AI-generated invoice outreach messages.
             Get one at console.anthropic.com.
           </Text>
           <TextInput
@@ -217,7 +248,8 @@ export default function SettingsScreen() {
   );
 }
 
-function Field({ label, value, onChange, keyboardType, multiline }) {
+function Field({ label, value, onChange, keyboardType, multiline, autoCapitalize }) {
+  const cap = autoCapitalize ?? (keyboardType === "email-address" ? "none" : "words");
   return (
     <View style={styles.fieldGroup}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -226,7 +258,7 @@ function Field({ label, value, onChange, keyboardType, multiline }) {
         value={value}
         onChangeText={onChange}
         keyboardType={keyboardType || "default"}
-        autoCapitalize={keyboardType === "email-address" ? "none" : "words"}
+        autoCapitalize={cap}
         autoCorrect={false}
         multiline={multiline}
         numberOfLines={multiline ? 3 : 1}

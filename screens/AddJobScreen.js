@@ -3,7 +3,7 @@
 // Collects: customer, title, description, address, schedule, notes.
 // Pricing is handled separately in PricingCalculatorScreen.
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -31,6 +31,7 @@ export default function AddJobScreen({ route, navigation }) {
   const [customerName, setCustomerName] = useState("");
   const [customers, setCustomers] = useState([]);
   const [showCustomerPicker, setShowCustomerPicker] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [address, setAddress] = useState("");
@@ -45,9 +46,18 @@ export default function AddJobScreen({ route, navigation }) {
 
   const scrollRef = useRef(null);
 
-  useEffect(() => {
-    navigation.setOptions({ title: isEditing ? "Edit Job" : "New Job" });
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: isEditing ? "Edit Job" : "New Job",
+      headerLeft: () => (
+        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, isEditing]);
 
+  useEffect(() => {
     async function load() {
       const [jobs, custs] = await Promise.all([loadJobs(), loadCustomers()]);
       setCustomers(custs);
@@ -118,6 +128,14 @@ export default function AddJobScreen({ route, navigation }) {
     setCustomerName(c.name);
     if (!address && c.address) setAddress(c.address);
     setShowCustomerPicker(false);
+    setCustomerSearch("");
+  }
+
+  function toggleCustomerPicker() {
+    setShowCustomerPicker((prev) => {
+      if (prev) setCustomerSearch("");
+      return !prev;
+    });
   }
 
   async function handleSave() {
@@ -186,7 +204,7 @@ export default function AddJobScreen({ route, navigation }) {
           <SectionLabel>Customer</SectionLabel>
           <TouchableOpacity
             style={styles.customerSelector}
-            onPress={() => setShowCustomerPicker(!showCustomerPicker)}
+            onPress={toggleCustomerPicker}
           >
             <Text style={customerName ? styles.customerSelected : styles.customerPlaceholder}>
               {customerName || "Select a customer..."}
@@ -196,21 +214,49 @@ export default function AddJobScreen({ route, navigation }) {
 
           {showCustomerPicker && (
             <View style={styles.customerList}>
-              {customers.map((c) => (
-                <TouchableOpacity
-                  key={c.id}
-                  style={styles.customerOption}
-                  onPress={() => selectCustomer(c)}
-                >
-                  <Text style={styles.customerOptionName}>{c.name}</Text>
-                  <Text style={styles.customerOptionSub}>{c.phone}</Text>
-                </TouchableOpacity>
-              ))}
+              <TextInput
+                style={styles.customerSearch}
+                value={customerSearch}
+                onChangeText={setCustomerSearch}
+                placeholder="Search customers..."
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                clearButtonMode="while-editing"
+                autoFocus
+              />
+              <ScrollView
+                style={styles.customerScroll}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
+                {customers
+                  .filter((c) => {
+                    const q = customerSearch.toLowerCase();
+                    return (
+                      c.name.toLowerCase().includes(q) ||
+                      (c.phone || "").includes(q)
+                    );
+                  })
+                  .map((c) => (
+                    <TouchableOpacity
+                      key={c.id}
+                      style={styles.customerOption}
+                      onPress={() => selectCustomer(c)}
+                    >
+                      <Text style={styles.customerOptionName}>{c.name}</Text>
+                      {c.phone ? (
+                        <Text style={styles.customerOptionSub}>{c.phone}</Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  ))}
+              </ScrollView>
               <TouchableOpacity
-                style={[styles.customerOption, { borderTopWidth: 1, borderTopColor: colors.border }]}
+                style={[styles.customerOption, styles.customerOptionAdd]}
                 onPress={() => {
                   setShowCustomerPicker(false);
-                  navigation.getParent()?.navigate('Customers', { screen: 'AddCustomer' });
+                  setCustomerSearch("");
+                  navigation.navigate('AddCustomer');
                 }}
               >
                 <Text style={{ fontSize: fontSize.sm, color: colors.accent }}>
@@ -508,7 +554,21 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     ...shadow.card,
   },
+  customerSearch: {
+    margin: spacing.sm,
+    marginBottom: 0,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    fontSize: fontSize.md,
+    color: colors.textPrimary,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  customerScroll: { maxHeight: 210 },
   customerOption: { padding: spacing.md },
+  customerOptionAdd: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   customerOptionName: { fontSize: fontSize.md, color: colors.textPrimary, fontWeight: "500" },
   customerOptionSub: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
   fieldGroup: { marginBottom: spacing.sm },

@@ -310,6 +310,10 @@ export default function TodayScreen({ navigation }) {
     navigation.getParent()?.navigate('Jobs', { screen: 'AddJob' });
   }
 
+  function handlePlanRoute() {
+    navigation.navigate('Route');
+  }
+
   const overdueTotal = overdueInvoices.reduce((s, inv) => s + (Number(inv.amount) || 0), 0);
   const visibleInvoices = overdueInvoices.slice(0, INVOICE_LIMIT);
   const visibleLeads = leadJobs.slice(0, LEAD_LIMIT);
@@ -392,7 +396,11 @@ export default function TodayScreen({ navigation }) {
       )}
 
       {/* Today's Schedule */}
-      <BriefingSection title="Today's Schedule">
+      <BriefingSection
+        title="Today's Schedule"
+        actionLabel={!loading && jobs.length > 0 ? "Plan Route" : undefined}
+        onAction={handlePlanRoute}
+      >
         {loading && (
           <ActivityIndicator color={colors.accent} size={36} style={{ marginTop: 24 }} />
         )}

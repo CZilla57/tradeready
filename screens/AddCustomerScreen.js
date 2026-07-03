@@ -4,7 +4,7 @@
 // Saves to AsyncStorage under the canonical 'tradeready_customers' key.
 // Duplicate detection by normalized name prevents accidental doubles.
  
-import React, { useState, useEffect } from "react";
+import React, { useState, useLayoutEffect, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -15,23 +15,101 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadCustomers, saveCustomers } from "../utils/storage";
 import { colors, spacing, radius, fontSize } from "../utils/theme";
  
-export default function AddCustomerScreen({ navigation }) {
+function buildAddress(item) {
+  const a = item.address || {};
+  const street = [a.house_number, a.road].filter(Boolean).join(" ");
+  const city = a.city || a.town || a.village || a.hamlet || "";
+  const region = a.state || "";
+  const zip = a.postcode || "";
+  const parts = [
+    street,
+    city,
+    region && zip ? `${region} ${zip}` : region || zip,
+  ].filter(Boolean);
+  return parts.join(", ");
+}
+
+function formatPhone(raw) {
+  const digits = raw.replace(/\D/g, "").slice(0, 10);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
+export default function AddCustomerScreen({ route, navigation }) {
+  const { customerId } = route.params || {};
+  const isEditing = !!customerId;
+
   const [name, setName]       = useState("");
   const [phone, setPhone]     = useState("");
   const [email, setEmail]     = useState("");
-  const [address, setAddress] = useState("");
+  const [address, setAddress]               = useState("");
+  const [addressSuggestions, setAddressSuggestions] = useState([]);
+  const [addressLoading, setAddressLoading] = useState(false);
   const [notes, setNotes]     = useState("");
   const [saving, setSaving]   = useState(false);
- 
+  const addressTimer = useRef(null);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: isEditing ? "Edit Customer" : "New Customer",
+      headerLeft: () => (
+        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, isEditing]);
+
   useEffect(() => {
-    navigation.setOptions({ title: "New Customer" });
-  }, []);
+    if (!isEditing) return;
+    loadCustomers().then((custs) => {
+      const c = custs.find((x) => x.id === customerId);
+      if (c) {
+        setName(c.name || "");
+        setPhone(c.phone || "");
+        setEmail(c.email || "");
+        setAddress(c.address || "");
+        setNotes(c.notes || "");
+      }
+    });
+  }, [customerId]);
  
+  function handleAddressChange(text) {
+    setAddress(text);
+    if (addressTimer.current) clearTimeout(addressTimer.current);
+    if (text.trim().length < 4) {
+      setAddressSuggestions([]);
+      return;
+    }
+    addressTimer.current = setTimeout(async () => {
+      setAddressLoading(true);
+      try {
+        const url =
+          `https://nominatim.openstreetmap.org/search` +
+          `?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=5&countrycodes=us`;
+        const res = await fetch(url, { headers: { "User-Agent": "TradeReadyApp/1.0" } });
+        const data = await res.json();
+        setAddressSuggestions(data.map(buildAddress).filter(Boolean));
+      } catch {
+        setAddressSuggestions([]);
+      } finally {
+        setAddressLoading(false);
+      }
+    }, 400);
+  }
+
+  function selectSuggestion(addr) {
+    setAddress(addr);
+    setAddressSuggestions([]);
+  }
+
   async function handleSave() {
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -42,33 +120,42 @@ export default function AddCustomerScreen({ navigation }) {
     setSaving(true);
     try {
       const existing = await loadCustomers();
- 
-      // Duplicate check — normalize both sides to catch "Mike Smith" vs "mike smith"
-      const normalizedNew = trimmedName.toLowerCase();
-      const duplicate = existing.find(
-        (c) => c.name.trim().toLowerCase() === normalizedNew
-      );
-      if (duplicate) {
-        Alert.alert(
-          "Customer already exists",
-          `"${duplicate.name}" is already in your customer list.`,
-          [{ text: "OK" }]
+
+      if (isEditing) {
+        const updated = existing.map((c) =>
+          c.id === customerId
+            ? { ...c, name: trimmedName, phone: phone.trim(), email: email.trim(), address: address.trim(), notes: notes.trim() }
+            : c
         );
-        setSaving(false);
-        return;
+        await saveCustomers(updated);
+      } else {
+        // Duplicate check — normalize both sides to catch "Mike Smith" vs "mike smith"
+        const normalizedNew = trimmedName.toLowerCase();
+        const duplicate = existing.find(
+          (c) => c.name.trim().toLowerCase() === normalizedNew
+        );
+        if (duplicate) {
+          Alert.alert(
+            "Customer already exists",
+            `"${duplicate.name}" is already in your customer list.`,
+            [{ text: "OK" }]
+          );
+          setSaving(false);
+          return;
+        }
+
+        const newCustomer = {
+          id:        `c${Date.now()}`,
+          name:      trimmedName,
+          phone:     phone.trim(),
+          email:     email.trim(),
+          address:   address.trim(),
+          notes:     notes.trim(),
+          createdAt: new Date().toISOString(),
+        };
+        await saveCustomers([...existing, newCustomer]);
       }
- 
-      const newCustomer = {
-        id:        `c${Date.now()}`,
-        name:      trimmedName,
-        phone:     phone.trim(),
-        email:     email.trim(),
-        address:   address.trim(),
-        notes:     notes.trim(),
-        createdAt: new Date().toISOString(),
-      };
- 
-      await saveCustomers([...existing, newCustomer]);
+
       navigation.goBack();
     } catch (err) {
       console.error("AddCustomerScreen: save failed", err);
@@ -93,12 +180,12 @@ export default function AddCustomerScreen({ navigation }) {
             value={name}
             onChange={setName}
             placeholder="Jane Smith"
-            autoFocus
+            autoFocus={!isEditing}
           />
           <Field
             label="Phone"
             value={phone}
-            onChange={setPhone}
+            onChange={(v) => setPhone(formatPhone(v))}
             placeholder="(555) 123-4567"
             keyboardType="phone-pad"
           />
@@ -110,12 +197,41 @@ export default function AddCustomerScreen({ navigation }) {
             keyboardType="email-address"
             autoCapitalize="none"
           />
-          <Field
-            label="Address"
-            value={address}
-            onChange={setAddress}
-            placeholder="123 Main St, City, ST 00000"
-          />
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>Address</Text>
+            <TextInput
+              style={styles.input}
+              value={address}
+              onChangeText={handleAddressChange}
+              placeholder="123 Main St, City, ST 00000"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="words"
+              autoCorrect={false}
+            />
+            {(addressLoading || addressSuggestions.length > 0) && (
+              <View style={styles.suggestions}>
+                {addressLoading && (
+                  <ActivityIndicator
+                    size="small"
+                    color={colors.textMuted}
+                    style={styles.suggestionsSpinner}
+                  />
+                )}
+                {addressSuggestions.map((addr, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    style={[
+                      styles.suggestionRow,
+                      i < addressSuggestions.length - 1 && styles.suggestionBorder,
+                    ]}
+                    onPress={() => selectSuggestion(addr)}
+                  >
+                    <Text style={styles.suggestionText}>{addr}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
           <Field
             label="Notes"
             value={notes}
@@ -193,6 +309,31 @@ const styles = StyleSheet.create({
     height: 88,
     paddingTop: spacing.sm,
     textAlignVertical: "top",
+  },
+
+  suggestions: {
+    marginTop: 4,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  suggestionsSpinner: {
+    paddingVertical: spacing.sm,
+  },
+  suggestionRow: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+  },
+  suggestionBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  suggestionText: {
+    fontSize: fontSize.sm,
+    color: colors.textPrimary,
+    lineHeight: 18,
   },
  
   actions: {

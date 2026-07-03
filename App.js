@@ -8,6 +8,7 @@
 //   JobList              → JobsScreen
 //   JobDetail            → JobDetailScreen
 //   AddJob               → AddJobScreen          (modal)
+//   AddCustomer          → AddCustomerScreen     (modal, for "Add new customer" from AddJob)
 //   PricingCalculator    → PricingCalculatorScreen
 //   CreateInvoiceFromJob → CreateInvoiceFromJobScreen
 //   Outreach             → OutreachScreen
@@ -24,14 +25,21 @@
 //   AddInvoice           → AddInvoiceScreen      (modal, for "New Invoice" from CustomerDetail)
 //   Outreach             → OutreachScreen
 //
+// TodayTab:
+//   TodayHome  → TodayScreen
+//   Route      → RouteScreen
+//
 // Settings (top-level tab, no nested stack needed):
 //   SettingsScreen
 //
 // MoneyTab:
 //   MoneyHome  → MoneyScreen
 //   LogExpense → LogExpenseScreen
+//
+// AITab:
+//   ChatHome   → ChatScreen
  
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -55,8 +63,12 @@ import AddCustomerScreen           from "./screens/AddCustomerScreen";
 import SettingsScreen              from "./screens/SettingsScreen";
 import TodayScreen                 from "./screens/TodayScreen";
 import MoneyScreen                 from "./screens/MoneyScreen";
+import ChatScreen                  from "./screens/ChatScreen";
+import RouteScreen                 from "./screens/RouteScreen";
  
 import { colors, fontSize } from "./utils/theme";
+import { loadSettings } from "./utils/storage";
+import { getTradeNickname } from "./utils/pricingEngine";
  
 const TodayStack    = createNativeStackNavigator();
 const Tab           = createBottomTabNavigator();
@@ -64,6 +76,7 @@ const JobStack      = createNativeStackNavigator();
 const InvoiceStack  = createNativeStackNavigator();
 const CustomerStack = createNativeStackNavigator();
 const MoneyStack    = createNativeStackNavigator();
+const ChatStack     = createNativeStackNavigator();
  
 // Shared header styling across all stacks
 const NAV_OPTS = {
@@ -78,10 +91,15 @@ const NAV_OPTS = {
 function TodayTab() {
   return (
     <TodayStack.Navigator screenOptions={NAV_OPTS}>
-      <TodayStack.Screen 
-        name="TodayHome" 
-        component={TodayScreen} 
-        options={{ headerShown: false }} 
+      <TodayStack.Screen
+        name="TodayHome"
+        component={TodayScreen}
+        options={{ headerShown: false }}
+      />
+      <TodayStack.Screen
+        name="Route"
+        component={RouteScreen}
+        options={{ title: "Today's Route" }}
       />
     </TodayStack.Navigator>
   );
@@ -94,6 +112,7 @@ function JobsTab() {
       <JobStack.Screen name="AddJob"              component={AddJobScreen}               options={{ presentation: "modal" }} />
       <JobStack.Screen name="PricingCalculator"   component={PricingCalculatorScreen}    options={{ title: "Price this job" }} />
       <JobStack.Screen name="CreateInvoiceFromJob" component={CreateInvoiceFromJobScreen} options={{ title: "Create Invoice" }} />
+      <JobStack.Screen name="AddCustomer"         component={AddCustomerScreen}          options={{ presentation: "modal" }} />
       <JobStack.Screen name="Outreach"            component={OutreachScreen}             options={{ title: "Outreach" }} />
     </JobStack.Navigator>
   );
@@ -129,6 +148,14 @@ function MoneyTab() {
     </MoneyStack.Navigator>
   );
 }
+
+function ChatTab() {
+  return (
+    <ChatStack.Navigator screenOptions={NAV_OPTS}>
+      <ChatStack.Screen name="ChatHome" component={ChatScreen} options={{ title: "AI Assistant" }} />
+    </ChatStack.Navigator>
+  );
+}
  
 // ── Tab icons ─────────────────────────────────────────────────────────────────
  
@@ -138,12 +165,19 @@ const TAB_ICONS = {
   Invoices:  { active: "💰", inactive: "💰" },
   Customers: { active: "👤", inactive: "👤" },
   Money:     { active: "💵", inactive: "💵" },
+  AI:        { active: "🤖", inactive: "🤖" },
   Settings:  { active: "⚙️", inactive: "⚙️" },
 };
  
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function MainTabs() {
+  const [nickname, setNickname] = useState("Tradie");
+
+  useEffect(() => {
+    loadSettings().then(s => setNickname(getTradeNickname(s?.trade)));
+  }, []);
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -166,6 +200,7 @@ function MainTabs() {
       <Tab.Screen name="Invoices"  component={InvoicesTab} />
       <Tab.Screen name="Customers" component={CustomersTab} />
       <Tab.Screen name="Money"     component={MoneyTab} />
+      <Tab.Screen name="AI" component={ChatTab} options={{ tabBarHideOnKeyboard: true, tabBarLabel: nickname }} />
       <Tab.Screen
         name="Settings"
         component={SettingsScreen}

@@ -1,7 +1,7 @@
 // screens/CustomerDetailScreen.js
 // Full profile for a single customer — contact info, lifetime value, invoice history, job history, notes.
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,9 +10,11 @@ import {
   TouchableOpacity,
   TextInput,
   Linking,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { loadJobs, loadNoteForCustomer, saveNoteForCustomer } from '../utils/storage';
+import { useFocusEffect } from '@react-navigation/native';
+import { loadJobs, loadCustomers, saveCustomers, loadNoteForCustomer, saveNoteForCustomer } from '../utils/storage';
 import { colors, spacing, radius, fontSize } from '../utils/theme';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -105,13 +107,34 @@ const JobRow = ({ job }) => {
 export default function CustomerDetailScreen({ route, navigation }) {
   const { customer } = route.params;
 
+  const [displayCustomer, setDisplayCustomer] = useState(customer);
   const [jobs, setJobs]               = useState([]);
   const [notes, setNotes]             = useState('');
   const [notesChanged, setNotesChanged] = useState(false);
 
-  useEffect(() => {
-    navigation.setOptions({ title: customer.name });
-  }, [customer.name]);
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: displayCustomer.name,
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={() => navigation.navigate('AddCustomer', { customerId: displayCustomer.id })}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={{ alignSelf: 'center', marginRight: 8, paddingLeft: 10 }}
+        >
+          <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Edit</Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, displayCustomer.name, displayCustomer.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadCustomers().then((custs) => {
+        const fresh = custs.find((c) => c.id === customer.id);
+        if (fresh) setDisplayCustomer((prev) => ({ ...prev, ...fresh }));
+      });
+    }, [customer.id])
+  );
 
   useEffect(() => {
     loadJobsAndNotes();
@@ -140,12 +163,12 @@ export default function CustomerDetailScreen({ route, navigation }) {
   const handleNotesSave = useCallback(async () => {
     if (!notesChanged) return;
     try {
-      await saveNoteForCustomer(customer.name, notes);
+      await saveNoteForCustomer(displayCustomer.name, notes);
       setNotesChanged(false);
     } catch (err) {
       console.error('CustomerDetailScreen: failed to save notes', err);
     }
-  }, [notes, notesChanged, customer.name]);
+  }, [notes, notesChanged, displayCustomer.name]);
 
   const handleInvoicePress = (invoice) => {
     navigation.navigate('AddInvoice', { invoiceId: invoice.id });
@@ -154,29 +177,52 @@ export default function CustomerDetailScreen({ route, navigation }) {
   const handleNewInvoice = () => {
     navigation.navigate('AddInvoice', {
       prefill: {
-        customer: customer.name,
-        email:    customer.email,
-        phone:    customer.phone,
+        customer: displayCustomer.name,
+        email:    displayCustomer.email,
+        phone:    displayCustomer.phone,
       },
     });
   };
 
+  const handleDelete = () => {
+    Alert.alert(
+      'Delete customer?',
+      `"${displayCustomer.name}" will be permanently removed. Their invoices and jobs will remain but will no longer be linked to a customer record.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const custs = await loadCustomers();
+              await saveCustomers(custs.filter((c) => c.id !== displayCustomer.id));
+              navigation.goBack();
+            } catch (err) {
+              console.error('CustomerDetailScreen: delete failed', err);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleCall = () => {
-    if (!customer.phone) return;
-    Linking.openURL(`tel:${customer.phone.replace(/\D/g, '')}`);
+    if (!displayCustomer.phone) return;
+    Linking.openURL(`tel:${displayCustomer.phone.replace(/\D/g, '')}`);
   };
 
   const handleEmail = () => {
-    if (!customer.email) return;
-    Linking.openURL(`mailto:${customer.email}`);
+    if (!displayCustomer.email) return;
+    Linking.openURL(`mailto:${displayCustomer.email}`);
   };
 
-  const invoices     = customer.invoices || [];
-  const totalSpent   = customer.totalSpent || 0;
-  const totalOwed    = customer.totalOwed || 0;
+  const invoices     = displayCustomer.invoices || [];
+  const totalSpent   = displayCustomer.totalSpent || 0;
+  const totalOwed    = displayCustomer.totalOwed || 0;
   const invoiceCount = invoices.length;
 
-  const initials = customer.name
+  const initials = displayCustomer.name
     .split(' ')
     .map(w => w[0])
     .slice(0, 2)
@@ -192,16 +238,16 @@ export default function CustomerDetailScreen({ route, navigation }) {
           <View style={styles.heroAvatar}>
             <Text style={styles.heroAvatarText}>{initials}</Text>
           </View>
-          <Text style={styles.heroName}>{customer.name}</Text>
+          <Text style={styles.heroName}>{displayCustomer.name}</Text>
 
           <View style={styles.heroActions}>
-            {customer.phone ? (
+            {displayCustomer.phone ? (
               <TouchableOpacity style={styles.heroAction} onPress={handleCall}>
                 <Text style={styles.heroActionIcon}>📞</Text>
                 <Text style={styles.heroActionLabel}>Call</Text>
               </TouchableOpacity>
             ) : null}
-            {customer.email ? (
+            {displayCustomer.email ? (
               <TouchableOpacity style={styles.heroAction} onPress={handleEmail}>
                 <Text style={styles.heroActionIcon}>✉️</Text>
                 <Text style={styles.heroActionLabel}>Email</Text>
@@ -241,15 +287,15 @@ export default function CustomerDetailScreen({ route, navigation }) {
             <InfoRow
               icon="📞"
               label="Phone"
-              value={customer.phone}
-              onPress={customer.phone ? handleCall : null}
+              value={displayCustomer.phone}
+              onPress={displayCustomer.phone ? handleCall : null}
             />
             <View style={styles.cardSeparator} />
             <InfoRow
               icon="✉️"
               label="Email"
-              value={customer.email}
-              onPress={customer.email ? handleEmail : null}
+              value={displayCustomer.email}
+              onPress={displayCustomer.email ? handleEmail : null}
             />
           </View>
         </View>
@@ -312,6 +358,10 @@ export default function CustomerDetailScreen({ route, navigation }) {
             </TouchableOpacity>
           )}
         </View>
+
+        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+          <Text style={styles.deleteBtnText}>Delete customer</Text>
+        </TouchableOpacity>
 
         <View style={{ height: 60 }} />
       </ScrollView>
@@ -557,6 +607,16 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     minHeight: 120,
     lineHeight: 22,
+  },
+  deleteBtn: {
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  deleteBtnText: {
+    fontSize: fontSize.sm,
+    color: colors.danger,
   },
   saveNotesButton: {
     marginTop: spacing.sm,
