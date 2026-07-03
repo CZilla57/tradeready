@@ -13,7 +13,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadSettings, saveSettings } from "../utils/storage";
+import { loadSettings, saveSettings, clearSampleData } from "../utils/storage";
 import { supabase } from "../utils/supabase";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import { TRADE_TYPES } from "../utils/pricingEngine";
@@ -232,6 +232,29 @@ export default function SettingsScreen() {
         <Button label="Save settings" onPress={handleSave} loading={saving} />
 
         <TouchableOpacity
+          style={styles.clearSampleBtn}
+          onPress={() =>
+            Alert.alert(
+              "Clear sample data",
+              "This permanently removes all sample customers, jobs, and invoices. Your own data is not affected.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Clear sample data",
+                  style: "destructive",
+                  onPress: async () => {
+                    await clearSampleData();
+                    Alert.alert("Done", "Sample data has been removed.");
+                  },
+                },
+              ]
+            )
+          }
+        >
+          <Text style={styles.clearSampleText}>Clear Sample Data</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={styles.signOutBtn}
           onPress={() =>
             Alert.alert("Sign out", "Are you sure you want to sign out?", [
@@ -348,8 +371,18 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   addRuleBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
-  signOutBtn: {
+  clearSampleBtn: {
     marginTop: spacing.lg,
+    paddingVertical: 14,
+    alignItems: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  clearSampleText: { color: colors.textSecondary, fontSize: fontSize.md, fontWeight: "500" },
+  signOutBtn: {
+    marginTop: spacing.sm,
     paddingVertical: 14,
     alignItems: "center",
     borderRadius: radius.md,

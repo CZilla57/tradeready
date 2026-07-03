@@ -374,6 +374,32 @@ export function defaultSettings() {
   };
 }
 
+// --- Onboarding ---
+
+export async function isOnboardingComplete() {
+  try {
+    const val = await AsyncStorage.getItem('onboardingComplete');
+    if (val === 'true') return true;
+    // Graceful fallback: users who set up the app before onboarding existed
+    const settings = await loadSettings();
+    return settings.businessName !== defaultSettings().businessName;
+  } catch {
+    return false;
+  }
+}
+
+export async function markOnboardingComplete() {
+  await AsyncStorage.setItem('onboardingComplete', 'true');
+}
+
+export async function clearSampleData() {
+  await Promise.all([
+    AsyncStorage.setItem(KEYS.customers, JSON.stringify([])),
+    AsyncStorage.setItem(KEYS.jobs, JSON.stringify([])),
+    AsyncStorage.setItem(KEYS.invoices, JSON.stringify([])),
+  ]);
+}
+
 // --- Daily Operations (Today Tab) ---
 
 export async function loadJobsForDate(dateString) {

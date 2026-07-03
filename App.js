@@ -47,6 +47,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Text, View, ActivityIndicator } from "react-native";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import AuthScreen from "./screens/AuthScreen";
+import OnboardingScreen from "./screens/OnboardingScreen";
+import { isOnboardingComplete } from "./utils/storage";
  
 // Screens
 import InvoicesScreen              from "./screens/InvoicesScreen";
@@ -217,8 +219,14 @@ function MainTabs() {
 
 function RootNavigator() {
   const { session, initializing } = useAuth();
+  const [onboardingDone, setOnboardingDone] = useState(null);
 
-  if (initializing) {
+  useEffect(() => {
+    if (!session) { setOnboardingDone(null); return; }
+    isOnboardingComplete().then(setOnboardingDone);
+  }, [session]);
+
+  if (initializing || (session && onboardingDone === null)) {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background }}>
         <ActivityIndicator color={colors.accent} size="large" />
@@ -230,7 +238,10 @@ function RootNavigator() {
 
   return (
     <NavigationContainer>
-      <MainTabs />
+      {onboardingDone
+        ? <MainTabs />
+        : <OnboardingScreen onComplete={() => setOnboardingDone(true)} />
+      }
     </NavigationContainer>
   );
 }
