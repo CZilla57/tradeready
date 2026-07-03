@@ -46,6 +46,9 @@ export default function OutreachScreen({ route, navigation }) {
       setSettings(s);
       navigation.setOptions({ title: inv?.customer || "Outreach" });
 
+      // Skip payment link fetch for paid invoices
+      if (inv?.paid) return;
+
       // Fetch the payment link from your Vercel backend
       try {
         if (!s.providerKey) {
@@ -66,9 +69,9 @@ export default function OutreachScreen({ route, navigation }) {
     load();
   }, [invoiceId]);
 
-  // Re-generate whenever channel or payment plan changes
+  // Re-generate whenever channel or payment plan changes (skip for paid invoices)
   useEffect(() => {
-    if (invoice && settings && paymentLink) {
+    if (invoice && !invoice.paid && settings && paymentLink) {
       generate();
     }
   }, [channel, paymentPlanEnabled, installments, frequency, paymentLink]);
@@ -162,99 +165,107 @@ export default function OutreachScreen({ route, navigation }) {
           ) : null}
         </Card>
 
-        {/* Payment plan toggle */}
-        <Card style={styles.section}>
-          <View style={styles.toggleRow}>
-            <Text style={styles.toggleLabel}>Offer a payment plan</Text>
-            <Switch
-              value={paymentPlanEnabled}
-              onValueChange={setPaymentPlanEnabled}
-              trackColor={{ true: colors.accent }}
-            />
-          </View>
-          {paymentPlanEnabled && (
-            <View style={styles.planOptions}>
-              <Text style={styles.planLabel}>Installments</Text>
-              {/* Note: Picker requires @react-native-picker/picker — see README */}
-              {["2", "3", "4", "6"].map((n) => (
+        {invoice.paid ? (
+          <Card style={styles.paidCard}>
+            <Text style={styles.paidTitle}>Invoice paid</Text>
+            <Text style={styles.paidSub}>No further outreach needed.</Text>
+          </Card>
+        ) : (
+          <>
+            {/* Payment plan toggle */}
+            <Card style={styles.section}>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Offer a payment plan</Text>
+                <Switch
+                  value={paymentPlanEnabled}
+                  onValueChange={setPaymentPlanEnabled}
+                  trackColor={{ true: colors.accent }}
+                />
+              </View>
+              {paymentPlanEnabled && (
+                <View style={styles.planOptions}>
+                  <Text style={styles.planLabel}>Installments</Text>
+                  {["2", "3", "4", "6"].map((n) => (
+                    <TouchableOpacity
+                      key={n}
+                      style={[styles.chipBtn, installments === n && styles.chipBtnActive]}
+                      onPress={() => setInstallments(n)}
+                    >
+                      <Text style={[styles.chipText, installments === n && styles.chipTextActive]}>
+                        {n} payments
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                  <Text style={[styles.planLabel, { marginTop: spacing.sm }]}>Frequency</Text>
+                  {["Weekly", "Bi-weekly", "Monthly"].map((f) => (
+                    <TouchableOpacity
+                      key={f}
+                      style={[styles.chipBtn, frequency === f && styles.chipBtnActive]}
+                      onPress={() => setFrequency(f)}
+                    >
+                      <Text style={[styles.chipText, frequency === f && styles.chipTextActive]}>{f}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </Card>
+
+            {/* Channel tabs */}
+            <View style={styles.channelTabs}>
+              {["email", "text"].map((ch) => (
                 <TouchableOpacity
-                  key={n}
-                  style={[styles.chipBtn, installments === n && styles.chipBtnActive]}
-                  onPress={() => setInstallments(n)}
+                  key={ch}
+                  style={[styles.tab, channel === ch && styles.tabActive]}
+                  onPress={() => setChannel(ch)}
                 >
-                  <Text style={[styles.chipText, installments === n && styles.chipTextActive]}>
-                    {n} payments
+                  <Text style={[styles.tabText, channel === ch && styles.tabTextActive]}>
+                    {ch === "email" ? "✉ Email" : "💬 Text message"}
                   </Text>
                 </TouchableOpacity>
               ))}
-              <Text style={[styles.planLabel, { marginTop: spacing.sm }]}>Frequency</Text>
-              {["Weekly", "Bi-weekly", "Monthly"].map((f) => (
-                <TouchableOpacity
-                  key={f}
-                  style={[styles.chipBtn, frequency === f && styles.chipBtnActive]}
-                  onPress={() => setFrequency(f)}
-                >
-                  <Text style={[styles.chipText, frequency === f && styles.chipTextActive]}>{f}</Text>
-                </TouchableOpacity>
-              ))}
             </View>
-          )}
-        </Card>
 
-        {/* Channel tabs */}
-        <View style={styles.channelTabs}>
-          {["email", "text"].map((ch) => (
-            <TouchableOpacity
-              key={ch}
-              style={[styles.tab, channel === ch && styles.tabActive]}
-              onPress={() => setChannel(ch)}
-            >
-              <Text style={[styles.tabText, channel === ch && styles.tabTextActive]}>
-                {ch === "email" ? "✉ Email" : "💬 Text message"}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+            {/* Generated message */}
+            <Card style={styles.messageCard}>
+              {channel === "email" && subject ? (
+                <Text style={styles.subjectLine}>Subject: {subject}</Text>
+              ) : null}
+              {generating ? (
+                <View style={styles.generatingRow}>
+                  <ActivityIndicator color={colors.accent} size="small" />
+                  <Text style={styles.generatingText}>  Generating message…</Text>
+                </View>
+              ) : (
+                <Text style={styles.messageText}>{message}</Text>
+              )}
+            </Card>
 
-        {/* Generated message */}
-        <Card style={styles.messageCard}>
-          {channel === "email" && subject ? (
-            <Text style={styles.subjectLine}>Subject: {subject}</Text>
-          ) : null}
-          {generating ? (
-            <View style={styles.generatingRow}>
-              <ActivityIndicator color={colors.accent} size="small" />
-              <Text style={styles.generatingText}>  Generating message…</Text>
+            {/* Actions */}
+            <View style={styles.actionRow}>
+              <TouchableOpacity style={styles.copyBtn} onPress={copyToClipboard}>
+                <Text style={styles.copyBtnText}>{copied ? "✓ Copied" : "Copy"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.regenBtn} onPress={generate}>
+                <Text style={styles.regenBtnText}>↺ Regenerate</Text>
+              </TouchableOpacity>
             </View>
-          ) : (
-            <Text style={styles.messageText}>{message}</Text>
-          )}
-        </Card>
 
-        {/* Actions */}
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.copyBtn} onPress={copyToClipboard}>
-            <Text style={styles.copyBtnText}>{copied ? "✓ Copied" : "Copy"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.regenBtn} onPress={generate}>
-            <Text style={styles.regenBtnText}>↺ Regenerate</Text>
-          </TouchableOpacity>
-        </View>
+            <Divider />
 
-        <Divider />
-
-        {/* Send buttons */}
-        <Text style={styles.sendLabel}>Send via</Text>
-        <Button
-          label={`Open in ${channel === "email" ? "Mail" : "Messages"}`}
-          onPress={channel === "email" ? sendEmail : sendSMS}
-          style={{ marginBottom: spacing.sm }}
-        />
-        <Button
-          label="Copy to clipboard"
-          variant="ghost"
-          onPress={copyToClipboard}
-        />
+            {/* Send buttons */}
+            <Text style={styles.sendLabel}>Send via</Text>
+            <Button
+              label={`Open in ${channel === "email" ? "Mail" : "Messages"}`}
+              onPress={channel === "email" ? sendEmail : sendSMS}
+              style={{ marginBottom: spacing.sm }}
+            />
+            <Button
+              label="Copy to clipboard"
+              variant="ghost"
+              onPress={copyToClipboard}
+            />
+          </>
+        )}
 
       </ScrollView>
     </SafeAreaView>
@@ -279,6 +290,13 @@ const styles = StyleSheet.create({
   },
   linkBadgeText: { fontSize: fontSize.xs, color: colors.success, fontWeight: "600" },
   section: { marginBottom: spacing.sm },
+  paidCard: {
+    marginBottom: spacing.sm,
+    alignItems: "center",
+    paddingVertical: spacing.lg,
+  },
+  paidTitle: { fontSize: fontSize.md, fontWeight: "700", color: colors.success },
+  paidSub: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: 4 },
   toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   toggleLabel: { fontSize: fontSize.md, color: colors.textPrimary },
   planOptions: { marginTop: spacing.sm },
