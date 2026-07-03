@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, spacing, radius, fontSize, shadow } from '../utils/theme';
 import {
-  loadJobsForDate,
+  loadJobs,
   getExpectedEarningsForDate,
   loadOverdueInvoices,
   loadLeadJobs,
@@ -70,6 +70,43 @@ function daysAgo(dateString) {
   if (diff === 0) return 'today';
   if (diff === 1) return '1 day ago';
   return `${diff} days ago`;
+}
+
+// ─── Week helpers ─────────────────────────────────────────────────────────────
+
+function toDateString(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+// Returns the Mon–Sun date strings for the week containing anchorDateStr.
+function getWeekDates(anchorDateStr) {
+  const [y, m, d] = anchorDateStr.split('-').map(Number);
+  const anchor = new Date(y, m - 1, d);
+  const dayOfWeek = anchor.getDay(); // 0 = Sun
+  const monday = new Date(anchor);
+  monday.setDate(anchor.getDate() - ((dayOfWeek + 6) % 7));
+  return Array.from({ length: 7 }, (_, i) => {
+    const dd = new Date(monday);
+    dd.setDate(monday.getDate() + i);
+    return toDateString(dd);
+  });
+}
+
+function weekMonthLabel(weekDates) {
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const first = new Date(weekDates[0]);
+  const last  = new Date(weekDates[6]);
+  if (first.getMonth() === last.getMonth()) {
+    return `${MONTHS[first.getMonth()]} ${first.getFullYear()}`;
+  }
+  return `${MONTHS[first.getMonth()]} – ${MONTHS[last.getMonth()]} ${last.getFullYear()}`;
+}
+
+function shiftDate(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  return toDateString(date);
 }
 
 const JOB_STATUS_CONFIG = {
@@ -248,6 +285,59 @@ function EmptySchedule({ onScheduleJob }) {
   );
 }
 
+const DAY_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, onPrevWeek, onNextWeek }) {
+  return (
+    <View style={styles.weekStripWrapper}>
+      <Text style={styles.weekMonthLabel}>{weekMonthLabel(weekDates)}</Text>
+      <View style={styles.weekStrip}>
+        <TouchableOpacity onPress={onPrevWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <Text style={styles.weekNavText}>‹</Text>
+        </TouchableOpacity>
+
+        {weekDates.map((dateStr, i) => {
+          const dayNum = parseInt(dateStr.split('-')[2], 10);
+          const isSelected = dateStr === selectedDate;
+          const isToday    = dateStr === today;
+          const hasJobs    = jobDateSet.has(dateStr);
+
+          return (
+            <TouchableOpacity
+              key={dateStr}
+              onPress={() => onSelectDay(dateStr)}
+              style={styles.dayCell}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.dayLetter, isSelected && styles.dayLetterSelected]}>
+                {DAY_LETTERS[i]}
+              </Text>
+              <View style={[
+                styles.dayNumCircle,
+                isSelected && styles.dayNumCircleSelected,
+                isToday && !isSelected && styles.dayNumCircleToday,
+              ]}>
+                <Text style={[
+                  styles.dayNum,
+                  isSelected && styles.dayNumSelected,
+                  isToday && !isSelected && styles.dayNumToday,
+                ]}>
+                  {dayNum}
+                </Text>
+              </View>
+              <View style={[styles.dayDot, hasJobs && styles.dayDotActive]} />
+            </TouchableOpacity>
+          );
+        })}
+
+        <TouchableOpacity onPress={onNextWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <Text style={styles.weekNavText}>›</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 const INVOICE_LIMIT = 3;
@@ -257,7 +347,8 @@ export default function TodayScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const todayString = getTodayDateString();
 
-  const [jobs, setJobs] = useState([]);
+  const [allJobs, setAllJobs] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(todayString);
   const [earnings, setEarnings] = useState(0);
   const [overdueInvoices, setOverdueInvoices] = useState([]);
   const [leadJobs, setLeadJobs] = useState([]);
@@ -270,14 +361,14 @@ export default function TodayScreen({ navigation }) {
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [todaysJobs, expectedEarnings, overdue, leads] = await Promise.all([
-            loadJobsForDate(todayString),
+          const [allJobsList, expectedEarnings, overdue, leads] = await Promise.all([
+            loadJobs(),
             getExpectedEarningsForDate(todayString),
             loadOverdueInvoices(),
             loadLeadJobs(),
           ]);
           if (active) {
-            setJobs(todaysJobs);
+            setAllJobs(allJobsList);
             setEarnings(expectedEarnings);
             setOverdueInvoices(overdue);
             setLeadJobs(leads);
@@ -314,6 +405,25 @@ export default function TodayScreen({ navigation }) {
     navigation.navigate('Route');
   }
 
+  // ── Week strip derived values ──────────────────────────────────────────────
+  const weekDates      = getWeekDates(selectedDate);
+  const jobDateSet     = new Set(allJobs.filter(j => j.scheduledDate).map(j => j.scheduledDate));
+  const selectedDayJobs = allJobs
+    .filter(j => j.scheduledDate === selectedDate)
+    .sort((a, b) => {
+      if (!a.scheduledStartTime) return 1;
+      if (!b.scheduledStartTime) return -1;
+      return a.scheduledStartTime.localeCompare(b.scheduledStartTime);
+    });
+
+  const isToday = selectedDate === todayString;
+  const scheduleSectionTitle = isToday
+    ? "Today's Schedule"
+    : new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+  function prevWeek() { setSelectedDate(d => shiftDate(d, -7)); }
+  function nextWeek() { setSelectedDate(d => shiftDate(d, 7)); }
+
   const overdueTotal = overdueInvoices.reduce((s, inv) => s + (Number(inv.amount) || 0), 0);
   const visibleInvoices = overdueInvoices.slice(0, INVOICE_LIMIT);
   const visibleLeads = leadJobs.slice(0, LEAD_LIMIT);
@@ -330,6 +440,17 @@ export default function TodayScreen({ navigation }) {
         <Text style={styles.greeting}>{getGreeting()}</Text>
         <Text style={styles.dateText}>{formatDisplayDate(todayString)}</Text>
       </View>
+
+      {/* Week strip */}
+      <WeekStrip
+        weekDates={weekDates}
+        selectedDate={selectedDate}
+        today={todayString}
+        jobDateSet={jobDateSet}
+        onSelectDay={setSelectedDate}
+        onPrevWeek={prevWeek}
+        onNextWeek={nextWeek}
+      />
 
       {/* 3-stat summary row */}
       <StatsRow
@@ -395,19 +516,19 @@ export default function TodayScreen({ navigation }) {
         </BriefingSection>
       )}
 
-      {/* Today's Schedule */}
+      {/* Schedule for selected day */}
       <BriefingSection
-        title="Today's Schedule"
-        actionLabel={!loading && jobs.length > 0 ? "Plan Route" : undefined}
+        title={scheduleSectionTitle}
+        actionLabel={!loading && isToday && selectedDayJobs.length > 0 ? "Plan Route" : undefined}
         onAction={handlePlanRoute}
       >
         {loading && (
           <ActivityIndicator color={colors.accent} size={36} style={{ marginTop: 24 }} />
         )}
-        {!loading && jobs.length === 0 && (
+        {!loading && selectedDayJobs.length === 0 && (
           <EmptySchedule onScheduleJob={handleScheduleJob} />
         )}
-        {!loading && jobs.map((job) => (
+        {!loading && selectedDayJobs.map((job) => (
           <JobCard key={job.id} job={job} onPress={() => handleJobPress(job)} />
         ))}
       </BriefingSection>
@@ -446,6 +567,92 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.textPrimary,
     letterSpacing: -0.5,
+  },
+
+  // Week strip
+  weekStripWrapper: {
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    ...shadow.card,
+  },
+  weekMonthLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.textMuted,
+    letterSpacing: 0.8,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  weekStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  weekNavBtn: {
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weekNavText: {
+    fontSize: 22,
+    color: colors.accent,
+    lineHeight: 26,
+  },
+  dayCell: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  dayLetter: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.textMuted,
+    marginBottom: 4,
+  },
+  dayLetterSelected: {
+    color: colors.accent,
+  },
+  dayNumCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayNumCircleSelected: {
+    backgroundColor: colors.accent,
+  },
+  dayNumCircleToday: {
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+  },
+  dayNum: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  dayNumSelected: {
+    color: colors.textOnAccent,
+  },
+  dayNumToday: {
+    color: colors.accent,
+  },
+  dayDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'transparent',
+    marginTop: 3,
+  },
+  dayDotActive: {
+    backgroundColor: colors.accent,
   },
 
   // Stats row
