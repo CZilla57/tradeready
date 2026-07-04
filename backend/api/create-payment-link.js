@@ -15,13 +15,38 @@ const Stripe = require('stripe');
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const BACKEND_API_TOKEN = process.env.BACKEND_API_TOKEN;
 
+// In-memory sliding-window rate limiter: 10 requests per IP per 60 seconds.
+// Per-instance state — resets on Vercel cold starts, which is acceptable.
+const rateLimitMap = new Map();
+const RATE_LIMIT = 10;
+const WINDOW_MS = 60_000;
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const timestamps = (rateLimitMap.get(ip) || []).filter(t => now - t < WINDOW_MS);
+  if (timestamps.length >= RATE_LIMIT) {
+    rateLimitMap.set(ip, timestamps);
+    return true;
+  }
+  timestamps.push(now);
+  rateLimitMap.set(ip, timestamps);
+  return false;
+}
+
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const allowedOrigins = ['https://tradeready.app', 'null'];
+  const origin = req.headers['origin'] || 'null';
+  res.setHeader('Access-Control-Allow-Origin', allowedOrigins.includes(origin) ? origin : 'https://tradeready.app');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  if (isRateLimited(ip)) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
+  }
 
   // Verify API token when one is configured on the server
   if (BACKEND_API_TOKEN) {
