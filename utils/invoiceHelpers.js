@@ -1,6 +1,8 @@
 // utils/invoiceHelpers.js
 // Pure functions that don't touch the UI — easy to test and reuse.
 
+import Constants from 'expo-constants';
+
 export function daysPastDue(dueDate) {
   const due = new Date(dueDate);
   const today = new Date();
@@ -69,8 +71,8 @@ export async function resolvePaymentLink(invoice, provider, providerKey) {
 // SECURITY: The Stripe secret key lives in STRIPE_SECRET_KEY on the server.
 // The app never sends an sk_ key over the network. providerKey here is the
 // BACKEND_API_TOKEN — a simple shared secret that authenticates this request.
-const VERCEL_URL = "https://backend-tradeready1.vercel.app";
-const VERCEL_URL_IS_PLACEHOLDER = false;
+const VERCEL_URL = Constants.expoConfig?.extra?.backendUrl ?? '';
+const VERCEL_URL_IS_PLACEHOLDER = Constants.expoConfig?.extra?.backendUrlIsPlaceholder ?? true;
 
 export async function fetchPaymentLink(invoice, provider, providerKey) {
   const endpoints = {

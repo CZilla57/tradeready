@@ -43,6 +43,8 @@
       ]
     ],
     "extra": {
+      "backendUrl": "https://backend-tradeready1.vercel.app",
+      "backendUrlIsPlaceholder": false,
       "eas": {
         "projectId": "2dcb243e-0753-4c9e-b411-da4a97faa5fa"
       }
