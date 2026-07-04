@@ -24,6 +24,26 @@ export default function AuthScreen() {
   const [error, setError] = useState('');
 
   async function handleSubmit() {
+    if (mode === 'forgot') {
+      if (!email.trim()) {
+        setError('Please enter your email address.');
+        return;
+      }
+      setError('');
+      setLoading(true);
+      try {
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+        if (error) throw error;
+        Alert.alert('Check your email', 'We sent a reset link to your email address.');
+        setMode('login');
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     if (!email.trim() || !password) {
       setError('Please enter your email and password.');
       return;
@@ -61,6 +81,26 @@ export default function AuthScreen() {
     setError('');
   }
 
+  function goForgot() {
+    setMode('forgot');
+    setError('');
+  }
+
+  function goLogin() {
+    setMode('login');
+    setError('');
+  }
+
+  const cardTitle =
+    mode === 'forgot' ? 'Reset your password' :
+    mode === 'login'  ? 'Sign in' :
+                        'Create account';
+
+  const submitLabel =
+    mode === 'forgot' ? 'Send reset link' :
+    mode === 'login'  ? 'Sign In' :
+                        'Create Account';
+
   return (
     <KeyboardAvoidingView
       style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
@@ -77,9 +117,7 @@ export default function AuthScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>
-            {mode === 'login' ? 'Sign in' : 'Create account'}
-          </Text>
+          <Text style={styles.cardTitle}>{cardTitle}</Text>
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -95,15 +133,26 @@ export default function AuthScreen() {
             autoCorrect={false}
           />
 
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
-            placeholderTextColor={colors.textMuted}
-            secureTextEntry
-          />
+          {mode !== 'forgot' && (
+            <>
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
+                placeholderTextColor={colors.textMuted}
+                secureTextEntry
+              />
+              {mode === 'login' && (
+                <TouchableOpacity style={styles.toggle} onPress={goForgot}>
+                  <Text style={styles.toggleText}>
+                    <Text style={styles.toggleLink}>Forgot password?</Text>
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </>
+          )}
 
           <TouchableOpacity
             style={[styles.submitBtn, loading && styles.submitBtnDisabled]}
@@ -113,21 +162,27 @@ export default function AuthScreen() {
           >
             {loading
               ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.submitText}>
-                  {mode === 'login' ? 'Sign In' : 'Create Account'}
-                </Text>
+              : <Text style={styles.submitText}>{submitLabel}</Text>
             }
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.toggle} onPress={toggle}>
-          <Text style={styles.toggleText}>
-            {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-            <Text style={styles.toggleLink}>
-              {mode === 'login' ? 'Sign up' : 'Sign in'}
+        {mode !== 'forgot' ? (
+          <TouchableOpacity style={styles.toggle} onPress={toggle}>
+            <Text style={styles.toggleText}>
+              {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+              <Text style={styles.toggleLink}>
+                {mode === 'login' ? 'Sign up' : 'Sign in'}
+              </Text>
             </Text>
-          </Text>
-        </TouchableOpacity>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.toggle} onPress={goLogin}>
+            <Text style={styles.toggleText}>
+              <Text style={styles.toggleLink}>Back to sign in</Text>
+            </Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
