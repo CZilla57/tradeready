@@ -38,6 +38,7 @@ describe("resolvePaymentLink — cache reuse", () => {
     const invoiceWithCache = {
       ...INVOICE,
       paymentLinkUrl: "https://pay.stripe.com/cached_abc123",
+      paymentLinkAmount: INVOICE.amount,
     };
 
     const result = await resolvePaymentLink(invoiceWithCache, "stripe", BACKEND_API_TOKEN);
@@ -50,12 +51,31 @@ describe("resolvePaymentLink — cache reuse", () => {
     const invoiceWithCache = {
       ...INVOICE,
       paymentLinkUrl: "https://pay.stripe.com/cached_no_key",
+      paymentLinkAmount: INVOICE.amount,
     };
 
     const result = await resolvePaymentLink(invoiceWithCache, "stripe", "");
 
     expect(result).toBe("https://pay.stripe.com/cached_no_key");
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test("fetches a new link when the cached amount no longer matches the invoice amount", async () => {
+    global.fetch.mockResolvedValueOnce({
+      json: () => Promise.resolve({ url: "https://pay.stripe.com/new_link_updated_amount" }),
+    });
+
+    const invoiceWithStaleCache = {
+      ...INVOICE,
+      amount: 500,                              // amount was edited
+      paymentLinkUrl: "https://pay.stripe.com/old_link_350",
+      paymentLinkAmount: 350,                   // link was generated for the old amount
+    };
+
+    const result = await resolvePaymentLink(invoiceWithStaleCache, "stripe", BACKEND_API_TOKEN);
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(result).toBe("https://pay.stripe.com/new_link_updated_amount");
   });
 });
 
@@ -64,6 +84,7 @@ describe("resolvePaymentLink — network call behaviour", () => {
     const invoiceWithCache = {
       ...INVOICE,
       paymentLinkUrl: "https://buy.stripe.com/cached",
+      paymentLinkAmount: INVOICE.amount,
     };
 
     await resolvePaymentLink(invoiceWithCache, "stripe", BACKEND_API_TOKEN);

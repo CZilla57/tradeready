@@ -99,6 +99,17 @@ module.exports = async function handler(req, res) {
       },
     });
 
+    // Archive the one-time product and price so they don't clutter the Stripe
+    // dashboard. Payment links remain fully active after their product is archived.
+    try {
+      await Promise.all([
+        stripe.products.update(product.id, { active: false }),
+        stripe.prices.update(price.id, { active: false }),
+      ]);
+    } catch {
+      // Non-fatal — the link is live. Log nothing; clutter is an ops concern.
+    }
+
     res.status(200).json({ url: paymentLink.url });
   } catch (err) {
     res.status(500).json({ error: err.message });

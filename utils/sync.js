@@ -131,7 +131,10 @@ async function pullRemote(userId) {
       lastSynced[table] = now;
     }
 
-    // Pull settings — merge so local SecureStore-backed fields are never clobbered
+    // Pull settings. SECURE_FIELDS (providerKey, anthropicKey, groqKey) are
+    // never written to AsyncStorage by saveSettings — they live in SecureStore
+    // only. loadSettings reads SecureStore after every pull and overwrites those
+    // fields, so no special merge is needed here.
     const { data: settingsRow } = await supabase
       .from('settings')
       .select('data')
@@ -139,13 +142,7 @@ async function pullRemote(userId) {
       .maybeSingle();
 
     if (settingsRow?.data) {
-      const localRaw = await AsyncStorage.getItem('settings');
-      const local = localRaw ? JSON.parse(localRaw) : {};
-      await AsyncStorage.setItem('settings', JSON.stringify({
-        ...settingsRow.data,
-        ...(local.providerKey  !== undefined ? { providerKey:  local.providerKey  } : {}),
-        ...(local.anthropicKey !== undefined ? { anthropicKey: local.anthropicKey } : {}),
-      }));
+      await AsyncStorage.setItem('settings', JSON.stringify(settingsRow.data));
     }
 
     // Pull customer notes

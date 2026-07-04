@@ -46,6 +46,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Text, View, ActivityIndicator, TouchableOpacity, Alert } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
@@ -166,13 +167,13 @@ function ChatTab() {
 // ── Tab icons ─────────────────────────────────────────────────────────────────
  
 const TAB_ICONS = {
-  Today:     { active: "📅", inactive: "📅" },
-  Jobs:      { active: "🔨", inactive: "🔨" },
-  Invoices:  { active: "💰", inactive: "💰" },
-  Customers: { active: "👤", inactive: "👤" },
-  Money:     { active: "💵", inactive: "💵" },
-  AI:        { active: "🤖", inactive: "🤖" },
-  Settings:  { active: "⚙️", inactive: "⚙️" },
+  Today:     { active: "calendar",             inactive: "calendar-outline" },
+  Jobs:      { active: "hammer",               inactive: "hammer-outline" },
+  Invoices:  { active: "receipt",              inactive: "receipt-outline" },
+  Customers: { active: "people",               inactive: "people-outline" },
+  Money:     { active: "cash",                 inactive: "cash-outline" },
+  AI:        { active: "chatbubble-ellipses",  inactive: "chatbubble-ellipses-outline" },
+  Settings:  { active: "settings",             inactive: "settings-outline" },
 };
  
 // ── Root ──────────────────────────────────────────────────────────────────────
@@ -188,12 +189,12 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarIcon: ({ focused }) => (
-          <Text style={{ fontSize: 20 }}>
-            {focused
-              ? TAB_ICONS[route.name]?.active
-              : TAB_ICONS[route.name]?.inactive}
-          </Text>
+        tabBarIcon: ({ focused, color }) => (
+          <Ionicons
+            name={focused ? TAB_ICONS[route.name]?.active : TAB_ICONS[route.name]?.inactive}
+            size={22}
+            color={color}
+          />
         ),
         tabBarActiveTintColor:   colors.accent,
         tabBarInactiveTintColor: colors.textMuted,

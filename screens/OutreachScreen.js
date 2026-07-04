@@ -63,7 +63,11 @@ export default function OutreachScreen({ route, navigation }) {
       // Persist so the link survives navigation and doesn't get re-created next time
       const allInvoices = await loadInvoices();
       await saveInvoices(
-        allInvoices.map((i) => (i.id === invoice.id ? { ...i, paymentLinkUrl: link } : i))
+        allInvoices.map((i) =>
+          i.id === invoice.id
+            ? { ...i, paymentLinkUrl: link, paymentLinkAmount: invoice.amount }
+            : i
+        )
       );
     } catch (err) {
       Alert.alert(

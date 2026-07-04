@@ -65,7 +65,10 @@ export function buildPaymentLink(invoice, provider, providerKey) {
 // Centralising this decision prevents duplicate Stripe/Square objects from being
 // created every time the Outreach screen is opened for the same invoice.
 export async function resolvePaymentLink(invoice, provider, providerKey) {
-  if (invoice.paymentLinkUrl) return invoice.paymentLinkUrl;
+  // Invalidate the cache if the invoice amount has changed since the link was generated.
+  if (invoice.paymentLinkUrl && invoice.paymentLinkAmount === invoice.amount) {
+    return invoice.paymentLinkUrl;
+  }
   return fetchPaymentLink(invoice, provider, providerKey);
 }
 
