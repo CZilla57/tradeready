@@ -13,7 +13,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  TouchableOpacity,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadInvoices, saveInvoices } from "../utils/storage";
@@ -54,7 +53,7 @@ export default function AddInvoiceScreen({ route, navigation }) {
       if (prefill.email)    setEmail(prefill.email);
       if (prefill.phone)    setPhone(prefill.phone);
     }
-  }, [invoiceId]);
+  }, [invoiceId, isEditing, navigation, prefill]);
 
   async function handleSave() {
     if (!customer.trim() || !amount.trim()) {

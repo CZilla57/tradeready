@@ -123,7 +123,6 @@ export default function CustomersScreen({ navigation }) {
   const [invoices, setInvoices]             = useState([]);
   const [manualCustomers, setManualCustomers] = useState([]);
   const [searchText, setSearchText]         = useState('');
-  const [loading, setLoading]               = useState(true);
 
   useFocusEffect(
     useCallback(() => {
@@ -138,8 +137,6 @@ export default function CustomersScreen({ navigation }) {
       setManualCustomers(custs || []);
     } catch (err) {
       console.error('CustomersScreen: failed to load data', err);
-    } finally {
-      setLoading(false);
     }
   };
 

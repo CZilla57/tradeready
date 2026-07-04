@@ -17,7 +17,7 @@ export async function exportPdf(html, filename = "document") {
       dialogTitle: `${filename}.pdf`,
       UTI: "com.adobe.pdf",
     });
-  } catch (e) {
+  } catch {
     Alert.alert("PDF error", "Could not generate PDF. Please try again.");
   }
 }

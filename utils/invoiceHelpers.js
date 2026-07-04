@@ -56,6 +56,14 @@ export function buildPaymentLink(invoice, provider, providerKey) {
   }
 }
 
+// Returns the invoice's already-cached payment link, or fetches a new one.
+// Centralising this decision prevents duplicate Stripe/Square objects from being
+// created every time the Outreach screen is opened for the same invoice.
+export async function resolvePaymentLink(invoice, provider, providerKey) {
+  if (invoice.paymentLinkUrl) return invoice.paymentLinkUrl;
+  return fetchPaymentLink(invoice, provider, providerKey);
+}
+
 // Calls your Vercel serverless function to get a real Stripe/Square/PayPal link.
 // Replace VERCEL_URL with your actual deployed backend URL.
 const VERCEL_URL = "https://backend-tradeready1.vercel.app";

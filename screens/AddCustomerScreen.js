@@ -79,7 +79,7 @@ export default function AddCustomerScreen({ route, navigation }) {
         setNotes(c.notes || "");
       }
     });
-  }, [customerId]);
+  }, [customerId, isEditing]);
  
   function handleAddressChange(text) {
     setAddress(text);

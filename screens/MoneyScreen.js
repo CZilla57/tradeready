@@ -31,9 +31,7 @@ import {
   FlatList,
   Alert,
   PanResponder,
-  KeyboardAvoidingView,
   Platform,
-  Dimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { persistPhoto } from '../utils/photoStorage';
@@ -43,8 +41,6 @@ import { loadInvoices, loadExpenses, saveExpenses, loadJobs } from '../utils/sto
 import { colors, spacing, radius, fontSize, shadow } from '../utils/theme';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
-
-const SCREEN_WIDTH = Dimensions.get('window').width;
 
 // Expense categories — trades-specific, not generic accounting jargon
 const EXPENSE_CATEGORIES = [
@@ -567,7 +563,7 @@ const AddExpenseModal = ({ visible, onClose, onSave }) => {
       setReceiptUri(null);
       setShowDatePicker(false);
     }
-  }, [visible]);
+  }, [visible, translateY]);
 
   // Single dismiss path — slide sheet out, then close. Used by every close trigger
   // so there is never a competing animation from the Modal itself.

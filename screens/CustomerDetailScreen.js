@@ -137,28 +137,27 @@ export default function CustomerDetailScreen({ route, navigation }) {
   );
 
   useEffect(() => {
-    loadJobsAndNotes();
-  }, []);
+    async function loadJobsAndNotes() {
+      try {
+        const [allJobs, savedNote] = await Promise.all([
+          loadJobs(),
+          loadNoteForCustomer(customer.name),
+        ]);
 
-  const loadJobsAndNotes = async () => {
-    try {
-      const [allJobs, savedNote] = await Promise.all([
-        loadJobs(),
-        loadNoteForCustomer(customer.name),
-      ]);
-
-      // Match by customerId first (proper relationship), fall back to name match
-      // for invoice-derived customers that don't have a formal customerId yet.
-      const customerJobs = allJobs.filter(j =>
-        j.customerId === customer.id ||
-        j.customerName?.trim().toLowerCase() === customer.name.trim().toLowerCase()
-      );
-      setJobs(customerJobs);
-      setNotes(savedNote);
-    } catch (err) {
-      console.error('CustomerDetailScreen: failed to load data', err);
+        // Match by customerId first (proper relationship), fall back to name match
+        // for invoice-derived customers that don't have a formal customerId yet.
+        const customerJobs = allJobs.filter(j =>
+          j.customerId === customer.id ||
+          j.customerName?.trim().toLowerCase() === customer.name.trim().toLowerCase()
+        );
+        setJobs(customerJobs);
+        setNotes(savedNote);
+      } catch (err) {
+        console.error('CustomerDetailScreen: failed to load data', err);
+      }
     }
-  };
+    loadJobsAndNotes();
+  }, [customer.id, customer.name]);
 
   const handleNotesSave = useCallback(async () => {
     if (!notesChanged) return;

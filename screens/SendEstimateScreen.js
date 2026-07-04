@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -49,14 +49,9 @@ export default function SendEstimateScreen({ route, navigation }) {
       setData({ job, customer, settings });
     }
     load();
-  }, [jobId]);
+  }, [jobId, navigation]);
 
-  useEffect(() => {
-    if (!data) return;
-    generate(data);
-  }, [data, channel]);
-
-  async function generate(d = data) {
+  const generate = useCallback(async (d = data) => {
     if (!d) return;
     setGenerating(true);
     setMessage("");
@@ -80,7 +75,12 @@ export default function SendEstimateScreen({ route, navigation }) {
       setMessage("Error generating message. Check your connection.");
     }
     setGenerating(false);
-  }
+  }, [channel, data]);
+
+  useEffect(() => {
+    if (!data) return;
+    generate(data);
+  }, [data, channel, generate]);
 
   async function sendEmail() {
     const available = await MailComposer.isAvailableAsync();

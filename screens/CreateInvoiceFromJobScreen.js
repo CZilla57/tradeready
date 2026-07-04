@@ -70,36 +70,34 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
  
   useEffect(() => {
     navigation.setOptions({ title: "Create Invoice" });
-    prefillFromJob();
-  }, [jobId]);
- 
-  async function prefillFromJob() {
-    try {
-      const [jobs, invoices, customers] = await Promise.all([loadJobs(), loadInvoices(), loadCustomers()]);
-      const j = jobs.find((x) => x.id === jobId);
+    async function prefillFromJob() {
+      try {
+        const [jobs, invoices, customers] = await Promise.all([loadJobs(), loadInvoices(), loadCustomers()]);
+        const j = jobs.find((x) => x.id === jobId);
 
-      if (!j) {
-        Alert.alert("Error", "Job not found.");
-        navigation.goBack();
-        return;
+        if (!j) {
+          Alert.alert("Error", "Job not found.");
+          navigation.goBack();
+          return;
+        }
+
+        const matchingCustomer = customers.find((c) => c.id === j.customerId);
+
+        setJob(j);
+        setCustomer(j.customerName || "");
+        setAmount(j.estimateTotal > 0 ? String(j.estimateTotal) : "");
+        setEmail(matchingCustomer?.email || "");
+        setPhone(matchingCustomer?.phone || "");
+        setDesc(j.title || "");
+        setNumber(nextInvoiceNumber(invoices));
+      } catch (err) {
+        console.error("CreateInvoiceFromJobScreen: prefill failed", err);
+      } finally {
+        setLoading(false);
       }
-
-      const matchingCustomer = customers.find((c) => c.id === j.customerId);
-
-      setJob(j);
-      setCustomer(j.customerName || "");
-      setAmount(j.estimateTotal > 0 ? String(j.estimateTotal) : "");
-      setEmail(matchingCustomer?.email || "");
-      setPhone(matchingCustomer?.phone || "");
-      setDesc(j.title || "");
-      setNumber(nextInvoiceNumber(invoices));
-      // desc stays as job title; tracked hours are shown as a read-only hint below
-    } catch (err) {
-      console.error("CreateInvoiceFromJobScreen: prefill failed", err);
-    } finally {
-      setLoading(false);
     }
-  }
+    prefillFromJob();
+  }, [jobId, navigation]);
  
   async function handleCreate() {
     if (!customer.trim()) {

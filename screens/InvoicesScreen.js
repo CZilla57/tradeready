@@ -22,7 +22,7 @@ import { syncNotifications } from "../utils/notifications";
 import { getStatus, formatCurrency, formatDate } from "../utils/invoiceHelpers";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
-import { Badge, StatCard, EmptyState, Button } from "../components/UI";
+import { Badge, StatCard, EmptyState } from "../components/UI";
 import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
 
 export default function InvoicesScreen({ navigation }) {

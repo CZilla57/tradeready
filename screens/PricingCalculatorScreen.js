@@ -3,7 +3,7 @@
 // Enter hours, materials, and settings → see a live price breakdown →
 // Claude writes a professional estimate → advance the job to "estimate_sent".
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -21,7 +21,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as MailComposer from "expo-mail-composer";
 import {
-  calculateEstimate,
   calculatePriceRange,
   getSanityWarnings,
   buildEstimatePrompt,
@@ -29,8 +28,8 @@ import {
   breakEvenPrice,
 } from "../utils/pricingEngine";
 import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storage";
-import { Button, Card, Divider, Badge } from "../components/UI";
-import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+import { Button, Card, Divider } from "../components/UI";
+import { colors, spacing, radius, fontSize } from "../utils/theme";
 
 export default function PricingCalculatorScreen({ route, navigation }) {
   const { jobId } = route.params || {};

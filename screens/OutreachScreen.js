@@ -3,7 +3,7 @@
 // Uses expo-mail-composer and expo-sms to open the native iOS Mail and
 // Messages apps pre-filled with the generated content — no email server needed.
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -19,9 +19,9 @@ import * as MailComposer from "expo-mail-composer";
 import * as SMS from "expo-sms";
 import * as Clipboard from "expo-clipboard";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
-import { getStatus, formatCurrency, generateOutreachMessage, fetchPaymentLink } from "../utils/invoiceHelpers";
+import { getStatus, formatCurrency, generateOutreachMessage, resolvePaymentLink } from "../utils/invoiceHelpers";
 import { Badge, Button, Card, Divider } from "../components/UI";
-import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+import { colors, spacing, radius, fontSize } from "../utils/theme";
 
 export default function OutreachScreen({ route, navigation }) {
   const { invoiceId } = route.params;
@@ -49,23 +49,22 @@ export default function OutreachScreen({ route, navigation }) {
       // Skip payment link fetch for paid invoices
       if (inv?.paid) return;
 
-      // Reuse a cached link so we don't create duplicate Stripe objects on every visit
-      if (inv?.paymentLinkUrl) {
-        setPaymentLink(inv.paymentLinkUrl);
+      // No cached link and no provider key configured → prompt the user to add one
+      if (!inv?.paymentLinkUrl && !s.providerKey) {
+        Alert.alert(
+          "Payment key missing",
+          "Go to Settings and paste your Stripe secret key (starts with sk_) to generate real payment links.",
+        );
+        setPaymentLink("");
         return;
       }
 
       try {
-        if (!s.providerKey) {
-          Alert.alert(
-            "Payment key missing",
-            "Go to Settings and paste your Stripe secret key (starts with sk_) to generate real payment links.",
-          );
-          setPaymentLink("");
-        } else {
-          const link = await fetchPaymentLink(inv, s.provider, s.providerKey);
-          setPaymentLink(link);
-          // Persist on the invoice so subsequent opens skip the Stripe API call
+        // resolvePaymentLink returns the cached URL when present, otherwise fetches a new one
+        const link = await resolvePaymentLink(inv, s.provider, s.providerKey);
+        setPaymentLink(link);
+        // Only persist newly generated links — cached ones are already stored
+        if (!inv?.paymentLinkUrl) {
           const allInvoices = await loadInvoices();
           await saveInvoices(
             allInvoices.map((i) => (i.id === inv.id ? { ...i, paymentLinkUrl: link } : i))
@@ -77,16 +76,9 @@ export default function OutreachScreen({ route, navigation }) {
       }
     }
     load();
-  }, [invoiceId]);
+  }, [invoiceId, navigation]);
 
-  // Re-generate whenever channel or payment plan changes (skip for paid invoices)
-  useEffect(() => {
-    if (invoice && !invoice.paid && settings && paymentLink) {
-      generate();
-    }
-  }, [channel, paymentPlanEnabled, installments, frequency, paymentLink]);
-
-  async function generate() {
+  const generate = useCallback(async () => {
     setGenerating(true);
     setMessage("");
     try {
@@ -110,11 +102,18 @@ export default function OutreachScreen({ route, navigation }) {
         setSubject("");
         setMessage(raw);
       }
-    } catch (e) {
+    } catch {
       setMessage("Error generating message. Check your connection.");
     }
     setGenerating(false);
-  }
+  }, [invoice, channel, settings, paymentLink, paymentPlanEnabled, installments, frequency]);
+
+  // Re-generate whenever channel or payment plan changes (skip for paid invoices)
+  useEffect(() => {
+    if (invoice && !invoice.paid && settings && paymentLink) {
+      generate();
+    }
+  }, [channel, paymentPlanEnabled, installments, frequency, paymentLink, invoice, settings, generate]);
 
   async function sendEmail() {
     const available = await MailComposer.isAvailableAsync();

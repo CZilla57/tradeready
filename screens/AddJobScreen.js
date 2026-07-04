@@ -81,7 +81,7 @@ export default function AddJobScreen({ route, navigation }) {
       }
     }
     load();
-  }, [jobId]);
+  }, [jobId, isEditing, focusSchedule]);
 
   function dateObjFromStr(str) {
     if (!str) return new Date();
