@@ -15,7 +15,6 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.tradeready.app",
       "buildNumber": "1",
-      "usesNonExemptEncryption": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
