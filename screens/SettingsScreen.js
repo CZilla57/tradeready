@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
@@ -280,6 +281,29 @@ export default function SettingsScreen() {
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
 
+        <Divider />
+
+        <SectionHeader title="Legal" />
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.listRow}
+            onPress={() => Linking.openURL('https://tradeready.app/privacy')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.listRowText}>Privacy Policy</Text>
+            <Text style={styles.listRowChevron}>›</Text>
+          </TouchableOpacity>
+          <View style={styles.listRowDivider} />
+          <TouchableOpacity
+            style={styles.listRow}
+            onPress={() => Linking.openURL('https://tradeready.app/terms')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.listRowText}>Terms of Service</Text>
+            <Text style={styles.listRowChevron}>›</Text>
+          </TouchableOpacity>
+        </View>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -416,4 +440,12 @@ const styles = StyleSheet.create({
   tradeBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
   tradeLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
   tradeLabelActive: { color: colors.accent, fontWeight: "600" },
+  listRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 13,
+  },
+  listRowText: { flex: 1, fontSize: fontSize.md, color: colors.textPrimary },
+  listRowChevron: { fontSize: 20, color: colors.textMuted },
+  listRowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
 });
