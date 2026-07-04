@@ -203,10 +203,14 @@ export async function initialSync(userId) {
     const dataOwner = storedOwnerRaw ? JSON.parse(storedOwnerRaw) : null;
     const localDataBelongsToOtherUser = dataOwner !== null && dataOwner !== userId;
 
-    // Check whether this user already has cloud data
+    // Check whether this user has ever synced before by looking for a settings
+    // row. Using 'settings' rather than 'jobs' avoids misclassifying a user
+    // who has zero jobs (but existing invoices/customers) as a new user.
+    // pushAllLocalToCloud always writes a settings row, so its presence is a
+    // reliable "has synced before" signal.
     const { count } = await supabase
-      .from('jobs')
-      .select('id', { count: 'exact', head: true })
+      .from('settings')
+      .select('user_id', { count: 'exact', head: true })
       .eq('user_id', userId);
 
     if (count === 0 && !localDataBelongsToOtherUser) {

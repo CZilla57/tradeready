@@ -296,6 +296,13 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// Suppress console.log in production builds. console.error and console.warn
+// are kept so crash-reporting integrations can capture them.
+if (!__DEV__) {
+  // eslint-disable-next-line no-console
+  console.log = () => {};
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>

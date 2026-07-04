@@ -404,11 +404,14 @@ export async function markOnboardingComplete() {
 }
 
 export async function clearSampleData() {
+  // Use the save functions so each collection's deletes are enqueued and
+  // synced to the cloud — prevents sample records from re-appearing on
+  // other devices or after reinstall.
   await Promise.all([
-    AsyncStorage.setItem(KEYS.customers, JSON.stringify([])),
-    AsyncStorage.setItem(KEYS.jobs, JSON.stringify([])),
-    AsyncStorage.setItem(KEYS.invoices, JSON.stringify([])),
-    AsyncStorage.removeItem(KEYS.expenses),
+    saveInvoices([]),
+    saveJobs([]),
+    saveCustomers([]),
+    saveExpenses([]),
     AsyncStorage.removeItem(KEYS.customerNotes),
   ]);
 }
