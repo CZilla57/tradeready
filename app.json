@@ -42,6 +42,13 @@
         }
       ]
     ],
+    "updates": {
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/2dcb243e-0753-4c9e-b411-da4a97faa5fa"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "extra": {
       "backendUrl": "https://backend-tradeready1.vercel.app",
       "backendUrlIsPlaceholder": false,
