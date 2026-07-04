@@ -14,7 +14,8 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.tradeready.app",
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "usesNonExemptEncryption": false
     },
     "android": {
       "adaptiveIcon": {
@@ -52,6 +53,8 @@
     "extra": {
       "backendUrl": "https://backend-tradeready1.vercel.app",
       "backendUrlIsPlaceholder": false,
+      "privacyPolicyUrl": "https://czilla57.github.io/tradeready-legal/privacy.html",
+      "termsUrl": "https://czilla57.github.io/tradeready-legal/terms.html",
       "eas": {
         "projectId": "2dcb243e-0753-4c9e-b411-da4a97faa5fa"
       }

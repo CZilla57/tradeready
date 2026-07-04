@@ -15,12 +15,16 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { supabase } from "../utils/supabase";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+
+const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
+const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
 
 function formatPhone(raw) {
   const digits = raw.replace(/\D/g, "").slice(0, 10);
@@ -308,7 +312,7 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <TouchableOpacity
             style={styles.listRow}
-            onPress={() => Linking.openURL('https://tradeready.app/privacy')}
+            onPress={() => Linking.openURL(PRIVACY_URL)}
             activeOpacity={0.7}
           >
             <Text style={styles.listRowText}>Privacy Policy</Text>
@@ -317,7 +321,7 @@ export default function SettingsScreen() {
           <View style={styles.listRowDivider} />
           <TouchableOpacity
             style={styles.listRow}
-            onPress={() => Linking.openURL('https://tradeready.app/terms')}
+            onPress={() => Linking.openURL(TERMS_URL)}
             activeOpacity={0.7}
           >
             <Text style={styles.listRowText}>Terms of Service</Text>
