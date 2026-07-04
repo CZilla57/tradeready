@@ -27,7 +27,20 @@
     "plugins": [
       "expo-document-picker",
       "expo-mail-composer",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-notifications",
+        {
+          "iosPermissionDescription": "TradeReady uses notifications to remind you about upcoming invoice due dates and payment follow-ups."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "TradeReady needs camera access to let you take photos of job sites and completed work.",
+          "photosPermission": "TradeReady needs photo library access to attach job site photos to your projects."
+        }
+      ]
     ],
     "extra": {
       "eas": {
