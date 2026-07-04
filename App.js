@@ -45,7 +45,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Text, View, ActivityIndicator } from "react-native";
+import { Text, View, ActivityIndicator, TouchableOpacity, Alert } from "react-native";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
@@ -249,12 +249,54 @@ function RootNavigator() {
   );
 }
 
+// expo-updates may not be installed; degrade gracefully if absent
+let Updates;
+try { Updates = require('expo-updates'); } catch (_) {}
+
+class ErrorBoundary extends React.Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    const handleRestart = () => {
+      if (Updates?.reloadAsync) {
+        Updates.reloadAsync();
+      } else {
+        Alert.alert('Restart required', 'Please close and reopen TradeReady to continue.');
+      }
+    };
+
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+        <Text style={{ fontSize: 28, fontWeight: '800', color: colors.accent, marginBottom: 16 }}>TradeReady</Text>
+        <Text style={{ fontSize: 16, color: colors.textPrimary, textAlign: 'center', marginBottom: 32 }}>
+          Something went wrong. Please restart the app.
+        </Text>
+        <TouchableOpacity
+          onPress={handleRestart}
+          style={{ backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32 }}
+          activeOpacity={0.85}
+        >
+          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Restart</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <RootNavigator />
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <RootNavigator />
+        </AuthProvider>
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }
