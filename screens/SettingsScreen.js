@@ -14,6 +14,7 @@ import {
   Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { supabase } from "../utils/supabase";
@@ -264,19 +265,39 @@ export default function SettingsScreen() {
 
         <TouchableOpacity
           style={styles.signOutBtn}
-          onPress={() =>
-            Alert.alert("Sign out", "Are you sure you want to sign out?", [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Sign out",
-                style: "destructive",
-                onPress: async () => {
-                  await clearAllUserData();
-                  await supabase.auth.signOut();
+          onPress={async () => {
+            const raw = await AsyncStorage.getItem('__syncQueue');
+            const queue = raw ? JSON.parse(raw) : [];
+            if (queue.length > 0) {
+              Alert.alert(
+                "You have unsynced changes",
+                "You made changes while offline that haven't been saved to the cloud yet. If you sign out now, they will be lost.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Sign out anyway",
+                    style: "destructive",
+                    onPress: async () => {
+                      await clearAllUserData();
+                      await supabase.auth.signOut();
+                    },
+                  },
+                ]
+              );
+            } else {
+              Alert.alert("Sign out", "Are you sure you want to sign out?", [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Sign out",
+                  style: "destructive",
+                  onPress: async () => {
+                    await clearAllUserData();
+                    await supabase.auth.signOut();
+                  },
                 },
-              },
-            ])
-          }
+              ]);
+            }
+          }}
         >
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>

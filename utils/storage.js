@@ -408,6 +408,8 @@ export async function clearSampleData() {
     AsyncStorage.setItem(KEYS.customers, JSON.stringify([])),
     AsyncStorage.setItem(KEYS.jobs, JSON.stringify([])),
     AsyncStorage.setItem(KEYS.invoices, JSON.stringify([])),
+    AsyncStorage.removeItem(KEYS.expenses),
+    AsyncStorage.removeItem(KEYS.customerNotes),
   ]);
 }
 
