@@ -5,6 +5,7 @@ import { supabase } from './supabase';
 const QUEUE_KEY      = '__syncQueue';
 const LAST_SYNCED_KEY = '__lastSyncedAt';
 const INIT_DONE_KEY  = '__initDone_';
+const DATA_OWNER_KEY = '__dataOwner';
 
 const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses'];
 
@@ -199,21 +200,34 @@ export async function initialSync(userId) {
     const net = await Network.getNetworkStateAsync();
     if (!net.isConnected) return;
 
+    // Guard: if local data was created by a different user, never push it up.
+    // This is defense-in-depth for cases where clearAllUserData() had a partial failure.
+    const storedOwnerRaw = await AsyncStorage.getItem(DATA_OWNER_KEY);
+    const dataOwner = storedOwnerRaw ? JSON.parse(storedOwnerRaw) : null;
+    const localDataBelongsToOtherUser = dataOwner !== null && dataOwner !== userId;
+
     // Check whether this user already has cloud data
     const { count } = await supabase
       .from('jobs')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId);
 
-    if (count === 0) {
+    if (count === 0 && !localDataBelongsToOtherUser) {
       // First device — push whatever is stored locally up to the cloud
       await pushAllLocalToCloud(userId);
     } else {
-      // Second device / reinstall — pull everything down from the cloud
+      if (localDataBelongsToOtherUser) {
+        // Stale data from a prior user is present; wipe it before merging cloud data
+        // so the wrong user's records don't persist alongside this user's records.
+        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes']);
+      }
+      // Second device / reinstall / different-user stale data — pull from cloud
       await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify({}));
       await pullRemote(userId);
     }
 
+    // Mark local data as owned by this user from this point forward
+    await AsyncStorage.setItem(DATA_OWNER_KEY, JSON.stringify(userId));
     await AsyncStorage.setItem(INIT_DONE_KEY + userId, 'true');
   } catch (e) {
     console.warn('Initial sync failed:', e.message);

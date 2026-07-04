@@ -5,7 +5,13 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
-import { loadInvoices, saveInvoices, clearAllUserData } from "../utils/storage";
+import {
+  loadInvoices, saveInvoices,
+  loadJobs, saveJobs,
+  loadCustomers, saveCustomers,
+  saveExpenses,
+  clearAllUserData,
+} from "../utils/storage";
 
 // Isolate storage from sync and notification side-effects so these tests
 // only assert on AsyncStorage / SecureStore calls.
@@ -106,6 +112,7 @@ describe("clearAllUserData", () => {
       "customerNotes",
       "__syncQueue",
       "__lastSyncedAt",
+      "__dataOwner",
       "onboardingComplete",
     ];
     for (const key of mustBeRemoved) {
@@ -131,5 +138,57 @@ describe("clearAllUserData", () => {
 
     // All three deletes were attempted despite the failure on the first
     expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ── Storage key-name contracts ────────────────────────────────────────────────
+// These tests pin the AsyncStorage key strings. If a key is ever renamed in
+// KEYS (storage.js) without updating dependent code (sync.js, these tests),
+// the test fails loudly rather than silently reading from the wrong bucket.
+
+describe("storage key contracts", () => {
+  test("loadJobs reads from the 'jobs' key", async () => {
+    await loadJobs();
+    expect(AsyncStorage.getItem).toHaveBeenCalledWith("jobs");
+  });
+
+  test("saveJobs writes to the 'jobs' key", async () => {
+    const jobs = [{ id: "j1", title: "Test job" }];
+    AsyncStorage.getItem.mockResolvedValue(JSON.stringify(jobs));
+    await saveJobs(jobs);
+    const writtenKey = AsyncStorage.setItem.mock.calls[0][0];
+    expect(writtenKey).toBe("jobs");
+  });
+
+  test("loadCustomers reads from the 'customers' key", async () => {
+    await loadCustomers();
+    expect(AsyncStorage.getItem).toHaveBeenCalledWith("customers");
+  });
+
+  test("saveCustomers writes to the 'customers' key", async () => {
+    const customers = [{ id: "c1", name: "Alice" }];
+    AsyncStorage.getItem.mockResolvedValue(JSON.stringify(customers));
+    await saveCustomers(customers);
+    const writtenKey = AsyncStorage.setItem.mock.calls[0][0];
+    expect(writtenKey).toBe("customers");
+  });
+
+  test("loadInvoices reads from the 'invoices' key", async () => {
+    await loadInvoices();
+    expect(AsyncStorage.getItem).toHaveBeenCalledWith("invoices");
+  });
+
+  test("saveExpenses writes to the 'expenses' key", async () => {
+    const expenses = [{ id: "e1", amount: 50 }];
+    AsyncStorage.getItem.mockResolvedValue(JSON.stringify(expenses));
+    await saveExpenses(expenses);
+    const writtenKey = AsyncStorage.setItem.mock.calls[0][0];
+    expect(writtenKey).toBe("expenses");
+  });
+
+  test("clearAllUserData removes __dataOwner", async () => {
+    await clearAllUserData();
+    const [removedKeys] = AsyncStorage.multiRemove.mock.calls[0];
+    expect(removedKeys).toContain("__dataOwner");
   });
 });

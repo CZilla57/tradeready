@@ -407,6 +407,7 @@ export async function clearAllUserData() {
     ...Object.values(KEYS),
     '__syncQueue',
     '__lastSyncedAt',
+    '__dataOwner',
     'onboardingComplete',
   ]);
   for (const field of SECURE_FIELDS) {

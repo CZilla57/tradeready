@@ -111,6 +111,94 @@ Apple reviews new apps in 1–3 days. Full guide: https://docs.expo.dev/submit/i
 
 ---
 
+## Quality checks
+
+The project ships with Jest tests and ESLint. Run them from the `tradeready/` folder.
+
+### Lint
+
+```bash
+npm run lint          # report problems
+npm run lint:fix      # auto-fix what ESLint can fix
+```
+
+### Format (Prettier)
+
+```bash
+npm run format        # rewrite all JS/JSON/MD files in-place
+```
+
+### Tests
+
+```bash
+npm test              # run all tests once
+npm run test:watch    # watch mode — re-runs on file save
+```
+
+**Test layout:**
+
+| File | What it covers |
+|---|---|
+| `__tests__/pricingEngine.test.js` | Pure pricing math (estimate, price range, break-even, trade nicknames) |
+| `__tests__/invoiceHelpers.test.js` | Invoice date/status logic, currency formatting, payment link builder |
+| `__tests__/UI.test.js` | Component smoke tests — Badge, Button, EmptyState, SectionHeader, StatCard |
+
+**Tech notes:**
+
+- Test runner: [jest-expo](https://github.com/expo/expo/tree/main/packages/jest-expo) (matches Expo SDK version)
+- Component tests: [@testing-library/react-native](https://callstack.github.io/react-native-testing-library/) v14 (async `render`)
+- Linter: ESLint 8 with `eslint-config-expo`
+
+---
+
+## Sync model and known limitations
+
+TradeReady is **local-first**: all reads and writes hit AsyncStorage immediately.
+Supabase sync is a background layer — the app works fully offline and syncs when
+a network connection is available.
+
+### How sync works
+
+| Event | What happens |
+|---|---|
+| First login on a device | Local data is pushed to the cloud (if none exists there yet) |
+| Login on a second device | Cloud data is pulled down; local storage is populated from the cloud |
+| Every save operation | Change is queued in `__syncQueue` and pushed on the next online moment |
+| App resumes from background | Queue is flushed; any remote changes since the last sync are pulled |
+| Sign-out | All local data, the sync queue, and the `__dataOwner` marker are cleared |
+
+### Known limitations
+
+**No conflict resolution.** If the same record is edited on two devices while
+both are offline, last-write wins when they both sync. There is no merge or
+conflict detection.
+
+**Photos are device-local only.** Photos attached to jobs are stored in the
+device file system via `expo-file-system` and are not synced to the cloud. If
+you reinstall the app or sign in on a different device, those photos will not
+be present.
+
+**SecureStore fields are device-local only.** API keys (`providerKey`,
+`anthropicKey`, `geminiKey`) live in the iOS Keychain / Android Keystore and
+are never written to Supabase. You must re-enter them on each device.
+
+**First-device detection uses job count only.** `initialSync` decides whether
+to push or pull based on whether the `jobs` table has any cloud rows for the
+user. A user with customers and invoices but no jobs would be treated as a new
+device and have their local data pushed up.
+
+**Stale-data window on token expiry.** If a Supabase session expires while the
+app is backgrounded and the device is offline, the `SIGNED_OUT` event fires the
+next time the app is opened but before it can reach the network. Local data is
+cleared at that point. Any unsent items in `__syncQueue` at the time of expiry
+are lost.
+
+**Pending queue items are dropped on sign-out.** `clearAllUserData()` removes
+`__syncQueue`, so any writes that hadn't been flushed to Supabase are
+permanently lost when the user signs out.
+
+---
+
 ## Common errors
 
 **"Command not found: expo"**

@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import { supabase } from '../utils/supabase';
 import { initialSync, syncIfOnline } from '../utils/sync';
 import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
+import { clearAllUserData } from '../utils/storage';
 
 const AuthContext = createContext(null);
 
@@ -24,6 +25,13 @@ export function AuthProvider({ children }) {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      if (_event === 'SIGNED_OUT') {
+        // Safety net: clear local data even for non-UI sign-outs (token expiry,
+        // remote revocation). SettingsScreen also calls this before signOut(), so
+        // a double-clear is fine — it's idempotent.
+        clearAllUserData();
+        return;
+      }
       if (session?.user?.id) {
         initialSync(session.user.id);
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
