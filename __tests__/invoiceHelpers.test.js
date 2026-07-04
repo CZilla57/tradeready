@@ -91,9 +91,10 @@ describe("buildPaymentLink", () => {
     email: "customer@example.com",
   };
 
-  test("stripe link uses the provider key", () => {
-    const link = buildPaymentLink(invoice, "stripe", "test_abc123");
-    expect(link).toContain("stripe.com");
+  test("stripe throws — no valid client-side fallback (providerKey is backend token, not a Stripe link slug)", () => {
+    expect(() => buildPaymentLink(invoice, "stripe", "test_abc123")).toThrow(
+      /backend to be configured/
+    );
   });
 
   test("venmo link includes amount and username", () => {

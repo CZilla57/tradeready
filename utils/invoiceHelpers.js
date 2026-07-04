@@ -44,7 +44,10 @@ export function buildPaymentLink(invoice, provider, providerKey) {
 
   switch (provider) {
     case "stripe":
-      return key ? `https://buy.stripe.com/${key}` : "https://stripe.com";
+      // providerKey for Stripe is the backend API token, not a Stripe payment
+      // link slug — there is no valid client-side fallback URL for Stripe.
+      // Callers should surface an error rather than generating a broken link.
+      throw new Error("Stripe payment links require the backend to be configured. Check your Vercel setup in Settings.");
     case "square":
       return `https://squareup.com/pay/${key}?amount=${amt}&note=${desc}`;
     case "paypal":

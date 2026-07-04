@@ -3,9 +3,9 @@
 // SECURITY MODEL (transitional MVP):
 //   - STRIPE_SECRET_KEY lives in Vercel environment variables only.
 //     It is never accepted from the request body.
-//   - BACKEND_API_TOKEN (optional but recommended) is a shared secret that
-//     the mobile app sends as "Authorization: Bearer <token>". Set it in
-//     Vercel project settings to prevent unauthenticated calls.
+//   - BACKEND_API_TOKEN is a required shared secret that the mobile app sends
+//     as "Authorization: Bearer <token>". Set it in Vercel project settings.
+//     The handler refuses all requests if this variable is not configured.
 //
 // TODO (v2): Replace with Stripe Connect so each user authorises their own
 //   Stripe account via OAuth and no shared secret key is needed.
@@ -34,9 +34,14 @@ function isRateLimited(ip) {
 }
 
 module.exports = async function handler(req, res) {
-  const allowedOrigins = ['https://tradeready.app', 'null'];
-  const origin = req.headers['origin'] || 'null';
-  res.setHeader('Access-Control-Allow-Origin', allowedOrigins.includes(origin) ? origin : 'https://tradeready.app');
+  // React Native fetch() sends no Origin header, so CORS headers only matter
+  // for browser-based callers. 'null' (sandboxed iframe / file://) is excluded.
+  const allowedOrigins = ['https://tradeready.app'];
+  const origin = req.headers['origin'];
+  res.setHeader(
+    'Access-Control-Allow-Origin',
+    origin && allowedOrigins.includes(origin) ? origin : 'https://tradeready.app'
+  );
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
@@ -48,12 +53,16 @@ module.exports = async function handler(req, res) {
     return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
   }
 
-  // Verify API token when one is configured on the server
-  if (BACKEND_API_TOKEN) {
-    const auth = req.headers['authorization'];
-    if (auth !== `Bearer ${BACKEND_API_TOKEN}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  // BACKEND_API_TOKEN is required. Refuse all requests if the Vercel env var
+  // is not set — an unconfigured endpoint would otherwise be publicly accessible.
+  if (!BACKEND_API_TOKEN) {
+    return res.status(500).json({
+      error: 'Server misconfiguration: BACKEND_API_TOKEN is not set. Add it to your Vercel project environment variables.',
+    });
+  }
+  const auth = req.headers['authorization'];
+  if (auth !== `Bearer ${BACKEND_API_TOKEN}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   if (!STRIPE_SECRET_KEY) {
