@@ -74,6 +74,7 @@ import { colors, fontSize } from "./utils/theme";
 import { loadSettings } from "./utils/storage";
 import { getTradeNickname } from "./utils/pricingEngine";
  
+const RootStack     = createNativeStackNavigator();
 const TodayStack    = createNativeStackNavigator();
 const Tab           = createBottomTabNavigator();
 const JobStack      = createNativeStackNavigator();
@@ -237,14 +238,19 @@ function RootNavigator() {
     );
   }
 
-  if (!session) return <AuthScreen />;
-
   return (
     <NavigationContainer>
-      {onboardingDone
-        ? <MainTabs />
-        : <OnboardingScreen onComplete={() => setOnboardingDone(true)} />
-      }
+      <RootStack.Navigator screenOptions={{ headerShown: false }}>
+        {!session ? (
+          <RootStack.Screen name="Auth" component={AuthScreen} />
+        ) : !onboardingDone ? (
+          <RootStack.Screen name="Onboarding">
+            {() => <OnboardingScreen onComplete={() => setOnboardingDone(true)} />}
+          </RootStack.Screen>
+        ) : (
+          <RootStack.Screen name="Main" component={MainTabs} />
+        )}
+      </RootStack.Navigator>
     </NavigationContainer>
   );
 }
