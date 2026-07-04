@@ -64,8 +64,11 @@ export async function resolvePaymentLink(invoice, provider, providerKey) {
   return fetchPaymentLink(invoice, provider, providerKey);
 }
 
-// Calls your Vercel serverless function to get a real Stripe/Square/PayPal link.
-// Replace VERCEL_URL with your actual deployed backend URL.
+// Calls the Vercel serverless function to create a Stripe Payment Link.
+//
+// SECURITY: The Stripe secret key lives in STRIPE_SECRET_KEY on the server.
+// The app never sends an sk_ key over the network. providerKey here is the
+// BACKEND_API_TOKEN — a simple shared secret that authenticates this request.
 const VERCEL_URL = "https://backend-tradeready1.vercel.app";
 const VERCEL_URL_IS_PLACEHOLDER = false;
 
@@ -83,15 +86,21 @@ export async function fetchPaymentLink(invoice, provider, providerKey) {
     return buildPaymentLink(invoice, provider, providerKey);
   }
 
+  const headers = { "Content-Type": "application/json" };
+  if (providerKey) {
+    // providerKey is the BACKEND_API_TOKEN — authenticates the request, not the Stripe key
+    headers["Authorization"] = `Bearer ${providerKey}`;
+  }
+
   const res = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({
       amount: invoice.amount,
       invoiceNumber: invoice.number,
       description: invoice.desc,
       customerEmail: invoice.email,
-      stripeKey: providerKey,
+      // No stripeKey — it lives in STRIPE_SECRET_KEY env var on the server
     }),
   });
 

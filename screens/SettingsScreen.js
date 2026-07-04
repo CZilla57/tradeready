@@ -28,7 +28,12 @@ function formatPhone(raw) {
 }
 
 const PROVIDERS = [
-  { id: "stripe", label: "Stripe", hint: "Paste your Stripe Secret Key (starts with sk_)" },
+  {
+    id: "stripe",
+    label: "Stripe",
+    hint: "Enter your backend API token (set as BACKEND_API_TOKEN in your Vercel project settings). Your Stripe Secret Key belongs on the server — never paste sk_ keys here.",
+    keyNote: "Stored securely on your device. Sent to your backend to authenticate payment link requests.",
+  },
   { id: "square", label: "Square", hint: "Paste your Square Access Token" },
   { id: "paypal", label: "PayPal", hint: "Paste your PayPal Client ID" },
   { id: "venmo", label: "Venmo", hint: "Enter your Venmo username" },
@@ -157,7 +162,7 @@ export default function SettingsScreen() {
               secureTextEntry={s.provider === "stripe" || s.provider === "square" || s.provider === "paypal"}
             />
             <Text style={styles.keyNote}>
-              This key is stored only on your device. Never share it with anyone.
+              {selectedProvider.keyNote ?? "Stored only on your device. Never share it with anyone."}
             </Text>
           </View>
         )}

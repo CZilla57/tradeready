@@ -32,6 +32,7 @@ export default function OutreachScreen({ route, navigation }) {
   const [message, setMessage] = useState("");
   const [subject, setSubject] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [generatingLink, setGeneratingLink] = useState(false);
   const [paymentLink, setPaymentLink] = useState("");
   const [paymentPlanEnabled, setPaymentPlanEnabled] = useState(false);
   const [installments, setInstallments] = useState("3");
@@ -46,37 +47,32 @@ export default function OutreachScreen({ route, navigation }) {
       setSettings(s);
       navigation.setOptions({ title: inv?.customer || "Outreach" });
 
-      // Skip payment link fetch for paid invoices
-      if (inv?.paid) return;
-
-      // No cached link and no provider key configured → prompt the user to add one
-      if (!inv?.paymentLinkUrl && !s.providerKey) {
-        Alert.alert(
-          "Payment key missing",
-          "Go to Settings and paste your Stripe secret key (starts with sk_) to generate real payment links.",
-        );
-        setPaymentLink("");
-        return;
-      }
-
-      try {
-        // resolvePaymentLink returns the cached URL when present, otherwise fetches a new one
-        const link = await resolvePaymentLink(inv, s.provider, s.providerKey);
-        setPaymentLink(link);
-        // Only persist newly generated links — cached ones are already stored
-        if (!inv?.paymentLinkUrl) {
-          const allInvoices = await loadInvoices();
-          await saveInvoices(
-            allInvoices.map((i) => (i.id === inv.id ? { ...i, paymentLinkUrl: link } : i))
-          );
-        }
-      } catch (err) {
-        Alert.alert("Payment link error", err?.message || "Could not generate payment link. Check your Stripe key in Settings.");
-        setPaymentLink("");
+      // Restore cached payment link so the message can auto-generate immediately
+      if (inv?.paymentLinkUrl) {
+        setPaymentLink(inv.paymentLinkUrl);
       }
     }
     load();
   }, [invoiceId, navigation]);
+
+  async function handleGenerateLink() {
+    setGeneratingLink(true);
+    try {
+      const link = await resolvePaymentLink(invoice, settings.provider, settings.providerKey);
+      setPaymentLink(link);
+      // Persist so the link survives navigation and doesn't get re-created next time
+      const allInvoices = await loadInvoices();
+      await saveInvoices(
+        allInvoices.map((i) => (i.id === invoice.id ? { ...i, paymentLinkUrl: link } : i))
+      );
+    } catch (err) {
+      Alert.alert(
+        "Payment link error",
+        err?.message || "Could not generate payment link. Check your backend configuration in Settings."
+      );
+    }
+    setGeneratingLink(false);
+  }
 
   const generate = useCallback(async () => {
     setGenerating(true);
@@ -171,6 +167,18 @@ export default function OutreachScreen({ route, navigation }) {
             <View style={styles.linkBadge}>
               <Text style={styles.linkBadgeText}>✓ Payment link ready</Text>
             </View>
+          ) : !invoice.paid ? (
+            <TouchableOpacity
+              style={styles.generateLinkBtn}
+              onPress={handleGenerateLink}
+              disabled={generatingLink}
+            >
+              {generatingLink ? (
+                <ActivityIndicator size="small" color={colors.accent} />
+              ) : (
+                <Text style={styles.generateLinkText}>Generate payment link</Text>
+              )}
+            </TouchableOpacity>
           ) : null}
         </Card>
 
@@ -298,6 +306,18 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
   linkBadgeText: { fontSize: fontSize.xs, color: colors.success, fontWeight: "600" },
+  generateLinkBtn: {
+    marginTop: spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    alignSelf: "flex-start",
+    minWidth: 44,
+    alignItems: "center",
+  },
+  generateLinkText: { fontSize: fontSize.xs, color: colors.accent, fontWeight: "600" },
   section: { marginBottom: spacing.sm },
   paidCard: {
     marginBottom: spacing.sm,

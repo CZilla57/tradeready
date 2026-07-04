@@ -1,11 +1,14 @@
 // __tests__/paymentLink.test.js
-// Tests for resolvePaymentLink — the utility used by OutreachScreen to decide
-// whether to return a cached payment URL or fetch a new one from the backend.
+// Tests for resolvePaymentLink and fetchPaymentLink — the utilities used by
+// OutreachScreen to decide whether to return a cached payment URL or fetch a
+// new one from the backend.
 //
-// Test #3: reuses an existing paymentLinkUrl rather than generating a new one.
-// Test #4: no network call fires when a cached link is already present.
+// Key security invariants under test:
+//   - The request body must NEVER contain a stripeKey field (sk_... stays on server).
+//   - providerKey is sent as Authorization: Bearer, not in the request body.
+//   - Cached links are returned without any network call.
 
-import { resolvePaymentLink } from "../utils/invoiceHelpers";
+import { resolvePaymentLink, fetchPaymentLink } from "../utils/invoiceHelpers";
 
 const INVOICE = {
   id: "inv1",
@@ -16,9 +19,8 @@ const INVOICE = {
   customer: "Jane Smith",
 };
 
-// Stripe is the only provider that reaches the network (via the Vercel backend).
-// Venmo / PayPal / Square fall back to client-side link builders with no fetch call.
-const STRIPE_KEY = "sk_test_abc123";
+// providerKey for Stripe is now the BACKEND_API_TOKEN, not an sk_ Stripe secret key.
+const BACKEND_API_TOKEN = "test-api-token-abc123";
 
 let originalFetch;
 
@@ -31,21 +33,20 @@ afterEach(() => {
   global.fetch = originalFetch;
 });
 
-describe("resolvePaymentLink — cache reuse (test #3)", () => {
+describe("resolvePaymentLink — cache reuse", () => {
   test("returns the cached paymentLinkUrl without touching the network", async () => {
     const invoiceWithCache = {
       ...INVOICE,
       paymentLinkUrl: "https://pay.stripe.com/cached_abc123",
     };
 
-    const result = await resolvePaymentLink(invoiceWithCache, "stripe", STRIPE_KEY);
+    const result = await resolvePaymentLink(invoiceWithCache, "stripe", BACKEND_API_TOKEN);
 
     expect(result).toBe("https://pay.stripe.com/cached_abc123");
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
   test("cached URL wins even when providerKey is empty", async () => {
-    // Ensures the cache-first logic doesn't break when key is missing later.
     const invoiceWithCache = {
       ...INVOICE,
       paymentLinkUrl: "https://pay.stripe.com/cached_no_key",
@@ -58,32 +59,30 @@ describe("resolvePaymentLink — cache reuse (test #3)", () => {
   });
 });
 
-describe("resolvePaymentLink — no auto-fetch when link already exists (test #4)", () => {
+describe("resolvePaymentLink — network call behaviour", () => {
   test("fetch is never called for a cached Stripe invoice", async () => {
     const invoiceWithCache = {
       ...INVOICE,
       paymentLinkUrl: "https://buy.stripe.com/cached",
     };
 
-    await resolvePaymentLink(invoiceWithCache, "stripe", STRIPE_KEY);
+    await resolvePaymentLink(invoiceWithCache, "stripe", BACKEND_API_TOKEN);
 
     expect(global.fetch).toHaveBeenCalledTimes(0);
   });
 
   test("fetch IS called when there is no cached URL and provider is Stripe", async () => {
-    // Confirms the fetch path is still exercised for new invoices.
     global.fetch.mockResolvedValueOnce({
       json: () => Promise.resolve({ url: "https://pay.stripe.com/new_link" }),
     });
 
-    const result = await resolvePaymentLink(INVOICE, "stripe", STRIPE_KEY);
+    const result = await resolvePaymentLink(INVOICE, "stripe", BACKEND_API_TOKEN);
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(result).toBe("https://pay.stripe.com/new_link");
   });
 
   test("non-Stripe providers never reach the network even without a cached URL", async () => {
-    // Venmo, PayPal, Square, and custom providers are all client-side only.
     const venmoResult = await resolvePaymentLink(INVOICE, "venmo", "mytrades");
     expect(venmoResult).toContain("venmo.com");
 
@@ -91,5 +90,67 @@ describe("resolvePaymentLink — no auto-fetch when link already exists (test #4
     expect(paypalResult).toContain("paypal.com");
 
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchPaymentLink — security: sk_ key never in request body", () => {
+  test("request body does not contain a stripeKey field", async () => {
+    global.fetch.mockResolvedValueOnce({
+      json: () => Promise.resolve({ url: "https://pay.stripe.com/link" }),
+    });
+
+    await fetchPaymentLink(INVOICE, "stripe", BACKEND_API_TOKEN);
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [, options] = global.fetch.mock.calls[0];
+    const body = JSON.parse(options.body);
+
+    expect(body).not.toHaveProperty("stripeKey");
+    expect(body).toHaveProperty("amount", INVOICE.amount);
+    expect(body).toHaveProperty("invoiceNumber", INVOICE.number);
+  });
+
+  test("providerKey is sent as Authorization Bearer header, not in the body", async () => {
+    global.fetch.mockResolvedValueOnce({
+      json: () => Promise.resolve({ url: "https://pay.stripe.com/link" }),
+    });
+
+    await fetchPaymentLink(INVOICE, "stripe", BACKEND_API_TOKEN);
+
+    const [, options] = global.fetch.mock.calls[0];
+    expect(options.headers["Authorization"]).toBe(`Bearer ${BACKEND_API_TOKEN}`);
+    const body = JSON.parse(options.body);
+    expect(body).not.toHaveProperty("stripeKey");
+  });
+
+  test("Authorization header is omitted when providerKey is empty", async () => {
+    global.fetch.mockResolvedValueOnce({
+      json: () => Promise.resolve({ url: "https://pay.stripe.com/link" }),
+    });
+
+    await fetchPaymentLink(INVOICE, "stripe", "");
+
+    const [, options] = global.fetch.mock.calls[0];
+    expect(options.headers).not.toHaveProperty("Authorization");
+  });
+
+  test("throws when backend returns an error", async () => {
+    global.fetch.mockResolvedValueOnce({
+      json: () => Promise.resolve({ error: "STRIPE_SECRET_KEY is not configured." }),
+    });
+
+    await expect(fetchPaymentLink(INVOICE, "stripe", BACKEND_API_TOKEN)).rejects.toThrow(
+      "STRIPE_SECRET_KEY is not configured."
+    );
+  });
+
+  test("throws when backend returns 401 Unauthorized", async () => {
+    global.fetch.mockResolvedValueOnce({
+      json: () => Promise.resolve({ error: "Unauthorized" }),
+    });
+
+    await expect(fetchPaymentLink(INVOICE, "stripe", "wrong-token")).rejects.toThrow(
+      "Unauthorized"
+    );
   });
 });
