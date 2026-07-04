@@ -179,7 +179,7 @@ you reinstall the app or sign in on a different device, those photos will not
 be present.
 
 **SecureStore fields are device-local only.** API keys (`providerKey`,
-`anthropicKey`, `geminiKey`) live in the iOS Keychain / Android Keystore and
+`anthropicKey`, `groqKey`) live in the iOS Keychain / Android Keystore and
 are never written to Supabase. You must re-enter them on each device.
 
 **First-device detection uses job count only.** `initialSync` decides whether

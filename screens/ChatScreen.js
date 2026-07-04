@@ -1,5 +1,5 @@
 // screens/ChatScreen.js
-// AI chatbot powered by Gemini — helps with estimates, business advice,
+// AI chatbot powered by Groq — helps with estimates, business advice,
 // and drafting messages to customers.
 
 import React, { useState, useCallback, useLayoutEffect } from "react";
@@ -18,7 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { loadSettings } from "../utils/storage";
-import { sendGeminiMessage } from "../utils/aiService";
+import { sendGroqMessage } from "../utils/aiService";
 import { TRADE_TYPES, getTradeNickname } from "../utils/pricingEngine";
 import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
 
@@ -71,10 +71,10 @@ export default function ChatScreen({ navigation }) {
     setSending(true);
 
     try {
-      const reply = await sendGeminiMessage({
+      const reply = await sendGroqMessage({
         messages: history,
         systemPrompt: buildSystemPrompt(settings || {}),
-        apiKey: settings?.geminiKey,
+        apiKey: settings?.groqKey,
       });
       setMessages(prev => [...prev, { id: String(Date.now()) + "r", role: "assistant", text: reply }]);
     } catch (err) {

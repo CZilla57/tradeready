@@ -179,8 +179,8 @@ export default function SettingsScreen() {
           </Text>
           <TextInput
             style={styles.input}
-            value={s.geminiKey}
-            onChangeText={(v) => update("geminiKey", v)}
+            value={s.groqKey}
+            onChangeText={(v) => update("groqKey", v)}
             placeholder="gsk_..."
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"

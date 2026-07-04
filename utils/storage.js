@@ -12,7 +12,7 @@ import { syncNotifications } from "./notifications";
 // Fields that must live in the iOS Keychain / Android Keystore rather than
 // plain AsyncStorage. Both load/saveSettings strip these out before hitting
 // AsyncStorage and delegate to SecureStore.
-const SECURE_FIELDS = ["providerKey", "anthropicKey", "geminiKey"];
+const SECURE_FIELDS = ["providerKey", "anthropicKey", "groqKey"];
 
 async function loadSecureFields() {
   const result = {};
@@ -22,6 +22,17 @@ async function loadSecureFields() {
     } catch {
       result[field] = "";
     }
+  }
+  // Migrate legacy "geminiKey" to "groqKey" if needed
+  if (!result.groqKey) {
+    try {
+      const legacy = await SecureStore.getItemAsync('geminiKey');
+      if (legacy) {
+        await SecureStore.setItemAsync('groqKey', legacy);
+        await SecureStore.deleteItemAsync('geminiKey');
+        result.groqKey = legacy;
+      }
+    } catch {}
   }
   return result;
 }
@@ -370,7 +381,7 @@ export function defaultSettings() {
 
     // AI
     anthropicKey: "",
-    geminiKey: "",
+    groqKey: "",
   };
 }
 
@@ -413,6 +424,8 @@ export async function clearAllUserData() {
   for (const field of SECURE_FIELDS) {
     try { await SecureStore.deleteItemAsync(field); } catch {}
   }
+  // Clean up legacy key in case migration never ran
+  try { await SecureStore.deleteItemAsync('geminiKey'); } catch {}
 }
 
 // --- Daily Operations (Today Tab) ---

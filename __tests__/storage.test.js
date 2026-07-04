@@ -120,14 +120,15 @@ describe("clearAllUserData", () => {
     }
   });
 
-  test("deletes all three SecureStore sensitive keys", async () => {
+  test("deletes all SecureStore sensitive keys including legacy geminiKey", async () => {
     await clearAllUserData();
 
     const deletedKeys = SecureStore.deleteItemAsync.mock.calls.map(([k]) => k);
     expect(deletedKeys).toContain("providerKey");
     expect(deletedKeys).toContain("anthropicKey");
-    expect(deletedKeys).toContain("geminiKey");
-    expect(deletedKeys).toHaveLength(3);
+    expect(deletedKeys).toContain("groqKey");
+    expect(deletedKeys).toContain("geminiKey"); // legacy key cleanup
+    expect(deletedKeys).toHaveLength(4);
   });
 
   test("completes without throwing even if a SecureStore delete fails", async () => {
@@ -136,8 +137,8 @@ describe("clearAllUserData", () => {
 
     await expect(clearAllUserData()).resolves.toBeUndefined();
 
-    // All three deletes were attempted despite the failure on the first
-    expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(3);
+    // All four deletes were attempted despite the failure on the first
+    expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(4);
   });
 });
 

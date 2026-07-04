@@ -1,6 +1,15 @@
 // Mock Expo modules that rely on native code unavailable in the Jest/Node environment.
 // jest-expo already mocks many modules; these fill in remaining gaps.
 
+jest.mock("expo-constants", () => ({
+  expoConfig: {
+    extra: {
+      backendUrl: "https://backend-tradeready1.vercel.app",
+      backendUrlIsPlaceholder: false,
+    },
+  },
+}));
+
 jest.mock("expo-notifications", () => ({
   getPermissionsAsync: jest.fn(() => Promise.resolve({ status: "granted" })),
   requestPermissionsAsync: jest.fn(() => Promise.resolve({ status: "granted" })),

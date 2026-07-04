@@ -8,7 +8,7 @@ const MAX_HISTORY = 20; // keep last 20 messages (~10 exchanges)
 // messages: [{ role: "user"|"assistant", text: string }]
 // systemPrompt: optional string
 // apiKey: Groq API key from console.groq.com
-export async function sendGeminiMessage({ messages, systemPrompt, apiKey }) {
+export async function sendGroqMessage({ messages, systemPrompt, apiKey }) {
   if (!apiKey) {
     throw new Error("No AI key set. Add your Groq API key in Settings → AI Assistant.");
   }
