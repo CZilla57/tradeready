@@ -3,26 +3,30 @@
 // Collects: customer, title, description, address, schedule, notes.
 // Pricing is handled separately in PricingCalculatorScreen.
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
   TextInput,
   ScrollView,
   TouchableOpacity,
-  Modal,
   StyleSheet,
   Alert,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadJobs, saveJobs, loadCustomers } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, getOrCreateCustomer } from "../utils/storage";
+import { advanceStatusForSchedule } from "../utils/jobStatus";
 import { Button } from "../components/UI";
-import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+import Field from "../components/Field";
+import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
 
 export default function AddJobScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId, focusSchedule } = route.params || {};
   const isEditing = !!jobId;
 
@@ -149,10 +153,18 @@ export default function AddJobScreen({ route, navigation }) {
     }
 
     setSaving(true);
-    const jobs = await loadJobs();
+    const [jobs, settings] = await Promise.all([loadJobs(), loadSettings()]);
+
+    // A free-typed customer (no pick from the list) has no id yet — promote it to
+    // a real record so the job links like any other (roadmap #5, folds in #3).
+    let resolvedCustomerId = customerId;
+    if (!resolvedCustomerId) {
+      const record = await getOrCreateCustomer({ name: customerName.trim() });
+      resolvedCustomerId = record?.id ?? "";
+    }
 
     const jobData = {
-      customerId,
+      customerId: resolvedCustomerId,
       customerName: customerName.trim(),
       title: title.trim(),
       description: description.trim(),
@@ -165,18 +177,24 @@ export default function AddJobScreen({ route, navigation }) {
 
     let updated;
     if (isEditing) {
-      updated = jobs.map((j) => (j.id === jobId ? { ...j, ...jobData } : j));
+      // Adding a schedule to an approved job advances it to "scheduled"
+      // (guarded so later statuses never regress — see utils/jobStatus).
+      updated = jobs.map((j) =>
+        j.id === jobId
+          ? { ...j, ...jobData, status: advanceStatusForSchedule(j.status, !!jobData.scheduledDate) }
+          : j
+      );
     } else {
       const newJob = {
         id: `j${Date.now()}`,
         status: "lead",
         estimateTotal: 0,
         laborHours: 0,
-        laborRate: 85,
+        laborRate: settings.laborRate ?? 85,
         materials: [],
-        materialMarkup: 20,
-        overhead: 15,
-        margin: 20,
+        materialMarkup: settings.materialMarkup ?? 20,
+        overhead: settings.overheadPercent ?? 15,
+        margin: settings.marginPercent ?? 20,
         invoiceId: null,
         createdAt: new Date().toISOString().split("T")[0],
         ...jobData,
@@ -279,18 +297,18 @@ export default function AddJobScreen({ route, navigation }) {
 
           {/* Job info */}
           <SectionLabel>Job info</SectionLabel>
-          <Field label="Job title *" value={title} onChange={setTitle} placeholder="Replace kitchen faucet" />
+          <Field label="Job title *" value={title} onChangeText={setTitle} placeholder="Replace kitchen faucet" />
           <Field
             label="Description"
             value={description}
-            onChange={setDescription}
+            onChangeText={setDescription}
             placeholder="What needs to be done? Be specific — this becomes your estimate."
             multiline
           />
           <Field
             label="Job address"
             value={address}
-            onChange={setAddress}
+            onChangeText={setAddress}
             placeholder="123 Main St, City, ST 00000"
             keyboardType="default"
           />
@@ -362,7 +380,7 @@ export default function AddJobScreen({ route, navigation }) {
           <Field
             label="Internal notes"
             value={notes}
-            onChange={setNotes}
+            onChangeText={setNotes}
             placeholder="Gate code, parking, customer preferences..."
             multiline
           />
@@ -381,148 +399,43 @@ export default function AddJobScreen({ route, navigation }) {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* ── Date picker ──────────────────────────────────────────────────── */}
-      {showDatePicker && (
-        Platform.OS === "ios" ? (
-          <Modal transparent animationType="slide">
-            <View style={styles.pickerOverlay}>
-              <View style={styles.pickerSheet}>
-                <View style={styles.pickerSheetHeader}>
-                  <Text style={styles.pickerSheetTitle}>Select Date</Text>
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.pickerSheetDone}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  themeVariant="light"
-                  value={dateObjFromStr(scheduledDate)}
-                  mode="date"
-                  display="inline"
-                  onChange={(_, date) => { if (date) setScheduledDate(toDateStr(date)); }}
-                  style={{ alignSelf: "center" }}
-                  accentColor={colors.accent}
-                />
-              </View>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-                  themeVariant="light"
-            value={dateObjFromStr(scheduledDate)}
-            mode="date"
-            display="default"
-            onChange={(event, date) => {
-              setShowDatePicker(false);
-              if (event.type === "set" && date) setScheduledDate(toDateStr(date));
-            }}
-          />
-        )
-      )}
-
-      {/* ── Start time picker ────────────────────────────────────────────── */}
-      {showStartTimePicker && (
-        Platform.OS === "ios" ? (
-          <Modal transparent animationType="slide">
-            <View style={styles.pickerOverlay}>
-              <View style={styles.pickerSheet}>
-                <View style={styles.pickerSheetHeader}>
-                  <Text style={styles.pickerSheetTitle}>Start Time</Text>
-                  <TouchableOpacity onPress={() => setShowStartTimePicker(false)}>
-                    <Text style={styles.pickerSheetDone}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  themeVariant="light"
-                  value={timeObjFromStr(scheduledStartTime)}
-                  mode="time"
-                  display="spinner"
-                  is24Hour={false}
-                  onChange={(_, date) => { if (date) setScheduledStartTime(toTimeStr(date)); }}
-                />
-              </View>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-                  themeVariant="light"
-            value={timeObjFromStr(scheduledStartTime)}
-            mode="time"
-            display="default"
-            is24Hour={false}
-            onChange={(event, date) => {
-              setShowStartTimePicker(false);
-              if (event.type === "set" && date) setScheduledStartTime(toTimeStr(date));
-            }}
-          />
-        )
-      )}
-
-      {/* ── End time picker ──────────────────────────────────────────────── */}
-      {showEndTimePicker && (
-        Platform.OS === "ios" ? (
-          <Modal transparent animationType="slide">
-            <View style={styles.pickerOverlay}>
-              <View style={styles.pickerSheet}>
-                <View style={styles.pickerSheetHeader}>
-                  <Text style={styles.pickerSheetTitle}>End Time</Text>
-                  <TouchableOpacity onPress={() => setShowEndTimePicker(false)}>
-                    <Text style={styles.pickerSheetDone}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  themeVariant="light"
-                  value={timeObjFromStr(scheduledEndTime)}
-                  mode="time"
-                  display="spinner"
-                  is24Hour={false}
-                  onChange={(_, date) => { if (date) setScheduledEndTime(toTimeStr(date)); }}
-                />
-              </View>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-                  themeVariant="light"
-            value={timeObjFromStr(scheduledEndTime)}
-            mode="time"
-            display="default"
-            is24Hour={false}
-            onChange={(event, date) => {
-              setShowEndTimePicker(false);
-              if (event.type === "set" && date) setScheduledEndTime(toTimeStr(date));
-            }}
-          />
-        )
-      )}
+      {/* ── Schedule pickers ─────────────────────────────────────────────── */}
+      <DateTimePickerSheet
+        visible={showDatePicker}
+        mode="date"
+        title="Select Date"
+        value={dateObjFromStr(scheduledDate)}
+        onChange={(date) => setScheduledDate(toDateStr(date))}
+        onClose={() => setShowDatePicker(false)}
+      />
+      <DateTimePickerSheet
+        visible={showStartTimePicker}
+        mode="time"
+        title="Start Time"
+        value={timeObjFromStr(scheduledStartTime)}
+        onChange={(date) => setScheduledStartTime(toTimeStr(date))}
+        onClose={() => setShowStartTimePicker(false)}
+      />
+      <DateTimePickerSheet
+        visible={showEndTimePicker}
+        mode="time"
+        title="End Time"
+        value={timeObjFromStr(scheduledEndTime)}
+        onChange={(date) => setScheduledEndTime(toTimeStr(date))}
+        onClose={() => setShowEndTimePicker(false)}
+      />
     </SafeAreaView>
   );
 }
 
 function SectionLabel({ children }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return <Text style={styles.sectionLabel}>{children}</Text>;
 }
 
-function Field({ label, value, onChange, placeholder, keyboardType, multiline }) {
-  return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={[styles.input, multiline && styles.inputMulti]}
-        value={value}
-        onChangeText={onChange}
-        placeholder={placeholder}
-        placeholderTextColor={colors.textMuted}
-        keyboardType={keyboardType || "default"}
-        autoCapitalize="sentences"
-        autoCorrect={false}
-        multiline={multiline}
-        numberOfLines={multiline ? 3 : 1}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scroll: { padding: spacing.md, paddingBottom: 160 },
   sectionLabel: {
@@ -583,7 +496,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
-  inputMulti: { height: 88, paddingTop: spacing.sm, textAlignVertical: "top" },
   timeRow: { flexDirection: "row" },
   actions: { flexDirection: "row", marginTop: spacing.lg },
 
@@ -606,25 +518,5 @@ const styles = StyleSheet.create({
   pickerBtnText: { fontSize: fontSize.md, color: colors.textPrimary, flex: 1 },
   pickerBtnPlaceholder: { fontSize: fontSize.md, color: colors.textMuted, flex: 1 },
   pickerIcon: { fontSize: 16, marginLeft: spacing.sm },
-
-  // Picker bottom-sheet modal (iOS)
-  pickerOverlay: {
-    flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.35)",
-  },
-  pickerSheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingHorizontal: spacing.md,
-    paddingBottom: 40,
-  },
-  pickerSheetHeader: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    marginBottom: spacing.sm,
-  },
-  pickerSheetTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
-  pickerSheetDone: { fontSize: fontSize.md, fontWeight: "600", color: colors.accent },
-});
+  });
+}

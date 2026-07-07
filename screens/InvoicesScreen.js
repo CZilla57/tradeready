@@ -2,7 +2,7 @@
 // The main screen — shows all invoices, stats at the top, search bar.
 // Tapping an invoice opens the Outreach screen for that invoice.
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -19,13 +19,19 @@ import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
-import { getStatus, formatCurrency, formatDate } from "../utils/invoiceHelpers";
+import { getStatus, formatDate } from "../utils/invoiceHelpers";
+import { summarizeInvoices, filterInvoices } from "../utils/invoiceStats";
+import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { Badge, StatCard, EmptyState } from "../components/UI";
-import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from "../hooks/useTheme";
 
 export default function InvoicesScreen({ navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const [invoices, setInvoices] = useState([]);
   const [search, setSearch] = useState("");
   const [settings, setSettings] = useState({});
@@ -40,23 +46,8 @@ export default function InvoicesScreen({ navigation }) {
     }, [])
   );
 
-  const filtered = invoices.filter(
-    (inv) =>
-      inv.customer.toLowerCase().includes(search.toLowerCase()) ||
-      inv.number.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const outstanding = invoices
-    .filter((i) => !i.paid)
-    .reduce((sum, i) => sum + i.amount, 0);
-
-  const overdueCount = invoices.filter(
-    (i) => !i.paid && new Date(i.due) < new Date()
-  ).length;
-
-  const collected = invoices
-    .filter((i) => i.paid)
-    .reduce((sum, i) => sum + i.amount, 0);
+  const filtered = filterInvoices(invoices, search);
+  const { outstanding, overdueCount, collected } = summarizeInvoices(invoices);
 
   async function handleExportPdf(inv) {
     const html = invoiceHtml(inv, settings);
@@ -70,7 +61,8 @@ export default function InvoicesScreen({ navigation }) {
       {
         text: "Mark paid",
         onPress: async () => {
-          const updated = invoices.map((i) => (i.id === id ? { ...i, paid: true } : i));
+          const today = new Date().toISOString().split('T')[0];
+          const updated = invoices.map((i) => (i.id === id ? { ...i, paid: true, paidAt: today } : i));
           setInvoices(updated);
           await saveInvoices(updated);
           syncNotifications();
@@ -99,7 +91,7 @@ export default function InvoicesScreen({ navigation }) {
           <Text style={styles.customerName} numberOfLines={1}>
             {inv.customer}
           </Text>
-          <Text style={styles.amount}>{formatCurrency(inv.amount)}</Text>
+          <Text style={styles.amount}>{formatMoney(inv.amount)}</Text>
         </View>
         <View style={styles.invoiceMeta}>
           <Badge label={status.label} color={status.color} />
@@ -132,11 +124,11 @@ export default function InvoicesScreen({ navigation }) {
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       {/* Stats row */}
       <View style={styles.statsRow}>
-        <StatCard label="Outstanding" value={formatCurrency(outstanding)} valueColor={colors.danger} />
+        <StatCard label="Outstanding" value={formatMoney(outstanding)} valueColor={colors.danger} />
         <View style={{ width: spacing.sm }} />
         <StatCard label="Overdue" value={String(overdueCount)} valueColor={colors.warning} />
         <View style={{ width: spacing.sm }} />
-        <StatCard label="Collected" value={formatCurrency(collected)} valueColor={colors.success} />
+        <StatCard label="Collected" value={formatMoney(collected)} valueColor={colors.success} />
       </View>
 
       {/* Search bar */}
@@ -214,7 +206,7 @@ export default function InvoicesScreen({ navigation }) {
                 {/* Customer + amount */}
                 <Text style={styles.modalCustomer}>{inv.customer}</Text>
                 <Text style={[styles.modalAmount, { color: accentColor }]}>
-                  {formatCurrency(inv.amount)}
+                  {formatMoney(inv.amount)}
                 </Text>
 
                 {/* Due date */}
@@ -296,244 +288,246 @@ export default function InvoicesScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  statsRow: {
-    flexDirection: "row",
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  searchRow: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  searchInput: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 40,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    ...shadow.card,
-  },
-  listContent: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: 100,
-  },
-  invoiceCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-    borderLeftWidth: 4,
-    ...shadow.card,
-  },
-  invoiceTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 6,
-  },
-  customerName: {
-    fontSize: fontSize.md,
-    fontWeight: "600",
-    color: colors.textPrimary,
-    flex: 1,
-    marginRight: spacing.sm,
-  },
-  amount: {
-    fontSize: fontSize.md,
-    fontWeight: "600",
-    color: colors.textPrimary,
-  },
-  invoiceMeta: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    flexWrap: "wrap",
-    marginBottom: 8,
-  },
-  metaText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-  },
-  descText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    flex: 1,
-  },
-  invoiceActions: {
-    flexDirection: "row",
-    gap: 8,
-    justifyContent: "flex-end",
-  },
-  editBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-  },
-  editBtnText: {
-    fontSize: fontSize.sm,
-    color: colors.textPrimary,
-  },
-  paidBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: radius.sm,
-    backgroundColor: colors.success,
-  },
-  paidBtnText: {
-    fontSize: fontSize.sm,
-    color: colors.textOnAccent,
-    fontWeight: "600",
-  },
-  // Invoice detail modal
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.4)",
-  },
-  modalSheet: {
-    backgroundColor: colors.background,
-    borderTopLeftRadius: radius.xl ?? 20,
-    borderTopRightRadius: radius.xl ?? 20,
-    maxHeight: "80%",
-    ...shadow.card,
-  },
-  modalHeader: {
-    alignItems: "center",
-    paddingTop: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.xs,
-    flexDirection: "row",
-    justifyContent: "center",
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.border,
-  },
-  modalCloseBtn: {
-    position: "absolute",
-    right: spacing.md,
-    top: spacing.sm,
-    padding: 4,
-  },
-  modalCloseText: {
-    fontSize: fontSize.md,
-    color: colors.textMuted,
-  },
-  modalBody: {
-    padding: spacing.md,
-    paddingBottom: 40,
-  },
-  modalTopRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 6,
-  },
-  modalInvoiceNum: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    fontWeight: "500",
-  },
-  modalCustomer: {
-    fontSize: fontSize.xl,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  modalAmount: {
-    fontSize: 36,
-    fontWeight: "700",
-    letterSpacing: -1,
-    marginBottom: spacing.md,
-  },
-  modalDetailRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  modalDetailLabel: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    fontWeight: "500",
-  },
-  modalDetailValue: {
-    fontSize: fontSize.sm,
-    color: colors.textPrimary,
-  },
-  modalLink: {
-    color: colors.accent,
-  },
-  modalDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.border,
-    marginVertical: spacing.md,
-  },
-  modalActionPrimary: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-    paddingVertical: 14,
-    alignItems: "center",
-    marginBottom: spacing.sm,
-  },
-  modalActionPrimaryText: {
-    color: colors.textOnAccent,
-    fontSize: fontSize.md,
-    fontWeight: "700",
-  },
-  modalActionRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  modalActionBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    alignItems: "center",
-  },
-  modalActionBtnPaid: {
-    borderColor: colors.success + "60",
-    backgroundColor: colors.successBg,
-  },
-  modalActionBtnText: {
-    fontSize: fontSize.sm,
-    color: colors.textPrimary,
-  },
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    statsRow: {
+      flexDirection: "row",
+      paddingHorizontal: spacing.md,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    searchRow: {
+      paddingHorizontal: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    searchInput: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      height: 40,
+      paddingHorizontal: spacing.md,
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      ...shadow.card,
+    },
+    listContent: {
+      paddingHorizontal: spacing.md,
+      paddingBottom: 100,
+    },
+    invoiceCard: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginBottom: spacing.sm,
+      borderLeftWidth: 4,
+      ...shadow.card,
+    },
+    invoiceTop: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      marginBottom: 6,
+    },
+    customerName: {
+      fontSize: fontSize.md,
+      fontWeight: "600",
+      color: colors.textPrimary,
+      flex: 1,
+      marginRight: spacing.sm,
+    },
+    amount: {
+      fontSize: fontSize.md,
+      fontWeight: "600",
+      color: colors.textPrimary,
+    },
+    invoiceMeta: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 8,
+    },
+    metaText: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+    },
+    descText: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      flex: 1,
+    },
+    invoiceActions: {
+      flexDirection: "row",
+      gap: 8,
+      justifyContent: "flex-end",
+    },
+    editBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.borderStrong,
+    },
+    editBtnText: {
+      fontSize: fontSize.sm,
+      color: colors.textPrimary,
+    },
+    paidBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderRadius: radius.sm,
+      backgroundColor: colors.success,
+    },
+    paidBtnText: {
+      fontSize: fontSize.sm,
+      color: colors.textOnAccent,
+      fontWeight: "600",
+    },
+    // Invoice detail modal
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.4)",
+    },
+    modalSheet: {
+      backgroundColor: colors.background,
+      borderTopLeftRadius: radius.xl ?? 20,
+      borderTopRightRadius: radius.xl ?? 20,
+      maxHeight: "80%",
+      ...shadow.card,
+    },
+    modalHeader: {
+      alignItems: "center",
+      paddingTop: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingBottom: spacing.xs,
+      flexDirection: "row",
+      justifyContent: "center",
+    },
+    modalHandle: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.border,
+    },
+    modalCloseBtn: {
+      position: "absolute",
+      right: spacing.md,
+      top: spacing.sm,
+      padding: 4,
+    },
+    modalCloseText: {
+      fontSize: fontSize.md,
+      color: colors.textMuted,
+    },
+    modalBody: {
+      padding: spacing.md,
+      paddingBottom: 40,
+    },
+    modalTopRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 6,
+    },
+    modalInvoiceNum: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      fontWeight: "500",
+    },
+    modalCustomer: {
+      fontSize: fontSize.xl,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 4,
+    },
+    modalAmount: {
+      fontSize: 36,
+      fontWeight: "700",
+      letterSpacing: -1,
+      marginBottom: spacing.md,
+    },
+    modalDetailRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      paddingVertical: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    modalDetailLabel: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      fontWeight: "500",
+    },
+    modalDetailValue: {
+      fontSize: fontSize.sm,
+      color: colors.textPrimary,
+    },
+    modalLink: {
+      color: colors.accent,
+    },
+    modalDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+      marginVertical: spacing.md,
+    },
+    modalActionPrimary: {
+      backgroundColor: colors.accent,
+      borderRadius: radius.md,
+      paddingVertical: 14,
+      alignItems: "center",
+      marginBottom: spacing.sm,
+    },
+    modalActionPrimaryText: {
+      color: colors.textOnAccent,
+      fontSize: fontSize.md,
+      fontWeight: "700",
+    },
+    modalActionRow: {
+      flexDirection: "row",
+      gap: 8,
+    },
+    modalActionBtn: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.borderStrong,
+      alignItems: "center",
+    },
+    modalActionBtnPaid: {
+      borderColor: colors.success + "60",
+      backgroundColor: colors.successBg,
+    },
+    modalActionBtnText: {
+      fontSize: fontSize.sm,
+      color: colors.textPrimary,
+    },
 
-  fab: {
-    position: "absolute",
-    right: spacing.lg,
-    bottom: spacing.xl,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  fabText: {
-    color: colors.textOnAccent,
-    fontSize: 28,
-    lineHeight: 32,
-    fontWeight: "300",
-  },
-});
+    fab: {
+      position: "absolute",
+      right: spacing.lg,
+      bottom: spacing.xl,
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: colors.accent,
+      alignItems: "center",
+      justifyContent: "center",
+      shadowColor: colors.accent,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.35,
+      shadowRadius: 8,
+      elevation: 6,
+    },
+    fabText: {
+      color: colors.textOnAccent,
+      fontSize: 28,
+      lineHeight: 32,
+      fontWeight: "300",
+    },
+  });
+}

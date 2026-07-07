@@ -3,7 +3,7 @@
 // Enter hours, materials, and settings → see a live price breakdown →
 // Claude writes a professional estimate → advance the job to "estimate_sent".
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -19,19 +19,24 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
-import * as MailComposer from "expo-mail-composer";
+import { composeEmail } from "../utils/messaging";
 import {
   calculatePriceRange,
   getSanityWarnings,
   buildEstimatePrompt,
-  formatCurrency,
   breakEvenPrice,
+  buildEstimateInput,
 } from "../utils/pricingEngine";
+import { formatQuote } from "../utils/format";
+import { generateMessage } from "../utils/anthropicMessage";
 import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storage";
 import { Button, Card, Divider } from "../components/UI";
-import { colors, spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
 
 export default function PricingCalculatorScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId } = route.params || {};
 
   // Job & context
@@ -68,9 +73,9 @@ export default function PricingCalculatorScreen({ route, navigation }) {
         setLaborHours(String(j.laborHours || 2));
         setLaborRate(String(j.laborRate || s.laborRate || 85));
         setMaterials(j.materials || []);
-        setMaterialMarkup(String(j.materialMarkup || s.materialMarkup || 20));
-        setOverheadPercent(String(j.overhead || s.overheadPercent || 15));
-        setMarginPercent(String(j.margin || s.marginPercent || 20));
+        setMaterialMarkup(String(j.materialMarkup ?? s.materialMarkup ?? 20));
+        setOverheadPercent(String(j.overhead ?? s.overheadPercent ?? 15));
+        setMarginPercent(String(j.margin ?? s.marginPercent ?? 20));
         const c = customers.find((x) => x.id === j.customerId);
         setCustomer(c || null);
       }
@@ -79,29 +84,19 @@ export default function PricingCalculatorScreen({ route, navigation }) {
       // block above already uses settings as a fallback for each field.
       if (s && !j) {
         setLaborRate(String(s.laborRate || 85));
-        setMaterialMarkup(String(s.materialMarkup || 20));
-        setOverheadPercent(String(s.overheadPercent || 15));
-        setMarginPercent(String(s.marginPercent || 20));
+        setMaterialMarkup(String(s.materialMarkup ?? 20));
+        setOverheadPercent(String(s.overheadPercent ?? 15));
+        setMarginPercent(String(s.marginPercent ?? 20));
       }
     }
     load();
   }, [jobId]);
 
   // Live calculation — recalculates on every input change
-  const params = {
-    laborHours: parseFloat(laborHours) || 0,
-    laborRate: parseFloat(laborRate) || 85,
-    materials,
-    materialMarkup: parseFloat(materialMarkup) || 20,
-    overheadPercent: parseFloat(overheadPercent) || 15,
-    marginPercent: parseFloat(marginPercent) || 20,
-    travelMiles: parseFloat(travelMiles) || 0,
-    travelFeePerMile: parseFloat(settings?.travelFeePerMile) || 0,
-    isEmergency,
-    emergencyMultiplier: parseFloat(settings?.emergencyMultiplier) || 1.5,
-    minimumJobFee: parseFloat(settings?.minimumJobFee) || 75,
-    taxPercent: parseFloat(taxPercent) || 0,
-  };
+  const params = buildEstimateInput(
+    { laborHours, laborRate, materials, materialMarkup, overheadPercent, marginPercent, travelMiles, isEmergency, taxPercent },
+    settings,
+  );
 
   const range = calculatePriceRange(params);
   const breakdown = range.breakdown;
@@ -167,26 +162,14 @@ export default function PricingCalculatorScreen({ route, navigation }) {
       range,
     });
 
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": settings?.anthropicKey || "",
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1500,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const data = await res.json();
-      const text = data.content?.map((b) => b.text || "").join("") || "Could not generate estimate.";
-      setGeneratedEstimate(text);
-    } catch {
-      setGeneratedEstimate("Error generating estimate. Check your connection.");
-    }
+    const text = await generateMessage({
+      prompt,
+      apiKey: settings?.anthropicKey,
+      max_tokens: 1500,
+      fallback: () =>
+        "Couldn't generate an estimate automatically. Add your Anthropic API key in Settings and check your connection, then tap Regenerate.",
+    });
+    setGeneratedEstimate(text);
     setGenerating(false);
   }
 
@@ -195,16 +178,12 @@ export default function PricingCalculatorScreen({ route, navigation }) {
       Alert.alert("No email", "No customer email on file.");
       return;
     }
-    const available = await MailComposer.isAvailableAsync();
-    if (!available) {
-      Alert.alert("Mail not available", "Set up the Mail app first.");
-      return;
-    }
-    await MailComposer.composeAsync({
+    const sent = await composeEmail({
       recipients: [customer?.email || job?.email],
-      subject: `Estimate: ${job?.title || "Your job"} — ${formatCurrency(breakdown.total)}`,
+      subject: `Estimate: ${job?.title || "Your job"} — ${formatQuote(breakdown.total)}`,
       body: generatedEstimate,
     });
+    if (!sent) return;
 
     // Advance job status to estimate_sent
     if (job?.status === "lead") {
@@ -297,17 +276,19 @@ function CalculatorTab({
   breakdown, range, breakEven, warnings,
   onSave, saving, onGenerateEstimate,
 }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
       {/* Live price display */}
       <Card style={styles.priceCard}>
         <Text style={styles.priceLabel}>Recommended price</Text>
-        <Text style={styles.priceMain}>{formatCurrency(range.recommended)}</Text>
+        <Text style={styles.priceMain}>{formatQuote(range.recommended)}</Text>
         <Text style={styles.priceRange}>
-          Range: {formatCurrency(range.low)} – {formatCurrency(range.high)}
+          Range: {formatQuote(range.low)} – {formatQuote(range.high)}
         </Text>
-        <Text style={styles.breakEven}>Break-even: {formatCurrency(breakEven)}</Text>
+        <Text style={styles.breakEven}>Break-even: {formatQuote(breakEven)}</Text>
       </Card>
 
       {/* Warnings */}
@@ -338,7 +319,7 @@ function CalculatorTab({
           />
           <View style={styles.calcResult}>
             <Text style={styles.calcResultLabel}>Labor total</Text>
-            <Text style={styles.calcResultValue}>{formatCurrency(breakdown.laborCost)}</Text>
+            <Text style={styles.calcResultValue}>{formatQuote(breakdown.laborCost)}</Text>
           </View>
         </View>
         <View style={[styles.inputRow, { marginTop: spacing.sm, alignItems: "center" }]}>
@@ -400,7 +381,7 @@ function CalculatorTab({
           />
           <View style={styles.calcResult}>
             <Text style={styles.calcResultLabel}>Materials total</Text>
-            <Text style={styles.calcResultValue}>{formatCurrency(breakdown.materialCost)}</Text>
+            <Text style={styles.calcResultValue}>{formatQuote(breakdown.materialCost)}</Text>
           </View>
         </View>
       </Card>
@@ -428,7 +409,7 @@ function CalculatorTab({
         <Divider />
         <BreakdownRow label="TOTAL" value={breakdown.total} bold />
         <Text style={styles.effectiveRate}>
-          Effective rate: {formatCurrency(breakdown.effectiveHourlyRate)}/hr
+          Effective rate: {formatQuote(breakdown.effectiveHourlyRate)}/hr
         </Text>
       </Card>
 
@@ -445,11 +426,13 @@ function CalculatorTab({
 // ── Estimate Tab ───────────────────────────────────────────────────────────
 
 function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEmail, copied, total }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <ScrollView contentContainerStyle={styles.scroll}>
       <Card style={styles.estimateHeader}>
         <Text style={styles.estimateHeaderLabel}>Estimate total</Text>
-        <Text style={styles.estimateHeaderTotal}>{formatCurrency(total)}</Text>
+        <Text style={styles.estimateHeaderTotal}>{formatQuote(total)}</Text>
       </Card>
 
       <Card style={styles.estimateBody}>
@@ -489,10 +472,14 @@ function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEm
 // ── Small reusable pieces ──────────────────────────────────────────────────
 
 function SectionLabel({ children }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return <Text style={styles.sectionLabel}>{children}</Text>;
 }
 
 function SmallInput({ label, value, onChange, placeholder, prefix, suffix }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <View style={styles.smallInputWrap}>
       <Text style={styles.smallLabel}>{label}</Text>
@@ -513,19 +500,22 @@ function SmallInput({ label, value, onChange, placeholder, prefix, suffix }) {
 }
 
 function BreakdownRow({ label, value, bold }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <View style={styles.breakdownRow}>
       <Text style={[styles.breakdownLabel, bold && { fontWeight: "700", color: colors.textPrimary }]}>
         {label}
       </Text>
       <Text style={[styles.breakdownValue, bold && { fontWeight: "700", fontSize: fontSize.md }]}>
-        {formatCurrency(value)}
+        {formatQuote(value)}
       </Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   tabs: {
     flexDirection: "row",
@@ -629,4 +619,5 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs, color: colors.textMuted,
     textAlign: "center", marginTop: spacing.md, lineHeight: 18,
   },
-});
+  });
+}

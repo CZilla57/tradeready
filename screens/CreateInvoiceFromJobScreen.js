@@ -8,11 +8,10 @@
 //   1. Saves new invoice to AsyncStorage (invoices key)
 //   2. Updates job status to "invoiced" and writes invoiceId back to the job
  
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
-  TextInput,
   ScrollView,
   TouchableOpacity,
   StyleSheet,
@@ -22,9 +21,11 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers } from "../utils/storage";
-import { formatCurrency } from "../utils/pricingEngine";
-import { colors, spacing, radius, fontSize } from "../utils/theme";
+import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer } from "../utils/storage";
+import { formatQuote } from "../utils/format";
+import Field from "../components/Field";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
  
 function trackedDisplay(sessions = []) {
   const ms = sessions
@@ -53,6 +54,8 @@ function nextInvoiceNumber(invoices) {
 }
  
 export default function CreateInvoiceFromJobScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId } = route.params;
  
   const [loading, setLoading]   = useState(true);
@@ -113,11 +116,20 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
     setSaving(true);
     try {
       const [jobs, invoices] = await Promise.all([loadJobs(), loadInvoices()]);
- 
+
+      // Link to a real customer record (matches the job's customer by name, or
+      // creates one); `customer` stays as the denormalized display name (#5).
+      const record = await getOrCreateCustomer({
+        name: customer.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+      });
+
       // Build the invoice record — matches the shape expected by InvoicesScreen / AddInvoiceScreen
       const newInvoice = {
-        id:       `inv${Date.now()}`,
-        customer: customer.trim(),
+        id:         `inv${Date.now()}`,
+        customer:   customer.trim(),
+        customerId: record?.id ?? "",
         number:   number.trim() || nextInvoiceNumber(invoices),
         amount:   parsedAmount,
         due,
@@ -171,7 +183,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
           {job?.estimateTotal > 0 && (
             <View style={styles.prefillBanner}>
               <Text style={styles.prefillBannerText}>
-                Pre-filled from job estimate ({formatCurrency(job.estimateTotal)}). Review and adjust if needed.
+                Pre-filled from job estimate ({formatQuote(job.estimateTotal)}). Review and adjust if needed.
               </Text>
             </View>
           )}
@@ -191,15 +203,15 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
             );
           })()}
 
-          <Field label="Customer name *" value={customer} onChange={setCustomer} placeholder="Jane Smith" />
-          <Field label="Invoice #" value={number} onChange={setNumber} placeholder="INV-0001" />
+          <Field label="Customer name *" value={customer} onChangeText={setCustomer} placeholder="Jane Smith" />
+          <Field label="Invoice #" value={number} onChangeText={setNumber} placeholder="INV-0001" />
  
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
               <Field
                 label="Amount ($) *"
                 value={amount}
-                onChange={setAmount}
+                onChangeText={setAmount}
                 placeholder="0.00"
                 keyboardType="decimal-pad"
               />
@@ -209,7 +221,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
               <Field
                 label="Due date"
                 value={due}
-                onChange={setDue}
+                onChangeText={setDue}
                 placeholder="YYYY-MM-DD"
                 keyboardType="numbers-and-punctuation"
               />
@@ -219,7 +231,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
           <Field
             label="Customer email"
             value={email}
-            onChange={setEmail}
+            onChangeText={setEmail}
             placeholder="jane@example.com"
             keyboardType="email-address"
             autoCapitalize="none"
@@ -227,14 +239,14 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
           <Field
             label="Customer phone"
             value={phone}
-            onChange={setPhone}
+            onChangeText={setPhone}
             placeholder="(555) 123-4567"
             keyboardType="phone-pad"
           />
           <Field
             label="Description of work"
             value={desc}
-            onChange={setDesc}
+            onChangeText={setDesc}
             placeholder="What was completed?"
             multiline
           />
@@ -262,27 +274,8 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }) {
   );
 }
  
-function Field({ label, value, onChange, placeholder, keyboardType, autoCapitalize, multiline }) {
-  return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        style={[styles.input, multiline && styles.inputMulti]}
-        value={value}
-        onChangeText={onChange}
-        placeholder={placeholder}
-        placeholderTextColor={colors.textMuted}
-        keyboardType={keyboardType || "default"}
-        autoCapitalize={autoCapitalize || "words"}
-        autoCorrect={false}
-        multiline={multiline}
-        numberOfLines={multiline ? 3 : 1}
-      />
-    </View>
-  );
-}
- 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container:        { flex: 1, backgroundColor: colors.background },
   loadingContainer: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background },
   scroll:           { padding: spacing.md, paddingBottom: 40 },
@@ -315,29 +308,7 @@ const styles = StyleSheet.create({
   },
  
   row:        { flexDirection: "row" },
-  fieldGroup: { marginBottom: spacing.md },
-  label: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    marginBottom: 5,
-    fontWeight: "500",
-  },
-  input: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  inputMulti: {
-    height: 88,
-    paddingTop: spacing.sm,
-    textAlignVertical: "top",
-  },
- 
+
   actions: {
     flexDirection: "row",
     gap: spacing.sm,
@@ -373,4 +344,5 @@ const styles = StyleSheet.create({
     color: colors.textOnAccent,
     fontWeight: "700",
   },
-});
+  });
+}

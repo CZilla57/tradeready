@@ -1,7 +1,7 @@
 // screens/CustomerDetailScreen.js
 // Full profile for a single customer — contact info, lifetime value, invoice history, job history, notes.
 
-import React, { useState, useEffect, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,13 +14,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { loadJobs, loadCustomers, saveCustomers, loadNoteForCustomer, saveNoteForCustomer } from '../utils/storage';
-import { colors, spacing, radius, fontSize } from '../utils/theme';
+import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
+import { spacing, radius, fontSize } from '../utils/theme';
+import { formatMoney } from '../utils/format';
+import { useTheme } from '../hooks/useTheme';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-const formatCurrency = (amount) =>
-  '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
 const formatDate = (dateStr) => {
   if (!dateStr) return '—';
@@ -29,7 +28,7 @@ const formatDate = (dateStr) => {
   });
 };
 
-const invoiceStatus = (inv) => {
+const invoiceStatus = (inv, colors) => {
   if (inv.paid) return { label: 'Paid', color: colors.success };
   const due = new Date(inv.due);
   const now = new Date();
@@ -50,7 +49,7 @@ const JOB_STAGES = {
 
 // ─── SUB-COMPONENTS ───────────────────────────────────────────────────────────
 
-const InfoRow = ({ icon, label, value, onPress }) => (
+const InfoRow = ({ icon, label, value, onPress, styles }) => (
   <TouchableOpacity
     style={styles.infoRow}
     onPress={onPress}
@@ -68,8 +67,8 @@ const InfoRow = ({ icon, label, value, onPress }) => (
   </TouchableOpacity>
 );
 
-const InvoiceRow = ({ invoice, onPress }) => {
-  const status = invoiceStatus(invoice);
+const InvoiceRow = ({ invoice, onPress, styles, colors }) => {
+  const status = invoiceStatus(invoice, colors);
   return (
     <TouchableOpacity style={styles.invoiceRow} onPress={() => onPress(invoice)}>
       <View style={styles.invoiceRowLeft}>
@@ -78,7 +77,7 @@ const InvoiceRow = ({ invoice, onPress }) => {
         <Text style={styles.invoiceDate}>Due {formatDate(invoice.due)}</Text>
       </View>
       <View style={styles.invoiceRowRight}>
-        <Text style={styles.invoiceAmount}>{formatCurrency(parseFloat(invoice.amount) || 0)}</Text>
+        <Text style={styles.invoiceAmount}>{formatMoney(parseFloat(invoice.amount) || 0)}</Text>
         <View style={[styles.statusBadge, { backgroundColor: status.color + '22' }]}>
           <Text style={[styles.statusBadgeText, { color: status.color }]}>{status.label}</Text>
         </View>
@@ -87,7 +86,7 @@ const InvoiceRow = ({ invoice, onPress }) => {
   );
 };
 
-const JobRow = ({ job }) => {
+const JobRow = ({ job, styles }) => {
   const stageLabel = JOB_STAGES[job.status] || job.status || 'Unknown';
   return (
     <View style={styles.jobRow}>
@@ -96,7 +95,7 @@ const JobRow = ({ job }) => {
         <Text style={styles.jobMeta}>{stageLabel} · {formatDate(job.scheduledDate)}</Text>
       </View>
       {job.estimateTotal > 0 && (
-        <Text style={styles.jobValue}>{formatCurrency(job.estimateTotal)}</Text>
+        <Text style={styles.jobValue}>{formatMoney(job.estimateTotal)}</Text>
       )}
     </View>
   );
@@ -105,6 +104,9 @@ const JobRow = ({ job }) => {
 // ─── MAIN SCREEN ──────────────────────────────────────────────────────────────
 
 export default function CustomerDetailScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const { customer } = route.params;
 
   const [displayCustomer, setDisplayCustomer] = useState(customer);
@@ -117,7 +119,7 @@ export default function CustomerDetailScreen({ route, navigation }) {
       title: displayCustomer.name,
       headerRight: () => (
         <TouchableOpacity
-          onPress={() => navigation.navigate('AddCustomer', { customerId: displayCustomer.id })}
+          onPress={() => navigation.navigate('AddCustomer', { customerId: displayCustomer.id, customer: displayCustomer })}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           style={{ alignSelf: 'center', marginRight: 8, paddingLeft: 10 }}
         >
@@ -125,7 +127,7 @@ export default function CustomerDetailScreen({ route, navigation }) {
         </TouchableOpacity>
       ),
     });
-  }, [navigation, displayCustomer.name, displayCustomer.id]);
+  }, [navigation, displayCustomer]);
 
   useFocusEffect(
     useCallback(() => {
@@ -139,10 +141,7 @@ export default function CustomerDetailScreen({ route, navigation }) {
   useEffect(() => {
     async function loadJobsAndNotes() {
       try {
-        const [allJobs, savedNote] = await Promise.all([
-          loadJobs(),
-          loadNoteForCustomer(customer.name),
-        ]);
+        const allJobs = await loadJobs();
 
         // Match by customerId first (proper relationship), fall back to name match
         // for invoice-derived customers that don't have a formal customerId yet.
@@ -151,23 +150,24 @@ export default function CustomerDetailScreen({ route, navigation }) {
           j.customerName?.trim().toLowerCase() === customer.name.trim().toLowerCase()
         );
         setJobs(customerJobs);
-        setNotes(savedNote);
+        // Notes live on the customer record now (roadmap #5).
+        setNotes(customer.notes || '');
       } catch (err) {
         console.error('CustomerDetailScreen: failed to load data', err);
       }
     }
     loadJobsAndNotes();
-  }, [customer.id, customer.name]);
+  }, [customer.id, customer.name, customer.notes]);
 
   const handleNotesSave = useCallback(async () => {
     if (!notesChanged) return;
     try {
-      await saveNoteForCustomer(displayCustomer.name, notes);
+      await updateCustomerNotes(displayCustomer, notes);
       setNotesChanged(false);
     } catch (err) {
       console.error('CustomerDetailScreen: failed to save notes', err);
     }
-  }, [notes, notesChanged, displayCustomer.name]);
+  }, [notes, notesChanged, displayCustomer]);
 
   const handleInvoicePress = (invoice) => {
     navigation.navigate('AddInvoice', { invoiceId: invoice.id });
@@ -262,13 +262,13 @@ export default function CustomerDetailScreen({ route, navigation }) {
         {/* Lifetime value stats */}
         <View style={styles.statsRow}>
           <View style={styles.statBox}>
-            <Text style={styles.statValue}>{formatCurrency(totalSpent)}</Text>
+            <Text style={styles.statValue}>{formatMoney(totalSpent)}</Text>
             <Text style={styles.statLabel}>Collected</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statBox}>
             <Text style={[styles.statValue, totalOwed > 0 && { color: colors.danger }]}>
-              {formatCurrency(totalOwed)}
+              {formatMoney(totalOwed)}
             </Text>
             <Text style={styles.statLabel}>Outstanding</Text>
           </View>
@@ -288,6 +288,7 @@ export default function CustomerDetailScreen({ route, navigation }) {
               label="Phone"
               value={displayCustomer.phone}
               onPress={displayCustomer.phone ? handleCall : null}
+              styles={styles}
             />
             <View style={styles.cardSeparator} />
             <InfoRow
@@ -295,6 +296,7 @@ export default function CustomerDetailScreen({ route, navigation }) {
               label="Email"
               value={displayCustomer.email}
               onPress={displayCustomer.email ? handleEmail : null}
+              styles={styles}
             />
           </View>
         </View>
@@ -309,7 +311,7 @@ export default function CustomerDetailScreen({ route, navigation }) {
                 .map((inv, idx) => (
                   <React.Fragment key={inv.id}>
                     {idx > 0 && <View style={styles.cardSeparator} />}
-                    <InvoiceRow invoice={inv} onPress={handleInvoicePress} />
+                    <InvoiceRow invoice={inv} onPress={handleInvoicePress} styles={styles} colors={colors} />
                   </React.Fragment>
                 ))
               }
@@ -327,7 +329,7 @@ export default function CustomerDetailScreen({ route, navigation }) {
                 .map((job, idx) => (
                   <React.Fragment key={job.id || idx}>
                     {idx > 0 && <View style={styles.cardSeparator} />}
-                    <JobRow job={job} />
+                    <JobRow job={job} styles={styles} />
                   </React.Fragment>
                 ))
               }
@@ -370,7 +372,8 @@ export default function CustomerDetailScreen({ route, navigation }) {
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -630,4 +633,5 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: fontSize.sm,
   },
-});
+  });
+}

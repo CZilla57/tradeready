@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,9 +13,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../utils/supabase';
-import { colors, spacing, radius, fontSize, shadow } from '../utils/theme';
+import { spacing, radius, fontSize } from '../utils/theme';
+import { useTheme } from '../hooks/useTheme';
 
 export default function AuthScreen() {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
@@ -192,97 +195,99 @@ export default function AuthScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  scroll: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: spacing.xl,
-  },
-  appName: {
-    fontSize: 40,
-    fontWeight: '800',
-    color: colors.accent,
-    letterSpacing: -1,
-  },
-  tagline: {
-    fontSize: fontSize.md,
-    color: colors.textMuted,
-    marginTop: spacing.xs,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  cardTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: spacing.md,
-  },
-  errorText: {
-    fontSize: fontSize.sm,
-    color: colors.danger,
-    backgroundColor: colors.dangerBg,
-    padding: spacing.sm,
-    borderRadius: radius.sm,
-    marginBottom: spacing.md,
-  },
-  label: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginBottom: spacing.xs,
-    marginTop: spacing.sm,
-  },
-  input: {
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-  },
-  submitBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: spacing.lg,
-  },
-  submitBtnDisabled: {
-    opacity: 0.6,
-  },
-  submitText: {
-    color: '#fff',
-    fontSize: fontSize.md,
-    fontWeight: '700',
-  },
-  toggle: {
-    alignItems: 'center',
-    marginTop: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  toggleText: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-  },
-  toggleLink: {
-    color: colors.accent,
-    fontWeight: '600',
-  },
-});
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    scroll: {
+      flexGrow: 1,
+      justifyContent: 'center',
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.xl,
+    },
+    header: {
+      alignItems: 'center',
+      marginBottom: spacing.xl,
+    },
+    appName: {
+      fontSize: 40,
+      fontWeight: '800',
+      color: colors.accent,
+      letterSpacing: -1,
+    },
+    tagline: {
+      fontSize: fontSize.md,
+      color: colors.textMuted,
+      marginTop: spacing.xs,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    cardTitle: {
+      fontSize: fontSize.xl,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      marginBottom: spacing.md,
+    },
+    errorText: {
+      fontSize: fontSize.sm,
+      color: colors.danger,
+      backgroundColor: colors.dangerBg,
+      padding: spacing.sm,
+      borderRadius: radius.sm,
+      marginBottom: spacing.md,
+    },
+    label: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: spacing.xs,
+      marginTop: spacing.sm,
+    },
+    input: {
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 12,
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+    },
+    submitBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: radius.md,
+      paddingVertical: 14,
+      alignItems: 'center',
+      marginTop: spacing.lg,
+    },
+    submitBtnDisabled: {
+      opacity: 0.6,
+    },
+    submitText: {
+      color: '#fff',
+      fontSize: fontSize.md,
+      fontWeight: '700',
+    },
+    toggle: {
+      alignItems: 'center',
+      marginTop: spacing.lg,
+      paddingVertical: spacing.sm,
+    },
+    toggleText: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+    },
+    toggleLink: {
+      color: colors.accent,
+      fontWeight: '600',
+    },
+  });
+}

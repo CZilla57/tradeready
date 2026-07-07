@@ -1,11 +1,15 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { colors, spacing, radius, fontSize, shadow } from '../../utils/theme';
-import { formatCurrency } from '../../utils/moneyUtils';
+import { spacing, radius, fontSize } from '../../utils/theme';
+import { useTheme } from '../../hooks/useTheme';
+import { formatMoney } from '../../utils/format';
 
 const PIPELINE_STATUSES = ['lead','estimate_sent','approved','scheduled','in_progress','complete'];
 
 export function ReceivablesCard({ invoices, jobs }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -25,7 +29,7 @@ export function ReceivablesCard({ invoices, jobs }) {
       <View style={styles.summaryRow}>
         <View style={styles.summaryColumn}>
           <Text style={styles.summaryColumnLabel}>Outstanding</Text>
-          <Text style={styles.summaryAmount}>{formatCurrency(totalOutstanding)}</Text>
+          <Text style={styles.summaryAmount}>{formatMoney(totalOutstanding)}</Text>
           <Text style={styles.receivablesSub}>
             {unpaid.length} invoice{unpaid.length !== 1 ? 's' : ''}
           </Text>
@@ -39,7 +43,7 @@ export function ReceivablesCard({ invoices, jobs }) {
             styles.summaryAmount,
             { color: overdue.length > 0 ? colors.danger : colors.textMuted },
           ]}>
-            {formatCurrency(totalOverdue)}
+            {formatMoney(totalOverdue)}
           </Text>
           <Text style={styles.receivablesSub}>
             {overdue.length} invoice{overdue.length !== 1 ? 's' : ''}
@@ -51,7 +55,7 @@ export function ReceivablesCard({ invoices, jobs }) {
         <View style={styles.summaryColumn}>
           <Text style={styles.summaryColumnLabel}>Pipeline</Text>
           <Text style={[styles.summaryAmount, { color: colors.accent }]}>
-            {formatCurrency(pipelineValue)}
+            {formatMoney(pipelineValue)}
           </Text>
           <Text style={styles.receivablesSub}>
             {pipelineJobs.length} job{pipelineJobs.length !== 1 ? 's' : ''}
@@ -62,53 +66,55 @@ export function ReceivablesCard({ invoices, jobs }) {
   );
 }
 
-const styles = StyleSheet.create({
-  receivablesCard: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  receivablesTitle: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: spacing.md,
-  },
-  receivablesSub: {
-    color: colors.textMuted,
-    fontSize: fontSize.xs,
-    marginTop: 2,
-  },
-  // Three-column layout shared with SummaryCard
-  summaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  summaryColumn: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  summaryColumnLabel: {
-    color: colors.textSecondary,
-    fontSize: fontSize.xs,
-    marginBottom: 6,
-  },
-  summaryAmount: {
-    fontSize: fontSize.xl - 4,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  summaryDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: colors.border,
-    marginHorizontal: spacing.sm,
-  },
-});
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    receivablesCard: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    receivablesTitle: {
+      color: colors.textSecondary,
+      fontSize: fontSize.sm,
+      fontWeight: '500',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: spacing.md,
+    },
+    receivablesSub: {
+      color: colors.textMuted,
+      fontSize: fontSize.xs,
+      marginTop: 2,
+    },
+    // Three-column layout shared with SummaryCard
+    summaryRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    summaryColumn: {
+      flex: 1,
+      alignItems: 'center',
+    },
+    summaryColumnLabel: {
+      color: colors.textSecondary,
+      fontSize: fontSize.xs,
+      marginBottom: 6,
+    },
+    summaryAmount: {
+      fontSize: fontSize.xl - 4,
+      fontWeight: '700',
+      letterSpacing: -0.3,
+    },
+    summaryDivider: {
+      width: 1,
+      height: 40,
+      backgroundColor: colors.border,
+      marginHorizontal: spacing.sm,
+    },
+  });
+}

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { colors, spacing, radius, fontSize, shadow } from '../utils/theme';
+import { spacing, radius, fontSize } from '../utils/theme';
+import { useTheme } from '../hooks/useTheme';
 import {
   loadJobs,
   getExpectedEarningsForDate,
@@ -17,113 +18,25 @@ import {
   loadLeadJobs,
 } from '../utils/storage';
 import { daysPastDue } from '../utils/invoiceHelpers';
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function getTodayDateString() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-function formatDisplayDate(dateString) {
-  const [year, month, day] = dateString.split('-').map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
-}
-
-function getGreeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 17) return 'Good afternoon';
-  return 'Good evening';
-}
-
-function formatCurrency(amount) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
-
-function formatTimeRange(startTime, endTime) {
-  if (!startTime) return 'Unscheduled';
-  const fmt = (t) => {
-    const [h, m] = t.split(':').map(Number);
-    const period = h >= 12 ? 'PM' : 'AM';
-    const hour = h % 12 === 0 ? 12 : h % 12;
-    return `${hour}:${String(m).padStart(2, '0')} ${period}`;
-  };
-  return endTime ? `${fmt(startTime)} – ${fmt(endTime)}` : fmt(startTime);
-}
-
-function daysAgo(dateString) {
-  if (!dateString) return 'recently';
-  const diff = Math.floor((Date.now() - new Date(dateString)) / 86400000);
-  if (diff === 0) return 'today';
-  if (diff === 1) return '1 day ago';
-  return `${diff} days ago`;
-}
-
-// ─── Week helpers ─────────────────────────────────────────────────────────────
-
-function toDateString(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-// Returns the Mon–Sun date strings for the week containing anchorDateStr.
-function getWeekDates(anchorDateStr) {
-  const [y, m, d] = anchorDateStr.split('-').map(Number);
-  const anchor = new Date(y, m - 1, d);
-  const dayOfWeek = anchor.getDay(); // 0 = Sun
-  const monday = new Date(anchor);
-  monday.setDate(anchor.getDate() - ((dayOfWeek + 6) % 7));
-  return Array.from({ length: 7 }, (_, i) => {
-    const dd = new Date(monday);
-    dd.setDate(monday.getDate() + i);
-    return toDateString(dd);
-  });
-}
-
-function weekMonthLabel(weekDates) {
-  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const first = new Date(weekDates[0]);
-  const last  = new Date(weekDates[6]);
-  if (first.getMonth() === last.getMonth()) {
-    return `${MONTHS[first.getMonth()]} ${first.getFullYear()}`;
-  }
-  return `${MONTHS[first.getMonth()]} – ${MONTHS[last.getMonth()]} ${last.getFullYear()}`;
-}
-
-function shiftDate(dateStr, days) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-  date.setDate(date.getDate() + days);
-  return toDateString(date);
-}
-
-const JOB_STATUS_CONFIG = {
-  scheduled:     { label: 'Scheduled',     color: colors.statusScheduled },
-  in_progress:   { label: 'In Progress',   color: colors.statusInProgress },
-  completed:     { label: 'Completed',     color: colors.statusComplete },
-  estimate_sent: { label: 'Estimate Sent', color: colors.statusEstimate },
-  lead:          { label: 'Lead',          color: colors.statusLead },
-};
-
-function getJobStatusConfig(status) {
-  return JOB_STATUS_CONFIG[status] ?? { label: status, color: colors.statusLead };
-}
+import { formatMoney } from '../utils/format';
+import {
+  getTodayDateString,
+  formatDisplayDate,
+  getGreeting,
+  formatTimeRange,
+  daysAgo,
+  getWeekDates,
+  weekMonthLabel,
+  shiftDate,
+} from '../utils/dateHelpers';
+import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function BriefingSection({ title, actionLabel, onAction, children }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <View style={styles.section}>
       <View style={styles.sectionHeaderRow}>
@@ -140,6 +53,9 @@ function BriefingSection({ title, actionLabel, onAction, children }) {
 }
 
 function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, onEarningsTap, onOverdueTap, onLeadsTap }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <View style={styles.statsRow}>
       {/* Today's earnings */}
@@ -147,7 +63,7 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
         <Text style={styles.statLabel}>TODAY</Text>
         {loading
           ? <ActivityIndicator color={colors.accent} size="small" style={styles.statSpinner} />
-          : <Text style={[styles.statValue, { color: colors.accent }]}>{formatCurrency(earnings)}</Text>
+          : <Text style={[styles.statValue, { color: colors.accent }]}>{formatMoney(earnings)}</Text>
         }
         <Text style={styles.statSub}>Expected</Text>
       </TouchableOpacity>
@@ -164,7 +80,7 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
         {loading
           ? <ActivityIndicator color={colors.textMuted} size="small" style={styles.statSpinner} />
           : <Text style={[styles.statValue, { color: overdueCount > 0 ? colors.danger : colors.textMuted }]}>
-              {overdueCount > 0 ? formatCurrency(overdueTotal) : '—'}
+              {overdueCount > 0 ? formatMoney(overdueTotal) : '—'}
             </Text>
         }
         <Text style={[styles.statSub, !loading && overdueCount > 0 && { color: colors.danger }]}>
@@ -196,6 +112,9 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
 }
 
 function OverdueInvoiceRow({ invoice, isLast, onPress }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const days = daysPastDue(invoice.due);
   const isSerious = days > 14;
   const tagColor = isSerious ? colors.danger : colors.warning;
@@ -212,7 +131,7 @@ function OverdueInvoiceRow({ invoice, isLast, onPress }) {
         <Text style={styles.listRowSub}>{invoice.number}</Text>
       </View>
       <View style={styles.listRowRight}>
-        <Text style={[styles.listRowAmount, { color: tagColor }]}>{formatCurrency(invoice.amount)}</Text>
+        <Text style={[styles.listRowAmount, { color: tagColor }]}>{formatMoney(invoice.amount)}</Text>
         <View style={[styles.overdueTag, { backgroundColor: tagBg }]}>
           <Text style={[styles.overdueTagText, { color: tagColor }]}>{days}d overdue</Text>
         </View>
@@ -222,6 +141,9 @@ function OverdueInvoiceRow({ invoice, isLast, onPress }) {
 }
 
 function LeadRow({ job, isLast, onPress }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <TouchableOpacity
       style={[styles.listRow, !isLast && styles.listRowBorder]}
@@ -238,6 +160,9 @@ function LeadRow({ job, isLast, onPress }) {
 }
 
 function SeeMoreRow({ label, onPress }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <TouchableOpacity style={styles.seeMoreRow} onPress={onPress} activeOpacity={0.7}>
       <Text style={styles.seeMoreText}>{label}</Text>
@@ -246,7 +171,10 @@ function SeeMoreRow({ label, onPress }) {
 }
 
 function JobCard({ job, onPress }) {
-  const { label, color } = getJobStatusConfig(job.status);
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
+  const { label, color } = getJobStatusDisplay(job.status);
 
   return (
     <TouchableOpacity style={styles.jobCard} onPress={onPress} activeOpacity={0.7}>
@@ -272,6 +200,9 @@ function JobCard({ job, onPress }) {
 }
 
 function EmptySchedule({ onScheduleJob }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <View style={styles.emptyState}>
       <Text style={styles.emptyTitle}>No jobs scheduled today</Text>
@@ -288,6 +219,9 @@ function EmptySchedule({ onScheduleJob }) {
 const DAY_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
 function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, onPrevWeek, onNextWeek }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <View style={styles.weekStripWrapper}>
       <Text style={styles.weekMonthLabel}>{weekMonthLabel(weekDates)}</Text>
@@ -344,6 +278,9 @@ const INVOICE_LIMIT = 3;
 const LEAD_LIMIT = 3;
 
 export default function TodayScreen({ navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const insets = useSafeAreaInsets();
   const todayString = getTodayDateString();
 
@@ -540,349 +477,351 @@ export default function TodayScreen({ navigation }) {
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  scrollContent: {
-    flexGrow: 1,
-  },
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    scrollContent: {
+      flexGrow: 1,
+    },
 
-  // Header
-  header: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  greeting: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textMuted,
-    letterSpacing: 0.3,
-    marginBottom: 2,
-  },
-  dateText: {
-    fontSize: fontSize.xxl,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    letterSpacing: -0.5,
-  },
+    // Header
+    header: {
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    greeting: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.textMuted,
+      letterSpacing: 0.3,
+      marginBottom: 2,
+    },
+    dateText: {
+      fontSize: fontSize.xxl,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      letterSpacing: -0.5,
+    },
 
-  // Week strip
-  weekStripWrapper: {
-    marginHorizontal: spacing.md,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
-    ...shadow.card,
-  },
-  weekMonthLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.textMuted,
-    letterSpacing: 0.8,
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  weekStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  weekNavBtn: {
-    paddingHorizontal: spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  weekNavText: {
-    fontSize: 22,
-    color: colors.accent,
-    lineHeight: 26,
-  },
-  dayCell: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  dayLetter: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: colors.textMuted,
-    marginBottom: 4,
-  },
-  dayLetterSelected: {
-    color: colors.accent,
-  },
-  dayNumCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dayNumCircleSelected: {
-    backgroundColor: colors.accent,
-  },
-  dayNumCircleToday: {
-    borderWidth: 1.5,
-    borderColor: colors.accent,
-  },
-  dayNum: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  dayNumSelected: {
-    color: colors.textOnAccent,
-  },
-  dayNumToday: {
-    color: colors.accent,
-  },
-  dayDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'transparent',
-    marginTop: 3,
-  },
-  dayDotActive: {
-    backgroundColor: colors.accent,
-  },
+    // Week strip
+    weekStripWrapper: {
+      marginHorizontal: spacing.md,
+      marginTop: spacing.sm,
+      marginBottom: spacing.xs,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.xs,
+      ...shadow.card,
+    },
+    weekMonthLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textMuted,
+      letterSpacing: 0.8,
+      textAlign: 'center',
+      textTransform: 'uppercase',
+      marginBottom: 6,
+    },
+    weekStrip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    weekNavBtn: {
+      paddingHorizontal: spacing.sm,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    weekNavText: {
+      fontSize: 22,
+      color: colors.accent,
+      lineHeight: 26,
+    },
+    dayCell: {
+      flex: 1,
+      alignItems: 'center',
+      paddingVertical: 4,
+    },
+    dayLetter: {
+      fontSize: 10,
+      fontWeight: '600',
+      color: colors.textMuted,
+      marginBottom: 4,
+    },
+    dayLetterSelected: {
+      color: colors.accent,
+    },
+    dayNumCircle: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dayNumCircleSelected: {
+      backgroundColor: colors.accent,
+    },
+    dayNumCircleToday: {
+      borderWidth: 1.5,
+      borderColor: colors.accent,
+    },
+    dayNum: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    dayNumSelected: {
+      color: colors.textOnAccent,
+    },
+    dayNumToday: {
+      color: colors.accent,
+    },
+    dayDot: {
+      width: 4,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: 'transparent',
+      marginTop: 3,
+    },
+    dayDotActive: {
+      backgroundColor: colors.accent,
+    },
 
-  // Stats row
-  statsRow: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.md,
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  statCardDanger: {
-    borderColor: colors.danger + '40',
-    backgroundColor: colors.dangerBg,
-  },
-  statCardWarning: {
-    borderColor: colors.warning + '40',
-    backgroundColor: colors.warningBg,
-  },
-  statLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.textMuted,
-    letterSpacing: 0.8,
-  },
-  statSpinner: {
-    marginTop: 6,
-    marginBottom: 2,
-    alignSelf: 'flex-start',
-  },
-  statValue: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginTop: 4,
-  },
-  statSub: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
+    // Stats row
+    statsRow: {
+      flexDirection: 'row',
+      paddingHorizontal: spacing.md,
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+      marginBottom: spacing.xs,
+    },
+    statCard: {
+      flex: 1,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    statCardDanger: {
+      borderColor: colors.danger + '40',
+      backgroundColor: colors.dangerBg,
+    },
+    statCardWarning: {
+      borderColor: colors.warning + '40',
+      backgroundColor: colors.warningBg,
+    },
+    statLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textMuted,
+      letterSpacing: 0.8,
+    },
+    statSpinner: {
+      marginTop: 6,
+      marginBottom: 2,
+      alignSelf: 'flex-start',
+    },
+    statValue: {
+      fontSize: fontSize.lg,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      marginTop: 4,
+    },
+    statSub: {
+      fontSize: fontSize.xs,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
 
-  // Section layout
-  section: {
-    marginTop: spacing.lg,
-    paddingHorizontal: spacing.md,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-  },
-  sectionTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  sectionAction: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.accent,
-  },
+    // Section layout
+    section: {
+      marginTop: spacing.lg,
+      paddingHorizontal: spacing.md,
+    },
+    sectionHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.sm,
+    },
+    sectionTitle: {
+      fontSize: fontSize.xl,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    sectionAction: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.accent,
+    },
 
-  // Shared list card
-  listCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: 'hidden',
-    ...shadow.card,
-  },
-  listCardDanger: {
-    borderLeftWidth: 3,
-    borderLeftColor: colors.danger,
-  },
+    // Shared list card
+    listCard: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      overflow: 'hidden',
+      ...shadow.card,
+    },
+    listCardDanger: {
+      borderLeftWidth: 3,
+      borderLeftColor: colors.danger,
+    },
 
-  // List rows
-  listRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: 14,
-  },
-  listRowBorder: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  listRowMain: {
-    flex: 1,
-    marginRight: spacing.sm,
-  },
-  listRowTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginBottom: 2,
-  },
-  listRowSub: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-  },
-  listRowRight: {
-    alignItems: 'flex-end',
-  },
-  listRowAmount: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  listRowChevron: {
-    fontSize: 22,
-    color: colors.textMuted,
-    lineHeight: 24,
-  },
+    // List rows
+    listRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: spacing.md,
+      paddingVertical: 14,
+    },
+    listRowBorder: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    listRowMain: {
+      flex: 1,
+      marginRight: spacing.sm,
+    },
+    listRowTitle: {
+      fontSize: fontSize.md,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      marginBottom: 2,
+    },
+    listRowSub: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+    },
+    listRowRight: {
+      alignItems: 'flex-end',
+    },
+    listRowAmount: {
+      fontSize: fontSize.md,
+      fontWeight: '700',
+      marginBottom: 4,
+    },
+    listRowChevron: {
+      fontSize: 22,
+      color: colors.textMuted,
+      lineHeight: 24,
+    },
 
-  // Overdue badge
-  overdueTag: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: radius.full,
-  },
-  overdueTagText: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-  },
+    // Overdue badge
+    overdueTag: {
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: radius.full,
+    },
+    overdueTagText: {
+      fontSize: fontSize.xs,
+      fontWeight: '700',
+    },
 
-  // See more row
-  seeMoreRow: {
-    paddingVertical: 12,
-    paddingHorizontal: spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    alignItems: 'center',
-  },
-  seeMoreText: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.accent,
-  },
+    // See more row
+    seeMoreRow: {
+      paddingVertical: 12,
+      paddingHorizontal: spacing.md,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+      alignItems: 'center',
+    },
+    seeMoreText: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.accent,
+    },
 
-  // Job cards
-  jobCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  jobTimeColumn: {
-    width: 76,
-    borderRightWidth: 1,
-    marginRight: 14,
-    justifyContent: 'center',
-    paddingRight: 10,
-  },
-  jobStartTime: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  jobEndTime: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  jobDetailsColumn: {
-    flex: 1,
-  },
-  jobTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: 3,
-  },
-  jobCustomer: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    marginBottom: spacing.sm,
-  },
-  statusBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radius.sm,
-  },
-  statusText: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-  },
+    // Job cards
+    jobCard: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginBottom: spacing.sm,
+      flexDirection: 'row',
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    jobTimeColumn: {
+      width: 76,
+      borderRightWidth: 1,
+      marginRight: 14,
+      justifyContent: 'center',
+      paddingRight: 10,
+    },
+    jobStartTime: {
+      fontSize: fontSize.md,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    jobEndTime: {
+      fontSize: fontSize.xs,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
+    jobDetailsColumn: {
+      flex: 1,
+    },
+    jobTitle: {
+      fontSize: fontSize.lg,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      marginBottom: 3,
+    },
+    jobCustomer: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      marginBottom: spacing.sm,
+    },
+    statusBadge: {
+      alignSelf: 'flex-start',
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 3,
+      borderRadius: radius.sm,
+    },
+    statusText: {
+      fontSize: fontSize.xs,
+      fontWeight: '700',
+    },
 
-  // Empty schedule state
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyTitle: {
-    fontSize: fontSize.lg - 1,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  emptySubtitle: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-    paddingHorizontal: spacing.lg,
-  },
-  emptyButton: {
-    backgroundColor: colors.accent,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 14,
-    borderRadius: radius.md,
-  },
-  emptyButtonText: {
-    color: colors.textOnAccent,
-    fontSize: fontSize.md,
-    fontWeight: '700',
-  },
-});
+    // Empty schedule state
+    emptyState: {
+      alignItems: 'center',
+      paddingVertical: 40,
+    },
+    emptyTitle: {
+      fontSize: fontSize.lg - 1,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      marginBottom: spacing.sm,
+    },
+    emptySubtitle: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      textAlign: 'center',
+      marginBottom: spacing.lg,
+      paddingHorizontal: spacing.lg,
+    },
+    emptyButton: {
+      backgroundColor: colors.accent,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: 14,
+      borderRadius: radius.md,
+    },
+    emptyButtonText: {
+      color: colors.textOnAccent,
+      fontSize: fontSize.md,
+      fontWeight: '700',
+    },
+  });
+}

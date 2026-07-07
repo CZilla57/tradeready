@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,15 +8,16 @@ import {
   FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, spacing, radius, fontSize, shadow } from '../utils/theme';
+import { spacing, radius, fontSize } from '../utils/theme';
+import { useTheme } from '../hooks/useTheme';
 import {
   DATE_FILTERS,
   EXPENSE_CATEGORIES,
-  formatCurrency,
   getDateRange,
   getPreviousRange,
   isInRange,
 } from '../utils/moneyUtils';
+import { formatMoney } from '../utils/format';
 import { useMoneyData }      from '../hooks/useMoneyData';
 import { SummaryCard }       from '../components/money/SummaryCard';
 import { MonthlyChart }      from '../components/money/MonthlyChart';
@@ -28,6 +29,8 @@ import { AddExpenseModal }   from '../components/money/AddExpenseModal';
 // ─── Inline sub-component: Expenses by Category breakdown ────────────────────
 
 function ExpenseCategoryCard({ expensesByCategory, filteredExpenseTotal }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   if (expensesByCategory.length === 0) return null;
   return (
     <View style={styles.categoryCard}>
@@ -43,7 +46,7 @@ function ExpenseCategoryCard({ expensesByCategory, filteredExpenseTotal }) {
               <View style={styles.categoryBreakdownHeader}>
                 <Text style={styles.categoryBreakdownLabel}>{cat.label}</Text>
                 <Text style={styles.categoryBreakdownAmount}>
-                  {formatCurrency(cat.total)}
+                  {formatMoney(cat.total)}
                 </Text>
               </View>
               <View style={styles.categoryProgressBg}>
@@ -60,6 +63,8 @@ function ExpenseCategoryCard({ expensesByCategory, filteredExpenseTotal }) {
 // ─── MAIN SCREEN ─────────────────────────────────────────────────────────────
 
 export default function MoneyScreen() {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { invoices, expenses, jobs, loading, handleAddExpense, handleDeleteExpense } =
     useMoneyData();
 
@@ -71,7 +76,7 @@ export default function MoneyScreen() {
   const { start, end } = getDateRange(activeFilter);
 
   const filteredIncome = invoices
-    .filter(inv => inv.paid === true && inv.due && isInRange(inv.due, start, end))
+    .filter(inv => inv.paid === true && isInRange(inv.paidAt || inv.due, start, end))
     .reduce((sum, inv) => sum + (parseFloat(inv.amount) || 0), 0);
 
   const filteredExpenses = expenses
@@ -93,7 +98,7 @@ export default function MoneyScreen() {
   const prevRange = getPreviousRange(activeFilter);
   const prevFilteredIncome = prevRange
     ? invoices
-        .filter(inv => inv.paid && inv.due && isInRange(inv.due, prevRange.start, prevRange.end))
+        .filter(inv => inv.paid && isInRange(inv.paidAt || inv.due, prevRange.start, prevRange.end))
         .reduce((sum, inv) => sum + (parseFloat(inv.amount) || 0), 0)
     : null;
   const prevFilteredExpenseTotal = prevRange
@@ -228,181 +233,183 @@ export default function MoneyScreen() {
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: colors.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingText: {
-    color: colors.textSecondary,
-    fontSize: fontSize.md,
-  },
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    loadingContainer: {
+      flex: 1,
+      backgroundColor: colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    loadingText: {
+      color: colors.textSecondary,
+      fontSize: fontSize.md,
+    },
 
-  // ── Date filter chips
-  filterScroll: {
-    paddingLeft: spacing.lg,
-    marginBottom: spacing.md,
-    height: 44,
-  },
-  filterScrollContent: {
-    paddingRight: spacing.lg,
-    paddingVertical: 4,
-    gap: spacing.sm,
-    alignItems: 'flex-start',
-  },
-  filterChip: {
-    paddingHorizontal: 14,
-    paddingTop: 6,
-    paddingBottom: 8,
-    borderRadius: radius.full,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginRight: spacing.sm,
-  },
-  filterChipActive: {
-    backgroundColor: colors.accentBg,
-    borderColor: colors.accent,
-  },
-  filterChipText: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-    lineHeight: 18,
-  },
-  filterChipTextActive: {
-    color: colors.accent,
-    fontWeight: '600',
-  },
+    // ── Date filter chips
+    filterScroll: {
+      paddingLeft: spacing.lg,
+      marginBottom: spacing.md,
+      height: 44,
+    },
+    filterScrollContent: {
+      paddingRight: spacing.lg,
+      paddingVertical: 4,
+      gap: spacing.sm,
+      alignItems: 'flex-start',
+    },
+    filterChip: {
+      paddingHorizontal: 14,
+      paddingTop: 6,
+      paddingBottom: 8,
+      borderRadius: radius.full,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginRight: spacing.sm,
+    },
+    filterChipActive: {
+      backgroundColor: colors.accentBg,
+      borderColor: colors.accent,
+    },
+    filterChipText: {
+      color: colors.textSecondary,
+      fontSize: fontSize.sm,
+      fontWeight: '500',
+      lineHeight: 18,
+    },
+    filterChipTextActive: {
+      color: colors.accent,
+      fontWeight: '600',
+    },
 
-  // ── Content tabs (Overview / Expenses)
-  tabBar: {
-    flexDirection: 'row',
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    padding: 3,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  tabButton: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    alignItems: 'center',
-    borderRadius: radius.sm - 2,
-  },
-  tabButtonActive: {
-    backgroundColor: colors.background,
-  },
-  tabButtonText: {
-    color: colors.textSecondary,
-    fontWeight: '500',
-    fontSize: fontSize.sm + 1,
-  },
-  tabButtonTextActive: {
-    color: colors.textPrimary,
-    fontWeight: '600',
-  },
-  scrollContent: {
-    flex: 1,
-  },
+    // ── Content tabs (Overview / Expenses)
+    tabBar: {
+      flexDirection: 'row',
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: radius.sm,
+      padding: 3,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    tabButton: {
+      flex: 1,
+      paddingVertical: spacing.sm,
+      alignItems: 'center',
+      borderRadius: radius.sm - 2,
+    },
+    tabButtonActive: {
+      backgroundColor: colors.background,
+    },
+    tabButtonText: {
+      color: colors.textSecondary,
+      fontWeight: '500',
+      fontSize: fontSize.sm + 1,
+    },
+    tabButtonTextActive: {
+      color: colors.textPrimary,
+      fontWeight: '600',
+    },
+    scrollContent: {
+      flex: 1,
+    },
 
-  // ── Expense Category Card (inline breakdown used only in this screen)
-  categoryCard: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  sectionTitle: {
-    color: colors.textPrimary,
-    fontSize: fontSize.md + 1,
-    fontWeight: '600',
-    marginBottom: spacing.md,
-  },
-  categoryBreakdownRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  categoryBreakdownIcon: {
-    fontSize: 20,
-    marginRight: spacing.md,
-    width: 28,
-    textAlign: 'center',
-  },
-  categoryBreakdownInfo: {
-    flex: 1,
-  },
-  categoryBreakdownHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.xs,
-  },
-  categoryBreakdownLabel: {
-    color: colors.textPrimary,
-    fontSize: fontSize.sm + 1,
-    fontWeight: '500',
-  },
-  categoryBreakdownAmount: {
-    color: colors.danger,
-    fontSize: fontSize.sm + 1,
-    fontWeight: '600',
-  },
-  categoryProgressBg: {
-    height: 4,
-    backgroundColor: colors.border,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  categoryProgressFill: {
-    height: '100%',
-    backgroundColor: colors.danger,
-    borderRadius: 2,
-    opacity: 0.7,
-  },
+    // ── Expense Category Card (inline breakdown used only in this screen)
+    categoryCard: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    sectionTitle: {
+      color: colors.textPrimary,
+      fontSize: fontSize.md + 1,
+      fontWeight: '600',
+      marginBottom: spacing.md,
+    },
+    categoryBreakdownRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 14,
+    },
+    categoryBreakdownIcon: {
+      fontSize: 20,
+      marginRight: spacing.md,
+      width: 28,
+      textAlign: 'center',
+    },
+    categoryBreakdownInfo: {
+      flex: 1,
+    },
+    categoryBreakdownHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginBottom: spacing.xs,
+    },
+    categoryBreakdownLabel: {
+      color: colors.textPrimary,
+      fontSize: fontSize.sm + 1,
+      fontWeight: '500',
+    },
+    categoryBreakdownAmount: {
+      color: colors.danger,
+      fontSize: fontSize.sm + 1,
+      fontWeight: '600',
+    },
+    categoryProgressBg: {
+      height: 4,
+      backgroundColor: colors.border,
+      borderRadius: 2,
+      overflow: 'hidden',
+    },
+    categoryProgressFill: {
+      height: '100%',
+      backgroundColor: colors.danger,
+      borderRadius: 2,
+      opacity: 0.7,
+    },
 
-  // ── Expense list (Expenses tab)
-  expenseList: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xs,
-  },
+    // ── Expense list (Expenses tab)
+    expenseList: {
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.xs,
+    },
 
-  // ── Empty states
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 40,
-  },
-  emptyStateIcon: {
-    fontSize: 48,
-    marginBottom: spacing.md,
-  },
-  emptyStateTitle: {
-    color: colors.textPrimary,
-    fontSize: fontSize.lg + 1,
-    fontWeight: '600',
-    marginBottom: spacing.sm,
-    textAlign: 'center',
-  },
-  emptyStateBody: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm + 1,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  bottomPadding: {
-    height: 100,
-  },
-});
+    // ── Empty states
+    emptyState: {
+      alignItems: 'center',
+      paddingVertical: 60,
+      paddingHorizontal: 40,
+    },
+    emptyStateIcon: {
+      fontSize: 48,
+      marginBottom: spacing.md,
+    },
+    emptyStateTitle: {
+      color: colors.textPrimary,
+      fontSize: fontSize.lg + 1,
+      fontWeight: '600',
+      marginBottom: spacing.sm,
+      textAlign: 'center',
+    },
+    emptyStateBody: {
+      color: colors.textSecondary,
+      fontSize: fontSize.sm + 1,
+      textAlign: 'center',
+      lineHeight: 20,
+    },
+    bottomPadding: {
+      height: 100,
+    },
+  });
+}

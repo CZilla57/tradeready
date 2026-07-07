@@ -1,18 +1,23 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { colors, spacing, radius, fontSize, shadow } from '../../utils/theme';
+import { spacing, radius, fontSize } from '../../utils/theme';
+import { useTheme } from '../../hooks/useTheme';
 import { getLast6MonthLabels } from '../../utils/moneyUtils';
 
 const BAR_MAX_HEIGHT = 80;
 
 export function MonthlyChart({ invoices, expenses }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const months = getLast6MonthLabels();
 
   const chartData = months.map(({ label, year, month }) => {
     const monthIncome = invoices
       .filter(inv => {
-        if (!inv.paid || !inv.due) return false;
-        const d = new Date(inv.due);
+        const dateStr = inv.paidAt || inv.due;
+        if (!inv.paid || !dateStr) return false;
+        const d = new Date(dateStr);
         return d.getFullYear() === year && d.getMonth() === month;
       })
       .reduce((sum, inv) => sum + (parseFloat(inv.amount) || 0), 0);
@@ -70,64 +75,66 @@ export function MonthlyChart({ invoices, expenses }) {
   );
 }
 
-const styles = StyleSheet.create({
-  chartCard: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  sectionTitle: {
-    color: colors.textPrimary,
-    fontSize: fontSize.md + 1,
-    fontWeight: '600',
-    marginBottom: spacing.md,
-  },
-  chartLegend: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.md,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  legendLabel: {
-    color: colors.textSecondary,
-    fontSize: fontSize.xs,
-  },
-  chartArea: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-  },
-  chartMonthGroup: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  chartBarWrapper: {
-    width: 12,
-    justifyContent: 'flex-end',
-    marginHorizontal: 2,
-  },
-  chartBar: {
-    width: '100%',
-    borderRadius: 3,
-    minHeight: 2,
-  },
-  chartMonthLabel: {
-    color: colors.textMuted,
-    fontSize: fontSize.xs,
-    marginTop: 6,
-  },
-});
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    chartCard: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    sectionTitle: {
+      color: colors.textPrimary,
+      fontSize: fontSize.md + 1,
+      fontWeight: '600',
+      marginBottom: spacing.md,
+    },
+    chartLegend: {
+      flexDirection: 'row',
+      gap: spacing.md,
+      marginBottom: spacing.md,
+    },
+    legendItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    legendDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+    },
+    legendLabel: {
+      color: colors.textSecondary,
+      fontSize: fontSize.xs,
+    },
+    chartArea: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-end',
+    },
+    chartMonthGroup: {
+      alignItems: 'center',
+      flex: 1,
+    },
+    chartBarWrapper: {
+      width: 12,
+      justifyContent: 'flex-end',
+      marginHorizontal: 2,
+    },
+    chartBar: {
+      width: '100%',
+      borderRadius: 3,
+      minHeight: 2,
+    },
+    chartMonthLabel: {
+      color: colors.textMuted,
+      fontSize: fontSize.xs,
+      marginTop: 6,
+    },
+  });
+}

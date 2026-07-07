@@ -3,11 +3,9 @@
 // navigation.navigate("AddInvoice", { invoiceId: "123" }) to edit,
 // navigation.navigate("AddInvoice", {}) to add new.
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
-  Text,
-  TextInput,
   ScrollView,
   StyleSheet,
   Alert,
@@ -15,12 +13,16 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadInvoices, saveInvoices } from "../utils/storage";
+import { loadInvoices, saveInvoices, getOrCreateCustomer } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { Button } from "../components/UI";
-import { colors, spacing, radius, fontSize } from "../utils/theme";
+import Field from "../components/Field";
+import { spacing } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
 
 export default function AddInvoiceScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { invoiceId, prefill } = route.params || {};
   const isEditing = !!invoiceId;
 
@@ -62,8 +64,16 @@ export default function AddInvoiceScreen({ route, navigation }) {
     }
     setSaving(true);
     const invoices = await loadInvoices();
+    // Link to a real customer record (creating one if needed); `customer` stays
+    // as the denormalized display name (roadmap #5).
+    const record = await getOrCreateCustomer({
+      name: customer.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+    });
     const invoiceFields = {
       customer: customer.trim(),
+      customerId: record?.id ?? "",
       number: number.trim() || autoInvoiceNumber(invoices),
       amount: parseFloat(amount) || 0,
       due,
@@ -93,16 +103,16 @@ export default function AddInvoiceScreen({ route, navigation }) {
         style={{ flex: 1 }}
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <Field label="Customer name *" value={customer} onChange={setCustomer} placeholder="Jane's Bakery" />
-          <Field label="Invoice #" value={number} onChange={setNumber} placeholder="INV-0042 (auto if blank)" />
+          <Field label="Customer name *" value={customer} onChangeText={setCustomer} placeholder="Jane's Bakery" />
+          <Field label="Invoice #" value={number} onChangeText={setNumber} placeholder="INV-0042 (auto if blank)" />
           <Row>
-            <Field label="Amount ($) *" value={amount} onChange={setAmount} placeholder="1500" keyboardType="decimal-pad" flex />
+            <Field label="Amount ($) *" value={amount} onChangeText={setAmount} placeholder="1500" keyboardType="decimal-pad" flex />
             <View style={{ width: spacing.md }} />
-            <Field label="Due date" value={due} onChange={setDue} placeholder="YYYY-MM-DD" flex />
+            <Field label="Due date" value={due} onChangeText={setDue} placeholder="YYYY-MM-DD" flex />
           </Row>
-          <Field label="Customer email" value={email} onChange={setEmail} placeholder="jane@example.com" keyboardType="email-address" autoCapitalize="none" />
-          <Field label="Customer phone" value={phone} onChange={setPhone} placeholder="(555) 123-4567" keyboardType="phone-pad" />
-          <Field label="Description of work" value={desc} onChange={setDesc} placeholder="Website redesign — Phase 2" />
+          <Field label="Customer email" value={email} onChangeText={setEmail} placeholder="jane@example.com" keyboardType="email-address" autoCapitalize="none" />
+          <Field label="Customer phone" value={phone} onChangeText={setPhone} placeholder="(555) 123-4567" keyboardType="phone-pad" />
+          <Field label="Description of work" value={desc} onChangeText={setDesc} placeholder="Website redesign — Phase 2" />
 
           <View style={styles.actions}>
             <Button label="Cancel" variant="ghost" onPress={() => navigation.goBack()} style={{ flex: 1 }} />
@@ -116,24 +126,6 @@ export default function AddInvoiceScreen({ route, navigation }) {
 }
 
 // ── Small helpers ──────────────────────────────────────────────────────────
-
-function Field({ label, value, onChange, placeholder, keyboardType, autoCapitalize, flex }) {
-  return (
-    <View style={[styles.fieldGroup, flex && { flex: 1 }]}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        style={styles.input}
-        value={value}
-        onChangeText={onChange}
-        placeholder={placeholder}
-        placeholderTextColor={colors.textMuted}
-        keyboardType={keyboardType || "default"}
-        autoCapitalize={autoCapitalize || "words"}
-        autoCorrect={false}
-      />
-    </View>
-  );
-}
 
 function Row({ children }) {
   return <View style={{ flexDirection: "row" }}>{children}</View>;
@@ -153,20 +145,10 @@ function autoInvoiceNumber(invoices) {
   return `INV-${String(next).padStart(4, "0")}`;
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scroll: { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160 },
-  fieldGroup: { marginBottom: spacing.md },
-  label: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5, fontWeight: "500" },
-  input: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
   actions: { flexDirection: "row", marginTop: spacing.lg },
-});
+  });
+}

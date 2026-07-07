@@ -2,7 +2,7 @@
 // Business info, payment processor selection, and notification rules.
 // All saved to AsyncStorage so they persist between app launches.
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -12,19 +12,28 @@ import {
   StyleSheet,
   Alert,
   Linking,
+  AppState,
+  ActivityIndicator,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
+import { syncIfOnline } from "../utils/sync";
 import { supabase } from "../utils/supabase";
 import { Button, SectionHeader, Divider } from "../components/UI";
+import BaseField from "../components/Field";
 import { TRADE_TYPES } from "../utils/pricingEngine";
-import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useSubscription } from "../context/SubscriptionContext";
+import { showManageSubscriptions } from "../utils/subscription";
+import { useTheme } from "../hooks/useTheme";
 
-const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
-const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
+const PRIVACY_URL  = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
+const TERMS_URL    = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
+const VERCEL_URL   = Constants.expoConfig?.extra?.backendUrl        ?? "";
 
 function formatPhone(raw) {
   const digits = raw.replace(/\D/g, "").slice(0, 10);
@@ -34,26 +43,137 @@ function formatPhone(raw) {
 }
 
 const PROVIDERS = [
-  {
-    id: "stripe",
-    label: "Stripe",
-    hint: "Enter your backend API token (set as BACKEND_API_TOKEN in your Vercel project settings). Your Stripe Secret Key belongs on the server — never paste sk_ keys here.",
-    keyNote: "Stored securely on your device. Sent to your backend to authenticate payment link requests.",
-  },
+  { id: "stripe", label: "Stripe" },
   { id: "square", label: "Square", hint: "Paste your Square Access Token" },
-  { id: "paypal", label: "PayPal", hint: "Paste your PayPal Client ID" },
+  { id: "paypal", label: "PayPal.Me", hint: "Enter your PayPal.Me username (e.g. johndoe)" },
   { id: "venmo", label: "Venmo", hint: "Enter your Venmo username" },
-  { id: "quickbooks", label: "QuickBooks", hint: "Enter your QuickBooks Company ID" },
   { id: "custom", label: "Custom URL", hint: "Paste your payment page URL" },
 ];
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ navigation }) {
+  const { colors, shadow, preference, setTheme } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const [s, setS] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { isSubscribed, isTrialing } = useSubscription();
+
+  // Stripe Connect state: null = loading, object = loaded
+  const [stripeStatus, setStripeStatus] = useState(null);
+  const [stripeConnecting, setStripeConnecting] = useState(false);
+  const [stripeDisconnecting, setStripeDisconnecting] = useState(false);
+  const appStateRef = useRef(AppState.currentState);
 
   useEffect(() => {
-    loadSettings().then(setS);
+    loadSettings().then((loaded) => {
+      // Migrate: if a legacy providerKey exists for the current non-Stripe provider
+      // and hasn't been copied into the per-provider map yet, do it now.
+      if (
+        loaded.provider !== "stripe" &&
+        loaded.providerKey &&
+        !loaded.providerKeys?.[loaded.provider]
+      ) {
+        loaded = {
+          ...loaded,
+          providerKeys: { ...loaded.providerKeys, [loaded.provider]: loaded.providerKey },
+        };
+      }
+      setS(loaded);
+    });
   }, []);
+
+  // Load Stripe Connect status on mount and whenever the app returns to foreground
+  // (the user may have just completed Stripe onboarding in the browser).
+  useEffect(() => {
+    fetchStripeStatus();
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (appStateRef.current.match(/inactive|background/) && nextState === "active") {
+        fetchStripeStatus();
+      }
+      appStateRef.current = nextState;
+    });
+    return () => sub.remove();
+  }, []);
+
+  async function fetchStripeStatus() {
+    if (!VERCEL_URL) {
+      setStripeStatus({ connected: false });
+      return;
+    }
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        setStripeStatus({ connected: false });
+        return;
+      }
+      const res = await fetch(`${VERCEL_URL}/api/stripe/connect-status`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStripeStatus(data);
+      } else {
+        // Endpoint error — show not-connected so the user isn't stuck on a spinner
+        setStripeStatus({ connected: false, _error: data?.error });
+      }
+    } catch {
+      setStripeStatus({ connected: false });
+    }
+  }
+
+  async function handleStripeConnect() {
+    setStripeConnecting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("You must be signed in.");
+      const res = await fetch(`${VERCEL_URL}/api/stripe/create-connect-account`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      await Linking.openURL(data.onboarding_url);
+    } catch (err) {
+      Alert.alert("Stripe Connect error", err.message || "Could not start Stripe onboarding.");
+    } finally {
+      setStripeConnecting(false);
+    }
+  }
+
+  async function handleStripeDisconnect() {
+    Alert.alert(
+      "Disconnect Stripe",
+      "Your Stripe account will be unlinked. Payment links will stop working until you reconnect.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disconnect",
+          style: "destructive",
+          onPress: async () => {
+            setStripeDisconnecting(true);
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              if (!session?.access_token) throw new Error("You must be signed in.");
+              const res = await fetch(`${VERCEL_URL}/api/stripe/disconnect`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${session.access_token}` },
+              });
+              if (!res.ok) throw new Error("Failed to disconnect.");
+              setStripeStatus({ connected: false });
+            } catch (err) {
+              Alert.alert("Error", err.message || "Could not disconnect Stripe account.");
+            } finally {
+              setStripeDisconnecting(false);
+            }
+          },
+        },
+      ]
+    );
+  }
 
   function update(field, value) {
     setS((prev) => ({ ...prev, [field]: value }));
@@ -72,6 +192,17 @@ export default function SettingsScreen() {
   function removeRule(index) {
     const rules = s.rules.filter((_, i) => i !== index);
     setS((prev) => ({ ...prev, rules }));
+  }
+
+  function updateProviderKey(value) {
+    if (s.provider === "stripe") {
+      update("providerKey", value);
+    } else {
+      setS((prev) => ({
+        ...prev,
+        providerKeys: { ...prev.providerKeys, [prev.provider]: value },
+      }));
+    }
   }
 
   async function handleSave() {
@@ -98,11 +229,11 @@ export default function SettingsScreen() {
         {/* Business info */}
         <SectionHeader title="Your business" />
         <View style={styles.card}>
-          <Field label="Business name" value={s.businessName} onChange={(v) => update("businessName", v)} />
-          <Field label="Your name" value={s.contactName} onChange={(v) => update("contactName", v)} />
-          <Field label="Phone" value={s.phone} onChange={(v) => update("phone", formatPhone(v))} keyboardType="phone-pad" />
-          <Field label="Email" value={s.email} onChange={(v) => update("email", v)} keyboardType="email-address" />
-          <Field label="Payment instructions" value={s.paymentNotes} onChange={(v) => update("paymentNotes", v)} multiline autoCapitalize="sentences" />
+          <Field label="Business name" value={s.businessName} onChangeText={(v) => update("businessName", v)} colors={colors} shadow={shadow} />
+          <Field label="Your name" value={s.contactName} onChangeText={(v) => update("contactName", v)} colors={colors} shadow={shadow} />
+          <Field label="Phone" value={s.phone} onChangeText={(v) => update("phone", formatPhone(v))} keyboardType="phone-pad" colors={colors} shadow={shadow} />
+          <Field label="Email" value={s.email} onChangeText={(v) => update("email", v)} keyboardType="email-address" colors={colors} shadow={shadow} />
+          <Field label="Payment instructions" value={s.paymentNotes} onChangeText={(v) => update("paymentNotes", v)} multiline autoCapitalize="sentences" colors={colors} shadow={shadow} />
 
           {/* Trade type */}
           <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>Your trade</Text>
@@ -129,12 +260,12 @@ export default function SettingsScreen() {
           These pre-fill your estimate calculator. You can always override them per job.
         </Text>
         <View style={styles.card}>
-          <Field label="Your hourly labor rate ($)" value={String(s.laborRate || "")} onChange={(v) => update("laborRate", parseFloat(v) || 0)} keyboardType="decimal-pad" />
-          <Field label="Material markup (%)" value={String(s.materialMarkup || "")} onChange={(v) => update("materialMarkup", parseFloat(v) || 0)} keyboardType="decimal-pad" />
-          <Field label="Overhead % (insurance, truck, tools)" value={String(s.overheadPercent || "")} onChange={(v) => update("overheadPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" />
-          <Field label="Profit margin %" value={String(s.marginPercent || "")} onChange={(v) => update("marginPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" />
-          <Field label="Minimum job fee ($)" value={String(s.minimumJobFee || "")} onChange={(v) => update("minimumJobFee", parseFloat(v) || 0)} keyboardType="decimal-pad" />
-          <Field label="Emergency/after-hours multiplier (e.g. 1.5 = 50% extra)" value={String(s.emergencyMultiplier || "")} onChange={(v) => update("emergencyMultiplier", parseFloat(v) || 1)} keyboardType="decimal-pad" />
+          <Field label="Your hourly labor rate ($)" value={String(s.laborRate || "")} onChangeText={(v) => update("laborRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Field label="Material markup (%)" value={String(s.materialMarkup || "")} onChangeText={(v) => update("materialMarkup", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Field label="Overhead % (insurance, truck, tools)" value={String(s.overheadPercent || "")} onChangeText={(v) => update("overheadPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Field label="Profit margin %" value={String(s.marginPercent || "")} onChangeText={(v) => update("marginPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Field label="Minimum job fee ($)" value={String(s.minimumJobFee || "")} onChangeText={(v) => update("minimumJobFee", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Field label="Emergency/after-hours multiplier (e.g. 1.5 = 50% extra)" value={String(s.emergencyMultiplier || "")} onChangeText={(v) => update("emergencyMultiplier", parseFloat(v) || 1)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
         </View>
 
         <Divider />
@@ -154,24 +285,84 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           ))}
         </View>
-        {selectedProvider && (
+        {s.provider === "stripe" ? (
+          <View style={styles.card}>
+            {stripeStatus === null ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : stripeStatus.connected ? (
+              <>
+                <View style={styles.stripeConnectedRow}>
+                  <View style={styles.stripeConnectedDot} />
+                  <Text style={styles.stripeConnectedLabel}>
+                    {stripeStatus.details_submitted
+                      ? (stripeStatus.display_name ? `Connected — ${stripeStatus.display_name}` : "Connected")
+                      : "Connected — finish onboarding"}
+                  </Text>
+                </View>
+                {!stripeStatus.details_submitted && (
+                  <Text style={styles.stripeOnboardingHint}>
+                    Tap below to complete your Stripe account setup before accepting payments.
+                  </Text>
+                )}
+                <View style={styles.stripeButtonRow}>
+                  {!stripeStatus.details_submitted && (
+                    <TouchableOpacity
+                      style={[styles.stripeBtn, stripeConnecting && { opacity: 0.5 }]}
+                      onPress={handleStripeConnect}
+                      disabled={stripeConnecting}
+                    >
+                      {stripeConnecting
+                        ? <ActivityIndicator size="small" color={colors.accent} />
+                        : <Text style={styles.stripeBtnText}>Complete setup</Text>}
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={[styles.stripeBtnDanger, stripeDisconnecting && { opacity: 0.5 }]}
+                    onPress={handleStripeDisconnect}
+                    disabled={stripeDisconnecting}
+                  >
+                    {stripeDisconnecting
+                      ? <ActivityIndicator size="small" color={colors.danger} />
+                      : <Text style={styles.stripeBtnDangerText}>Disconnect</Text>}
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.providerHint}>
+                  Connect your Stripe account to generate payment links for your customers.
+                  Payments go directly to your Stripe account.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.stripeConnectBtn, stripeConnecting && { opacity: 0.5 }]}
+                  onPress={handleStripeConnect}
+                  disabled={stripeConnecting}
+                >
+                  {stripeConnecting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.stripeConnectBtnText}>Connect Stripe account</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        ) : selectedProvider ? (
           <View style={styles.card}>
             <Text style={styles.providerHint}>{selectedProvider.hint}</Text>
             <TextInput
               style={styles.input}
-              value={s.providerKey}
-              onChangeText={(v) => update("providerKey", v)}
+              value={s.provider === "stripe" ? s.providerKey : (s.providerKeys?.[s.provider] ?? "")}
+              onChangeText={updateProviderKey}
               placeholder="Paste key or ID here"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
-              secureTextEntry={s.provider === "stripe" || s.provider === "square" || s.provider === "paypal"}
+              secureTextEntry={s.provider === "square"}
             />
-            <Text style={styles.keyNote}>
-              {selectedProvider.keyNote ?? "Stored only on your device. Never share it with anyone."}
-            </Text>
+            <Text style={styles.keyNote}>Stored only on your device. Never share it with anyone.</Text>
           </View>
-        )}
+        ) : null}
 
         <Divider />
 
@@ -214,6 +405,31 @@ export default function SettingsScreen() {
           <Text style={styles.keyNote}>
             Stored only on your device. Never share this key.
           </Text>
+        </View>
+
+        <Divider />
+
+        {/* Appearance */}
+        <SectionHeader title="Appearance" />
+        <View style={styles.card}>
+          <Text style={styles.providerHint}>Choose how TradeReady looks on your device.</Text>
+          <View style={styles.providerGrid}>
+            {[
+              { key: "light",  label: "Light"  },
+              { key: "system", label: "System" },
+              { key: "dark",   label: "Dark"   },
+            ].map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.providerBtn, preference === opt.key && styles.providerBtnActive]}
+                onPress={() => setTheme(opt.key)}
+              >
+                <Text style={[styles.providerLabel, preference === opt.key && styles.providerLabelActive]}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         <Divider />
@@ -272,39 +488,135 @@ export default function SettingsScreen() {
           onPress={async () => {
             const raw = await AsyncStorage.getItem('__syncQueue');
             const queue = raw ? JSON.parse(raw) : [];
+
+            const doSignOut = async () => {
+              await clearAllUserData();
+              await supabase.auth.signOut();
+            };
+
             if (queue.length > 0) {
               Alert.alert(
-                "You have unsynced changes",
-                "You made changes while offline that haven't been saved to the cloud yet. If you sign out now, they will be lost.",
+                "Unsynced changes",
+                "You have changes that haven't been saved to the cloud yet. Sync now to keep them.",
                 [
                   { text: "Cancel", style: "cancel" },
                   {
-                    text: "Sign out anyway",
-                    style: "destructive",
+                    text: "Sync & sign out",
                     onPress: async () => {
-                      await clearAllUserData();
-                      await supabase.auth.signOut();
+                      const { data: { session } } = await supabase.auth.getSession();
+                      if (session?.user?.id) await syncIfOnline(session.user.id);
+                      await doSignOut();
                     },
                   },
+                  { text: "Sign out anyway", style: "destructive", onPress: doSignOut },
                 ]
               );
             } else {
               Alert.alert("Sign out", "Are you sure you want to sign out?", [
                 { text: "Cancel", style: "cancel" },
-                {
-                  text: "Sign out",
-                  style: "destructive",
-                  onPress: async () => {
-                    await clearAllUserData();
-                    await supabase.auth.signOut();
-                  },
-                },
+                { text: "Sign out", style: "destructive", onPress: doSignOut },
               ]);
             }
           }}
         >
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.deleteAccountBtn, deleting && { opacity: 0.5 }]}
+          disabled={deleting}
+          onPress={() =>
+            Alert.alert(
+              "Delete account",
+              "This permanently deletes your account and all your data — jobs, invoices, customers, and expenses. This cannot be undone.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Delete my account",
+                  style: "destructive",
+                  onPress: async () => {
+                    setDeleting(true);
+                    try {
+                      const { data: { session } } = await supabase.auth.getSession();
+                      if (!session?.access_token) {
+                        Alert.alert("Error", "No active session. Please sign in again.");
+                        return;
+                      }
+                      const res = await fetch(`${VERCEL_URL}/api/delete-account`, {
+                        method: "POST",
+                        headers: {
+                          Authorization: `Bearer ${session.access_token}`,
+                          "Content-Type": "application/json",
+                        },
+                      });
+                      if (!res.ok) {
+                        const body = await res.json().catch(() => ({}));
+                        throw new Error(body.error || "Failed to delete account.");
+                      }
+                      await clearAllUserData();
+                      await supabase.auth.signOut();
+                    } catch (err) {
+                      Alert.alert("Error", err.message || "Something went wrong. Please try again.");
+                    } finally {
+                      setDeleting(false);
+                    }
+                  },
+                },
+              ]
+            )
+          }
+        >
+          <Text style={styles.deleteAccountText}>
+            {deleting ? "Deleting account…" : "Delete Account"}
+          </Text>
+        </TouchableOpacity>
+
+        <Divider />
+
+        {/* Subscription */}
+        <SectionHeader title="Subscription" />
+        <View style={styles.card}>
+          {isTrialing ? (
+            <View style={styles.subStatusRow}>
+              <View style={[styles.subStatusDot, { backgroundColor: colors.warning }]} />
+              <Text style={[styles.subStatusLabel, { color: colors.warning }]}>Free trial active</Text>
+            </View>
+          ) : isSubscribed ? (
+            <View style={styles.subStatusRow}>
+              <View style={[styles.subStatusDot, { backgroundColor: colors.success }]} />
+              <Text style={[styles.subStatusLabel, { color: colors.success }]}>TradeReady Pro — active</Text>
+            </View>
+          ) : (
+            <Text style={styles.providerHint}>
+              Upgrade to TradeReady Pro to unlock all features.
+            </Text>
+          )}
+
+          {isSubscribed || isTrialing ? (
+            <TouchableOpacity
+              style={[styles.stripeBtn, { marginTop: spacing.sm }]}
+              onPress={async () => {
+                try {
+                  await showManageSubscriptions();
+                } catch {
+                  const url = Platform.OS === "ios"
+                    ? "https://apps.apple.com/account/subscriptions"
+                    : "https://play.google.com/store/account/subscriptions";
+                  Linking.openURL(url);
+                }
+              }}
+            >
+              <Text style={styles.stripeBtnText}>Manage subscription</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]}
+              onPress={() => navigation.navigate("Paywall", { canDismiss: true })}
+            >
+              <Text style={styles.stripeConnectBtnText}>Upgrade to Pro</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         <Divider />
 
@@ -334,27 +646,23 @@ export default function SettingsScreen() {
   );
 }
 
-function Field({ label, value, onChange, keyboardType, multiline, autoCapitalize }) {
-  const cap = autoCapitalize ?? (keyboardType === "email-address" ? "none" : "words");
+// Thin adapter over the shared <Field>: keeps Settings' background-filled input
+// (for contrast against the surface cards) and tighter spacing via the escape
+// hatches. The label matches the shared baseline, so no labelStyle is needed.
+function Field({ multiline, colors, shadow, ...props }) {
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={[styles.input, multiline && styles.inputMultiline]}
-        value={value}
-        onChangeText={onChange}
-        keyboardType={keyboardType || "default"}
-        autoCapitalize={cap}
-        autoCorrect={false}
-        multiline={multiline}
-        numberOfLines={multiline ? 3 : 1}
-        placeholderTextColor={colors.textMuted}
-      />
-    </View>
+    <BaseField
+      {...props}
+      multiline={multiline}
+      containerStyle={styles.fieldGroup}
+      inputStyle={multiline ? [styles.input, styles.inputMultiline] : styles.input}
+    />
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scroll: { padding: spacing.md, paddingBottom: 60 },
   card: {
@@ -454,6 +762,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dangerBg,
   },
   signOutText: { color: colors.danger, fontSize: fontSize.md, fontWeight: "600" },
+  deleteAccountBtn: {
+    marginTop: spacing.sm,
+    paddingVertical: 14,
+    alignItems: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.danger,
+  },
+  deleteAccountText: { color: "#fff", fontSize: fontSize.md, fontWeight: "600" },
   tradeGrid: {
     flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4,
   },
@@ -473,4 +789,32 @@ const styles = StyleSheet.create({
   listRowText: { flex: 1, fontSize: fontSize.md, color: colors.textPrimary },
   listRowChevron: { fontSize: 20, color: colors.textMuted },
   listRowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-});
+
+  // Subscription status
+  subStatusRow:  { flexDirection: "row", alignItems: "center" },
+  subStatusDot:  { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  subStatusLabel: { fontSize: fontSize.sm, fontWeight: "600" },
+
+  // Stripe Connect
+  stripeConnectedRow: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
+  stripeConnectedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success, marginRight: 8 },
+  stripeConnectedLabel: { fontSize: fontSize.sm, color: colors.success, fontWeight: "600" },
+  stripeOnboardingHint: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+  stripeButtonRow: { flexDirection: "row", gap: 8, marginTop: spacing.sm },
+  stripeBtn: {
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.accent, alignItems: "center", justifyContent: "center",
+  },
+  stripeBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "600" },
+  stripeBtnDanger: {
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.danger + "80", alignItems: "center", justifyContent: "center",
+  },
+  stripeBtnDangerText: { fontSize: fontSize.sm, color: colors.danger },
+  stripeConnectBtn: {
+    marginTop: spacing.sm, paddingVertical: 12, borderRadius: radius.md,
+    backgroundColor: colors.accent, alignItems: "center",
+  },
+  stripeConnectBtnText: { fontSize: fontSize.sm, color: "#fff", fontWeight: "700" },
+  });
+}

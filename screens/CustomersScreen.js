@@ -13,74 +13,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
-import { colors, spacing, radius, fontSize } from '../utils/theme';
-
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-const formatCurrency = (amount) =>
-  '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-
-// Derives a unified customer list from invoices + manually added customers.
-// Groups invoices by customer name, merges with manual entries, sorts by revenue.
-const buildCustomerList = (invoices, manualCustomers) => {
-  const map = {};
-
-  invoices.forEach(inv => {
-    const key = inv.customer?.trim().toLowerCase();
-    if (!key) return;
-
-    if (!map[key]) {
-      map[key] = {
-        id:         key,
-        name:       inv.customer.trim(),
-        email:      inv.email || '',
-        phone:      inv.phone || '',
-        invoices:   [],
-        totalSpent: 0,
-        totalOwed:  0,
-        isManual:   false,
-      };
-    }
-
-    map[key].invoices.push(inv);
-    map[key].totalSpent += inv.paid ? (parseFloat(inv.amount) || 0) : 0;
-    map[key].totalOwed  += !inv.paid ? (parseFloat(inv.amount) || 0) : 0;
-
-    if (inv.email) map[key].email = inv.email;
-    if (inv.phone) map[key].phone = inv.phone;
-  });
-
-  manualCustomers.forEach(mc => {
-    const key = mc.name?.trim().toLowerCase();
-    if (!key) return;
-
-    if (map[key]) {
-      if (!map[key].email && mc.email) map[key].email = mc.email;
-      if (!map[key].phone && mc.phone) map[key].phone = mc.phone;
-      if (mc.notes) map[key].notes = mc.notes;
-      // Preserve the proper ID from the manual record so CustomerDetail can match jobs
-      map[key].id = mc.id || map[key].id;
-    } else {
-      map[key] = {
-        id:         mc.id || key,
-        name:       mc.name.trim(),
-        email:      mc.email || '',
-        phone:      mc.phone || '',
-        notes:      mc.notes || '',
-        invoices:   [],
-        totalSpent: 0,
-        totalOwed:  0,
-        isManual:   true,
-      };
-    }
-  });
-
-  return Object.values(map).sort((a, b) => b.totalSpent - a.totalSpent);
-};
+import { buildCustomerList } from '../utils/customerList';
+import { spacing, radius, fontSize } from '../utils/theme';
+import { formatMoney } from '../utils/format';
+import { useTheme } from '../hooks/useTheme';
 
 // ─── CUSTOMER ROW ─────────────────────────────────────────────────────────────
 
 const CustomerRow = ({ customer, onPress }) => {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const invoiceCount = customer.invoices.length;
   const hasOwed = customer.totalOwed > 0;
 
@@ -103,13 +46,13 @@ const CustomerRow = ({ customer, onPress }) => {
           {invoiceCount === 0
             ? 'No invoices yet'
             : `${invoiceCount} invoice${invoiceCount !== 1 ? 's' : ''}`}
-          {hasOwed ? ` · ${formatCurrency(customer.totalOwed)} owed` : ''}
+          {hasOwed ? ` · ${formatMoney(customer.totalOwed)} owed` : ''}
         </Text>
       </View>
 
       <View style={styles.rowRight}>
         {customer.totalSpent > 0 && (
-          <Text style={styles.rowSpent}>{formatCurrency(customer.totalSpent)}</Text>
+          <Text style={styles.rowSpent}>{formatMoney(customer.totalSpent)}</Text>
         )}
         <Text style={styles.rowChevron}>›</Text>
       </View>
@@ -120,6 +63,9 @@ const CustomerRow = ({ customer, onPress }) => {
 // ─── MAIN SCREEN ──────────────────────────────────────────────────────────────
 
 export default function CustomersScreen({ navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const [invoices, setInvoices]             = useState([]);
   const [manualCustomers, setManualCustomers] = useState([]);
   const [searchText, setSearchText]         = useState('');
@@ -169,7 +115,7 @@ export default function CustomersScreen({ navigation }) {
           <Text style={styles.headerTitle}>Customers</Text>
           <Text style={styles.headerSub}>
             {totalCustomers} {totalCustomers === 1 ? 'customer' : 'customers'}
-            {totalRevenue > 0 ? ` · ${formatCurrency(totalRevenue)} collected` : ''}
+            {totalRevenue > 0 ? ` · ${formatMoney(totalRevenue)} collected` : ''}
           </Text>
         </View>
         <TouchableOpacity
@@ -221,7 +167,8 @@ export default function CustomersScreen({ navigation }) {
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -365,4 +312,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
-});
+  });
+}

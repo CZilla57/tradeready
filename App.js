@@ -39,7 +39,7 @@
 //
 // AITab:
 //   ChatHome   → ChatScreen
- 
+
 import React, { useState, useEffect } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -48,10 +48,13 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Text, View, ActivityIndicator, TouchableOpacity, Alert } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { SubscriptionProvider, useSubscription } from "./context/SubscriptionContext";
+import { ThemeProvider, useThemeContext } from "./context/ThemeContext";
 import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
+import PaywallScreen from "./screens/PaywallScreen";
 import { isOnboardingComplete } from "./utils/storage";
- 
+
 // Screens
 import InvoicesScreen              from "./screens/InvoicesScreen";
 import AddInvoiceScreen            from "./screens/AddInvoiceScreen";
@@ -70,11 +73,11 @@ import TodayScreen                 from "./screens/TodayScreen";
 import MoneyScreen                 from "./screens/MoneyScreen";
 import ChatScreen                  from "./screens/ChatScreen";
 import RouteScreen                 from "./screens/RouteScreen";
- 
-import { colors, fontSize } from "./utils/theme";
-import { loadSettings } from "./utils/storage";
+
+import { colors as staticColors, fontSize } from "./utils/theme";
+import { loadSettings, migrateCustomerIdentity } from "./utils/storage";
 import { getTradeNickname } from "./utils/pricingEngine";
- 
+
 const RootStack     = createNativeStackNavigator();
 const TodayStack    = createNativeStackNavigator();
 const Tab           = createBottomTabNavigator();
@@ -83,20 +86,19 @@ const InvoiceStack  = createNativeStackNavigator();
 const CustomerStack = createNativeStackNavigator();
 const MoneyStack    = createNativeStackNavigator();
 const ChatStack     = createNativeStackNavigator();
- 
-// Shared header styling across all stacks
-const NAV_OPTS = {
-  headerStyle:           { backgroundColor: colors.surface },
-  headerTintColor:       colors.accent,
-  headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" },
-  headerBackTitleVisible: false,
-};
- 
+
 // ── Tab stacks ────────────────────────────────────────────────────────────────
- 
+
 function TodayTab() {
+  const { colors } = useThemeContext();
+  const navOpts = {
+    headerStyle:           { backgroundColor: colors.surface },
+    headerTintColor:       colors.accent,
+    headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" },
+    headerBackTitleVisible: false,
+  };
   return (
-    <TodayStack.Navigator screenOptions={NAV_OPTS}>
+    <TodayStack.Navigator screenOptions={navOpts}>
       <TodayStack.Screen
         name="TodayHome"
         component={TodayScreen}
@@ -110,9 +112,17 @@ function TodayTab() {
     </TodayStack.Navigator>
   );
 }
+
 function JobsTab() {
+  const { colors } = useThemeContext();
+  const navOpts = {
+    headerStyle:           { backgroundColor: colors.surface },
+    headerTintColor:       colors.accent,
+    headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" },
+    headerBackTitleVisible: false,
+  };
   return (
-    <JobStack.Navigator screenOptions={NAV_OPTS}>
+    <JobStack.Navigator screenOptions={navOpts}>
       <JobStack.Screen name="JobList"             component={JobsScreen}                 options={{ title: "Jobs" }} />
       <JobStack.Screen name="JobDetail"           component={JobDetailScreen}            options={{ title: "Job" }} />
       <JobStack.Screen name="AddJob"              component={AddJobScreen}               options={{ presentation: "modal" }} />
@@ -124,24 +134,37 @@ function JobsTab() {
     </JobStack.Navigator>
   );
 }
- 
+
 function InvoicesTab() {
+  const { colors } = useThemeContext();
+  const navOpts = {
+    headerStyle:           { backgroundColor: colors.surface },
+    headerTintColor:       colors.accent,
+    headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" },
+    headerBackTitleVisible: false,
+  };
   return (
-    <InvoiceStack.Navigator screenOptions={NAV_OPTS}>
+    <InvoiceStack.Navigator screenOptions={navOpts}>
       <InvoiceStack.Screen name="InvoiceList" component={InvoicesScreen}   options={{ title: "Invoices" }} />
       <InvoiceStack.Screen name="AddInvoice"  component={AddInvoiceScreen} options={{ presentation: "modal" }} />
       <InvoiceStack.Screen name="Outreach"    component={OutreachScreen}   options={{ title: "Outreach" }} />
     </InvoiceStack.Navigator>
   );
 }
- 
+
 function CustomersTab() {
+  const { colors } = useThemeContext();
+  const navOpts = {
+    headerStyle:           { backgroundColor: colors.surface },
+    headerTintColor:       colors.accent,
+    headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" },
+    headerBackTitleVisible: false,
+  };
   return (
-    <CustomerStack.Navigator screenOptions={NAV_OPTS}>
+    <CustomerStack.Navigator screenOptions={navOpts}>
       <CustomerStack.Screen name="CustomerList"   component={CustomersScreen}       options={{ title: "Customers" }} />
       <CustomerStack.Screen name="CustomerDetail" component={CustomerDetailScreen}  options={{ title: "Customer" }} />
       <CustomerStack.Screen name="AddCustomer"    component={AddCustomerScreen}     options={{ presentation: "modal" }} />
-      {/* AddInvoice is here so CustomerDetail can navigate to it within the same tab */}
       <CustomerStack.Screen name="AddInvoice"     component={AddInvoiceScreen}      options={{ presentation: "modal" }} />
       <CustomerStack.Screen name="Outreach"       component={OutreachScreen}        options={{ title: "Outreach" }} />
     </CustomerStack.Navigator>
@@ -149,23 +172,37 @@ function CustomersTab() {
 }
 
 function MoneyTab() {
+  const { colors } = useThemeContext();
+  const navOpts = {
+    headerStyle:           { backgroundColor: colors.surface },
+    headerTintColor:       colors.accent,
+    headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" },
+    headerBackTitleVisible: false,
+  };
   return (
-    <MoneyStack.Navigator screenOptions={NAV_OPTS}>
+    <MoneyStack.Navigator screenOptions={navOpts}>
       <MoneyStack.Screen name="MoneyHome" component={MoneyScreen} options={{ title: "Money" }} />
     </MoneyStack.Navigator>
   );
 }
 
 function ChatTab() {
+  const { colors } = useThemeContext();
+  const navOpts = {
+    headerStyle:           { backgroundColor: colors.surface },
+    headerTintColor:       colors.accent,
+    headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" },
+    headerBackTitleVisible: false,
+  };
   return (
-    <ChatStack.Navigator screenOptions={NAV_OPTS}>
+    <ChatStack.Navigator screenOptions={navOpts}>
       <ChatStack.Screen name="ChatHome" component={ChatScreen} options={{ title: "AI Assistant" }} />
     </ChatStack.Navigator>
   );
 }
- 
+
 // ── Tab icons ─────────────────────────────────────────────────────────────────
- 
+
 const TAB_ICONS = {
   Today:     { active: "calendar",             inactive: "calendar-outline" },
   Jobs:      { active: "hammer",               inactive: "hammer-outline" },
@@ -175,11 +212,12 @@ const TAB_ICONS = {
   AI:        { active: "chatbubble-ellipses",  inactive: "chatbubble-ellipses-outline" },
   Settings:  { active: "settings",             inactive: "settings-outline" },
 };
- 
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function MainTabs() {
   const [nickname, setNickname] = useState("Tradie");
+  const { colors } = useThemeContext();
 
   useEffect(() => {
     loadSettings().then(s => setNickname(getTradeNickname(s?.trade)));
@@ -223,15 +261,23 @@ function MainTabs() {
 }
 
 function RootNavigator() {
-  const { session, initializing } = useAuth();
-  const [onboardingDone, setOnboardingDone] = useState(null);
+  const { session, initializing }                = useAuth();
+  const { isSubscribed, isLoading: subLoading }  = useSubscription();
+  const { colors, isDark }                       = useThemeContext();
+  const [onboardingDone, setOnboardingDone]      = useState(null);
 
   useEffect(() => {
     if (!session) { setOnboardingDone(null); return; }
     isOnboardingComplete().then(setOnboardingDone);
+    migrateCustomerIdentity().catch(() => {});
   }, [session]);
 
-  if (initializing || (session && onboardingDone === null)) {
+  const isLoading =
+    initializing ||
+    (session && onboardingDone === null) ||
+    (session && onboardingDone && subLoading);
+
+  if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background }}>
         <ActivityIndicator color={colors.accent} size="large" />
@@ -239,8 +285,20 @@ function RootNavigator() {
     );
   }
 
+  const navTheme = {
+    dark: isDark,
+    colors: {
+      primary:      colors.accent,
+      background:   colors.background,
+      card:         colors.surface,
+      text:         colors.textPrimary,
+      border:       colors.border,
+      notification: colors.accent,
+    },
+  };
+
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navTheme}>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         {!session ? (
           <RootStack.Screen name="Auth" component={AuthScreen} />
@@ -248,8 +306,17 @@ function RootNavigator() {
           <RootStack.Screen name="Onboarding">
             {() => <OnboardingScreen onComplete={() => setOnboardingDone(true)} />}
           </RootStack.Screen>
+        ) : !isSubscribed ? (
+          <RootStack.Screen name="Paywall" component={PaywallScreen} />
         ) : (
-          <RootStack.Screen name="Main" component={MainTabs} />
+          <>
+            <RootStack.Screen name="Main" component={MainTabs} />
+            <RootStack.Screen
+              name="Paywall"
+              component={PaywallScreen}
+              options={{ presentation: "modal", headerShown: false }}
+            />
+          </>
         )}
       </RootStack.Navigator>
     </NavigationContainer>
@@ -279,14 +346,14 @@ class ErrorBoundary extends React.Component {
     };
 
     return (
-      <View style={{ flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
-        <Text style={{ fontSize: 28, fontWeight: '800', color: colors.accent, marginBottom: 16 }}>TradeReady</Text>
-        <Text style={{ fontSize: 16, color: colors.textPrimary, textAlign: 'center', marginBottom: 32 }}>
+      <View style={{ flex: 1, backgroundColor: staticColors.background, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+        <Text style={{ fontSize: 28, fontWeight: '800', color: staticColors.accent, marginBottom: 16 }}>TradeReady</Text>
+        <Text style={{ fontSize: 16, color: staticColors.textPrimary, textAlign: 'center', marginBottom: 32 }}>
           Something went wrong. Please restart the app.
         </Text>
         <TouchableOpacity
           onPress={handleRestart}
-          style={{ backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32 }}
+          style={{ backgroundColor: staticColors.accent, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32 }}
           activeOpacity={0.85}
         >
           <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Restart</Text>
@@ -307,9 +374,13 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
-        <AuthProvider>
-          <RootNavigator />
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <SubscriptionProvider>
+              <RootNavigator />
+            </SubscriptionProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
   );

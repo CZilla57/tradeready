@@ -3,7 +3,7 @@
 // React Native doesn't have HTML — View is like a div, Text is like a p,
 // TouchableOpacity is like a button, ScrollView is like an overflow div.
 
-import React from "react";
+import React, { useMemo } from "react";
 import {
   View,
   Text,
@@ -11,24 +11,26 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
-import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+import { useTheme } from "../hooks/useTheme";
+import { spacing, radius, fontSize } from "../utils/theme";
 
 // ── Badge ──────────────────────────────────────────────────────────────────
 // The colored pill labels like "7d overdue" or "Paid"
 export function Badge({ label, color = "accent" }) {
+  const { colors } = useTheme();
   const bgMap = {
-    danger: colors.dangerBg,
+    danger:  colors.dangerBg,
     warning: colors.warningBg,
     success: colors.successBg,
-    accent: colors.accentBg,
-    muted: "#f2f2f7",
+    accent:  colors.accentBg,
+    muted:   colors.surfaceSecondary,
   };
   const textMap = {
-    danger: colors.danger,
+    danger:  colors.danger,
     warning: colors.warning,
     success: colors.success,
-    accent: colors.accent,
-    muted: colors.textSecondary,
+    accent:  colors.accent,
+    muted:   colors.textSecondary,
   };
   return (
     <View style={[styles.badge, { backgroundColor: bgMap[color] || bgMap.muted }]}>
@@ -41,10 +43,17 @@ export function Badge({ label, color = "accent" }) {
 
 // ── Button ─────────────────────────────────────────────────────────────────
 export function Button({ label, onPress, variant = "primary", style, loading }) {
+  const { colors } = useTheme();
   const isPrimary = variant === "primary";
   return (
     <TouchableOpacity
-      style={[styles.btn, isPrimary ? styles.btnPrimary : styles.btnGhost, style]}
+      style={[
+        styles.btn,
+        isPrimary
+          ? { backgroundColor: colors.accent }
+          : { backgroundColor: "transparent", borderWidth: 1, borderColor: colors.borderStrong },
+        style,
+      ]}
       onPress={onPress}
       activeOpacity={0.75}
       disabled={loading}
@@ -52,7 +61,7 @@ export function Button({ label, onPress, variant = "primary", style, loading }) 
       {loading ? (
         <ActivityIndicator color={isPrimary ? "#fff" : colors.accent} size="small" />
       ) : (
-        <Text style={[styles.btnText, isPrimary ? styles.btnTextPrimary : styles.btnTextGhost]}>
+        <Text style={[styles.btnText, { color: isPrimary ? "#fff" : colors.textPrimary }]}>
           {label}
         </Text>
       )}
@@ -62,43 +71,49 @@ export function Button({ label, onPress, variant = "primary", style, loading }) 
 
 // ── Card ───────────────────────────────────────────────────────────────────
 export function Card({ children, style, onPress }) {
+  const { colors, shadow } = useTheme();
+  const cardStyle = [{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, ...shadow.card }, style];
   if (onPress) {
     return (
-      <TouchableOpacity style={[styles.card, style]} onPress={onPress} activeOpacity={0.8}>
+      <TouchableOpacity style={cardStyle} onPress={onPress} activeOpacity={0.8}>
         {children}
       </TouchableOpacity>
     );
   }
-  return <View style={[styles.card, style]}>{children}</View>;
+  return <View style={cardStyle}>{children}</View>;
 }
 
 // ── StatCard ───────────────────────────────────────────────────────────────
 export function StatCard({ label, value, valueColor }) {
+  const { colors, shadow } = useTheme();
   return (
-    <View style={styles.statCard}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, valueColor && { color: valueColor }]}>{value}</Text>
+    <View style={[styles.statCard, { backgroundColor: colors.surface, ...shadow.card }]}>
+      <Text style={[styles.statLabel, { color: colors.textMuted }]}>{label}</Text>
+      <Text style={[styles.statValue, { color: valueColor || colors.textPrimary }]}>{value}</Text>
     </View>
   );
 }
 
 // ── SectionHeader ──────────────────────────────────────────────────────────
 export function SectionHeader({ title }) {
-  return <Text style={styles.sectionHeader}>{title}</Text>;
+  const { colors } = useTheme();
+  return <Text style={[styles.sectionHeader, { color: colors.textSecondary }]}>{title}</Text>;
 }
 
 // ── EmptyState ─────────────────────────────────────────────────────────────
 export function EmptyState({ message }) {
+  const { colors } = useTheme();
   return (
     <View style={styles.empty}>
-      <Text style={styles.emptyText}>{message}</Text>
+      <Text style={[styles.emptyText, { color: colors.textMuted }]}>{message}</Text>
     </View>
   );
 }
 
 // ── Divider ────────────────────────────────────────────────────────────────
 export function Divider() {
-  return <View style={styles.divider} />;
+  const { colors } = useTheme();
+  return <View style={[styles.divider, { backgroundColor: colors.border }]} />;
 }
 
 const styles = StyleSheet.create({
@@ -119,51 +134,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: spacing.md,
   },
-  btnPrimary: {
-    backgroundColor: colors.accent,
-  },
-  btnGhost: {
-    backgroundColor: "transparent",
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-  },
   btnText: {
     fontSize: fontSize.md,
     fontWeight: "600",
   },
-  btnTextPrimary: {
-    color: "#fff",
-  },
-  btnTextGhost: {
-    color: colors.textPrimary,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    ...shadow.card,
-  },
   statCard: {
     flex: 1,
-    backgroundColor: colors.surface,
     borderRadius: radius.md,
     padding: spacing.md,
-    ...shadow.card,
   },
   statLabel: {
     fontSize: fontSize.xs,
-    color: colors.textMuted,
     marginBottom: 4,
   },
   statValue: {
     fontSize: fontSize.xl,
     fontWeight: "600",
-    color: colors.textPrimary,
   },
   sectionHeader: {
     fontSize: fontSize.xs,
     fontWeight: "600",
-    color: colors.textSecondary,
     textTransform: "uppercase",
     letterSpacing: 0.8,
     marginBottom: spacing.sm,
@@ -179,13 +169,11 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: fontSize.md,
-    color: colors.textMuted,
     textAlign: "center",
     lineHeight: 24,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.border,
     marginVertical: spacing.md,
   },
 });

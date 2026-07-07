@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, spacing, radius, fontSize, shadow } from '../utils/theme';
+import { spacing, radius, fontSize } from '../utils/theme';
+import { useTheme } from '../hooks/useTheme';
+import BaseField from '../components/Field';
 import { TRADE_TYPES } from '../utils/pricingEngine';
 import { saveSettings, defaultSettings, markOnboardingComplete, clearSampleData } from '../utils/storage';
 import { requestPermissions } from '../utils/notifications';
@@ -26,6 +28,8 @@ function formatPhone(raw) {
 }
 
 export default function OnboardingScreen({ onComplete }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [notifAsked, setNotifAsked] = useState(false);
@@ -151,6 +155,8 @@ export default function OnboardingScreen({ onComplete }) {
 }
 
 function StepWelcome() {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <View style={styles.stepContent}>
       <Text style={styles.appName}>TradeReady</Text>
@@ -179,6 +185,8 @@ function StepWelcome() {
 }
 
 function StepBusiness({ form, update }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <View style={styles.stepContent}>
       <Text style={styles.stepTitle}>Your business</Text>
@@ -217,6 +225,8 @@ function StepBusiness({ form, update }) {
 }
 
 function StepTrade({ form, update }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <View style={styles.stepContent}>
       <Text style={styles.stepTitle}>Your trade</Text>
@@ -251,6 +261,8 @@ function StepTrade({ form, update }) {
 }
 
 function StepDataChoice({ form, update }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const options = [
     {
       id: 'sample',
@@ -301,6 +313,8 @@ function StepDataChoice({ form, update }) {
 }
 
 function StepDone({ form, notifAsked, notifGranted, onRequestNotif }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const firstName = form.contactName.trim().split(' ')[0] || 'there';
   return (
     <View style={styles.doneContent}>
@@ -337,261 +351,259 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }) {
   );
 }
 
-function Field({ label, value, onChangeText, placeholder, keyboardType, autoCapitalize }) {
-  const cap = autoCapitalize ?? (keyboardType === 'email-address' ? 'none' : 'words');
+// Thin adapter over the shared <Field>: keeps Onboarding's taller, shadowed
+// input and bolder label (see components/Field.tsx) via the style escape hatches.
+function Field(props) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={styles.fieldInput}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor={colors.textMuted}
-        keyboardType={keyboardType || 'default'}
-        autoCapitalize={cap}
-        autoCorrect={false}
-      />
-    </View>
+    <BaseField
+      containerStyle={styles.fieldGroup}
+      labelStyle={styles.fieldLabel}
+      inputStyle={styles.fieldInput}
+      {...props}
+    />
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  flex: { flex: 1 },
-  dots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 6,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
-  dotActive: { backgroundColor: colors.accent },
-  scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
-  stepContent: {},
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    flex: { flex: 1 },
+    dots: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      gap: 6,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
+    dotActive: { backgroundColor: colors.accent },
+    scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
+    stepContent: {},
 
-  // Welcome
-  appName: {
-    fontSize: 44,
-    fontWeight: '800',
-    color: colors.accent,
-    letterSpacing: -1,
-    textAlign: 'center',
-    marginTop: spacing.xl,
-  },
-  welcomeTagline: {
-    fontSize: fontSize.lg,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    marginTop: spacing.xs,
-    marginBottom: spacing.xl,
-  },
-  welcomeBody: {
-    fontSize: fontSize.md,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: spacing.xl,
-  },
-  featureList: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    gap: spacing.md,
-    ...shadow.card,
-  },
-  featureRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  featureIcon: { fontSize: 24 },
-  featureText: { flex: 1 },
-  featureTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
-  featureDesc: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    // Welcome
+    appName: {
+      fontSize: 44,
+      fontWeight: '800',
+      color: colors.accent,
+      letterSpacing: -1,
+      textAlign: 'center',
+      marginTop: spacing.xl,
+    },
+    welcomeTagline: {
+      fontSize: fontSize.lg,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginTop: spacing.xs,
+      marginBottom: spacing.xl,
+    },
+    welcomeBody: {
+      fontSize: fontSize.md,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 22,
+      marginBottom: spacing.xl,
+    },
+    featureList: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      gap: spacing.md,
+      ...shadow.card,
+    },
+    featureRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    featureIcon: { fontSize: 24 },
+    featureText: { flex: 1 },
+    featureTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
+    featureDesc: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
 
-  // Step header
-  stepTitle: {
-    fontSize: fontSize.xxl,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: spacing.xs,
-  },
-  stepSubtitle: {
-    fontSize: fontSize.md,
-    color: colors.textSecondary,
-    marginBottom: spacing.lg,
-    lineHeight: 22,
-  },
+    // Step header
+    stepTitle: {
+      fontSize: fontSize.xxl,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      marginBottom: spacing.xs,
+    },
+    stepSubtitle: {
+      fontSize: fontSize.md,
+      color: colors.textSecondary,
+      marginBottom: spacing.lg,
+      lineHeight: 22,
+    },
 
-  // Field
-  fieldGroup: { marginBottom: spacing.md },
-  fieldLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginBottom: spacing.xs,
-  },
-  fieldInput: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 48,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
+    // Field
+    fieldGroup: { marginBottom: spacing.md },
+    fieldLabel: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: spacing.xs,
+    },
+    fieldInput: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      height: 48,
+      paddingHorizontal: spacing.md,
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
 
-  // Trade
-  tradeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
-  tradeBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  tradeBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-  tradeLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
-  tradeLabelActive: { color: colors.accent, fontWeight: '600' },
-  rateLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginBottom: spacing.xs,
-  },
-  rateInput: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 48,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  rateNote: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs },
+    // Trade
+    tradeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
+    tradeBtn: {
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: radius.full,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    tradeBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
+    tradeLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
+    tradeLabelActive: { color: colors.accent, fontWeight: '600' },
+    rateLabel: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: spacing.xs,
+    },
+    rateInput: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      height: 48,
+      paddingHorizontal: spacing.md,
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    rateNote: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs },
 
-  // Data choice
-  dataCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-    borderWidth: 2,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  dataCardActive: {
-    borderColor: colors.accent,
-    backgroundColor: colors.accentBg,
-  },
-  dataCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-    gap: spacing.sm,
-  },
-  dataCardEmoji: { fontSize: 22 },
-  dataCardTitle: {
-    flex: 1,
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  dataCardTitleActive: { color: colors.accent },
-  dataCardDesc: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
-  dataCardDescActive: { color: colors.accent + 'cc' },
-  radioOuter: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  radioOuterActive: { borderColor: colors.accent },
-  radioInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.accent,
-  },
+    // Data choice
+    dataCard: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginBottom: spacing.md,
+      borderWidth: 2,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    dataCardActive: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accentBg,
+    },
+    dataCardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: spacing.sm,
+      gap: spacing.sm,
+    },
+    dataCardEmoji: { fontSize: 22 },
+    dataCardTitle: {
+      flex: 1,
+      fontSize: fontSize.lg,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    dataCardTitleActive: { color: colors.accent },
+    dataCardDesc: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
+    dataCardDescActive: { color: colors.accent + 'cc' },
+    radioOuter: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      borderWidth: 2,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    radioOuterActive: { borderColor: colors.accent },
+    radioInner: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.accent,
+    },
 
-  // Done
-  doneContent: {
-    alignItems: 'center',
-    paddingTop: spacing.xl,
-  },
-  doneEmoji: { fontSize: 64, marginBottom: spacing.md },
-  doneTitle: {
-    fontSize: fontSize.xxl,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-  },
-  notifCard: {
-    width: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
-    ...shadow.card,
-  },
-  notifHeader: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
-  notifIcon: { fontSize: 24 },
-  notifText: { flex: 1 },
-  notifTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary, marginBottom: 2 },
-  notifDesc: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
-  notifBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  notifBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '600' },
-  notifResult: { paddingTop: spacing.xs },
-  notifResultText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
-  doneBody: {
-    fontSize: fontSize.md,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
-    paddingHorizontal: spacing.md,
-  },
+    // Done
+    doneContent: {
+      alignItems: 'center',
+      paddingTop: spacing.xl,
+    },
+    doneEmoji: { fontSize: 64, marginBottom: spacing.md },
+    doneTitle: {
+      fontSize: fontSize.xxl,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      textAlign: 'center',
+      marginBottom: spacing.lg,
+    },
+    notifCard: {
+      width: '100%',
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginBottom: spacing.lg,
+      ...shadow.card,
+    },
+    notifHeader: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+    notifIcon: { fontSize: 24 },
+    notifText: { flex: 1 },
+    notifTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary, marginBottom: 2 },
+    notifDesc: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
+    notifBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: radius.md,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    notifBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '600' },
+    notifResult: { paddingTop: spacing.xs },
+    notifResultText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
+    doneBody: {
+      fontSize: fontSize.md,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 22,
+      paddingHorizontal: spacing.md,
+    },
 
-  // Footer
-  footer: {
-    flexDirection: 'row',
-    padding: spacing.lg,
-    gap: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    backgroundColor: colors.background,
-  },
-  backBtn: {
-    height: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  backText: { fontSize: fontSize.md, color: colors.textSecondary, fontWeight: '500' },
-  nextBtn: {
-    flex: 1,
-    height: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-  },
-  nextBtnFull: { flex: 1 },
-  nextBtnDisabled: { opacity: 0.5 },
-  nextText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
-});
+    // Footer
+    footer: {
+      flexDirection: 'row',
+      padding: spacing.lg,
+      gap: spacing.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+      backgroundColor: colors.background,
+    },
+    backBtn: {
+      height: 50,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: spacing.lg,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    backText: { fontSize: fontSize.md, color: colors.textSecondary, fontWeight: '500' },
+    nextBtn: {
+      flex: 1,
+      height: 50,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.accent,
+      borderRadius: radius.md,
+    },
+    nextBtnFull: { flex: 1 },
+    nextBtnDisabled: { opacity: 0.5 },
+    nextText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
+  });
+}

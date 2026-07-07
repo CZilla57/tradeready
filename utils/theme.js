@@ -2,7 +2,7 @@
 // All colors, spacing, and font sizes in one place.
 // Change something here and it updates everywhere in the app.
 
-export const colors = {
+export const lightColors = {
   // Backgrounds
   background: "#f2f2f7",       // iOS system grouped background
   surface: "#ffffff",           // Card / sheet background
@@ -31,16 +31,57 @@ export const colors = {
   borderStrong: "#c7c7cc",
 
   // Job pipeline status colors
-  // Used by TodayScreen, JobsScreen, and any future screen that renders job status badges.
-  // Defined here so all screens stay in sync if we ever rebrand or add dark mode.
-  statusScheduled:  "#3B82F6", // blue
-  statusInProgress: "#F59E0B", // amber
-  statusComplete:   "#10B981", // green
-  statusEstimate:   "#8B5CF6", // purple
-  statusLead:       "#6B7280", // grey
-  statusInvoiced:   "#06B6D4", // cyan
-  statusPaid:       "#34C759", // same as success
+  statusLead:       "#6B7280",
+  statusEstimate:   "#8B5CF6",
+  statusApproved:   "#14B8A6",
+  statusScheduled:  "#3B82F6",
+  statusInProgress: "#F59E0B",
+  statusComplete:   "#10B981",
+  statusInvoiced:   "#06B6D4",
+  statusPaid:       "#34C759",
 };
+
+export const darkColors = {
+  // Backgrounds
+  background: "#000000",        // iOS true black (OLED-friendly)
+  surface: "#1c1c1e",           // iOS dark secondary grouped background
+  surfaceSecondary: "#000000",
+
+  // Text
+  textPrimary: "#ffffff",
+  textSecondary: "#aeaeb2",     // iOS dark secondary label
+  textMuted: "#636366",         // iOS dark tertiary label
+  textOnAccent: "#ffffff",
+
+  // Brand / accent
+  accent: "#0a84ff",            // iOS blue dark
+
+  // Semantic
+  danger: "#ff453a",            // iOS red dark
+  warning: "#ff9f0a",           // iOS orange dark
+  success: "#30d158",           // iOS green dark
+  dangerBg: "#2d0f0f",
+  warningBg: "#2d1f00",
+  successBg: "#0a2a15",
+  accentBg: "#001830",
+
+  // Borders
+  border: "#38383a",
+  borderStrong: "#48484a",
+
+  // Job pipeline status colors (brighter for dark backgrounds)
+  statusLead:       "#8D95A0",
+  statusEstimate:   "#a78bfa",
+  statusApproved:   "#2dd4bf",
+  statusScheduled:  "#60a5fa",
+  statusInProgress: "#fbbf24",
+  statusComplete:   "#34d399",
+  statusInvoiced:   "#22d3ee",
+  statusPaid:       "#30d158",
+};
+
+// Keep `colors` as the light palette for any legacy static usage (ErrorBoundary, etc.)
+export const colors = lightColors;
 
 export const spacing = {
   xs: 4,
@@ -73,5 +114,15 @@ export const shadow = {
     shadowOpacity: 0.06,
     shadowRadius: 4,
     elevation: 2,
+  },
+};
+
+export const darkShadow = {
+  card: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 5,
   },
 };

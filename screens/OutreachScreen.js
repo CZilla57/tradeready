@@ -3,7 +3,7 @@
 // Uses expo-mail-composer and expo-sms to open the native iOS Mail and
 // Messages apps pre-filled with the generated content — no email server needed.
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -15,15 +15,39 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as MailComposer from "expo-mail-composer";
-import * as SMS from "expo-sms";
 import * as Clipboard from "expo-clipboard";
+import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
-import { getStatus, formatCurrency, generateOutreachMessage, resolvePaymentLink } from "../utils/invoiceHelpers";
+import { getStatus, generateOutreachMessage, resolvePaymentLink, fetchPaymentLink, getProviderKey } from "../utils/invoiceHelpers";
+import { formatMoney } from "../utils/format";
 import { Badge, Button, Card, Divider } from "../components/UI";
-import { colors, spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
+
+const PROVIDER_LABELS = {
+  stripe: "Stripe",
+  paypal: "PayPal.Me",
+  venmo: "Venmo",
+  square: "Square",
+  custom: "Custom URL",
+};
+
+// Returns providers the user has credentials for. Default provider always
+// included; Stripe only appears when it IS the default; others appear when a
+// key is stored in providerKeys.
+function getConfiguredProviders(s) {
+  return Object.entries(PROVIDER_LABELS)
+    .filter(([id]) => {
+      if (id === s.provider) return true;
+      if (id === "stripe") return false;
+      return !!(s.providerKeys?.[id]);
+    })
+    .map(([id, label]) => ({ id, label }));
+}
 
 export default function OutreachScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { invoiceId } = route.params;
 
   const [invoice, setInvoice] = useState(null);
@@ -38,6 +62,7 @@ export default function OutreachScreen({ route, navigation }) {
   const [installments, setInstallments] = useState("3");
   const [frequency, setFrequency] = useState("Bi-weekly");
   const [copied, setCopied] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -45,6 +70,7 @@ export default function OutreachScreen({ route, navigation }) {
       const inv = invoices.find((i) => i.id === invoiceId);
       setInvoice(inv);
       setSettings(s);
+      setSelectedProvider(s.provider);
       navigation.setOptions({ title: inv?.customer || "Outreach" });
 
       // Restore cached payment link so the message can auto-generate immediately
@@ -55,10 +81,16 @@ export default function OutreachScreen({ route, navigation }) {
     load();
   }, [invoiceId, navigation]);
 
-  async function handleGenerateLink() {
+  async function handleGenerateLink(providerOverride) {
+    const provider = providerOverride ?? selectedProvider;
     setGeneratingLink(true);
     try {
-      const link = await resolvePaymentLink(invoice, settings.provider, settings.providerKey);
+      // When explicitly switching providers, bypass the invoice's cached link —
+      // it was generated for a different provider. On initial "Generate" tap,
+      // the cache is fine (same provider, same amount).
+      const link = providerOverride
+        ? await fetchPaymentLink(invoice, provider, getProviderKey(settings, provider))
+        : await resolvePaymentLink(invoice, provider, getProviderKey(settings, provider));
       setPaymentLink(link);
       // Persist so the link survives navigation and doesn't get re-created next time
       const allInvoices = await loadInvoices();
@@ -76,6 +108,13 @@ export default function OutreachScreen({ route, navigation }) {
       );
     }
     setGeneratingLink(false);
+  }
+
+  function handleSwitchProvider(provider) {
+    if (provider === selectedProvider) return;
+    setSelectedProvider(provider);
+    setPaymentLink("");
+    handleGenerateLink(provider);
   }
 
   const generate = useCallback(async () => {
@@ -110,18 +149,13 @@ export default function OutreachScreen({ route, navigation }) {
 
   // Re-generate whenever channel or payment plan changes (skip for paid invoices)
   useEffect(() => {
-    if (invoice && !invoice.paid && settings && paymentLink) {
+    if (invoice && !invoice.paid && settings) {
       generate();
     }
   }, [channel, paymentPlanEnabled, installments, frequency, paymentLink, invoice, settings, generate]);
 
   async function sendEmail() {
-    const available = await MailComposer.isAvailableAsync();
-    if (!available) {
-      Alert.alert("Mail not available", "Please set up the Mail app on this device first.");
-      return;
-    }
-    await MailComposer.composeAsync({
+    await composeEmail({
       recipients: [invoice.email],
       subject: subject || `Payment reminder: ${invoice.number}`,
       body: message,
@@ -129,12 +163,7 @@ export default function OutreachScreen({ route, navigation }) {
   }
 
   async function sendSMS() {
-    const available = await SMS.isAvailableAsync();
-    if (!available) {
-      Alert.alert("SMS not available", "This device can't send text messages.");
-      return;
-    }
-    await SMS.sendSMSAsync([invoice.phone], message);
+    await composeSMS({ recipients: [invoice.phone], body: message });
   }
 
   async function copyToClipboard() {
@@ -153,6 +182,7 @@ export default function OutreachScreen({ route, navigation }) {
   }
 
   const status = getStatus(invoice);
+  const configuredProviders = getConfiguredProviders(settings);
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
@@ -163,18 +193,41 @@ export default function OutreachScreen({ route, navigation }) {
           <View style={styles.summaryRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.customerName}>{invoice.customer}</Text>
-              <Text style={styles.invoiceMeta}>{invoice.number} · {formatCurrency(invoice.amount)}</Text>
+              <Text style={styles.invoiceMeta}>{invoice.number} · {formatMoney(invoice.amount)}</Text>
             </View>
             <Badge label={status.label} color={status.color} />
           </View>
+
+          {/* Provider selector — only shown when multiple providers are configured */}
+          {!invoice.paid && configuredProviders.length > 1 && (
+            <View style={styles.providerRow}>
+              <Text style={styles.providerRowLabel}>Pay via</Text>
+              <View style={styles.providerChips}>
+                {configuredProviders.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.providerChip, selectedProvider === p.id && styles.providerChipActive]}
+                    onPress={() => handleSwitchProvider(p.id)}
+                  >
+                    <Text style={[styles.providerChipText, selectedProvider === p.id && styles.providerChipTextActive]}>
+                      {p.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
           {paymentLink ? (
             <View style={styles.linkBadge}>
-              <Text style={styles.linkBadgeText}>✓ Payment link ready</Text>
+              <Text style={styles.linkBadgeText}>
+                ✓ {PROVIDER_LABELS[selectedProvider] ?? "Payment"} link ready
+              </Text>
             </View>
           ) : !invoice.paid ? (
             <TouchableOpacity
               style={styles.generateLinkBtn}
-              onPress={handleGenerateLink}
+              onPress={() => handleGenerateLink()}
               disabled={generatingLink}
             >
               {generatingLink ? (
@@ -293,7 +346,8 @@ export default function OutreachScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   scroll: { padding: spacing.md, paddingBottom: 40 },
@@ -322,6 +376,44 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   generateLinkText: { fontSize: fontSize.xs, color: colors.accent, fontWeight: "600" },
+  providerRow: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  providerRowLabel: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: "500",
+  },
+  providerChips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  providerChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  providerChipActive: {
+    backgroundColor: colors.accentBg,
+    borderColor: colors.accent,
+  },
+  providerChipText: {
+    fontSize: fontSize.xs,
+    color: colors.textSecondary,
+    fontWeight: "500",
+  },
+  providerChipTextActive: {
+    color: colors.accent,
+    fontWeight: "600",
+  },
   section: { marginBottom: spacing.sm },
   paidCard: {
     marginBottom: spacing.sm,
@@ -381,4 +473,5 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm, color: colors.textSecondary,
     fontWeight: "500", marginBottom: spacing.sm,
   },
-});
+  });
+}

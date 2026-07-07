@@ -1,26 +1,28 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as MailComposer from "expo-mail-composer";
-import * as SMS from "expo-sms";
 import * as Clipboard from "expo-clipboard";
+import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadJobs, loadCustomers, loadSettings, saveJobs } from "../utils/storage";
-import { formatCurrency } from "../utils/pricingEngine";
+import { formatQuote } from "../utils/format";
+import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { generateEstimateMessage } from "../utils/invoiceHelpers";
 import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { Button, Card, Divider } from "../components/UI";
-import { colors, spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
 
 export default function SendEstimateScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId } = route.params;
 
   const [data, setData] = useState(null); // { job, customer, settings }
@@ -83,12 +85,7 @@ export default function SendEstimateScreen({ route, navigation }) {
   }, [data, channel, generate]);
 
   async function sendEmail() {
-    const available = await MailComposer.isAvailableAsync();
-    if (!available) {
-      Alert.alert("Mail not available", "Please set up the Mail app on this device first.");
-      return;
-    }
-    await MailComposer.composeAsync({
+    await composeEmail({
       recipients: data.customer.email ? [data.customer.email] : [],
       subject: subject || `Estimate for ${data.job.title}`,
       body: message,
@@ -96,12 +93,10 @@ export default function SendEstimateScreen({ route, navigation }) {
   }
 
   async function sendSMS() {
-    const available = await SMS.isAvailableAsync();
-    if (!available) {
-      Alert.alert("SMS not available", "This device cannot send text messages.");
-      return;
-    }
-    await SMS.sendSMSAsync(data.customer.phone ? [data.customer.phone] : [], message);
+    await composeSMS({
+      recipients: data.customer.phone ? [data.customer.phone] : [],
+      body: message,
+    });
   }
 
   async function handleExportPdf() {
@@ -138,14 +133,7 @@ export default function SendEstimateScreen({ route, navigation }) {
   }
 
   const { job, customer } = data;
-  const laborCost = job.laborHours * job.laborRate;
-  const rawMaterialCost = (job.materials || []).reduce(
-    (s, m) => s + m.quantity * m.unitCost,
-    0
-  );
-  const materialCost = rawMaterialCost * (1 + job.materialMarkup / 100);
-  const overheadLine = job.estimateTotal - laborCost - materialCost;
-  const hasMaterials = (job.materials || []).length > 0;
+  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
@@ -165,20 +153,20 @@ export default function SendEstimateScreen({ route, navigation }) {
             <Text style={styles.lineLabel}>
               Labor ({job.laborHours} hrs @ ${job.laborRate}/hr)
             </Text>
-            <Text style={styles.lineValue}>{formatCurrency(laborCost)}</Text>
+            <Text style={styles.lineValue}>{formatQuote(laborCost)}</Text>
           </View>
           {hasMaterials && (
             <View style={styles.lineRow}>
               <Text style={styles.lineLabel}>
                 Materials ({job.materials.length} item{job.materials.length !== 1 ? "s" : ""})
               </Text>
-              <Text style={styles.lineValue}>{formatCurrency(materialCost)}</Text>
+              <Text style={styles.lineValue}>{formatQuote(materialCost)}</Text>
             </View>
           )}
           {overheadLine > 0 && (
             <View style={styles.lineRow}>
               <Text style={styles.lineLabel}>Overhead & operating costs</Text>
-              <Text style={styles.lineValue}>{formatCurrency(overheadLine)}</Text>
+              <Text style={styles.lineValue}>{formatQuote(overheadLine)}</Text>
             </View>
           )}
 
@@ -187,7 +175,7 @@ export default function SendEstimateScreen({ route, navigation }) {
           <View style={styles.lineRow}>
             <Text style={[styles.lineLabel, styles.totalLabel]}>TOTAL ESTIMATE</Text>
             <Text style={[styles.lineValue, styles.totalValue]}>
-              {formatCurrency(job.estimateTotal)}
+              {formatQuote(job.estimateTotal)}
             </Text>
           </View>
         </Card>
@@ -257,7 +245,8 @@ export default function SendEstimateScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   scroll: { padding: spacing.md, paddingBottom: 40 },
@@ -328,4 +317,5 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: spacing.sm,
   },
-});
+  });
+}

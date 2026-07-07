@@ -3,7 +3,7 @@
 // The status pipeline at the top lets the worker advance the job one step at a time.
 // Each status has a contextual primary action button at the bottom that changes based on pipeline position.
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -22,9 +22,13 @@ import { persistPhoto, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers } from "../utils/storage";
-import { JOB_STATUSES, formatCurrency } from "../utils/pricingEngine";
+import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
+import { formatQuote } from "../utils/format";
+import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
+import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
 import { Button, Card, Divider } from "../components/UI";
-import { colors, spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from "../hooks/useTheme";
 
 // ── Pipeline ───────────────────────────────────────────────────────────────
 
@@ -58,49 +62,12 @@ function openMaps(address) {
   });
 }
 
-function formatDate(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
-
-function formatTime(timeStr) {
-  const [h, m] = timeStr.split(":");
-  const hour = parseInt(h, 10);
-  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
-  const period = hour >= 12 ? "PM" : "AM";
-  return `${displayHour}:${m} ${period}`;
-}
-
-function formatElapsed(ms) {
-  const totalMins = Math.floor(ms / 60000);
-  const h = Math.floor(totalMins / 60);
-  const m = totalMins % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m`;
-  return "just now";
-}
-
-// Calculates the overhead + margin remainder so the breakdown always sums to the total.
-// We derive it from the stored total rather than re-running the pricing engine,
-// since the total is the source of truth once a job is saved.
-function calcOverheadLine(job) {
-  const laborCost = job.laborHours * job.laborRate;
-  const materialCost =
-    (job.materials || []).reduce(
-      (sum, m) => sum + m.quantity * m.unitCost,
-      0
-    ) *
-    (1 + job.materialMarkup / 100);
-  return job.estimateTotal - laborCost - materialCost;
-}
-
 // ── Sub-components ─────────────────────────────────────────────────────────
 
 function PipelineBar({ currentStatus }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const currentStep = PIPELINE_STEPS.indexOf(currentStatus);
   const info = JOB_STATUSES[currentStatus];
 
@@ -147,6 +114,9 @@ function PipelineBar({ currentStatus }) {
 }
 
 function JobDetailsCard({ job, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <Card style={styles.section}>
       <View style={styles.sectionHeader}>
@@ -168,13 +138,9 @@ function JobDetailsCard({ job, navigation }) {
       ) : null}
       {job.scheduledDate && (
         <Text style={styles.metaRow}>
-          📅 {formatDate(job.scheduledDate)}
+          📅 {formatDisplayDate(job.scheduledDate)}
           {job.scheduledStartTime
-            ? `  ·  ${formatTime(job.scheduledStartTime)}${
-                job.scheduledEndTime
-                  ? ` – ${formatTime(job.scheduledEndTime)}`
-                  : ""
-              }`
+            ? `  ·  ${formatTimeRange(job.scheduledStartTime, job.scheduledEndTime)}`
             : ""}
         </Text>
       )}
@@ -186,6 +152,9 @@ function JobDetailsCard({ job, navigation }) {
 }
 
 function CustomerCard({ customer }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   return (
     <Card style={styles.section}>
       <Text style={styles.sectionTitle}>Customer</Text>
@@ -215,6 +184,9 @@ function CustomerCard({ customer }) {
 }
 
 function EstimateCard({ job, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const hasEstimate = job.estimateTotal > 0;
 
   if (!hasEstimate) {
@@ -233,15 +205,7 @@ function EstimateCard({ job, navigation }) {
     );
   }
 
-  const laborCost = job.laborHours * job.laborRate;
-  const materialCost =
-    (job.materials || []).reduce(
-      (sum, m) => sum + m.quantity * m.unitCost,
-      0
-    ) *
-    (1 + job.materialMarkup / 100);
-  const overheadLine = calcOverheadLine(job);
-  const hasMaterials = (job.materials || []).length > 0;
+  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
 
   return (
     <Card style={styles.section}>
@@ -270,7 +234,7 @@ function EstimateCard({ job, navigation }) {
         <Text style={styles.estimateLabel}>
           Labor ({job.laborHours} hrs @ ${job.laborRate}/hr)
         </Text>
-        <Text style={styles.estimateValue}>{formatCurrency(laborCost)}</Text>
+        <Text style={styles.estimateValue}>{formatQuote(laborCost)}</Text>
       </View>
 
       {hasMaterials && (
@@ -280,7 +244,7 @@ function EstimateCard({ job, navigation }) {
             {job.materials.length !== 1 ? "s" : ""})
           </Text>
           <Text style={styles.estimateValue}>
-            {formatCurrency(materialCost)}
+            {formatQuote(materialCost)}
           </Text>
         </View>
       )}
@@ -289,7 +253,7 @@ function EstimateCard({ job, navigation }) {
         <View style={styles.estimateRow}>
           <Text style={styles.estimateLabel}>Overhead & operating costs</Text>
           <Text style={styles.estimateValue}>
-            {formatCurrency(overheadLine)}
+            {formatQuote(overheadLine)}
           </Text>
         </View>
       )}
@@ -301,7 +265,7 @@ function EstimateCard({ job, navigation }) {
           Total estimate
         </Text>
         <Text style={[styles.estimateValue, styles.estimateTotalValue]}>
-          {formatCurrency(job.estimateTotal)}
+          {formatQuote(job.estimateTotal)}
         </Text>
       </View>
     </Card>
@@ -309,6 +273,9 @@ function EstimateCard({ job, navigation }) {
 }
 
 function PhotosCard({ photos, onAdd, onDelete }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const [viewerUri, setViewerUri] = useState(null);
 
   return (
@@ -365,54 +332,21 @@ function PhotosCard({ photos, onAdd, onDelete }) {
   );
 }
 
-const TIME_TRACKING_STATUSES = new Set([
-  "approved", "scheduled", "in_progress", "complete", "invoiced",
-]);
-
 function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const [, setTick] = useState(0);
 
-  const activeSession =
-    sessions.length > 0 && !sessions[sessions.length - 1].end
-      ? sessions[sessions.length - 1]
-      : null;
-  const isClocked = !!activeSession;
+  const { activeSession, isClocked, timerStr, overUnder, sessionCount } =
+    computeTimeTracking(sessions, estimatedHours);
 
+  // Re-render every second while clocked in so the live timer ticks.
   useEffect(() => {
     if (!isClocked) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, [isClocked]);
-
-  const completedMs = sessions
-    .filter((s) => s.end)
-    .reduce((sum, s) => sum + (new Date(s.end) - new Date(s.start)), 0);
-
-  const liveMs = isClocked
-    ? completedMs + (Date.now() - new Date(activeSession.start).getTime())
-    : completedMs;
-
-  const totalSecs = Math.floor(liveMs / 1000);
-  const h = Math.floor(totalSecs / 3600);
-  const m = Math.floor((totalSecs % 3600) / 60);
-  const s = totalSecs % 60;
-
-  const timerStr = isClocked
-    ? h > 0
-      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-      : `${m}:${String(s).padStart(2, "0")}`
-    : h > 0
-    ? `${h}h ${String(m).padStart(2, "0")}m`
-    : liveMs > 0
-    ? `${m}m`
-    : "0m";
-
-  const trackedHours = liveMs / 3600000;
-  const overUnder =
-    estimatedHours > 0 ? trackedHours - estimatedHours : null;
-
-  const sessionCount =
-    sessions.filter((s) => s.end).length + (isClocked ? 1 : 0);
 
   return (
     <Card style={styles.section}>
@@ -469,6 +403,9 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }) {
 }
 
 function PrimaryAction({ job, navigation, onAdvance }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const actions = {
     lead: job.estimateTotal > 0
       ? {
@@ -537,6 +474,9 @@ function PrimaryAction({ job, navigation, onAdvance }) {
 // ── Main Screen ────────────────────────────────────────────────────────────
 
 export default function JobDetailScreen({ route, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const { jobId } = route.params;
 
   const [job, setJob] = useState(null);
@@ -742,150 +682,152 @@ export default function JobDetailScreen({ route, navigation }) {
 
 // ── Styles ─────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  scroll: { padding: spacing.md, paddingBottom: 40 },
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scroll: { padding: spacing.md, paddingBottom: 40 },
 
-  centered: { justifyContent: "center", alignItems: "center", padding: spacing.md },
+    centered: { justifyContent: "center", alignItems: "center", padding: spacing.md },
 
-  // Pipeline
-  pipelineCard: { marginBottom: spacing.sm, paddingVertical: spacing.md },
-  pipeline: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  pipelineStep: { alignItems: "center" },
-  pipelineDot: {
-    width: 20, height: 20, borderRadius: 10,
-    backgroundColor: colors.border,
-    alignItems: "center", justifyContent: "center",
-  },
-  pipelineDotDone: { backgroundColor: colors.success },
-  pipelineDotCurrent: { backgroundColor: colors.accent },
-  pipelineCheck: { color: colors.textOnAccent, fontSize: 10, fontWeight: "700" },
-  pipelineLine: {
-    height: 2, flex: 1, backgroundColor: colors.border,
-  },
-  pipelineLineDone: { backgroundColor: colors.success },
-  pipelineStatusLabel: {
-    marginTop: spacing.sm, textAlign: "center",
-    fontSize: fontSize.sm, fontWeight: "600", color: colors.accent,
-  },
-  pipelineStepCount: { fontSize: fontSize.xs, fontWeight: "400", color: colors.textMuted },
+    // Pipeline
+    pipelineCard: { marginBottom: spacing.sm, paddingVertical: spacing.md },
+    pipeline: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    pipelineStep: { alignItems: "center" },
+    pipelineDot: {
+      width: 20, height: 20, borderRadius: 10,
+      backgroundColor: colors.border,
+      alignItems: "center", justifyContent: "center",
+    },
+    pipelineDotDone: { backgroundColor: colors.success },
+    pipelineDotCurrent: { backgroundColor: colors.accent },
+    pipelineCheck: { color: colors.textOnAccent, fontSize: 10, fontWeight: "700" },
+    pipelineLine: {
+      height: 2, flex: 1, backgroundColor: colors.border,
+    },
+    pipelineLineDone: { backgroundColor: colors.success },
+    pipelineStatusLabel: {
+      marginTop: spacing.sm, textAlign: "center",
+      fontSize: fontSize.sm, fontWeight: "600", color: colors.accent,
+    },
+    pipelineStepCount: { fontSize: fontSize.xs, fontWeight: "400", color: colors.textMuted },
 
-  // Sections
-  section: { marginBottom: spacing.sm },
-  sectionHeader: {
-    flexDirection: "row", justifyContent: "space-between",
-    alignItems: "center", marginBottom: spacing.sm,
-  },
-  sectionTitle: {
-    fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary,
-    textTransform: "uppercase", letterSpacing: 0.5,
-  },
-  editLink: { fontSize: fontSize.sm, color: colors.accent },
-  estimateHeaderActions: { flexDirection: "row", alignItems: "center", gap: 6 },
-  editLinkSep: { fontSize: fontSize.sm, color: colors.textMuted },
+    // Sections
+    section: { marginBottom: spacing.sm },
+    sectionHeader: {
+      flexDirection: "row", justifyContent: "space-between",
+      alignItems: "center", marginBottom: spacing.sm,
+    },
+    sectionTitle: {
+      fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary,
+      textTransform: "uppercase", letterSpacing: 0.5,
+    },
+    editLink: { fontSize: fontSize.sm, color: colors.accent },
+    estimateHeaderActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+    editLinkSep: { fontSize: fontSize.sm, color: colors.textMuted },
 
-  // Job details
-  jobTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 6 },
-  jobDesc: { fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, marginBottom: 8 },
-  addressLink: { fontSize: fontSize.sm, color: colors.accent, marginBottom: 6 },
-  metaRow: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 4 },
-  notes: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 4, fontStyle: "italic" },
+    // Job details
+    jobTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 6 },
+    jobDesc: { fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, marginBottom: 8 },
+    addressLink: { fontSize: fontSize.sm, color: colors.accent, marginBottom: 6 },
+    metaRow: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 4 },
+    notes: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 4, fontStyle: "italic" },
 
-  // Customer
-  customerName: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
-  contactRow: { flexDirection: "row", gap: 8 },
-  contactBtn: {
-    flex: 1, paddingVertical: 8, borderRadius: radius.md,
-    backgroundColor: colors.accentBg, alignItems: "center",
-  },
-  contactBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
+    // Customer
+    customerName: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
+    contactRow: { flexDirection: "row", gap: 8 },
+    contactBtn: {
+      flex: 1, paddingVertical: 8, borderRadius: radius.md,
+      backgroundColor: colors.accentBg, alignItems: "center",
+    },
+    contactBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
 
-  // Estimate
-  estimateRow: {
-    flexDirection: "row", justifyContent: "space-between",
-    alignItems: "center", marginBottom: 6,
-  },
-  estimateLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
-  estimateValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
-  estimateTotalLabel: { fontWeight: "700", color: colors.textPrimary },
-  estimateTotalValue: { fontWeight: "700", fontSize: fontSize.lg },
-  noEstimateText: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 4 },
+    // Estimate
+    estimateRow: {
+      flexDirection: "row", justifyContent: "space-between",
+      alignItems: "center", marginBottom: 6,
+    },
+    estimateLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
+    estimateValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
+    estimateTotalLabel: { fontWeight: "700", color: colors.textPrimary },
+    estimateTotalValue: { fontWeight: "700", fontSize: fontSize.lg },
+    noEstimateText: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 4 },
 
-  // Photos
-  photoStrip: { marginTop: spacing.xs },
-  photoThumb: {
-    width: 88,
-    height: 88,
-    borderRadius: radius.md,
-    marginRight: spacing.sm,
-    backgroundColor: colors.border,
-  },
-  noPhotosText: { fontSize: fontSize.sm, color: colors.textMuted },
-  viewerBg: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.95)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  viewerImage: { width: "100%", height: "80%" },
-  viewerClose: {
-    position: "absolute",
-    top: 56,
-    right: 20,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 10,
-  },
-  viewerCloseText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+    // Photos
+    photoStrip: { marginTop: spacing.xs },
+    photoThumb: {
+      width: 88,
+      height: 88,
+      borderRadius: radius.md,
+      marginRight: spacing.sm,
+      backgroundColor: colors.border,
+    },
+    noPhotosText: { fontSize: fontSize.sm, color: colors.textMuted },
+    viewerBg: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.95)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    viewerImage: { width: "100%", height: "80%" },
+    viewerClose: {
+      position: "absolute",
+      top: 56,
+      right: 20,
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: "rgba(255,255,255,0.15)",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 10,
+    },
+    viewerCloseText: { color: "#fff", fontSize: 16, fontWeight: "600" },
 
-  // Time tracking
-  sessionCountText: { fontSize: fontSize.xs, color: colors.textMuted },
-  timerRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 6,
-  },
-  timerDisplay: {
-    fontSize: 32,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    letterSpacing: -0.5,
-    fontVariant: ["tabular-nums"],
-  },
-  timerDisplayActive: { color: colors.accent },
-  timerSub: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
-  clockBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    backgroundColor: colors.accentBg,
-    borderWidth: 1,
-    borderColor: colors.accent,
-  },
-  clockBtnOut: {
-    backgroundColor: colors.dangerBg,
-    borderColor: colors.danger,
-  },
-  clockBtnText: {
-    fontSize: fontSize.sm,
-    fontWeight: "600",
-    color: colors.accent,
-  },
-  clockBtnTextOut: { color: colors.danger },
-  clockedSince: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 4 },
+    // Time tracking
+    sessionCountText: { fontSize: fontSize.xs, color: colors.textMuted },
+    timerRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 6,
+    },
+    timerDisplay: {
+      fontSize: 32,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      letterSpacing: -0.5,
+      fontVariant: ["tabular-nums"],
+    },
+    timerDisplayActive: { color: colors.accent },
+    timerSub: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
+    clockBtn: {
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: radius.md,
+      backgroundColor: colors.accentBg,
+      borderWidth: 1,
+      borderColor: colors.accent,
+    },
+    clockBtnOut: {
+      backgroundColor: colors.dangerBg,
+      borderColor: colors.danger,
+    },
+    clockBtnText: {
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+      color: colors.accent,
+    },
+    clockBtnTextOut: { color: colors.danger },
+    clockedSince: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 4 },
 
-  // Delete
-  deleteBtn: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
-  deleteBtnText: { fontSize: fontSize.sm, color: colors.danger },
+    // Delete
+    deleteBtn: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
+    deleteBtnText: { fontSize: fontSize.sm, color: colors.danger },
 
-  // Error state
-  errorTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 8, textAlign: "center" },
-  errorSubtext: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: "center", marginBottom: 32 },
-  errorButton: { backgroundColor: colors.accent, paddingHorizontal: 32, paddingVertical: 14, borderRadius: radius.md },
-  errorButtonText: { color: colors.textOnAccent, fontSize: fontSize.md, fontWeight: "700" },
-});
+    // Error state
+    errorTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 8, textAlign: "center" },
+    errorSubtext: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: "center", marginBottom: 32 },
+    errorButton: { backgroundColor: colors.accent, paddingHorizontal: 32, paddingVertical: 14, borderRadius: radius.md },
+    errorButtonText: { color: colors.textOnAccent, fontSize: fontSize.md, fontWeight: "700" },
+  });
+}

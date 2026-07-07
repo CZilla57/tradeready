@@ -2,7 +2,7 @@
 // Shows today's scheduled jobs as an ordered stop list.
 // Tap ↑/↓ to reorder, then navigate stop-by-stop or open the full route at once.
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobsForDate, loadSettings } from "../utils/storage";
-import { colors, spacing, radius, fontSize, shadow } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
 
 function getTodayDateString() {
   const now = new Date();
@@ -68,6 +69,8 @@ function openFullRoute(stops, businessAddress) {
 // ── Stop card ─────────────────────────────────────────────────────────────────
 
 function StopCard({ stop, index, total, onUp, onDown }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const isFirst = index === 0;
   const isLast = index === total - 1;
   const startTime = formatTime(stop.scheduledStartTime);
@@ -147,6 +150,8 @@ function StopCard({ stop, index, total, onUp, onDown }) {
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 function EmptyState({ onBack }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <View style={styles.emptyWrap}>
       <Text style={styles.emptyTitle}>No jobs today</Text>
@@ -163,6 +168,8 @@ function EmptyState({ onBack }) {
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function RouteScreen({ navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [stops, setStops] = useState([]);
   const [businessAddress, setBusinessAddress] = useState("");
 
@@ -264,198 +271,200 @@ export default function RouteScreen({ navigation }) {
 const BADGE_SIZE = 28;
 const CONNECTOR_WIDTH = 2;
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  scroll: { padding: spacing.md },
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scroll: { padding: spacing.md },
 
-  hint: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    marginBottom: spacing.lg,
-    lineHeight: 20,
-  },
+    hint: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      marginBottom: spacing.lg,
+      lineHeight: 20,
+    },
 
-  // Timeline layout
-  stopList: { marginBottom: spacing.lg },
-  stopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-  },
+    // Timeline layout
+    stopList: { marginBottom: spacing.lg },
+    stopRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+    },
 
-  timeline: {
-    width: BADGE_SIZE + spacing.md,
-    alignItems: "center",
-  },
-  numberBadge: {
-    width: BADGE_SIZE,
-    height: BADGE_SIZE,
-    borderRadius: BADGE_SIZE / 2,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1,
-  },
-  numberText: {
-    color: "#fff",
-    fontSize: fontSize.sm,
-    fontWeight: "700",
-  },
-  connector: {
-    width: CONNECTOR_WIDTH,
-    flex: 1,
-    minHeight: 24,
-    backgroundColor: colors.border,
-    marginTop: 0,
-  },
+    timeline: {
+      width: BADGE_SIZE + spacing.md,
+      alignItems: "center",
+    },
+    numberBadge: {
+      width: BADGE_SIZE,
+      height: BADGE_SIZE,
+      borderRadius: BADGE_SIZE / 2,
+      backgroundColor: colors.accent,
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 1,
+    },
+    numberText: {
+      color: "#fff",
+      fontSize: fontSize.sm,
+      fontWeight: "700",
+    },
+    connector: {
+      width: CONNECTOR_WIDTH,
+      flex: 1,
+      minHeight: 24,
+      backgroundColor: colors.border,
+      marginTop: 0,
+    },
 
-  // Stop card
-  stopCard: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    marginLeft: spacing.sm,
-    marginBottom: spacing.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  stopTop: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-  },
-  stopInfo: {
-    flex: 1,
-    marginRight: spacing.sm,
-  },
-  stopTitle: {
-    fontSize: fontSize.md,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    marginBottom: 2,
-  },
-  stopCustomer: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    marginBottom: 2,
-  },
-  stopTime: {
-    fontSize: fontSize.sm,
-    color: colors.accent,
-    fontWeight: "500",
-    marginBottom: 4,
-  },
-  stopAddress: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    lineHeight: 18,
-  },
-  noAddress: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    fontStyle: "italic",
-  },
+    // Stop card
+    stopCard: {
+      flex: 1,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginLeft: spacing.sm,
+      marginBottom: spacing.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    stopTop: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+    },
+    stopInfo: {
+      flex: 1,
+      marginRight: spacing.sm,
+    },
+    stopTitle: {
+      fontSize: fontSize.md,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 2,
+    },
+    stopCustomer: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      marginBottom: 2,
+    },
+    stopTime: {
+      fontSize: fontSize.sm,
+      color: colors.accent,
+      fontWeight: "500",
+      marginBottom: 4,
+    },
+    stopAddress: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      lineHeight: 18,
+    },
+    noAddress: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      fontStyle: "italic",
+    },
 
-  // Reorder buttons
-  reorderCol: {
-    gap: 6,
-  },
-  reorderBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: radius.sm,
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  reorderBtnDisabled: {
-    opacity: 0.3,
-  },
-  reorderBtnText: {
-    fontSize: 16,
-    color: colors.textPrimary,
-    lineHeight: 18,
-  },
-  reorderBtnTextDisabled: {
-    color: colors.textMuted,
-  },
+    // Reorder buttons
+    reorderCol: {
+      gap: 6,
+    },
+    reorderBtn: {
+      width: 32,
+      height: 32,
+      borderRadius: radius.sm,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    reorderBtnDisabled: {
+      opacity: 0.3,
+    },
+    reorderBtnText: {
+      fontSize: 16,
+      color: colors.textPrimary,
+      lineHeight: 18,
+    },
+    reorderBtnTextDisabled: {
+      color: colors.textMuted,
+    },
 
-  // Navigate button
-  navigateBtn: {
-    marginTop: spacing.sm,
-    paddingVertical: 8,
-    paddingHorizontal: spacing.md,
-    backgroundColor: colors.accentBg,
-    borderRadius: radius.md,
-    alignItems: "center",
-  },
-  navigateBtnText: {
-    fontSize: fontSize.sm,
-    fontWeight: "600",
-    color: colors.accent,
-  },
+    // Navigate button
+    navigateBtn: {
+      marginTop: spacing.sm,
+      paddingVertical: 8,
+      paddingHorizontal: spacing.md,
+      backgroundColor: colors.accentBg,
+      borderRadius: radius.md,
+      alignItems: "center",
+    },
+    navigateBtnText: {
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+      color: colors.accent,
+    },
 
-  // Bottom actions
-  actions: {
-    gap: spacing.sm,
-  },
-  resetBtn: {
-    paddingVertical: 12,
-    alignItems: "center",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderStyle: "dashed",
-  },
-  resetBtnText: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    fontWeight: "500",
-  },
-  fullRouteBtn: {
-    paddingVertical: 14,
-    alignItems: "center",
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-  },
-  fullRouteBtnText: {
-    fontSize: fontSize.md,
-    fontWeight: "700",
-    color: "#fff",
-  },
+    // Bottom actions
+    actions: {
+      gap: spacing.sm,
+    },
+    resetBtn: {
+      paddingVertical: 12,
+      alignItems: "center",
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderStyle: "dashed",
+    },
+    resetBtnText: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      fontWeight: "500",
+    },
+    fullRouteBtn: {
+      paddingVertical: 14,
+      alignItems: "center",
+      backgroundColor: colors.accent,
+      borderRadius: radius.md,
+    },
+    fullRouteBtnText: {
+      fontSize: fontSize.md,
+      fontWeight: "700",
+      color: "#fff",
+    },
 
-  // Empty state
-  emptyWrap: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: spacing.xl,
-  },
-  emptyTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  emptySub: {
-    fontSize: fontSize.md,
-    color: colors.textMuted,
-    textAlign: "center",
-    lineHeight: 22,
-    marginBottom: spacing.xl,
-  },
-  emptyBtn: {
-    paddingHorizontal: spacing.xl,
-    paddingVertical: 12,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  emptyBtnText: {
-    fontSize: fontSize.md,
-    color: colors.textSecondary,
-    fontWeight: "500",
-  },
-});
+    // Empty state
+    emptyWrap: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: spacing.xl,
+    },
+    emptyTitle: {
+      fontSize: fontSize.xl,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: spacing.sm,
+    },
+    emptySub: {
+      fontSize: fontSize.md,
+      color: colors.textMuted,
+      textAlign: "center",
+      lineHeight: 22,
+      marginBottom: spacing.xl,
+    },
+    emptyBtn: {
+      paddingHorizontal: spacing.xl,
+      paddingVertical: 12,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    emptyBtnText: {
+      fontSize: fontSize.md,
+      color: colors.textSecondary,
+      fontWeight: "500",
+    },
+  });
+}

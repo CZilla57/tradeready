@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,12 +15,16 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { persistPhoto } from '../../utils/photoStorage';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { colors, spacing, radius, fontSize } from '../../utils/theme';
+import { DateTimePickerSheet } from '../DateTimePickerSheet';
+import { spacing, radius, fontSize } from '../../utils/theme';
+import { useTheme } from '../../hooks/useTheme';
 import { EXPENSE_CATEGORIES } from '../../utils/moneyUtils';
 
 // onSave receives form fields only (id + createdAt are stamped by useMoneyData)
 export function AddExpenseModal({ visible, onClose, onSave }) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
   const [description, setDescription]     = useState('');
   const [amount, setAmount]               = useState('');
   const [category, setCategory]           = useState('materials');
@@ -189,42 +193,14 @@ export function AddExpenseModal({ visible, onClose, onSave }) {
               <Text>📅</Text>
             </TouchableOpacity>
 
-            {showDatePicker && (
-              Platform.OS === 'ios' ? (
-                <Modal transparent animationType="slide">
-                  <View style={styles.expenseDateOverlay}>
-                    <View style={styles.expenseDateSheet}>
-                      <View style={styles.expenseDateHeader}>
-                        <Text style={styles.expenseDateTitle}>Select Date</Text>
-                        <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                          <Text style={styles.expenseDateDone}>Done</Text>
-                        </TouchableOpacity>
-                      </View>
-                      <DateTimePicker
-                        value={new Date(date + 'T00:00:00')}
-                        mode="date"
-                        display="inline"
-                        themeVariant="light"
-                        accentColor={colors.accent}
-                        onChange={(_, d) => { if (d) setDate(d.toISOString().split('T')[0]); }}
-                        style={{ alignSelf: 'center' }}
-                      />
-                    </View>
-                  </View>
-                </Modal>
-              ) : (
-                <DateTimePicker
-                  value={new Date(date + 'T00:00:00')}
-                  mode="date"
-                  display="default"
-                  themeVariant="light"
-                  onChange={(event, d) => {
-                    setShowDatePicker(false);
-                    if (event.type === 'set' && d) setDate(d.toISOString().split('T')[0]);
-                  }}
-                />
-              )
-            )}
+            <DateTimePickerSheet
+              visible={showDatePicker}
+              mode="date"
+              title="Select Date"
+              value={new Date(date + 'T00:00:00')}
+              onChange={(d) => setDate(d.toISOString().split('T')[0])}
+              onClose={() => setShowDatePicker(false)}
+            />
 
             <Text style={styles.fieldLabel}>Category</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
@@ -289,193 +265,172 @@ export function AddExpenseModal({ visible, onClose, onSave }) {
   );
 }
 
-const styles = StyleSheet.create({
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  modalSheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.lg + 8,
-    borderTopRightRadius: radius.lg + 8,
-    padding: spacing.lg,
-    maxHeight: '90%',
-  },
-  modalHandleArea: {
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  modalHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: colors.borderStrong,
-    borderRadius: 2,
-  },
-  modalTitle: {
-    color: colors.textPrimary,
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    marginBottom: spacing.lg,
-  },
-  fieldLabel: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-    marginBottom: spacing.sm,
-    marginTop: spacing.xs,
-  },
-  optionalLabel: {
-    color: colors.textMuted,
-    fontWeight: '400',
-  },
-  textInput: {
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.sm + 2,
-    padding: 14,
-    color: colors.textPrimary,
-    fontSize: fontSize.md,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  textInputMultiline: {
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  categoryScroll: {
-    marginBottom: spacing.md,
-  },
-  categoryChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginRight: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: 6,
-  },
-  categoryChipSelected: {
-    backgroundColor: colors.accentBg,
-    borderColor: colors.accent,
-  },
-  categoryChipIcon: {
-    fontSize: fontSize.sm,
-  },
-  categoryChipLabel: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  categoryChipLabelSelected: {
-    color: colors.accent,
-    fontWeight: '600',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginTop: spacing.sm,
-    paddingBottom: spacing.md,
-  },
-  cancelButton: {
-    flex: 1,
-    padding: spacing.md,
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceSecondary,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  cancelButtonText: {
-    color: colors.textSecondary,
-    fontWeight: '600',
-    fontSize: fontSize.md,
-  },
-  saveButton: {
-    flex: 2,
-    padding: spacing.md,
-    borderRadius: radius.md,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-  },
-  saveButtonText: {
-    color: colors.textOnAccent,
-    fontWeight: '700',
-    fontSize: fontSize.md,
-  },
-  expenseDateBtn: {
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.sm + 2,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
-  },
-  expenseDateBtnText: {
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-  },
-  expenseDateOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  expenseDateSheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingHorizontal: spacing.md,
-    paddingBottom: 40,
-  },
-  expenseDateHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    marginBottom: spacing.sm,
-  },
-  expenseDateTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
-  expenseDateDone:  { fontSize: fontSize.md, fontWeight: '600', color: colors.accent },
-  receiptBtn: {
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.sm + 2,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  receiptBtnText: {
-    color: colors.textSecondary,
-    fontSize: fontSize.md,
-  },
-  receiptPreview: {
-    borderRadius: radius.sm + 2,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.md,
-  },
-  receiptImage: {
-    width: '100%',
-    height: 180,
-    resizeMode: 'cover',
-  },
-  receiptRemoveRow: {
-    padding: spacing.sm,
-    alignItems: 'center',
-    backgroundColor: colors.surfaceSecondary,
-  },
-  receiptRemoveText: {
-    color: colors.danger,
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-});
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+    },
+    modalSheet: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: radius.lg + 8,
+      borderTopRightRadius: radius.lg + 8,
+      padding: spacing.lg,
+      maxHeight: '90%',
+    },
+    modalHandleArea: {
+      paddingVertical: 14,
+      alignItems: 'center',
+    },
+    modalHandle: {
+      width: 40,
+      height: 4,
+      backgroundColor: colors.borderStrong,
+      borderRadius: 2,
+    },
+    modalTitle: {
+      color: colors.textPrimary,
+      fontSize: fontSize.xl,
+      fontWeight: '700',
+      marginBottom: spacing.lg,
+    },
+    fieldLabel: {
+      color: colors.textSecondary,
+      fontSize: fontSize.sm,
+      fontWeight: '500',
+      marginBottom: spacing.sm,
+      marginTop: spacing.xs,
+    },
+    optionalLabel: {
+      color: colors.textMuted,
+      fontWeight: '400',
+    },
+    textInput: {
+      backgroundColor: colors.surfaceSecondary,
+      borderRadius: radius.sm + 2,
+      padding: 14,
+      color: colors.textPrimary,
+      fontSize: fontSize.md,
+      marginBottom: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    textInputMultiline: {
+      minHeight: 80,
+      textAlignVertical: 'top',
+    },
+    categoryScroll: {
+      marginBottom: spacing.md,
+    },
+    categoryChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surfaceSecondary,
+      borderRadius: radius.full,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      marginRight: spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 6,
+    },
+    categoryChipSelected: {
+      backgroundColor: colors.accentBg,
+      borderColor: colors.accent,
+    },
+    categoryChipIcon: {
+      fontSize: fontSize.sm,
+    },
+    categoryChipLabel: {
+      color: colors.textSecondary,
+      fontSize: fontSize.sm,
+      fontWeight: '500',
+    },
+    categoryChipLabelSelected: {
+      color: colors.accent,
+      fontWeight: '600',
+    },
+    modalActions: {
+      flexDirection: 'row',
+      gap: spacing.md,
+      marginTop: spacing.sm,
+      paddingBottom: spacing.md,
+    },
+    cancelButton: {
+      flex: 1,
+      padding: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: colors.surfaceSecondary,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    cancelButtonText: {
+      color: colors.textSecondary,
+      fontWeight: '600',
+      fontSize: fontSize.md,
+    },
+    saveButton: {
+      flex: 2,
+      padding: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+    },
+    saveButtonText: {
+      color: colors.textOnAccent,
+      fontWeight: '700',
+      fontSize: fontSize.md,
+    },
+    expenseDateBtn: {
+      backgroundColor: colors.surfaceSecondary,
+      borderRadius: radius.sm + 2,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.md,
+    },
+    expenseDateBtnText: {
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+    },
+    receiptBtn: {
+      backgroundColor: colors.surfaceSecondary,
+      borderRadius: radius.sm + 2,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      marginBottom: spacing.md,
+    },
+    receiptBtnText: {
+      color: colors.textSecondary,
+      fontSize: fontSize.md,
+    },
+    receiptPreview: {
+      borderRadius: radius.sm + 2,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: spacing.md,
+    },
+    receiptImage: {
+      width: '100%',
+      height: 180,
+      resizeMode: 'cover',
+    },
+    receiptRemoveRow: {
+      padding: spacing.sm,
+      alignItems: 'center',
+      backgroundColor: colors.surfaceSecondary,
+    },
+    receiptRemoveText: {
+      color: colors.danger,
+      fontSize: fontSize.sm,
+      fontWeight: '500',
+    },
+  });
+}

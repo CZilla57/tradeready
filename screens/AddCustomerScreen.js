@@ -4,7 +4,7 @@
 // Saves to AsyncStorage under the canonical 'tradeready_customers' key.
 // Duplicate detection by normalized name prevents accidental doubles.
  
-import React, { useState, useLayoutEffect, useEffect, useRef } from "react";
+import React, { useState, useLayoutEffect, useEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -19,7 +19,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadCustomers, saveCustomers } from "../utils/storage";
-import { colors, spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize } from "../utils/theme";
+import { useTheme } from '../hooks/useTheme';
+import Field from "../components/Field";
  
 function buildAddress(item) {
   const a = item.address || {};
@@ -43,7 +45,9 @@ function formatPhone(raw) {
 }
 
 export default function AddCustomerScreen({ route, navigation }) {
-  const { customerId } = route.params || {};
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const { customerId, customer: passedCustomer } = route.params || {};
   const isEditing = !!customerId;
 
   const [name, setName]       = useState("");
@@ -70,7 +74,9 @@ export default function AddCustomerScreen({ route, navigation }) {
   useEffect(() => {
     if (!isEditing) return;
     loadCustomers().then((custs) => {
-      const c = custs.find((x) => x.id === customerId);
+      // Fall back to the customer object passed by CustomerDetail so an
+      // invoice-derived customer (no record yet) still prefills (roadmap #5).
+      const c = custs.find((x) => x.id === customerId) || passedCustomer;
       if (c) {
         setName(c.name || "");
         setPhone(c.phone || "");
@@ -79,7 +85,7 @@ export default function AddCustomerScreen({ route, navigation }) {
         setNotes(c.notes || "");
       }
     });
-  }, [customerId, isEditing]);
+  }, [customerId, isEditing, passedCustomer]);
  
   function handleAddressChange(text) {
     setAddress(text);
@@ -122,12 +128,28 @@ export default function AddCustomerScreen({ route, navigation }) {
       const existing = await loadCustomers();
 
       if (isEditing) {
-        const updated = existing.map((c) =>
-          c.id === customerId
-            ? { ...c, name: trimmedName, phone: phone.trim(), email: email.trim(), address: address.trim(), notes: notes.trim() }
-            : c
-        );
-        await saveCustomers(updated);
+        const hasRecord = existing.some((c) => c.id === customerId);
+        if (hasRecord) {
+          const updated = existing.map((c) =>
+            c.id === customerId
+              ? { ...c, name: trimmedName, phone: phone.trim(), email: email.trim(), address: address.trim(), notes: notes.trim() }
+              : c
+          );
+          await saveCustomers(updated);
+        } else {
+          // Invoice-derived customer (id is a name-key, no record yet) — promote
+          // it to a real record instead of silently no-op'ing (roadmap #5, bug A).
+          const promoted = {
+            id:        `c${Date.now()}`,
+            name:      trimmedName,
+            phone:     phone.trim(),
+            email:     email.trim(),
+            address:   address.trim(),
+            notes:     notes.trim(),
+            createdAt: new Date().toISOString(),
+          };
+          await saveCustomers([...existing, promoted]);
+        }
       } else {
         // Duplicate check — normalize both sides to catch "Mike Smith" vs "mike smith"
         const normalizedNew = trimmedName.toLowerCase();
@@ -178,21 +200,21 @@ export default function AddCustomerScreen({ route, navigation }) {
           <Field
             label="Full name *"
             value={name}
-            onChange={setName}
+            onChangeText={setName}
             placeholder="Jane Smith"
             autoFocus={!isEditing}
           />
           <Field
             label="Phone"
             value={phone}
-            onChange={(v) => setPhone(formatPhone(v))}
+            onChangeText={(v) => setPhone(formatPhone(v))}
             placeholder="(555) 123-4567"
             keyboardType="phone-pad"
           />
           <Field
             label="Email"
             value={email}
-            onChange={setEmail}
+            onChangeText={setEmail}
             placeholder="jane@example.com"
             keyboardType="email-address"
             autoCapitalize="none"
@@ -235,7 +257,7 @@ export default function AddCustomerScreen({ route, navigation }) {
           <Field
             label="Notes"
             value={notes}
-            onChange={setNotes}
+            onChangeText={setNotes}
             placeholder="Gate code, parking, referral source..."
             multiline
           />
@@ -253,7 +275,7 @@ export default function AddCustomerScreen({ route, navigation }) {
               disabled={saving}
             >
               <Text style={styles.saveBtnText}>
-                {saving ? "Saving..." : "Add customer"}
+                {saving ? "Saving..." : isEditing ? "Save changes" : "Add customer"}
               </Text>
             </TouchableOpacity>
           </View>
@@ -263,28 +285,9 @@ export default function AddCustomerScreen({ route, navigation }) {
   );
 }
  
-function Field({ label, value, onChange, placeholder, keyboardType, autoCapitalize, multiline, autoFocus }) {
-  return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        style={[styles.input, multiline && styles.inputMulti]}
-        value={value}
-        onChangeText={onChange}
-        placeholder={placeholder}
-        placeholderTextColor={colors.textMuted}
-        keyboardType={keyboardType || "default"}
-        autoCapitalize={autoCapitalize || "words"}
-        autoCorrect={false}
-        multiline={multiline}
-        numberOfLines={multiline ? 3 : 1}
-        autoFocus={autoFocus}
-      />
-    </View>
-  );
-}
  
-const styles = StyleSheet.create({
+function createStyles(colors, shadow) {
+  return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scroll:    { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160 },
  
@@ -305,12 +308,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
-  inputMulti: {
-    height: 88,
-    paddingTop: spacing.sm,
-    textAlignVertical: "top",
-  },
-
   suggestions: {
     marginTop: 4,
     backgroundColor: colors.surface,
@@ -371,4 +368,5 @@ const styles = StyleSheet.create({
     color: colors.textOnAccent,
     fontWeight: "700",
   },
-});
+  });
+}
