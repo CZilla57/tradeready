@@ -4,6 +4,7 @@ import { supabase } from '../utils/supabase';
 import { initialSync, syncIfOnline } from '../utils/sync';
 import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
 import { clearAllUserData } from '../utils/storage';
+import { configurePurchases, loginPurchases, logoutPurchases } from '../utils/subscription';
 
 const AuthContext = createContext(null);
 
@@ -12,12 +13,15 @@ export function AuthProvider({ children }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
+    // configurePurchases must be called once at startup, before any logIn call.
+    configurePurchases();
     setupNotifications();
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setInitializing(false);
       if (session?.user?.id) {
+        loginPurchases(session.user.id);
         initialSync(session.user.id);
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
       }
@@ -26,13 +30,16 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (_event === 'SIGNED_OUT') {
-        // Safety net: clear local data even for non-UI sign-outs (token expiry,
-        // remote revocation). SettingsScreen also calls this before signOut(), so
-        // a double-clear is fine — it's idempotent.
-        clearAllUserData();
+        logoutPurchases();
+        // Do NOT wipe local data here. The __dataOwner guard in initialSync
+        // prevents a new user from inheriting stale data, and wiping here would
+        // destroy offline changes made before a token-expiry sign-out.
+        // Explicit sign-outs go through SettingsScreen, which calls
+        // clearAllUserData() before supabase.auth.signOut().
         return;
       }
       if (session?.user?.id) {
+        loginPurchases(session.user.id);
         initialSync(session.user.id);
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
       }

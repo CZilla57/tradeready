@@ -1,22 +1,24 @@
 // Vercel serverless function — creates a Stripe Payment Link for an invoice.
 //
-// SECURITY MODEL (transitional MVP):
-//   - STRIPE_SECRET_KEY lives in Vercel environment variables only.
-//     It is never accepted from the request body.
-//   - BACKEND_API_TOKEN is a required shared secret that the mobile app sends
-//     as "Authorization: Bearer <token>". Set it in Vercel project settings.
-//     The handler refuses all requests if this variable is not configured.
+// SECURITY MODEL (Stripe Connect):
+//   - Caller authenticates via Supabase JWT ("Authorization: Bearer <token>").
+//   - Server verifies the JWT, then looks up the caller's connected Stripe account
+//     in the stripe_accounts table.
+//   - Payment link is created on that connected account using the platform key.
+//   - STRIPE_SECRET_KEY is the platform key — it never leaves the server, and
+//     money goes directly to the user's own Stripe account.
 //
-// TODO (v2): Replace with Stripe Connect so each user authorises their own
-//   Stripe account via OAuth and no shared secret key is needed.
+// Required Vercel env vars:
+//   STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 
 const Stripe = require('stripe');
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-const BACKEND_API_TOKEN = process.env.BACKEND_API_TOKEN;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 // In-memory sliding-window rate limiter: 10 requests per IP per 60 seconds.
-// Per-instance state — resets on Vercel cold starts, which is acceptable.
 const rateLimitMap = new Map();
 const RATE_LIMIT = 10;
 const WINDOW_MS = 60_000;
@@ -34,17 +36,11 @@ function isRateLimited(ip) {
 }
 
 module.exports = async function handler(req, res) {
-  // React Native fetch() sends no Origin header, so CORS headers only matter
-  // for browser-based callers. 'null' (sandboxed iframe / file://) is excluded.
   const allowedOrigins = ['https://tradeready.app'];
   const origin = req.headers['origin'];
-  res.setHeader(
-    'Access-Control-Allow-Origin',
-    origin && allowedOrigins.includes(origin) ? origin : 'https://tradeready.app'
-  );
+  res.setHeader('Access-Control-Allow-Origin', origin && allowedOrigins.includes(origin) ? origin : 'https://tradeready.app');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -53,65 +49,90 @@ module.exports = async function handler(req, res) {
     return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
   }
 
-  // BACKEND_API_TOKEN is required. Refuse all requests if the Vercel env var
-  // is not set — an unconfigured endpoint would otherwise be publicly accessible.
-  if (!BACKEND_API_TOKEN) {
-    return res.status(500).json({
-      error: 'Server misconfiguration: BACKEND_API_TOKEN is not set. Add it to your Vercel project environment variables.',
-    });
+  if (!STRIPE_SECRET_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
+    return res.status(500).json({ error: 'Server misconfiguration. Check Vercel environment variables.' });
   }
+
+  // Auth: verify Supabase JWT
   const auth = req.headers['authorization'];
-  if (auth !== `Bearer ${BACKEND_API_TOKEN}`) {
+  if (!auth || !auth.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  const userJwt = auth.slice(7);
 
-  if (!STRIPE_SECRET_KEY) {
-    return res.status(500).json({
-      error: 'STRIPE_SECRET_KEY is not configured. Add it to your Vercel project environment variables.',
+  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { Authorization: `Bearer ${userJwt}`, apikey: SUPABASE_ANON_KEY },
+  });
+  if (!userRes.ok) return res.status(401).json({ error: 'Invalid or expired session. Please sign in again.' });
+  const user = await userRes.json();
+  const userId = user?.id;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Look up connected Stripe account for this user
+  const accountRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/stripe_accounts?user_id=eq.${userId}&select=stripe_account_id`,
+    {
+      headers: {
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+      },
+    }
+  );
+  const accountRows = accountRes.ok ? await accountRes.json() : [];
+  const stripeAccountId = accountRows[0]?.stripe_account_id;
+
+  if (!stripeAccountId) {
+    return res.status(422).json({
+      error: 'No Stripe account connected. Go to Settings → Payment processor and tap "Connect Stripe account".',
     });
   }
 
-  const { amount, invoiceNumber, description } = req.body;
-
+  const { amount, invoiceNumber, description, invoiceId } = req.body;
   if (!amount || amount <= 0) return res.status(400).json({ error: 'Amount must be greater than 0' });
 
   try {
     const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+    // All Stripe API calls target the connected account, not the platform account.
+    const stripeOpts = { stripeAccount: stripeAccountId };
 
-    const product = await stripe.products.create({
-      name: invoiceNumber ? `Invoice ${invoiceNumber}` : 'Invoice Payment',
-      ...(description ? { description } : {}),
-    });
-
-    const price = await stripe.prices.create({
-      currency: 'usd',
-      unit_amount: Math.round(amount * 100),
-      product: product.id,
-    });
-
-    const paymentLink = await stripe.paymentLinks.create({
-      line_items: [{ price: price.id, quantity: 1 }],
-      after_completion: {
-        type: 'hosted_confirmation',
-        hosted_confirmation: {
-          custom_message: 'Payment received. Thank you for your business!',
-        },
+    const product = await stripe.products.create(
+      {
+        name: invoiceNumber ? `Invoice ${invoiceNumber}` : 'Invoice Payment',
+        ...(description ? { description } : {}),
       },
-    });
+      stripeOpts
+    );
 
-    // Archive the one-time product and price so they don't clutter the Stripe
-    // dashboard. Payment links remain fully active after their product is archived.
+    const price = await stripe.prices.create(
+      { currency: 'usd', unit_amount: Math.round(amount * 100), product: product.id },
+      stripeOpts
+    );
+
+    const paymentLink = await stripe.paymentLinks.create(
+      {
+        line_items: [{ price: price.id, quantity: 1 }],
+        after_completion: {
+          type: 'hosted_confirmation',
+          hosted_confirmation: { custom_message: 'Payment received. Thank you for your business!' },
+        },
+        // invoiceId lets the webhook auto-mark the invoice paid when the customer pays
+        ...(invoiceId ? { metadata: { invoiceId } } : {}),
+      },
+      stripeOpts
+    );
+
+    // Archive the one-time product/price so they don't clutter the Stripe dashboard.
     try {
       await Promise.all([
-        stripe.products.update(product.id, { active: false }),
-        stripe.prices.update(price.id, { active: false }),
+        stripe.products.update(product.id, { active: false }, stripeOpts),
+        stripe.prices.update(price.id, { active: false }, stripeOpts),
       ]);
     } catch {
-      // Non-fatal — the link is live. Log nothing; clutter is an ops concern.
+      // Non-fatal — the link is live.
     }
 
-    res.status(200).json({ url: paymentLink.url });
+    return res.status(200).json({ url: paymentLink.url });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 };

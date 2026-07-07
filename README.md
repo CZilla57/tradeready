@@ -1,7 +1,9 @@
-# Invoice Collector — Expo App
+# TradeReady — Expo App
 
-A React Native app for collecting overdue invoices. Built with Expo so you can
-run it on your iPhone immediately without needing a Mac or Xcode.
+A mobile-first business operating system for solo tradespeople (plumbers, electricians,
+HVAC, landscapers, painters, handymen). Manage jobs, quotes, invoices, customers,
+expenses, and time-tracking from one app — with an AI layer that helps price work
+and draft professional messages.
 
 ---
 
@@ -20,10 +22,10 @@ You need two things installed on your computer: Node.js and Expo CLI.
 
 ## Step 2 — Get the app running
 
-1. Copy this entire `invoice-app` folder somewhere on your computer (e.g. your Desktop).
+1. Copy this entire `tradeready` folder somewhere on your computer (e.g. your Desktop).
 2. Open Terminal and navigate to that folder:
    ```
-   cd ~/Desktop/invoice-app
+   cd ~/Desktop/tradeready
    ```
 3. Install the app's dependencies (takes 1–2 minutes):
    ```
@@ -51,48 +53,112 @@ This is called "hot reload" and it makes development very fast.
 
 For the payment link to actually work, you also need to deploy the serverless
 functions in the `invoice-payment-api` folder to Vercel. See that folder's
-README for instructions. Once deployed, update the `VERCEL_URL` in:
+README for instructions. Once deployed, update `backendUrl` in `app.json`:
+
+```json
+"extra": {
+  "backendUrl": "https://your-deployment.vercel.app",
+  "backendUrlIsPlaceholder": false
+}
 ```
-utils/invoiceHelpers.js
-```
+
+The app reads `backendUrl` at runtime — no code changes required.
 
 ---
 
-## Step 4 — Add your Anthropic API key
+## Step 4 — Add your AI keys
 
-The app calls Claude to generate collection messages. To make this work:
+The app uses Claude (Anthropic) to generate pricing estimates and collection messages,
+and optionally Groq as an alternative AI provider.
 
 1. Go to console.anthropic.com and create an account.
 2. Generate an API key.
-3. Open `utils/invoiceHelpers.js` and find the `generateOutreachMessage` function.
-4. The fetch call to `api.anthropic.com` will work automatically once you're
-   authenticated. For a production app, you'd move this call to a serverless
-   function (same pattern as the payment link functions) so your key isn't in
-   the app bundle.
+3. Open the app, go to **Settings**, and paste the key into the **Anthropic key** field.
+
+The key is stored securely in the iOS Keychain / Android Keystore and never leaves
+your device. You must re-enter it on each device you sign in to.
+
+For a production app, you'd move the Anthropic API call to a serverless function
+so your key isn't stored on the device at all.
 
 ---
 
 ## File map — what does what
 
 ```
-App.js                     ← Entry point, sets up navigation
-app.json                   ← Expo config (app name, icons, etc.)
-package.json               ← List of packages the app depends on
+App.js                           ← Entry point; sets up tabs and navigation stacks
+app.json                         ← Expo config (name, icons, backendUrl, EAS project)
+types/
+  models.ts                      ← TypeScript types for all data shapes
 
 utils/
-  theme.js                 ← All colors, font sizes, spacing
-  storage.js               ← Saves/loads data on the device
-  invoiceHelpers.js        ← Invoice logic, payment link fetching, AI messages
+  theme.js                       ← All colors, font sizes, spacing
+  storage/                       ← Local persistence (8 typed modules, see below)
+    index.ts                     ← Barrel: re-exports public API
+    keys.ts                      ← AsyncStorage key constants
+    defaults.ts                  ← Default/seed values for each collection
+    collections.ts               ← Load/save for invoices, jobs, customers, expenses
+    settings.ts                  ← Settings (public + SecureStore-backed fields)
+    customers.ts                 ← Customer registry (upsert, notes, migration)
+    lifecycle.ts                 ← Onboarding, clearSampleData, clearAllUserData
+    dailyOps.ts                  ← Today-tab derived reads (today's jobs, overdue, leads)
+  format.ts                      ← formatMoney (2 dp, invoices/totals) / formatQuote (estimates)
+  pricingEngine.ts               ← Pricing math, estimate breakdown, price ranges
+  invoiceHelpers.js              ← Payment link fetch, AI message text, PDF helpers
+  anthropicMessage.ts            ← Shared Anthropic (Claude) API call with error fallback
+  messaging.ts                   ← composeEmail / composeSMS (availability guard + Alert)
+  dateHelpers.ts                 ← Date/time formatting, week math, greeting
+  jobStatus.ts                   ← advanceStatusForSchedule (approved → scheduled logic)
+  jobStatusDisplay.ts            ← getJobStatusDisplay — badge labels + colors
+  timeTracking.ts                ← computeTimeTracking — clock-in/out session math
+  invoiceStats.ts                ← summarizeInvoices, isOverdue, filterInvoices
+  numberInput.ts                 ← parseNumberInput, buildEstimateInput (safe 0-handling)
+  customerList.ts                ← buildCustomerList — invoice/record join + rollup
+  sync.js                        ← Supabase sync queue (push/pull, enqueue, trySync)
+  supabase.js                    ← Supabase client (auth + database)
+  notifications.js               ← Push notification scheduling (overdue reminders)
+  pdfTemplates.js                ← HTML templates for invoice and estimate PDFs
+  pdfExport.js                   ← PDF rendering and share sheet
+  photoStorage.js                ← Device photo management (expo-file-system)
+  aiService.js                   ← Groq AI integration (alternative to Anthropic)
+  moneyUtils.js                  ← (legacy) retained for existing callers
 
 components/
-  UI.js                    ← Small reusable pieces (Button, Card, Badge, etc.)
+  UI.js                          ← Shared primitives: Button, Card, Badge, StatCard,
+                                   EmptyState, SectionHeader, LoadingState, …
+  Field.tsx                      ← Shared text-input (label + input + escape hatches)
+  DateTimePickerSheet.tsx        ← Cross-platform date/time picker (iOS sheet / Android dialog)
+  money/
+    SummaryCard.js               ← Income/expense summary widget
+    MonthlyChart.js              ← Bar chart for monthly revenue
+    ReceivablesCard.js           ← Outstanding receivables summary
+    TopCustomersCard.js          ← Top customers by revenue
+    ExpenseRow.js                ← Single expense list row
+    AddExpenseModal.js           ← Log-expense bottom sheet
 
 screens/
-  InvoicesScreen.js        ← Main invoice list
-  AddInvoiceScreen.js      ← Add / edit invoice form
-  OutreachScreen.js        ← Generate and send collection messages
-  CustomersScreen.js       ← Customer list and history
-  SettingsScreen.js        ← Business info, payment processor, notification rules
+  TodayScreen.js                 ← Today tab: schedule, earnings summary, route launch
+  RouteScreen.js                 ← Map view (deep-links to Apple/Google Maps)
+  JobsScreen.js                  ← Job list with status filters (Active / Estimates / Completed)
+  JobDetailScreen.js             ← Job detail: status pipeline, time tracking, materials
+  AddJobScreen.js                ← Add / edit job form
+  SendEstimateScreen.js          ← Review and send estimate via email or SMS
+  PricingCalculatorScreen.js     ← AI-powered pricing calculator
+  CreateInvoiceFromJobScreen.js  ← Convert a completed job to an invoice
+  InvoicesScreen.js              ← Invoice list with overdue detection
+  AddInvoiceScreen.js            ← Add / edit invoice
+  OutreachScreen.js              ← Generate and send collection messages
+  MoneyScreen.js                 ← Money tab: dashboard, expense log, charts
+  CustomersScreen.js             ← Customer list with search
+  CustomerDetailScreen.js        ← Customer history, notes, contact actions
+  AddCustomerScreen.js           ← Add / edit customer
+  SettingsScreen.js              ← Business profile, AI keys, payment processor
+  ChatScreen.js                  ← AI Coach chat (Claude or Groq)
+  AuthScreen.js                  ← Sign in / sign up
+  OnboardingScreen.js            ← First-run wizard
+
+context/
+  AuthContext.js                 ← Supabase auth state (session, sign-in, sign-out)
 ```
 
 ---
@@ -128,6 +194,12 @@ npm run lint:fix      # auto-fix what ESLint can fix
 npm run format        # rewrite all JS/JSON/MD files in-place
 ```
 
+### Type check
+
+```bash
+npm run typecheck     # tsc --noEmit (TypeScript modules only; JS files use allowJs)
+```
+
 ### Tests
 
 ```bash
@@ -139,9 +211,25 @@ npm run test:watch    # watch mode — re-runs on file save
 
 | File | What it covers |
 |---|---|
-| `__tests__/pricingEngine.test.js` | Pure pricing math (estimate, price range, break-even, trade nicknames) |
-| `__tests__/invoiceHelpers.test.js` | Invoice date/status logic, currency formatting, payment link builder |
-| `__tests__/UI.test.js` | Component smoke tests — Badge, Button, EmptyState, SectionHeader, StatCard |
+| `__tests__/format.test.js` | `formatMoney` / `formatQuote` currency formatters |
+| `__tests__/pricingEngine.test.js` | Pricing math — estimate, price range, break-even, trade nicknames |
+| `__tests__/numberInput.test.js` | `parseNumberInput` safe parsing; `buildEstimateInput` (0%-overhead case) |
+| `__tests__/invoiceHelpers.test.js` | Invoice date/status logic, payment link builder |
+| `__tests__/invoiceStats.test.js` | Invoice summary stats, overdue detection, search filter |
+| `__tests__/dateHelpers.test.js` | Date formatting, week math, greeting, time range |
+| `__tests__/timeTracking.test.js` | Clock-in/out session math, live timer string |
+| `__tests__/jobStatus.test.js` | Status pipeline; approved → scheduled transition |
+| `__tests__/jobStatusDisplay.test.js` | Badge labels and colors for all 8 job statuses |
+| `__tests__/customerList.test.js` | Customer aggregation from invoices + manual records |
+| `__tests__/customerIdentity.test.js` | Customer registry upsert, migration, notes |
+| `__tests__/messaging.test.js` | Email/SMS composer — availability guard, fallback Alert |
+| `__tests__/anthropicMessage.test.js` | Anthropic API call — error and empty-response fallback |
+| `__tests__/storage.test.js` | Local persistence layer |
+| `__tests__/sync.test.js` | Supabase sync queue — enqueue, push, pull |
+| `__tests__/notifications.test.js` | Push notification scheduling |
+| `__tests__/paymentLink.test.js` | Payment link URL builder |
+| `__tests__/moneyUtils.test.js` | Money utility functions |
+| `__tests__/UI.test.js` | Component smoke tests — Badge, Button, EmptyState, StatCard |
 
 **Tech notes:**
 
@@ -212,3 +300,4 @@ permanently lost when the user signs out.
 
 **Messages not generating**
 → Check your internet connection. The app calls the Anthropic API to write messages.
+→ Make sure your Anthropic API key is entered in Settings.

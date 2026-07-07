@@ -1,7 +1,6 @@
 import {
   daysPastDue,
   getStatus,
-  formatCurrency,
   buildPaymentLink,
 } from "../utils/invoiceHelpers";
 
@@ -69,20 +68,6 @@ describe("getStatus", () => {
   });
 });
 
-describe("formatCurrency", () => {
-  test("formats whole dollars without cents", () => {
-    expect(formatCurrency(1500)).toMatch(/^\$1,500/);
-  });
-
-  test("formats zero", () => {
-    expect(formatCurrency(0)).toMatch(/^\$0/);
-  });
-
-  test("large number has comma separator", () => {
-    expect(formatCurrency(10000)).toMatch(/10,000/);
-  });
-});
-
 describe("buildPaymentLink", () => {
   const invoice = {
     number: "INV-001",
@@ -103,10 +88,10 @@ describe("buildPaymentLink", () => {
     expect(link).toContain("350.00");
   });
 
-  test("paypal link references invoice number", () => {
-    const link = buildPaymentLink(invoice, "paypal", "");
-    expect(link).toContain("paypal.com");
-    expect(link).toContain("INV-001");
+  test("paypal.me link uses username and amount", () => {
+    const link = buildPaymentLink(invoice, "paypal", "johndoe");
+    expect(link).toContain("paypal.me/johndoe");
+    expect(link).toContain("350.00");
   });
 
   test("square link includes amount", () => {
@@ -121,11 +106,9 @@ describe("buildPaymentLink", () => {
     expect(link).toContain("INV-001");
   });
 
-  test("unknown provider with empty key uses YOUR_KEY default", () => {
-    // The source does: const key = providerKey || "YOUR_KEY"
-    // so an empty string still gets the "YOUR_KEY" sentinel, not the placeholder URL.
+  test("unknown provider with empty key falls back to example placeholder URL", () => {
     const link = buildPaymentLink(invoice, "custom", "");
-    expect(link).toContain("YOUR_KEY");
+    expect(link).toContain("yourpaymentpage.com");
     expect(link).toContain("INV-001");
   });
 });

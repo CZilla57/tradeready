@@ -19,15 +19,6 @@ export const DATE_FILTERS = [
   { id: 'all_time',   label: 'All Time'   },
 ];
 
-// Format a number as currency: 1234.5 → "$1,234.50"
-// Always 2 decimal places; takes Math.abs so callers can prefix "−" separately for signed display.
-export function formatCurrency(amount) {
-  return '$' + Math.abs(amount).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
 // Get start/end Date objects for a filter period
 export function getDateRange(filterId) {
   const now = new Date();

@@ -1,15 +1,10 @@
 // Pure functions that return an HTML string for a given document type.
 // expo-print renders these to a PDF file on-device.
 
-const ACCENT = "#007aff";
+import { formatMoney, formatQuote } from "./format";
+import { computeEstimateBreakdown } from "./pricingEngine";
 
-function fmt(amount) {
-  return (amount || 0).toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  });
-}
+const ACCENT = "#007aff";
 
 function fmtDate(dateStr) {
   if (!dateStr) return "";
@@ -164,14 +159,14 @@ export function invoiceHtml(invoice, biz = {}) {
   <tbody>
     <tr>
       <td>${invoice.desc || "Services rendered"}</td>
-      <td>${fmt(invoice.amount)}</td>
+      <td>${formatMoney(invoice.amount)}</td>
     </tr>
   </tbody>
 </table>
 
 <div class="total-row">
   <span class="total-label">TOTAL DUE</span>
-  <span class="total-amount">${fmt(invoice.amount)}</span>
+  <span class="total-amount">${formatMoney(invoice.amount)}</span>
 </div>
 
 <div class="footer">Thank you for your business — ${bizName}</div>
@@ -190,12 +185,8 @@ export function estimateHtml(job, customer = {}, biz = {}) {
     .filter(Boolean)
     .join(" · ");
 
-  const laborCost       = (job.laborHours || 0) * (job.laborRate || 0);
-  const rawMaterial     = (job.materials || []).reduce((s, m) => s + m.quantity * m.unitCost, 0);
-  const materialCost    = rawMaterial * (1 + (job.materialMarkup || 0) / 100);
-  const overhead        = (job.estimateTotal || 0) - laborCost - materialCost;
-  const hasMaterials    = (job.materials || []).length > 0;
-  const hasOverhead     = overhead > 1;
+  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
+  const hasOverhead = overheadLine > 1;
   const customerName    = customer.name || job.customerName || "";
   const customerEmail   = customer.email || "";
   const customerPhone   = customer.phone || "";
@@ -203,15 +194,15 @@ export function estimateHtml(job, customer = {}, biz = {}) {
   const issueDate = fmtDate(new Date().toISOString());
 
   let rows = "";
-  rows += `<tr><td>Labor — ${job.laborHours || 0} hrs @ ${fmt(job.laborRate || 0)}/hr</td><td>${fmt(laborCost)}</td></tr>`;
+  rows += `<tr><td>Labor — ${job.laborHours || 0} hrs @ ${formatQuote(job.laborRate || 0)}/hr</td><td>${formatQuote(laborCost)}</td></tr>`;
   if (hasMaterials) {
     const label = job.materials.length === 1
       ? job.materials[0].name || "Materials"
       : `Materials (${job.materials.length} items)`;
-    rows += `<tr><td>${label}</td><td>${fmt(materialCost)}</td></tr>`;
+    rows += `<tr><td>${label}</td><td>${formatQuote(materialCost)}</td></tr>`;
   }
   if (hasOverhead) {
-    rows += `<tr><td>Overhead &amp; operating costs</td><td>${fmt(overhead)}</td></tr>`;
+    rows += `<tr><td>Overhead &amp; operating costs</td><td>${formatQuote(overheadLine)}</td></tr>`;
   }
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -253,7 +244,7 @@ export function estimateHtml(job, customer = {}, biz = {}) {
 
 <div class="total-row">
   <span class="total-label">TOTAL ESTIMATE</span>
-  <span class="total-amount">${fmt(job.estimateTotal || 0)}</span>
+  <span class="total-amount">${formatQuote(job.estimateTotal || 0)}</span>
 </div>
 
 <p style="margin-top:24px; font-size:12px; color:#636366;">

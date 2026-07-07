@@ -2,6 +2,10 @@
 // Pure functions that don't touch the UI — easy to test and reuse.
 
 import Constants from 'expo-constants';
+import { supabase } from './supabase';
+import { formatMoney, formatQuote } from './format';
+import { computeEstimateBreakdown } from './pricingEngine';
+import { generateMessage } from './anthropicMessage';
 
 export function daysPastDue(dueDate) {
   const due = new Date(dueDate);
@@ -24,17 +28,18 @@ export function getStatus(invoice) {
   return { label: `${days}d overdue`, color: "danger", days };
 }
 
-export function formatCurrency(amount) {
-  return amount.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  });
-}
-
 export function formatDate(dateString) {
   const d = new Date(dateString);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+// Returns the credential for the given provider (defaults to settings.provider).
+// Stripe uses providerKey (SecureStore / backend token); all other providers
+// store their key per-id in the providerKeys map.
+export function getProviderKey(settings, provider) {
+  const p = provider ?? settings.provider;
+  if (p === "stripe") return settings.providerKey || "";
+  return settings.providerKeys?.[p] || "";
 }
 
 export function buildPaymentLink(invoice, provider, providerKey) {
@@ -51,13 +56,14 @@ export function buildPaymentLink(invoice, provider, providerKey) {
     case "square":
       return `https://squareup.com/pay/${key}?amount=${amt}&note=${desc}`;
     case "paypal":
-      return `https://www.paypal.com/invoice/p/#${invoice.number}`;
+      return `https://paypal.me/${providerKey || "yourusername"}/${amt}`;
     case "venmo":
-      return `https://venmo.com/${key || "yourusername"}?txn=pay&amount=${amt}&note=${desc}`;
-    case "quickbooks":
-      return `https://app.qbo.intuit.com/app/invoice?id=${invoice.number}`;
-    default:
-      return `${key || "https://yourpaymentpage.com"}?amount=${amt}&invoice=${invoice.number}`;
+      return `https://venmo.com/${providerKey || "yourusername"}?txn=pay&amount=${amt}&note=${desc}`;
+    default: {
+      const base = providerKey || "https://yourpaymentpage.com";
+      const sep = base.includes("?") ? "&" : "?";
+      return `${base}${sep}amount=${amt}&invoice=${invoice.number}`;
+    }
   }
 }
 
@@ -72,11 +78,10 @@ export async function resolvePaymentLink(invoice, provider, providerKey) {
   return fetchPaymentLink(invoice, provider, providerKey);
 }
 
-// Calls the Vercel serverless function to create a Stripe Payment Link.
+// Calls the Vercel serverless function to create a Stripe Payment Link (Stripe Connect).
 //
-// SECURITY: The Stripe secret key lives in STRIPE_SECRET_KEY on the server.
-// The app never sends an sk_ key over the network. providerKey here is the
-// BACKEND_API_TOKEN — a simple shared secret that authenticates this request.
+// SECURITY: For Stripe, the caller's Supabase JWT is sent so the backend can look
+// up the user's connected Stripe account. No sk_ key ever leaves the server.
 const VERCEL_URL = Constants.expoConfig?.extra?.backendUrl ?? '';
 const VERCEL_URL_IS_PLACEHOLDER = Constants.expoConfig?.extra?.backendUrlIsPlaceholder ?? true;
 
@@ -95,8 +100,16 @@ export async function fetchPaymentLink(invoice, provider, providerKey) {
   }
 
   const headers = { "Content-Type": "application/json" };
-  if (providerKey) {
-    // providerKey is the BACKEND_API_TOKEN — authenticates the request, not the Stripe key
+
+  if (provider === "stripe") {
+    // Stripe Connect: authenticate with the user's Supabase session JWT so the
+    // backend can look up their connected Stripe account.
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error("You must be signed in to generate a Stripe payment link.");
+    }
+    headers["Authorization"] = `Bearer ${session.access_token}`;
+  } else if (providerKey) {
     headers["Authorization"] = `Bearer ${providerKey}`;
   }
 
@@ -108,7 +121,7 @@ export async function fetchPaymentLink(invoice, provider, providerKey) {
       invoiceNumber: invoice.number,
       description: invoice.desc,
       customerEmail: invoice.email,
-      // No stripeKey — it lives in STRIPE_SECRET_KEY env var on the server
+      invoiceId: invoice.id,
     }),
   });
 
@@ -124,18 +137,23 @@ export async function fetchPaymentLink(invoice, provider, providerKey) {
 
 function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan }) {
   const days = daysPastDue(invoice.due);
-  const amt = formatCurrency(invoice.amount);
+  const amt = formatMoney(invoice.amount);
   const overdueText = days > 0 ? `${days} days overdue` : days === 0 ? 'due today' : `due in ${Math.abs(days)} days`;
 
   let planText = '';
   if (paymentPlan?.enabled) {
-    const per = (invoice.amount / parseInt(paymentPlan.installments)).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+    const per = formatMoney(invoice.amount / parseInt(paymentPlan.installments));
     planText = ` We can also arrange ${paymentPlan.installments} payments of ${per} ${paymentPlan.frequency.toLowerCase()} if that works better for you.`;
   }
 
   if (channel === 'text') {
-    return `Hi ${invoice.customer}, this is ${biz.businessName}. Invoice ${invoice.number} for ${amt} is ${overdueText}.${planText} Pay here: ${paymentLink} — ${biz.phone}`;
+    const linkPart = paymentLink ? ` Pay here: ${paymentLink}` : '';
+    return `Hi ${invoice.customer}, this is ${biz.businessName}. Invoice ${invoice.number} for ${amt} is ${overdueText}.${planText}${linkPart} — ${biz.phone}`;
   }
+
+  const linkSection = paymentLink
+    ? `You can pay securely online here:\nPay now → ${paymentLink}\n`
+    : '';
 
   return `Subject: Payment reminder – ${invoice.number}
 
@@ -143,10 +161,7 @@ Hi ${invoice.customer},
 
 I hope you're doing well. I'm reaching out regarding invoice ${invoice.number} for ${amt}, which is currently ${overdueText}.
 
-You can pay securely online here:
-Pay now → ${paymentLink}
-${planText ? `\n${planText}\n` : ''}
-If you have any questions or concerns, please don't hesitate to get in touch.
+${linkSection}${planText ? `${planText}\n\n` : ''}If you have any questions or concerns, please don't hesitate to get in touch.
 
 ${biz.paymentNotes ? `${biz.paymentNotes}\n\n` : ''}Best regards,
 ${biz.contactName}
@@ -157,22 +172,16 @@ ${biz.phone}`;
 // ── Estimate messaging ─────────────────────────────────────────────────────
 
 function buildGenericEstimateMessage({ job, customer, channel, biz }) {
-  const laborCost = job.laborHours * job.laborRate;
-  const rawMaterialCost = (job.materials || []).reduce(
-    (s, m) => s + m.quantity * m.unitCost, 0
-  );
-  const materialCost = rawMaterialCost * (1 + job.materialMarkup / 100);
-  const overheadLine = job.estimateTotal - laborCost - materialCost;
-  const hasMaterials = (job.materials || []).length > 0;
+  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
 
   if (channel === 'text') {
     const parts = [
       `Hi ${customer.name}, ${biz.businessName} here.`,
       `Estimate for "${job.title}":`,
-      `Labor: ${formatCurrency(laborCost)}`,
+      `Labor: ${formatQuote(laborCost)}`,
     ];
-    if (hasMaterials) parts.push(`Materials: ${formatCurrency(materialCost)}`);
-    parts.push(`Total: ${formatCurrency(job.estimateTotal)}.`);
+    if (hasMaterials) parts.push(`Materials: ${formatQuote(materialCost)}`);
+    parts.push(`Total: ${formatQuote(job.estimateTotal)}.`);
     parts.push(`Reply YES to approve or call ${biz.phone}.`);
     return parts.join(' ');
   }
@@ -184,16 +193,16 @@ function buildGenericEstimateMessage({ job, customer, channel, biz }) {
     '',
     `Thank you for reaching out. Here's your estimate for ${job.title}:`,
     '',
-    `  Labor (${job.laborHours} hrs @ $${job.laborRate}/hr)  ${formatCurrency(laborCost)}`,
+    `  Labor (${job.laborHours} hrs @ $${job.laborRate}/hr)  ${formatQuote(laborCost)}`,
   ];
   if (hasMaterials) {
-    lines.push(`  Materials (${job.materials.length} item${job.materials.length !== 1 ? 's' : ''})  ${formatCurrency(materialCost)}`);
+    lines.push(`  Materials (${job.materials.length} item${job.materials.length !== 1 ? 's' : ''})  ${formatQuote(materialCost)}`);
   }
   if (overheadLine > 0) {
-    lines.push(`  Overhead & operating costs  ${formatCurrency(overheadLine)}`);
+    lines.push(`  Overhead & operating costs  ${formatQuote(overheadLine)}`);
   }
   lines.push(`  ${'─'.repeat(36)}`);
-  lines.push(`  TOTAL ESTIMATE  ${formatCurrency(job.estimateTotal)}`);
+  lines.push(`  TOTAL ESTIMATE  ${formatQuote(job.estimateTotal)}`);
   if (job.description) lines.push('', job.description);
   lines.push(
     '',
@@ -206,21 +215,16 @@ function buildGenericEstimateMessage({ job, customer, channel, biz }) {
 }
 
 export async function generateEstimateMessage({ job, customer, channel, biz, apiKey }) {
-  if (!apiKey) return buildGenericEstimateMessage({ job, customer, channel, biz });
+  const fallback = () => buildGenericEstimateMessage({ job, customer, channel, biz });
+  if (!apiKey) return fallback();
 
-  const laborCost = job.laborHours * job.laborRate;
-  const rawMaterialCost = (job.materials || []).reduce(
-    (s, m) => s + m.quantity * m.unitCost, 0
-  );
-  const materialCost = rawMaterialCost * (1 + job.materialMarkup / 100);
-  const overheadLine = job.estimateTotal - laborCost - materialCost;
-  const hasMaterials = (job.materials || []).length > 0;
+  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
 
   const breakdown = [
-    `Labor: ${job.laborHours} hrs @ $${job.laborRate}/hr = ${formatCurrency(laborCost)}`,
-    ...(hasMaterials ? [`Materials (${job.materials.length} items, with markup): ${formatCurrency(materialCost)}`] : []),
-    ...(overheadLine > 0 ? [`Overhead & operating costs: ${formatCurrency(overheadLine)}`] : []),
-    `Total estimate: ${formatCurrency(job.estimateTotal)}`,
+    `Labor: ${job.laborHours} hrs @ $${job.laborRate}/hr = ${formatQuote(laborCost)}`,
+    ...(hasMaterials ? [`Materials (${job.materials.length} items, with markup): ${formatQuote(materialCost)}`] : []),
+    ...(overheadLine > 0 ? [`Overhead & operating costs: ${formatQuote(overheadLine)}`] : []),
+    `Total estimate: ${formatQuote(job.estimateTotal)}`,
   ].join('\n');
 
   const isText = channel === 'text';
@@ -243,45 +247,32 @@ ${isText
 
 Write only the message, no commentary.`;
 
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 800,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-    return data.content?.map(b => b.text || '').join('') || buildGenericEstimateMessage({ job, customer, channel, biz });
-  } catch {
-    return buildGenericEstimateMessage({ job, customer, channel, biz });
-  }
+  return generateMessage({ prompt, apiKey, max_tokens: 800, fallback });
 }
 
 // Calls the Anthropic API to generate a collection message.
 // Falls back to a pre-written template if no API key is set or the call fails.
 export async function generateOutreachMessage({ invoice, channel, biz, paymentLink, paymentPlan, apiKey }) {
-  if (!apiKey) return buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
+  const fallback = () => buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
+  if (!apiKey) return fallback();
 
   const days = daysPastDue(invoice.due);
-  const amt = formatCurrency(invoice.amount);
+  const amt = formatMoney(invoice.amount);
   const isText = channel === "text";
 
   let planInfo = "";
   if (paymentPlan?.enabled) {
-    const per = (invoice.amount / parseInt(paymentPlan.installments)).toLocaleString("en-US", {
-      style: "currency",
-      currency: "USD",
-    });
+    const per = formatMoney(invoice.amount / parseInt(paymentPlan.installments));
     planInfo = `\n\nOffer a payment plan: ${paymentPlan.installments} payments of ${per} ${paymentPlan.frequency.toLowerCase()}. Weave this in naturally.`;
   }
+
+  const paymentLinkInfo = paymentLink
+    ? `PAYMENT LINK: ${paymentLink}`
+    : `No payment link — do not include a payment URL. Ask the customer to contact you directly to arrange payment.`;
+
+  const channelInstruction = isText
+    ? `For SMS: Keep it under 300 characters. ${paymentLink ? "Include the payment link as plain text." : "No payment URL."} Natural, friendly but firm tone.`
+    : `For email: First line must be "Subject: [subject]" then blank line then body. ${paymentLink ? `Include the payment link prominently labeled as "Pay now → ${paymentLink}".` : "Do not include any payment URL."} Professional, warm, firm tone.`;
 
   const prompt = `Draft a ${isText ? "text message (SMS)" : "professional email"} from ${biz.businessName} (${biz.contactName}) to collect an overdue invoice.
 
@@ -294,36 +285,12 @@ Customer email: ${invoice.email} | phone: ${invoice.phone}
 Business contact: ${biz.phone} | ${biz.email}
 Payment info: ${biz.paymentNotes}
 
-PAYMENT LINK: ${paymentLink}
+${paymentLinkInfo}
 ${planInfo}
 
-${
-  isText
-    ? `For SMS: Keep it under 300 characters. Include the payment link as plain text. Natural, friendly but firm tone.`
-    : `For email: First line must be "Subject: [subject]" then blank line then body. Include the payment link prominently labeled as "Pay now → ${paymentLink}". Professional, warm, firm tone.`
-}
+${channelInstruction}
 
 Write only the message, no commentary.`;
 
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-    return data.content?.map((b) => b.text || "").join("") || buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
-  } catch {
-    return buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
-  }
+  return generateMessage({ prompt, apiKey, max_tokens: 1000, fallback });
 }

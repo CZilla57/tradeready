@@ -2,8 +2,8 @@ import {
   calculateEstimate,
   calculatePriceRange,
   breakEvenPrice,
+  computeEstimateBreakdown,
   getTradeNickname,
-  formatCurrency,
 } from "../utils/pricingEngine";
 
 // Shared base params — override specific fields per test
@@ -322,20 +322,44 @@ describe("getTradeNickname", () => {
   });
 });
 
-describe("formatCurrency", () => {
-  test("formats whole dollars with $ prefix", () => {
-    expect(formatCurrency(500)).toMatch(/^\$500/);
+// Single home for the saved-job breakdown math (roadmap #3) — replaces the
+// copies that lived in JobDetail, SendEstimate, invoiceHelpers, and pdfTemplates.
+describe("computeEstimateBreakdown", () => {
+  const job = {
+    laborHours: 2,
+    laborRate: 85, // labor = 170
+    materials: [
+      { name: "Faucet", quantity: 1, unitCost: 89 },
+      { name: "Lines", quantity: 2, unitCost: 8 },
+    ],
+    materialMarkup: 20, // (89 + 16) = 105, ×1.2 = 126
+    estimateTotal: 340,
+  };
+
+  test("labor = hours × rate", () => {
+    expect(computeEstimateBreakdown(job).laborCost).toBe(170);
   });
 
-  test("formats zero", () => {
-    expect(formatCurrency(0)).toMatch(/^\$0/);
+  test("material cost applies markup to Σ(qty × unitCost)", () => {
+    expect(computeEstimateBreakdown(job).materialCost).toBeCloseTo(126, 5);
   });
 
-  test("formats cents", () => {
-    expect(formatCurrency(9.99)).toContain("9.99");
+  test("overhead is the residual, so the parts always sum to estimateTotal", () => {
+    const b = computeEstimateBreakdown(job);
+    expect(b.laborCost + b.materialCost + b.overheadLine).toBeCloseTo(b.estimateTotal, 5);
+    expect(b.overheadLine).toBeCloseTo(44, 5);
   });
 
-  test("formats large numbers with commas", () => {
-    expect(formatCurrency(1234)).toMatch(/1,234/);
+  test("hasMaterials reflects the list", () => {
+    expect(computeEstimateBreakdown(job).hasMaterials).toBe(true);
+    expect(computeEstimateBreakdown({ ...job, materials: [] }).hasMaterials).toBe(false);
+  });
+
+  test("missing numeric fields degrade to 0, not NaN", () => {
+    const b = computeEstimateBreakdown({});
+    expect(b.laborCost).toBe(0);
+    expect(b.materialCost).toBe(0);
+    expect(b.estimateTotal).toBe(0);
+    expect(b.hasMaterials).toBe(false);
   });
 });

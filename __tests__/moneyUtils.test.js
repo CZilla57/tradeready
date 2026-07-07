@@ -1,5 +1,4 @@
 import {
-  formatCurrency,
   getDateRange,
   getPreviousRange,
   isInRange,
@@ -8,31 +7,6 @@ import {
   EXPENSE_CATEGORIES,
   DATE_FILTERS,
 } from '../utils/moneyUtils';
-
-// ─── formatCurrency ───────────────────────────────────────────────────────────
-
-describe('formatCurrency', () => {
-  test('formats whole dollars with two decimal places', () => {
-    expect(formatCurrency(100)).toBe('$100.00');
-  });
-
-  test('formats zero', () => {
-    expect(formatCurrency(0)).toBe('$0.00');
-  });
-
-  test('formats cents correctly', () => {
-    expect(formatCurrency(9.99)).toBe('$9.99');
-  });
-
-  test('formats large numbers with thousand separators', () => {
-    expect(formatCurrency(1234.56)).toBe('$1,234.56');
-  });
-
-  test('applies Math.abs so callers can prefix the sign separately', () => {
-    // Negative input (e.g. net loss) → same as positive; screen adds "−" prefix
-    expect(formatCurrency(-500)).toBe('$500.00');
-  });
-});
 
 // ─── getDateRange ─────────────────────────────────────────────────────────────
 

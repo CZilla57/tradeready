@@ -220,7 +220,10 @@ export async function initialSync(userId) {
       if (localDataBelongsToOtherUser) {
         // Stale data from a prior user is present; wipe it before merging cloud data
         // so the wrong user's records don't persist alongside this user's records.
+        // Also discard the sync queue — items were enqueued for the previous user
+        // and pushing them under this user's ID would corrupt their account.
         await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes']);
+        await AsyncStorage.removeItem(QUEUE_KEY);
       }
       // Second device / reinstall / different-user stale data — pull from cloud
       await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify({}));
