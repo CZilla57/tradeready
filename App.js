@@ -312,7 +312,7 @@ function RootNavigator() {
           <>
             <RootStack.Screen name="Main" component={MainTabs} />
             <RootStack.Screen
-              name="Paywall"
+              name="PaywallModal"
               component={PaywallScreen}
               options={{ presentation: "modal", headerShown: false }}
             />

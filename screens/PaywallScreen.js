@@ -41,7 +41,7 @@ export default function PaywallScreen({ route, navigation }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const canDismiss = route?.params?.canDismiss ?? false;
-  const { refresh } = useSubscription();
+  const { updateFromPurchase } = useSubscription();
 
   const [offerings, setOfferings]           = useState(null);
   const [selectedPkg, setSelectedPkg]       = useState(null);
@@ -68,8 +68,8 @@ export default function PaywallScreen({ route, navigation }) {
     if (!selectedPkg) return;
     setPurchasing(true);
     try {
-      await purchasePackage(selectedPkg);
-      await refresh();
+      const { customerInfo } = await purchasePackage(selectedPkg);
+      updateFromPurchase(customerInfo);
       if (canDismiss && navigation?.canGoBack?.()) navigation.goBack();
     } catch (err) {
       if (!err.userCancelled) {

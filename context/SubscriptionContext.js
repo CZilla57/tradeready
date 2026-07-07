@@ -72,8 +72,13 @@ export function SubscriptionProvider({ children }) {
   const isSubscribed = !RC_CONFIGURED || fetchFailed || isEntitlementActive(customerInfo);
   const isTrialing   = isTrialingEntitlement(customerInfo);
 
+  const updateFromPurchase = useCallback((info) => {
+    setCustomerInfo(info);
+    setFetchFailed(false);
+  }, []);
+
   return (
-    <SubscriptionContext.Provider value={{ customerInfo, isSubscribed, isTrialing, isLoading, refresh }}>
+    <SubscriptionContext.Provider value={{ customerInfo, isSubscribed, isTrialing, isLoading, refresh, updateFromPurchase }}>
       {children}
     </SubscriptionContext.Provider>
   );

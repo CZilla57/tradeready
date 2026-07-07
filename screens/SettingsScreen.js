@@ -611,7 +611,7 @@ export default function SettingsScreen({ navigation }) {
           ) : (
             <TouchableOpacity
               style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]}
-              onPress={() => navigation.navigate("Paywall", { canDismiss: true })}
+              onPress={() => navigation.navigate("PaywallModal", { canDismiss: true })}
             >
               <Text style={styles.stripeConnectBtnText}>Upgrade to Pro</Text>
             </TouchableOpacity>
