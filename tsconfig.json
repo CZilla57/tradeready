@@ -1,13 +1,7 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    // New .ts/.tsx code is written strict from day one, so each converted
-    // module is done properly once (no second "tighten strictness" pass).
     "strict": true,
-    // Do NOT type-check the existing .js files during the gradual migration —
-    // allowJs (from the Expo base) lets .ts import them as `any` without noise.
-    // checkJs flips on in the final phase once everything is .ts/.tsx.
-    "checkJs": false,
     "noEmit": true,
     "resolveJsonModule": true
   },
