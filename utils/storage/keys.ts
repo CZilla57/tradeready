@@ -11,4 +11,5 @@ export const KEYS = {
   expenses: "expenses",
   customerNotes: "customerNotes",
   recurringJobs: "recurringJobs",
+  trips: "trips",
 } as const;

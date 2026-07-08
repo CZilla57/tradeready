@@ -18,3 +18,4 @@ export * from "./dailyOps";
 export { loadSettings, saveSettings } from "./settings";
 export { defaultSettings } from "./defaults";
 export { loadRecurringJobs, saveRecurringJobs } from "./recurringJobs";
+export { loadTrips, saveTrips } from "./trips";
