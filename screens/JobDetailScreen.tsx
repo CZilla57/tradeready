@@ -22,7 +22,8 @@ import * as ImagePicker from "expo-image-picker";
 import { persistPhoto, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { loadJobs, saveJobs, loadCustomers } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storage";
+import { scheduleReviewRequest } from "../utils/reviewRequest";
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
@@ -532,6 +533,12 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
     const current = JOB_STATUSES[job.status];
     if (!current?.next) return;
     await updateJob({ status: current.next });
+
+    if (current.next === "complete" && customer) {
+      loadSettings()
+        .then((settings) => scheduleReviewRequest(job, customer, settings))
+        .catch(() => {});
+    }
   }
 
   async function updateJob(changes: Partial<Job>) {

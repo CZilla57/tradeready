@@ -262,6 +262,12 @@ export interface Settings {
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;
   groqKey: string;
+
+  // Review requests — auto-ask customers for Google reviews after job completion.
+  reviewRequestEnabled: boolean;
+  reviewRequestTemplate: string;
+  googleReviewLink: string;
+  reviewRequestDelayHours: number;
 }
 
 /** Persisted customer-notes map: normalized (trimmed + lowercased) name → note. */

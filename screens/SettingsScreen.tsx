@@ -5,6 +5,7 @@ import {
   TextInput,
   ScrollView,
   TouchableOpacity,
+  Switch,
   StyleSheet,
   Alert,
   Linking,
@@ -383,6 +384,64 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
 
         <Divider />
 
+        <SectionHeader title="Review requests" />
+        <Text style={styles.ruleSubtitle}>
+          Automatically prompt customers for a Google review after you complete a job.
+        </Text>
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Enable review requests</Text>
+            <Switch
+              value={s.reviewRequestEnabled}
+              onValueChange={(v) => update("reviewRequestEnabled", v)}
+              trackColor={{ true: colors.accent }}
+            />
+          </View>
+        </View>
+        {s.reviewRequestEnabled && (
+          <>
+            <View style={styles.card}>
+              <Field
+                label="Google review link"
+                value={s.googleReviewLink}
+                onChangeText={(v) => update("googleReviewLink", v)}
+                autoCapitalize="none"
+                colors={colors}
+                shadow={shadow}
+              />
+              <Text style={styles.keyNote}>
+                Find this in your Google Business Profile → "Ask for reviews" → copy the link.
+              </Text>
+            </View>
+            <View style={styles.card}>
+              <Field
+                label="Delay after job completion (hours)"
+                value={String(s.reviewRequestDelayHours || 3)}
+                onChangeText={(v) => update("reviewRequestDelayHours", parseInt(v) || 3)}
+                keyboardType="number-pad"
+                colors={colors}
+                shadow={shadow}
+              />
+            </View>
+            <View style={styles.card}>
+              <Field
+                label="Message template"
+                value={s.reviewRequestTemplate}
+                onChangeText={(v) => update("reviewRequestTemplate", v)}
+                multiline
+                autoCapitalize="sentences"
+                colors={colors}
+                shadow={shadow}
+              />
+              <Text style={styles.keyNote}>
+                Use {"{businessName}"}, {"{customerName}"}, and {"{googleReviewLink}"} as placeholders.
+              </Text>
+            </View>
+          </>
+        )}
+
+        <Divider />
+
         <Button label="Save settings" onPress={handleSave} loading={saving} />
 
         <TouchableOpacity
@@ -552,6 +611,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     removeBtnText: { color: colors.danger, fontSize: fontSize.md },
     addRuleBtn: { paddingVertical: spacing.sm, alignItems: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", marginBottom: spacing.sm },
     addRuleBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
+    toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    toggleLabel: { fontSize: fontSize.md, color: colors.textPrimary },
     clearSampleBtn: { marginTop: spacing.lg, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     clearSampleText: { color: colors.textSecondary, fontSize: fontSize.md, fontWeight: "500" },
     signOutBtn: { marginTop: spacing.sm, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.danger + "50", backgroundColor: colors.dangerBg },

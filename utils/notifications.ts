@@ -19,6 +19,10 @@ export async function setupNotifications(): Promise<void> {
       name: 'Invoice Reminders',
       importance: Notifications.AndroidImportance.DEFAULT,
     });
+    await Notifications.setNotificationChannelAsync('review-requests', {
+      name: 'Review Requests',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
   }
 }
 

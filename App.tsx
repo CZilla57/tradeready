@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { NavigationContainer } from "@react-navigation/native";
+import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -33,10 +33,15 @@ import RouteScreen                from "./screens/RouteScreen";
 import RecurringJobsScreen        from "./screens/RecurringJobsScreen";
 import MileageLogScreen           from "./screens/MileageLogScreen";
 import AddTripScreen              from "./screens/AddTripScreen";
+import ReviewRequestScreen        from "./screens/ReviewRequestScreen";
+
+import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, migrateCustomerIdentity } from "./utils/storage";
 import { getTradeNickname } from "./utils/pricingEngine";
+
+const navigationRef = createNavigationContainerRef<any>();
 
 const RootStack     = createNativeStackNavigator();
 const TodayStack    = createNativeStackNavigator();
@@ -102,6 +107,11 @@ function JobsTab() {
         name="RecurringJobs"
         component={RecurringJobsScreen}
         options={{ title: "Recurring Jobs" }}
+      />
+      <JobStack.Screen
+        name="ReviewRequest"
+        component={ReviewRequestScreen}
+        options={{ title: "Review Request" }}
       />
     </JobStack.Navigator>
   );
@@ -246,6 +256,19 @@ function RootNavigator() {
     migrateCustomerIdentity().catch(() => {});
   }, [session]);
 
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data;
+      if (data?.type === "review_request" && data?.jobId && navigationRef.isReady()) {
+        navigationRef.navigate("Main", {
+          screen: "Jobs",
+          params: { screen: "ReviewRequest", params: { jobId: data.jobId } },
+        });
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   const isLoading =
     initializing ||
     (session && onboardingDone === null) ||
@@ -272,7 +295,7 @@ function RootNavigator() {
   };
 
   return (
-    <NavigationContainer theme={navTheme as any}>
+    <NavigationContainer ref={navigationRef} theme={navTheme as any}>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         {!session ? (
           <RootStack.Screen name="Auth" component={AuthScreen} />

@@ -194,5 +194,12 @@ export function defaultSettings(): Settings {
     // AI
     anthropicKey: "",
     groqKey: "",
+
+    // Review requests
+    reviewRequestEnabled: false,
+    reviewRequestTemplate:
+      "Hi {customerName}, thanks for choosing {businessName}! If you were happy with the work, we'd really appreciate a Google review:\n\n{googleReviewLink}\n\nThank you!",
+    googleReviewLink: "",
+    reviewRequestDelayHours: 3,
   };
 }
