@@ -5,6 +5,7 @@ import { supabase } from '../utils/supabase';
 import { initialSync, syncIfOnline } from '../utils/sync';
 import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
 import { configurePurchases, loginPurchases, logoutPurchases } from '../utils/subscription';
+import { checkAndGenerateRecurringJobs } from '../utils/recurringJobs';
 
 interface AuthContextValue {
   session: Session | null;
@@ -53,10 +54,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (session?.user?.id) {
+      checkAndGenerateRecurringJobs();
+    }
     const sub = AppState.addEventListener('change', state => {
       if (state === 'active' && session?.user?.id) {
         syncIfOnline(session.user.id);
         syncNotifications();
+        checkAndGenerateRecurringJobs();
       }
     });
     return () => sub.remove();
