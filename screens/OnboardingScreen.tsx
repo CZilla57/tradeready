@@ -425,7 +425,7 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
     const tradeLabel = TRADE_TYPES.find(t => t.id === form.trade)?.label || form.trade;
     const regionStr = form.region.trim() ? ` in ${form.region.trim()}` : "";
     sendOnboardingAI({
-      prompt: `A ${tradeLabel} business owner named ${firstName} just set up their account in a job management app. Their business is ${form.businessName.trim()}${regionStr}. Suggest 3 specific first actions they should take in the app. Each action should be one short sentence starting with a verb. Reply with ONLY a JSON array of 3 strings.`,
+      prompt: `You are helping ${firstName}, who runs a ${tradeLabel} business called ${form.businessName.trim()}${regionStr}. They just finished setting up their account in a job management app. Write 3 specific first actions for them, addressed directly as "you". Each action should be one short sentence starting with a verb (e.g. "Add your first customer…"). Reply with ONLY a JSON array of 3 strings.`,
     }).then(raw => {
       try {
         const match = raw.match(/\[[\s\S]*\]/);
