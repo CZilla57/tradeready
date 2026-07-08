@@ -180,6 +180,7 @@ export function defaultSettings(): Settings {
     minimumJobFee: 75,      // minimum charge even for tiny jobs
     travelFeePerMile: 0,    // 0 = no travel fee, otherwise $ per mile
     emergencyMultiplier: 1.5, // after-hours/emergency rate multiplier
+    mileageRate: 0.70,      // $ per mile — IRS standard mileage rate; user sets per tax year
 
     // Payment
     paymentNotes: "Payment due upon completion. We accept check, card, or bank transfer.",

@@ -168,6 +168,27 @@ export interface Expense {
 /** The fields AddExpenseModal hands to onSave, before id/createdAt are stamped. */
 export type ExpenseDraft = Omit<Expense, "id" | "createdAt">;
 
+/**
+ * A logged business drive for mileage tax deduction. LOCAL-ONLY (like
+ * RecurringJob): stored in AsyncStorage, cleared on sign-out, NOT synced to
+ * Supabase. Either endpoint may be a linked job (fromJobId/toJobId set) or
+ * "Home / Shop" (null). Labels are denormalized for display, matching the
+ * Job.customerName pattern.
+ */
+export interface Trip {
+  id: string;
+  date: DateString;              // "YYYY-MM-DD"
+  odometerStart: number;
+  odometerEnd: number;
+  miles: number;                 // derived + stored: max(0, end - start)
+  fromJobId: string | null;      // null = "Home / Shop"
+  fromLabel: string;
+  toJobId: string | null;        // null = "Home / Shop"
+  toLabel: string;
+  purpose: string;
+  createdAt: DateString;
+}
+
 /** A reminder rule: notify N days after an invoice's due date. */
 export interface ReminderRule {
   days: number;
@@ -224,6 +245,8 @@ export interface Settings {
   minimumJobFee: number;
   travelFeePerMile: number;
   emergencyMultiplier: number;
+  /** $ per mile for the mileage tax-deduction estimate (Money → Mileage). */
+  mileageRate: number;
 
   // Payment
   paymentNotes: string;
