@@ -42,7 +42,7 @@ export default function RecurringJobsScreen({ navigation }: { navigation: any })
   }
 
   function handleRowPress(rule: RecurringJob) {
-    const actions: Array<{ text: string; onPress?: () => void; style?: "cancel" | "destructive" | "default" }> = [
+    const actions: { text: string; onPress?: () => void; style?: "cancel" | "destructive" | "default" }[] = [
       {
         text: rule.isActive ? "Pause series" : "Resume series",
         onPress: async () => {
