@@ -497,7 +497,6 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
             multiline
           />
 
-          {/* Repeat */}
           <SectionLabel>Repeat</SectionLabel>
           {existingRecurringJob !== null ? (
             <View style={styles.recurringNotice}>
