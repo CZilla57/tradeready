@@ -31,6 +31,8 @@ import MoneyScreen                from "./screens/MoneyScreen";
 import ChatScreen                 from "./screens/ChatScreen";
 import RouteScreen                from "./screens/RouteScreen";
 import RecurringJobsScreen        from "./screens/RecurringJobsScreen";
+import MileageLogScreen           from "./screens/MileageLogScreen";
+import AddTripScreen              from "./screens/AddTripScreen";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, migrateCustomerIdentity } from "./utils/storage";
@@ -151,7 +153,9 @@ function MoneyTab() {
   };
   return (
     <MoneyStack.Navigator screenOptions={navOpts}>
-      <MoneyStack.Screen name="MoneyHome" component={MoneyScreen} options={{ title: "Money" }} />
+      <MoneyStack.Screen name="MoneyHome"   component={MoneyScreen}       options={{ title: "Money" }} />
+      <MoneyStack.Screen name="MileageLog"  component={MileageLogScreen}  options={{ title: "Mileage" }} />
+      <MoneyStack.Screen name="AddTrip"     component={AddTripScreen}     options={{ presentation: "modal" }} />
     </MoneyStack.Navigator>
   );
 }

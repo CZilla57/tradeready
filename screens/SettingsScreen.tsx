@@ -258,6 +258,16 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
 
         <Divider />
 
+        <SectionHeader title="Mileage deduction" />
+        <Text style={styles.ruleSubtitle}>
+          Used to estimate your tax deduction from logged trips (Money → Mileage). Set this to the standard mileage rate for your tax year.
+        </Text>
+        <View style={styles.card}>
+          <Field label="Mileage rate ($ per mile)" value={String(s.mileageRate ?? 0.70)} onChangeText={(v) => update("mileageRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+        </View>
+
+        <Divider />
+
         <SectionHeader title="Payment processor" />
         <View style={styles.providerGrid}>
           {PROVIDERS.map((p) => (

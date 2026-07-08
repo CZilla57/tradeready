@@ -24,6 +24,7 @@ import { SummaryCard }       from '../components/money/SummaryCard';
 import { MonthlyChart }      from '../components/money/MonthlyChart';
 import { ReceivablesCard }   from '../components/money/ReceivablesCard';
 import { TopCustomersCard }  from '../components/money/TopCustomersCard';
+import { MileageCard }       from '../components/money/MileageCard';
 import { ExpenseRow }        from '../components/money/ExpenseRow';
 import { AddExpenseModal }   from '../components/money/AddExpenseModal';
 import type { Invoice, Expense } from '../types/models';
@@ -69,7 +70,7 @@ function ExpenseCategoryCard({ expensesByCategory, filteredExpenseTotal }: Expen
 
 // ─── MAIN SCREEN ─────────────────────────────────────────────────────────────
 
-export default function MoneyScreen() {
+export default function MoneyScreen({ navigation }: any) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { invoices, expenses, jobs, loading, handleAddExpense, handleDeleteExpense } =
@@ -183,6 +184,7 @@ export default function MoneyScreen() {
             onAddExpense={() => setShowAddModal(true)}
           />
           <ReceivablesCard invoices={invoices} jobs={jobs} />
+          <MileageCard start={start} end={end} onPress={() => navigation.navigate('MileageLog')} />
           <MonthlyChart invoices={invoices} expenses={expenses} />
           <ExpenseCategoryCard
             expensesByCategory={expensesByCategory}
