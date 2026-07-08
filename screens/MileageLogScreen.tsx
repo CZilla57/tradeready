@@ -5,7 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
-import { DATE_FILTERS, getDateRange } from '../utils/moneyUtils';
+import { DATE_FILTERS, getDateRange, isInRange } from '../utils/moneyUtils';
 import { formatMoney } from '../utils/format';
 import { loadTrips, loadSettings } from '../utils/storage';
 import { mileageSummary, formatMiles, DEFAULT_MILEAGE_RATE } from '../utils/mileageUtils';
@@ -30,7 +30,7 @@ export default function MileageLogScreen({ navigation }: any) {
   const inRange = useMemo(
     () =>
       trips
-        .filter((t) => { const d = new Date(t.date); return d >= start && d <= end; })
+        .filter((t) => isInRange(t.date, start, end))
         .sort((a, b) => (a.date < b.date ? 1 : -1)),
     [trips, start, end],
   );
