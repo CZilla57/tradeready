@@ -140,3 +140,13 @@ export async function sendBackendGroqMessage({ messages, systemPrompt }: SendBac
   if (!text) throw new Error("No response from AI");
   return text;
 }
+
+export async function sendOnboardingAI({ prompt }: { prompt: string }): Promise<string> {
+  try {
+    return await sendBackendGroqMessage({
+      messages: [{ role: "user", text: prompt }],
+    });
+  } catch {
+    return "";
+  }
+}
