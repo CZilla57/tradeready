@@ -175,6 +175,17 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
       return;
     }
 
+    if (isRecurring) {
+      if (endCondition === 'count' && (!endCount.trim() || parseInt(endCount) < 1)) {
+        Alert.alert('End count required', 'Please enter a number of jobs greater than 0.');
+        return;
+      }
+      if (endCondition === 'date' && !endDate) {
+        Alert.alert('End date required', 'Please select an end date for the series.');
+        return;
+      }
+    }
+
     setSaving(true);
     const [jobs, settings] = await Promise.all([loadJobs(), loadSettings()]);
 
@@ -208,6 +219,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
         );
         if (applyToAll && existingRecurringJob) {
           const allRules = await loadRecurringJobs();
+          const currentJob = jobs.find((j: any) => j.id === jobId);
           const updatedRules = allRules.map(r =>
             r.id === existingRecurringJob.id
               ? {
@@ -218,6 +230,15 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                   description: jobData.description,
                   address: jobData.address,
                   notes: jobData.notes,
+                  // Pricing fields — carry from current job state
+                  estimateTotal: currentJob?.estimateTotal ?? r.estimateTotal,
+                  laborHours: currentJob?.laborHours ?? r.laborHours,
+                  laborRate: currentJob?.laborRate ?? r.laborRate,
+                  materials: currentJob?.materials ?? r.materials,
+                  materialMarkup: currentJob?.materialMarkup ?? r.materialMarkup,
+                  overhead: currentJob?.overhead ?? r.overhead,
+                  margin: currentJob?.margin ?? r.margin,
+                  // Recurrence config
                   cadence,
                   endCondition,
                   endCount: endCondition === 'count' ? (parseInt(endCount) || 1) : undefined,
