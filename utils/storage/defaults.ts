@@ -170,6 +170,7 @@ export function defaultSettings(): Settings {
     phone: "",
     email: "",
     address: "",
+    region: "",
     trade: "plumbing", // plumbing | electrical | hvac | landscaping | cleaning | painting | handyman | other
 
     // Pricing defaults — worker sets these once, used in every estimate

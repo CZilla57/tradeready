@@ -235,6 +235,7 @@ export interface Settings {
   phone: string;
   email: string;
   address: string;
+  region: string;
   trade: TradeId;
 
   // Pricing defaults — set once, applied to every estimate.
