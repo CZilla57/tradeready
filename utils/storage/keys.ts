@@ -10,4 +10,5 @@ export const KEYS = {
   settings: "settings",
   expenses: "expenses",
   customerNotes: "customerNotes",
+  recurringJobs: "recurringJobs",
 } as const;
