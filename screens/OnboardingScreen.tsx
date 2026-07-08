@@ -310,7 +310,7 @@ function RateSuggestion({ form, update }: StepProps) {
           const match = raw.match(/\{[\s\S]*\}/);
           if (match) {
             const parsed = JSON.parse(match[0]);
-            if (typeof parsed.typical === "number") {
+            if (typeof parsed.low === "number" && typeof parsed.typical === "number" && typeof parsed.high === "number") {
               setSuggestion({ low: parsed.low, typical: parsed.typical, high: parsed.high });
             }
           }
@@ -431,7 +431,7 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
         }
       } catch {}
     });
-  }, []);
+  }, [firstName, form.businessName, form.region, form.trade]);
 
   return (
     <View style={styles.doneContent}>
