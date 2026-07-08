@@ -30,6 +30,7 @@ import TodayScreen                from "./screens/TodayScreen";
 import MoneyScreen                from "./screens/MoneyScreen";
 import ChatScreen                 from "./screens/ChatScreen";
 import RouteScreen                from "./screens/RouteScreen";
+import RecurringJobsScreen        from "./screens/RecurringJobsScreen";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, migrateCustomerIdentity } from "./utils/storage";
@@ -72,7 +73,22 @@ function JobsTab() {
   };
   return (
     <JobStack.Navigator screenOptions={navOpts}>
-      <JobStack.Screen name="JobList"             component={JobsScreen}                options={{ title: "Jobs" }} />
+      <JobStack.Screen
+        name="JobList"
+        component={JobsScreen}
+        options={({ navigation }: { navigation: any }) => ({
+          title: "Jobs",
+          headerRight: () => (
+            <TouchableOpacity
+              onPress={() => navigation.navigate("RecurringJobs")}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ paddingLeft: 8 }}
+            >
+              <Ionicons name="repeat-outline" size={22} color={colors.accent} />
+            </TouchableOpacity>
+          ),
+        })}
+      />
       <JobStack.Screen name="JobDetail"           component={JobDetailScreen}           options={{ title: "Job" }} />
       <JobStack.Screen name="AddJob"              component={AddJobScreen}              options={{ presentation: "modal" }} />
       <JobStack.Screen name="PricingCalculator"   component={PricingCalculatorScreen}   options={{ title: "Price this job" }} />
@@ -80,6 +96,11 @@ function JobsTab() {
       <JobStack.Screen name="SendEstimate"        component={SendEstimateScreen}        options={{ title: "Send Estimate" }} />
       <JobStack.Screen name="AddCustomer"         component={AddCustomerScreen}         options={{ presentation: "modal" }} />
       <JobStack.Screen name="Outreach"            component={OutreachScreen}            options={{ title: "Outreach" }} />
+      <JobStack.Screen
+        name="RecurringJobs"
+        component={RecurringJobsScreen}
+        options={{ title: "Recurring Jobs" }}
+      />
     </JobStack.Navigator>
   );
 }
