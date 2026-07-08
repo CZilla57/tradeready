@@ -14,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { loadSettings } from "../utils/storage";
-import { sendGroqMessage, sendClaudeMessage } from "../utils/aiService";
+import { sendGroqMessage, sendClaudeMessage, sendBackendGroqMessage } from "../utils/aiService";
 import { getBusinessSnapshot } from "../utils/businessSnapshot";
 import { TRADE_TYPES, getTradeNickname } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
@@ -144,21 +144,23 @@ export default function ChatScreen({ navigation }: { navigation: any }) {
 
     try {
       const systemPrompt = buildSystemPrompt(settings || {}, snapshot);
-      const reply = settings?.anthropicKey
-        ? await sendClaudeMessage({ messages: history, systemPrompt, apiKey: settings.anthropicKey })
-        : await sendGroqMessage({ messages: history, systemPrompt, apiKey: settings?.groqKey ?? "" });
+      let reply: string;
+      if (settings?.anthropicKey) {
+        reply = await sendClaudeMessage({ messages: history, systemPrompt, apiKey: settings.anthropicKey });
+      } else if (settings?.groqKey) {
+        reply = await sendGroqMessage({ messages: history, systemPrompt, apiKey: settings.groqKey });
+      } else {
+        reply = await sendBackendGroqMessage({ messages: history, systemPrompt });
+      }
       setMessages(prev => [...prev, { id: String(Date.now()) + "r", role: "assistant", text: reply }]);
     } catch (err: unknown) {
       const msg = (err as Error).message || "";
-      const isNoKey = msg.includes("No AI key");
       setMessages(prev => [
         ...prev,
         {
           id: String(Date.now()) + "e",
           role: "assistant",
-          text: isNoKey
-            ? "Add your Groq or Anthropic API key in Settings → AI Assistant to get started."
-            : `Something went wrong: ${msg}`,
+          text: `Something went wrong: ${msg}`,
           isError: true,
         },
       ]);

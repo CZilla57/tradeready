@@ -1,8 +1,12 @@
+import Constants from "expo-constants";
+import { supabase } from "./supabase";
+
 const GROQ_MODEL = "llama-3.1-8b-instant";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_HISTORY = 20;
+const BACKEND_URL = Constants.expoConfig?.extra?.backendUrl ?? "";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -94,6 +98,45 @@ export async function sendClaudeMessage({ messages, systemPrompt, apiKey }: Send
   }
 
   const text: string = data.content?.map((b: { text?: string }) => b.text || "").join("") || "";
+  if (!text) throw new Error("No response from AI");
+  return text;
+}
+
+export interface SendBackendGroqMessageParams {
+  messages: ChatMessage[];
+  systemPrompt?: string;
+}
+
+export async function sendBackendGroqMessage({ messages, systemPrompt }: SendBackendGroqMessageParams): Promise<string> {
+  if (!BACKEND_URL) {
+    throw new Error("Backend not configured.");
+  }
+
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new Error("Sign in to use the AI assistant.");
+  }
+
+  const recent = messages.slice(-MAX_HISTORY);
+
+  const res = await fetch(`${BACKEND_URL}/api/ai-chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
+      messages: recent.map(m => ({ role: m.role, text: m.text })),
+      systemPrompt,
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error || "AI error");
+  }
+
+  const text: string = data.text || "";
   if (!text) throw new Error("No response from AI");
   return text;
 }
