@@ -104,6 +104,8 @@ export interface Job {
   notes: string;
   invoiceId: string | null;
   createdAt: DateString;
+  recurringJobId?: string;
+  occurrenceNumber?: number;
 }
 
 export interface Invoice {
@@ -175,6 +177,35 @@ export interface ReminderRule {
 export type PaymentPlan =
   | { enabled: true; installments: number | string; frequency: string }
   | { enabled: false };
+
+export type RecurrenceCadence = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
+export type RecurrenceEndCondition = 'never' | 'count' | 'date';
+
+export interface RecurringJob {
+  id: string;
+  customerId: string;
+  customerName: string;
+  title: string;
+  description: string;
+  address: string;
+  notes: string;
+  estimateTotal: number;
+  laborHours: number;
+  laborRate: number;
+  materials: Material[];
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+  occurrenceCount: number;
+  lastGeneratedDate: DateString | null;
+  nextDueDate: DateString;
+  isActive: boolean;
+  createdAt: DateString;
+}
 
 export interface Settings {
   // Business info
