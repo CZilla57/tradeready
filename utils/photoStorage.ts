@@ -1,4 +1,4 @@
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 export async function persistPhoto(tempUri: string, folder = "photos"): Promise<string> {
   const dir = `${FileSystem.documentDirectory}${folder}/`;

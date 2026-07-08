@@ -273,7 +273,8 @@ function RootNavigator() {
 }
 
 let Updates: any = null;
-try { Updates = require("expo-updates"); } catch (_) {}
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- expo-updates is absent in Expo Go; lazy require prevents a crash on dev builds
+try { Updates = require("expo-updates"); } catch {}
 
 interface ErrorBoundaryState { hasError: boolean; }
 

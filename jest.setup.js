@@ -30,7 +30,7 @@ jest.mock("expo-secure-store", () => ({
   deleteItemAsync: jest.fn(() => Promise.resolve()),
 }));
 
-jest.mock("expo-file-system", () => ({
+jest.mock("expo-file-system/legacy", () => ({
   documentDirectory: "file:///mock/",
   cacheDirectory: "file:///mock/cache/",
   readAsStringAsync: jest.fn(() => Promise.resolve("")),

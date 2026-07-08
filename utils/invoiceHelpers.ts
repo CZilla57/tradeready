@@ -4,6 +4,7 @@ import { formatMoney, formatQuote } from './format';
 import { computeEstimateBreakdown } from './pricingEngine';
 import { generateMessage } from './anthropicMessage';
 import type { Invoice, Job, Customer, Settings, PaymentPlan, PaymentProvider } from '../types/models';
+import type { BadgeColor } from '../components/UI';
 
 export function daysPastDue(dueDate: string): number {
   const due = new Date(dueDate);
@@ -14,7 +15,7 @@ export function daysPastDue(dueDate: string): number {
 
 export interface InvoiceStatus {
   label: string;
-  color: string;
+  color: BadgeColor;
   days: number;
 }
 

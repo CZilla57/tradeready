@@ -25,6 +25,7 @@ import DateTimePicker, {
   type DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
 import { spacing, radius, fontSize } from "../utils/theme";
+import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 
 type DateTimePickerSheetProps = {
@@ -95,7 +96,7 @@ export function DateTimePickerSheet({
   );
 }
 
-function createStyles(colors, shadow) {
+function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     overlay: {
       flex: 1,

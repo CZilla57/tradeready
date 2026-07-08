@@ -15,6 +15,7 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "
 import { useTheme } from "../hooks/useTheme";
 import BaseField from "../components/Field";
 import { TRADE_TYPES } from "../utils/pricingEngine";
+import type { TradeId } from "../types/models";
 import { saveSettings, defaultSettings, markOnboardingComplete, clearSampleData } from "../utils/storage";
 import { requestPermissions } from "../utils/notifications";
 
@@ -25,7 +26,7 @@ interface OnboardingForm {
   contactName: string;
   phone: string;
   email: string;
-  trade: string;
+  trade: TradeId;
   laborRate: string;
   dataChoice: "sample" | "fresh";
 }

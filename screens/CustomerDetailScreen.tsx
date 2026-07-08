@@ -154,7 +154,7 @@ export default function CustomerDetailScreen({ route, navigation }: { route: any
         </TouchableOpacity>
       ),
     });
-  }, [navigation, displayCustomer]);
+  }, [navigation, displayCustomer, colors.accent]);
 
   useFocusEffect(
     useCallback(() => {

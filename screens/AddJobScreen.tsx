@@ -61,7 +61,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
         </TouchableOpacity>
       ),
     });
-  }, [navigation, isEditing]);
+  }, [navigation, isEditing, colors.accent]);
 
   useEffect(() => {
     async function load() {

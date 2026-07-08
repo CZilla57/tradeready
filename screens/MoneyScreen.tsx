@@ -31,7 +31,7 @@ import type { Invoice, Expense } from '../types/models';
 // ─── Inline sub-component: Expenses by Category breakdown ────────────────────
 
 interface ExpenseCategoryCardProps {
-  expensesByCategory: Array<{ id: string; icon: string; label: string; total: number }>;
+  expensesByCategory: { id: string; icon: string; label: string; total: number }[];
   filteredExpenseTotal: number;
 }
 

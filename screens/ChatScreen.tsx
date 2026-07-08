@@ -123,7 +123,7 @@ export default function ChatScreen({ navigation }: { navigation: any }) {
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, messages.length, settings?.trade]);
+  }, [navigation, messages.length, settings?.trade, colors.accent]);
 
   useFocusEffect(
     useCallback(() => {
@@ -144,10 +144,9 @@ export default function ChatScreen({ navigation }: { navigation: any }) {
 
     try {
       const systemPrompt = buildSystemPrompt(settings || {}, snapshot);
-      const apiMessages = history.map(m => ({ role: m.role, content: m.text }));
       const reply = settings?.anthropicKey
-        ? await sendClaudeMessage({ messages: apiMessages, systemPrompt, apiKey: settings.anthropicKey })
-        : await sendGroqMessage({ messages: apiMessages, systemPrompt, apiKey: settings?.groqKey });
+        ? await sendClaudeMessage({ messages: history, systemPrompt, apiKey: settings.anthropicKey })
+        : await sendGroqMessage({ messages: history, systemPrompt, apiKey: settings?.groqKey ?? "" });
       setMessages(prev => [...prev, { id: String(Date.now()) + "r", role: "assistant", text: reply }]);
     } catch (err: unknown) {
       const msg = (err as Error).message || "";

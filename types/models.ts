@@ -172,11 +172,9 @@ export interface ReminderRule {
 }
 
 /** An optional installment offer woven into outreach messages (invoiceHelpers). */
-export interface PaymentPlan {
-  enabled: boolean;
-  installments: number | string;
-  frequency: string;
-}
+export type PaymentPlan =
+  | { enabled: true; installments: number | string; frequency: string }
+  | { enabled: false };
 
 export interface Settings {
   // Business info

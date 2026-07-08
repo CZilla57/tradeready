@@ -24,6 +24,7 @@ import type {
   Settings,
   TradeId,
 } from "../types/models";
+import type { BadgeColor } from "../components/UI";
 import { parseNumberInput } from "./numberInput";
 
 // ── Main calculation ───────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ export interface EstimateInputForm {
 export function buildEstimateInput(
   form: EstimateInputForm,
   settings: Settings | null | undefined,
-): EstimateInput {
+): Required<EstimateInput> {
   return {
     laborHours: parseNumberInput(form.laborHours, 0),
     laborRate: parseNumberInput(form.laborRate, 85),
@@ -243,7 +244,7 @@ export function buildEstimatePrompt({
   range,
 }: {
   job: Job;
-  customer: Customer;
+  customer: Pick<Customer, "name" | "address">;
   breakdown: EstimateBreakdown;
   settings: Settings;
   range: PriceRange;
@@ -307,7 +308,7 @@ function round(n: number): number {
 // Readable label for each job status
 export const JOB_STATUSES: Record<
   JobStatus,
-  { label: string; color: string; next: JobStatus | null }
+  { label: string; color: BadgeColor; next: JobStatus | null }
 > = {
   lead: { label: "Lead", color: "muted", next: "estimate_sent" },
   estimate_sent: { label: "Estimate sent", color: "accent", next: "approved" },

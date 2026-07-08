@@ -83,7 +83,7 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
         </TouchableOpacity>
       ),
     });
-  }, [navigation, isEditing]);
+  }, [navigation, isEditing, colors.accent]);
 
   useEffect(() => {
     if (!isEditing) return;

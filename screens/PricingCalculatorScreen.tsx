@@ -11,7 +11,6 @@ import {
   Switch,
   KeyboardAvoidingView,
   Platform,
-  type ViewStyle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
@@ -29,7 +28,7 @@ import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storag
 import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { Job, Customer, Settings, Material } from "../types/models";
+import type { Job, Customer, Settings } from "../types/models";
 
 interface LocalMaterial {
   id: string;
@@ -172,12 +171,12 @@ export default function PricingCalculatorScreen({ route, navigation }: { route: 
   }
 
   async function sendEstimateByEmail() {
-    if (!customer?.email && !job?.email) {
+    if (!customer || !customer.email) {
       Alert.alert("No email", "No customer email on file.");
       return;
     }
     const sent = await composeEmail({
-      recipients: [customer?.email || job?.email],
+      recipients: [customer.email],
       subject: `Estimate: ${job?.title || "Your job"} — ${formatQuote(breakdown.total)}`,
       body: generatedEstimate,
     });

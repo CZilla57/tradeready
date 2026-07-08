@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import { supabase } from './supabase';
-import type { Job, Invoice, Customer, Expense, Settings, CustomerNotes } from '../types/models';
+import type { Settings, CustomerNotes } from '../types/models';
 
 const QUEUE_KEY       = '__syncQueue';
 const LAST_SYNCED_KEY = '__lastSyncedAt';
@@ -9,7 +9,6 @@ const INIT_DONE_KEY   = '__initDone_';
 const DATA_OWNER_KEY  = '__dataOwner';
 
 const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses'] as const;
-type CollectionTable = typeof COLLECTION_TABLES[number];
 
 type SyncOp = 'upsert' | 'delete';
 
@@ -32,8 +31,8 @@ export async function enqueue(table: string, op: SyncOp, recordId: string, paylo
 
 export async function enqueueCollectionChanges(
   table: string,
-  oldRecords: Array<{ id?: string }>,
-  newRecords: Array<{ id?: string }>
+  oldRecords: { id?: string }[],
+  newRecords: { id?: string }[]
 ): Promise<void> {
   const oldIds = new Set(oldRecords.map(r => r.id).filter(Boolean));
   const newIds = new Set(newRecords.map(r => r.id).filter(Boolean));
@@ -122,7 +121,7 @@ async function pullRemote(userId: string): Promise<void> {
       if (error || !data?.length) continue;
 
       const localRaw = await AsyncStorage.getItem(table);
-      let local: Array<{ id: string }> = localRaw ? JSON.parse(localRaw) : [];
+      let local: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
 
       for (const remote of data) {
         if (remote.deleted) {
@@ -226,7 +225,7 @@ export async function initialSync(userId: string): Promise<void> {
 async function pushAllLocalToCloud(userId: string): Promise<void> {
   for (const table of COLLECTION_TABLES) {
     const raw = await AsyncStorage.getItem(table);
-    const records: Array<{ id: string }> = raw ? JSON.parse(raw) : [];
+    const records: { id: string }[] = raw ? JSON.parse(raw) : [];
     if (!records.length) continue;
     await supabase.from(table).upsert(
       records.map(r => ({

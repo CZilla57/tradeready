@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import type { CustomerInfo, PurchasesOfferings, PurchasesPackage, MakePurchaseResult } from 'react-native-purchases';
 
 const RC_APPLE_KEY  = Constants.expoConfig?.extra?.rcAppleApiKey  ?? '';
 const RC_GOOGLE_KEY = Constants.expoConfig?.extra?.rcGoogleApiKey ?? '';
@@ -9,6 +10,7 @@ const RC_API_KEY    = Platform.select({ ios: RC_APPLE_KEY, android: RC_GOOGLE_KE
 let Purchases: any = null;
 let PurchasesLogLevel: any = null;
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- react-native-purchases is an unlinked native module; static import crashes Expo Go and bare Jest
   const rc = require('react-native-purchases');
   Purchases         = rc.default ?? rc;
   PurchasesLogLevel = rc.LOG_LEVEL;
@@ -36,19 +38,19 @@ export async function logoutPurchases(): Promise<void> {
   try { await Purchases.logOut(); } catch { /* silent */ }
 }
 
-export async function getCustomerInfo(): Promise<unknown> {
+export async function getCustomerInfo(): Promise<CustomerInfo> {
   return Purchases.getCustomerInfo();
 }
 
-export async function getOfferings(): Promise<unknown> {
+export async function getOfferings(): Promise<PurchasesOfferings> {
   return Purchases.getOfferings();
 }
 
-export async function purchasePackage(pkg: unknown): Promise<unknown> {
+export async function purchasePackage(pkg: PurchasesPackage): Promise<MakePurchaseResult> {
   return Purchases.purchasePackage(pkg);
 }
 
-export async function restorePurchases(): Promise<unknown> {
+export async function restorePurchases(): Promise<CustomerInfo> {
   return Purchases.restorePurchases();
 }
 

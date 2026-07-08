@@ -4,7 +4,6 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../utils/supabase';
 import { initialSync, syncIfOnline } from '../utils/sync';
 import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
-import { clearAllUserData } from '../utils/storage';
 import { configurePurchases, loginPurchases, logoutPurchases } from '../utils/subscription';
 
 interface AuthContextValue {

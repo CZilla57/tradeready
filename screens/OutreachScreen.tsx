@@ -78,8 +78,8 @@ export default function OutreachScreen({ route, navigation }: { route: any; navi
     setGeneratingLink(true);
     try {
       const link = providerOverride
-        ? await fetchPaymentLink(invoice, provider, getProviderKey(settings, provider))
-        : await resolvePaymentLink(invoice, provider, getProviderKey(settings, provider));
+        ? await fetchPaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider))
+        : await resolvePaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider));
       setPaymentLink(link);
       const allInvoices = await loadInvoices();
       await saveInvoices(

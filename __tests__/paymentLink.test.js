@@ -10,6 +10,8 @@
 
 // Mock the Supabase client so fetchPaymentLink can retrieve a test JWT without
 // hitting the real auth server.
+import { buildPaymentLink, resolvePaymentLink, fetchPaymentLink } from "../utils/invoiceHelpers";
+
 const TEST_JWT = "test-supabase-jwt-xyz";
 jest.mock("../utils/supabase", () => ({
   supabase: {
@@ -20,8 +22,6 @@ jest.mock("../utils/supabase", () => ({
     },
   },
 }));
-
-import { buildPaymentLink, resolvePaymentLink, fetchPaymentLink } from "../utils/invoiceHelpers";
 
 const INVOICE = {
   id: "inv1",

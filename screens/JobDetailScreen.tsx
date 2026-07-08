@@ -30,7 +30,7 @@ import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { Job, Customer } from "../types/models";
+import type { Job, Customer, JobStatus } from "../types/models";
 
 // ── Pipeline ───────────────────────────────────────────────────────────────
 
@@ -66,7 +66,7 @@ function openMaps(address: string) {
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
-function PipelineBar({ currentStatus }: { currentStatus: string }) {
+function PipelineBar({ currentStatus }: { currentStatus: JobStatus }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -410,10 +410,7 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
 }
 
 function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: any; onAdvance: () => void }) {
-  const { colors, shadow } = useTheme();
-  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
-
-  const actions: Record<string, { label: string; onPress: () => void; variant: string }> = {
+  const actions: Record<string, { label: string; onPress: () => void; variant: "primary" | "secondary" | "ghost" }> = {
     lead: job.estimateTotal > 0
       ? {
           label: "Send estimate →",
@@ -561,7 +558,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
   }
 
   async function handleAddPhoto() {
-    Alert.alert("Add Photo", null, [
+    Alert.alert("Add Photo", undefined, [
       {
         text: "Take Photo",
         onPress: async () => {

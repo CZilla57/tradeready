@@ -34,7 +34,7 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
   const { jobId } = route.params;
 
   const [data, setData] = useState<ScreenData | null>(null);
-  const [channel, setChannel] = useState<string>("email");
+  const [channel, setChannel] = useState<"text" | "email">("email");
   const [message, setMessage] = useState<string>("");
   const [subject, setSubject] = useState<string>("");
   const [generating, setGenerating] = useState<boolean>(false);
@@ -128,7 +128,7 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
   async function markAsSent() {
     setMarking(true);
     const jobs = await loadJobs();
-    const updated = jobs.map((j: Job) =>
+    const updated = jobs.map((j): Job =>
       j.id === jobId ? { ...j, status: "estimate_sent" } : j
     );
     await saveJobs(updated);
@@ -193,7 +193,7 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
 
         {/* Channel tabs */}
         <View style={styles.channelTabs}>
-          {["email", "text"].map((ch) => (
+          {(["email", "text"] as const).map((ch) => (
             <TouchableOpacity
               key={ch}
               style={[styles.tab, channel === ch && styles.tabActive]}

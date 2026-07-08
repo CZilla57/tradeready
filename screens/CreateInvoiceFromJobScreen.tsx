@@ -145,7 +145,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: { rout
       await saveInvoices([...invoices, newInvoice]);
 
       // Advance the job to "invoiced" and record which invoice was created
-      const updatedJobs = jobs.map((j: Job) =>
+      const updatedJobs = jobs.map((j): Job =>
         j.id === jobId
           ? { ...j, status: "invoiced", invoiceId: newInvoice.id }
           : j

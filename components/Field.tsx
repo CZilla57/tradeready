@@ -24,6 +24,7 @@ import {
   type TextStyle,
 } from "react-native";
 import { spacing, radius, fontSize } from "../utils/theme";
+import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 
 type FieldProps = {
@@ -81,7 +82,7 @@ export default function Field({
   );
 }
 
-function createStyles(colors, shadow) {
+function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     fieldGroup: { marginBottom: spacing.md },
     flex: { flex: 1 },

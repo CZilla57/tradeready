@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { spacing, radius, fontSize } from "../utils/theme";
 
-type BadgeColor = "danger" | "warning" | "success" | "accent" | "muted";
+export type BadgeColor = "danger" | "warning" | "success" | "accent" | "muted";
 
 export function Badge({ label, color = "accent" }: { label: string; color?: BadgeColor }) {
   const { colors } = useTheme();
