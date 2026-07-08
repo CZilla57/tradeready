@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import { TRADE_TYPES } from "../utils/pricingEngine";
 import type { TradeId } from "../types/models";
 import { saveSettings, defaultSettings, markOnboardingComplete, clearSampleData } from "../utils/storage";
 import { requestPermissions } from "../utils/notifications";
+import { sendOnboardingAI } from "../utils/aiService";
 
 const STEPS = 5;
 
@@ -28,6 +29,7 @@ interface OnboardingForm {
   email: string;
   trade: TradeId;
   laborRate: string;
+  region: string;
   dataChoice: "sample" | "fresh";
 }
 
@@ -52,6 +54,7 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
     email: "",
     trade: "plumbing",
     laborRate: "85",
+    region: "",
     dataChoice: "sample",
   });
 
@@ -80,6 +83,7 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
       email: form.email,
       trade: form.trade,
       laborRate: parseFloat(form.laborRate) || 85,
+      region: form.region.trim(),
     });
     if (form.dataChoice === "fresh") {
       await clearSampleData();
@@ -207,6 +211,31 @@ function StepBusiness({ form, update }: StepProps) {
 function StepTrade({ form, update }: StepProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const [tips, setTips] = useState<string[]>([]);
+  const [tipsLoading, setTipsLoading] = useState(false);
+  const tipsTradeRef = useRef<string>("");
+
+  useEffect(() => {
+    if (form.trade === tipsTradeRef.current) return;
+    tipsTradeRef.current = form.trade;
+    setTips([]);
+    setTipsLoading(true);
+    const tradeLabel = TRADE_TYPES.find(t => t.id === form.trade)?.label || form.trade;
+    sendOnboardingAI({
+      prompt: `Give 2-3 short, practical tips for someone starting a ${tradeLabel} business using a job management app. Each tip should be one sentence. Focus on how they'll use features like job tracking, invoicing, and estimates in their trade. Reply with ONLY a JSON array of strings.`,
+    }).then(raw => {
+      if (tipsTradeRef.current !== form.trade) return;
+      try {
+        const match = raw.match(/\[[\s\S]*\]/);
+        if (match) {
+          const parsed = JSON.parse(match[0]);
+          if (Array.isArray(parsed)) setTips(parsed.map(String).slice(0, 3));
+        }
+      } catch {}
+      setTipsLoading(false);
+    });
+  }, [form.trade]);
+
   return (
     <View style={styles.stepContent}>
       <Text style={styles.stepTitle}>Your trade</Text>
@@ -222,7 +251,80 @@ function StepTrade({ form, update }: StepProps) {
           </TouchableOpacity>
         ))}
       </View>
-      <Text style={styles.rateLabel}>Your hourly labor rate ($)</Text>
+
+      {(tipsLoading || tips.length > 0) && (
+        <View style={styles.aiCard}>
+          {tipsLoading ? (
+            <View style={styles.aiLoadingRow}>
+              <ActivityIndicator size="small" color={colors.accent} />
+              <Text style={styles.aiLoadingText}>Getting tips for your trade...</Text>
+            </View>
+          ) : (
+            tips.map((tip, i) => (
+              <View key={i} style={styles.tipRow}>
+                <Text style={styles.tipBullet}>💡</Text>
+                <Text style={styles.tipText}>{tip}</Text>
+              </View>
+            ))
+          )}
+        </View>
+      )}
+
+      <Text style={[styles.rateLabel, { marginTop: spacing.md }]}>Your region</Text>
+      <TextInput
+        style={styles.rateInput}
+        value={form.region}
+        onChangeText={v => update("region", v)}
+        placeholder="e.g., Dallas, TX"
+        placeholderTextColor={colors.textMuted}
+      />
+      <Text style={styles.rateNote}>Used to suggest competitive rates for your area.</Text>
+
+      <RateSuggestion form={form} update={update} />
+    </View>
+  );
+}
+
+function RateSuggestion({ form, update }: StepProps) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const [suggestion, setSuggestion] = useState<{ low: number; typical: number; high: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const lastQueryRef = useRef("");
+
+  useEffect(() => {
+    const region = form.region.trim();
+    if (region.length < 2) return;
+    const queryKey = `${form.trade}|${region}`;
+    if (queryKey === lastQueryRef.current) return;
+
+    const timeout = setTimeout(() => {
+      lastQueryRef.current = queryKey;
+      setSuggestion(null);
+      setLoading(true);
+      const tradeLabel = TRADE_TYPES.find(t => t.id === form.trade)?.label || form.trade;
+      sendOnboardingAI({
+        prompt: `What is a typical hourly labor rate for a ${tradeLabel} professional in ${region}? Reply with ONLY a JSON object: {"low": number, "typical": number, "high": number}. No other text.`,
+      }).then(raw => {
+        try {
+          const match = raw.match(/\{[\s\S]*\}/);
+          if (match) {
+            const parsed = JSON.parse(match[0]);
+            if (typeof parsed.typical === "number") {
+              setSuggestion({ low: parsed.low, typical: parsed.typical, high: parsed.high });
+            }
+          }
+        } catch {}
+        setLoading(false);
+      });
+    }, 1000);
+
+    return () => clearTimeout(timeout);
+  }, [form.trade, form.region]);
+
+  return (
+    <>
+      <Text style={[styles.rateLabel, { marginTop: spacing.md }]}>Your hourly labor rate ($)</Text>
       <TextInput
         style={styles.rateInput}
         value={form.laborRate}
@@ -232,7 +334,34 @@ function StepTrade({ form, update }: StepProps) {
         placeholderTextColor={colors.textMuted}
       />
       <Text style={styles.rateNote}>You can adjust this any time in Settings.</Text>
-    </View>
+
+      {loading && (
+        <View style={[styles.aiCard, { marginTop: spacing.sm }]}>
+          <View style={styles.aiLoadingRow}>
+            <ActivityIndicator size="small" color={colors.accent} />
+            <Text style={styles.aiLoadingText}>Checking rates in your area...</Text>
+          </View>
+        </View>
+      )}
+
+      {suggestion && !loading && (
+        <View style={[styles.aiCard, { marginTop: spacing.sm }]}>
+          <Text style={styles.rateSuggestTitle}>
+            Typical rate in {form.region.trim()}: ${suggestion.typical}/hr
+          </Text>
+          <Text style={styles.rateSuggestRange}>
+            Range: ${suggestion.low} – ${suggestion.high}
+          </Text>
+          <TouchableOpacity
+            style={styles.useRateBtn}
+            onPress={() => update("laborRate", String(suggestion.typical))}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.useRateBtnText}>Use this rate</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </>
   );
 }
 
@@ -283,6 +412,27 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const firstName = form.contactName.trim().split(" ")[0] || "there";
+  const [actions, setActions] = useState<string[]>([]);
+  const fetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+    const tradeLabel = TRADE_TYPES.find(t => t.id === form.trade)?.label || form.trade;
+    const regionStr = form.region.trim() ? ` in ${form.region.trim()}` : "";
+    sendOnboardingAI({
+      prompt: `A ${tradeLabel} business owner named ${firstName} just set up their account in a job management app. Their business is ${form.businessName.trim()}${regionStr}. Suggest 3 specific first actions they should take in the app. Each action should be one short sentence starting with a verb. Reply with ONLY a JSON array of 3 strings.`,
+    }).then(raw => {
+      try {
+        const match = raw.match(/\[[\s\S]*\]/);
+        if (match) {
+          const parsed = JSON.parse(match[0]);
+          if (Array.isArray(parsed)) setActions(parsed.map(String).slice(0, 3));
+        }
+      } catch {}
+    });
+  }, []);
+
   return (
     <View style={styles.doneContent}>
       <Text style={styles.doneEmoji}>✅</Text>
@@ -307,9 +457,21 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
           </TouchableOpacity>
         )}
       </View>
-      <Text style={styles.doneBody}>
-        Head to Settings any time to update your pricing defaults, payment processor, or AI assistant keys.
-      </Text>
+      {actions.length > 0 ? (
+        <View style={styles.aiCard}>
+          <Text style={styles.actionsTitle}>Your first steps</Text>
+          {actions.map((action, i) => (
+            <View key={i} style={styles.tipRow}>
+              <Text style={styles.tipBullet}>{i + 1}.</Text>
+              <Text style={styles.tipText}>{action}</Text>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.doneBody}>
+          Head to Settings any time to update your pricing defaults, payment processor, or AI assistant keys.
+        </Text>
+      )}
     </View>
   );
 }
@@ -399,5 +561,16 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     nextBtnFull: { flex: 1 },
     nextBtnDisabled: { opacity: 0.5 },
     nextText: { color: "#fff", fontSize: fontSize.md, fontWeight: "700" },
+    aiCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginTop: spacing.md, ...shadow.card },
+    aiLoadingRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+    aiLoadingText: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+    tipRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
+    tipBullet: { fontSize: fontSize.sm },
+    tipText: { flex: 1, fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
+    rateSuggestTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
+    rateSuggestRange: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    useRateBtn: { marginTop: spacing.sm, backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 10, alignItems: "center" },
+    useRateBtnText: { color: "#fff", fontSize: fontSize.sm, fontWeight: "600" },
+    actionsTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
   });
 }
