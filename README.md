@@ -93,13 +93,14 @@ types/
 
 utils/
   theme.js                       ← All colors, font sizes, spacing
-  storage/                       ← Local persistence (8 typed modules, see below)
+  storage/                       ← Local persistence (9 typed modules, see below)
     index.ts                     ← Barrel: re-exports public API
     keys.ts                      ← AsyncStorage key constants
     defaults.ts                  ← Default/seed values for each collection
     collections.ts               ← Load/save for invoices, jobs, customers, expenses
     settings.ts                  ← Settings (public + SecureStore-backed fields)
     customers.ts                 ← Customer registry (upsert, notes, migration)
+    trips.ts                     ← loadTrips/saveTrips — mileage log, local-only (not synced)
     lifecycle.ts                 ← Onboarding, clearSampleData, clearAllUserData
     dailyOps.ts                  ← Today-tab derived reads (today's jobs, overdue, leads)
   format.ts                      ← formatMoney (2 dp, invoices/totals) / formatQuote (estimates)
@@ -111,6 +112,7 @@ utils/
   jobStatus.ts                   ← advanceStatusForSchedule (approved → scheduled logic)
   jobStatusDisplay.ts            ← getJobStatusDisplay — badge labels + colors
   timeTracking.ts                ← computeTimeTracking — clock-in/out session math
+  mileageUtils.ts                ← computeTripMiles, mileageSummary — mileage deduction math
   invoiceStats.ts                ← summarizeInvoices, isOverdue, filterInvoices
   numberInput.ts                 ← parseNumberInput, buildEstimateInput (safe 0-handling)
   customerList.ts                ← buildCustomerList — invoice/record join + rollup
@@ -135,6 +137,7 @@ components/
     TopCustomersCard.js          ← Top customers by revenue
     ExpenseRow.js                ← Single expense list row
     AddExpenseModal.js           ← Log-expense bottom sheet
+    MileageCard.tsx              ← "Mileage deduction" card on the Money dashboard
 
 screens/
   TodayScreen.js                 ← Today tab: schedule, earnings summary, route launch
@@ -149,6 +152,8 @@ screens/
   AddInvoiceScreen.js            ← Add / edit invoice
   OutreachScreen.js              ← Generate and send collection messages
   MoneyScreen.js                 ← Money tab: dashboard, expense log, charts
+  MileageLogScreen.tsx           ← Full mileage trip log (reached from the Mileage deduction card)
+  AddTripScreen.tsx              ← Add / edit trip (odometer start/end, from/to endpoint)
   CustomersScreen.js             ← Customer list with search
   CustomerDetailScreen.js        ← Customer history, notes, contact actions
   AddCustomerScreen.js           ← Add / edit customer
@@ -218,6 +223,7 @@ npm run test:watch    # watch mode — re-runs on file save
 | `__tests__/invoiceStats.test.js` | Invoice summary stats, overdue detection, search filter |
 | `__tests__/dateHelpers.test.js` | Date formatting, week math, greeting, time range |
 | `__tests__/timeTracking.test.js` | Clock-in/out session math, live timer string |
+| `__tests__/mileageUtils.test.js` | `computeTripMiles`, `mileageSummary` — mileage deduction math |
 | `__tests__/jobStatus.test.js` | Status pipeline; approved → scheduled transition |
 | `__tests__/jobStatusDisplay.test.js` | Badge labels and colors for all 8 job statuses |
 | `__tests__/customerList.test.js` | Customer aggregation from invoices + manual records |
@@ -269,6 +275,14 @@ be present.
 **SecureStore fields are device-local only.** API keys (`providerKey`,
 `anthropicKey`, `groqKey`) live in the iOS Keychain / Android Keystore and
 are never written to Supabase. You must re-enter them on each device.
+
+**Mileage trips are device-local only.** The mileage deduction log (`Trip`
+records, under Money → Mileage deduction) is stored in AsyncStorage only,
+the same as recurring jobs — it is not in the sync engine's `COLLECTION_TABLES`
+list (`utils/sync.ts:11`) and is cleared on sign-out. If you reinstall the app
+or sign in on a different device, logged trips will not be present. Adding
+cloud sync later means adding a `trips` Supabase table plus one entry in
+`COLLECTION_TABLES`.
 
 **First-device detection uses job count only.** `initialSync` decides whether
 to push or pull based on whether the `jobs` table has any cloud rows for the

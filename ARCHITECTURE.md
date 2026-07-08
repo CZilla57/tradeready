@@ -27,7 +27,7 @@ Seven tabs are live. Items marked ⚠️ are stubs or partial implementations.
 - Route optimization — the Route screen is a deep-link to Apple/Google Maps, not a waypoint optimizer
 - Dedicated scheduling/calendar tab
 - Receipt photo scanning for expenses (manual entry only)
-- Mileage / GPS tracking
+- GPS auto-tracking of mileage (the mileage log is odometer-based manual entry, not GPS)
 - Tax center and quarterly estimates
 - Recurring jobs
 - Customer review requests
@@ -97,8 +97,12 @@ Everything financial in one place.
 - Top customers by revenue
 - Receivables summary
 - Expense log (add expense with category)
+- Mileage deduction card → full trip log → add/edit trip screen (odometer
+  start/end, from/to endpoint — a linked job or "Home / Shop"; total business
+  miles × `settings.mileageRate` shown by period). Local-only, not synced —
+  see Data Models below.
 - ⚠️ Receipt scanning: not built (manual entry only)
-- ⚠️ Mileage tracking: not built
+- ⚠️ GPS auto-tracking of mileage: not built (odometer entry only)
 - ⚠️ Tax center: not built
 - ⚠️ Revenue reports beyond monthly chart: not built
 
@@ -160,11 +164,26 @@ Everything financial in one place.
 - description, receiptPhoto (device-local path)
 - jobId (optional)
 
+### Trip ⚠️ local-only, not synced
+- id, date, odometerStart, odometerEnd, miles (derived: `max(0, end - start)`)
+- fromJobId / toJobId (either may be `null` = "Home / Shop"), fromLabel / toLabel (denormalized)
+- purpose, createdAt
+- Mileage tax deduction log, modeled on `RecurringJob`: stored in AsyncStorage
+  (`utils/storage/trips.ts`) and cleared on sign-out, deliberately **not** in
+  `COLLECTION_TABLES` (`utils/sync.ts`) — no cloud sync yet. Deliberately
+  separate from `Job.travelFeePerMile`/`travelMiles` (the customer-facing
+  travel fee on estimates) and the `fuel` expense category — the deduction
+  does not auto-post to expenses, to avoid double-counting under IRS rules.
+  Deduction total = business miles × `settings.mileageRate` (default 0.70).
+  **Future:** add a `trips` Supabase table + RLS + one `COLLECTION_TABLES`
+  entry to sync this collection like the others.
+
 ### Settings / Business Profile
 - businessName, ownerName, trade
 - phone, email, address, logoPhoto
 - laborRate, materialMarkup, overhead, margin, minimumJobFee
 - taxRate
+- mileageRate (default 0.70 — $ per business mile, mileage deduction estimate)
 - paymentProcessor + providerKey (SecureStore)
 - anthropicKey, groqKey (SecureStore)
 - notificationRules
@@ -282,7 +301,7 @@ Build in this sequence so you always have something shippable:
 **Phase 3 — Money**
 ✅ Expense tracking
 ⬜ Receipt scanning (OCR)
-⬜ Mileage tracking (GPS)
+✅ Mileage tracking (odometer-based log + deduction estimate; ⚠️ GPS auto-tracking not built; local-only, not synced)
 ⬜ Quarterly tax estimates
 ⚠️ Revenue reports (monthly chart + top customers built; detailed reports not built)
 
