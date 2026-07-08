@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   StyleSheet,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs } from "../utils/storage";
@@ -69,7 +70,12 @@ export default function JobsScreen({ navigation }: { navigation: any }) {
       >
         <View style={styles.cardTop}>
           <View style={{ flex: 1, marginRight: spacing.sm }}>
-            <Text style={styles.jobTitle} numberOfLines={1}>{job.title}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Text style={[styles.jobTitle, { flex: 1 }]} numberOfLines={1}>{job.title}</Text>
+              {job.recurringJobId ? (
+                <Ionicons name="repeat-outline" size={14} color={colors.textMuted} />
+              ) : null}
+            </View>
             <Text style={styles.jobCustomer}>{job.customerName}</Text>
           </View>
           <View style={{ alignItems: "flex-end", gap: 5 }}>

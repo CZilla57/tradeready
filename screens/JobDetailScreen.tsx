@@ -17,6 +17,7 @@ import {
   Image,
   Modal,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { persistPhoto, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -654,6 +655,16 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
         showsVerticalScrollIndicator={false}
       >
         <PipelineBar currentStatus={job.status} />
+        {job.recurringJobId ? (
+          <TouchableOpacity
+            style={styles.recurringBanner}
+            onPress={() => navigation.navigate('RecurringJobs')}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="repeat-outline" size={14} color={colors.accent} />
+            <Text style={styles.recurringBannerText}>Part of a recurring series</Text>
+          </TouchableOpacity>
+        ) : null}
         <JobDetailsCard job={job} navigation={navigation} />
         {customer && <CustomerCard customer={customer} />}
         <EstimateCard job={job} navigation={navigation} />
@@ -717,6 +728,24 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       fontSize: fontSize.sm, fontWeight: "600", color: colors.accent,
     },
     pipelineStepCount: { fontSize: fontSize.xs, fontWeight: "400", color: colors.textMuted },
+
+    recurringBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+      backgroundColor: colors.surface,
+      borderRadius: radius.sm,
+      marginHorizontal: spacing.md,
+      marginBottom: spacing.sm,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    recurringBannerText: {
+      fontSize: fontSize.sm,
+      color: colors.accent,
+    },
 
     // Sections
     section: { marginBottom: spacing.sm },
