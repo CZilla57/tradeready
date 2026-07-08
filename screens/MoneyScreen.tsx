@@ -184,7 +184,7 @@ export default function MoneyScreen({ navigation }: any) {
             onAddExpense={() => setShowAddModal(true)}
           />
           <ReceivablesCard invoices={invoices} jobs={jobs} />
-          <MileageCard start={start} end={end} onPress={() => navigation.navigate('MileageLog')} />
+          <MileageCard start={start} end={end} onPress={() => navigation.navigate('MileageLog', { initialFilter: activeFilter })} />
           <MonthlyChart invoices={invoices} expenses={expenses} />
           <ExpenseCategoryCard
             expensesByCategory={expensesByCategory}

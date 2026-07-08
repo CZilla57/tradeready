@@ -11,12 +11,12 @@ import { loadTrips, loadSettings } from '../utils/storage';
 import { mileageSummary, formatMiles, DEFAULT_MILEAGE_RATE } from '../utils/mileageUtils';
 import type { Trip } from '../types/models';
 
-export default function MileageLogScreen({ navigation }: any) {
+export default function MileageLogScreen({ navigation, route }: any) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [rate, setRate] = useState<number>(DEFAULT_MILEAGE_RATE);
-  const [activeFilter, setActiveFilter] = useState<string>('this_year');
+  const [activeFilter, setActiveFilter] = useState<string>(route.params?.initialFilter ?? 'this_year');
 
   useFocusEffect(
     useCallback(() => {

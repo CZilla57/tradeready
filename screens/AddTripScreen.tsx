@@ -74,6 +74,10 @@ export default function AddTripScreen({ navigation, route }: any) {
   );
 
   const handleSave = async () => {
+    if (!date || isNaN(new Date(date).getTime())) {
+      Alert.alert('Invalid date', 'Enter the trip date as YYYY-MM-DD.');
+      return;
+    }
     if (!odoStart || !odoEnd) {
       Alert.alert('Missing readings', 'Enter both start and end odometer readings.');
       return;
