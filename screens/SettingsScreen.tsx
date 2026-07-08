@@ -230,6 +230,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
           <Field label="Phone" value={s.phone} onChangeText={(v) => update("phone", formatPhone(v))} keyboardType="phone-pad" colors={colors} shadow={shadow} />
           <Field label="Email" value={s.email} onChangeText={(v) => update("email", v)} keyboardType="email-address" colors={colors} shadow={shadow} />
           <Field label="Payment instructions" value={s.paymentNotes} onChangeText={(v) => update("paymentNotes", v)} multiline autoCapitalize="sentences" colors={colors} shadow={shadow} />
+          <Field label="Region" value={s.region || ""} onChangeText={(v) => update("region", v)} colors={colors} shadow={shadow} />
           <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>Your trade</Text>
           <View style={styles.tradeGrid}>
             {TRADE_TYPES.map((t) => (

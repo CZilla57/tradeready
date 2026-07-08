@@ -85,7 +85,8 @@ function getQuickPrompts(snapshot: any): QuickPrompt[] {
 function buildSystemPrompt(s: Partial<Settings>, snapshot: any): string {
   const trade = TRADE_TYPES.find(t => t.id === s.trade)?.label || "Trades";
   const who = [s.businessName, trade, s.contactName].filter(Boolean).join(", ");
-  let prompt = `Assistant for ${who}. Rates: $${s.laborRate || 85}/hr labor, ${s.materialMarkup || 20}% materials markup, ${s.overheadPercent || 15}% overhead, ${s.marginPercent || 20}% margin, $${s.minimumJobFee || 75} min fee. Be brief. Itemize estimates. USD only.`;
+  const regionStr = s.region ? ` Region: ${s.region}.` : "";
+  let prompt = `Assistant for ${who}.${regionStr} Rates: $${s.laborRate || 85}/hr labor, ${s.materialMarkup || 20}% materials markup, ${s.overheadPercent || 15}% overhead, ${s.marginPercent || 20}% margin, $${s.minimumJobFee || 75} min fee. Be brief. Itemize estimates. USD only.`;
 
   if (snapshot) {
     const statusLines = Object.entries(snapshot.activeJobsByStatus as Record<string, number>)
