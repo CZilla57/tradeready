@@ -294,7 +294,11 @@ function RateSuggestion({ form, update }: StepProps) {
 
   useEffect(() => {
     const region = form.region.trim();
-    if (region.length < 2) return;
+    if (region.length < 2) {
+      setSuggestion(null);
+      lastQueryRef.current = "";
+      return;
+    }
     const queryKey = `${form.trade}|${region}`;
     if (queryKey === lastQueryRef.current) return;
 
