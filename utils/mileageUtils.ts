@@ -4,6 +4,7 @@
 // unit-testable in isolation.
 
 import type { Trip } from '../types/models';
+import { isInRange } from './moneyUtils';
 
 /** IRS standard mileage rate default ($/mile). User overrides per tax year in Settings. */
 export const DEFAULT_MILEAGE_RATE = 0.70;
@@ -30,10 +31,7 @@ export function mileageSummary(
   end: Date,
   rate: number,
 ): MileageSummary {
-  const inRange = trips.filter((t) => {
-    const d = new Date(t.date);
-    return d >= start && d <= end;
-  });
+  const inRange = trips.filter((t) => isInRange(t.date, start, end));
   const totalMiles =
     Math.round(inRange.reduce((sum, t) => sum + (Number(t.miles) || 0), 0) * 10) / 10;
   const deduction = Math.round(totalMiles * (Number(rate) || 0) * 100) / 100;
