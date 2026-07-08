@@ -83,8 +83,27 @@ export function getPreviousRange(filterId: string): DateRange | null {
   }
 }
 
+/**
+ * Parse a stored date string as LOCAL time.
+ *
+ * A bare "YYYY-MM-DD" is treated as LOCAL midnight. `new Date("YYYY-MM-DD")`
+ * parses it as UTC midnight, which — in timezones west of UTC — lands on the
+ * previous local day and shifts a record just outside its reporting period.
+ * The date ranges it is compared against (getDateRange / getPreviousRange) are
+ * built with the local-time `new Date(year, month, day)` constructor, so both
+ * sides must be local for the comparison to be sound. Strings that carry a time
+ * component fall through to the platform parser (already local when no `Z`).
+ */
+function parseLocalDate(dateString: string): Date {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
+  if (dateOnly) {
+    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
+  }
+  return new Date(dateString);
+}
+
 export function isInRange(dateString: string, start: Date, end: Date): boolean {
-  const d = new Date(dateString);
+  const d = parseLocalDate(dateString);
   return d >= start && d <= end;
 }
 

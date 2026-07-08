@@ -124,6 +124,27 @@ describe('isInRange', () => {
   test('local datetime string within range returns true', () => {
     expect(isInRange('2025-06-20T14:30:00', start, end)).toBe(true);
   });
+
+  // ── Bare "YYYY-MM-DD" boundary days (the stored format for due/paidAt/exp.date/
+  // trip.date). These parse as LOCAL midnight, so results are identical in every
+  // timezone — the point of the fix. Under the old `new Date(dateString)` (UTC
+  // midnight), the first/last-day cases flipped depending on the runner's TZ and
+  // a period's opening day could be silently dropped from its totals.
+  test('date-only first day of period is in range', () => {
+    expect(isInRange('2025-06-01', start, end)).toBe(true);
+  });
+
+  test('date-only last day of period is in range', () => {
+    expect(isInRange('2025-06-30', start, end)).toBe(true);
+  });
+
+  test('date-only day before period is out of range', () => {
+    expect(isInRange('2025-05-31', start, end)).toBe(false);
+  });
+
+  test('date-only day after period is out of range', () => {
+    expect(isInRange('2025-07-01', start, end)).toBe(false);
+  });
 });
 
 // ─── getLast6MonthLabels ──────────────────────────────────────────────────────
