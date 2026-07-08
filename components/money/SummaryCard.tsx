@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
@@ -32,10 +32,9 @@ interface SummaryCardProps {
   prevIncome: number | null;
   prevExpenses: number | null;
   label: string;
-  onAddExpense: () => void;
 }
 
-export function SummaryCard({ income, expenses, prevIncome, prevExpenses, label, onAddExpense }: SummaryCardProps) {
+export function SummaryCard({ income, expenses, prevIncome, prevExpenses, label }: SummaryCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -52,9 +51,6 @@ export function SummaryCard({ income, expenses, prevIncome, prevExpenses, label,
     <View style={styles.summaryCard}>
       <View style={styles.summaryCardHeader}>
         <Text style={styles.summaryPeriodLabel}>{label}</Text>
-        <TouchableOpacity style={styles.addExpenseBtn} onPress={onAddExpense}>
-          <Text style={styles.addExpenseBtnText}>+ Expense</Text>
-        </TouchableOpacity>
       </View>
 
       <View style={styles.summaryRow}>
@@ -131,19 +127,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       fontWeight: '500',
       textTransform: 'uppercase',
       letterSpacing: 0.5,
-    },
-    addExpenseBtn: {
-      backgroundColor: colors.accent,
-      paddingHorizontal: 14,
-      paddingVertical: 6,
-      borderRadius: radius.full,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    addExpenseBtnText: {
-      color: colors.textOnAccent,
-      fontWeight: '700',
-      fontSize: fontSize.sm,
     },
     summaryRow: {
       flexDirection: 'row',

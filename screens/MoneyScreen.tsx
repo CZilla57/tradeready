@@ -181,7 +181,6 @@ export default function MoneyScreen({ navigation }: any) {
             prevIncome={prevFilteredIncome}
             prevExpenses={prevFilteredExpenseTotal}
             label={activeFilterLabel}
-            onAddExpense={() => setShowAddModal(true)}
           />
           <ReceivablesCard invoices={invoices} jobs={jobs} />
           <MileageCard start={start} end={end} onPress={() => navigation.navigate('MileageLog', { initialFilter: activeFilter })} />
@@ -208,12 +207,20 @@ export default function MoneyScreen({ navigation }: any) {
       {/* ── Expenses Tab ──────────────────────────────────────────────────── */}
       {activeTab === 'expenses' && (
         <FlatList
+          style={styles.scrollContent}
           data={filteredExpenses.sort((a, b) => (new Date((b as any).date) as any) - (new Date((a as any).date) as any))}
           keyExtractor={(item) => (item as any).id}
           renderItem={({ item }) => (
             <ExpenseRow expense={item} onDelete={handleDeleteExpense} />
           )}
           contentContainerStyle={styles.expenseList}
+          ListHeaderComponent={
+            <View style={styles.expenseHeader}>
+              <TouchableOpacity style={styles.addExpenseBtn} onPress={() => setShowAddModal(true)}>
+                <Text style={styles.addExpenseBtnText}>+ Expense</Text>
+              </TouchableOpacity>
+            </View>
+          }
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateIcon}>🧾</Text>
@@ -389,9 +396,25 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
 
     // ── Expense list (Expenses tab)
+    expenseHeader: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      marginBottom: spacing.md,
+    },
+    addExpenseBtn: {
+      backgroundColor: colors.accent,
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+      borderRadius: radius.full,
+    },
+    addExpenseBtnText: {
+      color: colors.textOnAccent,
+      fontWeight: '700',
+      fontSize: fontSize.sm,
+    },
     expenseList: {
       paddingHorizontal: spacing.lg,
-      paddingTop: spacing.xs,
+      paddingTop: spacing.sm,
     },
 
     // ── Empty states
