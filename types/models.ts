@@ -108,6 +108,38 @@ export interface Job {
   occurrenceNumber?: number;
 }
 
+export interface PricebookEntry {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  laborHours: number;
+  laborRate: number;
+  materials: Material[];
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  estimateTotal: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AIPricingSuggestion {
+  laborHours?: { suggested: number; reasoning: string };
+  laborRate?: { suggested: number; reasoning: string };
+  materials?: {
+    name: string;
+    suggestedUnitCost: number;
+    reasoning: string;
+  }[];
+  overallRange?: {
+    low: number;
+    mid: number;
+    high: number;
+    reasoning: string;
+  };
+}
+
 export interface Invoice {
   id: string;
   /**

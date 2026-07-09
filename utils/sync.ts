@@ -8,7 +8,7 @@ const LAST_SYNCED_KEY = '__lastSyncedAt';
 const INIT_DONE_KEY   = '__initDone_';
 const DATA_OWNER_KEY  = '__dataOwner';
 
-const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses'] as const;
+const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses', 'pricebook'] as const;
 
 type SyncOp = 'upsert' | 'delete';
 
