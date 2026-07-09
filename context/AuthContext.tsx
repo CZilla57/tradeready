@@ -6,6 +6,7 @@ import { initialSync, syncIfOnline } from '../utils/sync';
 import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
 import { configurePurchases, loginPurchases, logoutPurchases } from '../utils/subscription';
 import { checkAndGenerateRecurringJobs } from '../utils/recurringJobs';
+import { identifyUser } from '../utils/analytics';
 
 interface AuthContextValue {
   session: Session | null;
@@ -29,6 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loginPurchases(session.user.id);
         initialSync(session.user.id);
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
+        identifyUser(session.user.id);
       }
     });
 
@@ -45,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       if (session?.user?.id) {
         loginPurchases(session.user.id);
+        identifyUser(session.user.id);
         initialSync(session.user.id);
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
       }

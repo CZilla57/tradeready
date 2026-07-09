@@ -21,6 +21,7 @@ import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from ".
 import { syncNotifications } from "../utils/notifications";
 import { syncIfOnline } from "../utils/sync";
 import { supabase } from "../utils/supabase";
+import { resetUser } from "../utils/analytics";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import BaseField from "../components/Field";
 import { TRADE_TYPES } from "../utils/pricingEngine";
@@ -460,7 +461,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
           onPress={async () => {
             const raw = await AsyncStorage.getItem("__syncQueue");
             const queue = raw ? JSON.parse(raw) : [];
-            const doSignOut = async () => { await clearAllUserData(); await supabase.auth.signOut(); };
+            const doSignOut = async () => { resetUser(); await clearAllUserData(); await supabase.auth.signOut(); };
             if (queue.length > 0) {
               Alert.alert("Unsynced changes", "You have changes that haven't been saved to the cloud yet. Sync now to keep them.", [
                 { text: "Cancel", style: "cancel" },
@@ -499,6 +500,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
                     const body = await res.json().catch(() => ({}));
                     throw new Error(body.error || "Failed to delete account.");
                   }
+                  resetUser();
                   await clearAllUserData();
                   await supabase.auth.signOut();
                 } catch (err: unknown) {
