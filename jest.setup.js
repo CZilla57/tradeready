@@ -119,3 +119,21 @@ jest.mock("@react-native-community/datetimepicker", () => {
     default: (props) => <View testID="mock-datetime-picker" {...props} />,
   };
 });
+
+jest.mock("@sentry/react-native", () => ({
+  init: jest.fn(),
+  wrap: jest.fn((component) => component),
+  captureException: jest.fn(),
+  setUser: jest.fn(),
+  withScope: jest.fn((cb) => cb({ setExtra: jest.fn() })),
+  Severity: { Error: "error", Warning: "warning" },
+}));
+
+jest.mock("posthog-react-native", () => ({
+  PostHogProvider: ({ children }) => children,
+  usePostHog: jest.fn(() => ({
+    capture: jest.fn(),
+    identify: jest.fn(),
+    reset: jest.fn(),
+  })),
+}));

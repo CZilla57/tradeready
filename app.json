@@ -43,7 +43,8 @@
           "cameraPermission": "TradeReady needs camera access to let you take photos of job sites and completed work.",
           "photosPermission": "TradeReady needs photo library access to attach job site photos to your projects."
         }
-      ]
+      ],
+      ["@sentry/react-native", { "organization": "PLACEHOLDER", "project": "PLACEHOLDER" }]
     ],
     "updates": {
       "fallbackToCacheTimeout": 0,
@@ -59,6 +60,8 @@
       "termsUrl": "https://czilla57.github.io/tradeready-legal/terms.html",
       "rcAppleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
       "rcGoogleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
+      "posthogApiKey": "PLACEHOLDER_POSTHOG_KEY",
+      "sentryDsn": "PLACEHOLDER_SENTRY_DSN",
       "eas": {
         "projectId": "2dcb243e-0753-4c9e-b411-da4a97faa5fa"
       }
