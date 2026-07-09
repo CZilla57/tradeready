@@ -65,6 +65,10 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
     dataChoice: "sample",
   });
   const [logoUri, setLogoUri] = useState<string | null>(null);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  function markTouched(field: string) {
+    setTouched(prev => ({ ...prev, [field]: true }));
+  }
 
   const { session } = useAuth();
 
@@ -188,9 +192,11 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
               logoUri={logoUri}
               onPickLogo={handlePickLogo}
               onRemoveLogo={handleRemoveLogo}
+              touched={touched}
+              markTouched={markTouched}
             />
           )}
-          {step === 2 && <StepTrade form={form} update={update} />}
+          {step === 2 && <StepTrade form={form} update={update} touched={touched} markTouched={markTouched} />}
           {step === 3 && <StepDataChoice form={form} update={update} />}
           {step === 4 && (
             <StepDone
@@ -267,9 +273,11 @@ interface StepBusinessProps extends StepProps {
   logoUri: string | null;
   onPickLogo: () => void;
   onRemoveLogo: () => void;
+  touched: Record<string, boolean>;
+  markTouched: (field: string) => void;
 }
 
-function StepBusiness({ form, update, logoUri, onPickLogo, onRemoveLogo }: StepBusinessProps) {
+function StepBusiness({ form, update, logoUri, onPickLogo, onRemoveLogo, touched, markTouched }: StepBusinessProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
@@ -278,8 +286,14 @@ function StepBusiness({ form, update, logoUri, onPickLogo, onRemoveLogo }: StepB
       <Text style={styles.stepSubtitle}>This appears on your invoices and estimates.</Text>
       <Field label="Business name *" value={form.businessName} onChangeText={v => update("businessName", v)} placeholder="ABC Plumbing LLC" />
       <Field label="Your name *" value={form.contactName} onChangeText={v => update("contactName", v)} placeholder="John Smith" />
-      <Field label="Phone" value={form.phone} onChangeText={v => update("phone", formatPhone(v))} placeholder="(555) 000-0000" keyboardType="phone-pad" />
-      <Field label="Email" value={form.email} onChangeText={v => update("email", v)} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" />
+      <Field label="Phone" value={form.phone} onChangeText={v => update("phone", formatPhone(v))} placeholder="(555) 000-0000" keyboardType="phone-pad" onBlur={() => markTouched("phone")} />
+      {touched.phone && form.phone.length > 0 && form.phone.replace(/\D/g, "").length < 10 && (
+        <Text style={styles.warningText}>Phone number looks incomplete.</Text>
+      )}
+      <Field label="Email" value={form.email} onChangeText={v => update("email", v)} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" onBlur={() => markTouched("email")} />
+      {touched.email && form.email.length > 0 && !/^\S+@\S+\.\S+$/.test(form.email) && (
+        <Text style={styles.warningText}>This doesn't look like a valid email address.</Text>
+      )}
       <Field label="Business address" value={form.address} onChangeText={v => update("address", v)} placeholder="123 Main St, City, State ZIP" multiline />
 
       <Text style={styles.logoLabel}>Your logo</Text>
@@ -303,7 +317,7 @@ function StepBusiness({ form, update, logoUri, onPickLogo, onRemoveLogo }: StepB
   );
 }
 
-function StepTrade({ form, update }: StepProps) {
+function StepTrade({ form, update, touched, markTouched }: StepProps & { touched: Record<string, boolean>; markTouched: (field: string) => void }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [tips, setTips] = useState<string[]>([]);
@@ -398,12 +412,12 @@ function StepTrade({ form, update }: StepProps) {
       />
       <Text style={styles.rateNote}>Used to suggest competitive rates for your area.</Text>
 
-      <RateSuggestion form={form} update={update} />
+      <RateSuggestion form={form} update={update} touched={touched} markTouched={markTouched} />
     </View>
   );
 }
 
-function RateSuggestion({ form, update }: StepProps) {
+function RateSuggestion({ form, update, touched, markTouched }: StepProps & { touched: Record<string, boolean>; markTouched: (field: string) => void }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [suggestion, setSuggestion] = useState<{ low: number; typical: number; high: number } | null>(null);
@@ -467,11 +481,15 @@ function RateSuggestion({ form, update }: StepProps) {
         style={styles.rateInput}
         value={form.laborRate}
         onChangeText={v => update("laborRate", v)}
+        onBlur={() => markTouched("laborRate")}
         keyboardType="decimal-pad"
         placeholder="85"
         placeholderTextColor={colors.textMuted}
       />
       <Text style={styles.rateNote}>You can adjust this any time in Settings.</Text>
+      {touched.laborRate && (isNaN(parseFloat(form.laborRate)) || parseFloat(form.laborRate) < 10 || parseFloat(form.laborRate) > 500) && (
+        <Text style={styles.warningText}>This rate seems unusual — double-check before continuing.</Text>
+      )}
 
       {loading && (
         <View style={[styles.aiCard, { marginTop: spacing.sm }]}>
@@ -658,6 +676,7 @@ interface FieldProps {
   keyboardType?: string;
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
   multiline?: boolean;
+  onBlur?: () => void;
 }
 
 function Field(props: FieldProps) {
@@ -760,5 +779,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     retryText: { fontSize: fontSize.sm, color: colors.textMuted },
     retryBtn: { paddingVertical: 2, paddingHorizontal: 4 },
     retryBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "600" },
+    warningText: { fontSize: fontSize.xs, color: colors.warning, marginTop: 2, marginBottom: spacing.xs },
   });
 }
