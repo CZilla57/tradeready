@@ -44,7 +44,7 @@
           "photosPermission": "TradeReady needs photo library access to attach job site photos to your projects."
         }
       ],
-      ["@sentry/react-native", { "organization": "PLACEHOLDER", "project": "PLACEHOLDER" }]
+      ["@sentry/react-native", { "organization": "tradeready-3r", "project": "react-native" }]
     ],
     "updates": {
       "fallbackToCacheTimeout": 0,
