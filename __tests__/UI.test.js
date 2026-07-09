@@ -6,6 +6,7 @@ import React from "react";
 import { render } from "@testing-library/react-native";
 import { Badge, Button, Card, Divider, EmptyState, SectionHeader, StatCard } from "../components/UI";
 import { Text } from "react-native";
+import Field from "../components/Field";
 
 describe("Badge", () => {
   it("renders its label text", async () => {
@@ -119,5 +120,15 @@ describe("Divider", () => {
     const { root } = await render(<Divider />);
     expect(root.props.accessibilityElementsHidden).toBe(true);
     expect(root.props.importantForAccessibility).toBe("no");
+  });
+});
+
+describe("Field", () => {
+  it("labels the text input for screen readers", async () => {
+    const { getByLabelText } = await render(
+      <Field label="Email" value="" onChangeText={() => {}} />
+    );
+    const input = getByLabelText("Email");
+    expect(input).toBeTruthy();
   });
 });

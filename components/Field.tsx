@@ -80,6 +80,7 @@ export default function Field({
         multiline={multiline}
         numberOfLines={multiline ? 3 : 1}
         autoFocus={autoFocus}
+        accessibilityLabel={label}
       />
     </View>
   );
