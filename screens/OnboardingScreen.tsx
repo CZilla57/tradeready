@@ -18,7 +18,7 @@ import { useTheme } from "../hooks/useTheme";
 import BaseField from "../components/Field";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import type { TradeId } from "../types/models";
-import { saveSettings, defaultSettings, markOnboardingComplete, clearSampleData } from "../utils/storage";
+import { saveSettings, saveInvoices, defaultSettings, defaultInvoices, markOnboardingComplete, clearSampleData } from "../utils/storage";
 import { requestPermissions } from "../utils/notifications";
 import { sendOnboardingAI } from "../utils/aiService";
 import { useAuth } from "../context/AuthContext";
@@ -160,6 +160,8 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
     });
     if (form.dataChoice === "fresh") {
       await clearSampleData();
+    } else {
+      await saveInvoices(defaultInvoices(form.trade));
     }
     await markOnboardingComplete();
     onComplete();
@@ -654,6 +656,15 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
           </TouchableOpacity>
         )}
       </View>
+      <View style={styles.stripeInfoCard}>
+        <View style={styles.notifHeader}>
+          <Text style={styles.notifIcon}>💳</Text>
+          <View style={styles.notifText}>
+            <Text style={styles.notifTitle}>Accept payments</Text>
+            <Text style={styles.notifDesc}>Connect your Stripe account in Settings → Payment Processor to send payment links with your invoices.</Text>
+          </View>
+        </View>
+      </View>
       {actions.length > 0 ? (
         <View style={styles.aiCard}>
           <Text style={styles.actionsTitle}>Your first steps</Text>
@@ -753,6 +764,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     doneEmoji: { fontSize: 64, marginBottom: spacing.md },
     doneTitle: { fontSize: fontSize.xxl, fontWeight: "700", color: colors.textPrimary, textAlign: "center", marginBottom: spacing.lg },
     notifCard: { width: "100%", backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.lg, ...shadow.card },
+    stripeInfoCard: { width: "100%", backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.lg, ...shadow.card },
     notifHeader: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md },
     notifIcon: { fontSize: 24 },
     notifText: { flex: 1 },
