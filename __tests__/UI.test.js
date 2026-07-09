@@ -4,7 +4,8 @@
  */
 import React from "react";
 import { render } from "@testing-library/react-native";
-import { Badge, Button, Divider, EmptyState, SectionHeader, StatCard } from "../components/UI";
+import { Badge, Button, Card, Divider, EmptyState, SectionHeader, StatCard } from "../components/UI";
+import { Text } from "react-native";
 
 describe("Badge", () => {
   it("renders its label text", async () => {
@@ -90,6 +91,26 @@ describe("StatCard", () => {
       <StatCard label="Outstanding" value="$4,200" />
     );
     expect(getByLabelText("Outstanding: $4,200")).toBeTruthy();
+  });
+});
+
+describe("Card", () => {
+  it("exposes button role when tappable", async () => {
+    const { getByRole } = await render(
+      <Card onPress={() => {}}>
+        <Text>Job details</Text>
+      </Card>
+    );
+    expect(getByRole("button")).toBeTruthy();
+  });
+
+  it("does not expose button role when static", async () => {
+    const { queryByRole } = await render(
+      <Card>
+        <Text>Info</Text>
+      </Card>
+    );
+    expect(queryByRole("button")).toBeNull();
   });
 });
 

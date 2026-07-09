@@ -90,7 +90,7 @@ export function Card({ children, style, onPress }: CardProps) {
   const cardStyle = [{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, ...shadow.card }, style];
   if (onPress) {
     return (
-      <TouchableOpacity style={cardStyle} onPress={onPress} activeOpacity={0.8}>
+      <TouchableOpacity style={cardStyle} onPress={onPress} activeOpacity={0.8} accessibilityRole="button">
         {children}
       </TouchableOpacity>
     );
