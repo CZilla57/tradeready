@@ -35,9 +35,7 @@ import MileageLogScreen           from "./screens/MileageLogScreen";
 import AddTripScreen              from "./screens/AddTripScreen";
 import ReviewRequestScreen        from "./screens/ReviewRequestScreen";
 import PricebookScreen            from "./screens/PricebookScreen";
-// Task 4 will add PricebookEntryScreen; import + registration below are commented
-// out until that file exists, so the app keeps building in the meantime.
-// import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
+import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
 
 import * as Notifications from "expo-notifications";
 
@@ -171,8 +169,7 @@ function MoneyTab() {
       <MoneyStack.Screen name="MileageLog"  component={MileageLogScreen}  options={{ title: "Mileage" }} />
       <MoneyStack.Screen name="AddTrip"     component={AddTripScreen}     options={{ presentation: "modal" }} />
       <MoneyStack.Screen name="Pricebook"      component={PricebookScreen}      options={{ title: "Pricebook" }} />
-      {/* Task 4: uncomment once PricebookEntryScreen exists */}
-      {/* <MoneyStack.Screen name="PricebookEntry" component={PricebookEntryScreen} options={{ title: "Service" }} /> */}
+      <MoneyStack.Screen name="PricebookEntry" component={PricebookEntryScreen} options={{ title: "Service" }} />
     </MoneyStack.Navigator>
   );
 }

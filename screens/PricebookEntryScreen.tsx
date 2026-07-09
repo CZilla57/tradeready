@@ -1,0 +1,365 @@
+import React, { useState, useEffect, useMemo } from "react";
+import {
+  View, Text, TextInput, ScrollView, TouchableOpacity,
+  Alert, StyleSheet, KeyboardAvoidingView, Platform,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { loadPricebook, savePricebook, loadSettings } from "../utils/storage";
+import { calculateEstimate, buildEstimateInput } from "../utils/pricingEngine";
+import { formatQuote } from "../utils/format";
+import { Button, Card } from "../components/UI";
+import { spacing, radius, fontSize } from "../utils/theme";
+import type { ColorScheme, ShadowScheme } from "../utils/theme";
+import { useTheme } from "../hooks/useTheme";
+import type { PricebookEntry, Settings } from "../types/models";
+
+interface LocalMaterial {
+  id: string;
+  name: string;
+  quantity: number | string;
+  unitCost: number | string;
+}
+
+export default function PricebookEntryScreen({
+  route,
+  navigation,
+}: {
+  route: any;
+  navigation: any;
+}) {
+  const entryId = route.params?.entryId as string | undefined;
+  const isEditing = Boolean(entryId);
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [laborHours, setLaborHours] = useState("2");
+  const [laborRate, setLaborRate] = useState("85");
+  const [materials, setMaterials] = useState<LocalMaterial[]>([]);
+  const [materialMarkup, setMaterialMarkup] = useState("20");
+  const [overheadPercent, setOverheadPercent] = useState("15");
+  const [marginPercent, setMarginPercent] = useState("20");
+  const [existingCategories, setExistingCategories] = useState<string[]>([]);
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [settings, setSettings] = useState<Settings | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      const [entries, s] = await Promise.all([loadPricebook(), loadSettings()]);
+      setSettings(s);
+
+      const cats = [...new Set(entries.map((e) => e.category).filter(Boolean))] as string[];
+      setExistingCategories(cats);
+
+      if (entryId) {
+        const entry = entries.find((e) => e.id === entryId);
+        if (entry) {
+          setName(entry.name);
+          setDescription(entry.description || "");
+          setCategory(entry.category || "");
+          setLaborHours(String(entry.laborHours));
+          setLaborRate(String(entry.laborRate));
+          setMaterials(entry.materials as LocalMaterial[]);
+          setMaterialMarkup(String(entry.materialMarkup));
+          setOverheadPercent(String(entry.overhead));
+          setMarginPercent(String(entry.margin));
+        }
+      } else if (s) {
+        setLaborRate(String(s.laborRate || 85));
+        setMaterialMarkup(String(s.materialMarkup ?? 20));
+        setOverheadPercent(String(s.overheadPercent ?? 15));
+        setMarginPercent(String(s.marginPercent ?? 20));
+      }
+    }
+    load();
+  }, [entryId]);
+
+  const params = buildEstimateInput(
+    { laborHours, laborRate, materials: materials as any, materialMarkup, overheadPercent, marginPercent, travelMiles: "0", isEmergency: false, taxPercent: "0" },
+    settings,
+  );
+  const breakdown = calculateEstimate(params);
+
+  function addMaterial() {
+    setMaterials((prev) => [
+      ...prev,
+      { id: `m${Date.now()}`, name: "", quantity: 1, unitCost: 0 },
+    ]);
+  }
+
+  function updateMaterial(id: string, field: keyof LocalMaterial, value: string | number) {
+    setMaterials((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, [field]: value } : m)),
+    );
+  }
+
+  function removeMaterial(id: string) {
+    setMaterials((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  async function handleSave() {
+    if (!name.trim()) {
+      Alert.alert("Name required", "Give this service a name so you can find it later.");
+      return;
+    }
+    setSaving(true);
+    const entries = await loadPricebook();
+    const now = new Date().toISOString();
+
+    const entry: PricebookEntry = {
+      id: entryId || `pb-${Date.now()}`,
+      name: name.trim(),
+      description: description.trim() || undefined,
+      category: category.trim() || undefined,
+      laborHours: params.laborHours,
+      laborRate: params.laborRate,
+      materials: materials.map((m) => ({
+        id: m.id,
+        name: String(m.name),
+        quantity: parseFloat(String(m.quantity)) || 0,
+        unitCost: parseFloat(String(m.unitCost)) || 0,
+      })),
+      materialMarkup: params.materialMarkup,
+      overhead: params.overheadPercent,
+      margin: params.marginPercent,
+      estimateTotal: breakdown.total,
+      createdAt: entryId
+        ? entries.find((e) => e.id === entryId)?.createdAt || now
+        : now,
+      updatedAt: now,
+    };
+
+    const updated = entryId
+      ? entries.map((e) => (e.id === entryId ? entry : e))
+      : [...entries, entry];
+
+    await savePricebook(updated);
+    setSaving(false);
+    navigation.goBack();
+  }
+
+  const filteredCategories = existingCategories.filter(
+    (c) => c.toLowerCase().includes(category.toLowerCase()) && c.toLowerCase() !== category.toLowerCase(),
+  );
+
+  return (
+    <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
+      >
+        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          <Card>
+            <Text style={styles.label}>Service name *</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Water Heater Install"
+              placeholderTextColor={colors.textMuted}
+              value={name}
+              onChangeText={setName}
+            />
+
+            <Text style={styles.label}>Description</Text>
+            <TextInput
+              style={[styles.input, { minHeight: 60 }]}
+              placeholder="Optional notes about this service"
+              placeholderTextColor={colors.textMuted}
+              value={description}
+              onChangeText={setDescription}
+              multiline
+            />
+
+            <Text style={styles.label}>Category</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Plumbing, Electrical"
+              placeholderTextColor={colors.textMuted}
+              value={category}
+              onChangeText={(v) => {
+                setCategory(v);
+                setShowCategorySuggestions(v.length > 0);
+              }}
+              onFocus={() => setShowCategorySuggestions(category.length > 0)}
+              onBlur={() => setTimeout(() => setShowCategorySuggestions(false), 200)}
+            />
+            {showCategorySuggestions && filteredCategories.length > 0 && (
+              <View style={styles.suggestions}>
+                {filteredCategories.map((c) => (
+                  <TouchableOpacity
+                    key={c}
+                    style={styles.suggestionRow}
+                    onPress={() => {
+                      setCategory(c);
+                      setShowCategorySuggestions(false);
+                    }}
+                  >
+                    <Text style={styles.suggestionText}>{c}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </Card>
+
+          <Card style={{ marginTop: spacing.md }}>
+            <Text style={styles.sectionTitle}>Pricing</Text>
+            <View style={styles.fieldRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Labor hours</Text>
+                <TextInput
+                  style={styles.input}
+                  value={laborHours}
+                  onChangeText={setLaborHours}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+              <View style={{ width: spacing.sm }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Labor rate ($/hr)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={laborRate}
+                  onChangeText={setLaborRate}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+            </View>
+
+            <Text style={[styles.label, { marginTop: spacing.md }]}>Materials</Text>
+            {materials.map((m) => (
+              <View key={m.id} style={styles.materialRow}>
+                <TextInput
+                  style={[styles.matInput, { flex: 2 }]}
+                  placeholder="Item name"
+                  placeholderTextColor={colors.textMuted}
+                  value={String(m.name)}
+                  onChangeText={(v) => updateMaterial(m.id, "name", v)}
+                />
+                <TextInput
+                  style={styles.matInput}
+                  placeholder="Qty"
+                  placeholderTextColor={colors.textMuted}
+                  value={String(m.quantity)}
+                  onChangeText={(v) => updateMaterial(m.id, "quantity", v)}
+                  keyboardType="decimal-pad"
+                />
+                <TextInput
+                  style={styles.matInput}
+                  placeholder="$ each"
+                  placeholderTextColor={colors.textMuted}
+                  value={String(m.unitCost)}
+                  onChangeText={(v) => updateMaterial(m.id, "unitCost", v)}
+                  keyboardType="decimal-pad"
+                />
+                <TouchableOpacity onPress={() => removeMaterial(m.id)} style={styles.removeBtn}>
+                  <Text style={styles.removeBtnText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.addMaterialBtn} onPress={addMaterial}>
+              <Text style={styles.addMaterialText}>+ Add material</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.fieldRow, { marginTop: spacing.md }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Markup %</Text>
+                <TextInput style={styles.input} value={materialMarkup} onChangeText={setMaterialMarkup} keyboardType="decimal-pad" />
+              </View>
+              <View style={{ width: spacing.sm }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Overhead %</Text>
+                <TextInput style={styles.input} value={overheadPercent} onChangeText={setOverheadPercent} keyboardType="decimal-pad" />
+              </View>
+              <View style={{ width: spacing.sm }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Margin %</Text>
+                <TextInput style={styles.input} value={marginPercent} onChangeText={setMarginPercent} keyboardType="decimal-pad" />
+              </View>
+            </View>
+          </Card>
+
+          <Card style={{ marginTop: spacing.md }}>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Estimated Total</Text>
+              <Text style={styles.totalValue}>{formatQuote(breakdown.total)}</Text>
+            </View>
+          </Card>
+
+          {/* AI Pricing Assist button will be added in Task 6 */}
+
+          <View style={styles.actions}>
+            <Button
+              label={saving ? "Saving..." : isEditing ? "Update Service" : "Save Service"}
+              onPress={handleSave}
+              loading={saving}
+              style={{ flex: 1 }}
+            />
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scroll: { padding: spacing.lg, paddingBottom: 40 },
+    label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: "500", marginBottom: 4 },
+    sectionTitle: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "700", marginBottom: spacing.sm },
+    input: {
+      backgroundColor: colors.background,
+      borderRadius: radius.md,
+      padding: spacing.sm + 2,
+      color: colors.textPrimary,
+      fontSize: fontSize.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: spacing.sm,
+    },
+    fieldRow: { flexDirection: "row" },
+    materialRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: spacing.xs,
+      gap: 4,
+    },
+    matInput: {
+      flex: 1,
+      backgroundColor: colors.background,
+      borderRadius: radius.sm,
+      padding: spacing.sm,
+      color: colors.textPrimary,
+      fontSize: fontSize.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    removeBtn: {
+      padding: spacing.xs,
+      marginLeft: 2,
+    },
+    removeBtnText: { color: colors.danger, fontSize: fontSize.md, fontWeight: "600" },
+    addMaterialBtn: { paddingVertical: spacing.sm },
+    addMaterialText: { color: colors.accent, fontSize: fontSize.sm, fontWeight: "600" },
+    suggestions: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: spacing.sm,
+      marginTop: -spacing.sm + 2,
+    },
+    suggestionRow: { padding: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+    suggestionText: { color: colors.textPrimary, fontSize: fontSize.md },
+    totalRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+    },
+    totalLabel: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "600" },
+    totalValue: { color: colors.accent, fontSize: fontSize.xl, fontWeight: "700" },
+    actions: { marginTop: spacing.lg },
+  });
+}
