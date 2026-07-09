@@ -7,6 +7,10 @@
     "preview": {
       "channel": "preview",
       "distribution": "internal",
+      "env": {
+        "POSTHOG_PROJECT_TOKEN": "phc_n8uzAhbpcm5ygKiE2Xztnb9u7jj8ohZFB3qnCzBFGZJ7",
+        "POSTHOG_HOST": "https://us.i.posthog.com"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -16,6 +20,10 @@
     },
     "production": {
       "channel": "production",
+      "env": {
+        "POSTHOG_PROJECT_TOKEN": "phc_n8uzAhbpcm5ygKiE2Xztnb9u7jj8ohZFB3qnCzBFGZJ7",
+        "POSTHOG_HOST": "https://us.i.posthog.com"
+      },
       "android": {
         "buildType": "app-bundle",
         "autoIncrement": true
