@@ -27,6 +27,7 @@ import { TopCustomersCard }  from '../components/money/TopCustomersCard';
 import { MileageCard }       from '../components/money/MileageCard';
 import { PricebookCard }     from '../components/money/PricebookCard';
 import { ConversionFunnelCard } from '../components/money/ConversionFunnelCard';
+import { RevenueForecastCard } from '../components/money/RevenueForecastCard';
 import { AvgJobValueCard }      from '../components/money/AvgJobValueCard';
 import { InvoiceAgingCard }    from '../components/money/InvoiceAgingCard';
 import { RevenueByTypeCard }   from '../components/money/RevenueByTypeCard';
@@ -192,6 +193,7 @@ export default function MoneyScreen({ navigation }: any) {
           />
           <ReceivablesCard invoices={invoices} jobs={jobs} />
           <ConversionFunnelCard jobs={jobs} />
+          <RevenueForecastCard jobs={jobs} />
           <AvgJobValueCard
             jobs={jobs}
             start={start}
