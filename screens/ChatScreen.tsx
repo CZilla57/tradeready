@@ -21,6 +21,7 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "
 import { useTheme } from "../hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
 import type { Settings } from "../types/models";
+import { track } from '../utils/analytics';
 
 interface LocalMessage {
   id: string;
@@ -136,6 +137,7 @@ export default function ChatScreen({ navigation }: { navigation: any }) {
   async function send(overrideText?: string) {
     const text = (overrideText ?? input).trim();
     if (!text || sending) return;
+    track('ai_chat_sent');
     setInput("");
 
     const userMsg: LocalMessage = { id: String(Date.now()), role: "user", text };

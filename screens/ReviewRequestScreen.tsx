@@ -20,6 +20,7 @@ import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Settings } from "../types/models";
+import { track } from '../utils/analytics';
 
 export default function ReviewRequestScreen({
   route,
@@ -75,6 +76,7 @@ export default function ReviewRequestScreen({
     if (opened) {
       await markReviewRequestSent(jobId);
       setSent(true);
+      track('review_request_sent', { channel: 'sms' });
       Alert.alert("Review request sent", `SMS composer opened for ${customerName}.`);
     }
   }
@@ -88,6 +90,7 @@ export default function ReviewRequestScreen({
     if (opened) {
       await markReviewRequestSent(jobId);
       setSent(true);
+      track('review_request_sent', { channel: 'email' });
       Alert.alert("Review request sent", `Email composer opened for ${customerName}.`);
     }
   }

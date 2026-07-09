@@ -13,6 +13,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { PricebookEntry, Settings, AIPricingSuggestion } from "../types/models";
 import { getAIPricingSuggestion } from "../utils/pricebookAI";
+import { track } from '../utils/analytics';
 
 interface LocalMaterial {
   id: string;
@@ -140,6 +141,7 @@ export default function PricebookEntryScreen({
       : [...entries, entry];
 
     await savePricebook(updated);
+    track('pricebook_entry_saved');
     setSaving(false);
     navigation.goBack();
   }

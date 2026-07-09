@@ -7,6 +7,7 @@ import { useTheme } from '../hooks/useTheme';
 import { loadJobs, loadTrips, saveTrips } from '../utils/storage';
 import { computeTripMiles, formatMiles, generateTripId, HOME_LABEL } from '../utils/mileageUtils';
 import type { Job, Trip } from '../types/models';
+import { track } from '../utils/analytics';
 
 interface Endpoint { jobId: string | null; label: string; }
 
@@ -103,6 +104,7 @@ export default function AddTripScreen({ navigation, route }: any) {
     };
     const next = editingId ? trips.map((t) => (t.id === editingId ? record : t)) : [record, ...trips];
     await saveTrips(next);
+    track('trip_logged');
     navigation.goBack();
   };
 
