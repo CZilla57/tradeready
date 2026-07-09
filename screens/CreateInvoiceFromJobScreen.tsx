@@ -28,6 +28,7 @@ import Field from "../components/Field";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
+import { track } from '../utils/analytics';
 import type { Job, Invoice, Customer, InvoiceLineItem } from "../types/models";
 
 function trackedDisplay(sessions: any[] = []): string | null {
@@ -167,6 +168,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: { rout
       };
 
       await saveInvoices([...invoices, newInvoice]);
+      track('invoice_created', { source: 'from_job' });
 
       // Advance the job to "invoiced" and record which invoice was created
       const updatedJobs = jobs.map((j): Job =>

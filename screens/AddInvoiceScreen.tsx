@@ -20,6 +20,7 @@ import Field from "../components/Field";
 import { spacing } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
+import { track } from '../utils/analytics';
 import type { Invoice } from "../types/models";
 
 export default function AddInvoiceScreen({ route, navigation }: { route: any; navigation: any }) {
@@ -93,6 +94,9 @@ export default function AddInvoiceScreen({ route, navigation }: { route: any; na
     }
 
     await saveInvoices(updated);
+    if (!isEditing) {
+      track('invoice_created', { source: 'manual' });
+    }
     syncNotifications(); // fire-and-forget — reschedules all reminders
     setSaving(false);
     navigation.goBack();

@@ -3,6 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { Invoice, Expense, Job, ExpenseDraft } from '../types/models';
 import { loadInvoices, loadExpenses, saveExpenses, loadJobs } from '../utils/storage';
 import { generateExpenseId } from '../utils/moneyUtils';
+import { track } from '../utils/analytics';
 
 interface UseMoneyDataReturn {
   invoices: Invoice[];
@@ -62,7 +63,9 @@ export function useMoneyData(): UseMoneyDataReturn {
     };
     setExpenses(prev => {
       const updated = [expense, ...prev];
-      persistExpenses(updated);
+      persistExpenses(updated).then(() => {
+        track('expense_logged', { category: fields.category });
+      });
       return updated;
     });
   }, [persistExpenses]);

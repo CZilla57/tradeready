@@ -18,6 +18,7 @@ import { formatMoney } from "../utils/format";
 import { Badge, Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { track } from '../utils/analytics';
 import type { Invoice, Settings } from "../types/models";
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -81,6 +82,7 @@ export default function OutreachScreen({ route, navigation }: { route: any; navi
         ? await fetchPaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider))
         : await resolvePaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider));
       setPaymentLink(link);
+      track('payment_link_sent', { provider: provider });
       const allInvoices = await loadInvoices();
       await saveInvoices(
         allInvoices.map((i) =>
