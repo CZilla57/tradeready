@@ -9,6 +9,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
@@ -19,6 +21,9 @@ import type { TradeId } from "../types/models";
 import { saveSettings, defaultSettings, markOnboardingComplete, clearSampleData } from "../utils/storage";
 import { requestPermissions } from "../utils/notifications";
 import { sendOnboardingAI } from "../utils/aiService";
+import { useAuth } from "../context/AuthContext";
+import * as ImagePicker from "expo-image-picker";
+import { persistPhoto, deletePhoto } from "../utils/photoStorage";
 
 const STEPS = 5;
 
@@ -27,6 +32,7 @@ interface OnboardingForm {
   contactName: string;
   phone: string;
   email: string;
+  address: string;
   trade: TradeId;
   laborRate: string;
   region: string;
@@ -52,11 +58,22 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
     contactName: "",
     phone: "",
     email: "",
+    address: "",
     trade: "plumbing",
     laborRate: "85",
     region: "",
     dataChoice: "sample",
   });
+  const [logoUri, setLogoUri] = useState<string | null>(null);
+
+  const { session } = useAuth();
+
+  useEffect(() => {
+    if (session?.user?.email && !form.email) {
+      update("email", session.user.email);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-fill once on mount only
+  }, []);
 
   function update<K extends keyof OnboardingForm>(field: K, value: OnboardingForm[K]) {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -73,6 +90,49 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
     setNotifGranted(granted);
   }
 
+  function handlePickLogo() {
+    Alert.alert("Add your logo", "", [
+      {
+        text: "Take Photo",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          if (status !== "granted") {
+            Alert.alert("Permission needed", "Camera access is required to take a photo.");
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
+          if (!result.canceled) {
+            const uri = await persistPhoto(result.assets[0].uri, "logos");
+            setLogoUri(uri);
+          }
+        },
+      },
+      {
+        text: "Choose from Library",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (status !== "granted") {
+            Alert.alert("Permission needed", "Photo library access is required.");
+            return;
+          }
+          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
+          if (!result.canceled) {
+            const uri = await persistPhoto(result.assets[0].uri, "logos");
+            setLogoUri(uri);
+          }
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  async function handleRemoveLogo() {
+    if (logoUri) {
+      await deletePhoto(logoUri);
+      setLogoUri(null);
+    }
+  }
+
   async function finish() {
     setSaving(true);
     await saveSettings({
@@ -81,9 +141,11 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
       contactName: form.contactName.trim(),
       phone: form.phone,
       email: form.email,
+      address: form.address.trim(),
       trade: form.trade,
       laborRate: parseFloat(form.laborRate) || 85,
       region: form.region.trim(),
+      logoPhoto: logoUri || "",
     });
     if (form.dataChoice === "fresh") {
       await clearSampleData();
@@ -119,7 +181,15 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
           showsVerticalScrollIndicator={false}
         >
           {step === 0 && <StepWelcome />}
-          {step === 1 && <StepBusiness form={form} update={update} />}
+          {step === 1 && (
+            <StepBusiness
+              form={form}
+              update={update}
+              logoUri={logoUri}
+              onPickLogo={handlePickLogo}
+              onRemoveLogo={handleRemoveLogo}
+            />
+          )}
           {step === 2 && <StepTrade form={form} update={update} />}
           {step === 3 && <StepDataChoice form={form} update={update} />}
           {step === 4 && (
@@ -193,7 +263,13 @@ interface StepProps {
   update: <K extends keyof OnboardingForm>(field: K, value: OnboardingForm[K]) => void;
 }
 
-function StepBusiness({ form, update }: StepProps) {
+interface StepBusinessProps extends StepProps {
+  logoUri: string | null;
+  onPickLogo: () => void;
+  onRemoveLogo: () => void;
+}
+
+function StepBusiness({ form, update, logoUri, onPickLogo, onRemoveLogo }: StepBusinessProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
@@ -204,6 +280,25 @@ function StepBusiness({ form, update }: StepProps) {
       <Field label="Your name *" value={form.contactName} onChangeText={v => update("contactName", v)} placeholder="John Smith" />
       <Field label="Phone" value={form.phone} onChangeText={v => update("phone", formatPhone(v))} placeholder="(555) 000-0000" keyboardType="phone-pad" />
       <Field label="Email" value={form.email} onChangeText={v => update("email", v)} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" />
+      <Field label="Business address" value={form.address} onChangeText={v => update("address", v)} placeholder="123 Main St, City, State ZIP" multiline />
+
+      <Text style={styles.logoLabel}>Your logo</Text>
+      <Text style={styles.logoHint}>Optional — appears on invoices and estimates.</Text>
+      <TouchableOpacity style={styles.logoPicker} onPress={onPickLogo} activeOpacity={0.7}>
+        {logoUri ? (
+          <Image source={{ uri: logoUri }} style={styles.logoImage} />
+        ) : (
+          <View style={styles.logoPlaceholder}>
+            <Text style={styles.logoPlaceholderIcon}>📷</Text>
+            <Text style={styles.logoPlaceholderText}>Add logo</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+      {logoUri && (
+        <TouchableOpacity onPress={onRemoveLogo} style={styles.logoRemoveBtn}>
+          <Text style={styles.logoRemoveText}>Remove</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -487,6 +582,7 @@ interface FieldProps {
   placeholder?: string;
   keyboardType?: string;
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  multiline?: boolean;
 }
 
 function Field(props: FieldProps) {
@@ -576,5 +672,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     useRateBtn: { marginTop: spacing.sm, backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 10, alignItems: "center" },
     useRateBtnText: { color: "#fff", fontSize: fontSize.sm, fontWeight: "600" },
     actionsTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
+    logoLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.xs },
+    logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
+    logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
+    logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.surface },
+    logoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+    logoPlaceholderIcon: { fontSize: 24, marginBottom: 2 },
+    logoPlaceholderText: { fontSize: fontSize.xs, color: colors.textMuted },
+    logoRemoveBtn: { alignSelf: "flex-start", marginTop: 4 },
+    logoRemoveText: { fontSize: fontSize.xs, color: colors.danger },
   });
 }
