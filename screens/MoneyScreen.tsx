@@ -32,6 +32,7 @@ import { InvoiceAgingCard }    from '../components/money/InvoiceAgingCard';
 import { RevenueByTypeCard }   from '../components/money/RevenueByTypeCard';
 import { SeasonalTrendsCard }  from '../components/money/SeasonalTrendsCard';
 import { CustomerMixCard }     from '../components/money/CustomerMixCard';
+import { ExpenseTrendsCard }  from '../components/money/ExpenseTrendsCard';
 import { ExpenseRow }        from '../components/money/ExpenseRow';
 import { AddExpenseModal }   from '../components/money/AddExpenseModal';
 import type { Invoice, Expense } from '../types/models';
@@ -206,6 +207,7 @@ export default function MoneyScreen({ navigation }: any) {
             expensesByCategory={expensesByCategory}
             filteredExpenseTotal={filteredExpenseTotal}
           />
+          <ExpenseTrendsCard expenses={expenses} />
           <TopCustomersCard invoices={invoices} start={start} end={end} />
           <CustomerMixCard invoices={invoices} start={start} end={end} />
           <RevenueByTypeCard jobs={jobs} />
