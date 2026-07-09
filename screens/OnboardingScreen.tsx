@@ -24,6 +24,7 @@ import { sendOnboardingAI } from "../utils/aiService";
 import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
 import { persistPhoto, deletePhoto } from "../utils/photoStorage";
+import { track } from "../utils/analytics";
 
 const STEPS = 5;
 
@@ -164,6 +165,7 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
       await saveInvoices(defaultInvoices(form.trade));
     }
     await markOnboardingComplete();
+    track('onboarding_completed', { trade: form.trade });
     onComplete();
   }
 

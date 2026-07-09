@@ -17,6 +17,7 @@ import { useSubscription } from "../context/SubscriptionContext";
 import { getOfferings, purchasePackage, restorePurchases, ENTITLEMENT_ID } from "../utils/subscription";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { track } from "../utils/analytics";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl ?? "";
@@ -42,6 +43,8 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
   const [restoring, setRestoring]   = useState(false);
   const [loadError, setLoadError]   = useState<string | null>(null);
 
+  useEffect(() => { track('subscription_paywall_shown'); }, []);
+
   useEffect(() => { loadOfferings(); }, []);
 
   async function loadOfferings() {
@@ -63,6 +66,7 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
     try {
       const { customerInfo } = await purchasePackage(selectedPkg);
       updateFromPurchase(customerInfo);
+      track('subscription_purchased');
       if (canDismiss && navigation?.canGoBack?.()) navigation.goBack();
     } catch (err: any) {
       if (!err.userCancelled) {
