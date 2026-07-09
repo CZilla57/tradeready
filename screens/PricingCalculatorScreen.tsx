@@ -24,11 +24,12 @@ import {
 } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { generateMessage } from "../utils/anthropicMessage";
-import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook } from "../utils/storage";
 import { Button, Card, Divider } from "../components/UI";
+import { PricebookPickerModal } from "../components/PricebookPickerModal";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { Job, Customer, Settings } from "../types/models";
+import type { Job, Customer, Settings, PricebookEntry } from "../types/models";
 
 interface LocalMaterial {
   id: string;
@@ -61,6 +62,7 @@ export default function PricingCalculatorScreen({ route, navigation }: { route: 
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [pickerVisible, setPickerVisible] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -105,6 +107,7 @@ export default function PricingCalculatorScreen({ route, navigation }: { route: 
     params,
   });
   const breakEven = breakEvenPrice(params);
+  const hasExistingData = parseFloat(laborHours) > 0 || materials.length > 0;
 
   function addMaterial() {
     setMaterials((prev) => [
@@ -121,6 +124,74 @@ export default function PricingCalculatorScreen({ route, navigation }: { route: 
 
   function removeMaterial(id: string) {
     setMaterials((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  function handlePricebookSelect(entry: PricebookEntry, mode: "replace" | "add") {
+    if (mode === "replace") {
+      setLaborHours(String(entry.laborHours));
+      setLaborRate(String(entry.laborRate));
+      setMaterials(entry.materials as LocalMaterial[]);
+      setMaterialMarkup(String(entry.materialMarkup));
+      setOverheadPercent(String(entry.overhead));
+      setMarginPercent(String(entry.margin));
+    } else {
+      setLaborHours(String((parseFloat(laborHours) || 0) + entry.laborHours));
+      setMaterials((prev) => [...prev, ...(entry.materials as LocalMaterial[])]);
+      setMaterialMarkup(String(Math.max(parseFloat(materialMarkup) || 0, entry.materialMarkup)));
+      setOverheadPercent(String(Math.max(parseFloat(overheadPercent) || 0, entry.overhead)));
+      setMarginPercent(String(Math.max(parseFloat(marginPercent) || 0, entry.margin)));
+    }
+    setPickerVisible(false);
+  }
+
+  async function savePricebookEntry(name: string) {
+    const entries = await loadPricebook();
+    const now = new Date().toISOString();
+    const entry: PricebookEntry = {
+      id: `pb-${Date.now()}`,
+      name,
+      laborHours: params.laborHours,
+      laborRate: params.laborRate,
+      materials: materials.map((m) => ({
+        id: m.id,
+        name: m.name,
+        quantity: m.quantity,
+        unitCost: m.unitCost,
+      })),
+      materialMarkup: params.materialMarkup,
+      overhead: params.overheadPercent,
+      margin: params.marginPercent,
+      estimateTotal: breakdown.total,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await savePricebook([...entries, entry]);
+    Alert.alert("Saved", `"${name}" added to your Pricebook.`);
+  }
+
+  function handleSaveToPricebook() {
+    const defaultName = job?.title?.trim() || "Untitled Service";
+    if (Platform.OS === "ios" && Alert.prompt) {
+      Alert.prompt(
+        "Save to Pricebook",
+        "Name this service:",
+        (serviceName) => {
+          const name = serviceName?.trim();
+          if (name) savePricebookEntry(name);
+        },
+        "plain-text",
+        defaultName,
+      );
+    } else {
+      Alert.alert(
+        "Save to Pricebook",
+        `Save "${defaultName}" as a Pricebook service? You can rename it later from the Pricebook tab.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Save", onPress: () => savePricebookEntry(defaultName) },
+        ],
+      );
+    }
   }
 
   async function saveToJob() {
@@ -242,6 +313,8 @@ export default function PricingCalculatorScreen({ route, navigation }: { route: 
             onSave={saveToJob}
             saving={saving}
             onGenerateEstimate={generateEstimate}
+            onLoadFromPricebook={() => setPickerVisible(true)}
+            onSaveToPricebook={handleSaveToPricebook}
           />
         ) : (
           <EstimateTab
@@ -255,6 +328,13 @@ export default function PricingCalculatorScreen({ route, navigation }: { route: 
           />
         )}
       </KeyboardAvoidingView>
+
+      <PricebookPickerModal
+        visible={pickerVisible}
+        hasExistingData={hasExistingData}
+        onSelect={handlePricebookSelect}
+        onDismiss={() => setPickerVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -281,6 +361,8 @@ interface CalculatorTabProps {
   onSave: () => void;
   saving: boolean;
   onGenerateEstimate: () => void;
+  onLoadFromPricebook: () => void;
+  onSaveToPricebook: () => void;
 }
 
 function CalculatorTab({
@@ -292,11 +374,19 @@ function CalculatorTab({
   addMaterial, updateMaterial, removeMaterial,
   breakdown, range, breakEven, warnings,
   onSave, saving, onGenerateEstimate,
+  onLoadFromPricebook, onSaveToPricebook,
 }: CalculatorTabProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <View style={{ flexDirection: "row", marginBottom: spacing.md, gap: spacing.sm }}>
+        <Button label="📋 Load from Pricebook" variant="secondary" onPress={onLoadFromPricebook} style={{ flex: 1 }} />
+        {breakdown.total > 0 && (
+          <Button label="💾 Save to Pricebook" variant="ghost" onPress={onSaveToPricebook} style={{ flex: 1 }} />
+        )}
+      </View>
+
       <Card style={styles.priceCard}>
         <Text style={styles.priceLabel}>Recommended price</Text>
         <Text style={styles.priceMain}>{formatQuote(range.recommended)}</Text>
