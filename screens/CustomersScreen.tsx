@@ -18,6 +18,7 @@ import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
+import { useRefresh } from '../hooks/useRefresh';
 import type { Invoice, Customer } from '../types/models';
 
 // The merged customer shape returned by buildCustomerList — extends Customer
@@ -95,6 +96,10 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
     }, [])
   );
 
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    await loadData();
+  }, 'CustomersScreen');
+
   const loadData = async () => {
     try {
       const [invs, custs] = await Promise.all([loadInvoices(), loadCustomers()]);
@@ -159,6 +164,8 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
       </View>
 
       <FlatList
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         data={filteredCustomers}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (

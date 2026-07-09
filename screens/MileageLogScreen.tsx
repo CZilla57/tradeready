@@ -5,6 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
+import { useRefresh } from '../hooks/useRefresh';
 import { DATE_FILTERS, getDateRange, isInRange } from '../utils/moneyUtils';
 import { formatMoney } from '../utils/format';
 import { loadTrips, loadSettings } from '../utils/storage';
@@ -24,6 +25,12 @@ export default function MileageLogScreen({ navigation, route }: any) {
       loadSettings().then((s) => setRate(s.mileageRate ?? DEFAULT_MILEAGE_RATE));
     }, []),
   );
+
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    setTrips(await loadTrips());
+    const s = await loadSettings();
+    setRate(s.mileageRate ?? DEFAULT_MILEAGE_RATE);
+  }, 'MileageLogScreen');
 
   const { start, end } = getDateRange(activeFilter);
   const summary = mileageSummary(trips, start, end, rate);
@@ -58,6 +65,8 @@ export default function MileageLogScreen({ navigation, route }: any) {
       </View>
 
       <FlatList
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         data={inRange}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (

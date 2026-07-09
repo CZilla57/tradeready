@@ -22,6 +22,7 @@ import { Badge, EmptyState, StatCard } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { useRefresh } from "../hooks/useRefresh";
 import type { Job } from "../types/models";
 
 // Which filter tabs to show across the top
@@ -45,6 +46,10 @@ export default function JobsScreen({ navigation }: { navigation: any }) {
       loadJobs().then(setJobs);
     }, [])
   );
+
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    setJobs(await loadJobs());
+  }, 'JobsScreen');
 
   const activeFilter = FILTERS.find((f) => f.key === filter);
   const filtered = jobs.filter((j) => {
@@ -150,6 +155,8 @@ export default function JobsScreen({ navigation }: { navigation: any }) {
 
       {/* Job list */}
       <FlatList
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         data={filtered}
         keyExtractor={(item) => item.id}
         renderItem={renderJob}

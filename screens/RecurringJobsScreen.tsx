@@ -14,6 +14,7 @@ import { Badge, EmptyState } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { useRefresh } from "../hooks/useRefresh";
 import type { RecurringJob } from "../types/models";
 
 const CADENCE_LABELS: Record<string, string> = {
@@ -34,6 +35,10 @@ export default function RecurringJobsScreen({ navigation }: { navigation: any })
       loadRecurringJobs().then(setRules);
     }, [])
   );
+
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    setRules(await loadRecurringJobs());
+  }, 'RecurringJobsScreen');
 
   function formatEndCondition(rule: RecurringJob): string {
     if (rule.endCondition === "count") return `Ends after ${rule.endCount} jobs`;
@@ -120,6 +125,8 @@ export default function RecurringJobsScreen({ navigation }: { navigation: any })
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <FlatList
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         data={rules}
         keyExtractor={(r) => r.id}
         renderItem={renderRule}

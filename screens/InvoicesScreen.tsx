@@ -29,6 +29,7 @@ import { Badge, StatCard, EmptyState } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { useRefresh } from "../hooks/useRefresh";
 import type { Invoice, Settings } from "../types/models";
 
 export default function InvoicesScreen({ navigation }: { navigation: any }) {
@@ -48,6 +49,12 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
       loadSettings().then(setSettings);
     }, [])
   );
+
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    const [invs, sets] = await Promise.all([loadInvoices(), loadSettings()]);
+    setInvoices(invs);
+    setSettings(sets);
+  }, 'InvoicesScreen');
 
   const filtered: Invoice[] = filterInvoices(invoices, search);
   const { outstanding, overdueCount, collected } = summarizeInvoices(invoices);
@@ -151,6 +158,8 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
 
       {/* Invoice list */}
       <FlatList
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         data={filtered}
         keyExtractor={(item) => item.id}
         renderItem={renderInvoice}
