@@ -95,9 +95,8 @@ describe("StatCard", () => {
 
 describe("Divider", () => {
   it("is hidden from the accessibility tree", async () => {
-    const result = await render(<Divider />);
-    const viewInstance = result.container.instance.children[0];
-    expect(viewInstance.props.accessibilityElementsHidden).toBe(true);
-    expect(viewInstance.props.importantForAccessibility).toBe("no");
+    const { root } = await render(<Divider />);
+    expect(root.props.accessibilityElementsHidden).toBe(true);
+    expect(root.props.importantForAccessibility).toBe("no");
   });
 });
