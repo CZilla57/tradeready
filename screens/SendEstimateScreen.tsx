@@ -11,6 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadJobs, loadCustomers, loadSettings, saveJobs } from "../utils/storage";
+import { track } from '../utils/analytics';
 import { formatQuote } from "../utils/format";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { generateEstimateMessage } from "../utils/invoiceHelpers";
@@ -136,6 +137,7 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
       j.id === jobId ? { ...j, status: "estimate_sent" } : j
     );
     await saveJobs(updated);
+    track('estimate_sent');
     navigation.goBack();
   }
 

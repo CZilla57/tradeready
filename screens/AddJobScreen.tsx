@@ -20,6 +20,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, getOrCreateCustomer, loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
 import { advanceStatusForSchedule } from "../utils/jobStatus";
 import { calculateNextDate } from "../utils/recurringJobs";
+import { track } from '../utils/analytics';
 import { Button } from "../components/UI";
 import Field from "../components/Field";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
@@ -321,6 +322,9 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
 
       await saveJobs(updatedJobs);
       setSaving(false);
+      if (!isEditing) {
+        track('job_created');
+      }
       navigation.goBack();
     }
 

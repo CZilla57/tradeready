@@ -24,6 +24,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storage";
 import { scheduleReviewRequest } from "../utils/reviewRequest";
+import { track } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
@@ -533,6 +534,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
     const current = JOB_STATUSES[job.status];
     if (!current?.next) return;
     await updateJob({ status: current.next });
+    track('job_status_changed', { from: job.status, to: current.next });
 
     if (current.next === "complete" && customer) {
       loadSettings()
@@ -613,6 +615,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
     const changes: any = { timeSessions };
     if (job.status === "scheduled") changes.status = "in_progress";
     await updateJob(changes);
+    track('time_tracking_started', { jobId });
   }
 
   async function handleClockOut() {
