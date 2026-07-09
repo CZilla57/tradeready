@@ -8,6 +8,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { SubscriptionProvider, useSubscription } from "./context/SubscriptionContext";
 import { ThemeProvider, useThemeContext } from "./context/ThemeContext";
+import { SyncStatusProvider } from "./context/SyncStatusContext";
+import { SyncBanner } from "./components/SyncBanner";
 import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import PaywallScreen from "./screens/PaywallScreen";
@@ -406,11 +408,14 @@ function AppRoot() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <ThemeProvider>
-          <AuthProvider>
-            <SubscriptionProvider>
-              <RootNavigator />
-            </SubscriptionProvider>
-          </AuthProvider>
+          <SyncStatusProvider>
+            <AuthProvider>
+              <SubscriptionProvider>
+                <RootNavigator />
+              </SubscriptionProvider>
+            </AuthProvider>
+            <SyncBanner />
+          </SyncStatusProvider>
         </ThemeProvider>
       </ErrorBoundary>
     </SafeAreaProvider>

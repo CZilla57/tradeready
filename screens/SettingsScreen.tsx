@@ -15,7 +15,6 @@ import {
   type AppStateStatus,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
@@ -29,6 +28,7 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "
 import { useSubscription } from "../context/SubscriptionContext";
 import { showManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
+import { useSyncStatusContext } from "../context/SyncStatusContext";
 import type { Settings } from "../types/models";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
@@ -71,6 +71,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { isSubscribed, isTrialing } = useSubscription();
+  const { pendingCount } = useSyncStatusContext();
 
   const [stripeStatus, setStripeStatus] = useState<StripeStatus | null>(null);
   const [stripeConnecting, setStripeConnecting] = useState(false);
@@ -458,11 +459,9 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
 
         <TouchableOpacity
           style={styles.signOutBtn}
-          onPress={async () => {
-            const raw = await AsyncStorage.getItem("__syncQueue");
-            const queue = raw ? JSON.parse(raw) : [];
+          onPress={() => {
             const doSignOut = async () => { resetUser(); await clearAllUserData(); await supabase.auth.signOut(); };
-            if (queue.length > 0) {
+            if (pendingCount > 0) {
               Alert.alert("Unsynced changes", "You have changes that haven't been saved to the cloud yet. Sync now to keep them.", [
                 { text: "Cancel", style: "cancel" },
                 { text: "Sync & sign out", onPress: async () => { const { data: { session } } = await supabase.auth.getSession(); if (session?.user?.id) await syncIfOnline(session.user.id); await doSignOut(); } },
