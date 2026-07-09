@@ -1,6 +1,8 @@
 // Mock Expo modules that rely on native code unavailable in the Jest/Node environment.
 // jest-expo already mocks many modules; these fill in remaining gaps.
 
+import React from "react";
+
 jest.mock("expo-constants", () => ({
   expoConfig: {
     extra: {
@@ -109,3 +111,11 @@ jest.mock("@supabase/supabase-js", () => ({
     })),
   })),
 }));
+
+jest.mock("@react-native-community/datetimepicker", () => {
+  const { View } = require("react-native");
+  return {
+    __esModule: true,
+    default: (props) => <View testID="mock-datetime-picker" {...props} />,
+  };
+});

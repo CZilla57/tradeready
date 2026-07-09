@@ -5,8 +5,9 @@
 import React from "react";
 import { render } from "@testing-library/react-native";
 import { Badge, Button, Card, Divider, EmptyState, SectionHeader, StatCard } from "../components/UI";
-import { Text } from "react-native";
+import { Text, Platform } from "react-native";
 import Field from "../components/Field";
+import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
 
 describe("Badge", () => {
   it("renders its label text", async () => {
@@ -130,5 +131,25 @@ describe("Field", () => {
     );
     const input = getByLabelText("Email");
     expect(input).toBeTruthy();
+  });
+});
+
+describe("DateTimePickerSheet", () => {
+  const originalOS = Platform.OS;
+  afterEach(() => { Platform.OS = originalOS; });
+
+  it("labels the Done button for screen readers (iOS)", async () => {
+    Platform.OS = "ios";
+    const { getByRole } = await render(
+      <DateTimePickerSheet
+        visible={true}
+        mode="date"
+        value={new Date(2026, 6, 9)}
+        title="Select date"
+        onChange={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(getByRole("button", { name: "Done" })).toBeTruthy();
   });
 });

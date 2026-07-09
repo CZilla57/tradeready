@@ -54,12 +54,16 @@ export function DateTimePickerSheet({
 
   if (Platform.OS === "ios") {
     return (
-      <Modal transparent animationType="slide">
+      <Modal transparent animationType="slide" accessibilityLabel={title}>
         <View style={styles.overlay}>
           <View style={styles.sheet}>
             <View style={styles.header}>
               <Text style={styles.title}>{title}</Text>
-              <TouchableOpacity onPress={onClose}>
+              <TouchableOpacity
+                onPress={onClose}
+                accessibilityRole="button"
+                accessibilityLabel="Done"
+              >
                 <Text style={styles.done}>Done</Text>
               </TouchableOpacity>
             </View>
