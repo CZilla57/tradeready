@@ -4,7 +4,7 @@
  */
 import React from "react";
 import { render } from "@testing-library/react-native";
-import { Badge, Button, EmptyState, SectionHeader, StatCard } from "../components/UI";
+import { Badge, Button, Divider, EmptyState, SectionHeader, StatCard } from "../components/UI";
 
 describe("Badge", () => {
   it("renders its label text", async () => {
@@ -15,6 +15,11 @@ describe("Badge", () => {
   it("renders with default color prop without crashing", async () => {
     const { getByText } = await render(<Badge label="Paid" />);
     expect(getByText("Paid")).toBeTruthy();
+  });
+
+  it("exposes its label to the accessibility tree", async () => {
+    const { getByRole } = await render(<Badge label="Overdue" color="danger" />);
+    expect(getByRole("text", { name: "Overdue" })).toBeTruthy();
   });
 });
 
@@ -35,6 +40,19 @@ describe("Button", () => {
     const { queryByText } = await render(<Button label="Save" onPress={() => {}} loading />);
     expect(queryByText("Save")).toBeNull();
   });
+
+  it("exposes role and label to the accessibility tree", async () => {
+    const { getByRole } = await render(<Button label="Save" onPress={() => {}} />);
+    expect(getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  it("reports busy state when loading", async () => {
+    const { getByRole } = await render(<Button label="Save" onPress={() => {}} loading />);
+    const btn = getByRole("button", { name: "Save" });
+    expect(btn.props.accessibilityState).toEqual(
+      expect.objectContaining({ disabled: true, busy: true })
+    );
+  });
 });
 
 describe("EmptyState", () => {
@@ -51,6 +69,11 @@ describe("SectionHeader", () => {
     const { getByText } = await render(<SectionHeader title="Recent Jobs" />);
     expect(getByText("Recent Jobs")).toBeTruthy();
   });
+
+  it("is exposed as a header to the accessibility tree", async () => {
+    const { getByRole } = await render(<SectionHeader title="Recent Jobs" />);
+    expect(getByRole("header", { name: "Recent Jobs" })).toBeTruthy();
+  });
 });
 
 describe("StatCard", () => {
@@ -60,5 +83,21 @@ describe("StatCard", () => {
     );
     expect(getByText("Total revenue")).toBeTruthy();
     expect(getByText("$4,200")).toBeTruthy();
+  });
+
+  it("groups label and value into one accessibility element", async () => {
+    const { getByLabelText } = await render(
+      <StatCard label="Outstanding" value="$4,200" />
+    );
+    expect(getByLabelText("Outstanding: $4,200")).toBeTruthy();
+  });
+});
+
+describe("Divider", () => {
+  it("is hidden from the accessibility tree", async () => {
+    const result = await render(<Divider />);
+    const viewInstance = result.container.instance.children[0];
+    expect(viewInstance.props.accessibilityElementsHidden).toBe(true);
+    expect(viewInstance.props.importantForAccessibility).toBe("no");
   });
 });

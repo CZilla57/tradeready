@@ -29,7 +29,11 @@ export function Badge({ label, color = "accent" }: { label: string; color?: Badg
     muted:   colors.textSecondary,
   };
   return (
-    <View style={[styles.badge, { backgroundColor: bgMap[color] || bgMap.muted }]}>
+    <View
+      style={[styles.badge, { backgroundColor: bgMap[color] || bgMap.muted }]}
+      accessibilityRole="text"
+      accessibilityLabel={label}
+    >
       <Text style={[styles.badgeText, { color: textMap[color] || textMap.muted }]}>
         {label}
       </Text>
@@ -60,6 +64,9 @@ export function Button({ label, onPress, variant = "primary", style, loading }: 
       onPress={onPress}
       activeOpacity={0.75}
       disabled={loading}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!loading, busy: !!loading }}
     >
       {loading ? (
         <ActivityIndicator color={isPrimary ? "#fff" : colors.accent} size="small" />
@@ -94,7 +101,11 @@ export function Card({ children, style, onPress }: CardProps) {
 export function StatCard({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
   const { colors, shadow } = useTheme();
   return (
-    <View style={[styles.statCard, { backgroundColor: colors.surface, ...shadow.card }]}>
+    <View
+      style={[styles.statCard, { backgroundColor: colors.surface, ...shadow.card }]}
+      accessible={true}
+      accessibilityLabel={`${label}: ${value}`}
+    >
       <Text style={[styles.statLabel, { color: colors.textMuted }]}>{label}</Text>
       <Text style={[styles.statValue, { color: valueColor || colors.textPrimary }]}>{value}</Text>
     </View>
@@ -103,7 +114,14 @@ export function StatCard({ label, value, valueColor }: { label: string; value: s
 
 export function SectionHeader({ title }: { title: string }) {
   const { colors } = useTheme();
-  return <Text style={[styles.sectionHeader, { color: colors.textSecondary }]}>{title}</Text>;
+  return (
+    <Text
+      style={[styles.sectionHeader, { color: colors.textSecondary }]}
+      accessibilityRole="header"
+    >
+      {title}
+    </Text>
+  );
 }
 
 export function EmptyState({ message }: { message: string }) {
@@ -117,7 +135,13 @@ export function EmptyState({ message }: { message: string }) {
 
 export function Divider() {
   const { colors } = useTheme();
-  return <View style={[styles.divider, { backgroundColor: colors.border }]} />;
+  return (
+    <View
+      style={[styles.divider, { backgroundColor: colors.border }]}
+      accessibilityElementsHidden={true}
+      importantForAccessibility="no"
+    />
+  );
 }
 
 const styles = StyleSheet.create({
