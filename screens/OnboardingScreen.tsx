@@ -308,6 +308,8 @@ function StepTrade({ form, update }: StepProps) {
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [tips, setTips] = useState<string[]>([]);
   const [tipsLoading, setTipsLoading] = useState(false);
+  const [tipsError, setTipsError] = useState(false);
+  const [tipsRetryCount, setTipsRetryCount] = useState(0);
   const tipsTradeRef = useRef<string>("");
 
   useEffect(() => {
@@ -320,16 +322,30 @@ function StepTrade({ form, update }: StepProps) {
       prompt: `Give 2-3 short, practical tips for someone starting a ${tradeLabel} business using a job management app. Each tip should be one sentence. Focus on how they'll use features like job tracking, invoicing, and estimates in their trade. Reply with ONLY a JSON array of strings.`,
     }).then(raw => {
       if (tipsTradeRef.current !== form.trade) return;
+      let parsed: string[] = [];
       try {
         const match = raw.match(/\[[\s\S]*\]/);
         if (match) {
-          const parsed = JSON.parse(match[0]);
-          if (Array.isArray(parsed)) setTips(parsed.map(String).slice(0, 3));
+          const arr = JSON.parse(match[0]);
+          if (Array.isArray(arr)) parsed = arr.map(String).slice(0, 3);
         }
       } catch {}
+      if (parsed.length > 0) {
+        setTips(parsed);
+        setTipsError(false);
+      } else {
+        setTipsError(true);
+      }
       setTipsLoading(false);
     });
-  }, [form.trade]);
+  }, [form.trade, tipsRetryCount]);
+
+  function retryTips() {
+    tipsTradeRef.current = "";
+    setTipsError(false);
+    setTips([]);
+    setTipsRetryCount(c => c + 1);
+  }
 
   return (
     <View style={styles.stepContent}>
@@ -347,12 +363,19 @@ function StepTrade({ form, update }: StepProps) {
         ))}
       </View>
 
-      {(tipsLoading || tips.length > 0) && (
+      {(tipsLoading || tips.length > 0 || tipsError) && (
         <View style={styles.aiCard}>
           {tipsLoading ? (
             <View style={styles.aiLoadingRow}>
               <ActivityIndicator size="small" color={colors.accent} />
               <Text style={styles.aiLoadingText}>Getting tips for your trade...</Text>
+            </View>
+          ) : tipsError ? (
+            <View style={styles.retryRow}>
+              <Text style={styles.retryText}>Couldn't load tips</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={retryTips}>
+                <Text style={styles.retryBtnText}>Retry</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             tips.map((tip, i) => (
@@ -385,6 +408,8 @@ function RateSuggestion({ form, update }: StepProps) {
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [suggestion, setSuggestion] = useState<{ low: number; typical: number; high: number } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [rateError, setRateError] = useState(false);
+  const [rateRetryCount, setRateRetryCount] = useState(0);
   const lastQueryRef = useRef("");
 
   useEffect(() => {
@@ -405,21 +430,35 @@ function RateSuggestion({ form, update }: StepProps) {
       sendOnboardingAI({
         prompt: `What is a typical hourly labor rate for a ${tradeLabel} professional in ${region}? Reply with ONLY a JSON object: {"low": number, "typical": number, "high": number}. No other text.`,
       }).then(raw => {
+        let parsed = null;
         try {
           const match = raw.match(/\{[\s\S]*\}/);
           if (match) {
-            const parsed = JSON.parse(match[0]);
-            if (typeof parsed.low === "number" && typeof parsed.typical === "number" && typeof parsed.high === "number") {
-              setSuggestion({ low: parsed.low, typical: parsed.typical, high: parsed.high });
+            const obj = JSON.parse(match[0]);
+            if (typeof obj.low === "number" && typeof obj.typical === "number" && typeof obj.high === "number") {
+              parsed = { low: obj.low, typical: obj.typical, high: obj.high };
             }
           }
         } catch {}
+        if (parsed) {
+          setSuggestion(parsed);
+          setRateError(false);
+        } else {
+          setRateError(true);
+        }
         setLoading(false);
       });
     }, 1000);
 
     return () => clearTimeout(timeout);
-  }, [form.trade, form.region]);
+  }, [form.trade, form.region, rateRetryCount]);
+
+  function retryRate() {
+    lastQueryRef.current = "";
+    setRateError(false);
+    setSuggestion(null);
+    setRateRetryCount(c => c + 1);
+  }
 
   return (
     <>
@@ -439,6 +478,17 @@ function RateSuggestion({ form, update }: StepProps) {
           <View style={styles.aiLoadingRow}>
             <ActivityIndicator size="small" color={colors.accent} />
             <Text style={styles.aiLoadingText}>Checking rates in your area...</Text>
+          </View>
+        </View>
+      )}
+
+      {rateError && !loading && (
+        <View style={[styles.aiCard, { marginTop: spacing.sm }]}>
+          <View style={styles.retryRow}>
+            <Text style={styles.retryText}>Couldn't check rates</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={retryRate}>
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -512,6 +562,8 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const firstName = form.contactName.trim().split(" ")[0] || "there";
   const [actions, setActions] = useState<string[]>([]);
+  const [actionsError, setActionsError] = useState(false);
+  const [actionsRetryCount, setActionsRetryCount] = useState(0);
   const fetchedRef = useRef(false);
 
   useEffect(() => {
@@ -522,15 +574,29 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
     sendOnboardingAI({
       prompt: `You are helping ${firstName}, who runs a ${tradeLabel} business called ${form.businessName.trim()}${regionStr}. They just finished setting up their account in a job management app. Write 3 specific first actions for them, addressed directly as "you". Each action should be one short sentence starting with a verb (e.g. "Add your first customer…"). Reply with ONLY a JSON array of 3 strings.`,
     }).then(raw => {
+      let parsed: string[] = [];
       try {
         const match = raw.match(/\[[\s\S]*\]/);
         if (match) {
-          const parsed = JSON.parse(match[0]);
-          if (Array.isArray(parsed)) setActions(parsed.map(String).slice(0, 3));
+          const arr = JSON.parse(match[0]);
+          if (Array.isArray(arr)) parsed = arr.map(String).slice(0, 3);
         }
       } catch {}
+      if (parsed.length > 0) {
+        setActions(parsed);
+        setActionsError(false);
+      } else {
+        setActionsError(true);
+      }
     });
-  }, [firstName, form.businessName, form.region, form.trade]);
+  }, [firstName, form.businessName, form.region, form.trade, actionsRetryCount]);
+
+  function retryActions() {
+    fetchedRef.current = false;
+    setActionsError(false);
+    setActions([]);
+    setActionsRetryCount(c => c + 1);
+  }
 
   return (
     <View style={styles.doneContent}>
@@ -565,6 +631,15 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
               <Text style={styles.tipText}>{action}</Text>
             </View>
           ))}
+        </View>
+      ) : actionsError ? (
+        <View style={styles.aiCard}>
+          <View style={styles.retryRow}>
+            <Text style={styles.retryText}>Couldn't load suggestions</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={retryActions}>
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
         <Text style={styles.doneBody}>
@@ -681,5 +756,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     logoPlaceholderText: { fontSize: fontSize.xs, color: colors.textMuted },
     logoRemoveBtn: { alignSelf: "flex-start", marginTop: 4 },
     logoRemoveText: { fontSize: fontSize.xs, color: colors.danger },
+    retryRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+    retryText: { fontSize: fontSize.sm, color: colors.textMuted },
+    retryBtn: { paddingVertical: 2, paddingHorizontal: 4 },
+    retryBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "600" },
   });
 }
