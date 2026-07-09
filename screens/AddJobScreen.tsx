@@ -17,7 +17,15 @@ import {
   Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadJobs, saveJobs, loadCustomers, loadSettings, getOrCreateCustomer, loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
+import {
+  loadJobs,
+  saveJobs,
+  loadCustomers,
+  loadSettings,
+  getOrCreateCustomer,
+  loadRecurringJobs,
+  saveRecurringJobs,
+} from "../utils/storage";
 import { advanceStatusForSchedule } from "../utils/jobStatus";
 import { calculateNextDate } from "../utils/recurringJobs";
 import { Button } from "../components/UI";
@@ -25,14 +33,21 @@ import Field from "../components/Field";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
-import { useTheme } from '../hooks/useTheme';
-import type { Customer, RecurrenceCadence, RecurrenceEndCondition, RecurringJob } from "../types/models";
+import { useTheme } from "../hooks/useTheme";
+import type {
+  Customer,
+  RecurrenceCadence,
+  RecurrenceEndCondition,
+  RecurringJob,
+} from "../types/models";
+import { usePostHog } from "posthog-react-native";
 
 export default function AddJobScreen({ route, navigation }: { route: any; navigation: any }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId, focusSchedule } = route.params || {};
   const isEditing = !!jobId;
+  const posthog = usePostHog();
 
   // Job fields
   const [customerId, setCustomerId] = useState<string>("");
@@ -52,10 +67,10 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
   const [showStartTimePicker, setShowStartTimePicker] = useState<boolean>(false);
   const [showEndTimePicker, setShowEndTimePicker] = useState<boolean>(false);
   const [isRecurring, setIsRecurring] = useState<boolean>(false);
-  const [cadence, setCadence] = useState<RecurrenceCadence>('monthly');
-  const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>('never');
-  const [endCount, setEndCount] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [cadence, setCadence] = useState<RecurrenceCadence>("monthly");
+  const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>("never");
+  const [endCount, setEndCount] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
   const [showEndDatePicker, setShowEndDatePicker] = useState<boolean>(false);
   const [existingRecurringJob, setExistingRecurringJob] = useState<RecurringJob | null>(null);
 
@@ -65,7 +80,10 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
     navigation.setOptions({
       title: isEditing ? "Edit Job" : "New Job",
       headerLeft: () => (
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
         </TouchableOpacity>
       ),
@@ -90,14 +108,14 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
           setNotes(j.notes || "");
           if (j.recurringJobId) {
             const recurringJobs = await loadRecurringJobs();
-            const rule = recurringJobs.find(r => r.id === j.recurringJobId) ?? null;
+            const rule = recurringJobs.find((r) => r.id === j.recurringJobId) ?? null;
             setExistingRecurringJob(rule);
             if (rule) {
               setIsRecurring(true);
               setCadence(rule.cadence);
               setEndCondition(rule.endCondition);
-              setEndCount(rule.endCount != null ? String(rule.endCount) : '');
-              setEndDate(rule.endDate ?? '');
+              setEndCount(rule.endCount != null ? String(rule.endCount) : "");
+              setEndDate(rule.endDate ?? "");
             }
           }
         }
@@ -139,14 +157,18 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
   function displayDate(str: string): string | null {
     if (!str) return null;
     return dateObjFromStr(str).toLocaleDateString("en-US", {
-      weekday: "long", month: "long", day: "numeric",
+      weekday: "long",
+      month: "long",
+      day: "numeric",
     });
   }
 
   function displayTime(str: string): string | null {
     if (!str) return null;
     return timeObjFromStr(str).toLocaleTimeString("en-US", {
-      hour: "numeric", minute: "2-digit", hour12: true,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
     });
   }
 
@@ -176,12 +198,12 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
     }
 
     if (isRecurring) {
-      if (endCondition === 'count' && (!endCount.trim() || parseInt(endCount) < 1)) {
-        Alert.alert('End count required', 'Please enter a number of jobs greater than 0.');
+      if (endCondition === "count" && (!endCount.trim() || parseInt(endCount) < 1)) {
+        Alert.alert("End count required", "Please enter a number of jobs greater than 0.");
         return;
       }
-      if (endCondition === 'date' && !endDate) {
-        Alert.alert('End date required', 'Please select an end date for the series.');
+      if (endCondition === "date" && !endDate) {
+        Alert.alert("End date required", "Please select an end date for the series.");
         return;
       }
     }
@@ -214,13 +236,17 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
       if (isEditing) {
         updatedJobs = jobs.map((j: any) =>
           j.id === jobId
-            ? { ...j, ...jobData, status: advanceStatusForSchedule(j.status, !!jobData.scheduledDate) }
+            ? {
+                ...j,
+                ...jobData,
+                status: advanceStatusForSchedule(j.status, !!jobData.scheduledDate),
+              }
             : j
         );
         if (applyToAll && existingRecurringJob) {
           const allRules = await loadRecurringJobs();
           const currentJob = jobs.find((j: any) => j.id === jobId);
-          const updatedRules = allRules.map(r =>
+          const updatedRules = allRules.map((r) =>
             r.id === existingRecurringJob.id
               ? {
                   ...r,
@@ -241,15 +267,15 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                   // Recurrence config
                   cadence,
                   endCondition,
-                  endCount: endCondition === 'count' ? (parseInt(endCount) || 1) : undefined,
-                  endDate: endCondition === 'date' ? endDate : undefined,
+                  endCount: endCondition === "count" ? parseInt(endCount) || 1 : undefined,
+                  endDate: endCondition === "date" ? endDate : undefined,
                 }
               : r
           );
           await saveRecurringJobs(updatedRules);
         }
       } else {
-        const today = new Date().toISOString().split('T')[0];
+        const today = new Date().toISOString().split("T")[0];
         const startDate = jobData.scheduledDate || today;
         const newJobId = `j${Date.now()}`;
 
@@ -272,8 +298,8 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
             margin: settings.marginPercent ?? 20,
             cadence,
             endCondition,
-            endCount: endCondition === 'count' ? (parseInt(endCount) || 1) : undefined,
-            endDate: endCondition === 'date' ? endDate : undefined,
+            endCount: endCondition === "count" ? parseInt(endCount) || 1 : undefined,
+            endDate: endCondition === "date" ? endDate : undefined,
             occurrenceCount: 1,
             lastGeneratedDate: startDate,
             nextDueDate: calculateNextDate(startDate, cadence),
@@ -285,7 +311,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
 
           const newJob = {
             id: newJobId,
-            status: 'lead',
+            status: "lead",
             estimateTotal: 0,
             laborHours: 0,
             laborRate: settings.laborRate ?? 85,
@@ -303,7 +329,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
         } else {
           const newJob = {
             id: newJobId,
-            status: 'lead',
+            status: "lead",
             estimateTotal: 0,
             laborHours: 0,
             laborRate: settings.laborRate ?? 85,
@@ -320,21 +346,35 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
       }
 
       await saveJobs(updatedJobs);
+      if (!isEditing) {
+        posthog.capture("job_created", {
+          is_recurring: isRecurring,
+          has_schedule: !!jobData.scheduledDate,
+        });
+      }
       setSaving(false);
       navigation.goBack();
     }
 
     if (isEditing && existingRecurringJob) {
       setSaving(false);
-      Alert.alert(
-        'Edit recurring job',
-        'Apply changes to:',
-        [
-          { text: 'This job only', onPress: () => { setSaving(true); performSave(false); } },
-          { text: 'This and all future jobs', onPress: () => { setSaving(true); performSave(true); } },
-          { text: 'Cancel', style: 'cancel' },
-        ]
-      );
+      Alert.alert("Edit recurring job", "Apply changes to:", [
+        {
+          text: "This job only",
+          onPress: () => {
+            setSaving(true);
+            performSave(false);
+          },
+        },
+        {
+          text: "This and all future jobs",
+          onPress: () => {
+            setSaving(true);
+            performSave(true);
+          },
+        },
+        { text: "Cancel", style: "cancel" },
+      ]);
     } else {
       await performSave(false);
     }
@@ -353,10 +393,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
         >
           {/* Customer */}
           <SectionLabel>Customer</SectionLabel>
-          <TouchableOpacity
-            style={styles.customerSelector}
-            onPress={toggleCustomerPicker}
-          >
+          <TouchableOpacity style={styles.customerSelector} onPress={toggleCustomerPicker}>
             <Text style={customerName ? styles.customerSelected : styles.customerPlaceholder}>
               {customerName || "Select a customer..."}
             </Text>
@@ -384,10 +421,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                 {customers
                   .filter((c) => {
                     const q = customerSearch.toLowerCase();
-                    return (
-                      c.name.toLowerCase().includes(q) ||
-                      (c.phone || "").includes(q)
-                    );
+                    return c.name.toLowerCase().includes(q) || (c.phone || "").includes(q);
                   })
                   .map((c) => (
                     <TouchableOpacity
@@ -396,9 +430,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                       onPress={() => selectCustomer(c)}
                     >
                       <Text style={styles.customerOptionName}>{c.name}</Text>
-                      {c.phone ? (
-                        <Text style={styles.customerOptionSub}>{c.phone}</Text>
-                      ) : null}
+                      {c.phone ? <Text style={styles.customerOptionSub}>{c.phone}</Text> : null}
                     </TouchableOpacity>
                   ))}
               </ScrollView>
@@ -407,7 +439,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                 onPress={() => {
                   setShowCustomerPicker(false);
                   setCustomerSearch("");
-                  navigation.navigate('AddCustomer');
+                  navigation.navigate("AddCustomer");
                 }}
               >
                 <Text style={{ fontSize: fontSize.sm, color: colors.accent }}>
@@ -430,7 +462,12 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
 
           {/* Job info */}
           <SectionLabel>Job info</SectionLabel>
-          <Field label="Job title *" value={title} onChangeText={setTitle} placeholder="Replace kitchen faucet" />
+          <Field
+            label="Job title *"
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Replace kitchen faucet"
+          />
           <Field
             label="Description"
             value={description}
@@ -479,8 +516,13 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                     </TouchableOpacity>
                   ) : null}
                 </View>
-                <TouchableOpacity style={styles.pickerBtn} onPress={() => setShowStartTimePicker(true)}>
-                  <Text style={scheduledStartTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
+                <TouchableOpacity
+                  style={styles.pickerBtn}
+                  onPress={() => setShowStartTimePicker(true)}
+                >
+                  <Text
+                    style={scheduledStartTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}
+                  >
                     {scheduledStartTime ? displayTime(scheduledStartTime) : "Start…"}
                   </Text>
                   <Text style={styles.pickerIcon}>🕐</Text>
@@ -498,8 +540,13 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                     </TouchableOpacity>
                   ) : null}
                 </View>
-                <TouchableOpacity style={styles.pickerBtn} onPress={() => setShowEndTimePicker(true)}>
-                  <Text style={scheduledEndTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
+                <TouchableOpacity
+                  style={styles.pickerBtn}
+                  onPress={() => setShowEndTimePicker(true)}
+                >
+                  <Text
+                    style={scheduledEndTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}
+                  >
                     {scheduledEndTime ? displayTime(scheduledEndTime) : "End…"}
                   </Text>
                   <Text style={styles.pickerIcon}>🕐</Text>
@@ -523,11 +570,12 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
             <View style={styles.recurringNotice}>
               <Text style={styles.recurringNoticeText}>Part of a recurring series</Text>
               <Text style={styles.recurringNoticeSubText}>
-                {cadence.charAt(0).toUpperCase() + cadence.slice(1)} · {
-                  endCondition === 'never' ? 'No end' :
-                  endCondition === 'count' ? `Ends after ${endCount} jobs` :
-                  `Ends ${displayDate(endDate) ?? endDate}`
-                }
+                {cadence.charAt(0).toUpperCase() + cadence.slice(1)} ·{" "}
+                {endCondition === "never"
+                  ? "No end"
+                  : endCondition === "count"
+                    ? `Ends after ${endCount} jobs`
+                    : `Ends ${displayDate(endDate) ?? endDate}`}
               </Text>
             </View>
           ) : (
@@ -546,7 +594,9 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                 <>
                   <Text style={styles.fieldLabel}>Repeats</Text>
                   <View style={styles.chipRow}>
-                    {(['daily', 'weekly', 'monthly', 'quarterly', 'annually'] as RecurrenceCadence[]).map(c => (
+                    {(
+                      ["daily", "weekly", "monthly", "quarterly", "annually"] as RecurrenceCadence[]
+                    ).map((c) => (
                       <TouchableOpacity
                         key={c}
                         style={[styles.chip, cadence === c && styles.chipSelected]}
@@ -561,20 +611,22 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
 
                   <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>Ends</Text>
                   <View style={styles.chipRow}>
-                    {(['never', 'count', 'date'] as RecurrenceEndCondition[]).map(ec => (
+                    {(["never", "count", "date"] as RecurrenceEndCondition[]).map((ec) => (
                       <TouchableOpacity
                         key={ec}
                         style={[styles.chip, endCondition === ec && styles.chipSelected]}
                         onPress={() => setEndCondition(ec)}
                       >
-                        <Text style={[styles.chipText, endCondition === ec && styles.chipTextSelected]}>
-                          {ec === 'never' ? 'Never' : ec === 'count' ? 'After N jobs' : 'By date'}
+                        <Text
+                          style={[styles.chipText, endCondition === ec && styles.chipTextSelected]}
+                        >
+                          {ec === "never" ? "Never" : ec === "count" ? "After N jobs" : "By date"}
                         </Text>
                       </TouchableOpacity>
                     ))}
                   </View>
 
-                  {endCondition === 'count' && (
+                  {endCondition === "count" && (
                     <Field
                       label="Number of jobs"
                       value={endCount}
@@ -584,19 +636,22 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                     />
                   )}
 
-                  {endCondition === 'date' && (
+                  {endCondition === "date" && (
                     <View style={styles.fieldGroup}>
                       <View style={styles.pickerLabelRow}>
                         <Text style={styles.fieldLabel}>End date</Text>
                         {endDate ? (
-                          <TouchableOpacity onPress={() => setEndDate('')}>
+                          <TouchableOpacity onPress={() => setEndDate("")}>
                             <Text style={styles.pickerClear}>Clear</Text>
                           </TouchableOpacity>
                         ) : null}
                       </View>
-                      <TouchableOpacity style={styles.pickerBtn} onPress={() => setShowEndDatePicker(true)}>
+                      <TouchableOpacity
+                        style={styles.pickerBtn}
+                        onPress={() => setShowEndDatePicker(true)}
+                      >
                         <Text style={endDate ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
-                          {endDate ? displayDate(endDate) : 'Select end date…'}
+                          {endDate ? displayDate(endDate) : "Select end date…"}
                         </Text>
                         <Text style={styles.pickerIcon}>📅</Text>
                       </TouchableOpacity>
@@ -609,7 +664,12 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
 
           {/* Actions */}
           <View style={styles.actions}>
-            <Button label="Cancel" variant="ghost" onPress={() => navigation.goBack()} style={{ flex: 1 }} />
+            <Button
+              label="Cancel"
+              variant="ghost"
+              onPress={() => navigation.goBack()}
+              style={{ flex: 1 }}
+            />
             <View style={{ width: spacing.sm }} />
             <Button
               label={isEditing ? "Save changes" : "Add job"}
@@ -650,7 +710,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
         visible={showEndDatePicker}
         mode="date"
         title="End Date"
-        value={dateObjFromStr(endDate || new Date().toISOString().split('T')[0])}
+        value={dateObjFromStr(endDate || new Date().toISOString().split("T")[0])}
         onChange={(date: Date) => setEndDate(toDateStr(date))}
         onClose={() => setShowEndDatePicker(false)}
       />
@@ -666,148 +726,160 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  scroll: { padding: spacing.md, paddingBottom: 160 },
-  sectionLabel: {
-    fontSize: fontSize.xs, fontWeight: "600", color: colors.textSecondary,
-    textTransform: "uppercase", letterSpacing: 0.6,
-    marginTop: spacing.md, marginBottom: spacing.sm,
-  },
-  customerSelector: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    ...shadow.card,
-  },
-  customerSelected: { fontSize: fontSize.md, color: colors.textPrimary },
-  customerPlaceholder: { fontSize: fontSize.md, color: colors.textMuted },
-  chevron: { fontSize: fontSize.sm, color: colors.textMuted },
-  customerList: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    marginTop: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    overflow: "hidden",
-    ...shadow.card,
-  },
-  customerSearch: {
-    margin: spacing.sm,
-    marginBottom: 0,
-    backgroundColor: colors.background,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  customerScroll: { maxHeight: 210 },
-  customerOption: { padding: spacing.md },
-  customerOptionAdd: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  customerOptionName: { fontSize: fontSize.md, color: colors.textPrimary, fontWeight: "500" },
-  customerOptionSub: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
-  fieldGroup: { marginBottom: spacing.sm },
-  fieldLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5, fontWeight: "500" },
-  input: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  timeRow: { flexDirection: "row" },
-  actions: { flexDirection: "row", marginTop: spacing.lg },
+    container: { flex: 1, backgroundColor: colors.background },
+    scroll: { padding: spacing.md, paddingBottom: 160 },
+    sectionLabel: {
+      fontSize: fontSize.xs,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+      marginTop: spacing.md,
+      marginBottom: spacing.sm,
+    },
+    customerSelector: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      height: 44,
+      paddingHorizontal: spacing.md,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      ...shadow.card,
+    },
+    customerSelected: { fontSize: fontSize.md, color: colors.textPrimary },
+    customerPlaceholder: { fontSize: fontSize.md, color: colors.textMuted },
+    chevron: { fontSize: fontSize.sm, color: colors.textMuted },
+    customerList: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      marginTop: 4,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      overflow: "hidden",
+      ...shadow.card,
+    },
+    customerSearch: {
+      margin: spacing.sm,
+      marginBottom: 0,
+      backgroundColor: colors.background,
+      borderRadius: radius.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 8,
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    customerScroll: { maxHeight: 210 },
+    customerOption: { padding: spacing.md },
+    customerOptionAdd: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+    customerOptionName: { fontSize: fontSize.md, color: colors.textPrimary, fontWeight: "500" },
+    customerOptionSub: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    fieldGroup: { marginBottom: spacing.sm },
+    fieldLabel: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      marginBottom: 5,
+      fontWeight: "500",
+    },
+    input: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      height: 44,
+      paddingHorizontal: spacing.md,
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    timeRow: { flexDirection: "row" },
+    actions: { flexDirection: "row", marginTop: spacing.lg },
 
-  // Picker trigger buttons
-  pickerLabelRow: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 5,
-  },
-  pickerClear: { fontSize: fontSize.xs, color: colors.accent },
-  pickerBtn: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  pickerBtnText: { fontSize: fontSize.md, color: colors.textPrimary, flex: 1 },
-  pickerBtnPlaceholder: { fontSize: fontSize.md, color: colors.textMuted, flex: 1 },
-  pickerIcon: { fontSize: 16, marginLeft: spacing.sm },
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    marginBottom: spacing.sm,
-  },
-  toggleLabel: {
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    fontWeight: '500',
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  chip: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  chipSelected: {
-    borderColor: colors.accent,
-    backgroundColor: colors.accent,
-  },
-  chipText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-  },
-  chipTextSelected: {
-    color: colors.surface,
-    fontWeight: '600',
-  },
-  recurringNotice: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    marginBottom: spacing.sm,
-  },
-  recurringNoticeText: {
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    fontWeight: '500',
-  },
-  recurringNoticeSubText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
+    // Picker trigger buttons
+    pickerLabelRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 5,
+    },
+    pickerClear: { fontSize: fontSize.xs, color: colors.accent },
+    pickerBtn: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      height: 44,
+      paddingHorizontal: spacing.md,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    pickerBtnText: { fontSize: fontSize.md, color: colors.textPrimary, flex: 1 },
+    pickerBtnPlaceholder: { fontSize: fontSize.md, color: colors.textMuted, flex: 1 },
+    pickerIcon: { fontSize: 16, marginLeft: spacing.sm },
+    toggleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      marginBottom: spacing.sm,
+    },
+    toggleLabel: {
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      fontWeight: "500",
+    },
+    chipRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: spacing.xs,
+      marginBottom: spacing.sm,
+    },
+    chip: {
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 6,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    chipSelected: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accent,
+    },
+    chipText: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+    },
+    chipTextSelected: {
+      color: colors.surface,
+      fontWeight: "600",
+    },
+    recurringNotice: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      padding: spacing.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      marginBottom: spacing.sm,
+    },
+    recurringNoticeText: {
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      fontWeight: "500",
+    },
+    recurringNoticeSubText: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      marginTop: 2,
+    },
   });
 }

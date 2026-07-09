@@ -1,11 +1,12 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { AppState } from 'react-native';
-import type { Session } from '@supabase/supabase-js';
-import { supabase } from '../utils/supabase';
-import { initialSync, syncIfOnline } from '../utils/sync';
-import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
-import { configurePurchases, loginPurchases, logoutPurchases } from '../utils/subscription';
-import { checkAndGenerateRecurringJobs } from '../utils/recurringJobs';
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { AppState } from "react-native";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "../utils/supabase";
+import { initialSync, syncIfOnline } from "../utils/sync";
+import { setupNotifications, requestPermissions, syncNotifications } from "../utils/notifications";
+import { configurePurchases, loginPurchases, logoutPurchases } from "../utils/subscription";
+import { checkAndGenerateRecurringJobs } from "../utils/recurringJobs";
+import { posthog } from "../config/posthog";
 
 interface AuthContextValue {
   session: Session | null;
@@ -26,15 +27,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       setInitializing(false);
       if (session?.user?.id) {
+        posthog.identify(session.user.id, { $set: { email: session.user.email ?? null } });
         loginPurchases(session.user.id);
         initialSync(session.user.id);
-        requestPermissions().then(granted => { if (granted) syncNotifications(); });
+        requestPermissions().then((granted) => {
+          if (granted) syncNotifications();
+        });
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (_event === 'SIGNED_OUT') {
+      if (_event === "SIGNED_OUT") {
+        posthog.reset();
         logoutPurchases();
         // Do NOT wipe local data here. The __dataOwner guard in initialSync
         // prevents a new user from inheriting stale data, and wiping here would
@@ -46,7 +53,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session?.user?.id) {
         loginPurchases(session.user.id);
         initialSync(session.user.id);
-        requestPermissions().then(granted => { if (granted) syncNotifications(); });
+        requestPermissions().then((granted) => {
+          if (granted) syncNotifications();
+        });
       }
     });
 
@@ -57,8 +66,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (session?.user?.id) {
       checkAndGenerateRecurringJobs();
     }
-    const sub = AppState.addEventListener('change', state => {
-      if (state === 'active' && session?.user?.id) {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active" && session?.user?.id) {
         syncIfOnline(session.user.id);
         syncNotifications();
         checkAndGenerateRecurringJobs();
@@ -67,15 +76,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [session]);
 
-  return (
-    <AuthContext.Provider value={{ session, initializing }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ session, initializing }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
 }

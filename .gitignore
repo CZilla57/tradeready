@@ -10,3 +10,4 @@ web-build/
 *.mobileprovision
 *.orig.*
 web-build/
+.env

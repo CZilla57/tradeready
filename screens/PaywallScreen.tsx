@@ -14,12 +14,18 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useSubscription } from "../context/SubscriptionContext";
-import { getOfferings, purchasePackage, restorePurchases, ENTITLEMENT_ID } from "../utils/subscription";
+import {
+  getOfferings,
+  purchasePackage,
+  restorePurchases,
+  ENTITLEMENT_ID,
+} from "../utils/subscription";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { usePostHog } from "posthog-react-native";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "";
-const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl ?? "";
+const TERMS_URL = Constants.expoConfig?.extra?.termsUrl ?? "";
 
 const FEATURES = [
   "Unlimited jobs, invoices & customers",
@@ -35,14 +41,18 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const canDismiss: boolean = route?.params?.canDismiss ?? false;
   const { updateFromPurchase, refresh } = useSubscription();
+  const posthog = usePostHog();
 
-  const [offerings, setOfferings]   = useState<any[] | null>(null);
+  const [offerings, setOfferings] = useState<any[] | null>(null);
   const [selectedPkg, setSelectedPkg] = useState<any>(null);
   const [purchasing, setPurchasing] = useState(false);
-  const [restoring, setRestoring]   = useState(false);
-  const [loadError, setLoadError]   = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => { loadOfferings(); }, []);
+  useEffect(() => {
+    loadOfferings();
+    posthog.capture("paywall_viewed", { can_dismiss: canDismiss });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadOfferings() {
     setLoadError(null);
@@ -63,6 +73,11 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
     try {
       const { customerInfo } = await purchasePackage(selectedPkg);
       updateFromPurchase(customerInfo);
+      posthog.capture("subscription_started", {
+        plan: selectedPkg.packageType,
+        price: selectedPkg.product.price,
+        currency: selectedPkg.product.currencyCode,
+      });
       if (canDismiss && navigation?.canGoBack?.()) navigation.goBack();
     } catch (err: any) {
       if (!err.userCancelled) {
@@ -80,23 +95,28 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
       await refresh();
       const hasEntitlement = info?.entitlements?.active?.[ENTITLEMENT_ID] != null;
       if (hasEntitlement) {
+        posthog.capture("subscription_restored");
         Alert.alert("Restored!", "Your subscription has been restored.");
         if (canDismiss && navigation?.canGoBack?.()) navigation.goBack();
       } else {
-        Alert.alert("Nothing to restore", "We couldn't find an active subscription for this account.");
+        Alert.alert(
+          "Nothing to restore",
+          "We couldn't find an active subscription for this account."
+        );
       }
     } catch (err: any) {
-      Alert.alert("Restore failed", err.message ?? "Could not restore purchases. Please try again.");
+      Alert.alert(
+        "Restore failed",
+        err.message ?? "Could not restore purchases. Please try again."
+      );
     } finally {
       setRestoring(false);
     }
   }
 
   const monthlyPkg = offerings?.find((p: any) => p.packageType === "MONTHLY");
-  const annualPkg  = offerings?.find((p: any) => p.packageType === "ANNUAL");
-  const annualMonthlyCost = annualPkg
-    ? `$${(annualPkg.product.price / 12).toFixed(2)}/mo`
-    : null;
+  const annualPkg = offerings?.find((p: any) => p.packageType === "ANNUAL");
+  const annualMonthlyCost = annualPkg ? `$${(annualPkg.product.price / 12).toFixed(2)}/mo` : null;
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
@@ -148,16 +168,29 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
           <View style={styles.plans}>
             {annualPkg && (
               <TouchableOpacity
-                style={[styles.planCard, selectedPkg?.packageType === "ANNUAL" && styles.planCardSelected]}
+                style={[
+                  styles.planCard,
+                  selectedPkg?.packageType === "ANNUAL" && styles.planCardSelected,
+                ]}
                 onPress={() => setSelectedPkg(annualPkg)}
                 activeOpacity={0.85}
               >
                 <View style={styles.planLeft}>
-                  <View style={[styles.radio, selectedPkg?.packageType === "ANNUAL" && styles.radioSelected]}>
+                  <View
+                    style={[
+                      styles.radio,
+                      selectedPkg?.packageType === "ANNUAL" && styles.radioSelected,
+                    ]}
+                  >
                     {selectedPkg?.packageType === "ANNUAL" && <View style={styles.radioDot} />}
                   </View>
                   <View>
-                    <Text style={[styles.planName, selectedPkg?.packageType === "ANNUAL" && styles.planNameSelected]}>
+                    <Text
+                      style={[
+                        styles.planName,
+                        selectedPkg?.packageType === "ANNUAL" && styles.planNameSelected,
+                      ]}
+                    >
                       Annual
                     </Text>
                     {annualMonthlyCost && (
@@ -169,7 +202,12 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
                   <View style={styles.saveBadge}>
                     <Text style={styles.saveBadgeText}>BEST VALUE</Text>
                   </View>
-                  <Text style={[styles.planPrice, selectedPkg?.packageType === "ANNUAL" && styles.planPriceSelected]}>
+                  <Text
+                    style={[
+                      styles.planPrice,
+                      selectedPkg?.packageType === "ANNUAL" && styles.planPriceSelected,
+                    ]}
+                  >
                     {annualPkg.product.priceString}
                   </Text>
                 </View>
@@ -178,22 +216,40 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
 
             {monthlyPkg && (
               <TouchableOpacity
-                style={[styles.planCard, selectedPkg?.packageType === "MONTHLY" && styles.planCardSelected]}
+                style={[
+                  styles.planCard,
+                  selectedPkg?.packageType === "MONTHLY" && styles.planCardSelected,
+                ]}
                 onPress={() => setSelectedPkg(monthlyPkg)}
                 activeOpacity={0.85}
               >
                 <View style={styles.planLeft}>
-                  <View style={[styles.radio, selectedPkg?.packageType === "MONTHLY" && styles.radioSelected]}>
+                  <View
+                    style={[
+                      styles.radio,
+                      selectedPkg?.packageType === "MONTHLY" && styles.radioSelected,
+                    ]}
+                  >
                     {selectedPkg?.packageType === "MONTHLY" && <View style={styles.radioDot} />}
                   </View>
                   <View>
-                    <Text style={[styles.planName, selectedPkg?.packageType === "MONTHLY" && styles.planNameSelected]}>
+                    <Text
+                      style={[
+                        styles.planName,
+                        selectedPkg?.packageType === "MONTHLY" && styles.planNameSelected,
+                      ]}
+                    >
                       Monthly
                     </Text>
                     <Text style={styles.planSub}>billed monthly, cancel anytime</Text>
                   </View>
                 </View>
-                <Text style={[styles.planPrice, selectedPkg?.packageType === "MONTHLY" && styles.planPriceSelected]}>
+                <Text
+                  style={[
+                    styles.planPrice,
+                    selectedPkg?.packageType === "MONTHLY" && styles.planPriceSelected,
+                  ]}
+                >
                   {monthlyPkg.product.priceString}
                 </Text>
               </TouchableOpacity>
@@ -207,17 +263,21 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
           disabled={!selectedPkg || purchasing}
           activeOpacity={0.85}
         >
-          {purchasing
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.ctaText}>Start Free Trial</Text>}
+          {purchasing ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.ctaText}>Start Free Trial</Text>
+          )}
         </TouchableOpacity>
 
         <Text style={styles.ctaSub}>No charge for 14 days. Cancel anytime.</Text>
 
         <TouchableOpacity style={styles.restoreBtn} onPress={handleRestore} disabled={restoring}>
-          {restoring
-            ? <ActivityIndicator color={colors.textMuted} size="small" />
-            : <Text style={styles.restoreText}>Restore purchases</Text>}
+          {restoring ? (
+            <ActivityIndicator color={colors.textMuted} size="small" />
+          ) : (
+            <Text style={styles.restoreText}>Restore purchases</Text>
+          )}
         </TouchableOpacity>
 
         <View style={styles.legalRow}>
@@ -235,9 +295,9 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
         </View>
 
         <Text style={styles.legalNote}>
-          Subscription renews automatically unless cancelled at least 24 hours before the end of
-          the current period. Manage in your{" "}
-          {Platform.OS === "ios" ? "Apple ID" : "Google Play"} account settings.
+          Subscription renews automatically unless cancelled at least 24 hours before the end of the
+          current period. Manage in your {Platform.OS === "ios" ? "Apple ID" : "Google Play"}{" "}
+          account settings.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -246,83 +306,145 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
-    container:    { flex: 1, backgroundColor: colors.background },
-    closeBtn:     { position: "absolute", top: 52, right: 20, zIndex: 10, padding: 4 },
-    scroll:       { padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: 48 },
-    header:       { alignItems: "center", marginBottom: spacing.lg },
+    container: { flex: 1, backgroundColor: colors.background },
+    closeBtn: { position: "absolute", top: 52, right: 20, zIndex: 10, padding: 4 },
+    scroll: { padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: 48 },
+    header: { alignItems: "center", marginBottom: spacing.lg },
     iconWrap: {
-      width: 72, height: 72, borderRadius: 20,
+      width: 72,
+      height: 72,
+      borderRadius: 20,
       backgroundColor: colors.accentBg,
-      alignItems: "center", justifyContent: "center",
+      alignItems: "center",
+      justifyContent: "center",
       marginBottom: spacing.md,
     },
-    title:    { fontSize: fontSize.xxl, fontWeight: "800", color: colors.textPrimary, marginBottom: 6 },
+    title: {
+      fontSize: fontSize.xxl,
+      fontWeight: "800",
+      color: colors.textPrimary,
+      marginBottom: 6,
+    },
     subtitle: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center" },
     trialBadge: {
-      flexDirection: "row", alignItems: "center", gap: 6,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
       backgroundColor: colors.successBg,
       borderRadius: radius.full,
-      paddingVertical: 8, paddingHorizontal: 14,
-      alignSelf: "center", marginBottom: spacing.lg,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      alignSelf: "center",
+      marginBottom: spacing.lg,
     },
     trialBadgeText: { fontSize: fontSize.sm, color: colors.success, fontWeight: "600" },
     featureCard: {
-      backgroundColor: colors.surface, borderRadius: radius.lg,
-      padding: spacing.md, marginBottom: spacing.lg, ...shadow.card,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginBottom: spacing.lg,
+      ...shadow.card,
     },
-    featureRow:       { flexDirection: "row", alignItems: "center", paddingVertical: 8, gap: 12 },
+    featureRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8, gap: 12 },
     featureRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
     checkCircle: {
-      width: 22, height: 22, borderRadius: 11,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
       backgroundColor: colors.success,
-      alignItems: "center", justifyContent: "center",
+      alignItems: "center",
+      justifyContent: "center",
       flexShrink: 0,
     },
     featureText: { flex: 1, fontSize: fontSize.sm, color: colors.textPrimary },
     plans: { gap: spacing.sm, marginBottom: spacing.md },
     planCard: {
-      backgroundColor: colors.surface, borderRadius: radius.lg,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
       padding: spacing.md,
-      flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-      borderWidth: 2, borderColor: colors.border,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      borderWidth: 2,
+      borderColor: colors.border,
       ...shadow.card,
     },
     planCardSelected: { borderColor: colors.accent, backgroundColor: colors.accentBg },
-    planLeft:         { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
-    planRight:        { alignItems: "flex-end", gap: 4 },
+    planLeft: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
+    planRight: { alignItems: "flex-end", gap: 4 },
     radio: {
-      width: 20, height: 20, borderRadius: 10,
-      borderWidth: 2, borderColor: colors.border,
-      alignItems: "center", justifyContent: "center",
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      borderWidth: 2,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
     },
     radioSelected: { borderColor: colors.accent },
-    radioDot:      { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accent },
-    planName:         { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
+    radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accent },
+    planName: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
     planNameSelected: { color: colors.accent },
-    planSub:          { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },
-    saveBadge:        { backgroundColor: colors.success, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.sm },
-    saveBadgeText:    { fontSize: 10, fontWeight: "700", color: "#fff", letterSpacing: 0.5 },
-    planPrice:        { fontSize: fontSize.md, fontWeight: "700", color: colors.textPrimary },
+    planSub: { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },
+    saveBadge: {
+      backgroundColor: colors.success,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: radius.sm,
+    },
+    saveBadgeText: { fontSize: 10, fontWeight: "700", color: "#fff", letterSpacing: 0.5 },
+    planPrice: { fontSize: fontSize.md, fontWeight: "700", color: colors.textPrimary },
     planPriceSelected: { color: colors.accent },
     errorCard: {
-      backgroundColor: colors.dangerBg, borderRadius: radius.lg,
-      padding: spacing.md, marginBottom: spacing.md, alignItems: "center",
+      backgroundColor: colors.dangerBg,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginBottom: spacing.md,
+      alignItems: "center",
     },
-    errorText:    { fontSize: fontSize.sm, color: colors.danger, marginBottom: spacing.sm, textAlign: "center" },
-    retryBtn:     { paddingVertical: 8, paddingHorizontal: 16, backgroundColor: colors.danger, borderRadius: radius.md },
+    errorText: {
+      fontSize: fontSize.sm,
+      color: colors.danger,
+      marginBottom: spacing.sm,
+      textAlign: "center",
+    },
+    retryBtn: {
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      backgroundColor: colors.danger,
+      borderRadius: radius.md,
+    },
     retryBtnText: { color: "#fff", fontWeight: "600", fontSize: fontSize.sm },
     cta: {
-      backgroundColor: colors.accent, borderRadius: radius.lg,
-      paddingVertical: 16, alignItems: "center", marginBottom: spacing.sm,
+      backgroundColor: colors.accent,
+      borderRadius: radius.lg,
+      paddingVertical: 16,
+      alignItems: "center",
+      marginBottom: spacing.sm,
     },
     ctaDisabled: { opacity: 0.6 },
-    ctaText:     { fontSize: fontSize.lg, fontWeight: "700", color: "#fff" },
-    ctaSub:      { textAlign: "center", fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: spacing.lg },
-    restoreBtn:  { alignItems: "center", paddingVertical: spacing.sm, marginBottom: spacing.md },
+    ctaText: { fontSize: fontSize.lg, fontWeight: "700", color: "#fff" },
+    ctaSub: {
+      textAlign: "center",
+      fontSize: fontSize.xs,
+      color: colors.textSecondary,
+      marginBottom: spacing.lg,
+    },
+    restoreBtn: { alignItems: "center", paddingVertical: spacing.sm, marginBottom: spacing.md },
     restoreText: { fontSize: fontSize.sm, color: colors.textMuted },
-    legalRow:  { flexDirection: "row", justifyContent: "center", alignItems: "center", marginBottom: spacing.sm },
+    legalRow: {
+      flexDirection: "row",
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: spacing.sm,
+    },
     legalLink: { fontSize: fontSize.xs, color: colors.textMuted },
-    legalDot:  { fontSize: fontSize.xs, color: colors.textMuted },
-    legalNote: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: "center", lineHeight: 17 },
+    legalDot: { fontSize: fontSize.xs, color: colors.textMuted },
+    legalNote: {
+      fontSize: fontSize.xs,
+      color: colors.textMuted,
+      textAlign: "center",
+      lineHeight: 17,
+    },
   });
 }

@@ -21,8 +21,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { loadCustomers, saveCustomers } from "../utils/storage";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
-import { useTheme } from '../hooks/useTheme';
+import { useTheme } from "../hooks/useTheme";
 import Field from "../components/Field";
+import { usePostHog } from "posthog-react-native";
 
 interface AddressData {
   address?: {
@@ -43,11 +44,7 @@ function buildAddress(item: AddressData): string {
   const city = a.city || a.town || a.village || a.hamlet || "";
   const region = a.state || "";
   const zip = a.postcode || "";
-  const parts = [
-    street,
-    city,
-    region && zip ? `${region} ${zip}` : region || zip,
-  ].filter(Boolean);
+  const parts = [street, city, region && zip ? `${region} ${zip}` : region || zip].filter(Boolean);
   return parts.join(", ");
 }
 
@@ -63,22 +60,26 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { customerId, customer: passedCustomer } = route.params || {};
   const isEditing = !!customerId;
+  const posthog = usePostHog();
 
-  const [name, setName]       = useState<string>("");
-  const [phone, setPhone]     = useState<string>("");
-  const [email, setEmail]     = useState<string>("");
-  const [address, setAddress]                   = useState<string>("");
+  const [name, setName] = useState<string>("");
+  const [phone, setPhone] = useState<string>("");
+  const [email, setEmail] = useState<string>("");
+  const [address, setAddress] = useState<string>("");
   const [addressSuggestions, setAddressSuggestions] = useState<string[]>([]);
-  const [addressLoading, setAddressLoading]     = useState<boolean>(false);
-  const [notes, setNotes]     = useState<string>("");
-  const [saving, setSaving]   = useState<boolean>(false);
+  const [addressLoading, setAddressLoading] = useState<boolean>(false);
+  const [notes, setNotes] = useState<string>("");
+  const [saving, setSaving] = useState<boolean>(false);
   const addressTimer = useRef<any>(null);
 
   useLayoutEffect(() => {
     navigation.setOptions({
       title: isEditing ? "Edit Customer" : "New Customer",
       headerLeft: () => (
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
         </TouchableOpacity>
       ),
@@ -146,7 +147,14 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
         if (hasRecord) {
           const updated = existing.map((c: any) =>
             c.id === customerId
-              ? { ...c, name: trimmedName, phone: phone.trim(), email: email.trim(), address: address.trim(), notes: notes.trim() }
+              ? {
+                  ...c,
+                  name: trimmedName,
+                  phone: phone.trim(),
+                  email: email.trim(),
+                  address: address.trim(),
+                  notes: notes.trim(),
+                }
               : c
           );
           await saveCustomers(updated);
@@ -154,12 +162,12 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
           // Invoice-derived customer (id is a name-key, no record yet) — promote
           // it to a real record instead of silently no-op'ing (roadmap #5, bug A).
           const promoted = {
-            id:        `c${Date.now()}`,
-            name:      trimmedName,
-            phone:     phone.trim(),
-            email:     email.trim(),
-            address:   address.trim(),
-            notes:     notes.trim(),
+            id: `c${Date.now()}`,
+            name: trimmedName,
+            phone: phone.trim(),
+            email: email.trim(),
+            address: address.trim(),
+            notes: notes.trim(),
             createdAt: new Date().toISOString(),
           };
           await saveCustomers([...existing, promoted]);
@@ -167,9 +175,7 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
       } else {
         // Duplicate check — normalize both sides to catch "Mike Smith" vs "mike smith"
         const normalizedNew = trimmedName.toLowerCase();
-        const duplicate = existing.find(
-          (c: any) => c.name.trim().toLowerCase() === normalizedNew
-        );
+        const duplicate = existing.find((c: any) => c.name.trim().toLowerCase() === normalizedNew);
         if (duplicate) {
           Alert.alert(
             "Customer already exists",
@@ -181,15 +187,20 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
         }
 
         const newCustomer = {
-          id:        `c${Date.now()}`,
-          name:      trimmedName,
-          phone:     phone.trim(),
-          email:     email.trim(),
-          address:   address.trim(),
-          notes:     notes.trim(),
+          id: `c${Date.now()}`,
+          name: trimmedName,
+          phone: phone.trim(),
+          email: email.trim(),
+          address: address.trim(),
+          notes: notes.trim(),
           createdAt: new Date().toISOString(),
         };
         await saveCustomers([...existing, newCustomer]);
+        posthog.capture("customer_added", {
+          has_phone: !!phone.trim(),
+          has_email: !!email.trim(),
+          has_address: !!address.trim(),
+        });
       }
 
       navigation.goBack();
@@ -207,10 +218,7 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={{ flex: 1 }}
       >
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-        >
+        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <Field
             label="Full name *"
             value={name}
@@ -277,10 +285,7 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
           />
 
           <View style={styles.actions}>
-            <TouchableOpacity
-              style={styles.cancelBtn}
-              onPress={() => navigation.goBack()}
-            >
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => navigation.goBack()}>
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -299,88 +304,87 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
   );
 }
 
-
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  scroll:    { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160 },
+    container: { flex: 1, backgroundColor: colors.background },
+    scroll: { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160 },
 
-  fieldGroup:  { marginBottom: spacing.md },
-  label: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    marginBottom: 5,
-    fontWeight: "500",
-  },
-  input: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.textPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  suggestions: {
-    marginTop: 4,
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    overflow: "hidden",
-  },
-  suggestionsSpinner: {
-    paddingVertical: spacing.sm,
-  },
-  suggestionRow: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-  },
-  suggestionBorder: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  suggestionText: {
-    fontSize: fontSize.sm,
-    color: colors.textPrimary,
-    lineHeight: 18,
-  },
+    fieldGroup: { marginBottom: spacing.md },
+    label: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      marginBottom: 5,
+      fontWeight: "500",
+    },
+    input: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      height: 44,
+      paddingHorizontal: spacing.md,
+      fontSize: fontSize.md,
+      color: colors.textPrimary,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    suggestions: {
+      marginTop: 4,
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      overflow: "hidden",
+    },
+    suggestionsSpinner: {
+      paddingVertical: spacing.sm,
+    },
+    suggestionRow: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: 12,
+    },
+    suggestionBorder: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    suggestionText: {
+      fontSize: fontSize.sm,
+      color: colors.textPrimary,
+      lineHeight: 18,
+    },
 
-  actions: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-  },
-  cancelBtn: {
-    flex: 1,
-    height: 48,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  cancelBtnText: {
-    fontSize: fontSize.md,
-    color: colors.textSecondary,
-    fontWeight: "500",
-  },
-  saveBtn: {
-    flex: 2,
-    height: 48,
-    borderRadius: radius.md,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  saveBtnDisabled: {
-    opacity: 0.6,
-  },
-  saveBtnText: {
-    fontSize: fontSize.md,
-    color: colors.textOnAccent,
-    fontWeight: "700",
-  },
+    actions: {
+      flexDirection: "row",
+      gap: spacing.sm,
+      marginTop: spacing.lg,
+    },
+    cancelBtn: {
+      flex: 1,
+      height: 48,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    cancelBtnText: {
+      fontSize: fontSize.md,
+      color: colors.textSecondary,
+      fontWeight: "500",
+    },
+    saveBtn: {
+      flex: 2,
+      height: 48,
+      borderRadius: radius.md,
+      backgroundColor: colors.accent,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    saveBtnDisabled: {
+      opacity: 0.6,
+    },
+    saveBtnText: {
+      fontSize: fontSize.md,
+      color: colors.textOnAccent,
+      fontWeight: "700",
+    },
   });
 }

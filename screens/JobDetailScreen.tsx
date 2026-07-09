@@ -33,6 +33,7 @@ import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, JobStatus } from "../types/models";
+import { usePostHog } from "posthog-react-native";
 
 // ── Pipeline ───────────────────────────────────────────────────────────────
 
@@ -52,9 +53,7 @@ const PIPELINE_STEPS = [
 function openMaps(address: string) {
   const encoded = encodeURIComponent(address);
   const url =
-    Platform.OS === "ios"
-      ? `maps://maps.apple.com/?q=${encoded}`
-      : `geo:0,0?q=${encoded}`;
+    Platform.OS === "ios" ? `maps://maps.apple.com/?q=${encoded}` : `geo:0,0?q=${encoded}`;
 
   Linking.canOpenURL(url).then((supported) => {
     if (supported) {
@@ -95,12 +94,7 @@ function PipelineBar({ currentStatus }: { currentStatus: JobStatus }) {
                 </View>
               </View>
               {i < PIPELINE_STEPS.length - 1 && (
-                <View
-                  style={[
-                    styles.pipelineLine,
-                    isDone && styles.pipelineLineDone,
-                  ]}
-                />
+                <View style={[styles.pipelineLine, isDone && styles.pipelineLineDone]} />
               )}
             </React.Fragment>
           );
@@ -125,16 +119,12 @@ function JobDetailsCard({ job, navigation }: { job: Job; navigation: any }) {
     <Card style={styles.section}>
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Job details</Text>
-        <TouchableOpacity
-          onPress={() => navigation.navigate("AddJob", { jobId: job.id })}
-        >
+        <TouchableOpacity onPress={() => navigation.navigate("AddJob", { jobId: job.id })}>
           <Text style={styles.editLink}>Edit</Text>
         </TouchableOpacity>
       </View>
       <Text style={styles.jobTitle}>{job.title}</Text>
-      {job.description ? (
-        <Text style={styles.jobDesc}>{job.description}</Text>
-      ) : null}
+      {job.description ? <Text style={styles.jobDesc}>{job.description}</Text> : null}
       {job.address ? (
         <TouchableOpacity onPress={() => openMaps(job.address)}>
           <Text style={styles.addressLink}>📍 {job.address}</Text>
@@ -148,9 +138,7 @@ function JobDetailsCard({ job, navigation }: { job: Job; navigation: any }) {
             : ""}
         </Text>
       )}
-      {job.notes ? (
-        <Text style={styles.notes}>💬 {job.notes}</Text>
-      ) : null}
+      {job.notes ? <Text style={styles.notes}>💬 {job.notes}</Text> : null}
     </Card>
   );
 }
@@ -200,9 +188,7 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: any }) {
         <Text style={styles.noEstimateText}>No estimate built yet.</Text>
         <Button
           label="Build estimate →"
-          onPress={() =>
-            navigation.navigate("PricingCalculator", { jobId: job.id })
-          }
+          onPress={() => navigation.navigate("PricingCalculator", { jobId: job.id })}
           style={{ marginTop: spacing.sm }}
         />
       </Card>
@@ -247,27 +233,21 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: any }) {
             Materials ({job.materials.length} item
             {job.materials.length !== 1 ? "s" : ""})
           </Text>
-          <Text style={styles.estimateValue}>
-            {formatQuote(materialCost)}
-          </Text>
+          <Text style={styles.estimateValue}>{formatQuote(materialCost)}</Text>
         </View>
       )}
 
       {overheadLine > 0 && (
         <View style={styles.estimateRow}>
           <Text style={styles.estimateLabel}>Overhead & operating costs</Text>
-          <Text style={styles.estimateValue}>
-            {formatQuote(overheadLine)}
-          </Text>
+          <Text style={styles.estimateValue}>{formatQuote(overheadLine)}</Text>
         </View>
       )}
 
       <Divider />
 
       <View style={styles.estimateRow}>
-        <Text style={[styles.estimateLabel, styles.estimateTotalLabel]}>
-          Total estimate
-        </Text>
+        <Text style={[styles.estimateLabel, styles.estimateTotalLabel]}>Total estimate</Text>
         <Text style={[styles.estimateValue, styles.estimateTotalValue]}>
           {formatQuote(job.estimateTotal)}
         </Text>
@@ -276,7 +256,15 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: any }) {
   );
 }
 
-function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () => void; onDelete: (uri: string) => void }) {
+function PhotosCard({
+  photos,
+  onAdd,
+  onDelete,
+}: {
+  photos: string[];
+  onAdd: () => void;
+  onDelete: (uri: string) => void;
+}) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -294,9 +282,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
       </View>
 
       {photos.length === 0 ? (
-        <Text style={styles.noPhotosText}>
-          No photos yet. Tap Add to document before/after.
-        </Text>
+        <Text style={styles.noPhotosText}>No photos yet. Tap Add to document before/after.</Text>
       ) : (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
           {photos.map((uri, i) => (
@@ -336,7 +322,12 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
   );
 }
 
-function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
+function TimeTrackingCard({
+  sessions,
+  estimatedHours,
+  onClockIn,
+  onClockOut,
+}: {
   sessions: any[];
   estimatedHours: number;
   onClockIn: () => void;
@@ -347,8 +338,10 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
 
   const [, setTick] = useState<number>(0);
 
-  const { activeSession, isClocked, timerStr, overUnder, sessionCount } =
-    computeTimeTracking(sessions, estimatedHours);
+  const { activeSession, isClocked, timerStr, overUnder, sessionCount } = computeTimeTracking(
+    sessions,
+    estimatedHours
+  );
 
   // Re-render every second while clocked in so the live timer ticks.
   useEffect(() => {
@@ -411,19 +404,31 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
   );
 }
 
-function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: any; onAdvance: () => void }) {
-  const actions: Record<string, { label: string; onPress: () => void; variant: "primary" | "secondary" | "ghost" }> = {
-    lead: job.estimateTotal > 0
-      ? {
-          label: "Send estimate →",
-          onPress: () => navigation.navigate("SendEstimate", { jobId: job.id }),
-          variant: "primary",
-        }
-      : {
-          label: "Build estimate",
-          onPress: () => navigation.navigate("PricingCalculator", { jobId: job.id }),
-          variant: "primary",
-        },
+function PrimaryAction({
+  job,
+  navigation,
+  onAdvance,
+}: {
+  job: Job;
+  navigation: any;
+  onAdvance: () => void;
+}) {
+  const actions: Record<
+    string,
+    { label: string; onPress: () => void; variant: "primary" | "secondary" | "ghost" }
+  > = {
+    lead:
+      job.estimateTotal > 0
+        ? {
+            label: "Send estimate →",
+            onPress: () => navigation.navigate("SendEstimate", { jobId: job.id }),
+            variant: "primary",
+          }
+        : {
+            label: "Build estimate",
+            onPress: () => navigation.navigate("PricingCalculator", { jobId: job.id }),
+            variant: "primary",
+          },
     estimate_sent: {
       label: "Mark as approved by customer",
       onPress: onAdvance,
@@ -431,8 +436,7 @@ function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: a
     },
     approved: {
       label: "Schedule this job",
-      onPress: () =>
-        navigation.navigate("AddJob", { jobId: job.id, focusSchedule: true }),
+      onPress: () => navigation.navigate("AddJob", { jobId: job.id, focusSchedule: true }),
       variant: "primary",
     },
     scheduled: {
@@ -447,14 +451,12 @@ function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: a
     },
     complete: {
       label: "Create invoice",
-      onPress: () =>
-        navigation.navigate("CreateInvoiceFromJob", { jobId: job.id }),
+      onPress: () => navigation.navigate("CreateInvoiceFromJob", { jobId: job.id }),
       variant: "primary",
     },
     invoiced: {
       label: "View invoice & send outreach",
-      onPress: () =>
-        navigation.navigate("Outreach", { invoiceId: job.invoiceId }),
+      onPress: () => navigation.navigate("Outreach", { invoiceId: job.invoiceId }),
       variant: "primary",
     },
     paid: {
@@ -489,6 +491,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<boolean>(false);
+  const posthog = usePostHog();
 
   useFocusEffect(
     useCallback(() => {
@@ -498,10 +501,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
         setLoading(true);
         setLoadError(false);
         try {
-          const [jobs, customers] = await Promise.all([
-            loadJobs(),
-            loadCustomers(),
-          ]);
+          const [jobs, customers] = await Promise.all([loadJobs(), loadCustomers()]);
           if (!active) return;
 
           const j = jobs.find((x: Job) => x.id === jobId);
@@ -533,6 +533,11 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
     const current = JOB_STATUSES[job.status];
     if (!current?.next) return;
     await updateJob({ status: current.next });
+    posthog.capture("job_status_advanced", {
+      from_status: job.status,
+      to_status: current.next,
+      estimate_total: job.estimateTotal,
+    });
 
     if (current.next === "complete" && customer) {
       loadSettings()
@@ -543,11 +548,9 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
 
   async function updateJob(changes: Partial<Job>) {
     const jobs = await loadJobs();
-    const updated = jobs.map((j: Job) =>
-      j.id === jobId ? { ...j, ...changes } : j
-    );
+    const updated = jobs.map((j: Job) => (j.id === jobId ? { ...j, ...changes } : j));
     await saveJobs(updated);
-    setJob((prev) => prev ? ({ ...prev, ...changes }) : prev);
+    setJob((prev) => (prev ? { ...prev, ...changes } : prev));
   }
 
   async function handleDelete() {
@@ -575,7 +578,10 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
             Alert.alert("Permission needed", "Camera access is required to take a photo.");
             return;
           }
-          const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"] as any,
+            quality: 0.8,
+          });
           if (!result.canceled) {
             const uri = await persistPhoto(result.assets[0].uri, "job-photos");
             await updateJob({ photos: [...((job as any).photos || []), uri] } as any);
@@ -590,7 +596,10 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
             Alert.alert("Permission needed", "Photo library access is required.");
             return;
           }
-          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
+          const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"] as any,
+            quality: 0.8,
+          });
           if (!result.canceled) {
             const uri = await persistPhoto(result.assets[0].uri, "job-photos");
             await updateJob({ photos: [...((job as any).photos || []), uri] } as any);
@@ -602,7 +611,9 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
   }
 
   async function handleDeletePhoto(uri: string) {
-    await updateJob({ photos: ((job as any).photos || []).filter((p: string) => p !== uri) } as any);
+    await updateJob({
+      photos: ((job as any).photos || []).filter((p: string) => p !== uri),
+    } as any);
     await deletePhoto(uri);
   }
 
@@ -640,13 +651,8 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
         <Text style={styles.errorTitle}>Couldn't load this job</Text>
-        <Text style={styles.errorSubtext}>
-          It may have been deleted or something went wrong.
-        </Text>
-        <TouchableOpacity
-          style={styles.errorButton}
-          onPress={() => navigation.goBack()}
-        >
+        <Text style={styles.errorSubtext}>It may have been deleted or something went wrong.</Text>
+        <TouchableOpacity style={styles.errorButton} onPress={() => navigation.goBack()}>
           <Text style={styles.errorButtonText}>Go back</Text>
         </TouchableOpacity>
       </SafeAreaView>
@@ -657,15 +663,12 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <PipelineBar currentStatus={job.status} />
         {job.recurringJobId ? (
           <TouchableOpacity
             style={styles.recurringBanner}
-            onPress={() => navigation.navigate('RecurringJobs')}
+            onPress={() => navigation.navigate("RecurringJobs")}
             activeOpacity={0.7}
           >
             <Ionicons name="repeat-outline" size={14} color={colors.accent} />
@@ -691,11 +694,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
 
         <Divider />
 
-        <PrimaryAction
-          job={job}
-          navigation={navigation}
-          onAdvance={advanceStatus}
-        />
+        <PrimaryAction job={job} navigation={navigation} onAdvance={advanceStatus} />
 
         <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
           <Text style={styles.deleteBtnText}>Delete job</Text>
@@ -719,26 +718,34 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     pipeline: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
     pipelineStep: { alignItems: "center" },
     pipelineDot: {
-      width: 20, height: 20, borderRadius: 10,
+      width: 20,
+      height: 20,
+      borderRadius: 10,
       backgroundColor: colors.border,
-      alignItems: "center", justifyContent: "center",
+      alignItems: "center",
+      justifyContent: "center",
     },
     pipelineDotDone: { backgroundColor: colors.success },
     pipelineDotCurrent: { backgroundColor: colors.accent },
     pipelineCheck: { color: colors.textOnAccent, fontSize: 10, fontWeight: "700" },
     pipelineLine: {
-      height: 2, flex: 1, backgroundColor: colors.border,
+      height: 2,
+      flex: 1,
+      backgroundColor: colors.border,
     },
     pipelineLineDone: { backgroundColor: colors.success },
     pipelineStatusLabel: {
-      marginTop: spacing.sm, textAlign: "center",
-      fontSize: fontSize.sm, fontWeight: "600", color: colors.accent,
+      marginTop: spacing.sm,
+      textAlign: "center",
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+      color: colors.accent,
     },
     pipelineStepCount: { fontSize: fontSize.xs, fontWeight: "400", color: colors.textMuted },
 
     recurringBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection: "row",
+      alignItems: "center",
       gap: 6,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
@@ -757,39 +764,74 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     // Sections
     section: { marginBottom: spacing.sm },
     sectionHeader: {
-      flexDirection: "row", justifyContent: "space-between",
-      alignItems: "center", marginBottom: spacing.sm,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: spacing.sm,
     },
     sectionTitle: {
-      fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary,
-      textTransform: "uppercase", letterSpacing: 0.5,
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
     },
     editLink: { fontSize: fontSize.sm, color: colors.accent },
     estimateHeaderActions: { flexDirection: "row", alignItems: "center", gap: 6 },
     editLinkSep: { fontSize: fontSize.sm, color: colors.textMuted },
 
     // Job details
-    jobTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 6 },
-    jobDesc: { fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, marginBottom: 8 },
+    jobTitle: {
+      fontSize: fontSize.lg,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 6,
+    },
+    jobDesc: {
+      fontSize: fontSize.md,
+      color: colors.textSecondary,
+      lineHeight: 22,
+      marginBottom: 8,
+    },
     addressLink: { fontSize: fontSize.sm, color: colors.accent, marginBottom: 6 },
     metaRow: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 4 },
-    notes: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 4, fontStyle: "italic" },
+    notes: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      marginTop: 4,
+      fontStyle: "italic",
+    },
 
     // Customer
-    customerName: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
+    customerName: {
+      fontSize: fontSize.md,
+      fontWeight: "600",
+      color: colors.textPrimary,
+      marginBottom: spacing.sm,
+    },
     contactRow: { flexDirection: "row", gap: 8 },
     contactBtn: {
-      flex: 1, paddingVertical: 8, borderRadius: radius.md,
-      backgroundColor: colors.accentBg, alignItems: "center",
+      flex: 1,
+      paddingVertical: 8,
+      borderRadius: radius.md,
+      backgroundColor: colors.accentBg,
+      alignItems: "center",
     },
     contactBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
 
     // Estimate
     estimateRow: {
-      flexDirection: "row", justifyContent: "space-between",
-      alignItems: "center", marginBottom: 6,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 6,
     },
-    estimateLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
+    estimateLabel: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      flex: 1,
+      marginRight: spacing.sm,
+    },
     estimateValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
     estimateTotalLabel: { fontWeight: "700", color: colors.textPrimary },
     estimateTotalValue: { fontWeight: "700", fontSize: fontSize.lg },
@@ -868,9 +910,25 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     deleteBtnText: { fontSize: fontSize.sm, color: colors.danger },
 
     // Error state
-    errorTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 8, textAlign: "center" },
-    errorSubtext: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: "center", marginBottom: 32 },
-    errorButton: { backgroundColor: colors.accent, paddingHorizontal: 32, paddingVertical: 14, borderRadius: radius.md },
+    errorTitle: {
+      fontSize: fontSize.lg,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 8,
+      textAlign: "center",
+    },
+    errorSubtext: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      textAlign: "center",
+      marginBottom: 32,
+    },
+    errorButton: {
+      backgroundColor: colors.accent,
+      paddingHorizontal: 32,
+      paddingVertical: 14,
+      borderRadius: radius.md,
+    },
     errorButtonText: { color: colors.textOnAccent, fontSize: fontSize.md, fontWeight: "700" },
   });
 }

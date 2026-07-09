@@ -20,8 +20,9 @@ import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
-import { useTheme } from '../hooks/useTheme';
+import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, Settings } from "../types/models";
+import { usePostHog } from "posthog-react-native";
 
 interface ScreenData {
   job: Job;
@@ -34,6 +35,7 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId } = route.params;
 
+  const posthog = usePostHog();
   const [data, setData] = useState<ScreenData | null>(null);
   const [channel, setChannel] = useState<"text" | "email">("email");
   const [message, setMessage] = useState<string>("");
@@ -50,43 +52,51 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
         loadSettings(),
       ]);
       const job = jobs.find((j: Job) => j.id === jobId);
-      if (!job) { navigation.goBack(); return; }
-      const customer = customers.find((c: Customer) => c.id === job.customerId) || {
-        name: job.customerName,
-        email: "",
-        phone: "",
-      } as Customer;
+      if (!job) {
+        navigation.goBack();
+        return;
+      }
+      const customer =
+        customers.find((c: Customer) => c.id === job.customerId) ||
+        ({
+          name: job.customerName,
+          email: "",
+          phone: "",
+        } as Customer);
       navigation.setOptions({ title: job.customerName || "Send Estimate" });
       setData({ job, customer, settings });
     }
     load();
   }, [jobId, navigation]);
 
-  const generate = useCallback(async (d: ScreenData | null = data) => {
-    if (!d) return;
-    setGenerating(true);
-    setMessage("");
-    try {
-      const raw = await generateEstimateMessage({
-        job: d.job,
-        customer: d.customer,
-        channel,
-        biz: d.settings,
-        apiKey: (d.settings as any).anthropicKey,
-      });
-      if (channel === "email" && raw.startsWith("Subject:")) {
-        const lines = raw.split("\n");
-        setSubject(lines[0].replace("Subject:", "").trim());
-        setMessage(lines.slice(2).join("\n").trim());
-      } else {
-        setSubject("");
-        setMessage(raw);
+  const generate = useCallback(
+    async (d: ScreenData | null = data) => {
+      if (!d) return;
+      setGenerating(true);
+      setMessage("");
+      try {
+        const raw = await generateEstimateMessage({
+          job: d.job,
+          customer: d.customer,
+          channel,
+          biz: d.settings,
+          apiKey: (d.settings as any).anthropicKey,
+        });
+        if (channel === "email" && raw.startsWith("Subject:")) {
+          const lines = raw.split("\n");
+          setSubject(lines[0].replace("Subject:", "").trim());
+          setMessage(lines.slice(2).join("\n").trim());
+        } else {
+          setSubject("");
+          setMessage(raw);
+        }
+      } catch {
+        setMessage("Error generating message. Check your connection.");
       }
-    } catch {
-      setMessage("Error generating message. Check your connection.");
-    }
-    setGenerating(false);
-  }, [channel, data]);
+      setGenerating(false);
+    },
+    [channel, data]
+  );
 
   useEffect(() => {
     if (!data) return;
@@ -113,17 +123,14 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
   async function handleExportPdf() {
     if (!data) return;
     const { job, customer, settings } = data;
-    const logoDataUri = settings.logoPhoto
-      ? await readPhotoAsDataUri(settings.logoPhoto)
-      : null;
+    const logoDataUri = settings.logoPhoto ? await readPhotoAsDataUri(settings.logoPhoto) : null;
     const html = estimateHtml(job, customer, settings, logoDataUri ?? undefined);
     const filename = `Estimate-${job.title.replace(/\s+/g, "-")}-${customer.name.replace(/\s+/g, "-")}`;
     await exportPdf(html, filename);
   }
 
   async function copyToClipboard() {
-    const full =
-      channel === "email" && subject ? `Subject: ${subject}\n\n${message}` : message;
+    const full = channel === "email" && subject ? `Subject: ${subject}\n\n${message}` : message;
     await Clipboard.setStringAsync(full);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -132,10 +139,12 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
   async function markAsSent() {
     setMarking(true);
     const jobs = await loadJobs();
-    const updated = jobs.map((j): Job =>
-      j.id === jobId ? { ...j, status: "estimate_sent" } : j
-    );
+    const updated = jobs.map((j): Job => (j.id === jobId ? { ...j, status: "estimate_sent" } : j));
     await saveJobs(updated);
+    posthog.capture("estimate_sent", {
+      channel,
+      estimate_total: data?.job.estimateTotal ?? null,
+    });
     navigation.goBack();
   }
 
@@ -218,7 +227,7 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
           {generating ? (
             <View style={styles.generatingRow}>
               <ActivityIndicator color={colors.accent} size="small" />
-              <Text style={styles.generatingText}>  Writing message…</Text>
+              <Text style={styles.generatingText}> Writing message…</Text>
             </View>
           ) : (
             <Text style={styles.messageText}>{message}</Text>
@@ -262,75 +271,85 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  loading: { flex: 1, alignItems: "center", justifyContent: "center" },
-  scroll: { padding: spacing.md, paddingBottom: 40 },
+    container: { flex: 1, backgroundColor: colors.background },
+    loading: { flex: 1, alignItems: "center", justifyContent: "center" },
+    scroll: { padding: spacing.md, paddingBottom: 40 },
 
-  summaryCard: { marginBottom: spacing.sm },
-  jobTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 2 },
-  customerName: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
-  lineRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 6,
-  },
-  lineLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
-  lineValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
-  totalLabel: { fontWeight: "700", color: colors.textPrimary },
-  totalValue: { fontWeight: "700", fontSize: fontSize.lg, color: colors.textPrimary },
+    summaryCard: { marginBottom: spacing.sm },
+    jobTitle: {
+      fontSize: fontSize.lg,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 2,
+    },
+    customerName: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+    lineRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 6,
+    },
+    lineLabel: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      flex: 1,
+      marginRight: spacing.sm,
+    },
+    lineValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
+    totalLabel: { fontWeight: "700", color: colors.textPrimary },
+    totalValue: { fontWeight: "700", fontSize: fontSize.lg, color: colors.textPrimary },
 
-  channelTabs: { flexDirection: "row", gap: 8, marginBottom: spacing.sm },
-  tab: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    backgroundColor: colors.surface,
-  },
-  tabActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-  tabText: { fontSize: fontSize.sm, color: colors.textSecondary },
-  tabTextActive: { color: colors.accent, fontWeight: "600" },
+    channelTabs: { flexDirection: "row", gap: 8, marginBottom: spacing.sm },
+    tab: {
+      flex: 1,
+      paddingVertical: 8,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      backgroundColor: colors.surface,
+    },
+    tabActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
+    tabText: { fontSize: fontSize.sm, color: colors.textSecondary },
+    tabTextActive: { color: colors.accent, fontWeight: "600" },
 
-  messageCard: { marginBottom: spacing.sm, minHeight: 120 },
-  subjectLine: {
-    fontSize: fontSize.sm,
-    fontWeight: "600",
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
-    paddingBottom: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  generatingRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.sm },
-  generatingText: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
-  messageText: { fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
+    messageCard: { marginBottom: spacing.sm, minHeight: 120 },
+    subjectLine: {
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      marginBottom: spacing.sm,
+      paddingBottom: spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    generatingRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.sm },
+    generatingText: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+    messageText: { fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
 
-  actionRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
-  actionBtn: {
-    flex: 1,
-    height: 36,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  actionBtnText: { fontSize: fontSize.sm, color: colors.textPrimary },
+    actionRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
+    actionBtn: {
+      flex: 1,
+      height: 36,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.borderStrong,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    actionBtnText: { fontSize: fontSize.sm, color: colors.textPrimary },
 
-  sendLabel: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    fontWeight: "500",
-    marginBottom: spacing.sm,
-  },
-  markHint: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    textAlign: "center",
-    marginTop: spacing.sm,
-  },
+    sendLabel: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      fontWeight: "500",
+      marginBottom: spacing.sm,
+    },
+    markHint: {
+      fontSize: fontSize.xs,
+      color: colors.textMuted,
+      textAlign: "center",
+      marginTop: spacing.sm,
+    },
   });
 }
