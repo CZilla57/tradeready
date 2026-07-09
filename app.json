@@ -60,8 +60,8 @@
       "termsUrl": "https://czilla57.github.io/tradeready-legal/terms.html",
       "rcAppleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
       "rcGoogleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
-      "posthogApiKey": "PLACEHOLDER_POSTHOG_KEY",
-      "sentryDsn": "PLACEHOLDER_SENTRY_DSN",
+      "posthogApiKey": "phc_n8uzAhbpcm5ygKiE2Xztnb9u7jj8ohZFB3qnCzBFGZJ7",
+      "sentryDsn": "https://a3f3e50131ae0edac8e8981bab9dde17@o4511707186528256.ingest.us.sentry.io/4511707197472768",
       "eas": {
         "projectId": "2dcb243e-0753-4c9e-b411-da4a97faa5fa"
       }
