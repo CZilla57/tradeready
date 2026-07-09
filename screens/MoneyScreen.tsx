@@ -25,6 +25,7 @@ import { MonthlyChart }      from '../components/money/MonthlyChart';
 import { ReceivablesCard }   from '../components/money/ReceivablesCard';
 import { TopCustomersCard }  from '../components/money/TopCustomersCard';
 import { MileageCard }       from '../components/money/MileageCard';
+import { PricebookCard }     from '../components/money/PricebookCard';
 import { ExpenseRow }        from '../components/money/ExpenseRow';
 import { AddExpenseModal }   from '../components/money/AddExpenseModal';
 import type { Invoice, Expense } from '../types/models';
@@ -184,6 +185,7 @@ export default function MoneyScreen({ navigation }: any) {
           />
           <ReceivablesCard invoices={invoices} jobs={jobs} />
           <MileageCard start={start} end={end} onPress={() => navigation.navigate('MileageLog', { initialFilter: activeFilter })} />
+          <PricebookCard onPress={() => navigation.navigate('Pricebook')} />
           <MonthlyChart invoices={invoices} expenses={expenses} />
           <ExpenseCategoryCard
             expensesByCategory={expensesByCategory}
