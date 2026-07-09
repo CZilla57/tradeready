@@ -73,7 +73,7 @@ export default function OutreachScreen({ route, navigation }: { route: any; navi
     load();
   }, [invoiceId, navigation]);
 
-  async function handleGenerateLink(providerOverride?: string) {
+  async function handleGenerateLink(providerOverride?: string, explicit: boolean = true) {
     const provider = providerOverride ?? selectedProvider;
     if (!invoice || !provider) return;
     setGeneratingLink(true);
@@ -82,7 +82,9 @@ export default function OutreachScreen({ route, navigation }: { route: any; navi
         ? await fetchPaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider))
         : await resolvePaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider));
       setPaymentLink(link);
-      track('payment_link_sent', { provider: provider });
+      if (explicit) {
+        track('payment_link_sent', { provider: provider });
+      }
       const allInvoices = await loadInvoices();
       await saveInvoices(
         allInvoices.map((i) =>
@@ -104,7 +106,7 @@ export default function OutreachScreen({ route, navigation }: { route: any; navi
     if (provider === selectedProvider) return;
     setSelectedProvider(provider);
     setPaymentLink("");
-    handleGenerateLink(provider);
+    handleGenerateLink(provider, false);
   }
 
   const generate = useCallback(async () => {

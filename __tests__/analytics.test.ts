@@ -27,6 +27,11 @@ describe("analytics", () => {
     expect(() => track("job_created")).not.toThrow();
   });
 
+  it("track() swallows PostHog errors", () => {
+    posthogRef.current = { capture: jest.fn(() => { throw new Error("SDK error"); }) } as any;
+    expect(() => track("test_event")).not.toThrow();
+  });
+
   it("identifyUser() calls posthog.identify and Sentry.setUser", () => {
     identifyUser("user-123");
     expect(mockPostHog.identify).toHaveBeenCalledWith("user-123");

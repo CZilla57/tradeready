@@ -141,9 +141,10 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
     setSaving(true);
     try {
       const existing = await loadCustomers();
+      let hasRecord = true;
 
       if (isEditing) {
-        const hasRecord = existing.some((c: any) => c.id === customerId);
+        hasRecord = existing.some((c: any) => c.id === customerId);
         if (hasRecord) {
           const updated = existing.map((c: any) =>
             c.id === customerId
@@ -193,7 +194,7 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
         await saveCustomers([...existing, newCustomer]);
       }
 
-      if (!isEditing) {
+      if (!isEditing || !hasRecord) {
         track('customer_created');
       }
       navigation.goBack();
