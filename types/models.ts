@@ -268,6 +268,7 @@ export interface Settings {
   email: string;
   address: string;
   region?: string;
+  logoPhoto?: string;
   trade: TradeId;
 
   // Pricing defaults — set once, applied to every estimate.

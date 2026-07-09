@@ -16,7 +16,7 @@ export * from "./lifecycle";
 export * from "./dailyOps";
 
 export { loadSettings, saveSettings } from "./settings";
-export { defaultSettings } from "./defaults";
+export { defaultSettings, defaultInvoices } from "./defaults";
 export { loadRecurringJobs, saveRecurringJobs } from "./recurringJobs";
 export { loadTrips, saveTrips } from "./trips";
 export { loadPricebook, savePricebook } from "./pricebook";

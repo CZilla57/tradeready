@@ -36,6 +36,7 @@ type FieldProps = {
   autoCapitalize?: TextInputProps["autoCapitalize"];
   multiline?: boolean;
   autoFocus?: boolean;
+  onBlur?: () => void;
   flex?: boolean;
   containerStyle?: StyleProp<ViewStyle>;
   labelStyle?: StyleProp<TextStyle>;
@@ -51,6 +52,7 @@ export default function Field({
   autoCapitalize,
   multiline,
   autoFocus,
+  onBlur,
   flex,
   containerStyle,
   labelStyle,
@@ -69,6 +71,7 @@ export default function Field({
         style={[styles.input, multiline && styles.inputMulti, inputStyle]}
         value={value}
         onChangeText={onChangeText}
+        onBlur={onBlur}
         placeholder={placeholder}
         placeholderTextColor={colors.textMuted}
         keyboardType={keyboardType || "default"}

@@ -4,7 +4,7 @@
 // types/models.ts. Only defaultSettings is part of the public storage API (the
 // onboarding flow reads it); the collection seeds are internal to storage.
 
-import type { Invoice, Job, Customer, Settings } from "../../types/models";
+import type { Invoice, Job, Customer, Settings, TradeId } from "../../types/models";
 
 export function defaultCustomers(): Customer[] {
   return [
@@ -113,7 +113,22 @@ export function defaultJobs(): Job[] {
   ];
 }
 
-export function defaultInvoices(): Invoice[] {
+const SAMPLE_INVOICE_DESCS: Record<TradeId, string[]> = {
+  plumbing: ["Kitchen faucet replacement", "Emergency pipe repair", "Water heater flush", "Bathroom remodel — rough-in"],
+  electrical: ["Panel upgrade — 200A", "Recessed lighting install", "Outlet and switch replacement", "EV charger installation"],
+  hvac: ["AC unit service call", "Furnace replacement", "Ductwork repair", "Thermostat installation"],
+  carpenter: ["Custom shelving build", "Deck repair and staining", "Door frame replacement", "Cabinet installation"],
+  bricklayer: ["Garden wall construction", "Chimney repointing", "Patio brickwork", "Foundation repair"],
+  plasterer: ["Living room skim coat", "Ceiling repair", "Full room replaster", "Decorative cornice work"],
+  landscaping: ["Spring cleanup and mulching", "Patio paver installation", "Weekly mowing contract — Q2", "Tree trimming and removal"],
+  cleaning: ["Deep clean — 3BR house", "Post-construction cleanup", "Office weekly service", "Move-out clean"],
+  painting: ["Interior 2-room repaint", "Exterior house painting", "Cabinet refinishing", "Deck staining"],
+  handyman: ["Fence repair", "Drywall patch and paint", "Ceiling fan installation", "Gutter cleaning"],
+  other: ["Service call", "Project estimate", "Maintenance visit", "Repair work"],
+};
+
+export function defaultInvoices(trade?: TradeId): Invoice[] {
+  const descs = SAMPLE_INVOICE_DESCS[trade || "other"];
   return [
     {
       id: "1",
@@ -123,7 +138,7 @@ export function defaultInvoices(): Invoice[] {
       due: "2026-05-10",
       email: "owner@riversidebakery.com",
       phone: "(555) 301-2200",
-      desc: "Monthly bookkeeping — April",
+      desc: descs[0],
       paid: false,
     },
     {
@@ -134,7 +149,7 @@ export function defaultInvoices(): Invoice[] {
       due: "2026-06-01",
       email: "billing@greenthumbla.com",
       phone: "(555) 874-9900",
-      desc: "Lawn care contract Q2",
+      desc: descs[1],
       paid: false,
     },
     {
@@ -145,7 +160,7 @@ export function defaultInvoices(): Invoice[] {
       due: "2026-06-15",
       email: "admin@pateldental.com",
       phone: "(555) 440-1133",
-      desc: "Website + SEO package",
+      desc: descs[2],
       paid: false,
     },
     {
@@ -156,7 +171,7 @@ export function defaultInvoices(): Invoice[] {
       due: "2026-05-20",
       email: "mgr@blueridgecoffee.com",
       phone: "(555) 920-5544",
-      desc: "Logo refresh",
+      desc: descs[3],
       paid: true,
     },
   ];
@@ -171,6 +186,7 @@ export function defaultSettings(): Settings {
     email: "",
     address: "",
     region: "",
+    logoPhoto: "",
     trade: "plumbing", // plumbing | electrical | hvac | landscaping | cleaning | painting | handyman | other
 
     // Pricing defaults — worker sets these once, used in every estimate
