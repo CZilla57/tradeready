@@ -78,7 +78,12 @@ module.exports = async function handler(req, res) {
       return res.status(502).json({ error: "Could not parse AI response" });
     }
 
-    const suggestion = JSON.parse(jsonMatch[0]);
+    let suggestion;
+    try {
+      suggestion = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(502).json({ error: "Could not parse AI response" });
+    }
     return res.status(200).json(suggestion);
   } catch {
     return res.status(502).json({ error: "Failed to reach AI provider." });

@@ -26,11 +26,10 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
     }, []),
   );
 
-  const filtered = entries.filter(
-    (e) => e.name.toLowerCase().includes(search.toLowerCase()),
-  );
-
   const sections = useMemo(() => {
+    const filtered = entries.filter(
+      (e) => e.name.toLowerCase().includes(search.toLowerCase()),
+    );
     const grouped: Record<string, PricebookEntry[]> = {};
     for (const e of filtered) {
       const key = e.category || "Uncategorized";
@@ -39,7 +38,7 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
     return Object.keys(grouped)
       .sort((a, b) => (a === "Uncategorized" ? 1 : b === "Uncategorized" ? -1 : a.localeCompare(b)))
       .map((title) => ({ title, data: grouped[title] }));
-  }, [filtered]);
+  }, [entries, search]);
 
   function confirmDelete(entry: PricebookEntry) {
     Alert.alert("Delete Service", `Remove "${entry.name}" from your Pricebook?`, [

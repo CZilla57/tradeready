@@ -53,11 +53,10 @@ export function PricebookPickerModal({ visible, hasExistingData, onSelect, onDis
     }),
   ).current;
 
-  const filtered = entries.filter(
-    (e) => e.name.toLowerCase().includes(search.toLowerCase()),
-  );
-
   const sections = useMemo(() => {
+    const filtered = entries.filter(
+      (e) => e.name.toLowerCase().includes(search.toLowerCase()),
+    );
     const grouped: Record<string, PricebookEntry[]> = {};
     for (const e of filtered) {
       const key = e.category || "Uncategorized";
@@ -66,7 +65,7 @@ export function PricebookPickerModal({ visible, hasExistingData, onSelect, onDis
     return Object.keys(grouped)
       .sort((a, b) => (a === "Uncategorized" ? 1 : b === "Uncategorized" ? -1 : a.localeCompare(b)))
       .map((title) => ({ title, data: grouped[title] }));
-  }, [filtered]);
+  }, [entries, search]);
 
   function handleSelect(entry: PricebookEntry) {
     if (hasExistingData) {
