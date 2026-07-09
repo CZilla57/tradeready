@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { trySync } from '../utils/sync';
+import { trySyncAwait } from '../utils/sync';
 import { track } from '../utils/analytics';
 
 export function useRefresh(
@@ -12,8 +12,8 @@ export function useRefresh(
     setRefreshing(true);
 
     (async () => {
-      try { await trySync(); } catch {}
-      try { await reload(); } catch {}
+      try { await trySyncAwait(); } catch {}
+      try { await reload(); } catch (err) { console.error('useRefresh: reload failed', err); }
       if (screen) track('pull_to_refresh', { screen });
     })().finally(() => setRefreshing(false));
   }, [reload, screen]);

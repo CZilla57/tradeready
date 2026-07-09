@@ -184,6 +184,13 @@ export async function trySync(): Promise<void> {
   } catch { /* not logged in or offline */ }
 }
 
+export async function trySyncAwait(): Promise<void> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) await syncIfOnline(session.user.id);
+  } catch { /* not logged in or offline */ }
+}
+
 export async function initialSync(userId: string): Promise<void> {
   try {
     const done = await AsyncStorage.getItem(INIT_DONE_KEY + userId);

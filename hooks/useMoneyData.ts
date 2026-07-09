@@ -49,7 +49,6 @@ export function useMoneyData(): UseMoneyDataReturn {
   );
 
   const refresh = useCallback(async () => {
-    setLoading(true);
     try {
       const [invs, exps, jbs] = await Promise.all([
         loadInvoices(),
@@ -61,8 +60,6 @@ export function useMoneyData(): UseMoneyDataReturn {
       setJobs(jbs);
     } catch (err) {
       console.error('useMoneyData: failed to load data', err);
-    } finally {
-      setLoading(false);
     }
   }, []);
 

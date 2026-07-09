@@ -1,10 +1,10 @@
 // RNTL v14 ships an async renderHook()/render() — every test must await it.
 import { renderHook, act } from '@testing-library/react-native';
 import { useRefresh } from '../hooks/useRefresh';
-import { trySync } from '../utils/sync';
+import { trySyncAwait } from '../utils/sync';
 import { track } from '../utils/analytics';
 
-jest.mock('../utils/sync', () => ({ trySync: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../utils/sync', () => ({ trySyncAwait: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../utils/analytics', () => ({ track: jest.fn() }));
 
 beforeEach(() => jest.clearAllMocks());
@@ -15,13 +15,13 @@ describe('useRefresh', () => {
     expect(result.current.refreshing).toBe(false);
   });
 
-  it('calls trySync then the reload callback on refresh', async () => {
+  it('calls trySyncAwait then the reload callback on refresh', async () => {
     const reload = jest.fn().mockResolvedValue(undefined);
     const { result } = await renderHook(() => useRefresh(reload, 'TestScreen'));
 
     await act(async () => { result.current.onRefresh(); });
 
-    expect(trySync).toHaveBeenCalled();
+    expect(trySyncAwait).toHaveBeenCalled();
     expect(reload).toHaveBeenCalled();
   });
 
@@ -44,7 +44,7 @@ describe('useRefresh', () => {
   });
 
   it('sync failure does not prevent reload from running', async () => {
-    (trySync as jest.Mock).mockRejectedValueOnce(new Error('offline'));
+    (trySyncAwait as jest.Mock).mockRejectedValueOnce(new Error('offline'));
     const reload = jest.fn().mockResolvedValue(undefined);
     const { result } = await renderHook(() => useRefresh(reload));
 
