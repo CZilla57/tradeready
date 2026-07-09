@@ -8,12 +8,14 @@ import {
   Linking,
   Alert,
   Platform,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobsForDate, loadSettings } from "../utils/storage";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { useRefresh } from "../hooks/useRefresh";
 import type { Job } from "../types/models";
 
 function getTodayDateString(): string {
@@ -177,6 +179,13 @@ export default function RouteScreen({ navigation }: { navigation: any }) {
     }, [])
   );
 
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    const today = getTodayDateString();
+    const [jobs, settings] = await Promise.all([loadJobsForDate(today), loadSettings()]);
+    setStops(jobs);
+    setBusinessAddress(settings?.address || '');
+  }, 'RouteScreen');
+
   function moveUp(index: number) {
     if (index === 0) return;
     setStops((prev) => {
@@ -217,7 +226,11 @@ export default function RouteScreen({ navigation }: { navigation: any }) {
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
         <Text style={styles.hint}>
           Use ↑↓ to reorder your stops, then navigate one at a time or open the full route.
         </Text>

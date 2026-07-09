@@ -6,11 +6,13 @@ import {
   ScrollView,
   TouchableOpacity,
   FlatList,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
+import { useRefresh } from '../hooks/useRefresh';
 import {
   DATE_FILTERS,
   EXPENSE_CATEGORIES,
@@ -82,8 +84,9 @@ function ExpenseCategoryCard({ expensesByCategory, filteredExpenseTotal }: Expen
 export default function MoneyScreen({ navigation }: any) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
-  const { invoices, expenses, jobs, loading, handleAddExpense, handleDeleteExpense } =
+  const { invoices, expenses, jobs, loading, refresh, handleAddExpense, handleDeleteExpense } =
     useMoneyData();
+  const { refreshing, onRefresh } = useRefresh(refresh, 'MoneyScreen');
 
   const [activeFilter, setActiveFilter] = useState<string>('this_month');
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -183,7 +186,11 @@ export default function MoneyScreen({ navigation }: any) {
 
       {/* ── Overview Tab ──────────────────────────────────────────────────── */}
       {activeTab === 'overview' && (
-        <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
           <SummaryCard
             income={filteredIncome}
             expenses={filteredExpenseTotal}
@@ -232,6 +239,8 @@ export default function MoneyScreen({ navigation }: any) {
       {activeTab === 'expenses' && (
         <FlatList
           style={styles.scrollContent}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
           data={filteredExpenses.sort((a, b) => (new Date((b as any).date) as any) - (new Date((a as any).date) as any))}
           keyExtractor={(item) => (item as any).id}
           renderItem={({ item }) => (

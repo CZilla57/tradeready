@@ -12,6 +12,7 @@ import { Button } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { useRefresh } from "../hooks/useRefresh";
 import type { PricebookEntry } from "../types/models";
 
 export default function PricebookScreen({ navigation }: { navigation: any }) {
@@ -25,6 +26,10 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
       loadPricebook().then(setEntries);
     }, []),
   );
+
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    setEntries(await loadPricebook());
+  }, 'PricebookScreen');
 
   const sections = useMemo(() => {
     const filtered = entries.filter(
@@ -94,6 +99,8 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
       </View>
 
       <SectionList
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         sections={sections}
         keyExtractor={(item) => item.id}
         renderSectionHeader={({ section: { title } }) => (

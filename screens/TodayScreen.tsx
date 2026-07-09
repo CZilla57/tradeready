@@ -6,12 +6,14 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
+import { useRefresh } from '../hooks/useRefresh';
 import {
   loadJobs,
   getExpectedEarningsForDate,
@@ -378,6 +380,19 @@ export default function TodayScreen({ navigation }: { navigation: any }) {
     }, [todayString])
   );
 
+  const { refreshing, onRefresh } = useRefresh(async () => {
+    const [allJobsList, expectedEarnings, overdue, leads] = await Promise.all([
+      loadJobs(),
+      getExpectedEarningsForDate(todayString),
+      loadOverdueInvoices(),
+      loadLeadJobs(),
+    ]);
+    setAllJobs(allJobsList);
+    setEarnings(expectedEarnings);
+    setOverdueInvoices(overdue);
+    setLeadJobs(leads);
+  }, 'TodayScreen');
+
   function goToInvoices() {
     navigation.getParent()?.navigate('Invoices');
   }
@@ -427,6 +442,7 @@ export default function TodayScreen({ navigation }: { navigation: any }) {
     <ScrollView
       style={[styles.container, { paddingTop: insets.top }]}
       contentContainerStyle={styles.scrollContent}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
       {/* Header */}
       <View style={styles.header}>
