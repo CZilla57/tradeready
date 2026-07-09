@@ -16,6 +16,7 @@ import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { generateEstimateMessage } from "../utils/invoiceHelpers";
 import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
+import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
@@ -112,7 +113,10 @@ export default function SendEstimateScreen({ route, navigation }: { route: any; 
   async function handleExportPdf() {
     if (!data) return;
     const { job, customer, settings } = data;
-    const html = estimateHtml(job, customer, settings);
+    const logoDataUri = settings.logoPhoto
+      ? await readPhotoAsDataUri(settings.logoPhoto)
+      : null;
+    const html = estimateHtml(job, customer, settings, logoDataUri ?? undefined);
     const filename = `Estimate-${job.title.replace(/\s+/g, "-")}-${customer.name.replace(/\s+/g, "-")}`;
     await exportPdf(html, filename);
   }

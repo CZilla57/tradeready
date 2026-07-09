@@ -31,8 +31,18 @@ const BASE_CSS = `
     padding-bottom: 24px;
     border-bottom: 2px solid ${ACCENT};
   }
+  .logo { max-height: 56px; max-width: 140px; object-fit: contain; margin-bottom: 8px; display: block; }
   .biz-name { font-size: 22px; font-weight: 700; color: ${ACCENT}; }
   .biz-sub { font-size: 12px; color: #636366; margin-top: 4px; }
+  .section-header td {
+    padding: 10px 0 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #636366;
+    border-bottom: 1px solid #e5e5ea;
+  }
   .doc-type {
     font-size: 28px;
     font-weight: 300;
@@ -106,7 +116,7 @@ const BASE_CSS = `
   }
 `;
 
-export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}): string {
+export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoDataUri?: string): string {
   const bizName    = biz.businessName || "Your Business";
   const bizPhone   = biz.phone   || "";
   const bizEmail   = biz.email   || "";
@@ -121,11 +131,31 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}): stri
   const dueDate   = fmtDate(invoice.due);
   const isPaid    = invoice.paid;
 
+  const items = invoice.lineItems ?? [];
+  const primaryItems = items.filter((li) => li.category === "labor");
+  const additionalItems = items.filter((li) => li.category !== "labor");
+
+  let tableRows = "";
+  if (items.length > 0) {
+    for (const li of primaryItems) {
+      tableRows += `<tr><td>${li.description}</td><td>${formatMoney(li.amount)}</td></tr>`;
+    }
+    if (additionalItems.length > 0) {
+      tableRows += `<tr class="section-header"><td colspan="2">Additional Charges</td></tr>`;
+      for (const li of additionalItems) {
+        tableRows += `<tr><td>${li.description}</td><td>${formatMoney(li.amount)}</td></tr>`;
+      }
+    }
+  } else {
+    tableRows = `<tr><td>${invoice.desc || "Services rendered"}</td><td>${formatMoney(invoice.amount)}</td></tr>`;
+  }
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>${BASE_CSS}</style></head><body>
 
 <div class="header">
   <div>
+    ${logoDataUri ? `<img class="logo" src="${logoDataUri}" />` : ""}
     <div class="biz-name">${bizName}</div>
     ${bizSubLines ? `<div class="biz-sub">${bizSubLines}</div>` : ""}
   </div>
@@ -155,10 +185,7 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}): stri
     <tr><th>Description</th><th>Amount</th></tr>
   </thead>
   <tbody>
-    <tr>
-      <td>${invoice.desc || "Services rendered"}</td>
-      <td>${formatMoney(invoice.amount)}</td>
-    </tr>
+    ${tableRows}
   </tbody>
 </table>
 
@@ -172,7 +199,7 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}): stri
 </body></html>`;
 }
 
-export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Partial<Settings> = {}): string {
+export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Partial<Settings> = {}, logoDataUri?: string): string {
   const bizName    = biz.businessName || "Your Business";
   const bizPhone   = biz.phone   || "";
   const bizEmail   = biz.email   || "";
@@ -208,6 +235,7 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
 
 <div class="header">
   <div>
+    ${logoDataUri ? `<img class="logo" src="${logoDataUri}" />` : ""}
     <div class="biz-name">${bizName}</div>
     ${bizSubLines ? `<div class="biz-sub">${bizSubLines}</div>` : ""}
   </div>

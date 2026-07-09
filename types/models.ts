@@ -140,6 +140,14 @@ export interface AIPricingSuggestion {
   };
 }
 
+export type InvoiceLineCategory = 'labor' | 'materials' | 'overhead' | 'travel' | 'other';
+
+export interface InvoiceLineItem {
+  description: string;
+  amount: number;
+  category: InvoiceLineCategory;
+}
+
 export interface Invoice {
   id: string;
   /**
@@ -166,6 +174,8 @@ export interface Invoice {
   /** Cached payment link + the amount it was generated for (invoiceHelpers). */
   paymentLinkUrl?: string;
   paymentLinkAmount?: number;
+  /** Itemised breakdown from the job estimate; absent on manually-created invoices. */
+  lineItems?: InvoiceLineItem[];
   // NOTE: pdfTemplates references `invoice.created`, which is NOT a field here —
   // that is why the generated PDF's issue date always renders as "today".
 }

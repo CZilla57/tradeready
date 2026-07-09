@@ -19,3 +19,18 @@ export async function deletePhoto(uri: string): Promise<void> {
     // File already gone — not an error
   }
 }
+
+export async function readPhotoAsDataUri(uri: string): Promise<string | null> {
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    if (!info.exists) return null;
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const ext = uri.split('.').pop()?.toLowerCase() ?? 'jpeg';
+    const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+    return `data:${mime};base64,${base64}`;
+  } catch {
+    return null;
+  }
+}

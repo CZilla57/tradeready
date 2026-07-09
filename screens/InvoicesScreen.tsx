@@ -24,6 +24,7 @@ import { summarizeInvoices, filterInvoices } from "../utils/invoiceStats";
 import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
+import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { Badge, StatCard, EmptyState } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
@@ -52,7 +53,10 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
   const { outstanding, overdueCount, collected } = summarizeInvoices(invoices);
 
   async function handleExportPdf(inv: Invoice) {
-    const html = invoiceHtml(inv, settings);
+    const logoDataUri = settings.logoPhoto
+      ? await readPhotoAsDataUri(settings.logoPhoto)
+      : null;
+    const html = invoiceHtml(inv, settings, logoDataUri ?? undefined);
     const filename = `Invoice-${inv.number || inv.id}-${(inv as any).customer.replace(/\s+/g, "-")}`;
     await exportPdf(html, filename);
   }

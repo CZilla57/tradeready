@@ -22,12 +22,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer } from "../utils/storage";
+import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import Field from "../components/Field";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
-import type { Job, Invoice, Customer } from "../types/models";
+import type { Job, Invoice, Customer, InvoiceLineItem } from "../types/models";
 
 function trackedDisplay(sessions: any[] = []): string | null {
   const ms = sessions
@@ -127,7 +128,29 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: { rout
         phone: phone.trim(),
       });
 
-      // Build the invoice record — matches the shape expected by InvoicesScreen / AddInvoiceScreen
+      // Derive line items from the job's estimate breakdown
+      const lineItems: InvoiceLineItem[] = [];
+      if (job) {
+        const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
+        if (laborCost > 0) {
+          lineItems.push({
+            description: `Labor — ${job.laborHours || 0} hrs @ ${formatQuote(job.laborRate || 0)}/hr`,
+            amount: laborCost,
+            category: "labor",
+          });
+        }
+        if (hasMaterials) {
+          const materials = job.materials || [];
+          const label = materials.length === 1
+            ? materials[0].name || "Materials"
+            : `Materials (${materials.length} items)`;
+          lineItems.push({ description: label, amount: materialCost, category: "materials" });
+        }
+        if (overheadLine > 1) {
+          lineItems.push({ description: "Overhead & operating costs", amount: overheadLine, category: "overhead" });
+        }
+      }
+
       const newInvoice = {
         id:         `inv${Date.now()}`,
         customer:   customer.trim(),
@@ -139,7 +162,8 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: { rout
         phone:    phone.trim(),
         desc:     desc.trim(),
         paid:     false,
-        jobId,    // back-reference so we can cross-link later
+        jobId,
+        ...(lineItems.length > 0 ? { lineItems } : {}),
       };
 
       await saveInvoices([...invoices, newInvoice]);
