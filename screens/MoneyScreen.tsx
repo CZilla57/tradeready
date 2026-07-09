@@ -26,6 +26,12 @@ import { ReceivablesCard }   from '../components/money/ReceivablesCard';
 import { TopCustomersCard }  from '../components/money/TopCustomersCard';
 import { MileageCard }       from '../components/money/MileageCard';
 import { PricebookCard }     from '../components/money/PricebookCard';
+import { ConversionFunnelCard } from '../components/money/ConversionFunnelCard';
+import { AvgJobValueCard }      from '../components/money/AvgJobValueCard';
+import { InvoiceAgingCard }    from '../components/money/InvoiceAgingCard';
+import { RevenueByTypeCard }   from '../components/money/RevenueByTypeCard';
+import { SeasonalTrendsCard }  from '../components/money/SeasonalTrendsCard';
+import { CustomerMixCard }     from '../components/money/CustomerMixCard';
 import { ExpenseRow }        from '../components/money/ExpenseRow';
 import { AddExpenseModal }   from '../components/money/AddExpenseModal';
 import type { Invoice, Expense } from '../types/models';
@@ -184,14 +190,26 @@ export default function MoneyScreen({ navigation }: any) {
             label={activeFilterLabel}
           />
           <ReceivablesCard invoices={invoices} jobs={jobs} />
+          <ConversionFunnelCard jobs={jobs} />
+          <AvgJobValueCard
+            jobs={jobs}
+            start={start}
+            end={end}
+            prevStart={prevRange?.start ?? null}
+            prevEnd={prevRange?.end ?? null}
+          />
           <MileageCard start={start} end={end} onPress={() => navigation.navigate('MileageLog', { initialFilter: activeFilter })} />
           <PricebookCard onPress={() => navigation.navigate('Pricebook')} />
           <MonthlyChart invoices={invoices} expenses={expenses} />
+          <SeasonalTrendsCard invoices={invoices} />
           <ExpenseCategoryCard
             expensesByCategory={expensesByCategory}
             filteredExpenseTotal={filteredExpenseTotal}
           />
           <TopCustomersCard invoices={invoices} start={start} end={end} />
+          <CustomerMixCard invoices={invoices} start={start} end={end} />
+          <RevenueByTypeCard jobs={jobs} />
+          <InvoiceAgingCard invoices={invoices} />
 
           {filteredIncome === 0 && filteredExpenseTotal === 0 && (
             <View style={styles.emptyState}>
