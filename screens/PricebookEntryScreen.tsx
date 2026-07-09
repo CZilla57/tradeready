@@ -11,7 +11,8 @@ import { Button, Card } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { PricebookEntry, Settings } from "../types/models";
+import type { PricebookEntry, Settings, AIPricingSuggestion } from "../types/models";
+import { getAIPricingSuggestion } from "../utils/pricebookAI";
 
 interface LocalMaterial {
   id: string;
@@ -45,6 +46,8 @@ export default function PricebookEntryScreen({
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<AIPricingSuggestion | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -139,6 +142,35 @@ export default function PricebookEntryScreen({
     await savePricebook(updated);
     setSaving(false);
     navigation.goBack();
+  }
+
+  async function handleAISuggest() {
+    if (!name.trim()) {
+      Alert.alert("Name required", "Enter a service name so the AI knows what to price.");
+      return;
+    }
+    setAiLoading(true);
+    setAiSuggestion(null);
+    const result = await getAIPricingSuggestion({
+      serviceName: name.trim(),
+      description: description.trim() || undefined,
+      category: category.trim() || undefined,
+      materials: materials.map((m) => ({
+        id: m.id,
+        name: String(m.name),
+        quantity: parseFloat(String(m.quantity)) || 0,
+        unitCost: parseFloat(String(m.unitCost)) || 0,
+      })),
+      laborHours: parseFloat(laborHours) || 0,
+      laborRate: parseFloat(laborRate) || 0,
+      settings,
+    });
+    setAiLoading(false);
+    if (result) {
+      setAiSuggestion(result);
+    } else {
+      Alert.alert("Couldn't get suggestions", "AI pricing is unavailable right now. Try again later.");
+    }
   }
 
   const filteredCategories = existingCategories.filter(
@@ -287,7 +319,90 @@ export default function PricebookEntryScreen({
             </View>
           </Card>
 
-          {/* AI Pricing Assist button will be added in Task 6 */}
+          <Card style={{ marginTop: spacing.md }}>
+            <Button
+              label={aiLoading ? "Getting suggestions..." : "🤖 Get AI Pricing Suggestions"}
+              variant="secondary"
+              onPress={handleAISuggest}
+              loading={aiLoading}
+            />
+          </Card>
+
+          {aiSuggestion && (
+            <Card style={{ marginTop: spacing.md }}>
+              <Text style={styles.sectionTitle}>AI Suggestions</Text>
+
+              {aiSuggestion.laborHours && (
+                <View style={styles.suggestionItem}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.suggestionLabel}>Labor: {aiSuggestion.laborHours.suggested} hrs</Text>
+                    <Text style={styles.suggestionReasoning}>{aiSuggestion.laborHours.reasoning}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.applyBtn}
+                    onPress={() => setLaborHours(String(aiSuggestion.laborHours!.suggested))}
+                  >
+                    <Text style={styles.applyBtnText}>Apply</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {aiSuggestion.laborRate && (
+                <View style={styles.suggestionItem}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.suggestionLabel}>Rate: ${aiSuggestion.laborRate.suggested}/hr</Text>
+                    <Text style={styles.suggestionReasoning}>{aiSuggestion.laborRate.reasoning}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.applyBtn}
+                    onPress={() => setLaborRate(String(aiSuggestion.laborRate!.suggested))}
+                  >
+                    <Text style={styles.applyBtnText}>Apply</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {aiSuggestion.materials?.map((m, i) => (
+                <View key={i} style={styles.suggestionItem}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.suggestionLabel}>{m.name}: ${m.suggestedUnitCost}</Text>
+                    <Text style={styles.suggestionReasoning}>{m.reasoning}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.applyBtn}
+                    onPress={() => {
+                      const existing = materials.find(
+                        (mat) => String(mat.name).toLowerCase() === m.name.toLowerCase(),
+                      );
+                      if (existing) {
+                        updateMaterial(existing.id, "unitCost", m.suggestedUnitCost);
+                      } else {
+                        setMaterials((prev) => [
+                          ...prev,
+                          { id: `m${Date.now()}-${i}`, name: m.name, quantity: 1, unitCost: m.suggestedUnitCost },
+                        ]);
+                      }
+                    }}
+                  >
+                    <Text style={styles.applyBtnText}>Apply</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+
+              {aiSuggestion.overallRange && (
+                <View style={[styles.suggestionItem, { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.suggestionLabel}>
+                      Market range: {formatQuote(aiSuggestion.overallRange.low)} – {formatQuote(aiSuggestion.overallRange.high)}
+                    </Text>
+                    <Text style={styles.suggestionReasoning}>
+                      Mid: {formatQuote(aiSuggestion.overallRange.mid)} · {aiSuggestion.overallRange.reasoning}
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </Card>
+          )}
 
           <View style={styles.actions}>
             <Button
@@ -361,5 +476,22 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     totalLabel: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "600" },
     totalValue: { color: colors.accent, fontSize: fontSize.xl, fontWeight: "700" },
     actions: { marginTop: spacing.lg },
+    suggestionItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    suggestionLabel: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "600" },
+    suggestionReasoning: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
+    applyBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: radius.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs + 2,
+      marginLeft: spacing.sm,
+    },
+    applyBtnText: { color: "#fff", fontSize: fontSize.sm, fontWeight: "600" },
   });
 }

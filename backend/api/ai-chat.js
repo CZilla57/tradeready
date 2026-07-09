@@ -83,7 +83,7 @@ module.exports = async function handler(req, res) {
     }
 
     return res.status(200).json({ text });
-  } catch (err) {
+  } catch {
     return res.status(502).json({ error: 'Failed to reach AI provider.' });
   }
 };
