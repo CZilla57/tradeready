@@ -10,6 +10,7 @@ interface UseMoneyDataReturn {
   expenses: Expense[];
   jobs: Job[];
   loading: boolean;
+  refresh: () => Promise<void>;
   handleAddExpense: (fields: ExpenseDraft) => void;
   handleDeleteExpense: (id: string) => void;
 }
@@ -47,6 +48,24 @@ export function useMoneyData(): UseMoneyDataReturn {
     }, [])
   );
 
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [invs, exps, jbs] = await Promise.all([
+        loadInvoices(),
+        loadExpenses(),
+        loadJobs(),
+      ]);
+      setInvoices(invs);
+      setExpenses(exps);
+      setJobs(jbs);
+    } catch (err) {
+      console.error('useMoneyData: failed to load data', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const persistExpenses = useCallback(async (updated: Expense[]) => {
     try {
       await saveExpenses(updated);
@@ -83,6 +102,7 @@ export function useMoneyData(): UseMoneyDataReturn {
     expenses,
     jobs,
     loading,
+    refresh,
     handleAddExpense,
     handleDeleteExpense,
   };
