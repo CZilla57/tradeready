@@ -43,6 +43,23 @@ import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, migrateCustomerIdentity } from "./utils/storage";
 import { getTradeNickname } from "./utils/pricingEngine";
 
+import * as Sentry from "@sentry/react-native";
+import { PostHogProvider, usePostHog } from "posthog-react-native";
+import Constants from "expo-constants";
+import { posthogRef } from "./utils/analytics";
+
+const SENTRY_DSN = Constants.expoConfig?.extra?.sentryDsn ?? "";
+const POSTHOG_API_KEY = Constants.expoConfig?.extra?.posthogApiKey ?? "";
+
+if (SENTRY_DSN && !SENTRY_DSN.startsWith("PLACEHOLDER")) {
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    tracesSampleRate: 0.2,
+    enableAutoSessionTracking: true,
+    enabled: !__DEV__,
+  });
+}
+
 const navigationRef = createNavigationContainerRef<any>();
 
 const RootStack     = createNativeStackNavigator();
@@ -337,6 +354,10 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
     return { hasError: true };
   }
 
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    Sentry.captureException(error, { extra: { componentStack: errorInfo.componentStack } });
+  }
+
   render() {
     if (!this.state.hasError) return this.props.children;
 
@@ -371,8 +392,17 @@ if (!__DEV__) {
   console.log = () => {};
 }
 
-export default function App() {
-  return (
+function PostHogBridge() {
+  const posthog = usePostHog();
+  React.useEffect(() => {
+    posthogRef.current = posthog;
+    return () => { posthogRef.current = null; };
+  }, [posthog]);
+  return null;
+}
+
+function AppRoot() {
+  const content = (
     <SafeAreaProvider>
       <ErrorBoundary>
         <ThemeProvider>
@@ -385,4 +415,20 @@ export default function App() {
       </ErrorBoundary>
     </SafeAreaProvider>
   );
+
+  if (POSTHOG_API_KEY && !POSTHOG_API_KEY.startsWith("PLACEHOLDER")) {
+    return (
+      <PostHogProvider
+        apiKey={POSTHOG_API_KEY}
+        options={{ host: "https://us.i.posthog.com" }}
+      >
+        <PostHogBridge />
+        {content}
+      </PostHogProvider>
+    );
+  }
+
+  return content;
 }
+
+export default Sentry.wrap(AppRoot);

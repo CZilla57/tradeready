@@ -8,6 +8,8 @@ jest.mock("expo-constants", () => ({
     extra: {
       backendUrl: "https://backend-tradeready1.vercel.app",
       backendUrlIsPlaceholder: false,
+      posthogApiKey: "PLACEHOLDER_POSTHOG_KEY",
+      sentryDsn: "PLACEHOLDER_SENTRY_DSN",
     },
   },
 }));
