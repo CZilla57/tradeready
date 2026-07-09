@@ -88,6 +88,13 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
     return true;
   }
 
+  function canNavigateTo(target: number): boolean {
+    if (target === step) return false;
+    if (target <= step) return true;
+    if (target >= 2) return form.businessName.trim().length > 0 && form.contactName.trim().length > 0;
+    return true;
+  }
+
   async function handleRequestNotif() {
     const granted = await requestPermissions();
     setNotifAsked(true);
@@ -174,7 +181,14 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       <View style={styles.dots}>
         {Array.from({ length: STEPS }).map((_, i) => (
-          <View key={i} style={[styles.dot, i <= step && styles.dotActive]} />
+          <TouchableOpacity
+            key={i}
+            onPress={() => canNavigateTo(i) && setStep(i)}
+            activeOpacity={0.7}
+            style={styles.dotTouchable}
+          >
+            <View style={[styles.dot, i <= step && styles.dotActive]} />
+          </TouchableOpacity>
         ))}
       </View>
 
@@ -699,6 +713,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     dots: { flexDirection: "row", justifyContent: "center", gap: 6, paddingTop: spacing.md, paddingBottom: spacing.sm },
     dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
     dotActive: { backgroundColor: colors.accent },
+    dotTouchable: { padding: 4 },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
     stepContent: {},
     appName: { fontSize: 44, fontWeight: "800", color: colors.accent, letterSpacing: -1, textAlign: "center", marginTop: spacing.xl },
