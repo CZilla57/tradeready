@@ -12,7 +12,7 @@ interface TopCustomersCardProps {
   end: Date;
 }
 
-export function TopCustomersCard({ invoices, start, end }: TopCustomersCardProps) {
+export const TopCustomersCard = React.memo(function TopCustomersCard({ invoices, start, end }: TopCustomersCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -57,7 +57,7 @@ export function TopCustomersCard({ invoices, start, end }: TopCustomersCardProps
       ))}
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

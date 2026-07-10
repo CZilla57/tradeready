@@ -25,7 +25,7 @@ interface InvoiceAgingCardProps {
   invoices: Invoice[];
 }
 
-export function InvoiceAgingCard({ invoices }: InvoiceAgingCardProps) {
+export const InvoiceAgingCard = React.memo(function InvoiceAgingCard({ invoices }: InvoiceAgingCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -66,7 +66,7 @@ export function InvoiceAgingCard({ invoices }: InvoiceAgingCardProps) {
       )}
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

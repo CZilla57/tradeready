@@ -14,7 +14,7 @@ interface AvgJobValueCardProps {
   prevEnd: Date | null;
 }
 
-export function AvgJobValueCard({ jobs, start, end, prevStart, prevEnd }: AvgJobValueCardProps) {
+export const AvgJobValueCard = React.memo(function AvgJobValueCard({ jobs, start, end, prevStart, prevEnd }: AvgJobValueCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -62,7 +62,7 @@ export function AvgJobValueCard({ jobs, start, end, prevStart, prevEnd }: AvgJob
       )}
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

@@ -12,7 +12,7 @@ interface ExpenseTrendsCardProps {
   expenses: Expense[];
 }
 
-export function ExpenseTrendsCard({ expenses }: ExpenseTrendsCardProps) {
+export const ExpenseTrendsCard = React.memo(function ExpenseTrendsCard({ expenses }: ExpenseTrendsCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -70,7 +70,7 @@ export function ExpenseTrendsCard({ expenses }: ExpenseTrendsCardProps) {
       </View>
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

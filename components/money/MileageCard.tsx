@@ -11,7 +11,7 @@ import type { Trip } from '../../types/models';
 
 interface Props { start: Date; end: Date; onPress: () => void; }
 
-export function MileageCard({ start, end, onPress }: Props) {
+export const MileageCard = React.memo(function MileageCard({ start, end, onPress }: Props) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -38,7 +38,7 @@ export function MileageCard({ start, end, onPress }: Props) {
       </Text>
     </TouchableOpacity>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

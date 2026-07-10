@@ -12,20 +12,24 @@ interface ReceivablesCardProps {
   jobs: Job[];
 }
 
-export function ReceivablesCard({ invoices, jobs }: ReceivablesCardProps) {
+export const ReceivablesCard = React.memo(function ReceivablesCard({ invoices, jobs }: ReceivablesCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const { unpaid, totalOutstanding, overdue, totalOverdue, pipelineJobs, pipelineValue } = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-  const unpaid           = invoices.filter(inv => !inv.paid);
-  const totalOutstanding = unpaid.reduce((s, inv) => s + (parseFloat(String(inv.amount)) || 0), 0);
-  const overdue          = unpaid.filter(inv => inv.due && new Date(inv.due) < today);
-  const totalOverdue     = overdue.reduce((s, inv) => s + (parseFloat(String(inv.amount)) || 0), 0);
+    const unpaid           = invoices.filter(inv => !inv.paid);
+    const totalOutstanding = unpaid.reduce((s, inv) => s + (parseFloat(String(inv.amount)) || 0), 0);
+    const overdue          = unpaid.filter(inv => inv.due && new Date(inv.due) < today);
+    const totalOverdue     = overdue.reduce((s, inv) => s + (parseFloat(String(inv.amount)) || 0), 0);
 
-  const pipelineJobs  = jobs.filter(j => PIPELINE_STATUSES.includes(j.status) && j.estimateTotal > 0);
-  const pipelineValue = pipelineJobs.reduce((s, j) => s + j.estimateTotal, 0);
+    const pipelineJobs  = jobs.filter(j => PIPELINE_STATUSES.includes(j.status) && j.estimateTotal > 0);
+    const pipelineValue = pipelineJobs.reduce((s, j) => s + j.estimateTotal, 0);
+
+    return { unpaid, totalOutstanding, overdue, totalOverdue, pipelineJobs, pipelineValue };
+  }, [invoices, jobs]);
 
   if (totalOutstanding === 0 && pipelineValue === 0) return null;
 
@@ -70,7 +74,7 @@ export function ReceivablesCard({ invoices, jobs }: ReceivablesCardProps) {
       </View>
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

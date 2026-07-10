@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -93,41 +93,83 @@ export default function MoneyScreen({ navigation }: any) {
   const [activeTab, setActiveTab]       = useState<'overview' | 'expenses'>('overview');
 
   // ── Derived filter values ─────────────────────────────────────────────────
-  const { start, end } = getDateRange(activeFilter);
+  const { start, end } = useMemo(() => getDateRange(activeFilter), [activeFilter]);
 
-  const filteredIncome: number = (invoices as Invoice[])
-    .filter((inv) => inv.paid === true && isInRange(inv.paidAt || inv.due, start, end))
-    .reduce((sum, inv) => sum + (inv.amount || 0), 0);
+  const filteredIncome: number = useMemo(() =>
+    (invoices as Invoice[])
+      .filter((inv) => inv.paid === true && isInRange(inv.paidAt || inv.due, start, end))
+      .reduce((sum, inv) => sum + (inv.amount || 0), 0),
+    [invoices, start, end]
+  );
 
-  const filteredExpenses: Expense[] = (expenses as Expense[])
-    .filter((exp) => exp.date && isInRange(exp.date, start, end));
+  const filteredExpenses: Expense[] = useMemo(() =>
+    (expenses as Expense[])
+      .filter((exp) => exp.date && isInRange(exp.date, start, end)),
+    [expenses, start, end]
+  );
 
-  const filteredExpenseTotal: number = filteredExpenses
-    .reduce((sum, exp) => sum + (exp.amount || 0), 0);
+  const filteredExpenseTotal: number = useMemo(() =>
+    filteredExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0),
+    [filteredExpenses]
+  );
 
-  const expensesByCategory = EXPENSE_CATEGORIES
-    .map((cat) => ({
-      ...cat,
-      total: filteredExpenses
-        .filter((exp) => exp.category === cat.id)
-        .reduce((sum, exp) => sum + (exp.amount || 0), 0),
-    }))
-    .filter((cat) => cat.total > 0)
-    .sort((a, b) => b.total - a.total);
+  const expensesByCategory = useMemo(() =>
+    EXPENSE_CATEGORIES
+      .map((cat) => ({
+        ...cat,
+        total: filteredExpenses
+          .filter((exp) => exp.category === cat.id)
+          .reduce((sum, exp) => sum + (exp.amount || 0), 0),
+      }))
+      .filter((cat) => cat.total > 0)
+      .sort((a, b) => b.total - a.total),
+    [filteredExpenses]
+  );
 
-  const prevRange = getPreviousRange(activeFilter);
-  const prevFilteredIncome: number | null = prevRange
-    ? (invoices as Invoice[])
-        .filter((inv) => inv.paid && isInRange(inv.paidAt || inv.due, prevRange.start, prevRange.end))
-        .reduce((sum, inv) => sum + (inv.amount || 0), 0)
-    : null;
-  const prevFilteredExpenseTotal: number | null = prevRange
-    ? (expenses as Expense[])
-        .filter((exp) => exp.date && isInRange(exp.date, prevRange.start, prevRange.end))
-        .reduce((sum, exp) => sum + (exp.amount || 0), 0)
-    : null;
+  const sortedExpenses = useMemo(() =>
+    [...filteredExpenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    [filteredExpenses]
+  );
+
+  const prevRange = useMemo(() => getPreviousRange(activeFilter), [activeFilter]);
+  const prevFilteredIncome: number | null = useMemo(() =>
+    prevRange
+      ? (invoices as Invoice[])
+          .filter((inv) => inv.paid && isInRange(inv.paidAt || inv.due, prevRange.start, prevRange.end))
+          .reduce((sum, inv) => sum + (inv.amount || 0), 0)
+      : null,
+    [invoices, prevRange]
+  );
+  const prevFilteredExpenseTotal: number | null = useMemo(() =>
+    prevRange
+      ? (expenses as Expense[])
+          .filter((exp) => exp.date && isInRange(exp.date, prevRange.start, prevRange.end))
+          .reduce((sum, exp) => sum + (exp.amount || 0), 0)
+      : null,
+    [expenses, prevRange]
+  );
 
   const activeFilterLabel = DATE_FILTERS.find((f) => f.id === activeFilter)?.label || '';
+
+  const handleMileagePress = useCallback(
+    () => navigation.navigate('MileageLog', { initialFilter: activeFilter }),
+    [navigation, activeFilter]
+  );
+
+  const handlePricebookPress = useCallback(
+    () => navigation.navigate('Pricebook'),
+    [navigation]
+  );
+
+  const handleCloseModal = useCallback(() => setShowAddModal(false), []);
+
+  const handleSaveExpense = useCallback(
+    (fields: any) => {
+      handleAddExpense(fields);
+      setShowAddModal(false);
+    },
+    [handleAddExpense]
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   if (loading) {
@@ -217,8 +259,8 @@ export default function MoneyScreen({ navigation }: any) {
             prevStart={prevRange?.start ?? null}
             prevEnd={prevRange?.end ?? null}
           />
-          <MileageCard start={start} end={end} onPress={() => navigation.navigate('MileageLog', { initialFilter: activeFilter })} />
-          <PricebookCard onPress={() => navigation.navigate('Pricebook')} />
+          <MileageCard start={start} end={end} onPress={handleMileagePress} />
+          <PricebookCard onPress={handlePricebookPress} />
           <MonthlyChart invoices={invoices} expenses={expenses} />
           <SeasonalTrendsCard invoices={invoices} />
           <ExpenseCategoryCard
@@ -250,7 +292,7 @@ export default function MoneyScreen({ navigation }: any) {
           style={styles.scrollContent}
           refreshing={refreshing}
           onRefresh={onRefresh}
-          data={filteredExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())}
+          data={sortedExpenses}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <ExpenseRow expense={item} onDelete={handleDeleteExpense} />
@@ -279,11 +321,8 @@ export default function MoneyScreen({ navigation }: any) {
       {/* ── Add Expense Modal ─────────────────────────────────────────────── */}
       <AddExpenseModal
         visible={showAddModal}
-        onClose={() => setShowAddModal(false)}
-        onSave={(fields: any) => {
-          handleAddExpense(fields);
-          setShowAddModal(false);
-        }}
+        onClose={handleCloseModal}
+        onSave={handleSaveExpense}
       />
     </SafeAreaView>
   );

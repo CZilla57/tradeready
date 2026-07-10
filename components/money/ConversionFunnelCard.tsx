@@ -20,7 +20,7 @@ interface ConversionFunnelCardProps {
   jobs: Job[];
 }
 
-export function ConversionFunnelCard({ jobs }: ConversionFunnelCardProps) {
+export const ConversionFunnelCard = React.memo(function ConversionFunnelCard({ jobs }: ConversionFunnelCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -63,7 +63,7 @@ export function ConversionFunnelCard({ jobs }: ConversionFunnelCardProps) {
       )}
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

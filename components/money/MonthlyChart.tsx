@@ -12,31 +12,32 @@ interface MonthlyChartProps {
   expenses: Expense[];
 }
 
-export function MonthlyChart({ invoices, expenses }: MonthlyChartProps) {
+export const MonthlyChart = React.memo(function MonthlyChart({ invoices, expenses }: MonthlyChartProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
-  const months = getLast6MonthLabels();
+  const chartData = useMemo(() => {
+    const months = getLast6MonthLabels();
+    return months.map(({ label, year, month }) => {
+      const monthIncome = invoices
+        .filter(inv => {
+          const dateStr = inv.paidAt || inv.due;
+          if (!inv.paid || !dateStr) return false;
+          const d = new Date(dateStr);
+          return d.getFullYear() === year && d.getMonth() === month;
+        })
+        .reduce((sum, inv) => sum + (parseFloat(String(inv.amount)) || 0), 0);
 
-  const chartData = months.map(({ label, year, month }) => {
-    const monthIncome = invoices
-      .filter(inv => {
-        const dateStr = inv.paidAt || inv.due;
-        if (!inv.paid || !dateStr) return false;
-        const d = new Date(dateStr);
-        return d.getFullYear() === year && d.getMonth() === month;
-      })
-      .reduce((sum, inv) => sum + (parseFloat(String(inv.amount)) || 0), 0);
+      const monthExpenses = expenses
+        .filter(exp => {
+          const d = new Date(exp.date);
+          return d.getFullYear() === year && d.getMonth() === month;
+        })
+        .reduce((sum, exp) => sum + (parseFloat(String(exp.amount)) || 0), 0);
 
-    const monthExpenses = expenses
-      .filter(exp => {
-        const d = new Date(exp.date);
-        return d.getFullYear() === year && d.getMonth() === month;
-      })
-      .reduce((sum, exp) => sum + (parseFloat(String(exp.amount)) || 0), 0);
-
-    return { label, income: monthIncome, expenses: monthExpenses };
-  });
+      return { label, income: monthIncome, expenses: monthExpenses };
+    });
+  }, [invoices, expenses]);
 
   const maxValue = Math.max(
     ...chartData.map(d => Math.max(d.income, d.expenses)),
@@ -79,7 +80,7 @@ export function MonthlyChart({ invoices, expenses }: MonthlyChartProps) {
       </View>
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

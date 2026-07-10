@@ -10,7 +10,7 @@ interface RevenueByTypeCardProps {
   jobs: Job[];
 }
 
-export function RevenueByTypeCard({ jobs }: RevenueByTypeCardProps) {
+export const RevenueByTypeCard = React.memo(function RevenueByTypeCard({ jobs }: RevenueByTypeCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -39,7 +39,7 @@ export function RevenueByTypeCard({ jobs }: RevenueByTypeCardProps) {
       ))}
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

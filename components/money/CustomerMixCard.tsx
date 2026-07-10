@@ -12,7 +12,7 @@ interface CustomerMixCardProps {
   end: Date;
 }
 
-export function CustomerMixCard({ invoices, start, end }: CustomerMixCardProps) {
+export const CustomerMixCard = React.memo(function CustomerMixCard({ invoices, start, end }: CustomerMixCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -64,7 +64,7 @@ export function CustomerMixCard({ invoices, start, end }: CustomerMixCardProps) 
       )}
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

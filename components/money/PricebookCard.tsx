@@ -9,7 +9,7 @@ import type { PricebookEntry } from '../../types/models';
 
 interface Props { onPress: () => void; }
 
-export function PricebookCard({ onPress }: Props) {
+export const PricebookCard = React.memo(function PricebookCard({ onPress }: Props) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [entries, setEntries] = useState<PricebookEntry[]>([]);
@@ -39,7 +39,7 @@ export function PricebookCard({ onPress }: Props) {
       </Text>
     </TouchableOpacity>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

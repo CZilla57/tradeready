@@ -11,7 +11,7 @@ interface ExpenseRowProps {
   onDelete: (id: string) => void;
 }
 
-export function ExpenseRow({ expense, onDelete }: ExpenseRowProps) {
+export const ExpenseRow = React.memo(function ExpenseRow({ expense, onDelete }: ExpenseRowProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -63,7 +63,7 @@ export function ExpenseRow({ expense, onDelete }: ExpenseRowProps) {
       </TouchableOpacity>
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

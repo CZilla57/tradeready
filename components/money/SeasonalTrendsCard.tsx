@@ -12,7 +12,7 @@ interface SeasonalTrendsCardProps {
   invoices: Invoice[];
 }
 
-export function SeasonalTrendsCard({ invoices }: SeasonalTrendsCardProps) {
+export const SeasonalTrendsCard = React.memo(function SeasonalTrendsCard({ invoices }: SeasonalTrendsCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -86,7 +86,7 @@ export function SeasonalTrendsCard({ invoices }: SeasonalTrendsCardProps) {
       </View>
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

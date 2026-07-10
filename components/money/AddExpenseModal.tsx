@@ -27,7 +27,7 @@ interface AddExpenseModalProps {
   onSave: (fields: ExpenseDraft) => void;
 }
 
-export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalProps) {
+export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -267,7 +267,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
       </View>
     </Modal>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

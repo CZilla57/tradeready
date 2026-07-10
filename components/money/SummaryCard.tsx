@@ -34,7 +34,7 @@ interface SummaryCardProps {
   label: string;
 }
 
-export function SummaryCard({ income, expenses, prevIncome, prevExpenses, label }: SummaryCardProps) {
+export const SummaryCard = React.memo(function SummaryCard({ income, expenses, prevIncome, prevExpenses, label }: SummaryCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -101,7 +101,7 @@ export function SummaryCard({ income, expenses, prevIncome, prevExpenses, label 
       )}
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({

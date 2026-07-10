@@ -10,7 +10,7 @@ interface RevenueForecastCardProps {
   jobs: Job[];
 }
 
-export function RevenueForecastCard({ jobs }: RevenueForecastCardProps) {
+export const RevenueForecastCard = React.memo(function RevenueForecastCard({ jobs }: RevenueForecastCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -60,7 +60,7 @@ export function RevenueForecastCard({ jobs }: RevenueForecastCardProps) {
       </View>
     </View>
   );
-}
+});
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
