@@ -638,7 +638,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     smallLabel: { fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: 4 },
     smallInputRow: { flexDirection: "row", alignItems: "center" },
     smallInput: {
-      flex: 1, height: 36, backgroundColor: colors.background, borderRadius: radius.sm,
+      flex: 1, height: 44, backgroundColor: colors.background, borderRadius: radius.sm,
       paddingHorizontal: spacing.sm, fontSize: fontSize.sm, color: colors.textPrimary,
       borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     },
@@ -649,11 +649,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     toggleLabel: { flex: 1, fontSize: fontSize.sm, color: colors.textPrimary },
     materialRow: { flexDirection: "row", gap: 6, marginBottom: 6, alignItems: "center" },
     matInput: {
-      flex: 1, height: 36, backgroundColor: colors.background, borderRadius: radius.sm,
+      flex: 1, height: 44, backgroundColor: colors.background, borderRadius: radius.sm,
       paddingHorizontal: spacing.sm, fontSize: fontSize.sm, color: colors.textPrimary,
       borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     },
-    removeBtn: { padding: 6 },
+    removeBtn: {
+      padding: 6,
+      minHeight: 44,
+      minWidth: 44,
+      justifyContent: "center",
+      alignItems: "center",
+    },
     removeBtnText: { color: colors.danger, fontSize: fontSize.md },
     addMaterialBtn: {
       paddingVertical: spacing.sm, alignItems: "center", borderRadius: radius.md,

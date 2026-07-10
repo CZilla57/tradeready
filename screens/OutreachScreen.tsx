@@ -421,13 +421,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     messageText: { fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
     actionRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
     copyBtn: {
-      flex: 1, height: 36, borderRadius: radius.md,
+      flex: 1, height: 44, borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.borderStrong,
       alignItems: "center", justifyContent: "center",
     },
     copyBtnText: { fontSize: fontSize.sm, color: colors.textPrimary },
     regenBtn: {
-      flex: 1, height: 36, borderRadius: radius.md,
+      flex: 1, height: 44, borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.borderStrong,
       alignItems: "center", justifyContent: "center",
     },

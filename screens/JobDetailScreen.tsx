@@ -316,7 +316,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
                     { text: "Delete", style: "destructive", onPress: () => onDelete(uri) },
                   ])
                 }
-                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                hitSlop={{ top: 11, bottom: 11, left: 11, right: 11 }}
                 accessibilityLabel="Delete photo"
                 accessibilityRole="button"
               >
@@ -334,7 +334,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
         onRequestClose={() => setViewerUri(null)}
       >
         <View style={styles.viewerBg}>
-          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)}>
+          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
             <Text style={styles.viewerCloseText}>✕</Text>
           </TouchableOpacity>
           {viewerUri && (

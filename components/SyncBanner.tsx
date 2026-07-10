@@ -95,6 +95,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   button: {
+    minHeight: 44,
+    justifyContent: 'center',
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 4,

@@ -460,6 +460,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       right: spacing.md,
       top: spacing.sm,
       padding: 4,
+      minHeight: 44,
+      minWidth: 44,
+      justifyContent: "center",
+      alignItems: "center",
     },
     modalCloseText: {
       fontSize: fontSize.md,
