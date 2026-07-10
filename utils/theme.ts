@@ -7,7 +7,7 @@ export const lightColors = {
   // Text
   textPrimary: "#000000",
   textSecondary: "#6c6c70",
-  textMuted: "#aeaeb2",
+  textMuted: "#757578",
   textOnAccent: "#ffffff",
 
   // Brand / accent
@@ -46,7 +46,7 @@ export const darkColors = {
   // Text
   textPrimary: "#ffffff",
   textSecondary: "#aeaeb2",     // iOS dark secondary label
-  textMuted: "#636366",         // iOS dark tertiary label
+  textMuted: "#8e8e93",         // WCAG AA compliant on #000 and #1c1c1e
   textOnAccent: "#ffffff",
 
   // Brand / accent
