@@ -4,6 +4,20 @@ import { computeEstimateBreakdown } from "./pricingEngine";
 
 const ACCENT = "#007aff";
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safe(value: string | number | undefined | null): string {
+  if (value == null) return '';
+  return escapeHtml(String(value));
+}
+
 function fmtDate(dateStr: string | undefined): string {
   if (!dateStr) return "";
   return new Date(dateStr).toLocaleDateString("en-US", {
@@ -138,16 +152,16 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
   let tableRows = "";
   if (items.length > 0) {
     for (const li of primaryItems) {
-      tableRows += `<tr><td>${li.description}</td><td>${formatMoney(li.amount)}</td></tr>`;
+      tableRows += `<tr><td>${safe(li.description)}</td><td>${formatMoney(li.amount)}</td></tr>`;
     }
     if (additionalItems.length > 0) {
       tableRows += `<tr class="section-header"><td colspan="2">Additional Charges</td></tr>`;
       for (const li of additionalItems) {
-        tableRows += `<tr><td>${li.description}</td><td>${formatMoney(li.amount)}</td></tr>`;
+        tableRows += `<tr><td>${safe(li.description)}</td><td>${formatMoney(li.amount)}</td></tr>`;
       }
     }
   } else {
-    tableRows = `<tr><td>${invoice.desc || "Services rendered"}</td><td>${formatMoney(invoice.amount)}</td></tr>`;
+    tableRows = `<tr><td>${safe(invoice.desc) || "Services rendered"}</td><td>${formatMoney(invoice.amount)}</td></tr>`;
   }
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -156,8 +170,8 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
 <div class="header">
   <div>
     ${logoDataUri ? `<img class="logo" src="${logoDataUri}" />` : ""}
-    <div class="biz-name">${bizName}</div>
-    ${bizSubLines ? `<div class="biz-sub">${bizSubLines}</div>` : ""}
+    <div class="biz-name">${safe(bizName)}</div>
+    ${bizSubLines ? `<div class="biz-sub">${safe(bizSubLines)}</div>` : ""}
   </div>
   <div class="doc-type">Invoice</div>
 </div>
@@ -165,13 +179,13 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
 <div class="meta-grid">
   <div class="meta-block">
     <div class="label">Bill To</div>
-    <div class="value"><strong>${invoice.customer || ""}</strong></div>
-    ${invoice.email ? `<div class="value">${invoice.email}</div>` : ""}
-    ${invoice.phone ? `<div class="value">${invoice.phone}</div>` : ""}
+    <div class="value"><strong>${safe(invoice.customer)}</strong></div>
+    ${invoice.email ? `<div class="value">${safe(invoice.email)}</div>` : ""}
+    ${invoice.phone ? `<div class="value">${safe(invoice.phone)}</div>` : ""}
   </div>
   <div class="meta-block" style="text-align:right">
     <div class="label">Invoice #</div>
-    <div class="value"><strong>${invoice.number || "—"}</strong></div>
+    <div class="value"><strong>${safe(invoice.number) || "—"}</strong></div>
     ${issueDate ? `<div style="margin-top:8px"><span class="label">Issue date</span><br><span class="value">${issueDate}</span></div>` : ""}
     ${dueDate ? `<div style="margin-top:8px"><span class="label">Due date</span><br><span class="value">${dueDate}</span></div>` : ""}
     <div style="margin-top:10px">
@@ -194,7 +208,7 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
   <span class="total-amount">${formatMoney(invoice.amount)}</span>
 </div>
 
-<div class="footer">Thank you for your business — ${bizName}</div>
+<div class="footer">Thank you for your business — ${safe(bizName)}</div>
 
 </body></html>`;
 }
@@ -222,7 +236,7 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
   rows += `<tr><td>Labor — ${job.laborHours || 0} hrs @ ${formatQuote(job.laborRate || 0)}/hr</td><td>${formatQuote(laborCost)}</td></tr>`;
   if (hasMaterials) {
     const label = job.materials.length === 1
-      ? job.materials[0].name || "Materials"
+      ? safe(job.materials[0].name) || "Materials"
       : `Materials (${job.materials.length} items)`;
     rows += `<tr><td>${label}</td><td>${formatQuote(materialCost)}</td></tr>`;
   }
@@ -236,8 +250,8 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
 <div class="header">
   <div>
     ${logoDataUri ? `<img class="logo" src="${logoDataUri}" />` : ""}
-    <div class="biz-name">${bizName}</div>
-    ${bizSubLines ? `<div class="biz-sub">${bizSubLines}</div>` : ""}
+    <div class="biz-name">${safe(bizName)}</div>
+    ${bizSubLines ? `<div class="biz-sub">${safe(bizSubLines)}</div>` : ""}
   </div>
   <div class="doc-type">Estimate</div>
 </div>
@@ -245,13 +259,13 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
 <div class="meta-grid">
   <div class="meta-block">
     <div class="label">Prepared For</div>
-    <div class="value"><strong>${customerName}</strong></div>
-    ${customerEmail ? `<div class="value">${customerEmail}</div>` : ""}
-    ${customerPhone ? `<div class="value">${customerPhone}</div>` : ""}
+    <div class="value"><strong>${safe(customerName)}</strong></div>
+    ${customerEmail ? `<div class="value">${safe(customerEmail)}</div>` : ""}
+    ${customerPhone ? `<div class="value">${safe(customerPhone)}</div>` : ""}
   </div>
   <div class="meta-block" style="text-align:right">
     <div class="label">Job</div>
-    <div class="value"><strong>${job.title || ""}</strong></div>
+    <div class="value"><strong>${safe(job.title)}</strong></div>
     ${issueDate ? `<div style="margin-top:8px"><span class="label">Date</span><br><span class="value">${issueDate}</span></div>` : ""}
     <div style="margin-top:10px">
       <span class="badge badge-unpaid">Pending Approval</span>
@@ -277,7 +291,7 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
   This estimate is valid for 30 days. Reply to approve and we'll get you scheduled.
 </p>
 
-<div class="footer">Thank you for considering ${bizName}</div>
+<div class="footer">Thank you for considering ${safe(bizName)}</div>
 
 </body></html>`;
 }

@@ -61,8 +61,13 @@ export default function AddInvoiceScreen({ route, navigation }: { route: any; na
   }, [invoiceId, isEditing, navigation, prefill]);
 
   async function handleSave() {
-    if (!customer.trim() || !amount.trim()) {
-      Alert.alert("Missing info", "Customer name and amount are required.");
+    if (!customer.trim()) {
+      Alert.alert("Missing info", "Customer name is required.");
+      return;
+    }
+    const parsedAmount = parseFloat(amount);
+    if (!amount.trim() || isNaN(parsedAmount) || parsedAmount <= 0) {
+      Alert.alert("Missing info", "Please enter a valid invoice amount.");
       return;
     }
     setSaving(true);
@@ -78,7 +83,7 @@ export default function AddInvoiceScreen({ route, navigation }: { route: any; na
       customer: customer.trim(),
       customerId: record?.id ?? "",
       number: number.trim() || autoInvoiceNumber(invoices),
-      amount: parseFloat(amount) || 0,
+      amount: parsedAmount,
       due,
       email: email.trim(),
       phone: phone.trim(),

@@ -15,8 +15,11 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
 const GROQ_MODEL = 'llama-3.1-8b-instant';
 
+const ALLOWED_ORIGINS = ['https://tradeready.app'];
+
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers['origin'];
+  res.setHeader('Access-Control-Allow-Origin', origin && ALLOWED_ORIGINS.includes(origin) ? origin : 'https://tradeready.app');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -74,7 +77,8 @@ module.exports = async function handler(req, res) {
 
     const data = await groqRes.json();
     if (data.error) {
-      return res.status(502).json({ error: data.error.message || 'AI provider error' });
+      console.error('[ai-chat] provider error:', data.error.message);
+      return res.status(502).json({ error: 'AI provider error. Please try again.' });
     }
 
     const text = data.choices?.[0]?.message?.content || '';

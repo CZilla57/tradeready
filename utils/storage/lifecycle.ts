@@ -45,12 +45,16 @@ export async function clearSampleData(): Promise<void> {
 // Wipes all local user data on sign-out so the next user to sign in on this
 // device cannot inherit another user's records or trigger an accidental cloud push.
 export async function clearAllUserData(): Promise<void> {
+  const allKeys = await AsyncStorage.getAllKeys();
+  const initDoneKeys = allKeys.filter(k => k.startsWith("__initDone_"));
+
   await AsyncStorage.multiRemove([
     ...Object.values(KEYS),
     "__syncQueue",
     "__lastSyncedAt",
     "__dataOwner",
     "onboardingComplete",
+    ...initDoneKeys,
   ]);
   for (const field of SECURE_FIELDS) {
     try { await SecureStore.deleteItemAsync(field); } catch {}

@@ -18,12 +18,14 @@ const RC_WEBHOOK_SECRET         = process.env.REVENUECAT_WEBHOOK_SECRET;
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Verify the RevenueCat shared secret.
-  if (RC_WEBHOOK_SECRET) {
-    const auth = req.headers['authorization'];
-    if (auth !== `Bearer ${RC_WEBHOOK_SECRET}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  // Verify the RevenueCat shared secret — fail closed if unset.
+  if (!RC_WEBHOOK_SECRET) {
+    console.error('[subscription/webhook] REVENUECAT_WEBHOOK_SECRET not configured');
+    return res.status(500).json({ error: 'Webhook not configured' });
+  }
+  const auth = req.headers['authorization'];
+  if (auth !== `Bearer ${RC_WEBHOOK_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   const event = req.body?.event;

@@ -8,5 +8,8 @@ web-build/
 *.p12
 *.key
 *.mobileprovision
-*.orig.*
-web-build/
+
+# Environment variables
+.env
+.env.*
+!.env.example

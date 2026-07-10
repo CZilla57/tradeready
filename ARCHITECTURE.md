@@ -29,13 +29,12 @@ Seven tabs are live. Items marked ⚠️ are stubs or partial implementations.
 - Receipt photo scanning for expenses (manual entry only)
 - GPS auto-tracking of mileage (the mileage log is odometer-based manual entry, not GPS)
 - Tax center and quarterly estimates
-- Recurring jobs
-- Customer review requests
 - Proactive AI insights feed
 
-**AI on the client:** Anthropic API calls are made client-side using a user-supplied key
-stored in SecureStore — they have not been moved to the backend. Groq is available as an
-alternative via `aiService.js`.
+**AI on the backend:** AI calls are proxied through Vercel serverless functions
+using server-side API keys — no user-supplied keys required. Groq powers the
+AI Coach chat (`backend/api/ai-chat.js`); Claude powers pricebook suggestions
+(`backend/api/pricebook-suggest.js`).
 
 **Sync is live:** Supabase (Postgres + Auth) is the sync backend today, not a future item.
 See the "Sync model" section of README.md for how the local-first queue works.
@@ -101,10 +100,11 @@ Everything financial in one place.
   start/end, from/to endpoint — a linked job or "Home / Shop"; total business
   miles × `settings.mileageRate` shown by period). Local-only, not synced —
   see Data Models below.
+- Analytics cards: conversion funnel, avg job value, invoice aging, revenue by type,
+  seasonal trends, customer mix, expense trends, revenue forecast
 - ⚠️ Receipt scanning: not built (manual entry only)
 - ⚠️ GPS auto-tracking of mileage: not built (odometer entry only)
 - ⚠️ Tax center: not built
-- ⚠️ Revenue reports beyond monthly chart: not built
 
 ### Tab 5 — Customers
 - Customer list with search
@@ -123,8 +123,9 @@ Everything financial in one place.
 
 ### Tab 7 — Settings
 - Business profile (name, trade, contact, logo)
-- Payment processor configuration
-- AI API keys (Anthropic + Groq — stored in SecureStore)
+- Appearance (dark / light mode toggle)
+- Stripe Connect onboarding and status
+- Subscription management (RevenueCat)
 - Notification rules
 - Labor rate, material markup, overhead, margin defaults
 
@@ -259,7 +260,7 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 - **React Navigation** (bottom tabs + native stacks)
 - **AsyncStorage** — local data; app works fully offline
 - **Supabase** — Postgres + Auth; background sync layer (local-first, cloud-backed)
-- **TypeScript** — new modules are `.ts/.tsx` strict; legacy screens remain `.js` with `allowJs`
+- **TypeScript** — fully migrated; all modules are `.ts/.tsx` strict
 - **expo-image-picker** — job site and receipt photo capture
 - **expo-notifications** — payment reminders, appointment alerts
 - **expo-mail-composer / expo-sms** — native email/SMS composers
@@ -267,14 +268,18 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 - **@react-native-community/datetimepicker** — date/time picker (cross-platform)
 
 ### Backend (Vercel serverless)
-- Payment link generation (Stripe, Square, PayPal)
+- **Stripe Connect** — Express account onboarding, payment link generation, webhook-driven invoice marking
+- AI proxy — Groq chat completions (`ai-chat.js`) + Anthropic pricebook suggestions (`pricebook-suggest.js`)
+- RevenueCat subscription webhook (`subscription/webhook.js`)
 - Push notification scheduling
 - PDF generation for proposals and invoices
-- ⚠️ Anthropic API calls: currently client-side (user key in SecureStore); moving to backend is a planned hardening step
 - ⚠️ Google Maps Directions API: planned for route optimization; not yet wired up
 
+### Observability
+- **PostHog** — 15 business events (sign_up, job_created, invoice_paid, etc.)
+- **Sentry** — error reporting via `reportError()` in all critical catch blocks
+
 ### Future (multi-user / scale)
-- **Stripe Connect** — if taking a platform % of payments processed
 - Web dashboard
 - Team / subcontractor accounts
 
@@ -307,9 +312,11 @@ Build in this sequence so you always have something shippable:
 
 **Phase 4 — Growth**
 ✅ AI Coach chat
+✅ Customer review requests
+✅ Recurring jobs
+✅ Pricebook with AI-assisted pricing
+✅ Dark mode
 ⬜ Proactive insights feed
-⬜ Customer review requests
-⬜ Recurring jobs
 
 **Phase 5 — Scale**
 ✅ Cloud sync (Supabase — local-first)

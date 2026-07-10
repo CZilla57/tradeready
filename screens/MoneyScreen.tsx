@@ -96,38 +96,38 @@ export default function MoneyScreen({ navigation }: any) {
   const { start, end } = getDateRange(activeFilter);
 
   const filteredIncome: number = (invoices as Invoice[])
-    .filter((inv) => inv.paid === true && isInRange((inv as any).paidAt || inv.due, start, end))
-    .reduce((sum, inv) => sum + (parseFloat(String((inv as any).amount)) || 0), 0);
+    .filter((inv) => inv.paid === true && isInRange(inv.paidAt || inv.due, start, end))
+    .reduce((sum, inv) => sum + (inv.amount || 0), 0);
 
   const filteredExpenses: Expense[] = (expenses as Expense[])
-    .filter((exp) => (exp as any).date && isInRange((exp as any).date, start, end));
+    .filter((exp) => exp.date && isInRange(exp.date, start, end));
 
   const filteredExpenseTotal: number = filteredExpenses
-    .reduce((sum, exp) => sum + (parseFloat(String((exp as any).amount)) || 0), 0);
+    .reduce((sum, exp) => sum + (exp.amount || 0), 0);
 
   const expensesByCategory = EXPENSE_CATEGORIES
-    .map((cat: any) => ({
+    .map((cat) => ({
       ...cat,
       total: filteredExpenses
-        .filter((exp) => (exp as any).category === cat.id)
-        .reduce((sum, exp) => sum + (parseFloat(String((exp as any).amount)) || 0), 0),
+        .filter((exp) => exp.category === cat.id)
+        .reduce((sum, exp) => sum + (exp.amount || 0), 0),
     }))
-    .filter((cat: any) => cat.total > 0)
-    .sort((a: any, b: any) => b.total - a.total);
+    .filter((cat) => cat.total > 0)
+    .sort((a, b) => b.total - a.total);
 
   const prevRange = getPreviousRange(activeFilter);
   const prevFilteredIncome: number | null = prevRange
     ? (invoices as Invoice[])
-        .filter((inv) => inv.paid && isInRange((inv as any).paidAt || inv.due, prevRange.start, prevRange.end))
-        .reduce((sum, inv) => sum + (parseFloat(String((inv as any).amount)) || 0), 0)
+        .filter((inv) => inv.paid && isInRange(inv.paidAt || inv.due, prevRange.start, prevRange.end))
+        .reduce((sum, inv) => sum + (inv.amount || 0), 0)
     : null;
   const prevFilteredExpenseTotal: number | null = prevRange
     ? (expenses as Expense[])
-        .filter((exp) => (exp as any).date && isInRange((exp as any).date, prevRange.start, prevRange.end))
-        .reduce((sum, exp) => sum + (parseFloat(String((exp as any).amount)) || 0), 0)
+        .filter((exp) => exp.date && isInRange(exp.date, prevRange.start, prevRange.end))
+        .reduce((sum, exp) => sum + (exp.amount || 0), 0)
     : null;
 
-  const activeFilterLabel = DATE_FILTERS.find((f: any) => f.id === activeFilter)?.label || '';
+  const activeFilterLabel = DATE_FILTERS.find((f) => f.id === activeFilter)?.label || '';
 
   // ─────────────────────────────────────────────────────────────────────────
   if (loading) {
@@ -148,11 +148,14 @@ export default function MoneyScreen({ navigation }: any) {
         style={styles.filterScroll}
         contentContainerStyle={styles.filterScrollContent}
       >
-        {DATE_FILTERS.map((filter: any) => (
+        {DATE_FILTERS.map((filter) => (
           <TouchableOpacity
             key={filter.id}
             style={[styles.filterChip, activeFilter === filter.id && styles.filterChipActive]}
             onPress={() => setActiveFilter(filter.id)}
+            accessibilityRole="button"
+            accessibilityLabel={filter.label}
+            accessibilityState={{ selected: activeFilter === filter.id }}
           >
             <Text style={[
               styles.filterChipText,
@@ -169,6 +172,9 @@ export default function MoneyScreen({ navigation }: any) {
         <TouchableOpacity
           style={[styles.tabButton, activeTab === 'overview' && styles.tabButtonActive]}
           onPress={() => setActiveTab('overview')}
+          accessibilityRole="tab"
+          accessibilityLabel="Overview"
+          accessibilityState={{ selected: activeTab === 'overview' }}
         >
           <Text style={[styles.tabButtonText, activeTab === 'overview' && styles.tabButtonTextActive]}>
             Overview
@@ -177,6 +183,9 @@ export default function MoneyScreen({ navigation }: any) {
         <TouchableOpacity
           style={[styles.tabButton, activeTab === 'expenses' && styles.tabButtonActive]}
           onPress={() => setActiveTab('expenses')}
+          accessibilityRole="tab"
+          accessibilityLabel="Expenses"
+          accessibilityState={{ selected: activeTab === 'expenses' }}
         >
           <Text style={[styles.tabButtonText, activeTab === 'expenses' && styles.tabButtonTextActive]}>
             Expenses
@@ -241,8 +250,8 @@ export default function MoneyScreen({ navigation }: any) {
           style={styles.scrollContent}
           refreshing={refreshing}
           onRefresh={onRefresh}
-          data={filteredExpenses.sort((a, b) => (new Date((b as any).date) as any) - (new Date((a as any).date) as any))}
-          keyExtractor={(item) => (item as any).id}
+          data={filteredExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())}
+          keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <ExpenseRow expense={item} onDelete={handleDeleteExpense} />
           )}

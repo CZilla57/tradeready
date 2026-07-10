@@ -132,6 +132,7 @@ export default function JobsScreen({ navigation }: { navigation: any }) {
           value={search}
           onChangeText={setSearch}
           clearButtonMode="while-editing"
+          accessibilityLabel="Search jobs or customers"
         />
       </View>
 
@@ -144,6 +145,9 @@ export default function JobsScreen({ navigation }: { navigation: any }) {
               key={f.key}
               style={[styles.filterTab, filter === f.key && styles.filterTabActive]}
               onPress={() => setFilter(f.key)}
+              accessibilityRole="tab"
+              accessibilityLabel={`${f.label}${count > 0 ? `, ${count}` : ''}`}
+              accessibilityState={{ selected: filter === f.key }}
             >
               <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>
                 {f.label} {count > 0 ? `(${count})` : ""}
@@ -176,6 +180,8 @@ export default function JobsScreen({ navigation }: { navigation: any }) {
         style={styles.fab}
         onPress={() => navigation.navigate("AddJob", {})}
         activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel="Add new job"
       >
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>

@@ -73,6 +73,11 @@ export interface Material {
   unitCost: number;
 }
 
+export interface TimeSession {
+  start: string;
+  end: string | null;
+}
+
 export interface Job {
   id: string;
   /**
@@ -104,6 +109,8 @@ export interface Job {
   notes: string;
   invoiceId: string | null;
   createdAt: DateString;
+  photos?: string[];
+  timeSessions?: TimeSession[];
   recurringJobId?: string;
   occurrenceNumber?: number;
 }

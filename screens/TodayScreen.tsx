@@ -34,6 +34,7 @@ import {
 } from '../utils/dateHelpers';
 import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
 import type { Job, Invoice } from '../types/models';
+import { reportError } from '../utils/analytics';
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ function BriefingSection({ title, actionLabel, onAction, children }: BriefingSec
       <View style={styles.sectionHeaderRow}>
         <Text style={styles.sectionTitle}>{title}</Text>
         {actionLabel ? (
-          <TouchableOpacity onPress={onAction} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <TouchableOpacity onPress={onAction} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityRole="button" accessibilityLabel={actionLabel}>
             <Text style={styles.sectionAction}>{actionLabel}</Text>
           </TouchableOpacity>
         ) : null}
@@ -81,7 +82,7 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
   return (
     <View style={styles.statsRow}>
       {/* Today's earnings */}
-      <TouchableOpacity style={styles.statCard} onPress={onEarningsTap} activeOpacity={0.75}>
+      <TouchableOpacity style={styles.statCard} onPress={onEarningsTap} activeOpacity={0.75} accessibilityRole="button" accessibilityLabel={`Today's expected earnings: ${formatMoney(earnings)}`}>
         <Text style={styles.statLabel}>TODAY</Text>
         {loading
           ? <ActivityIndicator color={colors.accent} size="small" style={styles.statSpinner} />
@@ -95,6 +96,8 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
         style={[styles.statCard, !loading && overdueCount > 0 && styles.statCardDanger]}
         onPress={onOverdueTap}
         activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`Overdue invoices: ${overdueCount > 0 ? `${overdueCount}, ${formatMoney(overdueTotal)}` : 'none'}`}
       >
         <Text style={[styles.statLabel, !loading && overdueCount > 0 && { color: colors.danger }]}>
           OVERDUE
@@ -115,6 +118,8 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
         style={[styles.statCard, !loading && leadCount > 0 && styles.statCardWarning]}
         onPress={onLeadsTap}
         activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`Leads: ${leadCount > 0 ? `${leadCount} to follow up` : 'none pending'}`}
       >
         <Text style={[styles.statLabel, !loading && leadCount > 0 && { color: colors.warning }]}>
           LEADS
@@ -284,7 +289,7 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
     <View style={styles.weekStripWrapper}>
       <Text style={styles.weekMonthLabel}>{weekMonthLabel(weekDates)}</Text>
       <View style={styles.weekStrip}>
-        <TouchableOpacity onPress={onPrevWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity onPress={onPrevWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityRole="button" accessibilityLabel="Previous week">
           <Text style={styles.weekNavText}>‹</Text>
         </TouchableOpacity>
 
@@ -300,6 +305,9 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
               onPress={() => onSelectDay(dateStr)}
               style={styles.dayCell}
               activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`${DAY_LETTERS[i]}, ${dayNum}${hasJobs ? ', has jobs' : ''}`}
+              accessibilityState={{ selected: isSelected }}
             >
               <Text style={[styles.dayLetter, isSelected && styles.dayLetterSelected]}>
                 {DAY_LETTERS[i]}
@@ -322,7 +330,7 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
           );
         })}
 
-        <TouchableOpacity onPress={onNextWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity onPress={onNextWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityRole="button" accessibilityLabel="Next week">
           <Text style={styles.weekNavText}>›</Text>
         </TouchableOpacity>
       </View>
@@ -370,6 +378,7 @@ export default function TodayScreen({ navigation }: { navigation: any }) {
           }
         } catch (error: unknown) {
           console.error('TodayScreen: failed to load daily data', error);
+          reportError(error, { context: 'todayScreenLoad' });
         } finally {
           if (active) setLoading(false);
         }

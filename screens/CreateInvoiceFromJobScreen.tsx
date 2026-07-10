@@ -28,7 +28,7 @@ import Field from "../components/Field";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
-import { track } from '../utils/analytics';
+import { track, reportError } from '../utils/analytics';
 import type { Job, Invoice, Customer, InvoiceLineItem } from "../types/models";
 
 function trackedDisplay(sessions: any[] = []): string | null {
@@ -99,6 +99,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: { rout
         setNumber(nextInvoiceNumber(invoices));
       } catch (err: unknown) {
         console.error("CreateInvoiceFromJobScreen: prefill failed", err);
+        reportError(err, { context: 'invoicePrefill' });
       } finally {
         setLoading(false);
       }
@@ -183,6 +184,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: { rout
       navigation.replace("Outreach", { invoiceId: newInvoice.id });
     } catch (err: unknown) {
       console.error("CreateInvoiceFromJobScreen: save failed", err);
+      reportError(err, { context: 'invoiceCreate' });
       Alert.alert("Error", "Could not create invoice. Please try again.");
     } finally {
       setSaving(false);
@@ -218,7 +220,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: { rout
 
           {/* Tracked time hint */}
           {job && (() => {
-            const tracked = trackedDisplay((job as any).timeSessions);
+            const tracked = trackedDisplay(job.timeSessions);
             if (!tracked) return null;
             const estH = job.laborHours || 0;
             return (

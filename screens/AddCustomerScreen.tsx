@@ -23,7 +23,7 @@ import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import Field from "../components/Field";
-import { track } from '../utils/analytics';
+import { track, reportError } from '../utils/analytics';
 
 interface AddressData {
   address?: {
@@ -200,6 +200,7 @@ export default function AddCustomerScreen({ route, navigation }: { route: any; n
       navigation.goBack();
     } catch (err: unknown) {
       console.error("AddCustomerScreen: save failed", err);
+      reportError(err, { context: 'customerSave' });
       Alert.alert("Error", "Could not save customer. Please try again.");
     } finally {
       setSaving(false);

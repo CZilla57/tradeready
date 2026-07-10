@@ -18,7 +18,7 @@ import { formatMoney } from "../utils/format";
 import { Badge, Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import { track } from '../utils/analytics';
+import { track, reportError } from '../utils/analytics';
 import type { Invoice, Settings } from "../types/models";
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -94,6 +94,7 @@ export default function OutreachScreen({ route, navigation }: { route: any; navi
         )
       );
     } catch (err: unknown) {
+      reportError(err, { context: 'generatePaymentLink' });
       Alert.alert(
         "Payment link error",
         (err as Error)?.message || "Could not generate payment link. Check your backend configuration in Settings."

@@ -33,7 +33,7 @@ export function ExpenseRow({ expense, onDelete }: ExpenseRowProps) {
   }
 
   return (
-    <TouchableOpacity style={styles.expenseRow} onLongPress={confirmDelete}>
+    <View style={styles.expenseRow}>
       <View style={styles.expenseIcon}>
         <Text style={styles.expenseIconText}>{category.icon}</Text>
       </View>
@@ -51,7 +51,17 @@ export function ExpenseRow({ expense, onDelete }: ExpenseRowProps) {
       </View>
 
       <Text style={styles.expenseAmount}>{formatMoney(expense.amount)}</Text>
-    </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.deleteBtn}
+        onPress={confirmDelete}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        accessibilityLabel="Delete expense"
+        accessibilityRole="button"
+      >
+        <Text style={styles.deleteBtnText}>✕</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -103,6 +113,20 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       color: colors.danger,
       fontSize: fontSize.md,
       fontWeight: '700',
+    },
+    deleteBtn: {
+      marginLeft: 10,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: colors.dangerBg,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    deleteBtnText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.danger,
     },
   });
 }

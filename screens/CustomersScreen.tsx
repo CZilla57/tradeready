@@ -20,6 +20,7 @@ import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
 import type { Invoice, Customer } from '../types/models';
+import { reportError } from '../utils/analytics';
 
 // The merged customer shape returned by buildCustomerList — extends Customer
 // with aggregated invoice data.
@@ -107,6 +108,7 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
       setManualCustomers(custs || []);
     } catch (err: unknown) {
       console.error('CustomersScreen: failed to load data', err);
+      reportError(err, { context: 'customersScreenLoad' });
     }
   };
 
@@ -145,6 +147,8 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
         <TouchableOpacity
           style={styles.addButton}
           onPress={() => navigation.navigate('AddCustomer')}
+          accessibilityRole="button"
+          accessibilityLabel="Add new customer"
         >
           <Text style={styles.addButtonText}>+ Add</Text>
         </TouchableOpacity>
@@ -160,6 +164,7 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
           onChangeText={setSearchText}
           autoCorrect={false}
           clearButtonMode="while-editing"
+          accessibilityLabel="Search customers"
         />
       </View>
 

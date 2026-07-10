@@ -110,7 +110,6 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
           <TouchableOpacity
             style={styles.row}
             onPress={() => navigation.navigate("PricebookEntry", { entryId: item.id })}
-            onLongPress={() => confirmDelete(item)}
             activeOpacity={0.7}
           >
             <View style={{ flex: 1 }}>
@@ -120,6 +119,15 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
               ) : null}
             </View>
             <Text style={styles.rowPrice}>{formatQuote(item.estimateTotal)}</Text>
+            <TouchableOpacity
+              style={styles.rowDeleteBtn}
+              onPress={() => confirmDelete(item)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel={`Delete ${item.name}`}
+              accessibilityRole="button"
+            >
+              <Text style={styles.rowDeleteText}>✕</Text>
+            </TouchableOpacity>
           </TouchableOpacity>
         )}
         contentContainerStyle={styles.listContent}
@@ -183,6 +191,20 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     rowName: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "600" },
     rowDesc: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
     rowPrice: { color: colors.accent, fontSize: fontSize.md, fontWeight: "700", marginLeft: spacing.sm },
+    rowDeleteBtn: {
+      marginLeft: 10,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: colors.dangerBg,
+      alignItems: "center" as const,
+      justifyContent: "center" as const,
+    },
+    rowDeleteText: {
+      fontSize: 13,
+      fontWeight: "600" as const,
+      color: colors.danger,
+    },
     listContent: { paddingBottom: 100 },
     fab: {
       position: "absolute",

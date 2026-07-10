@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../utils/supabase';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
+import { track } from '../utils/analytics';
 
 type AuthMode = 'login' | 'signup' | 'forgot';
 
@@ -66,6 +67,7 @@ export default function AuthScreen() {
       } else {
         const { error } = await supabase.auth.signUp({ email: email.trim(), password });
         if (error) throw error;
+        track('sign_up');
         Alert.alert(
           'Check your email',
           'We sent you a confirmation link. Click it to activate your account, then sign in here.'
@@ -124,6 +126,7 @@ export default function AuthScreen() {
             onChangeText={setEmail}
             placeholder="you@example.com"
             placeholderTextColor={colors.textMuted}
+            accessibilityLabel="Email address"
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
@@ -139,6 +142,7 @@ export default function AuthScreen() {
                 placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
                 placeholderTextColor={colors.textMuted}
                 secureTextEntry
+                accessibilityLabel="Password"
               />
               {mode === 'login' && (
                 <TouchableOpacity style={styles.toggle} onPress={goForgot}>

@@ -20,7 +20,7 @@ import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from ".
 import { syncNotifications } from "../utils/notifications";
 import { syncIfOnline } from "../utils/sync";
 import { supabase } from "../utils/supabase";
-import { resetUser } from "../utils/analytics";
+import { resetUser, reportError } from "../utils/analytics";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import BaseField from "../components/Field";
 import { TRADE_TYPES } from "../utils/pricingEngine";
@@ -137,6 +137,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
       if (data.error) throw new Error(data.error);
       await Linking.openURL(data.onboarding_url);
     } catch (err: unknown) {
+      reportError(err, { context: 'stripeConnect' });
       Alert.alert("Stripe Connect error", (err as Error).message || "Could not start Stripe onboarding.");
     } finally {
       setStripeConnecting(false);
@@ -161,6 +162,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
             if (!res.ok) throw new Error("Failed to disconnect.");
             setStripeStatus({ connected: false });
           } catch (err: unknown) {
+            reportError(err, { context: 'stripeDisconnect' });
             Alert.alert("Error", (err as Error).message || "Could not disconnect Stripe account.");
           } finally {
             setStripeDisconnecting(false);
@@ -503,6 +505,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
                   await clearAllUserData();
                   await supabase.auth.signOut();
                 } catch (err: unknown) {
+                  reportError(err, { context: 'deleteAccount' });
                   Alert.alert("Error", (err as Error).message || "Something went wrong. Please try again.");
                 } finally {
                   setDeleting(false);

@@ -45,54 +45,49 @@ This is called "hot reload" and it makes development very fast.
 
 ---
 
-## Step 3 — Connect your payment processor
+## Step 3 — Connect Stripe for payments
 
-1. Open the app and go to the Settings tab.
-2. Select your payment processor (Stripe, Square, PayPal, etc.).
-3. Paste in your API key or account ID.
+Stripe Connect is built in. Users connect their Stripe account from
+**Settings → Connect Stripe** — no API keys needed. The backend (Vercel
+serverless at `backend/api/stripe/`) handles account creation, onboarding,
+payment link generation, and webhooks.
 
-For the payment link to actually work, you also need to deploy the serverless
-functions in the `invoice-payment-api` folder to Vercel. See that folder's
-README for instructions. Once deployed, update `backendUrl` in `app.json`:
+The backend is deployed at `backend-tradeready1.vercel.app`. The app reads
+`backendUrl` from `app.json` at runtime:
 
 ```json
 "extra": {
-  "backendUrl": "https://your-deployment.vercel.app",
+  "backendUrl": "https://backend-tradeready1.vercel.app",
   "backendUrlIsPlaceholder": false
 }
 ```
 
-The app reads `backendUrl` at runtime — no code changes required.
-
 ---
 
-## Step 4 — Add your AI keys
+## Step 4 — AI setup
 
-The app uses Claude (Anthropic) to generate pricing estimates and collection messages,
-and optionally Groq as an alternative AI provider.
+AI features (business chat, pricebook suggestions) are proxied through the
+Vercel backend using server-side API keys — no user-supplied keys required.
 
-1. Go to console.anthropic.com and create an account.
-2. Generate an API key.
-3. Open the app, go to **Settings**, and paste the key into the **Anthropic key** field.
+- **AI Coach chat** — Groq (Llama 3.1) via `backend/api/ai-chat.js`
+- **Pricebook AI Assist** — Claude (Anthropic) via `backend/api/pricebook-suggest.js`
 
-The key is stored securely in the iOS Keychain / Android Keystore and never leaves
-your device. You must re-enter it on each device you sign in to.
-
-For a production app, you'd move the Anthropic API call to a serverless function
-so your key isn't stored on the device at all.
+Required Vercel env vars: `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_URL`,
+`SUPABASE_ANON_KEY`.
 
 ---
 
 ## File map — what does what
 
 ```
-App.js                           ← Entry point; sets up tabs and navigation stacks
+App.tsx                          ← Entry point; sets up tabs and navigation stacks
 app.json                         ← Expo config (name, icons, backendUrl, EAS project)
 types/
   models.ts                      ← TypeScript types for all data shapes
 
 utils/
-  theme.js                       ← All colors, font sizes, spacing
+  theme.ts                       ← All colors, font sizes, spacing (light + dark mode tokens)
+  analytics.ts                   ← PostHog + Sentry wrapper (track, identifyUser, reportError)
   storage/                       ← Local persistence (9 typed modules, see below)
     index.ts                     ← Barrel: re-exports public API
     keys.ts                      ← AsyncStorage key constants
@@ -105,7 +100,7 @@ utils/
     dailyOps.ts                  ← Today-tab derived reads (today's jobs, overdue, leads)
   format.ts                      ← formatMoney (2 dp, invoices/totals) / formatQuote (estimates)
   pricingEngine.ts               ← Pricing math, estimate breakdown, price ranges
-  invoiceHelpers.js              ← Payment link fetch, AI message text, PDF helpers
+  invoiceHelpers.ts              ← Payment link fetch, AI message text, PDF helpers
   anthropicMessage.ts            ← Shared Anthropic (Claude) API call with error fallback
   messaging.ts                   ← composeEmail / composeSMS (availability guard + Alert)
   dateHelpers.ts                 ← Date/time formatting, week math, greeting
@@ -116,54 +111,92 @@ utils/
   invoiceStats.ts                ← summarizeInvoices, isOverdue, filterInvoices
   numberInput.ts                 ← parseNumberInput, buildEstimateInput (safe 0-handling)
   customerList.ts                ← buildCustomerList — invoice/record join + rollup
-  sync.js                        ← Supabase sync queue (push/pull, enqueue, trySync)
-  supabase.js                    ← Supabase client (auth + database)
-  notifications.js               ← Push notification scheduling (overdue reminders)
-  pdfTemplates.js                ← HTML templates for invoice and estimate PDFs
-  pdfExport.js                   ← PDF rendering and share sheet
-  photoStorage.js                ← Device photo management (expo-file-system)
-  aiService.js                   ← Groq AI integration (alternative to Anthropic)
-  moneyUtils.js                  ← (legacy) retained for existing callers
+  sync.ts                        ← Supabase sync queue (push/pull, enqueue, trySync)
+  supabase.ts                    ← Supabase client (auth + database)
+  notifications.ts               ← Push notification scheduling (overdue reminders)
+  pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
+  pdfExport.ts                   ← PDF rendering and share sheet
+  photoStorage.ts                ← Device photo management (expo-file-system)
+  aiService.ts                   ← Groq AI integration (backend-proxied via Vercel)
+  pricebookAI.ts                 ← Pricebook AI Assist (backend-proxied via Vercel)
+  subscription.ts                ← RevenueCat subscription helpers
+  recurringJobs.ts               ← Recurring job scheduling engine
+  reviewRequest.ts               ← Customer review request helpers
+  moneyUtils.ts                  ← Expense categories, date filters, date range math
+  businessSnapshot.ts            ← Business metrics snapshot for AI context
+  conversionFunnel.ts            ← Lead → paid conversion funnel analytics
+  avgJobValue.ts                 ← Average job value analytics
+  invoiceAging.ts                ← Invoice aging analytics
+  revenueByType.ts               ← Revenue breakdown by job type
+  seasonalTrends.ts              ← Seasonal revenue trends
+  customerMix.ts                 ← Customer mix analytics (new vs repeat)
+  expenseTrends.ts               ← Expense trends analytics
+  revenueForecast.ts             ← Revenue forecast analytics
+
+hooks/
+  useTheme.ts                    ← Dark/light theme hook (reads ThemeContext)
+  useRefresh.ts                  ← Pull-to-refresh hook (shared across 9 screens)
+  useSyncStatus.ts               ← Sync status hook (pending count, last sync time)
+  useMoneyData.ts                ← Money tab data loader (invoices, expenses, refresh)
 
 components/
-  UI.js                          ← Shared primitives: Button, Card, Badge, StatCard,
+  UI.tsx                         ← Shared primitives: Button, Card, Badge, StatCard,
                                    EmptyState, SectionHeader, LoadingState, …
   Field.tsx                      ← Shared text-input (label + input + escape hatches)
   DateTimePickerSheet.tsx        ← Cross-platform date/time picker (iOS sheet / Android dialog)
+  SyncBanner.tsx                 ← Sync status banner (pending items indicator)
+  PricebookPickerModal.tsx       ← Pricebook item picker for job materials
   money/
-    SummaryCard.js               ← Income/expense summary widget
-    MonthlyChart.js              ← Bar chart for monthly revenue
-    ReceivablesCard.js           ← Outstanding receivables summary
-    TopCustomersCard.js          ← Top customers by revenue
-    ExpenseRow.js                ← Single expense list row
-    AddExpenseModal.js           ← Log-expense bottom sheet
-    MileageCard.tsx              ← "Mileage deduction" card on the Money dashboard
+    SummaryCard.tsx              ← Income/expense summary widget
+    MonthlyChart.tsx             ← Bar chart for monthly revenue
+    ReceivablesCard.tsx          ← Outstanding receivables summary
+    TopCustomersCard.tsx         ← Top customers by revenue
+    ExpenseRow.tsx               ← Single expense list row
+    AddExpenseModal.tsx          ← Log-expense bottom sheet
+    MileageCard.tsx              ← Mileage deduction card on the Money dashboard
+    PricebookCard.tsx            ← Pricebook quick-access card
+    ConversionFunnelCard.tsx     ← Lead → paid conversion funnel
+    AvgJobValueCard.tsx          ← Average job value chart
+    InvoiceAgingCard.tsx         ← Invoice aging breakdown
+    RevenueByTypeCard.tsx        ← Revenue by job type chart
+    SeasonalTrendsCard.tsx       ← Seasonal revenue trends chart
+    CustomerMixCard.tsx          ← New vs repeat customer mix
+    ExpenseTrendsCard.tsx        ← Expense trends chart
+    RevenueForecastCard.tsx      ← Revenue forecast chart
 
 screens/
-  TodayScreen.js                 ← Today tab: schedule, earnings summary, route launch
-  RouteScreen.js                 ← Map view (deep-links to Apple/Google Maps)
-  JobsScreen.js                  ← Job list with status filters (Active / Estimates / Completed)
-  JobDetailScreen.js             ← Job detail: status pipeline, time tracking, materials
-  AddJobScreen.js                ← Add / edit job form
-  SendEstimateScreen.js          ← Review and send estimate via email or SMS
-  PricingCalculatorScreen.js     ← AI-powered pricing calculator
-  CreateInvoiceFromJobScreen.js  ← Convert a completed job to an invoice
-  InvoicesScreen.js              ← Invoice list with overdue detection
-  AddInvoiceScreen.js            ← Add / edit invoice
-  OutreachScreen.js              ← Generate and send collection messages
-  MoneyScreen.js                 ← Money tab: dashboard, expense log, charts
-  MileageLogScreen.tsx           ← Full mileage trip log (reached from the Mileage deduction card)
+  TodayScreen.tsx                ← Today tab: schedule, earnings summary, route launch
+  RouteScreen.tsx                ← Map view (deep-links to Apple/Google Maps)
+  JobsScreen.tsx                 ← Job list with status filters (Active / Estimates / Completed)
+  JobDetailScreen.tsx            ← Job detail: status pipeline, time tracking, materials
+  AddJobScreen.tsx               ← Add / edit job form
+  SendEstimateScreen.tsx         ← Review and send estimate via email or SMS
+  PricingCalculatorScreen.tsx    ← AI-powered pricing calculator
+  CreateInvoiceFromJobScreen.tsx ← Convert a completed job to an invoice
+  InvoicesScreen.tsx             ← Invoice list with overdue detection
+  AddInvoiceScreen.tsx           ← Add / edit invoice
+  OutreachScreen.tsx             ← Generate and send collection messages
+  MoneyScreen.tsx                ← Money tab: dashboard, expense log, analytics cards
+  MileageLogScreen.tsx           ← Full mileage trip log (reached from Mileage deduction card)
   AddTripScreen.tsx              ← Add / edit trip (odometer start/end, from/to endpoint)
-  CustomersScreen.js             ← Customer list with search
-  CustomerDetailScreen.js        ← Customer history, notes, contact actions
-  AddCustomerScreen.js           ← Add / edit customer
-  SettingsScreen.js              ← Business profile, AI keys, payment processor
-  ChatScreen.js                  ← AI Coach chat (Claude or Groq)
-  AuthScreen.js                  ← Sign in / sign up
-  OnboardingScreen.js            ← First-run wizard
+  CustomersScreen.tsx            ← Customer list with search
+  CustomerDetailScreen.tsx       ← Customer history, notes, contact actions
+  AddCustomerScreen.tsx          ← Add / edit customer
+  SettingsScreen.tsx             ← Business profile, appearance, Stripe Connect, payments
+  ChatScreen.tsx                 ← AI Coach chat (Groq via backend proxy)
+  AuthScreen.tsx                 ← Sign in / sign up
+  OnboardingScreen.tsx           ← First-run wizard
+  PricebookScreen.tsx            ← Pricebook item list with AI-assisted pricing
+  PricebookEntryScreen.tsx       ← Add / edit pricebook entry
+  PaywallScreen.tsx              ← RevenueCat subscription paywall
+  RecurringJobsScreen.tsx        ← Recurring job schedule manager
+  ReviewRequestScreen.tsx        ← Customer review request generator
 
 context/
-  AuthContext.js                 ← Supabase auth state (session, sign-in, sign-out)
+  AuthContext.tsx                ← Supabase auth state (session, sign-in, sign-out)
+  ThemeContext.tsx                ← Dark/light mode context + toggle
+  SubscriptionContext.tsx        ← RevenueCat subscription state
+  SyncStatusContext.tsx          ← Sync queue status (pending count, last sync)
 ```
 
 ---

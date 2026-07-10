@@ -31,6 +31,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
 import type { Invoice, Settings } from "../types/models";
+import { track } from "../utils/analytics";
 
 export default function InvoicesScreen({ navigation }: { navigation: any }) {
   const { colors, shadow } = useTheme();
@@ -64,8 +65,25 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
       ? await readPhotoAsDataUri(settings.logoPhoto)
       : null;
     const html = invoiceHtml(inv, settings, logoDataUri ?? undefined);
-    const filename = `Invoice-${inv.number || inv.id}-${(inv as any).customer.replace(/\s+/g, "-")}`;
+    const filename = `Invoice-${inv.number || inv.id}-${inv.customer.replace(/\s+/g, "-")}`;
     await exportPdf(html, filename);
+  }
+
+  function confirmDeleteInvoice(id: string, onSuccess?: () => void) {
+    Alert.alert("Delete invoice?", "This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          const updated = invoices.filter((i) => i.id !== id);
+          setInvoices(updated);
+          await saveInvoices(updated);
+          syncNotifications();
+          onSuccess?.();
+        },
+      },
+    ]);
   }
 
   async function markPaid(id: string, onSuccess?: () => void) {
@@ -75,9 +93,11 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
         text: "Mark paid",
         onPress: async () => {
           const today = new Date().toISOString().split('T')[0];
+          const inv = invoices.find((i) => i.id === id);
           const updated = invoices.map((i) => (i.id === id ? { ...i, paid: true, paidAt: today } : i));
           setInvoices(updated);
           await saveInvoices(updated);
+          track('invoice_paid', { amount: inv?.amount });
           syncNotifications();
           onSuccess?.();
         },
@@ -102,15 +122,15 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
       >
         <View style={styles.invoiceTop}>
           <Text style={styles.customerName} numberOfLines={1}>
-            {(inv as any).customer}
+            {inv.customer}
           </Text>
-          <Text style={styles.amount}>{formatMoney((inv as any).amount)}</Text>
+          <Text style={styles.amount}>{formatMoney(inv.amount)}</Text>
         </View>
         <View style={styles.invoiceMeta}>
           <Badge label={status.label} color={status.color} />
           <Text style={styles.metaText}>{inv.number}</Text>
           <Text style={[styles.metaText, styles.descText]} numberOfLines={1}>
-            {(inv as any).desc}
+            {inv.desc}
           </Text>
         </View>
         <View style={styles.invoiceActions}>
@@ -152,6 +172,7 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
           placeholderTextColor={colors.textMuted}
           value={search}
           onChangeText={setSearch}
+          accessibilityLabel="Search invoices"
           clearButtonMode="while-editing"
         />
       </View>
@@ -219,9 +240,9 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
                 </View>
 
                 {/* Customer + amount */}
-                <Text style={styles.modalCustomer}>{(inv as any).customer}</Text>
+                <Text style={styles.modalCustomer}>{inv.customer}</Text>
                 <Text style={[styles.modalAmount, { color: accentColor }]}>
-                  {formatMoney((inv as any).amount)}
+                  {formatMoney(inv.amount)}
                 </Text>
 
                 {/* Due date */}
@@ -233,27 +254,27 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
                 ) : null}
 
                 {/* Description */}
-                {(inv as any).desc ? (
+                {inv.desc ? (
                   <View style={styles.modalDetailRow}>
                     <Text style={styles.modalDetailLabel}>Description</Text>
-                    <Text style={[styles.modalDetailValue, { flex: 1, textAlign: "right" }]}>{(inv as any).desc}</Text>
+                    <Text style={[styles.modalDetailValue, { flex: 1, textAlign: "right" }]}>{inv.desc}</Text>
                   </View>
                 ) : null}
 
                 {/* Contact */}
-                {(inv as any).email ? (
+                {inv.email ? (
                   <View style={styles.modalDetailRow}>
                     <Text style={styles.modalDetailLabel}>Email</Text>
-                    <TouchableOpacity onPress={() => Linking.openURL(`mailto:${(inv as any).email}`)}>
-                      <Text style={[styles.modalDetailValue, styles.modalLink]}>{(inv as any).email}</Text>
+                    <TouchableOpacity onPress={() => Linking.openURL(`mailto:${inv.email}`)}>
+                      <Text style={[styles.modalDetailValue, styles.modalLink]}>{inv.email}</Text>
                     </TouchableOpacity>
                   </View>
                 ) : null}
-                {(inv as any).phone ? (
+                {inv.phone ? (
                   <View style={styles.modalDetailRow}>
                     <Text style={styles.modalDetailLabel}>Phone</Text>
-                    <TouchableOpacity onPress={() => Linking.openURL(`tel:${(inv as any).phone}`)}>
-                      <Text style={[styles.modalDetailValue, styles.modalLink]}>{(inv as any).phone}</Text>
+                    <TouchableOpacity onPress={() => Linking.openURL(`tel:${inv.phone}`)}>
+                      <Text style={[styles.modalDetailValue, styles.modalLink]}>{inv.phone}</Text>
                     </TouchableOpacity>
                   </View>
                 ) : null}
@@ -294,6 +315,13 @@ export default function InvoicesScreen({ navigation }: { navigation: any }) {
                     </TouchableOpacity>
                   )}
                 </View>
+
+                <TouchableOpacity
+                  style={styles.modalDeleteBtn}
+                  onPress={() => confirmDeleteInvoice(inv.id, () => setViewingInvoice(null))}
+                >
+                  <Text style={styles.modalDeleteBtnText}>Delete invoice</Text>
+                </TouchableOpacity>
               </ScrollView>
             </View>
           );
@@ -408,8 +436,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     modalSheet: {
       backgroundColor: colors.background,
-      borderTopLeftRadius: (radius as any).xl ?? 20,
-      borderTopRightRadius: (radius as any).xl ?? 20,
+      borderTopLeftRadius: radius.xl,
+      borderTopRightRadius: radius.xl,
       maxHeight: "80%",
       ...shadow.card,
     },
@@ -520,6 +548,20 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     modalActionBtnText: {
       fontSize: fontSize.sm,
       color: colors.textPrimary,
+    },
+    modalDeleteBtn: {
+      marginTop: spacing.md,
+      paddingVertical: 10,
+      alignItems: "center",
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.danger + "40",
+      backgroundColor: colors.dangerBg,
+    },
+    modalDeleteBtnText: {
+      fontSize: fontSize.sm,
+      color: colors.danger,
+      fontWeight: "600",
     },
 
     fab: {

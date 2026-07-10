@@ -66,6 +66,7 @@ module.exports = async function handler(req, res) {
     if (err.type === 'StripeInvalidRequestError') {
       return res.status(200).json({ connected: false });
     }
-    return res.status(500).json({ error: err.message });
+    console.error('[connect-status] error:', err.message);
+    return res.status(500).json({ error: 'Could not check Stripe connection status.' });
   }
 };

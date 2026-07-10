@@ -16,8 +16,11 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 
+const ALLOWED_ORIGINS = ["https://tradeready.app"];
+
 module.exports = async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = req.headers["origin"];
+  res.setHeader("Access-Control-Allow-Origin", origin && ALLOWED_ORIGINS.includes(origin) ? origin : "https://tradeready.app");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -65,7 +68,8 @@ module.exports = async function handler(req, res) {
 
     const data = await aiRes.json();
     if (data.error) {
-      return res.status(502).json({ error: data.error.message || "AI provider error" });
+      console.error("[pricebook-suggest] provider error:", data.error.message);
+      return res.status(502).json({ error: "AI provider error. Please try again." });
     }
 
     const text = data.content?.map((b) => b.text || "").join("") || "";

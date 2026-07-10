@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import { supabase } from './supabase';
+import { reportError } from './analytics';
 import type { Settings, CustomerNotes } from '../types/models';
 
 const QUEUE_KEY       = '__syncQueue';
@@ -163,6 +164,7 @@ async function pullRemote(userId: string): Promise<void> {
     await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify(lastSynced));
   } catch (e: unknown) {
     console.warn('Sync pull failed:', (e as Error).message);
+    reportError(e, { context: 'pullRemote' });
   }
 }
 
@@ -174,6 +176,7 @@ export async function syncIfOnline(userId: string): Promise<void> {
     await pullRemote(userId);
   } catch (e: unknown) {
     console.warn('Sync failed:', (e as Error).message);
+    reportError(e, { context: 'trySyncNow' });
   }
 }
 
@@ -226,6 +229,7 @@ export async function initialSync(userId: string): Promise<void> {
     await AsyncStorage.setItem(INIT_DONE_KEY + userId, 'true');
   } catch (e: unknown) {
     console.warn('Initial sync failed:', (e as Error).message);
+    reportError(e, { context: 'initialSync' });
   }
 }
 

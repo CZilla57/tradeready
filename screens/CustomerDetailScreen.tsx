@@ -20,6 +20,7 @@ import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
 import type { Job, Invoice } from '../types/models';
+import { reportError } from '../utils/analytics';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -181,6 +182,7 @@ export default function CustomerDetailScreen({ route, navigation }: { route: any
         setNotes(customer.notes || '');
       } catch (err: unknown) {
         console.error('CustomerDetailScreen: failed to load data', err);
+        reportError(err, { context: 'customerDetailLoad' });
       }
     }
     loadJobsAndNotes();
@@ -193,6 +195,7 @@ export default function CustomerDetailScreen({ route, navigation }: { route: any
       setNotesChanged(false);
     } catch (err: unknown) {
       console.error('CustomerDetailScreen: failed to save notes', err);
+      reportError(err, { context: 'customerNotesSave' });
     }
   }, [notes, notesChanged, displayCustomer]);
 
@@ -226,6 +229,7 @@ export default function CustomerDetailScreen({ route, navigation }: { route: any
               navigation.goBack();
             } catch (err: unknown) {
               console.error('CustomerDetailScreen: delete failed', err);
+              reportError(err, { context: 'customerDelete' });
             }
           },
         },

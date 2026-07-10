@@ -68,7 +68,8 @@ module.exports = async function handler(req, res) {
 
     return res.status(200).json({ onboarding_url: accountLink.url });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[create-connect-account] error:', err.message);
+    return res.status(500).json({ error: 'Could not start Stripe onboarding. Please try again.' });
   }
 };
 

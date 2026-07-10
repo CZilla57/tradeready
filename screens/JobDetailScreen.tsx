@@ -24,7 +24,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storage";
 import { scheduleReviewRequest } from "../utils/reviewRequest";
-import { track } from '../utils/analytics';
+import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
@@ -301,19 +301,28 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
       ) : (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
           {photos.map((uri, i) => (
-            <TouchableOpacity
-              key={i}
-              onPress={() => setViewerUri(uri)}
-              onLongPress={() =>
-                Alert.alert("Delete photo?", "This cannot be undone.", [
-                  { text: "Cancel", style: "cancel" },
-                  { text: "Delete", style: "destructive", onPress: () => onDelete(uri) },
-                ])
-              }
-              activeOpacity={0.85}
-            >
-              <Image source={{ uri }} style={styles.photoThumb} />
-            </TouchableOpacity>
+            <View key={i} style={styles.photoThumbWrap}>
+              <TouchableOpacity
+                onPress={() => setViewerUri(uri)}
+                activeOpacity={0.85}
+              >
+                <Image source={{ uri }} style={styles.photoThumb} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.photoDeleteBtn}
+                onPress={() =>
+                  Alert.alert("Delete photo?", "This cannot be undone.", [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Delete", style: "destructive", onPress: () => onDelete(uri) },
+                  ])
+                }
+                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                accessibilityLabel="Delete photo"
+                accessibilityRole="button"
+              >
+                <Text style={styles.photoDeleteText}>✕</Text>
+              </TouchableOpacity>
+            </View>
           ))}
         </ScrollView>
       )}
@@ -516,6 +525,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
           setCustomer(c || null);
         } catch (error: unknown) {
           console.error("JobDetailScreen: failed to load job", error);
+          reportError(error, { context: 'jobDetailLoad' });
           if (active) setLoadError(true);
         } finally {
           if (active) setLoading(false);
@@ -568,6 +578,7 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
   }
 
   async function handleAddPhoto() {
+    if (!job) return;
     Alert.alert("Add Photo", undefined, [
       {
         text: "Take Photo",
@@ -578,9 +589,9 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
             return;
           }
           const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
-          if (!result.canceled) {
+          if (!result.canceled && job) {
             const uri = await persistPhoto(result.assets[0].uri, "job-photos");
-            await updateJob({ photos: [...((job as any).photos || []), uri] } as any);
+            await updateJob({ photos: [...(job.photos || []), uri] });
           }
         },
       },
@@ -593,9 +604,9 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
             return;
           }
           const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
-          if (!result.canceled) {
+          if (!result.canceled && job) {
             const uri = await persistPhoto(result.assets[0].uri, "job-photos");
-            await updateJob({ photos: [...((job as any).photos || []), uri] } as any);
+            await updateJob({ photos: [...(job.photos || []), uri] });
           }
         },
       },
@@ -604,15 +615,16 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
   }
 
   async function handleDeletePhoto(uri: string) {
-    await updateJob({ photos: ((job as any).photos || []).filter((p: string) => p !== uri) } as any);
+    if (!job) return;
+    await updateJob({ photos: (job.photos || []).filter((p) => p !== uri) });
     await deletePhoto(uri);
   }
 
   async function handleClockIn() {
     if (!job) return;
     const newSession = { start: new Date().toISOString(), end: null };
-    const timeSessions = [...((job as any).timeSessions || []), newSession];
-    const changes: any = { timeSessions };
+    const sessions = [...(job.timeSessions || []), newSession];
+    const changes: Partial<Job> = { timeSessions: sessions };
     if (job.status === "scheduled") changes.status = "in_progress";
     await updateJob(changes);
     track('time_tracking_started', { jobId });
@@ -621,10 +633,10 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
   async function handleClockOut() {
     if (!job) return;
     const now = new Date().toISOString();
-    const timeSessions = ((job as any).timeSessions || []).map((s: any, i: number, arr: any[]) =>
+    const sessions = (job.timeSessions || []).map((s, i, arr) =>
       i === arr.length - 1 && !s.end ? { ...s, end: now } : s
     );
-    await updateJob({ timeSessions } as any);
+    await updateJob({ timeSessions: sessions });
   }
 
   // ── Loading state ──────────────────────────────────────────────────────
@@ -680,14 +692,14 @@ export default function JobDetailScreen({ route, navigation }: { route: any; nav
         <EstimateCard job={job} navigation={navigation} />
         {TIME_TRACKING_STATUSES.has(job.status) && (
           <TimeTrackingCard
-            sessions={(job as any).timeSessions || []}
+            sessions={job.timeSessions || []}
             estimatedHours={job.laborHours || 0}
             onClockIn={handleClockIn}
             onClockOut={handleClockOut}
           />
         )}
         <PhotosCard
-          photos={(job as any).photos || []}
+          photos={job.photos || []}
           onAdd={handleAddPhoto}
           onDelete={handleDeletePhoto}
         />
@@ -800,12 +812,31 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
 
     // Photos
     photoStrip: { marginTop: spacing.xs },
+    photoThumbWrap: {
+      position: 'relative' as const,
+      marginRight: spacing.sm,
+    },
     photoThumb: {
       width: 88,
       height: 88,
       borderRadius: radius.md,
-      marginRight: spacing.sm,
       backgroundColor: colors.border,
+    },
+    photoDeleteBtn: {
+      position: 'absolute' as const,
+      top: -6,
+      right: -6,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: colors.danger,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    photoDeleteText: {
+      color: '#fff',
+      fontSize: 11,
+      fontWeight: '700' as const,
     },
     noPhotosText: { fontSize: fontSize.sm, color: colors.textMuted },
     viewerBg: {

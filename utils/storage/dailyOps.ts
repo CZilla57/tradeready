@@ -4,6 +4,7 @@
 // the collections but never write.
 
 import { loadJobs, loadInvoices } from "./collections";
+import { reportError } from "../analytics";
 import type { Job, Invoice } from "../../types/models";
 
 export async function loadJobsForDate(dateString: string): Promise<Job[]> {
@@ -21,6 +22,7 @@ export async function loadJobsForDate(dateString: string): Promise<Job[]> {
       });
   } catch (error) {
     console.error("Error loading jobs for date:", error);
+    reportError(error, { context: 'loadJobsForDate' });
     return [];
   }
 }
@@ -37,6 +39,7 @@ export async function getExpectedEarningsForDate(dateString: string): Promise<nu
     return total;
   } catch (error) {
     console.error("Error calculating expected earnings:", error);
+    reportError(error, { context: 'getExpectedEarnings' });
     return 0;
   }
 }

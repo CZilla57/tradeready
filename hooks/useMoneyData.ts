@@ -3,7 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { Invoice, Expense, Job, ExpenseDraft } from '../types/models';
 import { loadInvoices, loadExpenses, saveExpenses, loadJobs } from '../utils/storage';
 import { generateExpenseId } from '../utils/moneyUtils';
-import { track } from '../utils/analytics';
+import { track, reportError } from '../utils/analytics';
 
 interface UseMoneyDataReturn {
   invoices: Invoice[];
@@ -38,6 +38,7 @@ export function useMoneyData(): UseMoneyDataReturn {
           setJobs(jbs);
         } catch (err) {
           console.error('useMoneyData: failed to load data', err);
+          reportError(err, { context: 'moneyDataLoad' });
         } finally {
           if (active) setLoading(false);
         }
@@ -60,6 +61,7 @@ export function useMoneyData(): UseMoneyDataReturn {
       setJobs(jbs);
     } catch (err) {
       console.error('useMoneyData: failed to load data', err);
+      reportError(err, { context: 'moneyDataRefresh' });
     }
   }, []);
 
@@ -68,6 +70,7 @@ export function useMoneyData(): UseMoneyDataReturn {
       await saveExpenses(updated);
     } catch (err) {
       console.error('useMoneyData: failed to save expenses', err);
+      reportError(err, { context: 'expenseSave' });
     }
   }, []);
 

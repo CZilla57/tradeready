@@ -21,7 +21,7 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "
 import { useTheme } from "../hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
 import type { Settings } from "../types/models";
-import { track } from '../utils/analytics';
+import { track, reportError } from '../utils/analytics';
 
 interface LocalMessage {
   id: string;
@@ -157,6 +157,7 @@ export default function ChatScreen({ navigation }: { navigation: any }) {
       }
       setMessages(prev => [...prev, { id: String(Date.now()) + "r", role: "assistant", text: reply }]);
     } catch (err: unknown) {
+      reportError(err, { context: 'aiChat' });
       const msg = (err as Error).message || "";
       setMessages(prev => [
         ...prev,
@@ -211,6 +212,7 @@ export default function ChatScreen({ navigation }: { navigation: any }) {
             onChangeText={setInput}
             placeholder="Ask anything..."
             placeholderTextColor={colors.textMuted}
+            accessibilityLabel="Chat message input"
             multiline
             maxLength={2000}
             returnKeyType="default"
@@ -220,6 +222,9 @@ export default function ChatScreen({ navigation }: { navigation: any }) {
             onPress={() => send()}
             disabled={!input.trim() || sending}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Send message"
+            accessibilityState={{ disabled: !input.trim() || sending }}
           >
             <Text style={styles.sendBtnText}>↑</Text>
           </TouchableOpacity>

@@ -17,7 +17,7 @@ import { useSubscription } from "../context/SubscriptionContext";
 import { getOfferings, purchasePackage, restorePurchases, ENTITLEMENT_ID } from "../utils/subscription";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import { track } from "../utils/analytics";
+import { track, reportError } from "../utils/analytics";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl ?? "";
@@ -70,6 +70,7 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
       if (canDismiss && navigation?.canGoBack?.()) navigation.goBack();
     } catch (err: any) {
       if (!err.userCancelled) {
+        reportError(err, { context: 'purchase' });
         Alert.alert("Purchase failed", err.message ?? "Something went wrong. Please try again.");
       }
     } finally {
@@ -90,6 +91,7 @@ export default function PaywallScreen({ route, navigation }: { route: any; navig
         Alert.alert("Nothing to restore", "We couldn't find an active subscription for this account.");
       }
     } catch (err: any) {
+      reportError(err, { context: 'restorePurchases' });
       Alert.alert("Restore failed", err.message ?? "Could not restore purchases. Please try again.");
     } finally {
       setRestoring(false);
