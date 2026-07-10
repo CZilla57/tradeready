@@ -7,6 +7,8 @@
 import * as SecureStore from 'expo-secure-store';
 
 const CHUNK_SIZE = 2048;
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder();
 
 // The SecureStore key the Supabase auth session is stored under. Shared with
 // utils/supabase.ts (passed as auth.storageKey, so supabase-js actually
@@ -32,19 +34,15 @@ export class SecureStoreAdapter {
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    // Clean up old chunks first
     await this._removeChunks(key);
 
-    if (value.length <= CHUNK_SIZE) {
+    const bytes = utf8Encoder.encode(value);
+    if (bytes.byteLength <= CHUNK_SIZE) {
       await SecureStore.setItemAsync(key, value);
       return;
     }
 
-    const chunks: string[] = [];
-    for (let i = 0; i < value.length; i += CHUNK_SIZE) {
-      chunks.push(value.slice(i, i + CHUNK_SIZE));
-    }
-
+    const chunks = this._chunkByBytes(bytes);
     await SecureStore.setItemAsync(key, chunks[0]);
     for (let i = 1; i < chunks.length; i++) {
       await SecureStore.setItemAsync(`${key}_chunk_${i}`, chunks[i]);
@@ -54,6 +52,26 @@ export class SecureStoreAdapter {
   async removeItem(key: string): Promise<void> {
     await SecureStore.deleteItemAsync(key);
     await this._removeChunks(key);
+  }
+
+  private _chunkByBytes(bytes: Uint8Array): string[] {
+    const chunks: string[] = [];
+    let offset = 0;
+
+    while (offset < bytes.byteLength) {
+      let end = Math.min(offset + CHUNK_SIZE, bytes.byteLength);
+      // Don't split in the middle of a multi-byte UTF-8 character:
+      // continuation bytes have the form 10xxxxxx (0x80..0xBF).
+      if (end < bytes.byteLength) {
+        while (end > offset && (bytes[end] & 0xc0) === 0x80) {
+          end--;
+        }
+      }
+      chunks.push(utf8Decoder.decode(bytes.slice(offset, end)));
+      offset = end;
+    }
+
+    return chunks;
   }
 
   private async _removeChunks(key: string): Promise<void> {
