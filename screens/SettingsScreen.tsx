@@ -70,6 +70,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
   const [s, setS] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const { isSubscribed, isTrialing } = useSubscription();
   const { pendingCount } = useSyncStatusContext();
 
@@ -346,15 +347,32 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
 
         <SectionHeader title="AI Assistant" />
         <View style={styles.card}>
-          <Text style={styles.providerHint}>Groq API key — powers the AI chat tab (estimates, advice, invoice messages). Get a free key at console.groq.com — no billing required.</Text>
-          <TextInput style={styles.input} value={s.groqKey} onChangeText={(v) => update("groqKey", v)} placeholder="gsk_..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry />
-          <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
+          <Text style={styles.providerHint}>
+            AI features work automatically via our cloud service. Toggle Advanced to use your own API keys instead.
+          </Text>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Advanced</Text>
+            <Switch
+              value={showAdvanced}
+              onValueChange={setShowAdvanced}
+              trackColor={{ false: colors.border, true: colors.accent }}
+            />
+          </View>
         </View>
-        <View style={[styles.card, { marginTop: spacing.sm }]}>
-          <Text style={styles.providerHint}>Anthropic (Claude) API key — used for AI-generated invoice outreach messages. Get one at console.anthropic.com.</Text>
-          <TextInput style={styles.input} value={s.anthropicKey} onChangeText={(v) => update("anthropicKey", v)} placeholder="sk-ant-..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry />
-          <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
-        </View>
+        {showAdvanced && (
+          <>
+            <View style={[styles.card, { marginTop: spacing.sm }]}>
+              <Text style={styles.providerHint}>Groq API key — powers the AI chat tab (estimates, advice, invoice messages). Get a free key at console.groq.com — no billing required.</Text>
+              <TextInput style={styles.input} value={s.groqKey} onChangeText={(v) => update("groqKey", v)} placeholder="gsk_..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+              <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
+            </View>
+            <View style={[styles.card, { marginTop: spacing.sm }]}>
+              <Text style={styles.providerHint}>Anthropic (Claude) API key — used for AI-generated invoice outreach messages. Get one at console.anthropic.com.</Text>
+              <TextInput style={styles.input} value={s.anthropicKey} onChangeText={(v) => update("anthropicKey", v)} placeholder="sk-ant-..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+              <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
+            </View>
+          </>
+        )}
 
         <Divider />
 
