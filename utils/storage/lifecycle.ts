@@ -10,6 +10,7 @@ import { KEYS } from "./keys";
 import { SECURE_FIELDS, loadSettings } from "./settings";
 import { defaultSettings } from "./defaults";
 import { saveInvoices, saveJobs, saveCustomers, saveExpenses } from "./collections";
+import { SESSION_STORAGE_KEY } from "../secureStoreAdapter";
 
 // --- Onboarding ---
 
@@ -61,4 +62,15 @@ export async function clearAllUserData(): Promise<void> {
   }
   // Clean up legacy key in case migration never ran
   try { await SecureStore.deleteItemAsync("geminiKey"); } catch {}
+
+  // Clean up the (possibly chunked) Supabase auth session. supabase.auth.signOut()
+  // also clears its own key, but this runs first in the sign-out flow and is a
+  // safety net if that call fails or is skipped (e.g. account deletion, offline).
+  // Bounded loop (max 10 chunks =~ 20KB) rather than probing with getItemAsync
+  // first — this is cleanup, so a couple of wasted no-op deletes are cheaper
+  // and simpler than an extra round-trip per key, and a missed chunk is harmless.
+  await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY).catch(() => {});
+  for (let i = 1; i <= 10; i++) {
+    await SecureStore.deleteItemAsync(`${SESSION_STORAGE_KEY}_chunk_${i}`).catch(() => {});
+  }
 }

@@ -128,7 +128,13 @@ describe("clearAllUserData", () => {
     expect(deletedKeys).toContain("anthropicKey");
     expect(deletedKeys).toContain("groqKey");
     expect(deletedKeys).toContain("geminiKey"); // legacy key cleanup
-    expect(deletedKeys).toHaveLength(4);
+    // Supabase auth session cleanup: base key + a bounded 10-slot chunk range
+    // (utils/storage/lifecycle.ts / utils/secureStoreAdapter.ts).
+    expect(deletedKeys).toContain("supabase_session");
+    expect(deletedKeys).toContain("supabase_session_chunk_1");
+    expect(deletedKeys).toContain("supabase_session_chunk_10");
+    // 4 credential keys + session base key + 10 chunk slots = 15.
+    expect(deletedKeys).toHaveLength(15);
   });
 
   test("completes without throwing even if a SecureStore delete fails", async () => {
@@ -137,8 +143,9 @@ describe("clearAllUserData", () => {
 
     await expect(clearAllUserData()).resolves.toBeUndefined();
 
-    // All four deletes were attempted despite the failure on the first
-    expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(4);
+    // All 15 deletes (4 credential keys + session base key + 10 chunk slots)
+    // were attempted despite the failure on the first.
+    expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(15);
   });
 });
 
