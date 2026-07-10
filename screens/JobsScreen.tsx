@@ -191,11 +191,11 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 }
 
 // Quick action button that changes based on the job's current status
-function QuickAction({ job, navigation }: { job: Job; navigation: any }) {
+function QuickAction({ job, navigation }: { job: Job; navigation: JobStackScreenProps<'JobList'>['navigation'] }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
-  const actions: Record<string, { label: string; screen: string }> = {
+  const actions: Record<string, { label: string; screen: 'PricingCalculator' | 'JobDetail' }> = {
     lead:          { label: "Build estimate →", screen: "PricingCalculator" },
     estimate_sent: { label: "Mark approved →",  screen: "JobDetail" },
     approved:      { label: "Schedule →",        screen: "JobDetail" },

@@ -119,7 +119,7 @@ function PipelineBar({ currentStatus }: { currentStatus: JobStatus }) {
   );
 }
 
-function JobDetailsCard({ job, navigation }: { job: Job; navigation: any }) {
+function JobDetailsCard({ job, navigation }: { job: Job; navigation: JobStackScreenProps<'JobDetail'>['navigation'] }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -189,7 +189,7 @@ function CustomerCard({ customer }: { customer: Customer }) {
   );
 }
 
-function EstimateCard({ job, navigation }: { job: Job; navigation: any }) {
+function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScreenProps<'JobDetail'>['navigation'] }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -422,7 +422,7 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
   );
 }
 
-function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: any; onAdvance: () => void }) {
+function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: JobStackScreenProps<'JobDetail'>['navigation']; onAdvance: () => void }) {
   const actions: Record<string, { label: string; onPress: () => void; variant: "primary" | "secondary" | "ghost" }> = {
     lead: job.estimateTotal > 0
       ? {
@@ -464,8 +464,11 @@ function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: a
     },
     invoiced: {
       label: "View invoice & send outreach",
-      onPress: () =>
-        navigation.navigate("Outreach", { invoiceId: job.invoiceId }),
+      onPress: () => {
+        if (job.invoiceId) {
+          navigation.navigate("Outreach", { invoiceId: job.invoiceId });
+        }
+      },
       variant: "primary",
     },
     paid: {
