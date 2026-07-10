@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
-  Image,
   Animated,
   StyleSheet,
   ScrollView,
@@ -13,6 +12,7 @@ import {
   PanResponder,
   Platform,
 } from 'react-native';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { persistPhoto } from '../../utils/photoStorage';
 import { DateTimePickerSheet } from '../DateTimePickerSheet';
@@ -243,7 +243,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
             </Text>
             {receiptUri ? (
               <View style={styles.receiptPreview}>
-                <Image source={{ uri: receiptUri }} style={styles.receiptImage} />
+                <Image source={{ uri: receiptUri }} style={styles.receiptImage} contentFit="cover" />
                 <TouchableOpacity style={styles.receiptRemoveRow} onPress={() => setReceiptUri(null)}>
                   <Text style={styles.receiptRemoveText}>✕  Remove photo</Text>
                 </TouchableOpacity>
@@ -424,7 +424,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     receiptImage: {
       width: '100%',
       height: 180,
-      resizeMode: 'cover',
     },
     receiptRemoveRow: {
       padding: spacing.sm,

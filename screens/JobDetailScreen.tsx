@@ -14,9 +14,9 @@ import {
   Linking,
   Platform,
   ActivityIndicator,
-  Image,
   Modal,
 } from "react-native";
+import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { persistPhoto, deletePhoto } from "../utils/photoStorage";
@@ -306,7 +306,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
                 onPress={() => setViewerUri(uri)}
                 activeOpacity={0.85}
               >
-                <Image source={{ uri }} style={styles.photoThumb} />
+                <Image source={{ uri }} style={styles.photoThumb} contentFit="cover" />
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.photoDeleteBtn}
@@ -338,7 +338,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
             <Text style={styles.viewerCloseText}>✕</Text>
           </TouchableOpacity>
           {viewerUri && (
-            <Image source={{ uri: viewerUri }} style={styles.viewerImage} resizeMode="contain" />
+            <Image source={{ uri: viewerUri }} style={styles.viewerImage} contentFit="contain" />
           )}
         </View>
       </Modal>

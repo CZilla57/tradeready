@@ -10,8 +10,8 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  Image,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -318,7 +318,7 @@ function StepBusiness({ form, update, logoUri, onPickLogo, onRemoveLogo, touched
       <Text style={styles.logoHint}>Optional — appears on invoices and estimates.</Text>
       <TouchableOpacity style={styles.logoPicker} onPress={onPickLogo} activeOpacity={0.7}>
         {logoUri ? (
-          <Image source={{ uri: logoUri }} style={styles.logoImage} />
+          <Image source={{ uri: logoUri }} style={styles.logoImage} contentFit="cover" />
         ) : (
           <View style={styles.logoPlaceholder}>
             <Text style={styles.logoPlaceholderIcon}>📷</Text>

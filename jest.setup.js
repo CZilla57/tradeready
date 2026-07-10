@@ -74,6 +74,11 @@ jest.mock("expo-image-picker", () => ({
   MediaTypeOptions: { Images: "Images" },
 }));
 
+jest.mock("expo-image", () => {
+  const { View } = require("react-native");
+  return { Image: View };
+});
+
 jest.mock("@react-native-async-storage/async-storage", () => ({
   getItem: jest.fn(() => Promise.resolve(null)),
   setItem: jest.fn(() => Promise.resolve()),
