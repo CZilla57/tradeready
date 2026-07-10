@@ -28,8 +28,9 @@ import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import type { Customer, RecurrenceCadence, RecurrenceEndCondition, RecurringJob } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
-export default function AddJobScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function AddJobScreen({ route, navigation }: JobStackScreenProps<'AddJob'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId, focusSchedule } = route.params || {};
@@ -411,7 +412,7 @@ export default function AddJobScreen({ route, navigation }: { route: any; naviga
                 onPress={() => {
                   setShowCustomerPicker(false);
                   setCustomerSearch("");
-                  navigation.navigate('AddCustomer');
+                  navigation.navigate('AddCustomer', {});
                 }}
               >
                 <Text style={{ fontSize: fontSize.sm, color: colors.accent }}>

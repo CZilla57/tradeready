@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
-import { buildCustomerList } from '../utils/customerList';
+import { buildCustomerList, type CustomerListEntry } from '../utils/customerList';
 import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
@@ -21,24 +21,13 @@ import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
 import type { Invoice, Customer } from '../types/models';
 import { reportError } from '../utils/analytics';
-
-// The merged customer shape returned by buildCustomerList — extends Customer
-// with aggregated invoice data.
-interface CustomerListItem {
-  id: string;
-  name: string;
-  email: string;
-  phone: string;
-  invoices: Invoice[];
-  totalSpent: number;
-  totalOwed: number;
-}
+import type { CustomerStackScreenProps } from '../types/navigation';
 
 // ─── CUSTOMER ROW ─────────────────────────────────────────────────────────────
 
 interface CustomerRowProps {
-  customer: CustomerListItem;
-  onPress: (c: CustomerListItem) => void;
+  customer: CustomerListEntry;
+  onPress: (c: CustomerListEntry) => void;
 }
 
 const CustomerRow = ({ customer, onPress }: CustomerRowProps) => {
@@ -83,7 +72,7 @@ const CustomerRow = ({ customer, onPress }: CustomerRowProps) => {
 
 // ─── MAIN SCREEN ──────────────────────────────────────────────────────────────
 
-export default function CustomersScreen({ navigation }: { navigation: any }) {
+export default function CustomersScreen({ navigation }: CustomerStackScreenProps<'CustomerList'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -113,7 +102,7 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
   };
 
   const allCustomers = useMemo(
-    () => buildCustomerList(invoices, manualCustomers) as CustomerListItem[],
+    () => buildCustomerList(invoices, manualCustomers),
     [invoices, manualCustomers]
   );
 
@@ -127,7 +116,7 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
     );
   }, [allCustomers, searchText]);
 
-  const handlePress = useCallback((customer: CustomerListItem) => {
+  const handlePress = useCallback((customer: CustomerListEntry) => {
     navigation.navigate('CustomerDetail', { customer });
   }, [navigation]);
 
@@ -146,7 +135,7 @@ export default function CustomersScreen({ navigation }: { navigation: any }) {
         </View>
         <TouchableOpacity
           style={styles.addButton}
-          onPress={() => navigation.navigate('AddCustomer')}
+          onPress={() => navigation.navigate('AddCustomer', {})}
           accessibilityRole="button"
           accessibilityLabel="Add new customer"
         >

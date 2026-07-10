@@ -30,6 +30,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import { track, reportError } from '../utils/analytics';
 import type { Job, Invoice, Customer, InvoiceLineItem } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
 function trackedDisplay(sessions: any[] = []): string | null {
   const ms = sessions
@@ -57,7 +58,7 @@ function nextInvoiceNumber(invoices: Invoice[]): string {
   return `INV-${String(next).padStart(4, "0")}`;
 }
 
-export default function CreateInvoiceFromJobScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function CreateInvoiceFromJobScreen({ route, navigation }: JobStackScreenProps<'CreateInvoiceFromJob'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId } = route.params;

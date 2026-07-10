@@ -23,6 +23,7 @@ import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import type { Job, Customer, Settings } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
 interface ScreenData {
   job: Job;
@@ -30,7 +31,7 @@ interface ScreenData {
   settings: Settings;
 }
 
-export default function SendEstimateScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function SendEstimateScreen({ route, navigation }: JobStackScreenProps<'SendEstimate'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId } = route.params;

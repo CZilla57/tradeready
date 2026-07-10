@@ -24,6 +24,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import Field from "../components/Field";
 import { track, reportError } from '../utils/analytics';
+import type { JobStackScreenProps } from "../types/navigation";
 
 interface AddressData {
   address?: {
@@ -59,7 +60,7 @@ function formatPhone(raw: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
-export default function AddCustomerScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function AddCustomerScreen({ route, navigation }: JobStackScreenProps<'AddCustomer'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { customerId, customer: passedCustomer } = route.params || {};

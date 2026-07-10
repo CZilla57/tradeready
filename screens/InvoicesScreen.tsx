@@ -32,8 +32,9 @@ import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
 import type { Invoice, Settings } from "../types/models";
 import { track } from "../utils/analytics";
+import type { InvoiceStackScreenProps } from "../types/navigation";
 
-export default function InvoicesScreen({ navigation }: { navigation: any }) {
+export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'InvoiceList'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 

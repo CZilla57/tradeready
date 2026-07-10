@@ -8,10 +8,11 @@ import { loadJobs, loadTrips, saveTrips } from '../utils/storage';
 import { computeTripMiles, formatMiles, generateTripId, HOME_LABEL } from '../utils/mileageUtils';
 import type { Job, Trip } from '../types/models';
 import { track } from '../utils/analytics';
+import type { MoneyStackScreenProps } from '../types/navigation';
 
 interface Endpoint { jobId: string | null; label: string; }
 
-export default function AddTripScreen({ navigation, route }: any) {
+export default function AddTripScreen({ navigation, route }: MoneyStackScreenProps<'AddTrip'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const editingId: string | undefined = route.params?.tripId;

@@ -39,6 +39,7 @@ import { ExpenseTrendsCard }  from '../components/money/ExpenseTrendsCard';
 import { ExpenseRow }        from '../components/money/ExpenseRow';
 import { AddExpenseModal }   from '../components/money/AddExpenseModal';
 import type { Invoice, Expense } from '../types/models';
+import type { MoneyStackScreenProps } from '../types/navigation';
 
 // ─── Inline sub-component: Expenses by Category breakdown ────────────────────
 
@@ -81,7 +82,7 @@ function ExpenseCategoryCard({ expensesByCategory, filteredExpenseTotal }: Expen
 
 // ─── MAIN SCREEN ─────────────────────────────────────────────────────────────
 
-export default function MoneyScreen({ navigation }: any) {
+export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'MoneyHome'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { invoices, expenses, jobs, loading, refresh, handleAddExpense, handleDeleteExpense } =

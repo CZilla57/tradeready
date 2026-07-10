@@ -22,6 +22,7 @@ import { useTheme } from "../hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
 import type { Settings } from "../types/models";
 import { track, reportError } from '../utils/analytics';
+import type { ChatStackScreenProps } from "../types/navigation";
 
 interface LocalMessage {
   id: string;
@@ -105,7 +106,7 @@ function buildSystemPrompt(s: Partial<Settings>, snapshot: any): string {
   return prompt;
 }
 
-export default function ChatScreen({ navigation }: { navigation: any }) {
+export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHome'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [messages, setMessages] = useState<LocalMessage[]>([]);

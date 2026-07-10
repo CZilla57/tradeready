@@ -30,6 +30,8 @@ import { showManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
 import type { Settings } from "../types/models";
+import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
+import type { MainTabParamList } from "../types/navigation";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
@@ -63,7 +65,7 @@ function formatPhone(raw: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
-export default function SettingsScreen({ navigation }: { navigation: any }) {
+export default function SettingsScreen({ navigation }: BottomTabScreenProps<MainTabParamList, 'Settings'>) {
   const { colors, shadow, preference, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -562,7 +564,7 @@ export default function SettingsScreen({ navigation }: { navigation: any }) {
               <Text style={styles.stripeBtnText}>Manage subscription</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} onPress={() => navigation.navigate("PaywallModal", { canDismiss: true })}>
+            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} onPress={() => navigation.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
               <Text style={styles.stripeConnectBtnText}>Upgrade to Pro</Text>
             </TouchableOpacity>
           )}

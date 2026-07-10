@@ -30,6 +30,7 @@ import { PricebookPickerModal } from "../components/PricebookPickerModal";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, Settings, PricebookEntry } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
 interface LocalMaterial {
   id: string;
@@ -38,7 +39,7 @@ interface LocalMaterial {
   unitCost: number;
 }
 
-export default function PricingCalculatorScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function PricingCalculatorScreen({ route, navigation }: JobStackScreenProps<'PricingCalculator'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { jobId } = route.params || {};

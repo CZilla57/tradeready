@@ -34,6 +34,7 @@ import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, JobStatus } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
 // ── Pipeline ───────────────────────────────────────────────────────────────
 
@@ -489,7 +490,7 @@ function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: a
 
 // ── Main Screen ────────────────────────────────────────────────────────────
 
-export default function JobDetailScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function JobDetailScreen({ route, navigation }: JobStackScreenProps<'JobDetail'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 

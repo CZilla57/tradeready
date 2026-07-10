@@ -20,6 +20,7 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from '../utils/analytics';
 import type { Invoice, Settings } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
 const PROVIDER_LABELS: Record<string, string> = {
   stripe: "Stripe",
@@ -39,7 +40,7 @@ function getConfiguredProviders(s: Settings): { id: string; label: string }[] {
     .map(([id, label]) => ({ id, label }));
 }
 
-export default function OutreachScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function OutreachScreen({ route, navigation }: JobStackScreenProps<'Outreach'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { invoiceId } = route.params;

@@ -21,14 +21,12 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "
 import { useTheme } from "../hooks/useTheme";
 import type { Settings } from "../types/models";
 import { track } from '../utils/analytics';
+import type { JobStackScreenProps } from "../types/navigation";
 
 export default function ReviewRequestScreen({
   route,
   navigation,
-}: {
-  route: any;
-  navigation: any;
-}) {
+}: JobStackScreenProps<'ReviewRequest'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 

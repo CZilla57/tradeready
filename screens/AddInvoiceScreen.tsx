@@ -22,8 +22,9 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
 import type { Invoice } from "../types/models";
+import type { InvoiceStackScreenProps } from "../types/navigation";
 
-export default function AddInvoiceScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function AddInvoiceScreen({ route, navigation }: InvoiceStackScreenProps<'AddInvoice'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const { invoiceId, prefill } = route.params || {};
@@ -54,9 +55,9 @@ export default function AddInvoiceScreen({ route, navigation }: { route: any; na
         }
       });
     } else if (prefill) {
-      if (prefill.customer) setCustomer(prefill.customer);
-      if (prefill.email)    setEmail(prefill.email);
-      if (prefill.phone)    setPhone(prefill.phone);
+      if (typeof prefill.customer === 'string') setCustomer(prefill.customer);
+      if (typeof prefill.email === 'string')    setEmail(prefill.email);
+      if (typeof prefill.phone === 'string')    setPhone(prefill.phone);
     }
   }, [invoiceId, isEditing, navigation, prefill]);
 

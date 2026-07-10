@@ -35,6 +35,7 @@ import {
 import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
 import type { Job, Invoice } from '../types/models';
 import { reportError } from '../utils/analytics';
+import type { TodayStackScreenProps } from '../types/navigation';
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
@@ -343,7 +344,7 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
 const INVOICE_LIMIT = 3;
 const LEAD_LIMIT = 3;
 
-export default function TodayScreen({ navigation }: { navigation: any }) {
+export default function TodayScreen({ navigation }: TodayStackScreenProps<'TodayHome'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 

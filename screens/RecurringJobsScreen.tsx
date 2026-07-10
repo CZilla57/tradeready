@@ -16,6 +16,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
 import type { RecurringJob } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
 const CADENCE_LABELS: Record<string, string> = {
   daily: "Daily",
@@ -25,7 +26,7 @@ const CADENCE_LABELS: Record<string, string> = {
   annually: "Annually",
 };
 
-export default function RecurringJobsScreen({ navigation }: { navigation: any }) {
+export default function RecurringJobsScreen({ navigation }: JobStackScreenProps<'RecurringJobs'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [rules, setRules] = useState<RecurringJob[]>([]);

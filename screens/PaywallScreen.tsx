@@ -18,6 +18,7 @@ import { getOfferings, purchasePackage, restorePurchases, ENTITLEMENT_ID } from 
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from "../utils/analytics";
+import type { RootStackScreenProps } from "../types/navigation";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl ?? "";
@@ -31,7 +32,7 @@ const FEATURES = [
   "Invoice reminder notifications",
 ];
 
-export default function PaywallScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function PaywallScreen({ route, navigation }: RootStackScreenProps<'Paywall'> | RootStackScreenProps<'PaywallModal'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const canDismiss: boolean = route?.params?.canDismiss ?? false;

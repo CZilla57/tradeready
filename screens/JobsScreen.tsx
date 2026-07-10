@@ -24,6 +24,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
 import type { Job } from "../types/models";
+import type { JobStackScreenProps } from "../types/navigation";
 
 // Which filter tabs to show across the top
 const FILTERS = [
@@ -33,7 +34,7 @@ const FILTERS = [
   { key: "all",       label: "All",       statuses: null as string[] | null },
 ];
 
-export default function JobsScreen({ navigation }: { navigation: any }) {
+export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 

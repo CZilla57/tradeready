@@ -14,8 +14,9 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
 import type { PricebookEntry } from "../types/models";
+import type { MoneyStackScreenProps } from "../types/navigation";
 
-export default function PricebookScreen({ navigation }: { navigation: any }) {
+export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'Pricebook'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [entries, setEntries] = useState<PricebookEntry[]>([]);
@@ -72,7 +73,7 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
           </Text>
           <Button
             label="Add your first service"
-            onPress={() => navigation.navigate("PricebookEntry")}
+            onPress={() => navigation.navigate("PricebookEntry", {})}
             style={{ marginTop: spacing.lg }}
           />
         </View>
@@ -137,7 +138,7 @@ export default function PricebookScreen({ navigation }: { navigation: any }) {
       <View style={styles.fab}>
         <Button
           label="+ Add Service"
-          onPress={() => navigation.navigate("PricebookEntry")}
+          onPress={() => navigation.navigate("PricebookEntry", {})}
         />
       </View>
     </SafeAreaView>

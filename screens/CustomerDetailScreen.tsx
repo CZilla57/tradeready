@@ -21,6 +21,7 @@ import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
 import type { Job, Invoice } from '../types/models';
 import { reportError } from '../utils/analytics';
+import type { CustomerStackScreenProps } from '../types/navigation';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -131,7 +132,7 @@ const JobRow = ({ job, styles }: JobRowProps) => {
 
 // ─── MAIN SCREEN ──────────────────────────────────────────────────────────────
 
-export default function CustomerDetailScreen({ route, navigation }: { route: any; navigation: any }) {
+export default function CustomerDetailScreen({ route, navigation }: CustomerStackScreenProps<'CustomerDetail'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 

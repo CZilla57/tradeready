@@ -11,8 +11,9 @@ import { formatMoney } from '../utils/format';
 import { loadTrips, loadSettings } from '../utils/storage';
 import { mileageSummary, formatMiles, DEFAULT_MILEAGE_RATE } from '../utils/mileageUtils';
 import type { Trip } from '../types/models';
+import type { MoneyStackScreenProps } from '../types/navigation';
 
-export default function MileageLogScreen({ navigation, route }: any) {
+export default function MileageLogScreen({ navigation, route }: MoneyStackScreenProps<'MileageLog'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -89,7 +90,7 @@ export default function MileageLogScreen({ navigation, route }: any) {
         ListFooterComponent={<View style={{ height: 100 }} />}
       />
 
-      <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('AddTrip')} activeOpacity={0.85}>
+      <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('AddTrip', {})} activeOpacity={0.85}>
         <Text style={styles.addBtnText}>+ Add trip</Text>
       </TouchableOpacity>
     </SafeAreaView>

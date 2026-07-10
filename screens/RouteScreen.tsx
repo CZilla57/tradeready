@@ -17,6 +17,7 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
 import type { Job } from "../types/models";
+import type { TodayStackScreenProps } from "../types/navigation";
 
 function getTodayDateString(): string {
   const now = new Date();
@@ -163,7 +164,7 @@ function EmptyState({ onBack }: { onBack: () => void }) {
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 
-export default function RouteScreen({ navigation }: { navigation: any }) {
+export default function RouteScreen({ navigation }: TodayStackScreenProps<'Route'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [stops, setStops] = useState<Job[]>([]);

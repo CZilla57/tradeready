@@ -14,6 +14,16 @@ import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import PaywallScreen from "./screens/PaywallScreen";
 import { isOnboardingComplete } from "./utils/storage";
+import type {
+  RootStackParamList,
+  MainTabParamList,
+  TodayStackParamList,
+  JobStackParamList,
+  InvoiceStackParamList,
+  CustomerStackParamList,
+  MoneyStackParamList,
+  ChatStackParamList,
+} from "./types/navigation";
 
 import InvoicesScreen             from "./screens/InvoicesScreen";
 import AddInvoiceScreen           from "./screens/AddInvoiceScreen";
@@ -62,16 +72,16 @@ if (SENTRY_DSN && !SENTRY_DSN.startsWith("PLACEHOLDER")) {
   });
 }
 
-const navigationRef = createNavigationContainerRef<any>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
-const RootStack     = createNativeStackNavigator();
-const TodayStack    = createNativeStackNavigator();
-const Tab           = createBottomTabNavigator();
-const JobStack      = createNativeStackNavigator();
-const InvoiceStack  = createNativeStackNavigator();
-const CustomerStack = createNativeStackNavigator();
-const MoneyStack    = createNativeStackNavigator();
-const ChatStack     = createNativeStackNavigator();
+const RootStack     = createNativeStackNavigator<RootStackParamList>();
+const TodayStack    = createNativeStackNavigator<TodayStackParamList>();
+const Tab           = createBottomTabNavigator<MainTabParamList>();
+const JobStack      = createNativeStackNavigator<JobStackParamList>();
+const InvoiceStack  = createNativeStackNavigator<InvoiceStackParamList>();
+const CustomerStack = createNativeStackNavigator<CustomerStackParamList>();
+const MoneyStack    = createNativeStackNavigator<MoneyStackParamList>();
+const ChatStack     = createNativeStackNavigator<ChatStackParamList>();
 
 // ── Tab stacks ────────────────────────────────────────────────────────────────
 
@@ -104,7 +114,7 @@ function JobsTab() {
       <JobStack.Screen
         name="JobList"
         component={JobsScreen}
-        options={({ navigation }: { navigation: any }) => ({
+        options={({ navigation }) => ({
           title: "Jobs",
           headerRight: () => (
             <TouchableOpacity
@@ -236,7 +246,7 @@ function MainTabs() {
         headerShown: false,
         tabBarIcon: ({ focused, color }) => (
           <Ionicons
-            name={(focused ? TAB_ICONS[route.name]?.active : TAB_ICONS[route.name]?.inactive) as any}
+            name={(focused ? TAB_ICONS[route.name]?.active : TAB_ICONS[route.name]?.inactive) as keyof typeof Ionicons.glyphMap}
             size={22}
             color={color}
           />
@@ -285,7 +295,7 @@ function RootNavigator() {
       if (data?.type === "review_request" && data?.jobId && navigationRef.isReady()) {
         navigationRef.navigate("Main", {
           screen: "Jobs",
-          params: { screen: "ReviewRequest", params: { jobId: data.jobId } },
+          params: { screen: "ReviewRequest", params: { jobId: String(data.jobId) } },
         });
       }
     });
@@ -318,7 +328,7 @@ function RootNavigator() {
   };
 
   return (
-    <NavigationContainer ref={navigationRef} theme={navTheme as any}>
+    <NavigationContainer ref={navigationRef} theme={navTheme}>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         {!session ? (
           <RootStack.Screen name="Auth" component={AuthScreen} />

@@ -14,6 +14,7 @@ import { useTheme } from "../hooks/useTheme";
 import type { PricebookEntry, Settings, AIPricingSuggestion } from "../types/models";
 import { getAIPricingSuggestion } from "../utils/pricebookAI";
 import { track } from '../utils/analytics';
+import type { MoneyStackScreenProps } from "../types/navigation";
 
 interface LocalMaterial {
   id: string;
@@ -25,10 +26,7 @@ interface LocalMaterial {
 export default function PricebookEntryScreen({
   route,
   navigation,
-}: {
-  route: any;
-  navigation: any;
-}) {
+}: MoneyStackScreenProps<'PricebookEntry'>) {
   const entryId = route.params?.entryId as string | undefined;
   const isEditing = Boolean(entryId);
   const { colors, shadow } = useTheme();
