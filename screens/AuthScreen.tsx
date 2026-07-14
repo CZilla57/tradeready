@@ -19,6 +19,7 @@ import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
 import { canResend, resendSecondsRemaining } from '../utils/resendCooldown';
+import { friendlyAuthError } from '../utils/authErrors';
 
 type AuthMode = 'login' | 'signup' | 'forgot';
 
@@ -27,6 +28,11 @@ type AuthMode = 'login' | 'signup' | 'forgot';
 // dashboard's Auth → URL Configuration → Redirect URLs or Supabase falls back
 // to the project Site URL and the link dead-ends.
 const PASSWORD_RESET_URL: string = Constants.expoConfig?.extra?.passwordResetUrl ?? '';
+// Hosted landing page for the signup confirmation link (tradeready-legal/
+// confirmed.html). Without an explicit redirect the link lands on the
+// project's Site URL, which showed testers an error page. Must be in the
+// Supabase Auth redirect allowlist, like the reset page.
+const EMAIL_CONFIRMED_URL: string = Constants.expoConfig?.extra?.emailConfirmedUrl ?? '';
 
 export default function AuthScreen() {
   const { colors, shadow } = useTheme();
@@ -42,16 +48,23 @@ export default function AuthScreen() {
   // when we last (re)sent one, and a 1 Hz clock for the countdown label.
   const [pendingConfirmEmail, setPendingConfirmEmail] = useState<string | null>(null);
   const [resendLastSentAt, setResendLastSentAt] = useState<number | null>(null);
+  // Same cooldown for password-reset sends — hammering the button just trips
+  // Supabase's hourly email cap (beta finding: raw "rate limit exceeded").
+  const [resetLastSentAt, setResetLastSentAt] = useState<number | null>(null);
   const [resendNow, setResendNow] = useState<number>(Date.now());
   const [resending, setResending] = useState(false);
 
   const resendReady = canResend(resendLastSentAt, resendNow);
+  const resetReady = canResend(resetLastSentAt, resendNow);
 
   useEffect(() => {
-    if (resendLastSentAt === null || canResend(resendLastSentAt, resendNow)) return;
+    const cooling =
+      (resendLastSentAt !== null && !canResend(resendLastSentAt, resendNow)) ||
+      (resetLastSentAt !== null && !canResend(resetLastSentAt, resendNow));
+    if (!cooling) return;
     const id = setInterval(() => setResendNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [resendLastSentAt, resendNow]);
+  }, [resendLastSentAt, resetLastSentAt, resendNow]);
 
   async function handleSubmit() {
     if (mode === 'forgot') {
@@ -59,6 +72,7 @@ export default function AuthScreen() {
         setError('Please enter your email address.');
         return;
       }
+      if (!resetReady) return;
       setError('');
       setLoading(true);
       try {
@@ -67,10 +81,13 @@ export default function AuthScreen() {
           PASSWORD_RESET_URL ? { redirectTo: PASSWORD_RESET_URL } : undefined
         );
         if (error) throw error;
+        const now = Date.now();
+        setResetLastSentAt(now);
+        setResendNow(now);
         Alert.alert('Check your email', 'We sent a reset link to your email address.');
         setMode('login');
       } catch (e: unknown) {
-        setError((e as Error).message);
+        setError(friendlyAuthError((e as Error).message));
       } finally {
         setLoading(false);
       }
@@ -92,7 +109,11 @@ export default function AuthScreen() {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({ email: email.trim(), password });
+        const { error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          ...(EMAIL_CONFIRMED_URL ? { options: { emailRedirectTo: EMAIL_CONFIRMED_URL } } : {}),
+        });
         if (error) throw error;
         track('sign_up');
         setPendingConfirmEmail(email.trim());
@@ -103,7 +124,7 @@ export default function AuthScreen() {
         setMode('login');
       }
     } catch (e: unknown) {
-      setError((e as Error).message);
+      setError(friendlyAuthError((e as Error).message));
     } finally {
       setLoading(false);
     }
@@ -113,7 +134,11 @@ export default function AuthScreen() {
     if (!pendingConfirmEmail || resending) return;
     setResending(true);
     try {
-      const { error } = await supabase.auth.resend({ type: 'signup', email: pendingConfirmEmail });
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: pendingConfirmEmail,
+        ...(EMAIL_CONFIRMED_URL ? { options: { emailRedirectTo: EMAIL_CONFIRMED_URL } } : {}),
+      });
       if (error) throw error;
       track('sign_up_confirmation_resent');
       const now = Date.now();
@@ -121,7 +146,7 @@ export default function AuthScreen() {
       setResendNow(now);
       Alert.alert('Confirmation email sent', 'Check your inbox — and your spam folder, just in case.');
     } catch (e: unknown) {
-      setError((e as Error).message);
+      setError(friendlyAuthError((e as Error).message));
     } finally {
       setResending(false);
     }
@@ -141,9 +166,11 @@ export default function AuthScreen() {
                         'Create account';
 
   const submitLabel =
-    mode === 'forgot' ? 'Send reset link' :
+    mode === 'forgot' ? (resetReady ? 'Send reset link' : `Resend in ${resendSecondsRemaining(resetLastSentAt, resendNow)}s`) :
     mode === 'login'  ? 'Sign In' :
                         'Create Account';
+
+  const submitDisabled = loading || (mode === 'forgot' && !resetReady);
 
   return (
     <KeyboardAvoidingView
@@ -176,7 +203,7 @@ export default function AuthScreen() {
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
-            textContentType="emailAddress"
+            textContentType="username"
             autoComplete="email"
           />
 
@@ -222,13 +249,13 @@ export default function AuthScreen() {
           )}
 
           <TouchableOpacity
-            style={[styles.submitBtn, loading && styles.submitBtnDisabled]}
+            style={[styles.submitBtn, submitDisabled && styles.submitBtnDisabled]}
             onPress={handleSubmit}
-            disabled={loading}
+            disabled={submitDisabled}
             activeOpacity={0.85}
             accessibilityRole="button"
             accessibilityLabel={submitLabel}
-            accessibilityState={{ disabled: loading, busy: loading }}
+            accessibilityState={{ disabled: submitDisabled, busy: loading }}
           >
             {loading
               ? <ActivityIndicator color="#fff" />

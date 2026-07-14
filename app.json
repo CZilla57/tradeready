@@ -66,6 +66,7 @@
       "privacyPolicyUrl": "https://czilla57.github.io/tradeready-legal/privacy.html",
       "termsUrl": "https://czilla57.github.io/tradeready-legal/terms.html",
       "passwordResetUrl": "https://czilla57.github.io/tradeready-legal/reset.html",
+      "emailConfirmedUrl": "https://czilla57.github.io/tradeready-legal/confirmed.html",
       "rcAppleApiKey": "appl_wHNdVnMEdRdTnMHbDEUgpdhppMO",
       "rcGoogleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
       "posthogApiKey": "phc_n8uzAhbpcm5ygKiE2Xztnb9u7jj8ohZFB3qnCzBFGZJ7",
