@@ -287,8 +287,12 @@ function RootNavigator() {
   const { isSubscribed, isLoading: subLoading } = useSubscription();
   const { colors, isDark }                      = useThemeContext();
   const [onboardingDone, setOnboardingDone]     = useState<boolean | null>(null);
+  // Mirrors `session` for the notification listener, which registers once and
+  // would otherwise close over the value from the first render.
+  const sessionRef = React.useRef(session);
 
   useEffect(() => {
+    sessionRef.current = session;
     if (!session) { setOnboardingDone(null); return; }
     isOnboardingComplete().then(setOnboardingDone);
     migrateCustomerIdentity().catch(() => {});
@@ -297,6 +301,10 @@ function RootNavigator() {
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data;
+      // Signed out: the Main route isn't mounted, so navigating would be an
+      // unhandled action (a warning in dev, a silent no-op in prod). Ignore
+      // the tap explicitly instead.
+      if (!sessionRef.current) return;
       if (data?.type === "review_request" && data?.jobId && navigationRef.isReady()) {
         navigationRef.navigate("Main", {
           screen: "Jobs",
