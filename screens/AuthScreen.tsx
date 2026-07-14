@@ -12,12 +12,19 @@ import {
   ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Constants from 'expo-constants';
 import { supabase } from '../utils/supabase';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
 
 type AuthMode = 'login' | 'signup' | 'forgot';
+
+// Hosted page that exchanges the recovery token and lets the user set a new
+// password (tradeready-legal/reset.html). Must be listed in the Supabase
+// dashboard's Auth → URL Configuration → Redirect URLs or Supabase falls back
+// to the project Site URL and the link dead-ends.
+const PASSWORD_RESET_URL: string = Constants.expoConfig?.extra?.passwordResetUrl ?? '';
 
 export default function AuthScreen() {
   const { colors, shadow } = useTheme();
@@ -38,7 +45,10 @@ export default function AuthScreen() {
       setError('');
       setLoading(true);
       try {
-        const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+        const { error } = await supabase.auth.resetPasswordForEmail(
+          email.trim(),
+          PASSWORD_RESET_URL ? { redirectTo: PASSWORD_RESET_URL } : undefined
+        );
         if (error) throw error;
         Alert.alert('Check your email', 'We sent a reset link to your email address.');
         setMode('login');

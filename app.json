@@ -58,6 +58,7 @@
       "backendUrlIsPlaceholder": false,
       "privacyPolicyUrl": "https://czilla57.github.io/tradeready-legal/privacy.html",
       "termsUrl": "https://czilla57.github.io/tradeready-legal/terms.html",
+      "passwordResetUrl": "https://czilla57.github.io/tradeready-legal/reset.html",
       "rcAppleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
       "rcGoogleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
       "posthogApiKey": "phc_n8uzAhbpcm5ygKiE2Xztnb9u7jj8ohZFB3qnCzBFGZJ7",
