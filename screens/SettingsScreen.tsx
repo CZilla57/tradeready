@@ -12,6 +12,8 @@ import {
   AppState,
   ActivityIndicator,
   Platform,
+  Modal,
+  KeyboardAvoidingView,
   type AppStateStatus,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -23,6 +25,7 @@ import { syncIfOnline } from "../utils/sync";
 import { supabase } from "../utils/supabase";
 import { resetUser, reportError } from "../utils/analytics";
 import { Button, SectionHeader, Divider } from "../components/UI";
+import { DELETE_CONFIRM_PHRASE, deleteConfirmMatches } from "../utils/deleteConfirm";
 import BaseField from "../components/Field";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
@@ -77,6 +80,8 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   const [s, setS] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const { isSubscribed, isTrialing } = useSubscription();
   const { pendingCount } = useSyncStatusContext();
@@ -221,6 +226,30 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     syncNotifications();
     setSaving(false);
     Alert.alert("Saved", "Your settings have been saved.");
+  }
+
+  async function performDeleteAccount() {
+    setDeleting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) { Alert.alert("Error", "No active session. Please sign in again."); return; }
+      const res = await fetch(`${VERCEL_URL}/api/delete-account`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to delete account.");
+      }
+      resetUser();
+      await clearAllUserData();
+      await supabase.auth.signOut();
+    } catch (err: unknown) {
+      reportError(err, { context: 'deleteAccount' });
+      Alert.alert("Error", (err as Error).message || "Something went wrong. Please try again.");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   if (!s) return null;
@@ -515,36 +544,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           accessibilityRole="button"
           accessibilityLabel="Delete account"
           accessibilityState={{ disabled: deleting, busy: deleting }}
-          onPress={() => Alert.alert("Delete account", "This permanently deletes your account and all your data — jobs, invoices, customers, and expenses. This cannot be undone.", [
-            { text: "Cancel", style: "cancel" },
-            {
-              text: "Delete my account",
-              style: "destructive",
-              onPress: async () => {
-                setDeleting(true);
-                try {
-                  const { data: { session } } = await supabase.auth.getSession();
-                  if (!session?.access_token) { Alert.alert("Error", "No active session. Please sign in again."); return; }
-                  const res = await fetch(`${VERCEL_URL}/api/delete-account`, {
-                    method: "POST",
-                    headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
-                  });
-                  if (!res.ok) {
-                    const body = await res.json().catch(() => ({}));
-                    throw new Error(body.error || "Failed to delete account.");
-                  }
-                  resetUser();
-                  await clearAllUserData();
-                  await supabase.auth.signOut();
-                } catch (err: unknown) {
-                  reportError(err, { context: 'deleteAccount' });
-                  Alert.alert("Error", (err as Error).message || "Something went wrong. Please try again.");
-                } finally {
-                  setDeleting(false);
-                }
-              },
-            },
-          ])}
+          onPress={() => { setDeleteConfirmText(""); setDeleteModalVisible(true); }}
         >
           <Text style={styles.deleteAccountText}>{deleting ? "Deleting account…" : "Delete Account"}</Text>
         </TouchableOpacity>
@@ -622,6 +622,57 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={deleteModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle} accessibilityRole="header">Delete account</Text>
+            <Text style={styles.modalBody}>
+              This permanently deletes your account and all your data — jobs, invoices,
+              customers, and expenses. This cannot be undone.
+            </Text>
+            <Text style={styles.modalBody}>Type {DELETE_CONFIRM_PHRASE} to confirm.</Text>
+            <TextInput
+              style={styles.input}
+              value={deleteConfirmText}
+              onChangeText={setDeleteConfirmText}
+              placeholder={DELETE_CONFIRM_PHRASE}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              accessibilityLabel={`Type ${DELETE_CONFIRM_PHRASE} to confirm account deletion`}
+            />
+            <View style={styles.modalBtnRow}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setDeleteModalVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalDeleteBtn, !deleteConfirmMatches(deleteConfirmText) && { opacity: 0.5 }]}
+                disabled={!deleteConfirmMatches(deleteConfirmText)}
+                onPress={() => { setDeleteModalVisible(false); performDeleteAccount(); }}
+                accessibilityRole="button"
+                accessibilityLabel="Delete my account"
+                accessibilityState={{ disabled: !deleteConfirmMatches(deleteConfirmText) }}
+              >
+                <Text style={styles.modalDeleteText}>Delete my account</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -681,6 +732,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     signOutText: { color: colors.danger, fontSize: fontSize.md, fontWeight: "600" },
     deleteAccountBtn: { marginTop: spacing.sm, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, backgroundColor: colors.danger },
     deleteAccountText: { color: "#fff", fontSize: fontSize.md, fontWeight: "600" },
+    modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
+    modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, ...shadow.card },
+    modalTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: spacing.sm },
+    modalBody: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+    modalBtnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 12, marginTop: spacing.md },
+    modalCancelBtn: { minHeight: 44, justifyContent: "center", paddingHorizontal: 16, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+    modalCancelText: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "500" },
+    modalDeleteBtn: { minHeight: 44, justifyContent: "center", paddingHorizontal: 16, borderRadius: radius.md, backgroundColor: colors.danger },
+    modalDeleteText: { color: "#fff", fontSize: fontSize.md, fontWeight: "600" },
     tradeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
     tradeBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background },
     tradeBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
