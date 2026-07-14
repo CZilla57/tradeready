@@ -62,6 +62,7 @@ async function pushQueue(userId: string): Promise<void> {
   if (!queue.length) return;
 
   const failed: QueueItem[] = [];
+  let firstError: unknown = null;
   for (const item of queue) {
     try {
       if (item.op === 'upsert') {
@@ -98,9 +99,19 @@ async function pushQueue(userId: string): Promise<void> {
           .eq('user_id', userId);
         if (error) throw error;
       }
-    } catch {
+    } catch (e: unknown) {
+      if (firstError === null) firstError = e;
       failed.push(item);
     }
+  }
+  // Failed items are retained for retry (unchanged behavior) — but silence
+  // here let a missing cloud table wedge the queue invisibly for weeks
+  // ("changes pending" forever; beta finding 2026-07-14). Surface one report
+  // per push attempt with what failed, not one per item.
+  if (failed.length) {
+    const tables = [...new Set(failed.map(i => i.table))].join(',');
+    console.warn(`Sync push: ${failed.length} item(s) failed (${tables}):`, (firstError as Error)?.message);
+    reportError(firstError, { context: 'pushQueue', failedCount: failed.length, tables });
   }
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(failed));
 }
