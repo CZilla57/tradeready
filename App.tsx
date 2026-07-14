@@ -3,7 +3,7 @@ import { NavigationContainer, createNavigationContainerRef } from "@react-naviga
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Text, View, ActivityIndicator, TouchableOpacity, Alert } from "react-native";
+import { Text, View, ActivityIndicator, TouchableOpacity, Alert, Dimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { SubscriptionProvider, useSubscription } from "./context/SubscriptionContext";
@@ -53,6 +53,7 @@ import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, migrateCustomerIdentity, migrateSampleDataIds } from "./utils/storage";
+import { fontScaleChanged } from "./utils/fontScaleRestart";
 import { getTradeNickname } from "./utils/pricingEngine";
 
 import * as Sentry from "@sentry/react-native";
@@ -424,6 +425,50 @@ if (!__DEV__) {
   console.log = () => {};
 }
 
+// RN repaints text when iOS changes the system text size under a running
+// app, but existing layout is never re-measured — headers chop and siblings
+// keep the old scale (device-verified 2026-07-14; a relaunch renders
+// correctly). Offer that relaunch when we detect the change.
+function FontScaleWatcher() {
+  const baselineRef = React.useRef(Dimensions.get("window").fontScale);
+  const promptingRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const sub = Dimensions.addEventListener("change", ({ window }) => {
+      const next = window.fontScale;
+      if (promptingRef.current || !fontScaleChanged(baselineRef.current, next)) return;
+      promptingRef.current = true;
+      Alert.alert(
+        "Text size changed",
+        "TradeReady needs a quick restart to fit the new text size.",
+        [
+          {
+            text: "Later",
+            style: "cancel",
+            // New baseline so we only re-prompt on a further change.
+            onPress: () => { baselineRef.current = next; promptingRef.current = false; },
+          },
+          {
+            text: "Restart now",
+            onPress: () => {
+              if (Updates?.reloadAsync) {
+                Updates.reloadAsync();
+              } else {
+                promptingRef.current = false;
+                baselineRef.current = next;
+                Alert.alert("Restart required", "Please close and reopen TradeReady to continue.");
+              }
+            },
+          },
+        ]
+      );
+    });
+    return () => sub.remove();
+  }, []);
+
+  return null;
+}
+
 function PostHogBridge() {
   const posthog = usePostHog();
   React.useEffect(() => {
@@ -445,6 +490,7 @@ function AppRoot() {
               </SubscriptionProvider>
             </AuthProvider>
             <SyncBanner />
+            <FontScaleWatcher />
           </SyncStatusProvider>
         </ThemeProvider>
       </ErrorBoundary>
