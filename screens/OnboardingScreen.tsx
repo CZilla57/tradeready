@@ -10,6 +10,8 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  InputAccessoryView,
+  Keyboard,
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,6 +27,7 @@ import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
 import { persistPhoto, deletePhoto } from "../utils/photoStorage";
 import { track, reportError } from "../utils/analytics";
+import { regionFromAddress } from "../utils/regionFromAddress";
 
 const STEPS = 5;
 
@@ -181,6 +184,13 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
 
   function next() {
     if (step < STEPS - 1) {
+      // Leaving the business step: prefill region from the address city/state
+      // so the trade step's rate lookup has something to work with. Only when
+      // the user hasn't typed a region themselves.
+      if (step === 1 && !form.region.trim() && form.address.trim()) {
+        const derived = regionFromAddress(form.address);
+        if (derived) update("region", derived);
+      }
       setStep(s => s + 1);
     } else {
       finish();
@@ -213,6 +223,7 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
         >
           {step === 0 && <StepWelcome />}
@@ -519,7 +530,24 @@ function RateSuggestion({ form, update, touched, markTouched }: StepProps & { to
         keyboardType="decimal-pad"
         placeholder="85"
         placeholderTextColor={colors.textMuted}
+        accessibilityLabel="Your hourly labor rate in dollars"
+        inputAccessoryViewID={Platform.OS === "ios" ? "onboardingRateDone" : undefined}
       />
+      {Platform.OS === "ios" && (
+        // The decimal pad has no return key; this gives it an explicit Done.
+        <InputAccessoryView nativeID="onboardingRateDone">
+          <View style={styles.keyboardBar}>
+            <TouchableOpacity
+              onPress={() => Keyboard.dismiss()}
+              style={styles.keyboardDoneBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Done"
+            >
+              <Text style={styles.keyboardDoneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
+      )}
       <Text style={styles.rateNote}>You can adjust this any time in Settings.</Text>
       {touched.laborRate && (isNaN(parseFloat(form.laborRate)) || parseFloat(form.laborRate) < 10 || parseFloat(form.laborRate) > 500) && (
         <Text style={styles.warningText}>This rate seems unusual — double-check before continuing.</Text>
@@ -684,7 +712,7 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
         </View>
       </View>
       {actions.length > 0 ? (
-        <View style={styles.aiCard}>
+        <View style={[styles.aiCard, styles.aiCardFull]}>
           <Text style={styles.actionsTitle}>Your first steps</Text>
           {actions.map((action, i) => (
             <View key={i} style={styles.tipRow}>
@@ -694,7 +722,7 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
           ))}
         </View>
       ) : actionsError ? (
-        <View style={styles.aiCard}>
+        <View style={[styles.aiCard, styles.aiCardFull]}>
           <View style={styles.retryRow}>
             <Text style={styles.retryText}>Couldn't load suggestions</Text>
             <TouchableOpacity style={styles.retryBtn} onPress={retryActions}>
@@ -758,14 +786,20 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     stepSubtitle: { fontSize: fontSize.md, color: colors.textSecondary, marginBottom: spacing.lg, lineHeight: 22 },
     fieldGroup: { marginBottom: spacing.md },
     fieldLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.xs },
-    fieldInput: { backgroundColor: colors.surface, borderRadius: radius.md, height: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
+    // minHeight (not height): a fixed height fought BaseField's multiline
+    // sizing — the address input painted taller than its layout box and the
+    // logo section rendered on top of it (device finding, 2026-07-14).
+    fieldInput: { backgroundColor: colors.surface, borderRadius: radius.md, minHeight: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
     tradeGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.lg },
     tradeBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     tradeBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
     tradeLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
     tradeLabelActive: { color: colors.accent, fontWeight: "600" },
     rateLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.xs },
-    rateInput: { backgroundColor: colors.surface, borderRadius: radius.md, height: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
+    rateInput: { backgroundColor: colors.surface, borderRadius: radius.md, minHeight: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
+    keyboardBar: { backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
+    keyboardDoneBtn: { paddingVertical: 6, paddingHorizontal: 10 },
+    keyboardDoneText: { color: colors.accent, fontSize: fontSize.md, fontWeight: "600" },
     rateNote: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs },
     dataCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md, borderWidth: 2, borderColor: colors.border, ...shadow.card },
     dataCardActive: { borderColor: colors.accent, backgroundColor: colors.accentBg },
@@ -811,7 +845,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     useRateBtn: { marginTop: spacing.sm, backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 10, alignItems: "center" },
     useRateBtnText: { color: "#fff", fontSize: fontSize.sm, fontWeight: "600" },
     actionsTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
-    logoLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.xs },
+    // StepDone centers its children, which shrank the first-steps card to its
+    // content and clipped the text (device finding); stretch it like the
+    // notification/Stripe cards above it.
+    aiCardFull: { width: "100%" },
+    logoLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginTop: spacing.md, marginBottom: spacing.xs },
     logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
     logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
     logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.surface },
