@@ -23,7 +23,7 @@ import {
   buildEstimateInput,
 } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
-import { generateMessage } from "../utils/anthropicMessage";
+import { generateOneShot } from "../utils/oneShotAI";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook } from "../utils/storage";
 import { Button, Card, Divider } from "../components/UI";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
@@ -231,7 +231,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
       range,
     });
 
-    const text = await generateMessage({
+    const text = await generateOneShot({
       prompt,
       apiKey: settings?.anthropicKey,
       max_tokens: 1500,

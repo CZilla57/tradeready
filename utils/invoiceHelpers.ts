@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import { supabase } from './supabase';
 import { formatMoney, formatQuote } from './format';
 import { computeEstimateBreakdown } from './pricingEngine';
-import { generateMessage } from './anthropicMessage';
+import { generateOneShot } from './oneShotAI';
 import type { Invoice, Job, Customer, Settings, PaymentPlan, PaymentProvider } from '../types/models';
 import type { BadgeColor } from '../components/UI';
 
@@ -252,7 +252,7 @@ ${isText
 
 Write only the message, no commentary.`;
 
-  return generateMessage({ prompt, apiKey, max_tokens: 800, fallback });
+  return generateOneShot({ prompt, apiKey, max_tokens: 800, fallback });
 }
 
 export async function generateOutreachMessage({
@@ -302,5 +302,5 @@ ${channelInstruction}
 
 Write only the message, no commentary.`;
 
-  return generateMessage({ prompt, apiKey, max_tokens: 1000, fallback });
+  return generateOneShot({ prompt, apiKey, max_tokens: 1000, fallback });
 }
