@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { supabase } from '../utils/supabase';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
+import { canResend, resendSecondsRemaining } from '../utils/resendCooldown';
 
 type AuthMode = 'login' | 'signup' | 'forgot';
 
@@ -35,6 +36,20 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Signup-confirmation resend: which address is waiting on a confirm link,
+  // when we last (re)sent one, and a 1 Hz clock for the countdown label.
+  const [pendingConfirmEmail, setPendingConfirmEmail] = useState<string | null>(null);
+  const [resendLastSentAt, setResendLastSentAt] = useState<number | null>(null);
+  const [resendNow, setResendNow] = useState<number>(Date.now());
+  const [resending, setResending] = useState(false);
+
+  const resendReady = canResend(resendLastSentAt, resendNow);
+
+  useEffect(() => {
+    if (resendLastSentAt === null || canResend(resendLastSentAt, resendNow)) return;
+    const id = setInterval(() => setResendNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [resendLastSentAt, resendNow]);
 
   async function handleSubmit() {
     if (mode === 'forgot') {
@@ -78,6 +93,7 @@ export default function AuthScreen() {
         const { error } = await supabase.auth.signUp({ email: email.trim(), password });
         if (error) throw error;
         track('sign_up');
+        setPendingConfirmEmail(email.trim());
         Alert.alert(
           'Check your email',
           'We sent you a confirmation link. Click it to activate your account, then sign in here.'
@@ -88,6 +104,24 @@ export default function AuthScreen() {
       setError((e as Error).message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleResend() {
+    if (!pendingConfirmEmail || resending) return;
+    setResending(true);
+    try {
+      const { error } = await supabase.auth.resend({ type: 'signup', email: pendingConfirmEmail });
+      if (error) throw error;
+      track('sign_up_confirmation_resent');
+      const now = Date.now();
+      setResendLastSentAt(now);
+      setResendNow(now);
+      Alert.alert('Confirmation email sent', 'Check your inbox — and your spam folder, just in case.');
+    } catch (e: unknown) {
+      setError((e as Error).message);
+    } finally {
+      setResending(false);
     }
   }
 
@@ -180,6 +214,30 @@ export default function AuthScreen() {
           </TouchableOpacity>
         </View>
 
+        {mode === 'login' && pendingConfirmEmail ? (
+          <View style={styles.resendBox}>
+            <Text style={styles.resendText}>
+              We sent a confirmation link to {pendingConfirmEmail}. Didn't get it?
+            </Text>
+            <TouchableOpacity
+              style={styles.resendBtn}
+              onPress={handleResend}
+              disabled={resending || !resendReady}
+              accessibilityRole="button"
+              accessibilityLabel="Resend confirmation email"
+              accessibilityState={{ disabled: resending || !resendReady, busy: resending }}
+            >
+              <Text style={[styles.resendLink, (resending || !resendReady) && styles.resendLinkDisabled]}>
+                {resending
+                  ? 'Sending…'
+                  : resendReady
+                    ? 'Resend confirmation email'
+                    : `Resend available in ${resendSecondsRemaining(resendLastSentAt, resendNow)}s`}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {mode !== 'forgot' ? (
           <TouchableOpacity
             style={styles.toggle}
@@ -261,6 +319,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     submitBtnDisabled: { opacity: 0.6 },
     submitText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
+    resendBox: {
+      marginTop: spacing.md,
+      padding: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    resendText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
+    resendBtn: { alignItems: 'center', marginTop: spacing.sm, paddingVertical: spacing.xs },
+    resendLink: { fontSize: fontSize.sm, color: colors.accent, fontWeight: '600' },
+    resendLinkDisabled: { color: colors.textMuted, fontWeight: '400' },
     toggle: { alignItems: 'center', marginTop: spacing.lg, paddingVertical: spacing.sm },
     toggleText: { fontSize: fontSize.sm, color: colors.textMuted },
     toggleLink: { color: colors.accent, fontWeight: '600' },
