@@ -166,12 +166,12 @@ export default function ReviewRequestScreen({
             ) : null}
 
             <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.copyBtn} onPress={handleCopy}>
+              <TouchableOpacity style={styles.copyBtn} onPress={handleCopy} accessibilityRole="button" accessibilityLabel={copied ? "Copied" : "Copy message"}>
                 <Text style={styles.copyBtnText}>
                   {copied ? "Copied!" : "Copy message"}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.skipBtn} onPress={handleSkip}>
+              <TouchableOpacity style={styles.skipBtn} onPress={handleSkip} accessibilityRole="button" accessibilityLabel="Skip review request">
                 <Text style={styles.skipBtnText}>Skip</Text>
               </TouchableOpacity>
             </View>

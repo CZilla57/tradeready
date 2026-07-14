@@ -67,7 +67,12 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
     navigation.setOptions({
       title: isEditing ? "Edit Job" : "New Job",
       headerLeft: () => (
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Cancel"
+        >
           <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
         </TouchableOpacity>
       ),
@@ -361,6 +366,9 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
           <TouchableOpacity
             style={styles.customerSelector}
             onPress={toggleCustomerPicker}
+            accessibilityRole="button"
+            accessibilityLabel={customerName ? `Customer: ${customerName}` : "Select a customer"}
+            accessibilityState={{ expanded: showCustomerPicker }}
           >
             <Text style={customerName ? styles.customerSelected : styles.customerPlaceholder}>
               {customerName || "Select a customer..."}
@@ -380,6 +388,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                 autoCorrect={false}
                 clearButtonMode="while-editing"
                 autoFocus
+                accessibilityLabel="Search customers"
               />
               <ScrollView
                 style={styles.customerScroll}
@@ -399,6 +408,8 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                       key={c.id}
                       style={styles.customerOption}
                       onPress={() => selectCustomer(c)}
+                      accessibilityRole="button"
+                      accessibilityLabel={c.phone ? `${c.name}, ${c.phone}` : c.name}
                     >
                       <Text style={styles.customerOptionName}>{c.name}</Text>
                       {c.phone ? (
@@ -414,6 +425,8 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                   setCustomerSearch("");
                   navigation.navigate('AddCustomer', {});
                 }}
+                accessibilityRole="button"
+                accessibilityLabel="Add new customer"
               >
                 <Text style={{ fontSize: fontSize.sm, color: colors.accent }}>
                   + Add new customer →
@@ -430,6 +443,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
               placeholderTextColor={colors.textMuted}
               value={customerName}
               onChangeText={setCustomerName}
+              accessibilityLabel="Customer name"
             />
           )}
 
@@ -459,12 +473,21 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
             <View style={styles.pickerLabelRow}>
               <Text style={styles.fieldLabel}>Date</Text>
               {scheduledDate ? (
-                <TouchableOpacity onPress={() => setScheduledDate("")}>
+                <TouchableOpacity
+                  onPress={() => setScheduledDate("")}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear date"
+                >
                   <Text style={styles.pickerClear}>Clear</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
-            <TouchableOpacity style={styles.pickerBtn} onPress={() => setShowDatePicker(true)}>
+            <TouchableOpacity
+              style={styles.pickerBtn}
+              onPress={() => setShowDatePicker(true)}
+              accessibilityRole="button"
+              accessibilityLabel={scheduledDate ? `Date: ${displayDate(scheduledDate)}` : "Select date"}
+            >
               <Text style={scheduledDate ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                 {scheduledDate ? displayDate(scheduledDate) : "Select date…"}
               </Text>
@@ -479,12 +502,21 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                 <View style={styles.pickerLabelRow}>
                   <Text style={styles.fieldLabel}>Start time</Text>
                   {scheduledStartTime ? (
-                    <TouchableOpacity onPress={() => setScheduledStartTime("")}>
+                    <TouchableOpacity
+                      onPress={() => setScheduledStartTime("")}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear start time"
+                    >
                       <Text style={styles.pickerClear}>Clear</Text>
                     </TouchableOpacity>
                   ) : null}
                 </View>
-                <TouchableOpacity style={styles.pickerBtn} onPress={() => setShowStartTimePicker(true)}>
+                <TouchableOpacity
+                  style={styles.pickerBtn}
+                  onPress={() => setShowStartTimePicker(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={scheduledStartTime ? `Start time: ${displayTime(scheduledStartTime)}` : "Select start time"}
+                >
                   <Text style={scheduledStartTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                     {scheduledStartTime ? displayTime(scheduledStartTime) : "Start…"}
                   </Text>
@@ -498,12 +530,21 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                 <View style={styles.pickerLabelRow}>
                   <Text style={styles.fieldLabel}>End time</Text>
                   {scheduledEndTime ? (
-                    <TouchableOpacity onPress={() => setScheduledEndTime("")}>
+                    <TouchableOpacity
+                      onPress={() => setScheduledEndTime("")}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear end time"
+                    >
                       <Text style={styles.pickerClear}>Clear</Text>
                     </TouchableOpacity>
                   ) : null}
                 </View>
-                <TouchableOpacity style={styles.pickerBtn} onPress={() => setShowEndTimePicker(true)}>
+                <TouchableOpacity
+                  style={styles.pickerBtn}
+                  onPress={() => setShowEndTimePicker(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={scheduledEndTime ? `End time: ${displayTime(scheduledEndTime)}` : "Select end time"}
+                >
                   <Text style={scheduledEndTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                     {scheduledEndTime ? displayTime(scheduledEndTime) : "End…"}
                   </Text>
@@ -544,6 +585,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                   onValueChange={setIsRecurring}
                   trackColor={{ false: colors.border, true: colors.accent }}
                   thumbColor={colors.surface}
+                  accessibilityLabel="Repeat this job"
                 />
               </View>
 
@@ -556,6 +598,9 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                         key={c}
                         style={[styles.chip, cadence === c && styles.chipSelected]}
                         onPress={() => setCadence(c)}
+                        accessibilityRole="radio"
+                        accessibilityLabel={`Repeats ${c}`}
+                        accessibilityState={{ selected: cadence === c }}
                       >
                         <Text style={[styles.chipText, cadence === c && styles.chipTextSelected]}>
                           {c.charAt(0).toUpperCase() + c.slice(1)}
@@ -571,6 +616,9 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                         key={ec}
                         style={[styles.chip, endCondition === ec && styles.chipSelected]}
                         onPress={() => setEndCondition(ec)}
+                        accessibilityRole="radio"
+                        accessibilityLabel={ec === 'never' ? 'Never ends' : ec === 'count' ? 'Ends after a number of jobs' : 'Ends by date'}
+                        accessibilityState={{ selected: endCondition === ec }}
                       >
                         <Text style={[styles.chipText, endCondition === ec && styles.chipTextSelected]}>
                           {ec === 'never' ? 'Never' : ec === 'count' ? 'After N jobs' : 'By date'}
@@ -594,12 +642,21 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                       <View style={styles.pickerLabelRow}>
                         <Text style={styles.fieldLabel}>End date</Text>
                         {endDate ? (
-                          <TouchableOpacity onPress={() => setEndDate('')}>
+                          <TouchableOpacity
+                            onPress={() => setEndDate('')}
+                            accessibilityRole="button"
+                            accessibilityLabel="Clear end date"
+                          >
                             <Text style={styles.pickerClear}>Clear</Text>
                           </TouchableOpacity>
                         ) : null}
                       </View>
-                      <TouchableOpacity style={styles.pickerBtn} onPress={() => setShowEndDatePicker(true)}>
+                      <TouchableOpacity
+                        style={styles.pickerBtn}
+                        onPress={() => setShowEndDatePicker(true)}
+                        accessibilityRole="button"
+                        accessibilityLabel={endDate ? `End date: ${displayDate(endDate)}` : "Select end date"}
+                      >
                         <Text style={endDate ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                           {endDate ? displayDate(endDate) : 'Select end date…'}
                         </Text>

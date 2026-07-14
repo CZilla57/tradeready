@@ -192,6 +192,7 @@ export default function PricebookEntryScreen({
               placeholderTextColor={colors.textMuted}
               value={name}
               onChangeText={setName}
+              accessibilityLabel="Service name"
             />
 
             <Text style={styles.label}>Description</Text>
@@ -202,6 +203,7 @@ export default function PricebookEntryScreen({
               value={description}
               onChangeText={setDescription}
               multiline
+              accessibilityLabel="Description"
             />
 
             <Text style={styles.label}>Category</Text>
@@ -216,6 +218,7 @@ export default function PricebookEntryScreen({
               }}
               onFocus={() => setShowCategorySuggestions(category.length > 0)}
               onBlur={() => setTimeout(() => setShowCategorySuggestions(false), 200)}
+              accessibilityLabel="Category"
             />
             {showCategorySuggestions && filteredCategories.length > 0 && (
               <View style={styles.suggestions}>
@@ -227,6 +230,8 @@ export default function PricebookEntryScreen({
                       setCategory(c);
                       setShowCategorySuggestions(false);
                     }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Use category ${c}`}
                   >
                     <Text style={styles.suggestionText}>{c}</Text>
                   </TouchableOpacity>
@@ -245,6 +250,7 @@ export default function PricebookEntryScreen({
                   value={laborHours}
                   onChangeText={setLaborHours}
                   keyboardType="decimal-pad"
+                  accessibilityLabel="Labor hours"
                 />
               </View>
               <View style={{ width: spacing.sm }} />
@@ -255,6 +261,7 @@ export default function PricebookEntryScreen({
                   value={laborRate}
                   onChangeText={setLaborRate}
                   keyboardType="decimal-pad"
+                  accessibilityLabel="Labor rate in dollars per hour"
                 />
               </View>
             </View>
@@ -268,6 +275,7 @@ export default function PricebookEntryScreen({
                   placeholderTextColor={colors.textMuted}
                   value={String(m.name)}
                   onChangeText={(v) => updateMaterial(m.id, "name", v)}
+                  accessibilityLabel="Material name"
                 />
                 <TextInput
                   style={styles.matInput}
@@ -276,6 +284,7 @@ export default function PricebookEntryScreen({
                   value={String(m.quantity)}
                   onChangeText={(v) => updateMaterial(m.id, "quantity", v)}
                   keyboardType="decimal-pad"
+                  accessibilityLabel="Material quantity"
                 />
                 <TextInput
                   style={styles.matInput}
@@ -284,30 +293,36 @@ export default function PricebookEntryScreen({
                   value={String(m.unitCost)}
                   onChangeText={(v) => updateMaterial(m.id, "unitCost", v)}
                   keyboardType="decimal-pad"
+                  accessibilityLabel="Material cost each"
                 />
-                <TouchableOpacity onPress={() => removeMaterial(m.id)} style={styles.removeBtn}>
+                <TouchableOpacity
+                  onPress={() => removeMaterial(m.id)}
+                  style={styles.removeBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove material ${String(m.name) || "item"}`}
+                >
                   <Text style={styles.removeBtnText}>✕</Text>
                 </TouchableOpacity>
               </View>
             ))}
-            <TouchableOpacity style={styles.addMaterialBtn} onPress={addMaterial}>
+            <TouchableOpacity style={styles.addMaterialBtn} onPress={addMaterial} accessibilityRole="button" accessibilityLabel="Add material">
               <Text style={styles.addMaterialText}>+ Add material</Text>
             </TouchableOpacity>
 
             <View style={[styles.fieldRow, { marginTop: spacing.md }]}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Markup %</Text>
-                <TextInput style={styles.input} value={materialMarkup} onChangeText={setMaterialMarkup} keyboardType="decimal-pad" />
+                <TextInput style={styles.input} value={materialMarkup} onChangeText={setMaterialMarkup} keyboardType="decimal-pad" accessibilityLabel="Material markup percent" />
               </View>
               <View style={{ width: spacing.sm }} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Overhead %</Text>
-                <TextInput style={styles.input} value={overheadPercent} onChangeText={setOverheadPercent} keyboardType="decimal-pad" />
+                <TextInput style={styles.input} value={overheadPercent} onChangeText={setOverheadPercent} keyboardType="decimal-pad" accessibilityLabel="Overhead percent" />
               </View>
               <View style={{ width: spacing.sm }} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Margin %</Text>
-                <TextInput style={styles.input} value={marginPercent} onChangeText={setMarginPercent} keyboardType="decimal-pad" />
+                <TextInput style={styles.input} value={marginPercent} onChangeText={setMarginPercent} keyboardType="decimal-pad" accessibilityLabel="Profit margin percent" />
               </View>
             </View>
           </Card>
@@ -341,6 +356,8 @@ export default function PricebookEntryScreen({
                   <TouchableOpacity
                     style={styles.applyBtn}
                     onPress={() => setLaborHours(String(aiSuggestion.laborHours!.suggested))}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Apply suggested labor hours: ${aiSuggestion.laborHours.suggested}`}
                   >
                     <Text style={styles.applyBtnText}>Apply</Text>
                   </TouchableOpacity>
@@ -356,6 +373,8 @@ export default function PricebookEntryScreen({
                   <TouchableOpacity
                     style={styles.applyBtn}
                     onPress={() => setLaborRate(String(aiSuggestion.laborRate!.suggested))}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Apply suggested labor rate: ${aiSuggestion.laborRate.suggested} dollars per hour`}
                   >
                     <Text style={styles.applyBtnText}>Apply</Text>
                   </TouchableOpacity>
@@ -370,6 +389,8 @@ export default function PricebookEntryScreen({
                   </View>
                   <TouchableOpacity
                     style={styles.applyBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Apply suggested cost for ${m.name}: ${m.suggestedUnitCost} dollars`}
                     onPress={() => {
                       const existing = materials.find(
                         (mat) => String(mat.name).toLowerCase() === m.name.toLowerCase(),

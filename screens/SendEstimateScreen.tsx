@@ -205,6 +205,9 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
               key={ch}
               style={[styles.tab, channel === ch && styles.tabActive]}
               onPress={() => setChannel(ch)}
+              accessibilityRole="tab"
+              accessibilityLabel={ch === "email" ? "Email" : "Text message"}
+              accessibilityState={{ selected: channel === ch }}
             >
               <Text style={[styles.tabText, channel === ch && styles.tabTextActive]}>
                 {ch === "email" ? "✉ Email" : "💬 Text message"}
@@ -230,13 +233,13 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
 
         {/* Copy / Regenerate / PDF */}
         <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.actionBtn} onPress={copyToClipboard}>
+          <TouchableOpacity style={styles.actionBtn} onPress={copyToClipboard} accessibilityRole="button" accessibilityLabel={copied ? "Copied" : "Copy message"}>
             <Text style={styles.actionBtnText}>{copied ? "✓ Copied" : "Copy"}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionBtn} onPress={() => generate()}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => generate()} accessibilityRole="button" accessibilityLabel="Regenerate message">
             <Text style={styles.actionBtnText}>↺ Regenerate</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionBtn} onPress={handleExportPdf}>
+          <TouchableOpacity style={styles.actionBtn} onPress={handleExportPdf} accessibilityRole="button" accessibilityLabel="Save as PDF">
             <Text style={styles.actionBtnText}>Save PDF</Text>
           </TouchableOpacity>
         </View>

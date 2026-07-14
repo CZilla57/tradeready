@@ -86,7 +86,13 @@ export function PricebookPickerModal({ visible, hasExistingData, onSelect, onDis
   return (
     <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
       <View style={styles.backdrop}>
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={dismiss} />
+        <TouchableOpacity
+          style={{ flex: 1 }}
+          activeOpacity={1}
+          onPress={dismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Close pricebook picker"
+        />
         <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
           <View {...panResponder.panHandlers} style={styles.handleArea}>
             <View style={styles.handle} />
@@ -114,6 +120,7 @@ export function PricebookPickerModal({ visible, hasExistingData, onSelect, onDis
                   placeholderTextColor={colors.textMuted}
                   value={search}
                   onChangeText={setSearch}
+                  accessibilityLabel="Search services"
                 />
               </View>
 
@@ -129,7 +136,13 @@ export function PricebookPickerModal({ visible, hasExistingData, onSelect, onDis
                     <Text style={styles.sectionHeader}>{title}</Text>
                   )}
                   renderItem={({ item }) => (
-                    <TouchableOpacity style={styles.row} onPress={() => handleSelect(item)} activeOpacity={0.7}>
+                    <TouchableOpacity
+                      style={styles.row}
+                      onPress={() => handleSelect(item)}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${item.name}, ${formatQuote(item.estimateTotal)}`}
+                    >
                       <View style={{ flex: 1 }}>
                         <Text style={styles.rowName}>{item.name}</Text>
                       </View>
@@ -171,6 +184,8 @@ function ModalButton({ label, onPress, variant = "primary", style }: ModalButton
         borderColor: colors.border,
       }, style]}
       activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={label}
     >
       <Text style={{
         color: isPrimary ? "#fff" : colors.textPrimary,

@@ -99,6 +99,8 @@ export default function RecurringJobsScreen({ navigation }: JobStackScreenProps<
         style={styles.ruleCard}
         onPress={() => handleRowPress(rule)}
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel={`${rule.title}, ${rule.customerName}, ${CADENCE_LABELS[rule.cadence]}, ${rule.isActive ? "active" : "paused"}`}
       >
         <View style={styles.cardTop}>
           <View style={{ flex: 1, marginRight: spacing.sm }}>

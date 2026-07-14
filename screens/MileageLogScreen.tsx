@@ -51,6 +51,9 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
             key={f.id}
             style={[styles.filterChip, activeFilter === f.id && styles.filterChipActive]}
             onPress={() => setActiveFilter(f.id)}
+            accessibilityRole="radio"
+            accessibilityLabel={f.label}
+            accessibilityState={{ selected: activeFilter === f.id }}
           >
             <Text style={[styles.filterChipText, activeFilter === f.id && styles.filterChipTextActive]}>{f.label}</Text>
           </TouchableOpacity>
@@ -71,7 +74,13 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
         data={inRange}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <TouchableOpacity style={styles.row} onPress={() => navigation.navigate('AddTrip', { tripId: item.id })} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => navigation.navigate('AddTrip', { tripId: item.id })}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Trip ${item.fromLabel} to ${item.toLabel}, ${item.date}, ${formatMiles(item.miles)}`}
+          >
             <View style={{ flex: 1 }}>
               <Text style={styles.rowRoute} numberOfLines={1}>{item.fromLabel} → {item.toLabel}</Text>
               <Text style={styles.rowMeta}>{item.date}{item.purpose ? ` · ${item.purpose}` : ''}</Text>
@@ -90,7 +99,13 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
         ListFooterComponent={<View style={{ height: 100 }} />}
       />
 
-      <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('AddTrip', {})} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={styles.addBtn}
+        onPress={() => navigation.navigate('AddTrip', {})}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel="Add trip"
+      >
         <Text style={styles.addBtnText}>+ Add trip</Text>
       </TouchableOpacity>
     </SafeAreaView>

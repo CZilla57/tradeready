@@ -326,6 +326,9 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
                 key={t.id}
                 style={[styles.tradeBtn, s.trade === t.id && styles.tradeBtnActive]}
                 onPress={() => update("trade", t.id)}
+                accessibilityRole="radio"
+                accessibilityLabel={t.label}
+                accessibilityState={{ selected: s.trade === t.id }}
               >
                 <Text style={[styles.tradeLabel, s.trade === t.id && styles.tradeLabelActive]}>{t.label}</Text>
               </TouchableOpacity>
@@ -365,6 +368,9 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               key={p.id}
               style={[styles.providerBtn, s.provider === p.id && styles.providerBtnActive]}
               onPress={() => update("provider", p.id)}
+              accessibilityRole="radio"
+              accessibilityLabel={p.label}
+              accessibilityState={{ selected: s.provider === p.id }}
             >
               <Text style={[styles.providerLabel, s.provider === p.id && styles.providerLabelActive]}>{p.label}</Text>
             </TouchableOpacity>
@@ -391,11 +397,11 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
                 )}
                 <View style={styles.stripeButtonRow}>
                   {!stripeStatus.details_submitted && (
-                    <TouchableOpacity style={[styles.stripeBtn, stripeConnecting && { opacity: 0.5 }]} onPress={handleStripeConnect} disabled={stripeConnecting}>
+                    <TouchableOpacity style={[styles.stripeBtn, stripeConnecting && { opacity: 0.5 }]} onPress={handleStripeConnect} disabled={stripeConnecting} accessibilityRole="button" accessibilityLabel="Complete Stripe setup" accessibilityState={{ disabled: stripeConnecting, busy: stripeConnecting }}>
                       {stripeConnecting ? <ActivityIndicator size="small" color={colors.accent} /> : <Text style={styles.stripeBtnText}>Complete setup</Text>}
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity style={[styles.stripeBtnDanger, stripeDisconnecting && { opacity: 0.5 }]} onPress={handleStripeDisconnect} disabled={stripeDisconnecting}>
+                  <TouchableOpacity style={[styles.stripeBtnDanger, stripeDisconnecting && { opacity: 0.5 }]} onPress={handleStripeDisconnect} disabled={stripeDisconnecting} accessibilityRole="button" accessibilityLabel="Disconnect Stripe" accessibilityState={{ disabled: stripeDisconnecting, busy: stripeDisconnecting }}>
                     {stripeDisconnecting ? <ActivityIndicator size="small" color={colors.danger} /> : <Text style={styles.stripeBtnDangerText}>Disconnect</Text>}
                   </TouchableOpacity>
                 </View>
@@ -403,7 +409,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
             ) : (
               <>
                 <Text style={styles.providerHint}>Connect your Stripe account to generate payment links for your customers. Payments go directly to your Stripe account.</Text>
-                <TouchableOpacity style={[styles.stripeConnectBtn, stripeConnecting && { opacity: 0.5 }]} onPress={handleStripeConnect} disabled={stripeConnecting}>
+                <TouchableOpacity style={[styles.stripeConnectBtn, stripeConnecting && { opacity: 0.5 }]} onPress={handleStripeConnect} disabled={stripeConnecting} accessibilityRole="button" accessibilityLabel="Connect Stripe account" accessibilityState={{ disabled: stripeConnecting, busy: stripeConnecting }}>
                   {stripeConnecting ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.stripeConnectBtnText}>Connect Stripe account</Text>}
                 </TouchableOpacity>
               </>
@@ -421,6 +427,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry={s.provider === "square"}
+              accessibilityLabel={`${selectedProvider.label} key or ID`}
             />
             <Text style={styles.keyNote}>Stored only on your device. Never share it with anyone.</Text>
           </View>
@@ -439,6 +446,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               value={showAdvanced}
               onValueChange={setShowAdvanced}
               trackColor={{ false: colors.border, true: colors.accent }}
+              accessibilityLabel="Advanced AI settings"
             />
           </View>
         </View>
@@ -446,12 +454,12 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           <>
             <View style={[styles.card, { marginTop: spacing.sm }]}>
               <Text style={styles.providerHint}>Groq API key — powers the AI chat tab (estimates, advice, invoice messages). Get a free key at console.groq.com — no billing required.</Text>
-              <TextInput style={styles.input} value={s.groqKey} onChangeText={(v) => update("groqKey", v)} placeholder="gsk_..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+              <TextInput style={styles.input} value={s.groqKey} onChangeText={(v) => update("groqKey", v)} placeholder="gsk_..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry accessibilityLabel="Groq API key" />
               <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
             </View>
             <View style={[styles.card, { marginTop: spacing.sm }]}>
               <Text style={styles.providerHint}>Anthropic (Claude) API key — used for AI-generated invoice outreach messages. Get one at console.anthropic.com.</Text>
-              <TextInput style={styles.input} value={s.anthropicKey} onChangeText={(v) => update("anthropicKey", v)} placeholder="sk-ant-..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+              <TextInput style={styles.input} value={s.anthropicKey} onChangeText={(v) => update("anthropicKey", v)} placeholder="sk-ant-..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry accessibilityLabel="Anthropic API key" />
               <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
             </View>
           </>
@@ -464,7 +472,14 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           <Text style={styles.providerHint}>Choose how TradeReady looks on your device.</Text>
           <View style={styles.providerGrid}>
             {([{ key: "light", label: "Light" }, { key: "system", label: "System" }, { key: "dark", label: "Dark" }] as const).map((opt) => (
-              <TouchableOpacity key={opt.key} style={[styles.providerBtn, preference === opt.key && styles.providerBtnActive]} onPress={() => setTheme(opt.key)}>
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.providerBtn, preference === opt.key && styles.providerBtnActive]}
+                onPress={() => setTheme(opt.key)}
+                accessibilityRole="radio"
+                accessibilityLabel={`${opt.label} appearance`}
+                accessibilityState={{ selected: preference === opt.key }}
+              >
                 <Text style={[styles.providerLabel, preference === opt.key && styles.providerLabelActive]}>{opt.label}</Text>
               </TouchableOpacity>
             ))}
@@ -477,14 +492,14 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
         <Text style={styles.ruleSubtitle}>Get notified when an invoice is this many days past due:</Text>
         {s.rules.map((rule, i) => (
           <View key={i} style={styles.ruleRow}>
-            <TextInput style={styles.ruleInput} value={String(rule.days)} onChangeText={(v) => updateRule(i, v)} keyboardType="number-pad" maxLength={3} />
+            <TextInput style={styles.ruleInput} value={String(rule.days)} onChangeText={(v) => updateRule(i, v)} keyboardType="number-pad" maxLength={3} accessibilityLabel={`Reminder rule ${i + 1}: days past due`} />
             <Text style={styles.ruleSuffix}>days past due</Text>
-            <TouchableOpacity onPress={() => removeRule(i)} style={styles.removeBtn}>
+            <TouchableOpacity onPress={() => removeRule(i)} style={styles.removeBtn} accessibilityRole="button" accessibilityLabel={`Remove reminder rule ${i + 1}`}>
               <Text style={styles.removeBtnText}>✕</Text>
             </TouchableOpacity>
           </View>
         ))}
-        <TouchableOpacity style={styles.addRuleBtn} onPress={addRule}>
+        <TouchableOpacity style={styles.addRuleBtn} onPress={addRule} accessibilityRole="button" accessibilityLabel="Add reminder rule">
           <Text style={styles.addRuleBtnText}>+ Add rule</Text>
         </TouchableOpacity>
 
@@ -501,6 +516,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               value={s.reviewRequestEnabled}
               onValueChange={(v) => update("reviewRequestEnabled", v)}
               trackColor={{ true: colors.accent }}
+              accessibilityLabel="Enable review requests"
             />
           </View>
         </View>

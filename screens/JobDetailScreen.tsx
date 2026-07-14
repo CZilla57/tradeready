@@ -129,6 +129,8 @@ function JobDetailsCard({ job, navigation }: { job: Job; navigation: JobStackScr
         <Text style={styles.sectionTitle}>Job details</Text>
         <TouchableOpacity
           onPress={() => navigation.navigate("AddJob", { jobId: job.id })}
+          accessibilityRole="button"
+          accessibilityLabel="Edit job details"
         >
           <Text style={styles.editLink}>Edit</Text>
         </TouchableOpacity>
@@ -138,7 +140,7 @@ function JobDetailsCard({ job, navigation }: { job: Job; navigation: JobStackScr
         <Text style={styles.jobDesc}>{job.description}</Text>
       ) : null}
       {job.address ? (
-        <TouchableOpacity onPress={() => openMaps(job.address)}>
+        <TouchableOpacity onPress={() => openMaps(job.address)} accessibilityRole="button" accessibilityLabel={`Open ${job.address} in Maps`}>
           <Text style={styles.addressLink}>📍 {job.address}</Text>
         </TouchableOpacity>
       ) : null}
@@ -169,18 +171,24 @@ function CustomerCard({ customer }: { customer: Customer }) {
         <TouchableOpacity
           style={styles.contactBtn}
           onPress={() => Linking.openURL(`tel:${customer.phone}`)}
+          accessibilityRole="button"
+          accessibilityLabel={`Call ${customer.name}`}
         >
           <Text style={styles.contactBtnText}>📞 Call</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.contactBtn}
           onPress={() => Linking.openURL(`sms:${customer.phone}`)}
+          accessibilityRole="button"
+          accessibilityLabel={`Text ${customer.name}`}
         >
           <Text style={styles.contactBtnText}>💬 Text</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.contactBtn}
           onPress={() => Linking.openURL(`mailto:${customer.email}`)}
+          accessibilityRole="button"
+          accessibilityLabel={`Email ${customer.name}`}
         >
           <Text style={styles.contactBtnText}>✉ Email</Text>
         </TouchableOpacity>
@@ -220,6 +228,8 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
         <View style={styles.estimateHeaderActions}>
           <TouchableOpacity
             onPress={() => navigation.navigate("PricingCalculator", { jobId: job.id })}
+            accessibilityRole="button"
+            accessibilityLabel="Edit estimate"
           >
             <Text style={styles.editLink}>Edit</Text>
           </TouchableOpacity>
@@ -228,6 +238,8 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
               <Text style={styles.editLinkSep}>·</Text>
               <TouchableOpacity
                 onPress={() => navigation.navigate("SendEstimate", { jobId: job.id })}
+                accessibilityRole="button"
+                accessibilityLabel="Send estimate"
               >
                 <Text style={styles.editLink}>Send →</Text>
               </TouchableOpacity>
@@ -290,7 +302,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
         <Text style={styles.sectionTitle}>
           Photos{photos.length > 0 ? ` (${photos.length})` : ""}
         </Text>
-        <TouchableOpacity onPress={onAdd}>
+        <TouchableOpacity onPress={onAdd} accessibilityRole="button" accessibilityLabel="Add photo">
           <Text style={styles.editLink}>+ Add</Text>
         </TouchableOpacity>
       </View>
@@ -306,6 +318,8 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
               <TouchableOpacity
                 onPress={() => setViewerUri(uri)}
                 activeOpacity={0.85}
+                accessibilityRole="imagebutton"
+                accessibilityLabel={`View photo ${i + 1} of ${photos.length}`}
               >
                 <Image source={{ uri }} style={styles.photoThumb} contentFit="cover" />
               </TouchableOpacity>
@@ -335,7 +349,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
         onRequestClose={() => setViewerUri(null)}
       >
         <View style={styles.viewerBg}>
-          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }} accessibilityRole="button" accessibilityLabel="Close photo viewer">
             <Text style={styles.viewerCloseText}>✕</Text>
           </TouchableOpacity>
           {viewerUri && (
@@ -406,6 +420,8 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
           style={[styles.clockBtn, isClocked && styles.clockBtnOut]}
           onPress={isClocked ? onClockOut : onClockIn}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={isClocked ? "Clock out" : "Clock in"}
         >
           <Text style={[styles.clockBtnText, isClocked && styles.clockBtnTextOut]}>
             {isClocked ? "⏹  Clock Out" : "▶  Clock In"}
@@ -665,6 +681,8 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
         <TouchableOpacity
           style={styles.errorButton}
           onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Text style={styles.errorButtonText}>Go back</Text>
         </TouchableOpacity>
@@ -686,6 +704,8 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
             style={styles.recurringBanner}
             onPress={() => navigation.navigate('RecurringJobs')}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Part of a recurring series. View recurring jobs"
           >
             <Ionicons name="repeat-outline" size={14} color={colors.accent} />
             <Text style={styles.recurringBannerText}>Part of a recurring series</Text>
@@ -716,7 +736,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           onAdvance={advanceStatus}
         />
 
-        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} accessibilityRole="button" accessibilityLabel="Delete job">
           <Text style={styles.deleteBtnText}>Delete job</Text>
         </TouchableOpacity>
       </ScrollView>

@@ -201,6 +201,9 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
                     key={p.id}
                     style={[styles.providerChip, selectedProvider === p.id && styles.providerChipActive]}
                     onPress={() => handleSwitchProvider(p.id)}
+                    accessibilityRole="radio"
+                    accessibilityLabel={`Pay via ${p.label}`}
+                    accessibilityState={{ selected: selectedProvider === p.id }}
                   >
                     <Text style={[styles.providerChipText, selectedProvider === p.id && styles.providerChipTextActive]}>
                       {p.label}
@@ -222,6 +225,9 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
               style={styles.generateLinkBtn}
               onPress={() => handleGenerateLink()}
               disabled={generatingLink}
+              accessibilityRole="button"
+              accessibilityLabel="Generate payment link"
+              accessibilityState={{ disabled: generatingLink, busy: generatingLink }}
             >
               {generatingLink ? (
                 <ActivityIndicator size="small" color={colors.accent} />
@@ -246,6 +252,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
                   value={paymentPlanEnabled}
                   onValueChange={setPaymentPlanEnabled}
                   trackColor={{ true: colors.accent }}
+                  accessibilityLabel="Offer a payment plan"
                 />
               </View>
               {paymentPlanEnabled && (
@@ -256,6 +263,9 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
                       key={n}
                       style={[styles.chipBtn, installments === n && styles.chipBtnActive]}
                       onPress={() => setInstallments(n)}
+                      accessibilityRole="radio"
+                      accessibilityLabel={`${n} payments`}
+                      accessibilityState={{ selected: installments === n }}
                     >
                       <Text style={[styles.chipText, installments === n && styles.chipTextActive]}>
                         {n} payments
@@ -268,6 +278,9 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
                       key={f}
                       style={[styles.chipBtn, frequency === f && styles.chipBtnActive]}
                       onPress={() => setFrequency(f)}
+                      accessibilityRole="radio"
+                      accessibilityLabel={f}
+                      accessibilityState={{ selected: frequency === f }}
                     >
                       <Text style={[styles.chipText, frequency === f && styles.chipTextActive]}>{f}</Text>
                     </TouchableOpacity>
@@ -282,6 +295,9 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
                   key={ch}
                   style={[styles.tab, channel === ch && styles.tabActive]}
                   onPress={() => setChannel(ch)}
+                  accessibilityRole="tab"
+                  accessibilityLabel={ch === "email" ? "Email" : "Text message"}
+                  accessibilityState={{ selected: channel === ch }}
                 >
                   <Text style={[styles.tabText, channel === ch && styles.tabTextActive]}>
                     {ch === "email" ? "✉ Email" : "💬 Text message"}
@@ -305,10 +321,10 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
             </Card>
 
             <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.copyBtn} onPress={copyToClipboard}>
+              <TouchableOpacity style={styles.copyBtn} onPress={copyToClipboard} accessibilityRole="button" accessibilityLabel={copied ? "Copied" : "Copy message"}>
                 <Text style={styles.copyBtnText}>{copied ? "✓ Copied" : "Copy"}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.regenBtn} onPress={generate}>
+              <TouchableOpacity style={styles.regenBtn} onPress={generate} accessibilityRole="button" accessibilityLabel="Regenerate message">
                 <Text style={styles.regenBtnText}>↺ Regenerate</Text>
               </TouchableOpacity>
             </View>

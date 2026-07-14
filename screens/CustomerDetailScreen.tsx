@@ -72,6 +72,8 @@ const InfoRow = ({ icon, label, value, onPress, styles }: InfoRowProps) => (
     onPress={onPress ?? undefined}
     disabled={!onPress}
     activeOpacity={onPress ? 0.6 : 1}
+    accessibilityRole={onPress ? 'button' : 'text'}
+    accessibilityLabel={`${label}: ${value || 'not set'}`}
   >
     <Text style={styles.infoIcon}>{icon}</Text>
     <View style={styles.infoContent}>
@@ -94,7 +96,12 @@ interface InvoiceRowProps {
 const InvoiceRow = ({ invoice, onPress, styles, colors }: InvoiceRowProps) => {
   const status = invoiceStatus(invoice, colors);
   return (
-    <TouchableOpacity style={styles.invoiceRow} onPress={() => onPress(invoice)}>
+    <TouchableOpacity
+      style={styles.invoiceRow}
+      onPress={() => onPress(invoice)}
+      accessibilityRole="button"
+      accessibilityLabel={`Invoice ${invoice.number || 'without number'}, ${formatMoney(parseFloat(String(invoice.amount)) || 0)}, ${status.label}`}
+    >
       <View style={styles.invoiceRowLeft}>
         <Text style={styles.invoiceNumber}>{invoice.number || 'No #'}</Text>
         <Text style={styles.invoiceDesc} numberOfLines={1}>{(invoice as any).desc || 'No description'}</Text>
@@ -151,6 +158,8 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
           onPress={() => navigation.navigate('AddCustomer', { customerId: displayCustomer.id, customer: displayCustomer })}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           style={{ alignSelf: 'center', marginRight: 8, paddingLeft: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Edit customer"
         >
           <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Edit</Text>
         </TouchableOpacity>
@@ -273,18 +282,18 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
 
           <View style={styles.heroActions}>
             {displayCustomer.phone ? (
-              <TouchableOpacity style={styles.heroAction} onPress={handleCall}>
+              <TouchableOpacity style={styles.heroAction} onPress={handleCall} accessibilityRole="button" accessibilityLabel={`Call ${displayCustomer.name}`}>
                 <Text style={styles.heroActionIcon}>📞</Text>
                 <Text style={styles.heroActionLabel}>Call</Text>
               </TouchableOpacity>
             ) : null}
             {displayCustomer.email ? (
-              <TouchableOpacity style={styles.heroAction} onPress={handleEmail}>
+              <TouchableOpacity style={styles.heroAction} onPress={handleEmail} accessibilityRole="button" accessibilityLabel={`Email ${displayCustomer.name}`}>
                 <Text style={styles.heroActionIcon}>✉️</Text>
                 <Text style={styles.heroActionLabel}>Email</Text>
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity style={styles.heroAction} onPress={handleNewInvoice}>
+            <TouchableOpacity style={styles.heroAction} onPress={handleNewInvoice} accessibilityRole="button" accessibilityLabel="New invoice for this customer">
               <Text style={styles.heroActionIcon}>🧾</Text>
               <Text style={styles.heroActionLabel}>Invoice</Text>
             </TouchableOpacity>
@@ -384,15 +393,16 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
             onBlur={handleNotesSave}
             multiline
             textAlignVertical="top"
+            accessibilityLabel="Customer notes"
           />
           {notesChanged && (
-            <TouchableOpacity style={styles.saveNotesButton} onPress={handleNotesSave}>
+            <TouchableOpacity style={styles.saveNotesButton} onPress={handleNotesSave} accessibilityRole="button" accessibilityLabel="Save notes">
               <Text style={styles.saveNotesButtonText}>Save notes</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} accessibilityRole="button" accessibilityLabel="Delete customer">
           <Text style={styles.deleteBtnText}>Delete customer</Text>
         </TouchableOpacity>
 

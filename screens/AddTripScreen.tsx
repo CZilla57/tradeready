@@ -55,6 +55,9 @@ export default function AddTripScreen({ navigation, route }: MoneyStackScreenPro
       <TouchableOpacity
         style={[styles.chip, current.jobId === null && styles.chipActive]}
         onPress={() => setter({ jobId: null, label: HOME_LABEL })}
+        accessibilityRole="radio"
+        accessibilityLabel={HOME_LABEL}
+        accessibilityState={{ selected: current.jobId === null }}
       >
         <Text style={[styles.chipText, current.jobId === null && styles.chipTextActive]}>{HOME_LABEL}</Text>
       </TouchableOpacity>
@@ -65,6 +68,9 @@ export default function AddTripScreen({ navigation, route }: MoneyStackScreenPro
             key={j.id}
             style={[styles.chip, current.jobId === j.id && styles.chipActive]}
             onPress={() => setter({ jobId: j.id, label })}
+            accessibilityRole="radio"
+            accessibilityLabel={label}
+            accessibilityState={{ selected: current.jobId === j.id }}
           >
             <Text style={[styles.chipText, current.jobId === j.id && styles.chipTextActive]} numberOfLines={1}>
               {label}
@@ -128,7 +134,7 @@ export default function AddTripScreen({ navigation, route }: MoneyStackScreenPro
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.label}>Date</Text>
-        <TextInput style={styles.input} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} />
+        <TextInput style={styles.input} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} accessibilityLabel="Trip date" />
 
         <Text style={styles.label}>From</Text>
         {renderEndpoints(from, setFrom)}
@@ -137,24 +143,36 @@ export default function AddTripScreen({ navigation, route }: MoneyStackScreenPro
         {renderEndpoints(to, setTo)}
 
         <Text style={styles.label}>Odometer start</Text>
-        <TextInput style={styles.input} value={odoStart} onChangeText={setOdoStart} keyboardType="decimal-pad" placeholder="e.g. 45210" placeholderTextColor={colors.textMuted} />
+        <TextInput style={styles.input} value={odoStart} onChangeText={setOdoStart} keyboardType="decimal-pad" placeholder="e.g. 45210" placeholderTextColor={colors.textMuted} accessibilityLabel="Odometer start" />
 
         <Text style={styles.label}>Odometer end</Text>
-        <TextInput style={styles.input} value={odoEnd} onChangeText={setOdoEnd} keyboardType="decimal-pad" placeholder="e.g. 45240" placeholderTextColor={colors.textMuted} />
+        <TextInput style={styles.input} value={odoEnd} onChangeText={setOdoEnd} keyboardType="decimal-pad" placeholder="e.g. 45240" placeholderTextColor={colors.textMuted} accessibilityLabel="Odometer end" />
 
         <Text style={[styles.milesPreview, invalid && styles.milesInvalid]}>
           {invalid ? 'End reading is less than start' : `Trip distance: ${formatMiles(miles)}`}
         </Text>
 
         <Text style={styles.label}>Purpose (optional)</Text>
-        <TextInput style={[styles.input, styles.multiline]} value={purpose} onChangeText={setPurpose} placeholder="e.g. Drive to job site" placeholderTextColor={colors.textMuted} multiline />
+        <TextInput style={[styles.input, styles.multiline]} value={purpose} onChangeText={setPurpose} placeholder="e.g. Drive to job site" placeholderTextColor={colors.textMuted} multiline accessibilityLabel="Trip purpose" />
 
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSave} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={styles.saveBtn}
+          onPress={handleSave}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={editingId ? 'Save changes' : 'Add trip'}
+        >
           <Text style={styles.saveBtnText}>{editingId ? 'Save Changes' : 'Add Trip'}</Text>
         </TouchableOpacity>
 
         {editingId && (
-          <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={styles.deleteBtn}
+            onPress={handleDelete}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Delete trip"
+          >
             <Text style={styles.deleteBtnText}>Delete Trip</Text>
           </TouchableOpacity>
         )}

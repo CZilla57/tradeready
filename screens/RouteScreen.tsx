@@ -116,6 +116,9 @@ function StopCard({ stop, index, total, onUp, onDown }: StopCardProps) {
               onPress={onUp}
               disabled={isFirst}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Move stop up"
+              accessibilityState={{ disabled: isFirst }}
             >
               <Text style={[styles.reorderBtnText, isFirst && styles.reorderBtnTextDisabled]}>↑</Text>
             </TouchableOpacity>
@@ -124,6 +127,9 @@ function StopCard({ stop, index, total, onUp, onDown }: StopCardProps) {
               onPress={onDown}
               disabled={isLast}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Move stop down"
+              accessibilityState={{ disabled: isLast }}
             >
               <Text style={[styles.reorderBtnText, isLast && styles.reorderBtnTextDisabled]}>↓</Text>
             </TouchableOpacity>
@@ -135,6 +141,8 @@ function StopCard({ stop, index, total, onUp, onDown }: StopCardProps) {
             style={styles.navigateBtn}
             onPress={() => navigateTo(stop.address)}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Navigate to this stop"
           >
             <Text style={styles.navigateBtnText}>Navigate to this stop →</Text>
           </TouchableOpacity>
@@ -155,7 +163,7 @@ function EmptyState({ onBack }: { onBack: () => void }) {
       <Text style={styles.emptySub}>
         Schedule some jobs for today in the Jobs tab and they'll appear here.
       </Text>
-      <TouchableOpacity style={styles.emptyBtn} onPress={onBack} activeOpacity={0.8}>
+      <TouchableOpacity style={styles.emptyBtn} onPress={onBack} activeOpacity={0.8} accessibilityRole="button" accessibilityLabel="Go back">
         <Text style={styles.emptyBtnText}>Go back</Text>
       </TouchableOpacity>
     </View>
@@ -250,7 +258,7 @@ export default function RouteScreen({ navigation }: TodayStackScreenProps<'Route
         </View>
 
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.resetBtn} onPress={resetOrder} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.resetBtn} onPress={resetOrder} activeOpacity={0.8} accessibilityRole="button" accessibilityLabel="Reset to scheduled time order">
             <Text style={styles.resetBtnText}>Reset to scheduled time order</Text>
           </TouchableOpacity>
 
@@ -259,6 +267,8 @@ export default function RouteScreen({ navigation }: TodayStackScreenProps<'Route
               style={styles.fullRouteBtn}
               onPress={() => openFullRoute(stops, businessAddress)}
               activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Open full route in Maps"
             >
               <Text style={styles.fullRouteBtnText}>Open Full Route in Maps</Text>
             </TouchableOpacity>

@@ -4,11 +4,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSyncStatusContext } from '../context/SyncStatusContext';
 import { useThemeContext } from '../context/ThemeContext';
+import { animationDuration, useReduceMotion } from '../utils/motion';
 
 export function SyncBanner() {
   const { isOnline, pendingCount, syncing, syncNow } = useSyncStatusContext();
   const { colors } = useThemeContext();
   const insets = useSafeAreaInsets();
+  const reduceMotion = useReduceMotion();
 
   const visible = !isOnline || pendingCount > 0;
   const translateY = useRef(new Animated.Value(visible ? 0 : -100)).current;
@@ -23,14 +25,14 @@ export function SyncBanner() {
     }
     Animated.timing(translateY, {
       toValue: visible ? 0 : -100,
-      duration: 300,
+      duration: animationDuration(reduceMotion, 300),
       useNativeDriver: true,
     }).start(({ finished }) => {
       if (finished && !visible) {
         setMounted(false);
       }
     });
-  }, [visible, translateY]);
+  }, [visible, translateY, reduceMotion]);
 
   if (!mounted) {
     return null;

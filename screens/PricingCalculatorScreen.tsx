@@ -274,6 +274,9 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         <TouchableOpacity
           style={[styles.tab, tab === "calculator" && styles.tabActive]}
           onPress={() => setTab("calculator")}
+          accessibilityRole="tab"
+          accessibilityLabel="Calculator"
+          accessibilityState={{ selected: tab === "calculator" }}
         >
           <Text style={[styles.tabText, tab === "calculator" && styles.tabTextActive]}>
             🧮 Calculator
@@ -282,6 +285,9 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         <TouchableOpacity
           style={[styles.tab, tab === "estimate" && styles.tabActive]}
           onPress={() => { setTab("estimate"); if (!generatedEstimate) generateEstimate(); }}
+          accessibilityRole="tab"
+          accessibilityLabel="Estimate"
+          accessibilityState={{ selected: tab === "estimate" }}
         >
           <Text style={[styles.tabText, tab === "estimate" && styles.tabTextActive]}>
             📄 Estimate
@@ -415,7 +421,7 @@ function CalculatorTab({
         </View>
         <View style={[styles.inputRow, { marginTop: spacing.sm, alignItems: "center" }]}>
           <Text style={styles.toggleLabel}>Emergency / after-hours rate</Text>
-          <Switch value={isEmergency} onValueChange={setIsEmergency} trackColor={{ true: colors.warning }} />
+          <Switch value={isEmergency} onValueChange={setIsEmergency} trackColor={{ true: colors.warning }} accessibilityLabel="Emergency or after-hours rate" />
         </View>
       </Card>
 
@@ -432,6 +438,7 @@ function CalculatorTab({
               placeholderTextColor={colors.textMuted}
               value={m.name}
               onChangeText={(v) => updateMaterial(m.id, "name", v)}
+              accessibilityLabel="Material name"
             />
             <TextInput
               style={styles.matInput}
@@ -440,6 +447,7 @@ function CalculatorTab({
               value={String(m.quantity)}
               onChangeText={(v) => updateMaterial(m.id, "quantity", parseFloat(v) || 0)}
               keyboardType="decimal-pad"
+              accessibilityLabel="Material quantity"
             />
             <TextInput
               style={styles.matInput}
@@ -448,13 +456,19 @@ function CalculatorTab({
               value={String(m.unitCost)}
               onChangeText={(v) => updateMaterial(m.id, "unitCost", parseFloat(v) || 0)}
               keyboardType="decimal-pad"
+              accessibilityLabel="Material cost each"
             />
-            <TouchableOpacity onPress={() => removeMaterial(m.id)} style={styles.removeBtn}>
+            <TouchableOpacity
+              onPress={() => removeMaterial(m.id)}
+              style={styles.removeBtn}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove material ${m.name || "item"}`}
+            >
               <Text style={styles.removeBtnText}>✕</Text>
             </TouchableOpacity>
           </View>
         ))}
-        <TouchableOpacity style={styles.addMaterialBtn} onPress={addMaterial}>
+        <TouchableOpacity style={styles.addMaterialBtn} onPress={addMaterial} accessibilityRole="button" accessibilityLabel="Add material">
           <Text style={styles.addMaterialText}>+ Add material</Text>
         </TouchableOpacity>
         <View style={[styles.inputRow, { marginTop: spacing.sm }]}>
@@ -584,6 +598,7 @@ function SmallInput({ label, value, onChange, placeholder, prefix, suffix }: Sma
           placeholder={placeholder}
           placeholderTextColor={colors.textMuted}
           keyboardType="decimal-pad"
+          accessibilityLabel={label}
         />
         {suffix ? <Text style={styles.inputAdornment}>{suffix}</Text> : null}
       </View>

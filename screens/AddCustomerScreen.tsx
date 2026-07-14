@@ -80,7 +80,12 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
     navigation.setOptions({
       title: isEditing ? "Edit Customer" : "New Customer",
       headerLeft: () => (
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Cancel"
+        >
           <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
         </TouchableOpacity>
       ),
@@ -250,6 +255,7 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
               placeholderTextColor={colors.textMuted}
               autoCapitalize="words"
               autoCorrect={false}
+              accessibilityLabel="Address"
             />
             {(addressLoading || addressSuggestions.length > 0) && (
               <View style={styles.suggestions}>
@@ -268,6 +274,8 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
                       i < addressSuggestions.length - 1 && styles.suggestionBorder,
                     ]}
                     onPress={() => selectSuggestion(addr)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Use address ${addr}`}
                   >
                     <Text style={styles.suggestionText}>{addr}</Text>
                   </TouchableOpacity>
@@ -287,6 +295,8 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
             <TouchableOpacity
               style={styles.cancelBtn}
               onPress={() => navigation.goBack()}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel"
             >
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </TouchableOpacity>
@@ -294,6 +304,9 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
               style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
               onPress={handleSave}
               disabled={saving}
+              accessibilityRole="button"
+              accessibilityLabel={isEditing ? "Save changes" : "Add customer"}
+              accessibilityState={{ disabled: saving, busy: saving }}
             >
               <Text style={styles.saveBtnText}>
                 {saving ? "Saving..." : isEditing ? "Save changes" : "Add customer"}

@@ -286,6 +286,8 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
             <TouchableOpacity
               style={styles.cancelBtn}
               onPress={() => navigation.goBack()}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel"
             >
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </TouchableOpacity>
@@ -293,6 +295,9 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
               style={[styles.createBtn, saving && styles.createBtnDisabled]}
               onPress={handleCreate}
               disabled={saving}
+              accessibilityRole="button"
+              accessibilityLabel="Create invoice"
+              accessibilityState={{ disabled: saving, busy: saving }}
             >
               <Text style={styles.createBtnText}>
                 {saving ? "Creating..." : "Create invoice →"}

@@ -396,6 +396,8 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
           onPress={handleRestart}
           style={{ backgroundColor: staticColors.accent, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32 }}
           activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Restart"
         >
           <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700" }}>Restart</Text>
         </TouchableOpacity>
