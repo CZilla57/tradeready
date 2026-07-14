@@ -24,7 +24,7 @@ import { sendOnboardingAI } from "../utils/aiService";
 import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
 import { persistPhoto, deletePhoto } from "../utils/photoStorage";
-import { track } from "../utils/analytics";
+import { track, reportError } from "../utils/analytics";
 
 const STEPS = 5;
 
@@ -147,26 +147,36 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
 
   async function finish() {
     setSaving(true);
-    await saveSettings({
-      ...defaultSettings(),
-      businessName: form.businessName.trim(),
-      contactName: form.contactName.trim(),
-      phone: form.phone,
-      email: form.email,
-      address: form.address.trim(),
-      trade: form.trade,
-      laborRate: parseFloat(form.laborRate) || 85,
-      region: form.region.trim(),
-      logoPhoto: logoUri || "",
-    });
-    if (form.dataChoice === "fresh") {
-      await clearSampleData();
-    } else {
-      await saveInvoices(defaultInvoices(form.trade));
+    try {
+      await saveSettings({
+        ...defaultSettings(),
+        businessName: form.businessName.trim(),
+        contactName: form.contactName.trim(),
+        phone: form.phone,
+        email: form.email,
+        address: form.address.trim(),
+        trade: form.trade,
+        laborRate: parseFloat(form.laborRate) || 85,
+        region: form.region.trim(),
+        logoPhoto: logoUri || "",
+      });
+      if (form.dataChoice === "fresh") {
+        await clearSampleData();
+      } else {
+        await saveInvoices(defaultInvoices(form.trade));
+      }
+      await markOnboardingComplete();
+      track('onboarding_completed', { trade: form.trade });
+      onComplete();
+    } catch (err: unknown) {
+      reportError(err, { context: 'onboardingFinish' });
+      Alert.alert(
+        "Couldn't save your setup",
+        "Something went wrong while saving your business info. Please try again."
+      );
+    } finally {
+      setSaving(false);
     }
-    await markOnboardingComplete();
-    track('onboarding_completed', { trade: form.trade });
-    onComplete();
   }
 
   function next() {
