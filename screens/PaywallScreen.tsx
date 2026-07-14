@@ -14,7 +14,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useSubscription } from "../context/SubscriptionContext";
-import { getOfferings, purchasePackage, restorePurchases, ENTITLEMENT_ID } from "../utils/subscription";
+import { getOfferings, purchasePackage, restorePurchases, checkTrialEligibility, ENTITLEMENT_ID } from "../utils/subscription";
+import { trialCopy, NO_TRIAL_COPY } from "../utils/paywallCopy";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from "../utils/analytics";
@@ -43,6 +44,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
   const [purchasing, setPurchasing] = useState(false);
   const [restoring, setRestoring]   = useState(false);
   const [loadError, setLoadError]   = useState<string | null>(null);
+  const [eligibility, setEligibility] = useState<Record<string, boolean>>({});
 
   useEffect(() => { track('subscription_paywall_shown'); }, []);
 
@@ -56,6 +58,8 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
       setOfferings(pkgs);
       const annual = pkgs.find((p: any) => p.packageType === "ANNUAL");
       setSelectedPkg(annual ?? pkgs[0] ?? null);
+      const ids = pkgs.map((p: any) => p.product?.identifier).filter(Boolean);
+      checkTrialEligibility(ids).then(setEligibility).catch(() => {});
     } catch {
       setLoadError("Could not load subscription options. Check your connection and try again.");
     }
@@ -105,6 +109,13 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
     ? `$${(annualPkg.product.price / 12).toFixed(2)}/mo`
     : null;
 
+  // Trial wording comes from the selected package's real intro offer; a user
+  // the store reports as trial-INELIGIBLE (lapsed subscriber) gets the
+  // no-trial wording instead of a false "Start Free Trial".
+  const selectedEligible =
+    !selectedPkg || eligibility[selectedPkg.product?.identifier] !== false;
+  const copy = (selectedEligible ? trialCopy(selectedPkg) : null) ?? NO_TRIAL_COPY;
+
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {canDismiss && (
@@ -126,10 +137,12 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
           <Text style={styles.subtitle}>Everything you need to run your trade business</Text>
         </View>
 
-        <View style={styles.trialBadge}>
-          <Ionicons name="gift-outline" size={15} color={colors.success} />
-          <Text style={styles.trialBadgeText}>14-day free trial — no charge until it ends</Text>
-        </View>
+        {copy.badge ? (
+          <View style={styles.trialBadge}>
+            <Ionicons name="gift-outline" size={15} color={colors.success} />
+            <Text style={styles.trialBadgeText}>{copy.badge}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.featureCard}>
           {FEATURES.map((text, i) => (
@@ -216,10 +229,10 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
         >
           {purchasing
             ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.ctaText}>Start Free Trial</Text>}
+            : <Text style={styles.ctaText}>{copy.cta}</Text>}
         </TouchableOpacity>
 
-        <Text style={styles.ctaSub}>No charge for 14 days. Cancel anytime.</Text>
+        <Text style={styles.ctaSub}>{copy.sub}</Text>
 
         <TouchableOpacity style={styles.restoreBtn} onPress={handleRestore} disabled={restoring}>
           {restoring

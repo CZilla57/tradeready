@@ -63,6 +63,27 @@ export async function showManageSubscriptions(): Promise<void> {
   }
 }
 
+// Per-product trial/intro eligibility. Only a definitive INELIGIBLE (status 1)
+// marks a product false — UNKNOWN (0, the norm on Android and on iOS before
+// StoreKit responds) keeps trial copy visible; the store's purchase sheet
+// always shows the authoritative terms. Fails open to {} so the paywall
+// renders normally in Expo Go and on any SDK error.
+export async function checkTrialEligibility(productIds: string[]): Promise<Record<string, boolean>> {
+  if (!RC_CONFIGURED || productIds.length === 0) return {};
+  if (typeof Purchases.checkTrialOrIntroductoryPriceEligibility !== 'function') return {};
+  try {
+    const INELIGIBLE = 1;
+    const result = await Purchases.checkTrialOrIntroductoryPriceEligibility(productIds);
+    const map: Record<string, boolean> = {};
+    for (const [id, info] of Object.entries(result ?? {})) {
+      map[id] = (info as { status?: number })?.status !== INELIGIBLE;
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 export function isEntitlementActive(customerInfo: unknown): boolean {
   if (!RC_CONFIGURED) return true;
   return (customerInfo as any)?.entitlements?.active?.[ENTITLEMENT_ID] != null;
