@@ -9,7 +9,11 @@ import * as SecureStore from "expo-secure-store";
 import { KEYS } from "./keys";
 import { SECURE_FIELDS, loadSettings } from "./settings";
 import { defaultSettings } from "./defaults";
-import { saveInvoices, saveJobs, saveCustomers, saveExpenses } from "./collections";
+import {
+  loadInvoices, loadJobs, loadCustomers, loadExpenses,
+  saveInvoices, saveJobs, saveCustomers, saveExpenses,
+} from "./collections";
+import { isSampleId } from "../sampleData";
 import { SESSION_STORAGE_KEY } from "../secureStoreAdapter";
 
 // --- Onboarding ---
@@ -33,12 +37,21 @@ export async function markOnboardingComplete(): Promise<void> {
 export async function clearSampleData(): Promise<void> {
   // Use the save functions so each collection's deletes are enqueued and
   // synced to the cloud — prevents sample records from re-appearing on
-  // other devices or after reinstall.
+  // other devices or after reinstall. Filters by sample id (legacy or
+  // namespaced — utils/sampleData.ts) rather than saving empty arrays: the
+  // Settings alert promises "your own data is not affected", and until
+  // 2026-07-14 this wiped the user's real records along with the samples.
+  const [invoices, jobs, customers, expenses] = await Promise.all([
+    loadInvoices(),
+    loadJobs(),
+    loadCustomers(),
+    loadExpenses(),
+  ]);
   await Promise.all([
-    saveInvoices([]),
-    saveJobs([]),
-    saveCustomers([]),
-    saveExpenses([]),
+    saveInvoices(invoices.filter(r => !isSampleId(r.id))),
+    saveJobs(jobs.filter(r => !isSampleId(r.id))),
+    saveCustomers(customers.filter(r => !isSampleId(r.id))),
+    saveExpenses(expenses.filter(r => !isSampleId(r.id))),
     AsyncStorage.removeItem(KEYS.customerNotes),
   ]);
 }

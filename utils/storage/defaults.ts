@@ -5,11 +5,19 @@
 // onboarding flow reads it); the collection seeds are internal to storage.
 
 import type { Invoice, Job, Customer, Settings, TradeId } from "../../types/models";
+import { freshSampleSuffix } from "../sampleData";
+
+// Per-install namespace for sample ids. Fixed ids (c1, j1, "1"...) collided
+// across accounts on the per-user cloud tables and RLS rejected every later
+// account's pushes (wedged "changes pending" banner — TestFlight finding
+// 2026-07-14). Module-level so one app launch seeds all collections with
+// consistent cross-links (jobs reference customers by these ids).
+const SEED = freshSampleSuffix();
 
 export function defaultCustomers(): Customer[] {
   return [
     {
-      id: "c1",
+      id: `c1-${SEED}`,
       name: "Riverside Bakery",
       email: "owner@riversidebakery.com",
       phone: "(555) 301-2200",
@@ -17,7 +25,7 @@ export function defaultCustomers(): Customer[] {
       notes: "Side entrance is easiest. Ask for Maria.",
     },
     {
-      id: "c2",
+      id: `c2-${SEED}`,
       name: "Tom Nguyen",
       email: "tom.nguyen@gmail.com",
       phone: "(555) 874-9900",
@@ -25,7 +33,7 @@ export function defaultCustomers(): Customer[] {
       notes: "Dog in backyard — keep gate closed.",
     },
     {
-      id: "c3",
+      id: `c3-${SEED}`,
       name: "Patel Family Dental",
       email: "admin@pateldental.com",
       phone: "(555) 440-1133",
@@ -38,8 +46,8 @@ export function defaultCustomers(): Customer[] {
 export function defaultJobs(): Job[] {
   return [
     {
-      id: "j1",
-      customerId: "c2",
+      id: `j1-${SEED}`,
+      customerId: `c2-${SEED}`,
       customerName: "Tom Nguyen",
       title: "Replace kitchen faucet",
       description: "Customer wants Moen Arbor faucet installed, remove old unit and dispose.",
@@ -63,8 +71,8 @@ export function defaultJobs(): Job[] {
       createdAt: "2026-06-25",
     },
     {
-      id: "j2",
-      customerId: "c1",
+      id: `j2-${SEED}`,
+      customerId: `c1-${SEED}`,
       customerName: "Riverside Bakery",
       title: "Fix leaking drain pipe",
       description: "Drain under 3-compartment sink leaking at elbow joint. Replace section.",
@@ -89,8 +97,8 @@ export function defaultJobs(): Job[] {
       createdAt: "2026-06-23",
     },
     {
-      id: "j3",
-      customerId: "c3",
+      id: `j3-${SEED}`,
+      customerId: `c3-${SEED}`,
       customerName: "Patel Family Dental",
       title: "Water heater replacement",
       description: "50-gal gas water heater, existing unit is 12 years old and leaking.",
@@ -131,7 +139,7 @@ export function defaultInvoices(trade?: TradeId): Invoice[] {
   const descs = SAMPLE_INVOICE_DESCS[trade || "other"];
   return [
     {
-      id: "1",
+      id: `1-${SEED}`,
       customer: "Riverside Bakery",
       number: "INV-0038",
       amount: 2400,
@@ -142,7 +150,7 @@ export function defaultInvoices(trade?: TradeId): Invoice[] {
       paid: false,
     },
     {
-      id: "2",
+      id: `2-${SEED}`,
       customer: "Green Thumb Landscaping",
       number: "INV-0041",
       amount: 875,
@@ -153,7 +161,7 @@ export function defaultInvoices(trade?: TradeId): Invoice[] {
       paid: false,
     },
     {
-      id: "3",
+      id: `3-${SEED}`,
       customer: "Patel Family Dental",
       number: "INV-0043",
       amount: 5100,
@@ -164,7 +172,7 @@ export function defaultInvoices(trade?: TradeId): Invoice[] {
       paid: false,
     },
     {
-      id: "4",
+      id: `4-${SEED}`,
       customer: "Blue Ridge Coffee Co.",
       number: "INV-0039",
       amount: 650,

@@ -52,7 +52,7 @@ import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
 import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
-import { loadSettings, migrateCustomerIdentity } from "./utils/storage";
+import { loadSettings, migrateCustomerIdentity, migrateSampleDataIds } from "./utils/storage";
 import { getTradeNickname } from "./utils/pricingEngine";
 
 import * as Sentry from "@sentry/react-native";
@@ -295,7 +295,12 @@ function RootNavigator() {
     sessionRef.current = session;
     if (!session) { setOnboardingDone(null); return; }
     isOnboardingComplete().then(setOnboardingDone);
-    migrateCustomerIdentity().catch(() => {});
+    // Identity first (may backfill invoice.customerId with a legacy sample
+    // id), then the sample-id migration remaps those to namespaced ids.
+    migrateCustomerIdentity()
+      .catch(() => {})
+      .then(() => migrateSampleDataIds())
+      .catch(() => {});
   }, [session]);
 
   useEffect(() => {

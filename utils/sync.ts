@@ -57,6 +57,20 @@ async function getQueue(): Promise<QueueItem[]> {
   }
 }
 
+// Drops queue items whose recordId is in the given set. Used by the
+// sample-id migration: legacy-id upserts can never succeed (they collide
+// with another account's rows and RLS rejects them forever), and the same
+// records are re-enqueued under their new ids by the migration's saves.
+export async function pruneQueueRecords(recordIds: Set<string>): Promise<number> {
+  const queue = await getQueue();
+  const kept = queue.filter(item => !recordIds.has(item.recordId));
+  const removed = queue.length - kept.length;
+  if (removed > 0) {
+    await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(kept));
+  }
+  return removed;
+}
+
 async function pushQueue(userId: string): Promise<void> {
   const queue = await getQueue();
   if (!queue.length) return;
@@ -249,7 +263,7 @@ async function pushAllLocalToCloud(userId: string): Promise<void> {
     const raw = await AsyncStorage.getItem(table);
     const records: { id: string }[] = raw ? JSON.parse(raw) : [];
     if (!records.length) continue;
-    await supabase.from(table).upsert(
+    const { error } = await supabase.from(table).upsert(
       records.map(r => ({
         id: r.id,
         user_id: userId,
@@ -258,6 +272,12 @@ async function pushAllLocalToCloud(userId: string): Promise<void> {
         deleted: false,
       }))
     );
+    // Ignoring these errors hid the sample-id RLS collisions for weeks —
+    // keep the first-device push best-effort, but never silent.
+    if (error) {
+      console.warn(`Initial push failed for ${table}:`, error.message);
+      reportError(error, { context: 'pushAllLocalToCloud', table });
+    }
   }
 
   const raw = await AsyncStorage.getItem('settings');
