@@ -9,11 +9,20 @@ mentioned anywhere — they don't exist.
 
 ## App name (30 chars max)
 
-**TradeReady** (10)
+**TradeReady: Trade Job Manager** (29)
+
+Bare "TradeReady" is taken ("TradeReady — Trades Training", an education
+app); this suffix both clears the collision and differentiates us as
+management software. The name under the icon on the device stays
+**TradeReady** (app config, unchanged — no rebuild needed).
 
 ## Subtitle (30 chars max)
 
-**Jobs, invoices & AI pricing** (27)
+**Invoice, estimate & AI pricing** (30)
+
+("Job" moved into the name, so the subtitle stopped spending characters on
+it and picked up "estimate" instead — Apple indexes name + subtitle +
+keywords, and duplicates waste slots.)
 
 ## Category
 
@@ -27,7 +36,10 @@ Primary: **Business** · Secondary: **Productivity**
 
 ## Keywords (100 chars max, comma-separated — avoid repeating name/subtitle words)
 
-`estimate,plumber,electrician,handyman,contractor,hvac,landscaping,quote,tradesman,payment` (89)
+`roofer,plumber,electrician,handyman,contractor,hvac,landscaping,quote,tradesman,payment,carpenter` (97)
+
+("estimate" moved to the subtitle; freed characters went to two more
+trades, roofer and carpenter.)
 
 ## Description (4000 chars max — draft ~2600)
 
