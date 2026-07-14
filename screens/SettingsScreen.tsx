@@ -305,11 +305,18 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
+      {/* automaticallyAdjustKeyboardInsets accumulated phantom bottom inset on
+          device (endless empty scroll space — beta finding); use the same
+          KeyboardAvoidingView pattern as the Add/Edit screens instead. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
+      >
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets
+        keyboardDismissMode="on-drag"
       >
         <SectionHeader title="Your business" />
         <View style={styles.card}>
@@ -624,10 +631,10 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           ) : isSubscribed ? (
             <View style={styles.subStatusRow}>
               <View style={[styles.subStatusDot, { backgroundColor: colors.success }]} />
-              <Text style={[styles.subStatusLabel, { color: colors.success }]}>TradeReady Pro — active</Text>
+              <Text style={[styles.subStatusLabel, { color: colors.success }]}>Subscription active</Text>
             </View>
           ) : (
-            <Text style={styles.providerHint}>Upgrade to TradeReady Pro to unlock all features.</Text>
+            <Text style={styles.providerHint}>Subscribe to unlock all features.</Text>
           )}
           {isSubscribed || isTrialing ? (
             <TouchableOpacity style={[styles.stripeBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Manage subscription" onPress={async () => {
@@ -639,8 +646,8 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               <Text style={styles.stripeBtnText}>Manage subscription</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Upgrade to Pro" onPress={() => navigation.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
-              <Text style={styles.stripeConnectBtnText}>Upgrade to Pro</Text>
+            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Subscribe" onPress={() => navigation.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
+              <Text style={styles.stripeConnectBtnText}>Subscribe</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -685,6 +692,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           </TouchableOpacity>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       <Modal
         visible={deleteModalVisible}
