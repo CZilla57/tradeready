@@ -474,6 +474,8 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
 
         <TouchableOpacity
           style={styles.clearSampleBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Clear sample data"
           onPress={() => Alert.alert("Clear sample data", "This permanently removes all sample customers, jobs, and invoices. Your own data is not affected.", [
             { text: "Cancel", style: "cancel" },
             { text: "Clear sample data", style: "destructive", onPress: async () => { await clearSampleData(); Alert.alert("Done", "Sample data has been removed."); } },
@@ -484,6 +486,8 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
 
         <TouchableOpacity
           style={styles.signOutBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Sign out"
           onPress={() => {
             const doSignOut = async () => { resetUser(); await clearAllUserData(); await supabase.auth.signOut(); };
             if (pendingCount > 0) {
@@ -506,6 +510,9 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
         <TouchableOpacity
           style={[styles.deleteAccountBtn, deleting && { opacity: 0.5 }]}
           disabled={deleting}
+          accessibilityRole="button"
+          accessibilityLabel="Delete account"
+          accessibilityState={{ disabled: deleting, busy: deleting }}
           onPress={() => Alert.alert("Delete account", "This permanently deletes your account and all your data — jobs, invoices, customers, and expenses. This cannot be undone.", [
             { text: "Cancel", style: "cancel" },
             {
@@ -558,7 +565,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
             <Text style={styles.providerHint}>Upgrade to TradeReady Pro to unlock all features.</Text>
           )}
           {isSubscribed || isTrialing ? (
-            <TouchableOpacity style={[styles.stripeBtn, { marginTop: spacing.sm }]} onPress={async () => {
+            <TouchableOpacity style={[styles.stripeBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Manage subscription" onPress={async () => {
               try { await showManageSubscriptions(); } catch {
                 const url = Platform.OS === "ios" ? "https://apps.apple.com/account/subscriptions" : "https://play.google.com/store/account/subscriptions";
                 Linking.openURL(url);
@@ -567,7 +574,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               <Text style={styles.stripeBtnText}>Manage subscription</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} onPress={() => navigation.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
+            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Upgrade to Pro" onPress={() => navigation.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
               <Text style={styles.stripeConnectBtnText}>Upgrade to Pro</Text>
             </TouchableOpacity>
           )}
@@ -602,12 +609,12 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
 
         <SectionHeader title="Legal" />
         <View style={styles.card}>
-          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(PRIVACY_URL)} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(PRIVACY_URL)} activeOpacity={0.7} accessibilityRole="link" accessibilityLabel="Privacy Policy">
             <Text style={styles.listRowText}>Privacy Policy</Text>
             <Text style={styles.listRowChevron}>›</Text>
           </TouchableOpacity>
           <View style={styles.listRowDivider} />
-          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(TERMS_URL)} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(TERMS_URL)} activeOpacity={0.7} accessibilityRole="link" accessibilityLabel="Terms of Service">
             <Text style={styles.listRowText}>Terms of Service</Text>
             <Text style={styles.listRowChevron}>›</Text>
           </TouchableOpacity>

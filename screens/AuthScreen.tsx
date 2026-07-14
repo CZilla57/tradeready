@@ -155,7 +155,7 @@ export default function AuthScreen() {
                 accessibilityLabel="Password"
               />
               {mode === 'login' && (
-                <TouchableOpacity style={styles.toggle} onPress={goForgot}>
+                <TouchableOpacity style={styles.toggle} onPress={goForgot} accessibilityRole="button" accessibilityLabel="Forgot password?">
                   <Text style={styles.toggleText}>
                     <Text style={styles.toggleLink}>Forgot password?</Text>
                   </Text>
@@ -169,6 +169,9 @@ export default function AuthScreen() {
             onPress={handleSubmit}
             disabled={loading}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={submitLabel}
+            accessibilityState={{ disabled: loading, busy: loading }}
           >
             {loading
               ? <ActivityIndicator color="#fff" />
@@ -178,7 +181,12 @@ export default function AuthScreen() {
         </View>
 
         {mode !== 'forgot' ? (
-          <TouchableOpacity style={styles.toggle} onPress={toggle}>
+          <TouchableOpacity
+            style={styles.toggle}
+            onPress={toggle}
+            accessibilityRole="button"
+            accessibilityLabel={mode === 'login' ? 'Sign up' : 'Sign in'}
+          >
             <Text style={styles.toggleText}>
               {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
               <Text style={styles.toggleLink}>
@@ -187,7 +195,7 @@ export default function AuthScreen() {
             </Text>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={styles.toggle} onPress={goLogin}>
+          <TouchableOpacity style={styles.toggle} onPress={goLogin} accessibilityRole="button" accessibilityLabel="Back to sign in">
             <Text style={styles.toggleText}>
               <Text style={styles.toggleLink}>Back to sign in</Text>
             </Text>

@@ -121,6 +121,8 @@ function JobsTab() {
               onPress={() => navigation.navigate("RecurringJobs")}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               style={{ paddingLeft: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Recurring jobs"
             >
               <Ionicons name="repeat-outline" size={22} color={colors.accent} />
             </TouchableOpacity>

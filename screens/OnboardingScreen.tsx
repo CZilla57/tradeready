@@ -200,6 +200,9 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
             onPress={() => canNavigateTo(i) && setStep(i)}
             activeOpacity={0.7}
             style={styles.dotTouchable}
+            accessibilityRole="button"
+            accessibilityLabel={`Go to step ${i + 1} of ${STEPS}`}
+            accessibilityState={{ selected: i === step }}
           >
             <View style={[styles.dot, i <= step && styles.dotActive]} />
           </TouchableOpacity>
@@ -239,7 +242,7 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
 
       <View style={styles.footer}>
         {step > 0 && (
-          <TouchableOpacity style={styles.backBtn} onPress={back}>
+          <TouchableOpacity style={styles.backBtn} onPress={back} accessibilityRole="button" accessibilityLabel="Back">
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
         )}
@@ -248,6 +251,9 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
           onPress={next}
           disabled={!canContinue() || saving}
           activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={step === 0 ? "Let's get started" : step === STEPS - 1 ? "Start using TradeReady" : "Continue"}
+          accessibilityState={{ disabled: !canContinue() || saving, busy: saving }}
         >
           {saving ? (
             <ActivityIndicator color="#fff" />

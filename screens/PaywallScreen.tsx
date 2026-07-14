@@ -123,6 +123,8 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
           style={styles.closeBtn}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
         >
           <Ionicons name="close" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
@@ -171,6 +173,9 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
                 style={[styles.planCard, selectedPkg?.packageType === "ANNUAL" && styles.planCardSelected]}
                 onPress={() => setSelectedPkg(annualPkg)}
                 activeOpacity={0.85}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: selectedPkg?.packageType === "ANNUAL" }}
+                accessibilityLabel={`Annual plan, ${annualPkg.product.priceString} per year`}
               >
                 <View style={styles.planLeft}>
                   <View style={[styles.radio, selectedPkg?.packageType === "ANNUAL" && styles.radioSelected]}>
@@ -201,6 +206,9 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
                 style={[styles.planCard, selectedPkg?.packageType === "MONTHLY" && styles.planCardSelected]}
                 onPress={() => setSelectedPkg(monthlyPkg)}
                 activeOpacity={0.85}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: selectedPkg?.packageType === "MONTHLY" }}
+                accessibilityLabel={`Monthly plan, ${monthlyPkg.product.priceString} per month`}
               >
                 <View style={styles.planLeft}>
                   <View style={[styles.radio, selectedPkg?.packageType === "MONTHLY" && styles.radioSelected]}>
@@ -226,6 +234,9 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
           onPress={handlePurchase}
           disabled={!selectedPkg || purchasing}
           activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={copy.cta}
+          accessibilityState={{ disabled: !selectedPkg || purchasing, busy: purchasing }}
         >
           {purchasing
             ? <ActivityIndicator color="#fff" />
@@ -234,7 +245,14 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
 
         <Text style={styles.ctaSub}>{copy.sub}</Text>
 
-        <TouchableOpacity style={styles.restoreBtn} onPress={handleRestore} disabled={restoring}>
+        <TouchableOpacity
+          style={styles.restoreBtn}
+          onPress={handleRestore}
+          disabled={restoring}
+          accessibilityRole="button"
+          accessibilityLabel="Restore purchases"
+          accessibilityState={{ disabled: restoring, busy: restoring }}
+        >
           {restoring
             ? <ActivityIndicator color={colors.textMuted} size="small" />
             : <Text style={styles.restoreText}>Restore purchases</Text>}
@@ -242,13 +260,13 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
 
         <View style={styles.legalRow}>
           {PRIVACY_URL ? (
-            <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL)}>
+            <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL)} accessibilityRole="link" accessibilityLabel="Privacy Policy">
               <Text style={styles.legalLink}>Privacy Policy</Text>
             </TouchableOpacity>
           ) : null}
           {PRIVACY_URL && TERMS_URL ? <Text style={styles.legalDot}> · </Text> : null}
           {TERMS_URL ? (
-            <TouchableOpacity onPress={() => Linking.openURL(TERMS_URL)}>
+            <TouchableOpacity onPress={() => Linking.openURL(TERMS_URL)} accessibilityRole="link" accessibilityLabel="Terms of Service">
               <Text style={styles.legalLink}>Terms of Service</Text>
             </TouchableOpacity>
           ) : null}
