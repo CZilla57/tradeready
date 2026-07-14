@@ -81,6 +81,7 @@ export default function Field({
         numberOfLines={multiline ? 3 : 1}
         autoFocus={autoFocus}
         accessibilityLabel={label}
+        maxFontSizeMultiplier={1.4}
       />
     </View>
   );
@@ -99,7 +100,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     input: {
       backgroundColor: colors.surface,
       borderRadius: radius.md,
-      height: 44,
+      // minHeight (not height) so larger accessibility text grows the field
+      // instead of clipping inside it.
+      minHeight: 44,
       paddingHorizontal: spacing.md,
       fontSize: fontSize.md,
       color: colors.textPrimary,
@@ -107,7 +110,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
     },
     inputMulti: {
-      height: 88,
+      minHeight: 88,
       paddingTop: spacing.sm,
       textAlignVertical: "top",
     },

@@ -255,6 +255,9 @@ function MainTabs() {
         tabBarInactiveTintColor: colors.textMuted,
         tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
         tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: "500" as const },
+        // Tab labels are the most space-constrained text in the app; native
+        // tab bars conventionally don't scale them (VoiceOver reads them).
+        tabBarAllowFontScaling: false,
       })}
     >
       <Tab.Screen name="Today"     component={TodayTab} />

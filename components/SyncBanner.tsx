@@ -58,13 +58,18 @@ export function SyncBanner() {
     >
       <View style={styles.content}>
         <Ionicons name={icon as any} size={18} color={accentColor} />
-        <Text style={[styles.text, { color: colors.textPrimary }]}>{message}</Text>
+        <Text style={[styles.text, { color: colors.textPrimary }]} maxFontSizeMultiplier={1.3}>{message}</Text>
         {isOnline && pendingCount > 0 && (
           syncing ? (
             <ActivityIndicator size="small" color={accentColor} testID="sync-spinner" />
           ) : (
-            <TouchableOpacity onPress={syncNow} style={[styles.button, { backgroundColor: accentColor }]}>
-              <Text style={styles.buttonText}>Sync Now</Text>
+            <TouchableOpacity
+              onPress={syncNow}
+              style={[styles.button, { backgroundColor: accentColor }]}
+              accessibilityRole="button"
+              accessibilityLabel="Sync now"
+            >
+              <Text style={styles.buttonText} maxFontSizeMultiplier={1.3}>Sync Now</Text>
             </TouchableOpacity>
           )
         )}

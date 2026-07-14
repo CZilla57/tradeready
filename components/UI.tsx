@@ -34,7 +34,10 @@ export function Badge({ label, color = "accent" }: { label: string; color?: Badg
       accessibilityRole="text"
       accessibilityLabel={label}
     >
-      <Text style={[styles.badgeText, { color: textMap[color] || textMap.muted }]}>
+      <Text
+        style={[styles.badgeText, { color: textMap[color] || textMap.muted }]}
+        maxFontSizeMultiplier={1.2}
+      >
         {label}
       </Text>
     </View>
@@ -71,7 +74,10 @@ export function Button({ label, onPress, variant = "primary", style, loading }: 
       {loading ? (
         <ActivityIndicator color={isPrimary ? "#fff" : colors.accent} size="small" />
       ) : (
-        <Text style={[styles.btnText, { color: isPrimary ? "#fff" : colors.textPrimary }]}>
+        <Text
+          style={[styles.btnText, { color: isPrimary ? "#fff" : colors.textPrimary }]}
+          maxFontSizeMultiplier={1.4}
+        >
           {label}
         </Text>
       )}
@@ -106,8 +112,8 @@ export function StatCard({ label, value, valueColor }: { label: string; value: s
       accessible={true}
       accessibilityLabel={`${label}: ${value}`}
     >
-      <Text style={[styles.statLabel, { color: colors.textMuted }]}>{label}</Text>
-      <Text style={[styles.statValue, { color: valueColor || colors.textPrimary }]}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.textMuted }]} maxFontSizeMultiplier={1.4}>{label}</Text>
+      <Text style={[styles.statValue, { color: valueColor || colors.textPrimary }]} maxFontSizeMultiplier={1.4}>{value}</Text>
     </View>
   );
 }
@@ -156,11 +162,14 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   btn: {
-    height: 44,
+    // minHeight (not height) so clamped-but-larger accessibility text can
+    // still grow the button instead of clipping.
+    minHeight: 44,
     borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.md,
+    paddingVertical: 10,
   },
   btnText: {
     fontSize: fontSize.md,
