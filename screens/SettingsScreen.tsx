@@ -26,6 +26,7 @@ import { supabase } from "../utils/supabase";
 import { resetUser, reportError } from "../utils/analytics";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import { DELETE_CONFIRM_PHRASE, deleteConfirmMatches } from "../utils/deleteConfirm";
+import { settingsEqual } from "../utils/settingsDirty";
 import BaseField from "../components/Field";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
@@ -91,6 +92,48 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   const [stripeDisconnecting, setStripeDisconnecting] = useState(false);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
+  // Unsaved-edits guard: edits live only in `s` until "Save settings", so
+  // leaving the tab with a dirty copy silently loses work. Track the
+  // last-saved snapshot and warn on blur. Refs mirror state because the blur
+  // listener is registered once and would otherwise close over stale values.
+  const [savedSnapshot, setSavedSnapshot] = useState<Settings | null>(null);
+  const sRef = useRef<Settings | null>(null);
+  const savedSnapshotRef = useRef<Settings | null>(null);
+  const suppressDirtyWarnRef = useRef(false); // sign-out/delete wipe data on purpose
+  useEffect(() => { sRef.current = s; }, [s]);
+  useEffect(() => { savedSnapshotRef.current = savedSnapshot; }, [savedSnapshot]);
+
+  useEffect(() => {
+    const unsub = navigation.addListener("blur", () => {
+      const current = sRef.current;
+      const saved = savedSnapshotRef.current;
+      if (suppressDirtyWarnRef.current || !current || !saved) return;
+      if (settingsEqual(current, saved)) return;
+      Alert.alert(
+        "Unsaved settings",
+        "You changed settings but didn't tap Save. Keep your changes?",
+        [
+          {
+            text: "Discard",
+            style: "destructive",
+            onPress: () => { if (savedSnapshotRef.current) setS(savedSnapshotRef.current); },
+          },
+          {
+            text: "Save",
+            onPress: async () => {
+              const toSave = sRef.current;
+              if (!toSave) return;
+              await saveSettings(toSave);
+              syncNotifications();
+              setSavedSnapshot(toSave);
+            },
+          },
+        ]
+      );
+    });
+    return unsub;
+  }, [navigation]);
+
   useEffect(() => {
     loadSettings().then((loaded) => {
       if (
@@ -104,6 +147,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
         };
       }
       setS(loaded);
+      setSavedSnapshot(loaded);
     });
   }, []);
 
@@ -224,11 +268,13 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     setSaving(true);
     await saveSettings(s);
     syncNotifications();
+    setSavedSnapshot(s);
     setSaving(false);
     Alert.alert("Saved", "Your settings have been saved.");
   }
 
   async function performDeleteAccount() {
+    suppressDirtyWarnRef.current = true; // deleting the account discards edits by definition
     setDeleting(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -247,6 +293,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     } catch (err: unknown) {
       reportError(err, { context: 'deleteAccount' });
       Alert.alert("Error", (err as Error).message || "Something went wrong. Please try again.");
+      suppressDirtyWarnRef.current = false; // deletion failed; the guard matters again
     } finally {
       setDeleting(false);
     }
@@ -520,7 +567,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           accessibilityRole="button"
           accessibilityLabel="Sign out"
           onPress={() => {
-            const doSignOut = async () => { resetUser(); await clearAllUserData(); await supabase.auth.signOut(); };
+            const doSignOut = async () => { suppressDirtyWarnRef.current = true; resetUser(); await clearAllUserData(); await supabase.auth.signOut(); };
             if (pendingCount > 0) {
               Alert.alert("Unsynced changes", "You have changes that haven't been saved to the cloud yet. Sync now to keep them.", [
                 { text: "Cancel", style: "cancel" },
