@@ -10,12 +10,12 @@ import {
   Linking,
   Platform,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useSubscription } from "../context/SubscriptionContext";
 import { getOfferings, purchasePackage, restorePurchases, checkTrialEligibility, ENTITLEMENT_ID } from "../utils/subscription";
-import { trialCopy, NO_TRIAL_COPY } from "../utils/paywallCopy";
+import { trialCopy, NO_TRIAL_COPY, offeringsDisplayState } from "../utils/paywallCopy";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from "../utils/analytics";
@@ -36,6 +36,7 @@ const FEATURES = [
 export default function PaywallScreen({ route, navigation }: RootStackScreenProps<'Paywall'> | RootStackScreenProps<'PaywallModal'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const insets = useSafeAreaInsets();
   const canDismiss: boolean = route?.params?.canDismiss ?? false;
   const { updateFromPurchase, refresh } = useSubscription();
 
@@ -52,6 +53,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
 
   async function loadOfferings() {
     setLoadError(null);
+    setOfferings(null); // back to the spinner so a retry gives visible feedback
     try {
       const result = await getOfferings();
       const pkgs: any[] = result?.current?.availablePackages ?? [];
@@ -105,6 +107,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
 
   const monthlyPkg = offerings?.find((p: any) => p.packageType === "MONTHLY");
   const annualPkg  = offerings?.find((p: any) => p.packageType === "ANNUAL");
+  const planState  = offeringsDisplayState(offerings, loadError);
   const annualMonthlyCost = annualPkg
     ? `$${(annualPkg.product.price / 12).toFixed(2)}/mo`
     : null;
@@ -120,7 +123,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {canDismiss && (
         <TouchableOpacity
-          style={styles.closeBtn}
+          style={[styles.closeBtn, { top: insets.top + 8 }]}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           accessibilityRole="button"
@@ -157,15 +160,35 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
           ))}
         </View>
 
-        {loadError ? (
+        {planState === "error" ? (
           <View style={styles.errorCard}>
             <Text style={styles.errorText}>{loadError}</Text>
-            <TouchableOpacity style={styles.retryBtn} onPress={loadOfferings}>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={loadOfferings}
+              accessibilityRole="button"
+              accessibilityLabel="Try again"
+            >
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
           </View>
-        ) : offerings === null ? (
+        ) : planState === "loading" ? (
           <ActivityIndicator color={colors.accent} style={{ marginVertical: spacing.xl }} />
+        ) : planState === "empty" ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>
+              Subscription plans aren't available right now. This is usually temporary —
+              check your connection and try again in a moment.
+            </Text>
+            <TouchableOpacity
+              style={styles.emptyRetryBtn}
+              onPress={loadOfferings}
+              accessibilityRole="button"
+              accessibilityLabel="Try again"
+            >
+              <Text style={styles.emptyRetryBtnText}>Try again</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
           <View style={styles.plans}>
             {annualPkg && (
@@ -285,7 +308,9 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container:    { flex: 1, backgroundColor: colors.background },
-    closeBtn:     { position: "absolute", top: 52, right: 20, zIndex: 10, padding: 4 },
+    // top is applied inline from the live safe-area inset (hardcoding it put
+    // the button under the Dynamic Island on some devices, too low on others).
+    closeBtn:     { position: "absolute", right: 20, zIndex: 10, padding: 4 },
     scroll:       { padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: 48 },
     header:       { alignItems: "center", marginBottom: spacing.lg },
     iconWrap: {
@@ -346,6 +371,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.dangerBg, borderRadius: radius.lg,
       padding: spacing.md, marginBottom: spacing.md, alignItems: "center",
     },
+    emptyCard: {
+      backgroundColor: colors.surface, borderRadius: radius.lg,
+      padding: spacing.md, marginBottom: spacing.md, alignItems: "center",
+      ...shadow.card,
+    },
+    emptyText: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm, textAlign: "center" },
+    emptyRetryBtn: { paddingVertical: 8, paddingHorizontal: 16, backgroundColor: colors.accent, borderRadius: radius.md },
+    emptyRetryBtnText: { color: "#fff", fontWeight: "600", fontSize: fontSize.sm },
     errorText:    { fontSize: fontSize.sm, color: colors.danger, marginBottom: spacing.sm, textAlign: "center" },
     retryBtn:     { paddingVertical: 8, paddingHorizontal: 16, backgroundColor: colors.danger, borderRadius: radius.md },
     retryBtnText: { color: "#fff", fontWeight: "600", fontSize: fontSize.sm },

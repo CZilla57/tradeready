@@ -58,3 +58,21 @@ export const NO_TRIAL_COPY: TrialCopy = {
   cta: "Subscribe",
   sub: "Renews automatically. Cancel anytime.",
 };
+
+// What the paywall's plan area should render. "empty" is the case the screen
+// historically dropped on the floor: offerings loaded fine but contained no
+// monthly/annual package (misconfigured or still-propagating store products),
+// which left the user staring at a disabled CTA with no explanation.
+export type OfferingsDisplayState = "loading" | "error" | "empty" | "plans";
+
+export function offeringsDisplayState(
+  offerings: { packageType?: string }[] | null,
+  loadError: string | null
+): OfferingsDisplayState {
+  if (loadError) return "error";
+  if (offerings === null) return "loading";
+  const usable = offerings.some(
+    (p) => p?.packageType === "MONTHLY" || p?.packageType === "ANNUAL"
+  );
+  return usable ? "plans" : "empty";
+}

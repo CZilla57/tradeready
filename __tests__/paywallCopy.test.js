@@ -61,3 +61,34 @@ describe("NO_TRIAL_COPY", () => {
     expect(NO_TRIAL_COPY.sub).toBe("Renews automatically. Cancel anytime.");
   });
 });
+
+describe("offeringsDisplayState", () => {
+  const { offeringsDisplayState } = require("../utils/paywallCopy");
+
+  it("reports error whenever a load error is set, regardless of offerings", () => {
+    expect(offeringsDisplayState(null, "boom")).toBe("error");
+    expect(offeringsDisplayState([], "boom")).toBe("error");
+    expect(offeringsDisplayState([{ packageType: "ANNUAL" }], "boom")).toBe("error");
+  });
+
+  it("reports loading while offerings have not arrived", () => {
+    expect(offeringsDisplayState(null, null)).toBe("loading");
+  });
+
+  it("reports empty for a loaded offering with zero packages", () => {
+    expect(offeringsDisplayState([], null)).toBe("empty");
+  });
+
+  it("reports empty when no package is a monthly or annual plan", () => {
+    expect(offeringsDisplayState([{ packageType: "LIFETIME" }], null)).toBe("empty");
+    expect(offeringsDisplayState([{}], null)).toBe("empty");
+  });
+
+  it("reports plans when a monthly or annual package exists", () => {
+    expect(offeringsDisplayState([{ packageType: "MONTHLY" }], null)).toBe("plans");
+    expect(offeringsDisplayState([{ packageType: "ANNUAL" }], null)).toBe("plans");
+    expect(
+      offeringsDisplayState([{ packageType: "ANNUAL" }, { packageType: "MONTHLY" }], null)
+    ).toBe("plans");
+  });
+});
