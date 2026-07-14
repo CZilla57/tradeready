@@ -15,6 +15,8 @@ const SUPABASE_URL              = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const RC_WEBHOOK_SECRET         = process.env.REVENUECAT_WEBHOOK_SECRET;
 
+const { resolvePlan } = require('../../lib/plan');
+
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -45,9 +47,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ received: true, skipped: true });
   }
 
-  const plan = productId?.includes('annual') ? 'annual'
-             : productId?.includes('monthly') ? 'monthly'
-             : null;
+  const plan = resolvePlan(productId);
 
   try {
     await upsertSubscription({ userId, status, plan, periodType, expiresAt, productId });
