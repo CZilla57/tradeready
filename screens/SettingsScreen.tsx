@@ -37,7 +37,9 @@ import type { MainTabParamList } from "../types/navigation";
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
 const VERCEL_URL  = Constants.expoConfig?.extra?.backendUrl        ?? "";
-const SUPPORT_EMAIL = "support@tradeready.app";
+// Must match the address published in the privacy policy (§ Contact) —
+// the domain is gettradereadyapp.com, NOT tradeready.app (which doesn't exist).
+const SUPPORT_EMAIL = "support@gettradereadyapp.com";
 const APP_VERSION   = Constants.expoConfig?.version ?? "1.0.0";
 
 interface StripeStatus {
