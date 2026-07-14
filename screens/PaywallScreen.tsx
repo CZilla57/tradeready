@@ -138,7 +138,10 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
           <View style={styles.iconWrap}>
             <Ionicons name="hammer" size={36} color={colors.accent} />
           </View>
-          <Text style={styles.title}>TradeReady Pro</Text>
+          {/* User-facing name is just "TradeReady" — there is no free tier, so
+              "Pro" implied a split that doesn't exist (beta feedback). The
+              RevenueCat entitlement id stays 'TradeReady Pro' (internal). */}
+          <Text style={styles.title}>TradeReady</Text>
           <Text style={styles.subtitle}>Everything you need to run your trade business</Text>
         </View>
 
