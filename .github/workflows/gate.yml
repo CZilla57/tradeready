@@ -1,0 +1,33 @@
+# The verify gate (typecheck / tests / lint) that has always run manually
+# from the repo root — now also enforced on every push and PR so a red gate
+# can't land unnoticed. Same three legs, same green criteria (lint runs with
+# --max-warnings=0 via the package script).
+name: Verify gate
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test -- --ci
+
+      - name: Lint
+        run: npm run lint
