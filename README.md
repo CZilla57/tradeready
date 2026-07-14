@@ -120,6 +120,7 @@ utils/
   aiService.ts                   ← Groq AI integration (backend-proxied via Vercel)
   pricebookAI.ts                 ← Pricebook AI Assist (backend-proxied via Vercel)
   subscription.ts                ← RevenueCat subscription helpers
+  paywallCopy.ts                 ← Trial wording derived from the store's real intro offer
   recurringJobs.ts               ← Recurring job scheduling engine
   reviewRequest.ts               ← Customer review request helpers
   moneyUtils.ts                  ← Expense categories, date filters, date range math
@@ -197,6 +198,11 @@ context/
   ThemeContext.tsx                ← Dark/light mode context + toggle
   SubscriptionContext.tsx        ← RevenueCat subscription state
   SyncStatusContext.tsx          ← Sync queue status (pending count, last sync)
+
+backend/                         ← Vercel serverless functions (deployed separately)
+  api/                           ← Stripe Connect, payment links, AI proxies,
+                                   account deletion, subscription webhook
+  lib/guards.js                  ← Rate limiter + input caps shared by the AI endpoints
 ```
 
 ---
@@ -269,6 +275,10 @@ npm run test:watch    # watch mode — re-runs on file save
 | `__tests__/paymentLink.test.js` | Payment link URL builder |
 | `__tests__/moneyUtils.test.js` | Money utility functions |
 | `__tests__/UI.test.js` | Component smoke tests — Badge, Button, EmptyState, StatCard |
+| `__tests__/paywallCopy.test.js` | Paywall trial wording from the store's intro-offer data |
+| `__tests__/backendGuards.test.js` | Backend rate limiter + AI payload input caps |
+
+_(Table lists the core suites; `npm test` is the authoritative count — 38 suites as of 2026-07-13.)_
 
 **Tech notes:**
 
