@@ -9,6 +9,8 @@
 //   SUPABASE_URL
 //   SUPABASE_ANON_KEY
 
+const { createRateLimiter, validateChatPayload } = require('../lib/guards');
+
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -16,6 +18,10 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const GROQ_MODEL = 'llama-3.1-8b-instant';
 
 const ALLOWED_ORIGINS = ['https://tradeready.app'];
+
+// 20 chat turns per user per minute — far above human usage, low enough to
+// stop runaway loops from burning the server-side Groq key.
+const allowRequest = createRateLimiter({ limit: 20 });
 
 module.exports = async function handler(req, res) {
   const origin = req.headers['origin'];
@@ -44,9 +50,16 @@ module.exports = async function handler(req, res) {
     return res.status(401).json({ error: 'Invalid or expired session.' });
   }
 
+  const user = await userRes.json().catch(() => null);
+  const rateKey = (user && user.id) || req.headers['x-forwarded-for'] || 'anonymous';
+  if (!allowRequest(rateKey)) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a minute and try again.' });
+  }
+
   const { messages, systemPrompt } = req.body || {};
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: 'messages array is required.' });
+  const invalid = validateChatPayload(messages, systemPrompt);
+  if (invalid) {
+    return res.status(400).json({ error: invalid });
   }
 
   const chatMessages = [];

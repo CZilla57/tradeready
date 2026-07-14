@@ -9,6 +9,8 @@
 //   SUPABASE_URL
 //   SUPABASE_ANON_KEY
 
+const { createRateLimiter, validatePricebookPayload } = require("../lib/guards");
+
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -17,6 +19,10 @@ const ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 const ALLOWED_ORIGINS = ["https://tradeready.app"];
+
+// 10 suggestions per user per minute — pricebook entries are one-shot lookups;
+// this caps abuse of the server-side Anthropic key.
+const allowRequest = createRateLimiter({ limit: 10 });
 
 module.exports = async function handler(req, res) {
   const origin = req.headers["origin"];
@@ -43,11 +49,18 @@ module.exports = async function handler(req, res) {
     return res.status(401).json({ error: "Invalid or expired session." });
   }
 
-  const { serviceName, description, category, materials, laborHours, laborRate, trade, region } = req.body || {};
-
-  if (!serviceName) {
-    return res.status(400).json({ error: "serviceName is required." });
+  const user = await userRes.json().catch(() => null);
+  const rateKey = (user && user.id) || req.headers["x-forwarded-for"] || "anonymous";
+  if (!allowRequest(rateKey)) {
+    return res.status(429).json({ error: "Too many requests. Please wait a minute and try again." });
   }
+
+  const invalid = validatePricebookPayload(req.body);
+  if (invalid) {
+    return res.status(400).json({ error: invalid });
+  }
+
+  const { serviceName, description, category, materials, laborHours, laborRate, trade, region } = req.body || {};
 
   const prompt = buildPricingSuggestionPrompt({ serviceName, description, category, materials, laborHours, laborRate, trade, region });
 
