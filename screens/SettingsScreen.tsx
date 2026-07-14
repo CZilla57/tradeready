@@ -18,6 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
+import { composeEmail } from "../utils/messaging";
 import { syncIfOnline } from "../utils/sync";
 import { supabase } from "../utils/supabase";
 import { resetUser, reportError } from "../utils/analytics";
@@ -36,6 +37,8 @@ import type { MainTabParamList } from "../types/navigation";
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
 const VERCEL_URL  = Constants.expoConfig?.extra?.backendUrl        ?? "";
+const SUPPORT_EMAIL = "support@tradeready.app";
+const APP_VERSION   = Constants.expoConfig?.version ?? "1.0.0";
 
 interface StripeStatus {
   connected: boolean;
@@ -572,6 +575,31 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
 
         <Divider />
 
+        <SectionHeader title="Help & Support" />
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.listRow}
+            onPress={() =>
+              composeEmail({
+                recipients: [SUPPORT_EMAIL],
+                subject: `TradeReady support (v${APP_VERSION}, ${Platform.OS})`,
+                body: "",
+              })
+            }
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Contact support by email"
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.listRowText}>Contact Support</Text>
+              <Text style={styles.listRowSub}>{SUPPORT_EMAIL}</Text>
+            </View>
+            <Text style={styles.listRowChevron}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Divider />
+
         <SectionHeader title="Legal" />
         <View style={styles.card}>
           <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(PRIVACY_URL)} activeOpacity={0.7}>
@@ -651,6 +679,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     tradeLabelActive: { color: colors.accent, fontWeight: "600" },
     listRow: { flexDirection: "row", alignItems: "center", paddingVertical: 13 },
     listRowText: { flex: 1, fontSize: fontSize.md, color: colors.textPrimary },
+    listRowSub: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
     listRowChevron: { fontSize: 20, color: colors.textMuted },
     listRowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
     subStatusRow: { flexDirection: "row", alignItems: "center" },
