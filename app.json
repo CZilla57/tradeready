@@ -13,7 +13,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.tradeready.app",
+      "bundleIdentifier": "com.gettradereadyapp.tradeready",
       "buildNumber": "1",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -24,7 +24,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0c335e"
       },
-      "package": "com.tradeready.app",
+      "package": "com.gettradereadyapp.tradeready",
       "versionCode": 2
     },
     "plugins": [
