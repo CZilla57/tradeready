@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { supabase } from '../utils/supabase';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../utils/theme';
@@ -36,6 +37,7 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   // Signup-confirmation resend: which address is waiting on a confirm link,
   // when we last (re)sent one, and a 1 Hz clock for the countdown label.
   const [pendingConfirmEmail, setPendingConfirmEmail] = useState<string | null>(null);
@@ -174,20 +176,41 @@ export default function AuthScreen() {
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
+            textContentType="emailAddress"
+            autoComplete="email"
           />
 
           {mode !== 'forgot' && (
             <>
               <Text style={styles.label}>Password</Text>
-              <TextInput
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
-                placeholderTextColor={colors.textMuted}
-                secureTextEntry
-                accessibilityLabel="Password"
-              />
+              <View style={styles.passwordWrap}>
+                <TextInput
+                  style={[styles.input, styles.inputWithToggle]}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
+                  placeholderTextColor={colors.textMuted}
+                  secureTextEntry={!showPassword}
+                  accessibilityLabel="Password"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType={mode === 'signup' ? 'newPassword' : 'password'}
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                />
+                <TouchableOpacity
+                  style={styles.showToggle}
+                  onPress={() => setShowPassword(v => !v)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Ionicons
+                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                    size={20}
+                    color={colors.textMuted}
+                  />
+                </TouchableOpacity>
+              </View>
               {mode === 'login' && (
                 <TouchableOpacity style={styles.toggle} onPress={goForgot} accessibilityRole="button" accessibilityLabel="Forgot password?">
                   <Text style={styles.toggleText}>
@@ -309,6 +332,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: 12,
       fontSize: fontSize.md,
       color: colors.textPrimary,
+    },
+    passwordWrap: { justifyContent: 'center' },
+    inputWithToggle: { paddingRight: 44 },
+    showToggle: {
+      position: 'absolute',
+      right: 0,
+      height: '100%',
+      justifyContent: 'center',
+      paddingHorizontal: spacing.sm,
     },
     submitBtn: {
       backgroundColor: colors.accent,
