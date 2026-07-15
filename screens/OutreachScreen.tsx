@@ -15,6 +15,7 @@ import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import { getStatus, generateOutreachMessage, resolvePaymentLink, fetchPaymentLink, getProviderKey } from "../utils/invoiceHelpers";
 import { formatMoney } from "../utils/format";
+import { supabase } from "../utils/supabase";
 import { Badge, Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -58,6 +59,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
   const [frequency, setFrequency] = useState("Bi-weekly");
   const [copied, setCopied] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [autoReminder, setAutoReminder] = useState<{ sent_at: string; status: string } | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -73,6 +75,27 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
     }
     load();
   }, [invoiceId, navigation]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("auto_reminder_log")
+          .select("sent_at,status")
+          .eq("invoice_id", invoiceId)
+          .maybeSingle();
+        if (!cancelled) {
+          setAutoReminder((data as { sent_at: string; status: string } | null) ?? null);
+        }
+      } catch {
+        // best-effort — table may not exist yet; just don't show the note
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [invoiceId]);
 
   async function handleGenerateLink(providerOverride?: string, explicit: boolean = true) {
     const provider = providerOverride ?? selectedProvider;
@@ -188,6 +211,11 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
             <View style={{ flex: 1 }}>
               <Text style={styles.customerName}>{invoice.customer}</Text>
               <Text style={styles.invoiceMeta}>{invoice.number} · {formatMoney(invoice.amount)}</Text>
+              {autoReminder?.status === "sent" && (
+                <Text style={styles.autoReminderNote}>
+                  ✓ Auto-reminder emailed {new Date(autoReminder.sent_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                </Text>
+              )}
             </View>
             <Badge label={status.label} color={status.color} />
           </View>
@@ -359,6 +387,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     summaryRow: { flexDirection: "row", alignItems: "flex-start" },
     customerName: { fontSize: fontSize.lg, fontWeight: "600", color: colors.textPrimary },
     invoiceMeta: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    autoReminderNote: { fontSize: fontSize.xs, color: colors.success, marginTop: 4, fontWeight: "500" },
     linkBadge: {
       marginTop: spacing.sm,
       backgroundColor: colors.successBg,
