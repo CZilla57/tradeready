@@ -66,6 +66,16 @@ describe("selectInvoicesToRemind", () => {
     expect(out).toEqual([]);
   });
 
+  test("does not throw on a malformed (null) rule entry", () => {
+    // A null/undefined rule element must not throw and abort the whole cron run;
+    // it is treated as non-finite and the invoice is simply skipped.
+    expect(() =>
+      selectInvoicesToRemind({ invoices: [inv()], settings: { ...settings, rules: [null] }, alreadySentInvoiceIds: [], today: TODAY })
+    ).not.toThrow();
+    const out = selectInvoicesToRemind({ invoices: [inv()], settings: { ...settings, rules: [null] }, alreadySentInvoiceIds: [], today: TODAY });
+    expect(out).toEqual([]);
+  });
+
   test("excludes paid invoices", () => {
     const out = selectInvoicesToRemind({ invoices: [inv({ paid: true })], settings, alreadySentInvoiceIds: [], today: TODAY });
     expect(out).toEqual([]);

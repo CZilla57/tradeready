@@ -8,7 +8,10 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, tod
   if (!settings || !settings.autoSendEmailEnabled) return [];
   const rules = Array.isArray(settings.rules) ? settings.rules : [];
   if (rules.length === 0) return [];
-  const earliest = Math.min(...rules.map((r) => Number(r.days)));
+  // r?.days (not r.days) so a null/malformed rule entry yields NaN and is
+  // rejected by the isFinite guard below, rather than throwing and aborting the
+  // whole cron run for every user.
+  const earliest = Math.min(...rules.map((r) => Number(r?.days)));
   if (!Number.isFinite(earliest)) return [];
 
   const sent = new Set(alreadySentInvoiceIds || []);
