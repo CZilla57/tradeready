@@ -5,5 +5,8 @@
       "memory": 256,
       "maxDuration": 10
     }
-  }
+  },
+  "crons": [
+    { "path": "/api/cron/send-reminders", "schedule": "0 15 * * *" }
+  ]
 }
