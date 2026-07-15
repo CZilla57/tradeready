@@ -13,7 +13,7 @@ import {
   loadJobs, saveJobs,
   loadCustomers, saveCustomers,
 } from "./collections";
-import type { Customer, CustomerNotes } from "../../types/models";
+import type { Customer, CustomerNotes, Invoice } from "../../types/models";
 
 // --- Customer Notes (legacy) ---
 // Notes now live on the customer record's `notes` field. The old flat
@@ -129,6 +129,39 @@ export async function updateCustomerNotes(
   if (!rec) return null;
   await saveCustomers(next.map((c) => (c.id === rec.id ? { ...c, notes: note } : c)));
   return rec.id;
+}
+
+// Backfill blank invoice contact fields (email/phone) from the linked customer —
+// the customer→invoice half of the denormalization sync. Pure, no I/O. Mirrors
+// upsertCustomerInList's "backfill blank, never clobber" rule. Matches the
+// invoice's customer by customerId first, then by normalized name.
+export function backfillInvoiceContacts(
+  invoices: Invoice[],
+  customers: Customer[],
+): { invoices: Invoice[]; changed: boolean } {
+  const byId = new Map(customers.map((c) => [c.id, c]));
+  const byName = new Map<string, Customer>();
+  for (const c of customers) {
+    const key = normalizeName(c.name);
+    if (key && !byName.has(key)) byName.set(key, c);
+  }
+
+  let changed = false;
+  const next = invoices.map((inv) => {
+    const cust: Customer | undefined =
+      (inv.customerId ? byId.get(inv.customerId) : undefined) ||
+      byName.get(normalizeName(inv.customer));
+    if (!cust) return inv;
+
+    const email = !inv.email && cust.email ? cust.email : inv.email;
+    const phone = !inv.phone && cust.phone ? cust.phone : inv.phone;
+    if (email === inv.email && phone === inv.phone) return inv;
+
+    changed = true;
+    return { ...inv, email, phone };
+  });
+
+  return { invoices: changed ? next : invoices, changed };
 }
 
 export interface MigrationResult {
