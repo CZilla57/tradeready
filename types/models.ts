@@ -316,6 +316,13 @@ export interface Settings {
    */
   autoOutreachEnabled: boolean;
 
+  /**
+   * When true, the backend automatically EMAILS a one-and-done payment reminder
+   * for an overdue invoice once it passes the earliest reminder age (Phase 2 —
+   * Vercel Cron + Resend). Opt-in; independent of autoOutreachEnabled.
+   */
+  autoSendEmailEnabled: boolean;
+
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;
   groqKey: string;

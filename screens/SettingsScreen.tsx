@@ -525,6 +525,21 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           </View>
         </View>
 
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Automatically email overdue reminders</Text>
+            <Switch
+              value={!!s.autoSendEmailEnabled}
+              onValueChange={(v) => update("autoSendEmailEnabled", v)}
+              trackColor={{ true: colors.accent }}
+              accessibilityLabel="Automatically email overdue reminders"
+            />
+          </View>
+          <Text style={styles.keyNote}>
+            When on, TradeReady emails the customer a payment reminder once an invoice passes your earliest reminder age — no tap needed. Sent under your business name; replies come to your email.
+          </Text>
+        </View>
+
         <Divider />
 
         <SectionHeader title="Review requests" />
