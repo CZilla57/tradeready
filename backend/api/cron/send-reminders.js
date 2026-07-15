@@ -29,6 +29,22 @@ function sbFetch(path, init = {}) {
   });
 }
 
+// Best-effort status write for an already-claimed log row. NEVER throws — a
+// failure to record status must not flip a delivered email to 'failed', abort
+// the batch, or double-count. A missed status write just leaves the row at its
+// prior value (logged for investigation).
+async function markLog(logId, patch) {
+  try {
+    const r = await sbFetch(`auto_reminder_log?id=eq.${logId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) console.error("[send-reminders] status write non-2xx", logId, r.status);
+  } catch (e) {
+    console.error("[send-reminders] status write threw", logId, e.message);
+  }
+}
+
 module.exports = async function handler(req, res) {
   // Fail closed with a log if the secret is unset (misconfiguration); 401 on a
   // wrong/missing header — mirrors backend/api/subscription/webhook.js.
@@ -78,7 +94,7 @@ module.exports = async function handler(req, res) {
 
       for (const invoice of toSend) {
         scanned++;
-        // Per-invoice isolation: a network throw on any call below must not
+        // Per-invoice isolation: a network throw on the claim below must not
         // abort the whole daily batch.
         try {
           // CLAIM: insert first as 'pending'. A conflict on (user_id, invoice_id)
@@ -99,7 +115,7 @@ module.exports = async function handler(req, res) {
           if (!Array.isArray(claimed) || claimed.length === 0) continue; // already claimed
           const logId = claimed[0].id;
 
-          // SEND, then mark the claimed row 'sent' or 'failed' (no retry — one-and-done).
+          // SEND, then record the outcome via best-effort markLog (never throws).
           try {
             const email = buildReminderEmail({ invoice, settings, today });
             const r = await fetch("https://api.resend.com/emails", {
@@ -109,17 +125,11 @@ module.exports = async function handler(req, res) {
             });
             if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
             sent++;
-            await sbFetch(`auto_reminder_log?id=eq.${logId}`, {
-              method: "PATCH",
-              body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
-            });
+            await markLog(logId, { status: "sent", sent_at: new Date().toISOString() });
           } catch (sendErr) {
             failed++;
             console.error("[send-reminders] send failed", invoice.id, sendErr.message);
-            await sbFetch(`auto_reminder_log?id=eq.${logId}`, {
-              method: "PATCH",
-              body: JSON.stringify({ status: "failed", error: String(sendErr.message).slice(0, 500) }),
-            });
+            await markLog(logId, { status: "failed", error: String(sendErr.message).slice(0, 500) });
           }
         } catch (invErr) {
           failed++;
