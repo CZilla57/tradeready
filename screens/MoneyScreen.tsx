@@ -243,6 +243,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
+          {/* ── Money in & out (income + expenses) ──────────────────────── */}
           <SummaryCard
             income={filteredIncome}
             expenses={filteredExpenseTotal}
@@ -250,6 +251,20 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
             prevExpenses={prevFilteredExpenseTotal}
             label={activeFilterLabel}
           />
+          <MonthlyChart invoices={invoices} expenses={expenses} />
+          <SeasonalTrendsCard invoices={invoices} />
+          <ExpenseCategoryCard
+            expensesByCategory={expensesByCategory}
+            filteredExpenseTotal={filteredExpenseTotal}
+          />
+          <ExpenseTrendsCard expenses={expenses} />
+
+          {/* ── Customers & invoicing (derived from paid invoices) ──────── */}
+          <TopCustomersCard invoices={invoices} start={start} end={end} />
+          <CustomerMixCard invoices={invoices} start={start} end={end} />
+          <InvoiceAgingCard invoices={invoices} />
+
+          {/* ── Job pipeline (needs open jobs / unpaid invoices) ────────── */}
           <ReceivablesCard invoices={invoices} jobs={jobs} />
           <ConversionFunnelCard jobs={jobs} />
           <RevenueForecastCard jobs={jobs} />
@@ -260,19 +275,11 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
             prevStart={prevRange?.start ?? null}
             prevEnd={prevRange?.end ?? null}
           />
+          <RevenueByTypeCard jobs={jobs} />
+
+          {/* ── Tools ───────────────────────────────────────────────────── */}
           <MileageCard start={start} end={end} onPress={handleMileagePress} />
           <PricebookCard onPress={handlePricebookPress} />
-          <MonthlyChart invoices={invoices} expenses={expenses} />
-          <SeasonalTrendsCard invoices={invoices} />
-          <ExpenseCategoryCard
-            expensesByCategory={expensesByCategory}
-            filteredExpenseTotal={filteredExpenseTotal}
-          />
-          <ExpenseTrendsCard expenses={expenses} />
-          <TopCustomersCard invoices={invoices} start={start} end={end} />
-          <CustomerMixCard invoices={invoices} start={start} end={end} />
-          <RevenueByTypeCard jobs={jobs} />
-          <InvoiceAgingCard invoices={invoices} />
 
           {filteredIncome === 0 && filteredExpenseTotal === 0 && (
             <View style={styles.emptyState}>

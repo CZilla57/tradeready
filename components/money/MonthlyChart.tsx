@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
-import { getLast6MonthLabels } from '../../utils/moneyUtils';
+import { getLast6MonthLabels, parseLocalDate } from '../../utils/moneyUtils';
 import type { Invoice, Expense } from '../../types/models';
 
 const BAR_MAX_HEIGHT = 80;
@@ -23,14 +23,14 @@ export const MonthlyChart = React.memo(function MonthlyChart({ invoices, expense
         .filter(inv => {
           const dateStr = inv.paidAt || inv.due;
           if (!inv.paid || !dateStr) return false;
-          const d = new Date(dateStr);
+          const d = parseLocalDate(dateStr);
           return d.getFullYear() === year && d.getMonth() === month;
         })
         .reduce((sum, inv) => sum + (parseFloat(String(inv.amount)) || 0), 0);
 
       const monthExpenses = expenses
         .filter(exp => {
-          const d = new Date(exp.date);
+          const d = parseLocalDate(exp.date);
           return d.getFullYear() === year && d.getMonth() === month;
         })
         .reduce((sum, exp) => sum + (parseFloat(String(exp.amount)) || 0), 0);

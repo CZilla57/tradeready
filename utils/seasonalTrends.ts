@@ -1,4 +1,5 @@
 import type { Invoice } from "../types/models";
+import { parseLocalDate } from "./moneyUtils";
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -23,7 +24,7 @@ function incomeInMonth(invoices: Invoice[], year: number, month: number): number
     if (!inv.paid) continue;
     const dateStr = inv.paidAt ?? inv.due;
     if (!dateStr) continue;
-    const d = new Date(dateStr);
+    const d = parseLocalDate(dateStr);
     if (d.getFullYear() === year && d.getMonth() === month) {
       total += inv.amount || 0;
     }

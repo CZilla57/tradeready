@@ -94,7 +94,7 @@ export function getPreviousRange(filterId: string): DateRange | null {
  * sides must be local for the comparison to be sound. Strings that carry a time
  * component fall through to the platform parser (already local when no `Z`).
  */
-function parseLocalDate(dateString: string): Date {
+export function parseLocalDate(dateString: string): Date {
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
   if (dateOnly) {
     return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
