@@ -309,6 +309,12 @@ export interface Settings {
 
   // Notifications
   rules: ReminderRule[];
+  /**
+   * When true, overdue-invoice notifications become actionable: tapping one
+   * opens a pre-filled outreach message (App.tsx routes to Invoices → Outreach).
+   * Opt-in; absent on settings persisted before this field shipped → treated as false.
+   */
+  autoOutreachEnabled: boolean;
 
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;
