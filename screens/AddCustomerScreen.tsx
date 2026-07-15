@@ -203,11 +203,17 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
       // Adding/fixing a customer's contact info should reach their existing
       // invoices' denormalized email/phone (used by OutreachScreen + the Phase 2
       // auto-email cron). Blank-only, never clobbers — see utils/storage/customers.ts.
-      // No-op for a brand-new customer with no invoices yet.
-      const allInvoices = await loadInvoices();
-      const savedCustomers = await loadCustomers();
-      const { invoices: fixedInvoices, changed } = backfillInvoiceContacts(allInvoices, savedCustomers);
-      if (changed) await saveInvoices(fixedInvoices);
+      // No-op for a brand-new customer with no invoices yet. Best-effort: the
+      // customer is already saved, so a backfill failure must not surface as a
+      // customer-save error (which would skip goBack and mislead the user).
+      try {
+        const allInvoices = await loadInvoices();
+        const savedCustomers = await loadCustomers();
+        const { invoices: fixedInvoices, changed } = backfillInvoiceContacts(allInvoices, savedCustomers);
+        if (changed) await saveInvoices(fixedInvoices);
+      } catch (backfillErr: unknown) {
+        reportError(backfillErr, { context: 'backfillInvoiceContactsOnSave' });
+      }
 
       if (!isEditing || !hasRecord) {
         track('customer_created');
