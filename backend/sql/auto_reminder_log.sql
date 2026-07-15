@@ -7,7 +7,7 @@ create table if not exists public.auto_reminder_log (
   invoice_id text not null,
   to_email   text,
   sent_at    timestamptz not null default now(),
-  status     text not null default 'sent',   -- 'sent' | 'failed'
+  status     text not null default 'pending', -- 'pending' | 'sent' | 'failed'
   error      text,
   unique (user_id, invoice_id)
 );

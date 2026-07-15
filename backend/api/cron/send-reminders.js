@@ -30,7 +30,13 @@ function sbFetch(path, init = {}) {
 }
 
 module.exports = async function handler(req, res) {
-  if (!CRON_SECRET || req.headers["authorization"] !== `Bearer ${CRON_SECRET}`) {
+  // Fail closed with a log if the secret is unset (misconfiguration); 401 on a
+  // wrong/missing header — mirrors backend/api/subscription/webhook.js.
+  if (!CRON_SECRET) {
+    console.error("[send-reminders] CRON_SECRET not configured");
+    return res.status(500).json({ error: "Cron not configured" });
+  }
+  if (req.headers["authorization"] !== `Bearer ${CRON_SECRET}`) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !RESEND_API_KEY) {
@@ -72,34 +78,52 @@ module.exports = async function handler(req, res) {
 
       for (const invoice of toSend) {
         scanned++;
-
-        // CLAIM: insert-first; a conflict on (user_id, invoice_id) returns [] so we skip.
-        const claimRes = await sbFetch("auto_reminder_log?on_conflict=user_id,invoice_id", {
-          method: "POST",
-          headers: { Prefer: "return=representation,resolution=ignore-duplicates" },
-          body: JSON.stringify({ user_id: userId, invoice_id: invoice.id, to_email: invoice.email, status: "sent" }),
-        });
-        const claimed = await claimRes.json().catch(() => []);
-        if (!Array.isArray(claimed) || claimed.length === 0) continue;
-        const logId = claimed[0].id;
-
-        // SEND, then RECORD failure on the claimed row (no retry — one-and-done).
+        // Per-invoice isolation: a network throw on any call below must not
+        // abort the whole daily batch.
         try {
-          const email = buildReminderEmail({ invoice, settings, today });
-          const r = await fetch("https://api.resend.com/emails", {
+          // CLAIM: insert first as 'pending'. A conflict on (user_id, invoice_id)
+          // returns [] → already handled by a prior run (one-and-done), skip.
+          const claimRes = await sbFetch("auto_reminder_log?on_conflict=user_id,invoice_id", {
             method: "POST",
-            headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify(email),
+            headers: { Prefer: "return=representation,resolution=ignore-duplicates" },
+            body: JSON.stringify({ user_id: userId, invoice_id: invoice.id, to_email: invoice.email, status: "pending" }),
           });
-          if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
-          sent++;
-        } catch (err) {
+          if (!claimRes.ok) {
+            // e.g. table missing (migration not applied) or a permissions error —
+            // surface it instead of silently treating it as a duplicate.
+            failed++;
+            console.error("[send-reminders] claim failed", invoice.id, claimRes.status, await claimRes.text());
+            continue;
+          }
+          const claimed = await claimRes.json().catch(() => []);
+          if (!Array.isArray(claimed) || claimed.length === 0) continue; // already claimed
+          const logId = claimed[0].id;
+
+          // SEND, then mark the claimed row 'sent' or 'failed' (no retry — one-and-done).
+          try {
+            const email = buildReminderEmail({ invoice, settings, today });
+            const r = await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify(email),
+            });
+            if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
+            sent++;
+            await sbFetch(`auto_reminder_log?id=eq.${logId}`, {
+              method: "PATCH",
+              body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
+            });
+          } catch (sendErr) {
+            failed++;
+            console.error("[send-reminders] send failed", invoice.id, sendErr.message);
+            await sbFetch(`auto_reminder_log?id=eq.${logId}`, {
+              method: "PATCH",
+              body: JSON.stringify({ status: "failed", error: String(sendErr.message).slice(0, 500) }),
+            });
+          }
+        } catch (invErr) {
           failed++;
-          console.error("[send-reminders] send failed", invoice.id, err.message);
-          await sbFetch(`auto_reminder_log?id=eq.${logId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ status: "failed", error: String(err.message).slice(0, 500) }),
-          });
+          console.error("[send-reminders] invoice error", invoice.id, invErr.message);
         }
       }
     }
