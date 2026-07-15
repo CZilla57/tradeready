@@ -13,7 +13,7 @@ import {
   loadJobs, saveJobs,
   loadCustomers, saveCustomers,
 } from "./collections";
-import type { Customer, CustomerNotes } from "../../types/models";
+import type { Customer, CustomerNotes, Invoice } from "../../types/models";
 
 // --- Customer Notes (legacy) ---
 // Notes now live on the customer record's `notes` field. The old flat
@@ -131,6 +131,39 @@ export async function updateCustomerNotes(
   return rec.id;
 }
 
+// Backfill blank invoice contact fields (email/phone) from the linked customer —
+// the customer→invoice half of the denormalization sync. Pure, no I/O. Mirrors
+// upsertCustomerInList's "backfill blank, never clobber" rule. Matches the
+// invoice's customer by customerId first, then by normalized name.
+export function backfillInvoiceContacts(
+  invoices: Invoice[],
+  customers: Customer[],
+): { invoices: Invoice[]; changed: boolean } {
+  const byId = new Map(customers.map((c) => [c.id, c]));
+  const byName = new Map<string, Customer>();
+  for (const c of customers) {
+    const key = normalizeName(c.name);
+    if (key && !byName.has(key)) byName.set(key, c);
+  }
+
+  let changed = false;
+  const next = invoices.map((inv) => {
+    const cust: Customer | undefined =
+      (inv.customerId ? byId.get(inv.customerId) : undefined) ||
+      byName.get(normalizeName(inv.customer));
+    if (!cust) return inv;
+
+    const email = !inv.email && cust.email ? cust.email : inv.email;
+    const phone = !inv.phone && cust.phone ? cust.phone : inv.phone;
+    if (email === inv.email && phone === inv.phone) return inv;
+
+    changed = true;
+    return { ...inv, email, phone };
+  });
+
+  return { invoices: changed ? next : invoices, changed };
+}
+
 export interface MigrationResult {
   customersChanged: boolean;
   invoicesChanged: boolean;
@@ -154,7 +187,7 @@ export async function migrateCustomerIdentity(): Promise<MigrationResult> {
 
   // 1. Stamp customerId on invoices, creating records for invoice-only customers.
   let invoicesChanged = false;
-  const nextInvoices = invoices.map((inv) => {
+  let nextInvoices = invoices.map((inv) => {
     if (inv.customerId || !inv.customer?.trim()) return inv;
     const { customer, customers: c2, changed } = upsertCustomerInList(nextCustomers, {
       name: inv.customer,
@@ -190,6 +223,16 @@ export async function migrateCustomerIdentity(): Promise<MigrationResult> {
       if (note && note.trim()) { customersChanged = true; return { ...c, notes: note }; }
       return c;
     });
+  }
+
+  // 4. Backfill blank invoice contact fields (email/phone) from the linked
+  //    customer — the customer→invoice direction steps 1–3 don't cover (step 1
+  //    only flows invoice→customer, then freezes the invoice once it has a
+  //    customerId). Runs after customerId stamping so invoices are linked.
+  const backfilled = backfillInvoiceContacts(nextInvoices, nextCustomers);
+  if (backfilled.changed) {
+    nextInvoices = backfilled.invoices;
+    invoicesChanged = true;
   }
 
   if (customersChanged) await saveCustomers(nextCustomers);

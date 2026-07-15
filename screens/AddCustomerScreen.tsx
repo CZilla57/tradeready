@@ -18,7 +18,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadCustomers, saveCustomers } from "../utils/storage";
+import { loadCustomers, saveCustomers, loadInvoices, saveInvoices, backfillInvoiceContacts } from "../utils/storage";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
@@ -198,6 +198,21 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
           createdAt: new Date().toISOString(),
         };
         await saveCustomers([...existing, newCustomer]);
+      }
+
+      // Adding/fixing a customer's contact info should reach their existing
+      // invoices' denormalized email/phone (used by OutreachScreen + the Phase 2
+      // auto-email cron). Blank-only, never clobbers — see utils/storage/customers.ts.
+      // No-op for a brand-new customer with no invoices yet. Best-effort: the
+      // customer is already saved, so a backfill failure must not surface as a
+      // customer-save error (which would skip goBack and mislead the user).
+      try {
+        const allInvoices = await loadInvoices();
+        const savedCustomers = await loadCustomers();
+        const { invoices: fixedInvoices, changed } = backfillInvoiceContacts(allInvoices, savedCustomers);
+        if (changed) await saveInvoices(fixedInvoices);
+      } catch (backfillErr: unknown) {
+        reportError(backfillErr, { context: 'backfillInvoiceContactsOnSave' });
       }
 
       if (!isEditing || !hasRecord) {
