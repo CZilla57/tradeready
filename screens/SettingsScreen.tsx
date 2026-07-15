@@ -510,6 +510,21 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           <Text style={styles.addRuleBtnText}>+ Add rule</Text>
         </TouchableOpacity>
 
+        <Text style={[styles.ruleSubtitle, { marginTop: spacing.sm }]}>
+          Turn those reminders into one-tap outreach: tapping a reminder opens a ready-to-send message for that invoice.
+        </Text>
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Draft a reminder I can send with one tap</Text>
+            <Switch
+              value={!!s.autoOutreachEnabled}
+              onValueChange={(v) => update("autoOutreachEnabled", v)}
+              trackColor={{ true: colors.accent }}
+              accessibilityLabel="Draft a reminder I can send with one tap"
+            />
+          </View>
+        </View>
+
         <Divider />
 
         <SectionHeader title="Review requests" />
