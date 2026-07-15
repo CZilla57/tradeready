@@ -18,12 +18,17 @@ import { composeEmail } from "../utils/messaging";
 import {
   calculatePriceRange,
   getSanityWarnings,
-  buildEstimatePrompt,
   breakEvenPrice,
   buildEstimateInput,
 } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { generateOneShot } from "../utils/oneShotAI";
+import {
+  buildEstimateDocument,
+  buildScopePrompt,
+  sanitizeScope,
+  cannedScope,
+} from "../utils/estimateDocument";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook } from "../utils/storage";
 import { Button, Card, Divider } from "../components/UI";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
@@ -223,22 +228,35 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     setGenerating(true);
     setTab("estimate");
 
-    const prompt = buildEstimatePrompt({
-      job: { ...job, laborHours: params.laborHours, laborRate: params.laborRate, materials, materialMarkup: params.materialMarkup },
-      customer: customer || { name: job.customerName, address: job.address },
-      breakdown,
-      settings,
-      range,
+    // The document is assembled deterministically — every number comes from
+    // the pricing engine (letting the model write the whole thing produced
+    // wrong math and cheap formatting; beta finding 2026-07-14). AI writes
+    // only the scope paragraph, and a canned one keeps the document complete
+    // when AI is unavailable.
+    const fallbackScope = cannedScope({ jobTitle: job.title, description: job.description });
+    const aiScope = await generateOneShot({
+      prompt: buildScopePrompt({ jobTitle: job.title, description: job.description, trade: settings.trade }),
+      apiKey: settings?.anthropicKey,
+      max_tokens: 200,
+      fallback: () => "",
     });
 
-    const text = await generateOneShot({
-      prompt,
-      apiKey: settings?.anthropicKey,
-      max_tokens: 1500,
-      fallback: () =>
-        "Couldn't generate an estimate automatically. Add your Anthropic API key in Settings and check your connection, then tap Regenerate.",
-    });
-    setGeneratedEstimate(text);
+    setGeneratedEstimate(
+      buildEstimateDocument({
+        businessName: settings.businessName,
+        contactName: settings.contactName,
+        phone: settings.phone,
+        email: settings.email,
+        customerName: customer?.name || job.customerName,
+        customerAddress: customer?.address || job.address,
+        jobTitle: job.title,
+        laborHours: params.laborHours,
+        laborRate: params.laborRate,
+        materialsCount: materials.length,
+        breakdown,
+        scope: sanitizeScope(aiScope, fallbackScope),
+      })
+    );
     setGenerating(false);
   }
 

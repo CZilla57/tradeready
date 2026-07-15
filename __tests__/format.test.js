@@ -39,6 +39,15 @@ describe("formatQuote", () => {
     expect(formatQuote(1234.56)).toBe("$1,234.56");
   });
 
+  test("cents always render as a full pair — never $87.5", () => {
+    expect(formatQuote(87.5)).toBe("$87.50");
+    expect(formatQuote(1537.5)).toBe("$1,537.50");
+  });
+
+  test("float dust on a round amount stays round", () => {
+    expect(formatQuote(599.9999999999)).toBe("$600");
+  });
+
   test("zero", () => {
     expect(formatQuote(0)).toBe("$0");
   });

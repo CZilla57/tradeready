@@ -35,10 +35,16 @@ export function formatMoney(amount: number): string {
  *   formatQuote(-500)     -> "-$500"
  */
 export function formatQuote(amount: number): string {
-  return (Number(amount) || 0).toLocaleString("en-US", {
+  // Round to cents first so float dust doesn't count as "has cents", then
+  // render whole dollars or a FULL cent pair. min:0/max:2 alone produced
+  // "$87.5" (beta finding 2026-07-14) — the doc above always promised
+  // "$2,499.50"-style output.
+  const cents = Math.round((Number(amount) || 0) * 100) / 100;
+  const hasCents = !Number.isInteger(cents);
+  return cents.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 0,
+    minimumFractionDigits: hasCents ? 2 : 0,
     maximumFractionDigits: 2,
   });
 }
