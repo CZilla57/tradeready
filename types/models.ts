@@ -172,6 +172,12 @@ export interface Invoice {
   number: string;
   amount: number;
   due: DateString;
+  /**
+   * Denormalized snapshot of the customer's contact info at creation. Blank
+   * fields are backfilled from the linked customer by
+   * backfillInvoiceContacts (customers.ts) — via migrateCustomerIdentity on
+   * sign-in and on customer save. Non-blank values are never overwritten.
+   */
   email: string;
   phone: string;
   desc: string;
