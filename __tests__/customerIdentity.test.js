@@ -187,4 +187,33 @@ describe("migrateCustomerIdentity", () => {
     const [job] = await loadJobs();
     expect(inv.customerId).toBe(job.customerId);
   });
+
+  test("backfills blank invoice contact fields from the linked customer", async () => {
+    seed({
+      customers: [{ id: "c1", name: "Jane Smith", email: "jane@x.com", phone: "555-1234", address: "", notes: "" }],
+      invoices: [{ id: "i1", customerId: "c1", customer: "Jane Smith", email: "", phone: "", amount: 100, paid: false }],
+      jobs: [],
+      customerNotes: {},
+    });
+
+    const result = await migrateCustomerIdentity();
+    expect(result.invoicesChanged).toBe(true);
+
+    const [inv] = await loadInvoices();
+    expect(inv.email).toBe("jane@x.com");
+    expect(inv.phone).toBe("555-1234");
+  });
+
+  test("invoice-contact backfill is idempotent on a second run", async () => {
+    seed({
+      customers: [{ id: "c1", name: "Jane Smith", email: "jane@x.com", phone: "555-1234", address: "", notes: "" }],
+      invoices: [{ id: "i1", customerId: "c1", customer: "Jane Smith", email: "", phone: "", amount: 100, paid: false }],
+      jobs: [],
+      customerNotes: {},
+    });
+
+    await migrateCustomerIdentity();
+    const second = await migrateCustomerIdentity();
+    expect(second.invoicesChanged).toBe(false);
+  });
 });

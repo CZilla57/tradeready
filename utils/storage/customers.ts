@@ -187,7 +187,7 @@ export async function migrateCustomerIdentity(): Promise<MigrationResult> {
 
   // 1. Stamp customerId on invoices, creating records for invoice-only customers.
   let invoicesChanged = false;
-  const nextInvoices = invoices.map((inv) => {
+  let nextInvoices = invoices.map((inv) => {
     if (inv.customerId || !inv.customer?.trim()) return inv;
     const { customer, customers: c2, changed } = upsertCustomerInList(nextCustomers, {
       name: inv.customer,
@@ -223,6 +223,16 @@ export async function migrateCustomerIdentity(): Promise<MigrationResult> {
       if (note && note.trim()) { customersChanged = true; return { ...c, notes: note }; }
       return c;
     });
+  }
+
+  // 4. Backfill blank invoice contact fields (email/phone) from the linked
+  //    customer — the customer→invoice direction steps 1–3 don't cover (step 1
+  //    only flows invoice→customer, then freezes the invoice once it has a
+  //    customerId). Runs after customerId stamping so invoices are linked.
+  const backfilled = backfillInvoiceContacts(nextInvoices, nextCustomers);
+  if (backfilled.changed) {
+    nextInvoices = backfilled.invoices;
+    invoicesChanged = true;
   }
 
   if (customersChanged) await saveCustomers(nextCustomers);
