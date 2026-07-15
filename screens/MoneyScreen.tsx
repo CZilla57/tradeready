@@ -185,30 +185,32 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
     <SafeAreaView style={styles.container} edges={['bottom']}>
 
       {/* ── Date Filter Chips ─────────────────────────────────────────────── */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScroll}
-        contentContainerStyle={styles.filterScrollContent}
-      >
-        {DATE_FILTERS.map((filter) => (
-          <TouchableOpacity
-            key={filter.id}
-            style={[styles.filterChip, activeFilter === filter.id && styles.filterChipActive]}
-            onPress={() => setActiveFilter(filter.id)}
-            accessibilityRole="button"
-            accessibilityLabel={filter.label}
-            accessibilityState={{ selected: activeFilter === filter.id }}
-          >
-            <Text style={[
-              styles.filterChipText,
-              activeFilter === filter.id && styles.filterChipTextActive,
-            ]}>
-              {filter.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <View style={styles.filterBar}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterScroll}
+          contentContainerStyle={styles.filterScrollContent}
+        >
+          {DATE_FILTERS.map((filter) => (
+            <TouchableOpacity
+              key={filter.id}
+              style={[styles.filterChip, activeFilter === filter.id && styles.filterChipActive]}
+              onPress={() => setActiveFilter(filter.id)}
+              accessibilityRole="button"
+              accessibilityLabel={filter.label}
+              accessibilityState={{ selected: activeFilter === filter.id }}
+            >
+              <Text style={[
+                styles.filterChipText,
+                activeFilter === filter.id && styles.filterChipTextActive,
+              ]}>
+                {filter.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
 
       {/* ── Content Tabs ──────────────────────────────────────────────────── */}
       <View style={styles.tabBar}>
@@ -356,10 +358,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
 
     // ── Date filter chips
+    // Fixed-height wrapper. A horizontal ScrollView left to size itself
+    // stretches to fill the column's free vertical space on the New
+    // Architecture (Fabric) — a `height` on the ScrollView's own style is
+    // not honored — which pinned the chips to the top and pushed the whole
+    // screen down. The wrapper pins the row to chip height.
+    filterBar: {
+      height: 44,
+      marginBottom: spacing.md,
+    },
     filterScroll: {
       paddingLeft: spacing.lg,
-      marginBottom: spacing.md,
-      height: 44,
     },
     filterScrollContent: {
       paddingRight: spacing.lg,
