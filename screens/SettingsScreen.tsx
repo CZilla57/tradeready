@@ -84,6 +84,9 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // While a notification-rule box is being edited we keep its raw text here so it
+  // can be empty/intermediate; the numeric model is committed on blur (see commitRule).
+  const [ruleDrafts, setRuleDrafts] = useState<Record<number, string>>({});
   const { isSubscribed, isTrialing } = useSubscription();
   const { pendingCount } = useSyncStatusContext();
 
@@ -233,18 +236,37 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     setS(prev => prev ? { ...prev, [field]: value } as Settings : prev);
   }
 
-  function updateRule(index: number, days: string) {
-    if (!s) return;
-    const rules = [...s.rules];
-    rules[index] = { days: parseInt(days) || 1 };
-    setS(prev => prev ? { ...prev, rules } : prev);
+  // Keep only the raw text while typing so the box can be emptied to enter a new
+  // number; the value is normalized to a number on blur (commitRule).
+  function updateRule(index: number, text: string) {
+    setRuleDrafts(prev => ({ ...prev, [index]: text.replace(/[^0-9]/g, "") }));
+  }
+
+  function commitRule(index: number) {
+    const draft = ruleDrafts[index];
+    if (draft === undefined) return;
+    const parsed = parseInt(draft, 10);
+    const days = Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
+    setS(prev => {
+      if (!prev) return prev;
+      const rules = [...prev.rules];
+      rules[index] = { days };
+      return { ...prev, rules };
+    });
+    setRuleDrafts(prev => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
   }
 
   function addRule() {
+    setRuleDrafts({});
     setS(prev => prev ? { ...prev, rules: [...prev.rules, { days: 7 }] } : prev);
   }
 
   function removeRule(index: number) {
+    setRuleDrafts({});
     setS(prev => {
       if (!prev) return prev;
       return { ...prev, rules: prev.rules.filter((_, i) => i !== index) };
@@ -263,12 +285,28 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     }
   }
 
+  // Fold any notification-rule box that is still being edited (a pending draft)
+  // into the numeric model, so saving while a field is focused persists what's typed.
+  function flushRuleDrafts(settings: Settings): Settings {
+    if (Object.keys(ruleDrafts).length === 0) return settings;
+    const rules = settings.rules.map((rule, i) => {
+      const draft = ruleDrafts[i];
+      if (draft === undefined) return rule;
+      const parsed = parseInt(draft, 10);
+      return { days: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed };
+    });
+    return { ...settings, rules };
+  }
+
   async function handleSave() {
     if (!s) return;
+    const flushed = flushRuleDrafts(s);
     setSaving(true);
-    await saveSettings(s);
+    await saveSettings(flushed);
     syncNotifications();
-    setSavedSnapshot(s);
+    setS(flushed);
+    setRuleDrafts({});
+    setSavedSnapshot(flushed);
     setSaving(false);
     Alert.alert("Saved", "Your settings have been saved.");
   }
@@ -499,7 +537,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
         <Text style={styles.ruleSubtitle}>Get notified when an invoice is this many days past due:</Text>
         {s.rules.map((rule, i) => (
           <View key={i} style={styles.ruleRow}>
-            <TextInput style={styles.ruleInput} value={String(rule.days)} onChangeText={(v) => updateRule(i, v)} keyboardType="number-pad" maxLength={3} accessibilityLabel={`Reminder rule ${i + 1}: days past due`} />
+            <TextInput style={styles.ruleInput} value={ruleDrafts[i] !== undefined ? ruleDrafts[i] : String(rule.days)} onChangeText={(v) => updateRule(i, v)} onBlur={() => commitRule(i)} keyboardType="number-pad" maxLength={3} accessibilityLabel={`Reminder rule ${i + 1}: days past due`} />
             <Text style={styles.ruleSuffix}>days past due</Text>
             <TouchableOpacity onPress={() => removeRule(i)} style={styles.removeBtn} accessibilityRole="button" accessibilityLabel={`Remove reminder rule ${i + 1}`}>
               <Text style={styles.removeBtnText}>✕</Text>
