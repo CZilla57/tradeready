@@ -126,7 +126,7 @@ Everything financial in one place.
 - Appearance (dark / light mode toggle)
 - Stripe Connect onboarding and status
 - Subscription management (RevenueCat)
-- Notification rules (+ auto-outreach toggle: tap an overdue reminder to open a ready-to-send message)
+- Notification rules (+ auto-outreach toggle: tap an overdue reminder to open a ready-to-send message; + auto-email toggle: backend emails a one-and-done reminder once overdue)
 - Labor rate, material markup, overhead, margin defaults
 
 ---
@@ -187,7 +187,7 @@ Everything financial in one place.
 - mileageRate (default 0.70 — $ per business mile, mileage deduction estimate)
 - paymentProcessor + providerKey (SecureStore)
 - anthropicKey, groqKey (SecureStore)
-- notificationRules, autoOutreachEnabled
+- notificationRules, autoOutreachEnabled, autoSendEmailEnabled
 
 ---
 
