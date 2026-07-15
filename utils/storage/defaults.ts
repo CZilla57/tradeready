@@ -215,6 +215,7 @@ export function defaultSettings(): Settings {
 
     // Notifications — days after due date to send a reminder
     rules: [{ days: 1 }, { days: 7 }],
+    autoOutreachEnabled: false, // opt-in; see docs/superpowers/specs/2026-07-14-overdue-auto-outreach-design.md
 
     // AI
     anthropicKey: "",

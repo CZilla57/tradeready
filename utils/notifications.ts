@@ -46,6 +46,7 @@ export async function syncNotifications(): Promise<void> {
     const invoices: Invoice[] = invoicesRaw ? JSON.parse(invoicesRaw) : [];
     const settings: Partial<Settings> = settingsRaw ? JSON.parse(settingsRaw) : {};
     const rules: ReminderRule[] = settings.rules || [];
+    const autoOutreach = !!settings.autoOutreachEnabled;
 
     await Notifications.cancelAllScheduledNotificationsAsync();
 
@@ -66,11 +67,17 @@ export async function syncNotifications(): Promise<void> {
 
         await Notifications.scheduleNotificationAsync({
           identifier: `inv_${inv.id}_${rule.days}d`,
-          content: {
-            title: `Overdue invoice — ${inv.customer}`,
-            body: `Invoice ${inv.number} is now ${rule.days} days past due.`,
-            data: { invoiceId: inv.id },
-          },
+          content: autoOutreach
+            ? {
+                title: `Follow up with ${inv.customer}`,
+                body: `Tap to send a reminder for ${inv.number} — ${rule.days} days past due.`,
+                data: { type: 'overdue_outreach', invoiceId: inv.id, daysPastDue: rule.days },
+              }
+            : {
+                title: `Overdue invoice — ${inv.customer}`,
+                body: `Invoice ${inv.number} is now ${rule.days} days past due.`,
+                data: { invoiceId: inv.id },
+              },
           trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
         });
         count++;

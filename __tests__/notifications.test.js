@@ -145,3 +145,49 @@ describe("notification identifier", () => {
     );
   });
 });
+
+// ── Auto-outreach (actionable notifications) ─────────────────────────────────
+
+describe("auto-outreach toggle", () => {
+  test("adds overdue_outreach type + daysPastDue to data when enabled", async () => {
+    seedStorage(
+      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, due: dateInDays(30) }],
+      { rules: [{ days: 7 }], autoOutreachEnabled: true }
+    );
+
+    await syncNotifications();
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].content.data).toEqual({
+      type: "overdue_outreach",
+      invoiceId: "i7",
+      daysPastDue: 7,
+    });
+    expect(call[0].content.body).toContain("INV-007");
+  });
+
+  test("keeps the plain reminder (no type) when disabled", async () => {
+    seedStorage(
+      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, due: dateInDays(30) }],
+      { rules: [{ days: 7 }], autoOutreachEnabled: false }
+    );
+
+    await syncNotifications();
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].content.data).toEqual({ invoiceId: "i7" });
+    expect(call[0].content.data.type).toBeUndefined();
+  });
+
+  test("defaults to the plain reminder when the flag is absent", async () => {
+    seedStorage(
+      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, due: dateInDays(30) }],
+      { rules: [{ days: 7 }] } // no autoOutreachEnabled key — mirrors a pre-existing user
+    );
+
+    await syncNotifications();
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].content.data.type).toBeUndefined();
+  });
+});

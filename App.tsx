@@ -59,7 +59,7 @@ import { getTradeNickname } from "./utils/pricingEngine";
 import * as Sentry from "@sentry/react-native";
 import { PostHogProvider, usePostHog } from "posthog-react-native";
 import Constants from "expo-constants";
-import { posthogRef } from "./utils/analytics";
+import { posthogRef, track } from "./utils/analytics";
 
 const SENTRY_DSN = Constants.expoConfig?.extra?.sentryDsn ?? "";
 const POSTHOG_API_KEY = Constants.expoConfig?.extra?.posthogApiKey ?? "";
@@ -315,6 +315,13 @@ function RootNavigator() {
         navigationRef.navigate("Main", {
           screen: "Jobs",
           params: { screen: "ReviewRequest", params: { jobId: String(data.jobId) } },
+        });
+      }
+      if (data?.type === "overdue_outreach" && data?.invoiceId && navigationRef.isReady()) {
+        track("overdue_outreach_opened", { daysPastDue: data.daysPastDue });
+        navigationRef.navigate("Main", {
+          screen: "Invoices",
+          params: { screen: "Outreach", params: { invoiceId: String(data.invoiceId) } },
         });
       }
     });
