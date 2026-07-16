@@ -39,12 +39,36 @@ export function resetUser(): void {
 }
 
 export function reportError(error: unknown, context?: Record<string, unknown>): void {
+  // Supabase/PostgREST failures are plain objects ({code, message, details,
+  // hint}), which Sentry titles "Object captured as exception with keys: ..."
+  // — hiding the message that identifies the failure (2026-07-16 sync-wedge
+  // diagnosis). Wrap non-Errors so the issue title carries the real message;
+  // the original object is preserved as the `rawError` extra.
+  const toCapture = error instanceof Error ? error : new Error(describeNonError(error));
   Sentry.withScope((scope) => {
     if (context) {
       Object.entries(context).forEach(([key, value]) => {
         scope.setExtra(key, value);
       });
     }
-    Sentry.captureException(error);
+    if (toCapture !== error) {
+      scope.setExtra("rawError", error);
+    }
+    Sentry.captureException(toCapture);
   });
+}
+
+function describeNonError(value: unknown): string {
+  const obj = value as { message?: unknown; code?: unknown } | null | undefined;
+  if (typeof obj?.message === "string" && obj.message) {
+    const code = obj.code;
+    return typeof code === "string" || typeof code === "number"
+      ? `[${code}] ${obj.message}`
+      : obj.message;
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }

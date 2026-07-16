@@ -49,4 +49,38 @@ describe("analytics", () => {
     reportError(err, { screen: "JobDetail" });
     expect(Sentry.captureException).toHaveBeenCalled();
   });
+
+  it("reportError() passes Error instances through unchanged", () => {
+    const err = new Error("boom");
+    reportError(err);
+    expect(Sentry.captureException).toHaveBeenCalledWith(err);
+  });
+
+  it("reportError() wraps plain objects so the Sentry title carries the real message", () => {
+    // Supabase/PostgREST errors are plain objects; unwrapped they title as
+    // "Object captured as exception with keys: code, details, hint, message".
+    const scope = { setExtra: jest.fn() };
+    (Sentry.withScope as jest.Mock).mockImplementationOnce((cb: (s: unknown) => void) => cb(scope));
+    const pgError = {
+      code: "42501",
+      details: null,
+      hint: null,
+      message: 'new row violates row-level security policy (USING expression) for table "customers"',
+    };
+    reportError(pgError, { context: "pushQueue" });
+    const captured = (Sentry.captureException as jest.Mock).mock.calls[0][0];
+    expect(captured).toBeInstanceOf(Error);
+    expect(captured.message).toBe(
+      '[42501] new row violates row-level security policy (USING expression) for table "customers"',
+    );
+    expect(scope.setExtra).toHaveBeenCalledWith("rawError", pgError);
+    expect(scope.setExtra).toHaveBeenCalledWith("context", "pushQueue");
+  });
+
+  it("reportError() stringifies message-less values", () => {
+    reportError({ status: 500 });
+    const captured = (Sentry.captureException as jest.Mock).mock.calls[0][0];
+    expect(captured).toBeInstanceOf(Error);
+    expect(captured.message).toBe('{"status":500}');
+  });
 });
