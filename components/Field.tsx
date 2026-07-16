@@ -9,7 +9,9 @@
 // containerStyle / labelStyle / inputStyle escape hatches — inputStyle is
 // applied last so it wins over the baseline and the multiline override.
 //
-// autoCapitalize defaults smartly: email keyboards get "none", everything else
+// autoCapitalize defaults smartly: email keyboards get "none", multiline
+// fields get "sentences" (they hold prose — descriptions, notes; Title-Casing
+// Every Word there was a reported annoyance, 2026-07-16), everything else
 // "words" (good for names, titles, addresses). Pass the prop to override.
 
 import React, { useMemo } from "react";
@@ -62,7 +64,8 @@ export default function Field({
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
   const cap =
-    autoCapitalize ?? (keyboardType === "email-address" ? "none" : "words");
+    autoCapitalize ??
+    (keyboardType === "email-address" ? "none" : multiline ? "sentences" : "words");
 
   return (
     <View style={[styles.fieldGroup, flex && styles.flex, containerStyle]}>
