@@ -98,6 +98,24 @@ export function upsertCustomerInList(
   return { customer, customers: [...customers, customer], changed: true };
 }
 
+// Resolve a job/invoice's linked customer: by id when the link is intact, else
+// by normalized display name. Ids can dangle — e.g. a recurring rule created
+// before a sample-id remap keeps the old customerId — and the name is the
+// registry's de-facto join key, so a name hit is the same person. Returns null
+// only when neither resolves.
+export function resolveCustomer(
+  customers: Customer[],
+  link: { customerId?: string | null; customerName?: string | null },
+): Customer | null {
+  if (link.customerId) {
+    const byId = customers.find((c) => c.id === link.customerId);
+    if (byId) return byId;
+  }
+  const key = normalizeName(link.customerName);
+  if (!key) return null;
+  return customers.find((c) => normalizeName(c.name) === key) ?? null;
+}
+
 // Async wrapper for the single-customer creation paths (invoice/job/manual add).
 // Loads the collection, upserts, persists only if something changed, and returns
 // the record (or null when no usable name was given).

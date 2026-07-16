@@ -8,6 +8,7 @@ import {
   getOrCreateCustomer,
   updateCustomerNotes,
   migrateCustomerIdentity,
+  resolveCustomer,
   loadCustomers,
   loadInvoices,
   loadJobs,
@@ -215,5 +216,33 @@ describe("migrateCustomerIdentity", () => {
     await migrateCustomerIdentity();
     const second = await migrateCustomerIdentity();
     expect(second.invoicesChanged).toBe(false);
+  });
+});
+
+describe("resolveCustomer", () => {
+  const customers = [
+    { id: "c1-sabc", name: "Riverside Bakery", email: "owner@riversidebakery.com", phone: "555" },
+    { id: "c1751000000000_1", name: "Tom Nguyen", email: "tom@x.com", phone: "" },
+  ];
+
+  test("resolves by id when the link is intact", () => {
+    const hit = resolveCustomer(customers, { customerId: "c1751000000000_1", customerName: "Wrong Name" });
+    expect(hit?.email).toBe("tom@x.com");
+  });
+
+  test("falls back to the normalized-name join when the id dangles", () => {
+    const hit = resolveCustomer(customers, { customerId: "c1", customerName: "  riverside BAKERY " });
+    expect(hit?.email).toBe("owner@riversidebakery.com");
+  });
+
+  test("resolves by name when there is no id at all", () => {
+    const hit = resolveCustomer(customers, { customerName: "Tom Nguyen" });
+    expect(hit?.id).toBe("c1751000000000_1");
+  });
+
+  test("returns null when neither id nor name resolves", () => {
+    expect(resolveCustomer(customers, { customerId: "cX", customerName: "Nobody" })).toBeNull();
+    expect(resolveCustomer(customers, { customerId: "cX" })).toBeNull();
+    expect(resolveCustomer(customers, {})).toBeNull();
   });
 });

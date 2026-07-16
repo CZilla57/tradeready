@@ -22,7 +22,7 @@ import * as ImagePicker from "expo-image-picker";
 import { persistPhoto, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { loadJobs, saveJobs, loadCustomers, loadSettings } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, resolveCustomer } from "../utils/storage";
 import { scheduleReviewRequest } from "../utils/reviewRequest";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
@@ -541,8 +541,9 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           }
 
           setJob(j);
-          const c = customers.find((x: Customer) => x.id === j.customerId);
-          setCustomer(c || null);
+          // Name-join fallback keeps contact links working when the id dangles
+          // (e.g. recurring-rule jobs created before a sample-id remap).
+          setCustomer(resolveCustomer(customers, j));
         } catch (error: unknown) {
           console.error("JobDetailScreen: failed to load job", error);
           reportError(error, { context: 'jobDetailLoad' });

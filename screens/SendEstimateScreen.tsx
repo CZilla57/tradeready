@@ -10,7 +10,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
-import { loadJobs, loadCustomers, loadSettings, saveJobs } from "../utils/storage";
+import { loadJobs, loadCustomers, loadSettings, saveJobs, resolveCustomer } from "../utils/storage";
 import { track } from '../utils/analytics';
 import { formatQuote } from "../utils/format";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
@@ -53,7 +53,10 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
       ]);
       const job = jobs.find((j: Job) => j.id === jobId);
       if (!job) { navigation.goBack(); return; }
-      const customer = customers.find((c: Customer) => c.id === job.customerId) || {
+      // resolveCustomer falls back to the normalized-name join when the id
+      // link dangles (e.g. a recurring rule outliving a sample-id remap), so
+      // the email/phone on file still reach the composer.
+      const customer = resolveCustomer(customers, job) || {
         name: job.customerName,
         email: "",
         phone: "",
@@ -254,12 +257,13 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
         />
         <Button
           label="Mark estimate as sent"
-          variant="ghost"
+          variant="secondary"
           onPress={markAsSent}
           loading={marking}
         />
         <Text style={styles.markHint}>
-          Advances the job to "Estimate sent" so you can track approval.
+          No email needed — advances the job to "Estimate sent" so you can
+          track approval, however you delivered the estimate.
         </Text>
       </ScrollView>
     </SafeAreaView>
