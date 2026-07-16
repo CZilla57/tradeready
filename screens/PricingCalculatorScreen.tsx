@@ -20,7 +20,9 @@ import {
   getSanityWarnings,
   breakEvenPrice,
   buildEstimateInput,
+  JOB_STATUSES,
 } from "../utils/pricingEngine";
+import { track } from "../utils/analytics";
 import { formatQuote } from "../utils/format";
 import { generateOneShot } from "../utils/oneShotAI";
 import {
@@ -29,7 +31,7 @@ import {
   sanitizeScope,
   cannedScope,
 } from "../utils/estimateDocument";
-import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook, resolveCustomer } from "../utils/storage";
 import { Button, Card, Divider } from "../components/UI";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
@@ -84,8 +86,9 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         setMaterialMarkup(String(j.materialMarkup ?? s.materialMarkup ?? 20));
         setOverheadPercent(String(j.overhead ?? s.overheadPercent ?? 15));
         setMarginPercent(String(j.margin ?? s.marginPercent ?? 20));
-        const c = customers.find((x) => x.id === j.customerId);
-        setCustomer(c || null);
+        // Name-join fallback keeps the email/phone on file reachable when the
+        // id link dangles (e.g. recurring-rule jobs after a sample-id remap).
+        setCustomer(resolveCustomer(customers, j));
       }
       setSettings(s);
       if (s && !j) {
@@ -260,9 +263,26 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     setGenerating(false);
   }
 
+  // Advances a lead to the pipeline's next stage (estimate_sent) — shared by
+  // the email path and the explicit no-email "Mark estimate as sent" button.
+  async function markEstimateSent() {
+    if (!job || job.status !== "lead") return;
+    const next = JOB_STATUSES.lead.next;
+    if (!next) return;
+    const jobs = await loadJobs();
+    await saveJobs(
+      jobs.map((j) => (j.id === jobId ? { ...j, status: next, estimateTotal: breakdown.total } : j))
+    );
+    setJob({ ...job, status: next, estimateTotal: breakdown.total });
+    track("estimate_sent");
+  }
+
   async function sendEstimateByEmail() {
     if (!customer || !customer.email) {
-      Alert.alert("No email", "No customer email on file.");
+      Alert.alert(
+        "No email",
+        'No customer email on file. Add one on the customer record, or use "Mark estimate as sent" below.'
+      );
       return;
     }
     const sent = await composeEmail({
@@ -271,13 +291,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
       body: generatedEstimate,
     });
     if (!sent) return;
-
-    if (job?.status === "lead") {
-      const jobs = await loadJobs();
-      await saveJobs(
-        jobs.map((j) => (j.id === jobId ? { ...j, status: "estimate_sent", estimateTotal: breakdown.total } : j))
-      );
-    }
+    await markEstimateSent();
   }
 
   async function copyEstimate() {
@@ -348,6 +362,11 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
             onRegenerate={generateEstimate}
             onCopy={copyEstimate}
             onEmail={sendEstimateByEmail}
+            onMarkSent={async () => {
+              await markEstimateSent();
+              Alert.alert("Marked as sent", 'The job moved to "Estimate sent".');
+            }}
+            canMarkSent={!!job && job.status === "lead"}
             copied={copied}
             total={breakdown.total}
           />
@@ -540,11 +559,13 @@ interface EstimateTabProps {
   onRegenerate: () => void;
   onCopy: () => void;
   onEmail: () => void;
+  onMarkSent: () => void;
+  canMarkSent: boolean;
   copied: boolean;
   total: number;
 }
 
-function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEmail, copied, total }: EstimateTabProps) {
+function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEmail, onMarkSent, canMarkSent, copied, total }: EstimateTabProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
@@ -577,8 +598,18 @@ function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEm
         <Button label="✉ Email to customer →" onPress={onEmail} style={{ marginTop: spacing.sm }} />
       ) : null}
 
+      {!generating && generatedEstimate && canMarkSent ? (
+        <Button
+          label="Mark estimate as sent"
+          variant="secondary"
+          onPress={onMarkSent}
+          style={{ marginTop: spacing.sm }}
+        />
+      ) : null}
+
       <Text style={styles.estimateNote}>
-        Sending this email will mark the job as "Estimate sent" and start the approval clock.
+        Email it — or mark it sent yourself if you delivered it another way.
+        Either moves the job to "Estimate sent" and starts the approval clock.
       </Text>
     </ScrollView>
   );
