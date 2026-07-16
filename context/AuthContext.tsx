@@ -11,6 +11,12 @@ import { identifyUser } from '../utils/analytics';
 interface AuthContextValue {
   session: Session | null;
   initializing: boolean;
+  /** True while initialSync for the current session is in flight. The root
+   *  gate must not evaluate onboarding state until this settles: after a
+   *  sign-out wipe, local state says "new user" until the cloud pull lands,
+   *  and evaluating early re-onboarded returning users whose onboarding save
+   *  then clobbered the pulled settings (2026-07-16). */
+  bootstrapping: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -18,17 +24,24 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [bootstrapping, setBootstrapping] = useState(false);
 
   useEffect(() => {
     configurePurchases();
     setupNotifications();
+
+    // initialSync never rejects (it catches internally); finally is a guard.
+    const runInitialSync = (userId: string) => {
+      setBootstrapping(true);
+      initialSync(userId).finally(() => setBootstrapping(false));
+    };
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setInitializing(false);
       if (session?.user?.id) {
         loginPurchases(session.user.id);
-        initialSync(session.user.id);
+        runInitialSync(session.user.id);
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
         identifyUser(session.user.id);
       }
@@ -48,7 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session?.user?.id) {
         loginPurchases(session.user.id);
         identifyUser(session.user.id);
-        initialSync(session.user.id);
+        runInitialSync(session.user.id);
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
       }
     });
@@ -71,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [session]);
 
   return (
-    <AuthContext.Provider value={{ session, initializing }}>
+    <AuthContext.Provider value={{ session, initializing, bootstrapping }}>
       {children}
     </AuthContext.Provider>
   );

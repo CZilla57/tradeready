@@ -53,6 +53,7 @@ import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, migrateCustomerIdentity, migrateSampleDataIds } from "./utils/storage";
+import { rootGateLoading } from "./utils/rootGate";
 import { fontScaleChanged } from "./utils/fontScaleRestart";
 import { getTradeNickname } from "./utils/pricingEngine";
 
@@ -284,7 +285,7 @@ function MainTabs() {
 }
 
 function RootNavigator() {
-  const { session, initializing }               = useAuth();
+  const { session, initializing, bootstrapping } = useAuth();
   const { isSubscribed, isLoading: subLoading } = useSubscription();
   const { colors, isDark }                      = useThemeContext();
   const [onboardingDone, setOnboardingDone]     = useState<boolean | null>(null);
@@ -295,6 +296,13 @@ function RootNavigator() {
   useEffect(() => {
     sessionRef.current = session;
     if (!session) { setOnboardingDone(null); return; }
+    // Wait for initialSync: after a sign-out wipe, local state says "new
+    // user" until the cloud pull lands — evaluating early re-onboarded
+    // returning users, and their onboarding save clobbered the pulled
+    // settings (2026-07-16). onboardingDone stays null meanwhile, which the
+    // loading gate below renders as a spinner; mid-session token refreshes
+    // keep their previous value, so no flash.
+    if (bootstrapping) return;
     isOnboardingComplete().then(setOnboardingDone);
     // Identity first (may backfill invoice.customerId with a legacy sample
     // id), then the sample-id migration remaps those to namespaced ids.
@@ -302,7 +310,7 @@ function RootNavigator() {
       .catch(() => {})
       .then(() => migrateSampleDataIds())
       .catch(() => {});
-  }, [session]);
+  }, [session, bootstrapping]);
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -328,10 +336,12 @@ function RootNavigator() {
     return () => sub.remove();
   }, []);
 
-  const isLoading =
-    initializing ||
-    (session && onboardingDone === null) ||
-    (session && onboardingDone && subLoading);
+  const isLoading = rootGateLoading({
+    initializing,
+    hasSession: !!session,
+    onboardingDone,
+    subLoading,
+  });
 
   if (isLoading) {
     return (
