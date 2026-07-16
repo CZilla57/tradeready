@@ -8,7 +8,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { KEYS } from "./keys";
 import { SECURE_FIELDS, loadSettings } from "./settings";
-import { defaultSettings } from "./defaults";
+import { defaultSettings, resetSampleSeed } from "./defaults";
 import {
   loadInvoices, loadJobs, loadCustomers, loadExpenses,
   saveInvoices, saveJobs, saveCustomers, saveExpenses,
@@ -59,6 +59,11 @@ export async function clearSampleData(): Promise<void> {
 // Wipes all local user data on sign-out so the next user to sign in on this
 // device cannot inherit another user's records or trigger an accidental cloud push.
 export async function clearAllUserData(): Promise<void> {
+  // Rotate the sample-id namespace before the wipe: any read after this
+  // re-seeds, and reusing this launch's suffix would collide with seed rows
+  // the outgoing account may have already pushed (see defaults.ts).
+  resetSampleSeed();
+
   const allKeys = await AsyncStorage.getAllKeys();
   const initDoneKeys = allKeys.filter(k => k.startsWith("__initDone_"));
 

@@ -12,7 +12,16 @@ import { freshSampleSuffix } from "../sampleData";
 // account's pushes (wedged "changes pending" banner — TestFlight finding
 // 2026-07-14). Module-level so one app launch seeds all collections with
 // consistent cross-links (jobs reference customers by these ids).
-const SEED = freshSampleSuffix();
+let SEED = freshSampleSuffix();
+
+// Sign-out wipes local storage, and the next collection read re-seeds. Without
+// a new suffix that re-seed reuses this launch's ids — and if the previous
+// account already pushed them, the next account's upserts hit rows owned by
+// someone else and RLS rejects them forever (demo-account sync wedge,
+// 2026-07-16). clearAllUserData calls this so each account seeds fresh ids.
+export function resetSampleSeed(): void {
+  SEED = freshSampleSuffix();
+}
 
 export function defaultCustomers(): Customer[] {
   return [

@@ -2,6 +2,8 @@
 // Tests for high-risk storage invariants:
 //   1. Editing a paid invoice must not reset it to unpaid.
 //   2. Sign-out clears all local data and sensitive SecureStore keys.
+//   3. Sign-out rotates the sample-seed namespace so re-seeded ids never
+//      collide with seed rows a previous account already pushed.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
@@ -12,6 +14,8 @@ import {
   saveExpenses,
   clearAllUserData,
 } from "../utils/storage";
+import { defaultCustomers, defaultJobs, defaultInvoices, resetSampleSeed } from "../utils/storage/defaults";
+import { isSampleId } from "../utils/sampleData";
 
 // Isolate storage from sync and notification side-effects so these tests
 // only assert on AsyncStorage / SecureStore calls.
@@ -198,5 +202,44 @@ describe("storage key contracts", () => {
     await clearAllUserData();
     const [removedKeys] = AsyncStorage.multiRemove.mock.calls[0];
     expect(removedKeys).toContain("__dataOwner");
+  });
+});
+
+// ── Sample-seed namespace rotation ────────────────────────────────────────────
+// The seeds materialize on any read of an empty collection. If the namespace
+// suffix survives a sign-out, the next account re-seeds the SAME ids the
+// previous account may have pushed, and RLS rejects the upserts forever
+// (demo-account sync wedge, 2026-07-16).
+
+describe("sample seed namespacing", () => {
+  test("seeds share one suffix so job→customer links resolve", () => {
+    const customers = defaultCustomers();
+    const suffix = customers[0].id.slice("c1-".length);
+    expect(customers.map((c) => c.id)).toEqual([
+      `c1-${suffix}`, `c2-${suffix}`, `c3-${suffix}`,
+    ]);
+    for (const job of defaultJobs()) {
+      expect(customers.some((c) => c.id === job.customerId)).toBe(true);
+    }
+    for (const record of [...customers, ...defaultInvoices()]) {
+      expect(isSampleId(record.id)).toBe(true);
+    }
+  });
+
+  test("resetSampleSeed rotates the suffix and keeps links consistent", () => {
+    const before = defaultCustomers()[0].id;
+    resetSampleSeed();
+    const customers = defaultCustomers();
+    expect(customers[0].id).not.toBe(before);
+    for (const job of defaultJobs()) {
+      expect(customers.some((c) => c.id === job.customerId)).toBe(true);
+    }
+    expect(isSampleId(customers[0].id)).toBe(true);
+  });
+
+  test("clearAllUserData rotates the seed so re-seeded ids cannot collide with the previous account's", async () => {
+    const before = defaultCustomers()[0].id;
+    await clearAllUserData();
+    expect(defaultCustomers()[0].id).not.toBe(before);
   });
 });
