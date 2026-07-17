@@ -1,0 +1,23 @@
+# Gitleaks false positives — verified public-by-design client keys (audit 2026-07-16).
+# Every finding below is one of two intentionally embedded keys:
+#   - Supabase publishable anon key (sb_publishable_...) — safe by design; RLS enforces access
+#   - PostHog project API key (phc_...) — write-only ingestion key, public by design
+# No real secrets exist in this repo; server secrets live only in Vercel env vars.
+#
+# Fingerprint format: <commit>:<file>:<rule>:<line>. These pin the commits that
+# introduced each occurrence. If a future commit moves/edits these lines, gitleaks
+# will report a NEW fingerprint — re-verify it is the same public key, then add it here.
+
+# Supabase publishable anon key quoted in a plan doc
+053b6cf555ca176cbe1bf7b8d51939b7aa7224f3:docs/superpowers/plans/2026-07-09-tier3-fixes.md:generic-api-key:614
+053b6cf555ca176cbe1bf7b8d51939b7aa7224f3:docs/superpowers/plans/2026-07-09-tier3-fixes.md:generic-api-key:634
+
+# PostHog project key in EAS build profiles (added by posthog[bot])
+108dc64d12b9a98627af285b586a9061ebaceb84:eas.json:generic-api-key:11
+108dc64d12b9a98627af285b586a9061ebaceb84:eas.json:generic-api-key:24
+
+# PostHog project key in app.json extra
+55251daa5b25fc579afd86c33b4bba6c0e844891:app.json:generic-api-key:63
+
+# Supabase publishable anon key in the (pre-TS) Supabase client
+52d89264c9a49595284ccbc26587ce5fe56cc280:utils/supabase.js:generic-api-key:6
