@@ -13,8 +13,12 @@
 // fields get "sentences" (they hold prose — descriptions, notes; Title-Casing
 // Every Word there was a reported annoyance, 2026-07-16), everything else
 // "words" (good for names, titles, addresses). Pass the prop to override.
+//
+// Every Field's keyboard can be dismissed (owner requirement, 2026-07-16):
+// single-line inputs default to returnKeyType="done"; multiline and iOS pad
+// keyboards (no return key) get a per-instance KeyboardDoneBar accessory.
 
-import React, { useMemo } from "react";
+import React, { useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -28,6 +32,9 @@ import {
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { KeyboardDoneBar, needsDoneBar } from "./KeyboardDoneBar";
+
+let fieldDoneSeq = 0;
 
 type FieldProps = {
   label: string;
@@ -38,6 +45,7 @@ type FieldProps = {
   autoCapitalize?: TextInputProps["autoCapitalize"];
   multiline?: boolean;
   autoFocus?: boolean;
+  returnKeyType?: TextInputProps["returnKeyType"];
   onBlur?: () => void;
   flex?: boolean;
   containerStyle?: StyleProp<ViewStyle>;
@@ -54,6 +62,7 @@ export default function Field({
   autoCapitalize,
   multiline,
   autoFocus,
+  returnKeyType,
   onBlur,
   flex,
   containerStyle,
@@ -66,6 +75,12 @@ export default function Field({
   const cap =
     autoCapitalize ??
     (keyboardType === "email-address" ? "none" : multiline ? "sentences" : "words");
+
+  // Multiline keeps return = newline; the Done bar handles dismissal there.
+  const returnKey = returnKeyType ?? (multiline ? undefined : "done");
+  const showDoneBar = needsDoneBar(keyboardType, multiline);
+  const doneBarID = useRef<string | null>(null);
+  if (doneBarID.current === null) doneBarID.current = `fieldDoneBar${++fieldDoneSeq}`;
 
   return (
     <View style={[styles.fieldGroup, flex && styles.flex, containerStyle]}>
@@ -83,9 +98,12 @@ export default function Field({
         multiline={multiline}
         numberOfLines={multiline ? 3 : 1}
         autoFocus={autoFocus}
+        returnKeyType={returnKey}
+        inputAccessoryViewID={showDoneBar ? doneBarID.current : undefined}
         accessibilityLabel={label}
         maxFontSizeMultiplier={1.4}
       />
+      {showDoneBar && <KeyboardDoneBar nativeID={doneBarID.current} />}
     </View>
   );
 }

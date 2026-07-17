@@ -19,6 +19,7 @@ import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
+import { KeyboardDoneBar } from '../components/KeyboardDoneBar';
 import type { Job, Invoice } from '../types/models';
 import { reportError } from '../utils/analytics';
 import type { CustomerStackScreenProps } from '../types/navigation';
@@ -393,8 +394,10 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
             onBlur={handleNotesSave}
             multiline
             textAlignVertical="top"
+            inputAccessoryViewID="customerNotesDone"
             accessibilityLabel="Customer notes"
           />
+          <KeyboardDoneBar nativeID="customerNotesDone" />
           {notesChanged && (
             <TouchableOpacity style={styles.saveNotesButton} onPress={handleNotesSave} accessibilityRole="button" accessibilityLabel="Save notes">
               <Text style={styles.saveNotesButtonText}>Save notes</Text>

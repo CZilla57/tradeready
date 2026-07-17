@@ -19,6 +19,7 @@ import { getBusinessSnapshot } from "../utils/businessSnapshot";
 import { TRADE_TYPES, getTradeNickname } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { Ionicons } from "@expo/vector-icons";
 import type { Settings } from "../types/models";
 import { track, reportError } from '../utils/analytics';
@@ -217,7 +218,9 @@ export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHom
             multiline
             maxLength={2000}
             returnKeyType="default"
+            inputAccessoryViewID="chatComposerDone"
           />
+          <KeyboardDoneBar nativeID="chatComposerDone" />
           <TouchableOpacity
             style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
             onPress={() => send()}

@@ -91,6 +91,7 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
           placeholderTextColor={colors.textMuted}
           value={search}
           onChangeText={setSearch}
+          returnKeyType="search"
         />
         {search.length > 0 && (
           <TouchableOpacity onPress={() => setSearch("")}>

@@ -33,11 +33,16 @@ import {
 } from "../utils/estimateDocument";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook, resolveCustomer } from "../utils/storage";
 import { Button, Card, Divider } from "../components/UI";
+import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, Settings, PricebookEntry } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
+
+// One Done bar serves every decimal-pad input on the calculator tab
+// (SmallInput and the material rows reference this ID).
+const CALC_DONE_ID = "pricingCalcDone";
 
 interface LocalMaterial {
   id: string;
@@ -379,6 +384,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         onSelect={handlePricebookSelect}
         onDismiss={() => setPickerVisible(false)}
       />
+      <KeyboardDoneBar nativeID={CALC_DONE_ID} />
     </SafeAreaView>
   );
 }
@@ -475,6 +481,7 @@ function CalculatorTab({
               placeholderTextColor={colors.textMuted}
               value={m.name}
               onChangeText={(v) => updateMaterial(m.id, "name", v)}
+              returnKeyType="done"
               accessibilityLabel="Material name"
             />
             <TextInput
@@ -484,6 +491,7 @@ function CalculatorTab({
               value={String(m.quantity)}
               onChangeText={(v) => updateMaterial(m.id, "quantity", parseFloat(v) || 0)}
               keyboardType="decimal-pad"
+              inputAccessoryViewID={CALC_DONE_ID}
               accessibilityLabel="Material quantity"
             />
             <TextInput
@@ -493,6 +501,7 @@ function CalculatorTab({
               value={String(m.unitCost)}
               onChangeText={(v) => updateMaterial(m.id, "unitCost", parseFloat(v) || 0)}
               keyboardType="decimal-pad"
+              inputAccessoryViewID={CALC_DONE_ID}
               accessibilityLabel="Material cost each"
             />
             <TouchableOpacity
@@ -647,6 +656,7 @@ function SmallInput({ label, value, onChange, placeholder, prefix, suffix }: Sma
           placeholder={placeholder}
           placeholderTextColor={colors.textMuted}
           keyboardType="decimal-pad"
+          inputAccessoryViewID={CALC_DONE_ID}
           accessibilityLabel={label}
         />
         {suffix ? <Text style={styles.inputAdornment}>{suffix}</Text> : null}

@@ -388,6 +388,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                 autoCorrect={false}
                 clearButtonMode="while-editing"
                 autoFocus
+                returnKeyType="search"
                 accessibilityLabel="Search customers"
               />
               <ScrollView
@@ -443,6 +444,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
               placeholderTextColor={colors.textMuted}
               value={customerName}
               onChangeText={setCustomerName}
+              returnKeyType="done"
               accessibilityLabel="Customer name"
             />
           )}

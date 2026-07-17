@@ -153,6 +153,7 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
           onChangeText={setSearchText}
           autoCorrect={false}
           clearButtonMode="while-editing"
+          returnKeyType="search"
           accessibilityLabel="Search customers"
         />
       </View>

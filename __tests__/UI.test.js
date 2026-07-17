@@ -3,7 +3,7 @@
  * RNTL v14 ships an async render() — every test must await it.
  */
 import React from "react";
-import { render } from "@testing-library/react-native";
+import { render, fireEvent } from "@testing-library/react-native";
 import { Badge, Button, Card, Divider, EmptyState, SectionHeader, StatCard } from "../components/UI";
 import { Text, Platform } from "react-native";
 import Field from "../components/Field";
@@ -151,5 +151,28 @@ describe("DateTimePickerSheet", () => {
       />
     );
     expect(getByRole("button", { name: "Done" })).toBeTruthy();
+  });
+
+  // Owner report 2026-07-16: opening a picker with nothing selected and
+  // tapping Done must select the displayed fallback (today/now) — before
+  // this, users had to scroll to another value and back to pick it.
+  it("Done commits the currently displayed value before closing (iOS)", async () => {
+    Platform.OS = "ios";
+    const shown = new Date(2026, 6, 16);
+    const onChange = jest.fn();
+    const onClose = jest.fn();
+    const { getByRole } = await render(
+      <DateTimePickerSheet
+        visible={true}
+        mode="date"
+        value={shown}
+        title="Select date"
+        onChange={onChange}
+        onClose={onClose}
+      />
+    );
+    fireEvent.press(getByRole("button", { name: "Done" }));
+    expect(onChange).toHaveBeenCalledWith(shown);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

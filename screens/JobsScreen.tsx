@@ -133,6 +133,7 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
           value={search}
           onChangeText={setSearch}
           clearButtonMode="while-editing"
+          returnKeyType="search"
           accessibilityLabel="Search jobs or customers"
         />
       </View>

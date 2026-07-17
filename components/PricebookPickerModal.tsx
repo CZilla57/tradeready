@@ -120,6 +120,7 @@ export function PricebookPickerModal({ visible, hasExistingData, onSelect, onDis
                   placeholderTextColor={colors.textMuted}
                   value={search}
                   onChangeText={setSearch}
+                  returnKeyType="search"
                   accessibilityLabel="Search services"
                 />
               </View>

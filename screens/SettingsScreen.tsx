@@ -28,6 +28,7 @@ import { Button, SectionHeader, Divider } from "../components/UI";
 import { DELETE_CONFIRM_PHRASE, deleteConfirmMatches } from "../utils/deleteConfirm";
 import { settingsEqual } from "../utils/settingsDirty";
 import BaseField from "../components/Field";
+import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useSubscription } from "../context/SubscriptionContext";
@@ -472,6 +473,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry={s.provider === "square"}
+              returnKeyType="done"
               accessibilityLabel={`${selectedProvider.label} key or ID`}
             />
             <Text style={styles.keyNote}>Stored only on your device. Never share it with anyone.</Text>
@@ -499,12 +501,12 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           <>
             <View style={[styles.card, { marginTop: spacing.sm }]}>
               <Text style={styles.providerHint}>Groq API key — powers the AI chat tab (estimates, advice, invoice messages). Get a free key at console.groq.com — no billing required.</Text>
-              <TextInput style={styles.input} value={s.groqKey} onChangeText={(v) => update("groqKey", v)} placeholder="gsk_..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry accessibilityLabel="Groq API key" />
+              <TextInput style={styles.input} value={s.groqKey} onChangeText={(v) => update("groqKey", v)} placeholder="gsk_..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry returnKeyType="done" accessibilityLabel="Groq API key" />
               <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
             </View>
             <View style={[styles.card, { marginTop: spacing.sm }]}>
               <Text style={styles.providerHint}>Anthropic (Claude) API key — used for AI-generated invoice outreach messages. Get one at console.anthropic.com.</Text>
-              <TextInput style={styles.input} value={s.anthropicKey} onChangeText={(v) => update("anthropicKey", v)} placeholder="sk-ant-..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry accessibilityLabel="Anthropic API key" />
+              <TextInput style={styles.input} value={s.anthropicKey} onChangeText={(v) => update("anthropicKey", v)} placeholder="sk-ant-..." placeholderTextColor={colors.textMuted} autoCapitalize="none" autoCorrect={false} secureTextEntry returnKeyType="done" accessibilityLabel="Anthropic API key" />
               <Text style={styles.keyNote}>Stored only on your device. Never share this key.</Text>
             </View>
           </>
@@ -537,7 +539,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
         <Text style={styles.ruleSubtitle}>Get notified when an invoice is this many days past due:</Text>
         {s.rules.map((rule, i) => (
           <View key={i} style={styles.ruleRow}>
-            <TextInput style={styles.ruleInput} value={ruleDrafts[i] !== undefined ? ruleDrafts[i] : String(rule.days)} onChangeText={(v) => updateRule(i, v)} onBlur={() => commitRule(i)} keyboardType="number-pad" maxLength={3} accessibilityLabel={`Reminder rule ${i + 1}: days past due`} />
+            <TextInput style={styles.ruleInput} value={ruleDrafts[i] !== undefined ? ruleDrafts[i] : String(rule.days)} onChangeText={(v) => updateRule(i, v)} onBlur={() => commitRule(i)} keyboardType="number-pad" maxLength={3} inputAccessoryViewID="settingsDone" accessibilityLabel={`Reminder rule ${i + 1}: days past due`} />
             <Text style={styles.ruleSuffix}>days past due</Text>
             <TouchableOpacity onPress={() => removeRule(i)} style={styles.removeBtn} accessibilityRole="button" accessibilityLabel={`Remove reminder rule ${i + 1}`}>
               <Text style={styles.removeBtnText}>✕</Text>
@@ -761,6 +763,8 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
         </View>
       </ScrollView>
       </KeyboardAvoidingView>
+      {/* Serves the number-pad reminder-rule inputs. */}
+      <KeyboardDoneBar nativeID="settingsDone" />
 
       <Modal
         visible={deleteModalVisible}
@@ -787,6 +791,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               placeholderTextColor={colors.textMuted}
               autoCapitalize="characters"
               autoCorrect={false}
+              returnKeyType="done"
               accessibilityLabel={`Type ${DELETE_CONFIRM_PHRASE} to confirm account deletion`}
             />
             <View style={styles.modalBtnRow}>

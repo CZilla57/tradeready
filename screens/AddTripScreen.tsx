@@ -5,6 +5,7 @@ import { spacing, radius, fontSize } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { loadJobs, loadTrips, saveTrips } from '../utils/storage';
+import { KeyboardDoneBar } from '../components/KeyboardDoneBar';
 import { computeTripMiles, formatMiles, generateTripId, HOME_LABEL } from '../utils/mileageUtils';
 import type { Job, Trip } from '../types/models';
 import { track } from '../utils/analytics';
@@ -134,7 +135,7 @@ export default function AddTripScreen({ navigation, route }: MoneyStackScreenPro
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.label}>Date</Text>
-        <TextInput style={styles.input} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} accessibilityLabel="Trip date" />
+        <TextInput style={styles.input} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} returnKeyType="done" accessibilityLabel="Trip date" />
 
         <Text style={styles.label}>From</Text>
         {renderEndpoints(from, setFrom)}
@@ -143,17 +144,17 @@ export default function AddTripScreen({ navigation, route }: MoneyStackScreenPro
         {renderEndpoints(to, setTo)}
 
         <Text style={styles.label}>Odometer start</Text>
-        <TextInput style={styles.input} value={odoStart} onChangeText={setOdoStart} keyboardType="decimal-pad" placeholder="e.g. 45210" placeholderTextColor={colors.textMuted} accessibilityLabel="Odometer start" />
+        <TextInput style={styles.input} value={odoStart} onChangeText={setOdoStart} keyboardType="decimal-pad" placeholder="e.g. 45210" placeholderTextColor={colors.textMuted} inputAccessoryViewID="addTripDone" accessibilityLabel="Odometer start" />
 
         <Text style={styles.label}>Odometer end</Text>
-        <TextInput style={styles.input} value={odoEnd} onChangeText={setOdoEnd} keyboardType="decimal-pad" placeholder="e.g. 45240" placeholderTextColor={colors.textMuted} accessibilityLabel="Odometer end" />
+        <TextInput style={styles.input} value={odoEnd} onChangeText={setOdoEnd} keyboardType="decimal-pad" placeholder="e.g. 45240" placeholderTextColor={colors.textMuted} inputAccessoryViewID="addTripDone" accessibilityLabel="Odometer end" />
 
         <Text style={[styles.milesPreview, invalid && styles.milesInvalid]}>
           {invalid ? 'End reading is less than start' : `Trip distance: ${formatMiles(miles)}`}
         </Text>
 
         <Text style={styles.label}>Purpose (optional)</Text>
-        <TextInput style={[styles.input, styles.multiline]} value={purpose} onChangeText={setPurpose} placeholder="e.g. Drive to job site" placeholderTextColor={colors.textMuted} multiline accessibilityLabel="Trip purpose" />
+        <TextInput style={[styles.input, styles.multiline]} value={purpose} onChangeText={setPurpose} placeholder="e.g. Drive to job site" placeholderTextColor={colors.textMuted} multiline inputAccessoryViewID="addTripDone" accessibilityLabel="Trip purpose" />
 
         <TouchableOpacity
           style={styles.saveBtn}
@@ -177,6 +178,7 @@ export default function AddTripScreen({ navigation, route }: MoneyStackScreenPro
           </TouchableOpacity>
         )}
         <View style={{ height: 60 }} />
+        <KeyboardDoneBar nativeID="addTripDone" />
       </ScrollView>
     </SafeAreaView>
   );

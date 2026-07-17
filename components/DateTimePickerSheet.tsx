@@ -4,8 +4,13 @@
 // AddExpenseModal's date).
 //
 // iOS renders a bottom-sheet modal with a "Done" button; the picker updates
-// the value live and only "Done" (onClose) dismisses it. Android shows the
-// native default dialog, which dismisses itself on pick.
+// the value live, and "Done" commits the currently displayed value before
+// dismissing — so opening with nothing selected and tapping Done selects the
+// parent's fallback (today/now) instead of requiring the user to scroll away
+// and back (owner requirement, 2026-07-16). Re-committing an existing
+// selection is a no-op, and the sheet has no cancel path, so this is safe.
+// Android shows the native default dialog, whose OK already returns the
+// displayed date even when untouched.
 //
 // `mode` drives every styling difference — this matches the four originals
 // exactly: date → inline calendar, accent-tinted, centered; time → spinner,
@@ -60,7 +65,10 @@ export function DateTimePickerSheet({
             <View style={styles.header}>
               <Text style={styles.title}>{title}</Text>
               <TouchableOpacity
-                onPress={onClose}
+                onPress={() => {
+                  onChange(value);
+                  onClose();
+                }}
                 accessibilityRole="button"
                 accessibilityLabel="Done"
               >

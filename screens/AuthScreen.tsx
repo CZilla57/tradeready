@@ -205,6 +205,7 @@ export default function AuthScreen() {
             autoCorrect={false}
             textContentType="username"
             autoComplete="email"
+            returnKeyType="done"
           />
 
           {mode !== 'forgot' && (
@@ -223,6 +224,7 @@ export default function AuthScreen() {
                   autoCorrect={false}
                   textContentType={mode === 'signup' ? 'newPassword' : 'password'}
                   autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  returnKeyType="done"
                 />
                 <TouchableOpacity
                   style={styles.showToggle}

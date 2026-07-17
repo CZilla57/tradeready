@@ -175,6 +175,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           onChangeText={setSearch}
           accessibilityLabel="Search invoices"
           clearButtonMode="while-editing"
+          returnKeyType="search"
         />
       </View>
 

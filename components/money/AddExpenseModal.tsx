@@ -16,6 +16,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { persistPhoto } from '../../utils/photoStorage';
 import { DateTimePickerSheet } from '../DateTimePickerSheet';
+import { KeyboardDoneBar } from '../KeyboardDoneBar';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { EXPENSE_CATEGORIES } from '../../utils/moneyUtils';
@@ -175,6 +176,7 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
               placeholderTextColor={colors.textMuted}
               value={description}
               onChangeText={setDescription}
+              returnKeyType="done"
             />
 
             <Text style={styles.fieldLabel}>Amount</Text>
@@ -185,6 +187,7 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
               value={amount}
               onChangeText={setAmount}
               keyboardType="decimal-pad"
+              inputAccessoryViewID="expenseModalDone"
             />
 
             <Text style={styles.fieldLabel}>Date</Text>
@@ -236,6 +239,7 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
               onChangeText={setNotes}
               multiline
               numberOfLines={3}
+              inputAccessoryViewID="expenseModalDone"
             />
 
             <Text style={styles.fieldLabel}>
@@ -263,6 +267,9 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
               </TouchableOpacity>
             </View>
           </ScrollView>
+          {/* Mounted inside the Modal so the accessory attaches to its
+              window; serves the decimal-pad amount and multiline notes. */}
+          <KeyboardDoneBar nativeID="expenseModalDone" />
         </Animated.View>
       </View>
     </Modal>

@@ -8,6 +8,7 @@ import { loadPricebook, savePricebook, loadSettings } from "../utils/storage";
 import { calculateEstimate, buildEstimateInput } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Button, Card } from "../components/UI";
+import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -192,6 +193,7 @@ export default function PricebookEntryScreen({
               placeholderTextColor={colors.textMuted}
               value={name}
               onChangeText={setName}
+              returnKeyType="done"
               accessibilityLabel="Service name"
             />
 
@@ -203,6 +205,7 @@ export default function PricebookEntryScreen({
               value={description}
               onChangeText={setDescription}
               multiline
+              inputAccessoryViewID="pricebookEntryDone"
               accessibilityLabel="Description"
             />
 
@@ -218,6 +221,7 @@ export default function PricebookEntryScreen({
               }}
               onFocus={() => setShowCategorySuggestions(category.length > 0)}
               onBlur={() => setTimeout(() => setShowCategorySuggestions(false), 200)}
+              returnKeyType="done"
               accessibilityLabel="Category"
             />
             {showCategorySuggestions && filteredCategories.length > 0 && (
@@ -250,6 +254,7 @@ export default function PricebookEntryScreen({
                   value={laborHours}
                   onChangeText={setLaborHours}
                   keyboardType="decimal-pad"
+                  inputAccessoryViewID="pricebookEntryDone"
                   accessibilityLabel="Labor hours"
                 />
               </View>
@@ -261,6 +266,7 @@ export default function PricebookEntryScreen({
                   value={laborRate}
                   onChangeText={setLaborRate}
                   keyboardType="decimal-pad"
+                  inputAccessoryViewID="pricebookEntryDone"
                   accessibilityLabel="Labor rate in dollars per hour"
                 />
               </View>
@@ -275,6 +281,7 @@ export default function PricebookEntryScreen({
                   placeholderTextColor={colors.textMuted}
                   value={String(m.name)}
                   onChangeText={(v) => updateMaterial(m.id, "name", v)}
+                  returnKeyType="done"
                   accessibilityLabel="Material name"
                 />
                 <TextInput
@@ -284,6 +291,7 @@ export default function PricebookEntryScreen({
                   value={String(m.quantity)}
                   onChangeText={(v) => updateMaterial(m.id, "quantity", v)}
                   keyboardType="decimal-pad"
+                  inputAccessoryViewID="pricebookEntryDone"
                   accessibilityLabel="Material quantity"
                 />
                 <TextInput
@@ -293,6 +301,7 @@ export default function PricebookEntryScreen({
                   value={String(m.unitCost)}
                   onChangeText={(v) => updateMaterial(m.id, "unitCost", v)}
                   keyboardType="decimal-pad"
+                  inputAccessoryViewID="pricebookEntryDone"
                   accessibilityLabel="Material cost each"
                 />
                 <TouchableOpacity
@@ -312,17 +321,17 @@ export default function PricebookEntryScreen({
             <View style={[styles.fieldRow, { marginTop: spacing.md }]}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Markup %</Text>
-                <TextInput style={styles.input} value={materialMarkup} onChangeText={setMaterialMarkup} keyboardType="decimal-pad" accessibilityLabel="Material markup percent" />
+                <TextInput style={styles.input} value={materialMarkup} onChangeText={setMaterialMarkup} keyboardType="decimal-pad" inputAccessoryViewID="pricebookEntryDone" accessibilityLabel="Material markup percent" />
               </View>
               <View style={{ width: spacing.sm }} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Overhead %</Text>
-                <TextInput style={styles.input} value={overheadPercent} onChangeText={setOverheadPercent} keyboardType="decimal-pad" accessibilityLabel="Overhead percent" />
+                <TextInput style={styles.input} value={overheadPercent} onChangeText={setOverheadPercent} keyboardType="decimal-pad" inputAccessoryViewID="pricebookEntryDone" accessibilityLabel="Overhead percent" />
               </View>
               <View style={{ width: spacing.sm }} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Margin %</Text>
-                <TextInput style={styles.input} value={marginPercent} onChangeText={setMarginPercent} keyboardType="decimal-pad" accessibilityLabel="Profit margin percent" />
+                <TextInput style={styles.input} value={marginPercent} onChangeText={setMarginPercent} keyboardType="decimal-pad" inputAccessoryViewID="pricebookEntryDone" accessibilityLabel="Profit margin percent" />
               </View>
             </View>
           </Card>
@@ -435,6 +444,7 @@ export default function PricebookEntryScreen({
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      <KeyboardDoneBar nativeID="pricebookEntryDone" />
     </SafeAreaView>
   );
 }

@@ -270,6 +270,7 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
               placeholderTextColor={colors.textMuted}
               autoCapitalize="words"
               autoCorrect={false}
+              returnKeyType="done"
               accessibilityLabel="Address"
             />
             {(addressLoading || addressSuggestions.length > 0) && (

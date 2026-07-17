@@ -10,14 +10,13 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  InputAccessoryView,
-  Keyboard,
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import BaseField from "../components/Field";
+import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import type { TradeId } from "../types/models";
 import { saveSettings, saveInvoices, defaultSettings, defaultInvoices, markOnboardingComplete, clearSampleData } from "../utils/storage";
@@ -454,6 +453,7 @@ function StepTrade({ form, update, touched, markTouched }: StepProps & { touched
         onChangeText={v => update("region", v)}
         placeholder="e.g., Dallas, TX"
         placeholderTextColor={colors.textMuted}
+        returnKeyType="done"
       />
       <Text style={styles.rateNote}>Used to suggest competitive rates for your area.</Text>
 
@@ -531,23 +531,10 @@ function RateSuggestion({ form, update, touched, markTouched }: StepProps & { to
         placeholder="85"
         placeholderTextColor={colors.textMuted}
         accessibilityLabel="Your hourly labor rate in dollars"
-        inputAccessoryViewID={Platform.OS === "ios" ? "onboardingRateDone" : undefined}
+        inputAccessoryViewID="onboardingRateDone"
       />
-      {Platform.OS === "ios" && (
-        // The decimal pad has no return key; this gives it an explicit Done.
-        <InputAccessoryView nativeID="onboardingRateDone">
-          <View style={styles.keyboardBar}>
-            <TouchableOpacity
-              onPress={() => Keyboard.dismiss()}
-              style={styles.keyboardDoneBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Done"
-            >
-              <Text style={styles.keyboardDoneText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </InputAccessoryView>
-      )}
+      {/* The decimal pad has no return key; this gives it an explicit Done. */}
+      <KeyboardDoneBar nativeID="onboardingRateDone" />
       <Text style={styles.rateNote}>You can adjust this any time in Settings.</Text>
       {touched.laborRate && (isNaN(parseFloat(form.laborRate)) || parseFloat(form.laborRate) < 10 || parseFloat(form.laborRate) > 500) && (
         <Text style={styles.warningText}>This rate seems unusual — double-check before continuing.</Text>
@@ -797,9 +784,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     tradeLabelActive: { color: colors.accent, fontWeight: "600" },
     rateLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.xs },
     rateInput: { backgroundColor: colors.surface, borderRadius: radius.md, minHeight: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
-    keyboardBar: { backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
-    keyboardDoneBtn: { paddingVertical: 6, paddingHorizontal: 10 },
-    keyboardDoneText: { color: colors.accent, fontSize: fontSize.md, fontWeight: "600" },
     rateNote: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs },
     dataCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md, borderWidth: 2, borderColor: colors.border, ...shadow.card },
     dataCardActive: { borderColor: colors.accent, backgroundColor: colors.accentBg },
