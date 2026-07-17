@@ -327,6 +327,16 @@ or sign in on a different device, logged trips will not be present. Adding
 cloud sync later means adding a `trips` Supabase table plus one entry in
 `COLLECTION_TABLES`.
 
+**Estimate approvals are the one server-authoritative write path.** When a
+customer approves or declines an estimate via the hosted link, the Vercel
+backend writes `job.approval.*` straight to Supabase with the service-role
+key (bypassing the normal device→cloud flow) — the same pattern the Stripe
+webhook uses for invoice payments. The device picks the decision up on its
+next `pullRemote` (sign-in or app-foreground) and advances the job's status
+locally; the server never writes `job.status`. This write inherits the same
+last-write-wins envelope as everything else: an un-pushed local edit to that
+job can still clobber the pulled `approval.*` fields on its next push.
+
 **First-device detection uses job count only.** `initialSync` decides whether
 to push or pull based on whether the `jobs` table has any cloud rows for the
 user. A user with customers and invoices but no jobs would be treated as a new
