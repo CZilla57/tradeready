@@ -33,3 +33,23 @@ describe("advanceStatusForSchedule", () => {
     expect(advanceStatusForSchedule("paid", true)).toBe("paid");
   });
 });
+
+const { applyEstimateDecision } = require('../utils/jobStatus');
+
+describe('applyEstimateDecision', () => {
+  it('advances estimate_sent -> approved (via the pipeline)', () => {
+    expect(applyEstimateDecision('estimate_sent', 'approved')).toBe('approved');
+  });
+  it('advances lead -> approved defensively', () => {
+    expect(applyEstimateDecision('lead', 'approved')).toBe('approved');
+  });
+  it('sets estimate_sent -> declined', () => {
+    expect(applyEstimateDecision('estimate_sent', 'declined')).toBe('declined');
+  });
+  it('never regresses a job already past estimate_sent', () => {
+    for (const s of ['approved', 'scheduled', 'in_progress', 'complete', 'invoiced', 'paid']) {
+      expect(applyEstimateDecision(s, 'declined')).toBe(s);
+      expect(applyEstimateDecision(s, 'approved')).toBe(s);
+    }
+  });
+});

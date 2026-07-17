@@ -14,6 +14,7 @@ const STATUS_COLOR_KEY: Record<JobStatus, keyof ColorScheme> = {
   complete: 'statusComplete',
   invoiced: 'statusInvoiced',
   paid: 'statusPaid',
+  declined: 'statusDeclined',
 };
 
 interface ConversionFunnelCardProps {
