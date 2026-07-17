@@ -60,4 +60,22 @@ function constantTimeEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-module.exports = { fetchJob, fetchJobForUser, upsertJob, constantTimeEqual };
+// Decides the approval object to persist when (re)generating an approval link.
+// Consent integrity: once a job is APPROVED, its snapshot is frozen — re-sending
+// returns the existing link unchanged and never overwrites the approved snapshot.
+// `mintToken` is injected (not called here) so this stays pure/deterministic.
+function planApprovalWrite(existing, snapshot, sentAt, mintToken) {
+  const prev = existing || {};
+  if (prev.decision === 'approved' && prev.token) {
+    return { approval: prev, changed: false, token: prev.token, sentAt: prev.sentAt };
+  }
+  const token = prev.token || mintToken();
+  return {
+    approval: { ...prev, token, sentAt, snapshot },
+    changed: true,
+    token,
+    sentAt,
+  };
+}
+
+module.exports = { fetchJob, fetchJobForUser, upsertJob, constantTimeEqual, planApprovalWrite };

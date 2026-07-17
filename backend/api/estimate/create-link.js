@@ -4,7 +4,7 @@
 // create-payment-link.js. The device never needs a secure RNG.
 
 const crypto = require('crypto');
-const { fetchJobForUser, upsertJob } = require('../../lib/estimateStore');
+const { fetchJobForUser, upsertJob, planApprovalWrite } = require('../../lib/estimateStore');
 const { createRateLimiter } = require('../../lib/guards');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -51,21 +51,18 @@ module.exports = async function handler(req, res) {
   }
 
   const existing = row.data?.approval || {};
-  // Reuse an outstanding token so re-sending doesn't break a link already out.
-  const token = existing.token || crypto.randomBytes(24).toString('hex');
   const sentAt = new Date().toISOString();
-  const nextData = {
-    ...row.data,
-    approval: { ...existing, token, sentAt, snapshot },
-  };
+  const plan = planApprovalWrite(existing, snapshot, sentAt, () => crypto.randomBytes(24).toString('hex'));
 
-  try {
-    await upsertJob(jobId, userId, nextData);
-  } catch (err) {
-    console.error('[estimate/create-link] upsert failed:', err.message);
-    return res.status(500).json({ error: 'Database error' });
+  if (plan.changed) {
+    try {
+      await upsertJob(jobId, userId, { ...row.data, approval: plan.approval });
+    } catch (err) {
+      console.error('[estimate/create-link] upsert failed:', err.message);
+      return res.status(500).json({ error: 'Database error' });
+    }
   }
 
-  const url = `${PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&t=${encodeURIComponent(token)}`;
-  return res.status(200).json({ url, token, sentAt });
+  const url = `${PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&t=${encodeURIComponent(plan.token)}`;
+  return res.status(200).json({ url, token: plan.token, sentAt: plan.sentAt });
 };
