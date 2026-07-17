@@ -52,7 +52,7 @@ import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
 import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
-import { loadSettings, migrateCustomerIdentity, migrateSampleDataIds } from "./utils/storage";
+import { loadSettings, migrateCustomerIdentity, migrateSampleDataIds, applyEstimateDecisions } from "./utils/storage";
 import { rootGateLoading } from "./utils/rootGate";
 import { fontScaleChanged } from "./utils/fontScaleRestart";
 import { getTradeNickname } from "./utils/pricingEngine";
@@ -309,6 +309,8 @@ function RootNavigator() {
     migrateCustomerIdentity()
       .catch(() => {})
       .then(() => migrateSampleDataIds())
+      .catch(() => {})
+      .then(() => applyEstimateDecisions())
       .catch(() => {});
   }, [session, bootstrapping]);
 
