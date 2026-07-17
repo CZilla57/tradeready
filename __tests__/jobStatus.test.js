@@ -52,4 +52,8 @@ describe('applyEstimateDecision', () => {
       expect(applyEstimateDecision(s, 'approved')).toBe(s);
     }
   });
+  it('leaves a declined job unchanged (no resurrection to approved)', () => {
+    expect(applyEstimateDecision('declined', 'approved')).toBe('declined');
+    expect(applyEstimateDecision('declined', 'declined')).toBe('declined');
+  });
 });

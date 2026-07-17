@@ -17,7 +17,7 @@ function headers() {
 // Returns { user_id, data } or null.
 async function fetchJob(jobId) {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&select=user_id,data`,
+    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&deleted=eq.false&select=user_id,data`,
     { headers: headers() }
   );
   if (!res.ok) throw new Error(`Supabase fetch ${res.status}: ${await res.text()}`);
@@ -28,7 +28,7 @@ async function fetchJob(jobId) {
 // Returns { user_id, data } only if the row belongs to userId; else null.
 async function fetchJobForUser(jobId, userId) {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&user_id=eq.${encodeURIComponent(userId)}&select=user_id,data`,
+    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&user_id=eq.${encodeURIComponent(userId)}&deleted=eq.false&select=user_id,data`,
     { headers: headers() }
   );
   if (!res.ok) throw new Error(`Supabase fetch ${res.status}: ${await res.text()}`);

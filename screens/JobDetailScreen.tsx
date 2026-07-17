@@ -617,7 +617,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     if (!job) return;
     const jobs = await loadJobs();
     const reset = jobs.map((j): Job =>
-      j.id === job.id ? { ...j, status: "estimate_sent", approval: j.approval ? { ...j.approval, decision: undefined, consentAt: undefined, declineReason: undefined } : undefined } : j
+      j.id === job.id ? { ...j, status: "estimate_sent", approval: j.approval ? { ...j.approval, decision: undefined, consentAt: undefined, declineReason: undefined, signerName: undefined } : undefined } : j
     );
     await saveJobs(reset);
     navigation.navigate("SendEstimate", { jobId: job.id });
