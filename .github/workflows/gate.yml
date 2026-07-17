@@ -2,6 +2,11 @@
 # from the repo root — now also enforced on every push and PR so a red gate
 # can't land unnoticed. Same three legs, same green criteria (lint runs with
 # --max-warnings=0 via the package script).
+#
+# A fourth leg (2026-07-16): gitleaks secret scanning over the full git
+# history. Known public-by-design client keys (Supabase publishable key,
+# PostHog project key) are fingerprinted in .gitleaksignore; anything else
+# fails the gate. --redact keeps any real finding out of the public CI logs.
 name: Verify gate
 
 on:
@@ -31,3 +36,17 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — the scan covers every commit, not just HEAD
+
+      - name: Secret scan (gitleaks, full history)
+        run: |
+          curl -sSL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks git . --no-banner --redact
