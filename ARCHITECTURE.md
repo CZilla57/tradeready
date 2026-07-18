@@ -158,6 +158,12 @@ Everything financial in one place.
 - jobId (optional)
 - number, amount, due, paid, paidAt
 - paymentLinkUrl
+- payments (optional): ledger of partial payments — `{id, amount, date, method, note?, stripeSessionId?}`.
+  A deposit, progress draws and a final balance are separate entries. `paid` is
+  retained and maintained as "balance within half a cent of zero".
+  **Absent on invoices created before the ledger existed** — `utils/invoicePayments.ts`
+  derives those from `paid`/`amount`/`paidAt`, which is why no migration was needed.
+- depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
 
 ### Expense
 - id, date, amount
