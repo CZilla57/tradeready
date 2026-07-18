@@ -1,6 +1,13 @@
 // POST /api/stripe/webhook
-// Stripe Connect webhook — marks invoices paid in Supabase when a customer
-// completes payment through a Stripe payment link.
+// Stripe Connect webhook — appends a ledger entry to the invoice in Supabase
+// when a customer completes payment through a Stripe payment link.
+//
+// The invoice's `payments` array is the source of truth for what's been paid;
+// `paid`/`paidAt` are written alongside it as a best-effort CACHE (not the
+// source of truth) so simple reads don't need to sum the ledger. A Postgres
+// trigger unions ledger entries from concurrent writers, so this handler's
+// write can only ever ADD an entry — it cannot shrink or clobber one written
+// elsewhere.
 //
 // The app's sync layer (pullRemote) picks up the Supabase change on the next
 // focus event, so the invoice appears paid automatically without any manual step.
@@ -18,6 +25,7 @@
 //   SUPABASE_SERVICE_ROLE_KEY
 
 const Stripe = require('stripe');
+const { amountPaid, isFullyPaid } = require('../../lib/paymentMath');
 
 const STRIPE_SECRET_KEY            = process.env.STRIPE_SECRET_KEY;
 const STRIPE_CONNECT_WEBHOOK_SECRET = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
@@ -63,7 +71,7 @@ const handler = async function (req, res) {
   }
 
   try {
-    await markInvoicePaid(invoiceId);
+    await recordStripePayment(invoiceId, session);
     return res.status(200).json({ received: true });
   } catch (err) {
     console.error('[stripe/webhook] failed to mark invoice paid:', err.message);
@@ -78,13 +86,12 @@ module.exports = handler;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function markInvoicePaid(invoiceId) {
+async function recordStripePayment(invoiceId, session) {
   const supabaseHeaders = {
     Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
     apikey: SUPABASE_SERVICE_ROLE_KEY,
   };
 
-  // Fetch the current invoice record so we can merge the paid flag in
   const fetchRes = await fetch(
     `${SUPABASE_URL}/rest/v1/invoices?id=eq.${encodeURIComponent(invoiceId)}&select=user_id,data`,
     { headers: supabaseHeaders }
@@ -96,20 +103,52 @@ async function markInvoicePaid(invoiceId) {
 
   const rows = await fetchRes.json();
   if (!rows.length) {
-    // Invoice hasn't synced to Supabase yet (e.g. device was offline when
-    // the link was generated). Log and return — don't error, and don't ask
-    // Stripe to retry, since retries won't help until the device syncs first.
+    // Invoice hasn't synced to Supabase yet (device was offline when the link
+    // was generated). Log and return — retries won't help until it syncs.
     console.warn(`[stripe/webhook] invoice ${invoiceId} not found in Supabase — skipping`);
     return;
   }
 
   const { user_id, data } = rows[0];
+  const paymentId = `stripe_${session.id}`;
+  const existing = Array.isArray(data?.payments) ? data.payments : [];
 
-  // Guard: already marked paid (duplicate webhook delivery)
-  if (data?.paid) return;
+  // Idempotency: a repeated Stripe delivery must not append twice. The
+  // Postgres trigger's union would collapse the duplicate id anyway, but
+  // checking here keeps the write itself clean.
+  if (existing.some((p) => p && p.id === paymentId)) return;
 
-  const today = new Date().toISOString().split('T')[0];
-  const updatedData = { ...data, paid: true, paidAt: today };
+  // NOTE: dated from UTC. The device records local dates, so a payment near
+  // midnight at a large offset can land on the adjacent day — and since each
+  // payment is individually revenue-bucketed, that can shift a month boundary.
+  // The server does not know the user's timezone. Accepted limitation.
+  const payment = {
+    id: paymentId,
+    amount: (session.amount_total || 0) / 100,
+    date: new Date().toISOString().split('T')[0],
+    method: 'card',
+    stripeSessionId: session.id,
+  };
+
+  const payments = [...existing, payment];
+  const nextData = { ...data, payments };
+
+  // paid/paidAt are a best-effort CACHE, not the source of truth: the trigger
+  // may union in entries this function never saw. The device re-derives both
+  // on sync, and the reminder cron derives from the ledger rather than reading
+  // these fields.
+  const settled = isFullyPaid(nextData);
+  nextData.paid = settled;
+  if (settled) {
+    nextData.paidAt = payment.date;
+  } else {
+    delete nextData.paidAt;
+  }
+
+  console.log(
+    `[stripe/webhook] invoice ${invoiceId}: +$${payment.amount} (${paymentId}), ` +
+    `paid ${amountPaid(nextData)} of ${nextData.amount}`
+  );
 
   const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/invoices`, {
     method: 'POST',
@@ -121,7 +160,7 @@ async function markInvoicePaid(invoiceId) {
     body: JSON.stringify({
       id: invoiceId,
       user_id,
-      data: updatedData,
+      data: nextData,
       updated_at: new Date().toISOString(),
       deleted: false,
     }),
