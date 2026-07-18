@@ -741,4 +741,22 @@ describe("amount coercion", () => {
     const i = inv({ amount: "abc", payments: [pmt({ id: "p1", amount: "xyz" })] });
     expect(Number.isFinite(balanceDue(i))).toBe(true);
   });
+
+  test("a malformed payment amount cannot desync isFullyPaid from the paid flag", () => {
+    // amountPaid coerces the bad entry to 0, so $1000 of good payments settles
+    // the invoice. withDerivedPaidFields must agree — if it summed p.amount raw
+    // it would produce NaN and `paid` would stay false forever.
+    const withGood = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 1000, date: "2026-07-01" }));
+    const withBad = applyPayment(withGood, pmt({ id: "p2", amount: undefined, date: "2026-07-02" }));
+    expect(amountPaid(withBad)).toBe(1000);
+    expect(isFullyPaid(withBad)).toBe(true);
+    expect(withBad.paid).toBe(true);
+  });
+
+  test("a malformed payment amount does not break the paidAt walk", () => {
+    const a = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: undefined, date: "2026-07-01" }));
+    const b = applyPayment(a, pmt({ id: "p2", amount: 1000, date: "2026-07-10" }));
+    expect(b.paid).toBe(true);
+    expect(b.paidAt).toBe("2026-07-10");
+  });
 });

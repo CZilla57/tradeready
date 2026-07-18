@@ -111,7 +111,7 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
   // would re-enter the LEGACY FALLBACK and read back the old amount instead
   // of zero. The `payments.length > 0` guard also stops a $0 invoice with an
   // empty ledger from being auto-marked paid.
-  const collected = payments.reduce((sum, p) => (p.voidedAt ? sum : sum + p.amount), 0);
+  const collected = payments.reduce((sum, p) => (p.voidedAt ? sum : sum + toAmount(p.amount)), 0);
   const settled = payments.length > 0 && toAmount(invoice.amount) - collected <= PAID_EPSILON;
   const next: Invoice = { ...invoice, payments };
   if (settled) {
@@ -132,7 +132,7 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
     let closingDate = chronological[chronological.length - 1].date;
     for (const p of chronological) {
       if (p.voidedAt) continue;
-      running += p.amount;
+      running += toAmount(p.amount);
       if (running >= toAmount(invoice.amount) - PAID_EPSILON) {
         closingDate = p.date;
         break;
