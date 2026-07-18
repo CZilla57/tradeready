@@ -159,8 +159,11 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
   function confirmVoid(invoice: Invoice, paymentId: string) {
     const payment = effectivePayments(invoice).find((p) => p.id === paymentId);
     if (!payment) return;
-    const voidedAt = new Date().toISOString().split('T')[0];
-    const after = voidPayment(invoice, paymentId, voidedAt);
+    // Only for the dialog's balance text — computed once, up front, with
+    // whatever date the dialog happens to be built on. The write below
+    // recomputes its own date at confirm time, so a void confirmed across
+    // midnight isn't recorded against yesterday.
+    const after = voidPayment(invoice, paymentId, new Date().toISOString().split('T')[0]);
     Alert.alert(
       "Void this payment?",
       `This can't be undone. ${invoice.number} will go back to ${formatMoney(balanceDue(after))} due.\n\nTo correct a mistake, record a new payment.`,
@@ -172,9 +175,11 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           onPress: async () => {
             // Same staleness concern as handleRecordPayment: re-resolve against
             // the live list rather than the snapshot captured when the modal
-            // opened.
+            // opened. The void date is also recomputed here, at confirm time,
+            // rather than reusing the dialog-build-time date above.
             const current = invoices.find((i) => i.id === invoice.id) ?? invoice;
-            const confirmedAfter = voidPayment(current, paymentId, voidedAt);
+            const confirmVoidedAt = new Date().toISOString().split('T')[0];
+            const confirmedAfter = voidPayment(current, paymentId, confirmVoidedAt);
             const updated = invoices.map((i) => (i.id === invoice.id ? confirmedAfter : i));
             setInvoices(updated);
             await saveInvoices(updated);

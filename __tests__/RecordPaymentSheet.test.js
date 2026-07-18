@@ -30,7 +30,7 @@ describe("RecordPaymentSheet", () => {
     const { getByLabelText } = await render(
       <RecordPaymentSheet visible invoice={partly} onSave={noop} onClose={noop} />
     );
-    expect(getByLabelText("Amount").props.value).toBe("600");
+    expect(getByLabelText("Amount").props.value).toBe("600.00");
   });
 
   test("does not call onSave for a zero amount", async () => {

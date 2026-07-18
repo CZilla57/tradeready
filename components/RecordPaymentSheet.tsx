@@ -46,7 +46,7 @@ export function RecordPaymentSheet({
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
   const balance = balanceDue(invoice);
-  const [amount, setAmount] = useState(String(balance));
+  const [amount, setAmount] = useState(balance.toFixed(2));
   const [date, setDate] = useState(new Date());
   const [method, setMethod] = useState<PaymentMethod>("cash");
   const [note, setNote] = useState("");
@@ -56,7 +56,7 @@ export function RecordPaymentSheet({
   // Re-seed whenever the sheet reopens or the balance changes underneath it.
   useEffect(() => {
     if (visible) {
-      setAmount(String(balanceDue(invoice)));
+      setAmount(balanceDue(invoice).toFixed(2));
       setDate(new Date());
       setMethod("cash");
       setNote("");
