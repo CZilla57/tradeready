@@ -60,7 +60,7 @@ export function newPaymentId(): string {
  * Returns the existing ledger untouched when one is already present.
  */
 export function materializeLegacyLedger(invoice: Invoice): Payment[] {
-  if (invoice.payments && invoice.payments.length > 0) return invoice.payments;
+  if (invoice.payments && invoice.payments.length > 0) return [...invoice.payments];
   if (!invoice.paid) return [];
   return [
     {
@@ -75,13 +75,23 @@ export function materializeLegacyLedger(invoice: Invoice): Payment[] {
 
 /** Recompute the legacy `paid`/`paidAt` fields from a ledger. */
 function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
+  // Derive `settled` from the ledger itself, not from amountPaid(next) — that
+  // object still carries the input's stale `paid` flag, so an empty ledger
+  // would re-enter the LEGACY FALLBACK and read back the old amount instead
+  // of zero. The `payments.length > 0` guard also stops a $0 invoice with an
+  // empty ledger from being auto-marked paid.
+  const collected = payments.reduce((sum, p) => sum + p.amount, 0);
+  const settled = payments.length > 0 && invoice.amount - collected <= PAID_EPSILON;
   const next: Invoice = { ...invoice, payments };
-  const settled = balanceDue(next) <= PAID_EPSILON;
   if (settled) {
     // paidAt is the date of the payment that closed the balance — walk the
-    // ledger in order and stop at the one that crossed the line.
+    // ledger in INSERTION order (not date order) and stop at the one that
+    // crossed the line. A backdated payment recorded after a later-dated one
+    // therefore yields a paidAt earlier than a payment already in the
+    // ledger — that is intentional: paidAt means "the payment that closed
+    // the balance", not "the latest date in the ledger".
     let running = 0;
-    let closingDate = payments.length ? payments[payments.length - 1].date : invoice.due;
+    let closingDate = payments[payments.length - 1].date;
     for (const p of payments) {
       running += p.amount;
       if (running >= invoice.amount - PAID_EPSILON) {

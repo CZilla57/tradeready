@@ -151,9 +151,11 @@ describe("materializeLegacyLedger", () => {
   test("a legacy unpaid invoice yields an empty ledger", () => {
     expect(materializeLegacyLedger(inv({ paid: false }))).toEqual([]);
   });
-  test("an existing ledger is returned untouched", () => {
+  test("an existing ledger is returned as a copy, not the caller's live array", () => {
     const existing = [pmt({ amount: 400 })];
-    expect(materializeLegacyLedger(inv({ payments: existing }))).toEqual(existing);
+    const result = materializeLegacyLedger(inv({ payments: existing }));
+    expect(result).not.toBe(existing);
+    expect(result).toEqual(existing);
   });
 });
 
@@ -185,6 +187,23 @@ describe("applyPayment", () => {
     applyPayment(original, pmt({ amount: 400 }));
     expect(original.payments).toBeUndefined();
     expect(original.paid).toBe(false);
+  });
+  test("does not mutate the input invoice's existing ledger array", () => {
+    const original = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400 })] });
+    applyPayment(original, pmt({ id: "p2", amount: 600 }));
+    expect(original.payments).toHaveLength(1);
+    expect(original.payments[0]).toEqual(pmt({ id: "p1", amount: 400 }));
+  });
+  test("a single payment that overshoots the total settles the invoice", () => {
+    const result = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 1200, date: "2026-07-05" }));
+    expect(result.paid).toBe(true);
+    expect(result.paidAt).toBe("2026-07-05");
+    expect(balanceDue(result)).toBe(0);
+  });
+  test("applying a payment to an invoice with an empty ledger AND paid:true preserves the legacy amount", () => {
+    const legacy = inv({ paid: true, amount: 1000, paidAt: "2026-06-15", payments: [] });
+    const result = applyPayment(legacy, pmt({ id: "p2", amount: 50, date: "2026-07-02" }));
+    expect(amountPaid(result)).toBe(1050);
   });
 });
 
@@ -219,5 +238,33 @@ describe("removePayment", () => {
     const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
     removePayment(withPayment, "p1");
     expect(withPayment.payments).toHaveLength(1);
+  });
+  test("removing the only payment from a settled invoice un-pays it", () => {
+    const settled = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 1000, date: "2026-07-01" }));
+    const result = removePayment(settled, "p1");
+    expect(result.paid).toBe(false);
+    expect(result.paidAt).toBeUndefined();
+    expect(amountPaid(result)).toBe(0);
+    expect(balanceDue(result)).toBe(1000);
+  });
+  test("a legacy paid invoice can be un-paid by removing its materialized entry", () => {
+    const legacy = inv({ id: "i1", paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined });
+    const result = removePayment(legacy, "legacy_i1");
+    expect(result.paid).toBe(false);
+    expect(balanceDue(result)).toBe(1000);
+  });
+});
+
+describe("paidAt ordering — insertion order, not date order (pinned intentional behavior)", () => {
+  test("a backdated payment recorded second still closes on ITS date, even though it precedes the first payment's date", () => {
+    // p1 is recorded first with a LATER date; p2 is recorded second (backdated)
+    // with an EARLIER date. Insertion order means p2 — the one that arrives
+    // and crosses the balance — is the closing payment, even though its date
+    // is earlier than p1's. This is the intended reading of "the payment that
+    // closed the balance": it walks recording order, not calendar order.
+    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-20" }));
+    const second = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-01" }));
+    expect(second.paid).toBe(true);
+    expect(second.paidAt).toBe("2026-07-01");
   });
 });
