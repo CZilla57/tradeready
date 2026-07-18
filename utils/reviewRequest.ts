@@ -23,6 +23,18 @@ async function saveRecords(records: ReviewRequestRecord[]): Promise<void> {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
 
+// True when the rendered message would be missing its review link: the template
+// still references {googleReviewLink} but no link is set. Returns false when the
+// user removed the placeholder or hardcoded a URL into the template — in those
+// cases there is nothing to guard. The ReviewRequest screen uses this to block
+// sending a linkless review ask.
+export function reviewMessageMissingLink(
+  template: string,
+  googleReviewLink: string,
+): boolean {
+  return template.includes("{googleReviewLink}") && googleReviewLink.trim() === "";
+}
+
 export function buildReviewMessage(
   template: string,
   businessName: string,
@@ -30,11 +42,21 @@ export function buildReviewMessage(
   googleReviewLink: string,
 ): string
 {
-  return template
-
+  const withNames = template
     .replace(/\{businessName\}/g, businessName)
-    .replace(/\{customerName\}/g, customerName)
-    .replace(/\{googleReviewLink\}/g, googleReviewLink);
+    .replace(/\{customerName\}/g, customerName);
+
+  // When there's no link, drop the placeholder along with a dangling colon and
+  // the blank line it would otherwise leave, so the preview reads cleanly
+  // instead of showing an empty hole. (Sending is blocked in this state.)
+  if (googleReviewLink.trim() === "") {
+    return withNames
+      .replace(/:?[ \t]*\n*\{googleReviewLink\}\n*[ \t]*/g, "\n\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  return withNames.replace(/\{googleReviewLink\}/g, googleReviewLink);
 }
 
 export async function isReviewRequestPending(jobId: string): Promise<boolean> {

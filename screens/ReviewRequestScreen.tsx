@@ -13,6 +13,7 @@ import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadSettings } from "../utils/storage";
 import {
   buildReviewMessage,
+  reviewMessageMissingLink,
   getReviewRequestRecord,
   markReviewRequestSent,
 } from "../utils/reviewRequest";
@@ -37,6 +38,7 @@ export default function ReviewRequestScreen({
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
   const [message, setMessage] = useState("");
+  const [missingLink, setMissingLink] = useState(false);
   const [sent, setSent] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -47,6 +49,7 @@ export default function ReviewRequestScreen({
         getReviewRequestRecord(jobId),
       ]);
       setSettings(s);
+      setMissingLink(reviewMessageMissingLink(s.reviewRequestTemplate, s.googleReviewLink));
 
       if (record) {
         setCustomerName(record.customerName);
@@ -143,6 +146,27 @@ export default function ReviewRequestScreen({
               You already sent a review request for this job.
             </Text>
           </Card>
+        ) : missingLink ? (
+          <Card style={styles.noticeCard}>
+            <Text style={styles.noticeTitle}>Add your Google review link</Text>
+            <Text style={styles.noticeSub}>
+              Review requests need a link for customers to leave a review. Add your
+              Google review link in Settings, then come back to send this request.
+            </Text>
+            <Button
+              label="Go to Settings"
+              onPress={() => navigation.navigate("Settings")}
+              style={{ marginTop: spacing.md }}
+            />
+            <TouchableOpacity
+              style={[styles.skipBtn, { alignSelf: "center", marginTop: spacing.sm }]}
+              onPress={handleSkip}
+              accessibilityRole="button"
+              accessibilityLabel="Skip review request"
+            >
+              <Text style={styles.skipBtnText}>Skip</Text>
+            </TouchableOpacity>
+          </Card>
         ) : (
           <>
             <Divider />
@@ -224,6 +248,21 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       fontSize: fontSize.sm,
       color: colors.success,
       marginTop: 2,
+    },
+    noticeCard: {
+      backgroundColor: colors.warningBg,
+      marginTop: spacing.sm,
+    },
+    noticeTitle: {
+      fontSize: fontSize.md,
+      fontWeight: "600",
+      color: colors.warning,
+    },
+    noticeSub: {
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+      marginTop: spacing.xs,
+      lineHeight: 20,
     },
     sendLabel: {
       fontSize: fontSize.sm,
