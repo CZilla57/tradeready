@@ -19,6 +19,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
+import { DEFAULT_CONFIRM_TEMPLATE, DEFAULT_ON_MY_WAY_TEMPLATE } from "../utils/appointmentTemplates";
 import { syncNotifications } from "../utils/notifications";
 import { composeEmail } from "../utils/messaging";
 import { syncIfOnline } from "../utils/sync";
@@ -579,6 +580,53 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
             When on, TradeReady emails the customer a payment reminder once an invoice passes your earliest reminder age — no tap needed. Sent under your business name; replies come to your email.
           </Text>
         </View>
+
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Appointment reminders</Text>
+            <Switch
+              value={!!s.appointmentRemindersEnabled}
+              onValueChange={(v) => update("appointmentRemindersEnabled", v)}
+              trackColor={{ true: colors.accent }}
+              accessibilityLabel="Appointment reminders"
+            />
+          </View>
+          <Text style={styles.keyNote}>
+            Remind me the evening before a scheduled job to confirm with the customer.
+          </Text>
+        </View>
+        {!!s.appointmentRemindersEnabled && (
+          <>
+            <View style={styles.card}>
+              <Field
+                label="Confirmation message"
+                value={s.appointmentConfirmTemplate ?? DEFAULT_CONFIRM_TEMPLATE}
+                onChangeText={(v) => update("appointmentConfirmTemplate", v)}
+                multiline
+                autoCapitalize="sentences"
+                colors={colors}
+                shadow={shadow}
+              />
+              <Text style={styles.keyNote}>
+                Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
+              </Text>
+            </View>
+            <View style={styles.card}>
+              <Field
+                label="On-my-way message"
+                value={s.onMyWayTemplate ?? DEFAULT_ON_MY_WAY_TEMPLATE}
+                onChangeText={(v) => update("onMyWayTemplate", v)}
+                multiline
+                autoCapitalize="sentences"
+                colors={colors}
+                shadow={shadow}
+              />
+              <Text style={styles.keyNote}>
+                Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
+              </Text>
+            </View>
+          </>
+        )}
 
         <Divider />
 
