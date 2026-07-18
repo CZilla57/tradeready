@@ -1,4 +1,5 @@
 import type { Invoice } from "../types/models";
+import { isFullyPaid } from "./invoicePayments";
 
 export interface CustomerPaySpeed {
   name: string;
@@ -33,7 +34,10 @@ export function computeInvoiceAging(invoices: Invoice[]): InvoiceAgingResult {
   let paidCount = 0;
 
   for (const inv of invoices) {
-    if (!inv.paid || !inv.paidAt || !inv.due) continue;
+    // Aging measures how long an invoice took to SETTLE, so partly-paid ones
+    // are correctly excluded — they haven't finished aging. paidAt still holds
+    // the settling payment's date.
+    if (!isFullyPaid(inv) || !inv.paidAt || !inv.due) continue;
     const days = daysBetween(inv.due, inv.paidAt);
     totalDays += days;
     paidCount++;

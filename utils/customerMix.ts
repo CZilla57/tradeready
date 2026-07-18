@@ -1,4 +1,5 @@
 import type { Invoice } from "../types/models";
+import { collectedInRange } from "./invoicePayments";
 
 export interface CustomerMixResult {
   newCount: number;
@@ -13,11 +14,6 @@ function parseLocalDate(dateString: string): Date {
     return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
   }
   return new Date(dateString);
-}
-
-function isInRange(dateString: string, start: Date, end: Date): boolean {
-  const d = parseLocalDate(dateString);
-  return d >= start && d <= end;
 }
 
 export function computeCustomerMix(
@@ -40,12 +36,13 @@ export function computeCustomerMix(
 
   const revenueByCustomer = new Map<string, number>();
   for (const inv of invoices) {
-    if (!inv.paid) continue;
-    const dateStr = inv.paidAt ?? inv.due;
-    if (!dateStr || !isInRange(dateStr, start, end)) continue;
     const name = (inv.customer || "").trim().toLowerCase();
     if (!name) continue;
-    revenueByCustomer.set(name, (revenueByCustomer.get(name) || 0) + (inv.amount || 0));
+    // Each payment counts in the window it actually arrived in, so a deposit
+    // and its final balance land in the months they were received.
+    const collected = collectedInRange([inv], start, end);
+    if (collected === 0) continue;
+    revenueByCustomer.set(name, (revenueByCustomer.get(name) || 0) + collected);
   }
 
   let newCount = 0;

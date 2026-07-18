@@ -1,5 +1,5 @@
 import type { Invoice } from "../types/models";
-import { parseLocalDate } from "./moneyUtils";
+import { collectedByPeriod } from "./invoicePayments";
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -18,20 +18,6 @@ export interface SeasonalTrendsResult {
   yoyChangePct: number | null;
 }
 
-function incomeInMonth(invoices: Invoice[], year: number, month: number): number {
-  let total = 0;
-  for (const inv of invoices) {
-    if (!inv.paid) continue;
-    const dateStr = inv.paidAt ?? inv.due;
-    if (!dateStr) continue;
-    const d = parseLocalDate(dateStr);
-    if (d.getFullYear() === year && d.getMonth() === month) {
-      total += inv.amount || 0;
-    }
-  }
-  return total;
-}
-
 export function computeSeasonalTrends(
   invoices: Invoice[],
   now: Date = new Date(),
@@ -40,12 +26,24 @@ export function computeSeasonalTrends(
   let thisYearTotal = 0;
   let lastYearTotal = 0;
 
+  // Build this-year and last-year windows for all 12 months, then collect once.
+  const windows: { start: Date; end: Date }[] = [];
+  const monthMeta: { year: number; month: number }[] = [];
   for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const year = d.getFullYear();
     const month = d.getMonth();
-    const thisYear = incomeInMonth(invoices, year, month);
-    const lastYear = incomeInMonth(invoices, year - 1, month);
+    monthMeta.push({ year, month });
+    windows.push({ start: new Date(year, month, 1), end: new Date(year, month + 1, 0) });
+    windows.push({ start: new Date(year - 1, month, 1), end: new Date(year - 1, month + 1, 0) });
+  }
+  const totals = collectedByPeriod(invoices, windows);
+
+  for (let k = 0; k < monthMeta.length; k++) {
+    const { year, month } = monthMeta[k];
+    // totals[2*k] is month k this year; totals[2*k + 1] is the same month last year.
+    const thisYear = totals[2 * k];
+    const lastYear = totals[2 * k + 1];
 
     thisYearTotal += thisYear;
     lastYearTotal += lastYear;

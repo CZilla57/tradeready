@@ -82,4 +82,18 @@ describe("buildCustomerList", () => {
   test("skips an invoice with no customer name and no id", () => {
     expect(buildCustomerList([inv({ id: "i1", customer: "", amount: 100 })], [])).toEqual([]);
   });
+
+  test("a partly-paid invoice splits across spent and owed", () => {
+    const list = buildCustomerList(
+      [
+        inv({
+          id: "i1", customer: "Acme", amount: 1000, paid: false,
+          payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash" }],
+        }),
+      ],
+      [],
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ totalSpent: 400, totalOwed: 600 });
+  });
 });

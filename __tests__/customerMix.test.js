@@ -105,4 +105,20 @@ describe("computeCustomerMix", () => {
     const result = computeCustomerMix(invoices, JUL_START, JUL_END);
     expect(result.newCount).toBe(1);
   });
+
+  it("counts revenue in the month each payment actually arrived", () => {
+    const invoices = [
+      makeInvoice({
+        customer: "Alice", due: "2026-03-01", paid: false, paidAt: undefined, amount: 1000,
+        payments: [
+          { id: "p1", amount: 400, date: "2026-06-15", method: "cash" },
+          { id: "p2", amount: 600, date: "2026-07-10", method: "cash" },
+        ],
+      }),
+    ];
+    const result = computeCustomerMix(invoices, JUL_START, JUL_END);
+    // Due date (March) is before the July window, so Alice is returning.
+    expect(result.returningCount).toBe(1);
+    expect(result.returningRevenue).toBe(600);
+  });
 });

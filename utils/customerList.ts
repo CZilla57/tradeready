@@ -6,7 +6,7 @@
 // normalized name, and finally derive a name-keyed entry so an un-migrated
 // invoice-only customer still appears. Sorted by lifetime spend.
 
-import { parseNumberInput } from "./numberInput";
+import { amountPaid, balanceDue } from "./invoicePayments";
 import type { Invoice, Customer } from "../types/models";
 
 export interface CustomerListEntry {
@@ -74,8 +74,10 @@ export function buildCustomerList(
 
     const entry = byId[id];
     entry.invoices.push(inv);
-    entry.totalSpent += inv.paid ? parseNumberInput(inv.amount, 0) : 0;
-    entry.totalOwed += !inv.paid ? parseNumberInput(inv.amount, 0) : 0;
+    // A part-paid customer should show both what they've paid and what's left,
+    // rather than appearing to owe everything and have paid nothing.
+    entry.totalSpent += amountPaid(inv);
+    entry.totalOwed += balanceDue(inv);
     if (inv.email) entry.email = inv.email;
     if (inv.phone) entry.phone = inv.phone;
   });

@@ -119,4 +119,22 @@ describe("computeSeasonalTrends", () => {
     const result = computeSeasonalTrends(invoices, NOW);
     expect(result.yoyChangePct).toBeNull();
   });
+
+  it("a deposit and its final balance land in the months they were received", () => {
+    const invoices = [
+      makeInvoice({
+        paid: false, paidAt: undefined, amount: 500,
+        payments: [
+          { id: "p1", amount: 300, date: "2026-06-15", method: "cash" },
+          { id: "p2", amount: 200, date: "2026-07-05", method: "cash" },
+        ],
+      }),
+    ];
+    const result = computeSeasonalTrends(invoices, NOW);
+
+    const jun = result.months.find((m) => m.label === "Jun" && m.year === 2026);
+    const jul = result.months.find((m) => m.label === "Jul" && m.year === 2026);
+    expect(jun.thisYear).toBe(300);
+    expect(jul.thisYear).toBe(200);
+  });
 });

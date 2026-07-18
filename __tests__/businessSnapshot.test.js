@@ -115,6 +115,20 @@ describe("aggregateSnapshot", () => {
     expect(snap.totalCustomers).toBe(2);
   });
 
+  test("revenue reflects payments received, not the whole invoice amount", () => {
+    const snap = aggregateSnapshot(
+      [
+        inv({
+          id: "i1", paid: false, amount: 1000, due: "2026-06-01",
+          payments: [{ id: "p1", amount: 400, date: "2026-07-02", method: "cash" }],
+        }),
+      ],
+      [], [], NOW,
+    );
+    expect(snap.revenueThisMonth).toBe(400);
+    expect(snap.outstandingTotal).toBe(600);
+  });
+
   test("empty inputs produce an all-zero snapshot", () => {
     const snap = aggregateSnapshot([], [], [], NOW);
     expect(snap.revenueThisMonth).toBe(0);

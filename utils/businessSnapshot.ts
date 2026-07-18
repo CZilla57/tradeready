@@ -5,6 +5,7 @@
 import { loadInvoices, loadJobs, loadCustomers } from "./storage";
 import { isOverdue } from "./invoiceStats";
 import { buildCustomerList } from "./customerList";
+import { collectedInRange, balanceDue } from "./invoicePayments";
 import type { Invoice, Job, Customer, JobStatus } from "../types/models";
 
 export interface TopCustomerEntry {
@@ -36,12 +37,6 @@ const ACTIVE_STATUSES = new Set<JobStatus>([
 
 const DONE_STATUSES = new Set<JobStatus>(["complete", "invoiced", "paid"]);
 
-function isInMonth(dateStr: string | null | undefined, year: number, month: number): boolean {
-  if (!dateStr) return false;
-  const d = new Date(dateStr);
-  return d.getFullYear() === year && d.getMonth() === month;
-}
-
 /**
  * Pure aggregation — no async, no storage calls. Pass `now` for deterministic tests.
  */
@@ -62,18 +57,21 @@ export function aggregateSnapshot(
   let overdueTotal = 0;
   let overdueCount = 0;
 
+  // Build month windows once so payments bucket by their own dates.
+  const thisMonthRange = { start: new Date(thisYear, thisMonth, 1), end: new Date(thisYear, thisMonth + 1, 0) };
+  const lastMonthRange = { start: new Date(lastYear, lastMonth, 1), end: new Date(lastYear, lastMonth + 1, 0) };
+
   for (const inv of invoices) {
-    const amount = inv.amount || 0;
-    if (inv.paid) {
-      const dateStr = inv.paidAt ?? inv.due;
-      if (isInMonth(dateStr, thisYear, thisMonth)) revenueThisMonth += amount;
-      if (isInMonth(dateStr, lastYear, lastMonth)) revenueLastMonth += amount;
-    } else {
-      outstandingTotal += amount;
-      if (isOverdue(inv)) {
-        overdueTotal += amount;
-        overdueCount++;
-      }
+    // Not either/or any more: a partly-paid invoice contributes revenue for
+    // what arrived AND outstanding for what's still owed.
+    revenueThisMonth += collectedInRange([inv], thisMonthRange.start, thisMonthRange.end);
+    revenueLastMonth += collectedInRange([inv], lastMonthRange.start, lastMonthRange.end);
+
+    const balance = balanceDue(inv);
+    outstandingTotal += balance;
+    if (balance > 0 && isOverdue(inv)) {
+      overdueTotal += balance;
+      overdueCount++;
     }
   }
 

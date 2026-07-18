@@ -101,4 +101,14 @@ describe("computeInvoiceAging", () => {
     ]);
     expect(result.paidCount).toBe(0);
   });
+
+  it("excludes a partly-paid invoice — it hasn't finished aging", () => {
+    const result = computeInvoiceAging([
+      makeInvoice({
+        paid: false, paidAt: "2026-06-11", amount: 500,
+        payments: [{ id: "p1", amount: 200, date: "2026-06-11", method: "cash" }],
+      }),
+    ]);
+    expect(result.paidCount).toBe(0);
+  });
 });
