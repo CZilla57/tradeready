@@ -155,6 +155,45 @@ export interface InvoiceLineItem {
   category: InvoiceLineCategory;
 }
 
+/** How a payment reached the tradesperson. */
+export type PaymentMethod = 'stripe' | 'cash' | 'check' | 'card' | 'other';
+
+/**
+ * A single payment against an invoice. Invoices may be settled in any number
+ * of partial payments (a deposit up front, progress draws, a final balance).
+ *
+ * `id` is `p<timestamp>_<counter>` for payments recorded on the device, and
+ * `stripe_<checkout_session_id>` for payments appended by the Stripe Connect
+ * webhook. The two id spaces cannot collide, which is what lets pullRemote
+ * union the two sides' ledgers deterministically (see utils/sync.ts).
+ */
+export interface Payment {
+  id: string;
+  amount: number;
+  /** The date money was actually received — "YYYY-MM-DD". Drives revenue bucketing. */
+  date: DateString;
+  method: PaymentMethod;
+  note?: string;
+  /**
+   * Present only on webhook-created payments. Doubles as the idempotency key:
+   * a repeated Stripe delivery for the same session must not append twice.
+   */
+  stripeSessionId?: string;
+}
+
+/**
+ * An up-front amount requested from the customer, set on the Outreach screen.
+ * Recorded so the UI can show "Deposit requested: $500 — unpaid" and reuse the
+ * same payment link rather than minting a new one each render.
+ */
+export interface DepositRequest {
+  /** The resolved dollar amount, even when the user chose a percentage. */
+  amount: number;
+  /** Set only when the user picked a percentage rather than a fixed amount. */
+  percent?: number;
+  requestedAt: DateString;
+}
+
 export interface Invoice {
   id: string;
   /**
@@ -184,6 +223,19 @@ export interface Invoice {
   paid: boolean;
   /** ISO date the invoice was marked paid; absent on pre-paidAt invoices (fall back to `due`). */
   paidAt?: DateString;
+  /**
+   * The payment ledger. ABSENT on every invoice created before this feature —
+   * that is deliberate, not an oversight. utils/invoicePayments.ts falls back
+   * to `paid`/`amount`/`paidAt` when this is absent, so legacy invoices derive
+   * exactly as they always did and no migration is required.
+   *
+   * `paid` above is now maintained as `balanceDue(inv) <= 0.005`. It is kept
+   * because the PDF template, the backend reminder selector, and any client
+   * running older code still read it.
+   */
+  payments?: Payment[];
+  /** An up-front amount requested from the customer; set on the Outreach screen. */
+  depositRequest?: DepositRequest;
   /** Cached payment link + the amount it was generated for (invoiceHelpers). */
   paymentLinkUrl?: string;
   paymentLinkAmount?: number;
