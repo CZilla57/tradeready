@@ -18,6 +18,7 @@ import {
   mergePaymentLedgers,
   effectivePayments,
   settleRemaining,
+  reconcilePaidFields,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -677,5 +678,30 @@ describe("settleRemaining", () => {
     const result = settleRemaining(settled, "2026-07-22");
     expect(result.payments).toHaveLength(1);
     expect(result).toBe(settled);
+  });
+});
+
+describe("reconcilePaidFields", () => {
+  test("editing the amount DOWN to the paid total marks it settled", () => {
+    const i = inv({ amount: 400, paid: false, payments: [pmt({ id: "p1", amount: 400 })] });
+    const result = reconcilePaidFields(i);
+    expect(result.paid).toBe(true);
+  });
+
+  test("editing the amount UP past the paid total re-opens it", () => {
+    const i = inv({ amount: 2000, paid: true, paidAt: "2026-07-01", payments: [pmt({ id: "p1", amount: 1000 })] });
+    const result = reconcilePaidFields(i);
+    expect(result.paid).toBe(false);
+    expect(result.paidAt).toBeUndefined();
+  });
+
+  test("a LEGACY invoice with no ledger is returned unchanged, not un-paid", () => {
+    const i = inv({ amount: 1000, paid: true, paidAt: "2026-06-15", payments: undefined });
+    expect(reconcilePaidFields(i)).toBe(i);
+  });
+
+  test("a voided-only ledger re-opens the invoice", () => {
+    const i = inv({ amount: 1000, paid: true, payments: [pmt({ id: "p1", amount: 1000, voidedAt: "2026-07-22" })] });
+    expect(reconcilePaidFields(i).paid).toBe(false);
   });
 });

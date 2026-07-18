@@ -21,6 +21,7 @@ import { spacing } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
+import { reconcilePaidFields } from "../utils/invoicePayments";
 import type { Invoice } from "../types/models";
 import type { InvoiceStackScreenProps } from "../types/navigation";
 
@@ -93,8 +94,11 @@ export default function AddInvoiceScreen({ route, navigation }: InvoiceStackScre
 
     let updated: any[];
     if (isEditing) {
-      // Spread only editable fields so paid status is never silently reset
-      updated = invoices.map((i) => (i.id === invoiceId ? { ...i, ...invoiceFields } : i));
+      // paid/paidAt are re-derived from the ledger, not carried over verbatim:
+      // editing `amount` can change whether the invoice is settled.
+      updated = invoices.map((i) =>
+        i.id === invoiceId ? reconcilePaidFields({ ...i, ...invoiceFields }) : i
+      );
     } else {
       updated = [...invoices, { ...invoiceFields, paid: false, id: String(Date.now()) }];
     }

@@ -130,6 +130,22 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
 }
 
 /**
+ * Re-derive `paid`/`paidAt` from the invoice's own ledger.
+ *
+ * Call this after changing a field the derivation depends on — notably
+ * `amount`. Editing an amount while carrying the old `paid` forward is how the
+ * flag drifts out of sync with the ledger.
+ *
+ * A legacy invoice (no ledger) is returned UNCHANGED: with an empty ledger the
+ * stored flag IS the source of truth, and re-deriving would wrongly un-pay it.
+ */
+export function reconcilePaidFields(invoice: Invoice): Invoice {
+  const ledger = invoice.payments;
+  if (!ledger || ledger.length === 0) return invoice;
+  return withDerivedPaidFields(invoice, ledger);
+}
+
+/**
  * Append a payment and recompute paid/paidAt. Pure — returns a new Invoice and
  * does not save or sync. Callers hand the result to saveInvoices themselves.
  *
