@@ -353,3 +353,30 @@ export function settleRemaining(invoice: Invoice, date: DateString): Invoice {
     method: "other",
   });
 }
+
+/**
+ * Total collected in each of several windows, walking every ledger ONCE.
+ *
+ * Equivalent to mapping collectedInRange over the ranges (there is a test
+ * pinning that), but the bucketed charts need 6 and 24 windows respectively and
+ * the naive form re-materialises every invoice's ledger once per window.
+ *
+ * Voided payments are excluded, matching collectedInRange. A payment falling in
+ * two overlapping ranges counts in both — that is the caller's business.
+ */
+export function collectedByPeriod(
+  invoices: Invoice[],
+  ranges: { start: Date; end: Date }[],
+): number[] {
+  const totals = new Array<number>(ranges.length).fill(0);
+  for (const invoice of invoices) {
+    for (const p of effectivePayments(invoice)) {
+      if (p.voidedAt) continue;
+      const amount = toAmount(p.amount);
+      for (let i = 0; i < ranges.length; i++) {
+        if (isInRange(p.date, ranges[i].start, ranges[i].end)) totals[i] += amount;
+      }
+    }
+  }
+  return totals;
+}

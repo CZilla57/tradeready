@@ -19,6 +19,7 @@ import {
   effectivePayments,
   settleRemaining,
   reconcilePaidFields,
+  collectedByPeriod,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -703,6 +704,64 @@ describe("reconcilePaidFields", () => {
   test("a voided-only ledger re-opens the invoice", () => {
     const i = inv({ amount: 1000, paid: true, payments: [pmt({ id: "p1", amount: 1000, voidedAt: "2026-07-22" })] });
     expect(reconcilePaidFields(i).paid).toBe(false);
+  });
+});
+
+describe("collectedByPeriod", () => {
+  const JUNE = { start: new Date(2026, 5, 1), end: new Date(2026, 5, 30) };
+  const JULY = { start: new Date(2026, 6, 1), end: new Date(2026, 6, 31) };
+
+  test("bins each payment into the range that contains it", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [
+        pmt({ id: "p1", amount: 400, date: "2026-06-20" }),
+        pmt({ id: "p2", amount: 600, date: "2026-07-05" }),
+      ],
+    });
+    expect(collectedByPeriod([i], [JUNE, JULY])).toEqual([400, 600]);
+  });
+
+  test("returns a zero for a range with no payments", () => {
+    const i = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-05" })] });
+    expect(collectedByPeriod([i], [JUNE, JULY])).toEqual([0, 400]);
+  });
+
+  test("excludes voided payments", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [
+        pmt({ id: "p1", amount: 400, date: "2026-07-05" }),
+        pmt({ id: "p2", amount: 600, date: "2026-07-06", voidedAt: "2026-07-22" }),
+      ],
+    });
+    expect(collectedByPeriod([i], [JULY])).toEqual([400]);
+  });
+
+  test("a legacy paid invoice buckets on paidAt, matching collectedInRange", () => {
+    const i = inv({ paid: true, amount: 1000, paidAt: "2026-07-15", due: "2026-06-01" });
+    expect(collectedByPeriod([i], [JUNE, JULY])).toEqual([0, 1000]);
+  });
+
+  test("sums across several invoices", () => {
+    const a = inv({ id: "a", amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-10" })] });
+    const b = inv({ id: "b", paid: true, amount: 250, paidAt: "2026-07-11" });
+    expect(collectedByPeriod([a, b], [JULY])).toEqual([650]);
+  });
+
+  test("agrees with collectedInRange for every range", () => {
+    const invoices = [
+      inv({ id: "a", amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-06-20" })] }),
+      inv({ id: "b", paid: true, amount: 250, paidAt: "2026-07-11" }),
+    ];
+    const ranges = [JUNE, JULY];
+    expect(collectedByPeriod(invoices, ranges)).toEqual(
+      ranges.map((r) => collectedInRange(invoices, r.start, r.end)),
+    );
+  });
+
+  test("an empty ranges array yields an empty result", () => {
+    expect(collectedByPeriod([inv({ amount: 1000 })], [])).toEqual([]);
   });
 });
 
