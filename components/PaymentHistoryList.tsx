@@ -18,6 +18,7 @@ import React, { useMemo } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { effectivePayments } from "../utils/invoicePayments";
 import { formatMoney } from "../utils/format";
+import { formatDate } from "../utils/invoiceHelpers";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -70,14 +71,14 @@ export function PaymentHistoryList({
                 {formatMoney(p.amount)}
               </Text>
               <Text style={styles.meta}>
-                {p.date} · {METHOD_LABELS[p.method] ?? p.method}
+                {formatDate(p.date)} · {METHOD_LABELS[p.method] ?? p.method}
               </Text>
             </View>
             {isLegacyEntry(p) && (
               <Text style={styles.note}>recorded before itemised history</Text>
             )}
             {p.note && !isLegacyEntry(p) && <Text style={styles.note}>{p.note}</Text>}
-            {voided && <Text style={styles.voided}>voided {p.voidedAt}</Text>}
+            {voided && <Text style={styles.voided}>voided {formatDate(p.voidedAt!)}</Text>}
           </TouchableOpacity>
         );
       })}
