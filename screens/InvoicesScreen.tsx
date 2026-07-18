@@ -147,6 +147,10 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
             setInvoices(updated);
             await saveInvoices(updated);
             syncNotifications();
+            // Refresh the modal's snapshot since it renders from viewingInvoice,
+            // not from the live invoices array. Without this, the modal would show
+            // pre-void state (payment history, balance) until closed and reopened.
+            setViewingInvoice(after);
           },
         },
       ]
