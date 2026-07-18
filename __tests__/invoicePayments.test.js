@@ -759,4 +759,24 @@ describe("amount coercion", () => {
     expect(b.paid).toBe(true);
     expect(b.paidAt).toBe("2026-07-10");
   });
+
+  test("a malformed payment amount does not poison ranged revenue", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [
+        pmt({ id: "p1", amount: 400, date: "2026-07-10" }),
+        pmt({ id: "p2", amount: undefined, date: "2026-07-11" }),
+      ],
+    });
+    const total = collectedInRange([i], new Date(2026, 6, 1), new Date(2026, 6, 31));
+    expect(total).toBe(400);
+    expect(Number.isFinite(total)).toBe(true);
+  });
+
+  test("a malformed legacy invoice amount synthesizes a zero-amount entry, not NaN", () => {
+    const legacy = inv({ id: "i1", paid: true, amount: undefined, paidAt: "2026-06-15", payments: undefined });
+    const ledger = materializeLegacyLedger(legacy);
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0].amount).toBe(0);
+  });
 });

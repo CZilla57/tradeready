@@ -29,6 +29,12 @@ export const PAID_EPSILON = 0.005;
  * Rather than scatter that further, the derivations take responsibility: a
  * malformed amount contributes zero instead of concatenating a string or
  * poisoning the whole sum with NaN.
+ *
+ * INVARIANT: every read of invoice.amount or payment.amount in this module
+ * goes through here — for arithmetic, comparison, or accumulation alike.
+ * This was applied piecemeal at first and each pass missed a site, producing
+ * functions in this same file that disagreed about whether an invoice was
+ * settled. If you add a function that touches an amount, coerce it here too.
  */
 function toAmount(value: unknown): number {
   const n = typeof value === "number" ? value : parseFloat(String(value));
@@ -84,7 +90,7 @@ export function materializeLegacyLedger(invoice: Invoice): Payment[] {
   return [
     {
       id: `legacy_${invoice.id}`,
-      amount: invoice.amount,
+      amount: toAmount(invoice.amount),
       date: invoice.paidAt || invoice.due,
       method: "other",
       note: "Recorded before payment history was itemised",
@@ -223,7 +229,7 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
   for (const inv of invoices) {
     for (const p of paymentsInRange(inv, start, end)) {
       if (p.voidedAt) continue;
-      total += p.amount;
+      total += toAmount(p.amount);
     }
   }
   return total;

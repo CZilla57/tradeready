@@ -26,6 +26,10 @@ const PAID_EPSILON = 0.005;
  * `toAmount` — see that copy's doc comment for why this exists: a malformed
  * amount contributes zero instead of concatenating a string or poisoning the
  * whole sum with NaN.
+ *
+ * INVARIANT: every read of invoice.amount or payment.amount in this file
+ * goes through here, same as the TS copy. Keep both sweeps in lockstep —
+ * paymentMathParity.test.js will catch a divergence.
  */
 function toAmount(value) {
   const n = typeof value === "number" ? value : parseFloat(String(value));
@@ -68,7 +72,7 @@ function materializeLegacyLedger(invoice) {
   return [
     {
       id: `legacy_${invoice.id}`,
-      amount: invoice.amount,
+      amount: toAmount(invoice.amount),
       date: invoice.paidAt || invoice.due,
       method: "other",
       note: "Recorded before payment history was itemised",
