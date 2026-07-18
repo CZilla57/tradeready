@@ -51,6 +51,10 @@ describe("renderTemplate", () => {
   test("empty var renders as empty string", () => {
     expect(renderTemplate("at {time}!", { time: "" })).toBe("at !");
   });
+
+  test("treats a $ in the value as literal text (no replacement-pattern injection)", () => {
+    expect(renderTemplate("Hi {customerName}", { customerName: "Cash$1 Services" })).toBe("Hi Cash$1 Services");
+  });
 });
 
 describe("resolveChannel", () => {
@@ -105,6 +109,10 @@ describe("selectAppointmentReminders", () => {
 
   test("excludes jobs with no scheduledDate", () => {
     expect(selectAppointmentReminders([job({ scheduledDate: null })], [customer()], settings, NOW)).toEqual([]);
+  });
+
+  test("excludes a job whose customer can't be resolved at all", () => {
+    expect(selectAppointmentReminders([job({ customerId: "missing", customerName: "Nobody" })], [], settings, NOW)).toEqual([]);
   });
 
   test("drops reminders whose 5pm-day-before is already past", () => {
