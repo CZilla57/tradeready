@@ -158,3 +158,43 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
   }
   return total;
 }
+
+/**
+ * Combine two versions of the same invoice, keeping the payments from BOTH.
+ *
+ * This exists because sync's pullRemote used to replace whole records
+ * (last-write-wins). That is safe for a boolean `paid` — either side yields the
+ * same answer — but with a ledger it destroys money: a payment the Stripe
+ * webhook wrote to the cloud vanishes if the device happened to edit the same
+ * invoice, or vice versa.
+ *
+ * Semantics:
+ *  - Scalar fields take the REMOTE value (unchanged last-write-wins).
+ *  - Payments are UNIONED by id. Both sides are materialized first, so a legacy
+ *    invoice contributes its implied entry under the deterministic id
+ *    `legacy_<invoice.id>`. That determinism is load-bearing: two legacy copies
+ *    synthesize the identical entry and collapse to one. Skipping the
+ *    materialize step would union two legacy invoices to [] and silently
+ *    un-pay them.
+ *  - On an id collision the remote entry wins. Unobservable in practice: the id
+ *    namespaces (`p…` device, `stripe_…` webhook, `legacy_…` synthetic) mean a
+ *    shared id is the same payment.
+ *  - The union is sorted canonically by (date, id). Phase 1 derives `paidAt`
+ *    from the closing payment in INSERTION order, so an unsorted union would
+ *    let two devices disagree on `paidAt`. Sorting makes this merge genuinely
+ *    commutative. Canonical ordering applies to merges only — applyPayment
+ *    still appends.
+ *
+ * Pure: neither input is mutated.
+ */
+export function mergePaymentLedgers(local: Invoice, remote: Invoice): Invoice {
+  const byId = new Map<string, Payment>();
+  for (const p of materializeLegacyLedger(local)) byId.set(p.id, p);
+  for (const p of materializeLegacyLedger(remote)) byId.set(p.id, p);
+
+  const merged = [...byId.values()].sort((a, b) =>
+    a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date),
+  );
+
+  return withDerivedPaidFields(remote, merged);
+}

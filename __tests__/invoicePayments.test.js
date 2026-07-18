@@ -15,6 +15,7 @@ import {
   removePayment,
   paymentsInRange,
   collectedInRange,
+  mergePaymentLedgers,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -349,5 +350,118 @@ describe("paymentsInRange / collectedInRange", () => {
     const a = inv({ id: "a", amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-10" })] });
     const b = inv({ id: "b", paid: true, amount: 250, paidAt: "2026-07-11" });
     expect(collectedInRange([a, b], JULY_START, JULY_END)).toBe(650);
+  });
+});
+
+describe("mergePaymentLedgers", () => {
+  test("keeps payments from BOTH sides (the whole point)", () => {
+    // The device recorded a cash payment; the webhook recorded a Stripe one.
+    const local = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-01" })] });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "stripe_cs_1", amount: 300, date: "2026-07-05" })] });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.payments).toHaveLength(2);
+    expect(amountPaid(merged)).toBe(700);
+  });
+
+  test("a payment present on both sides is not double-counted", () => {
+    const shared = pmt({ id: "stripe_cs_1", amount: 300, date: "2026-07-05" });
+    const local = inv({ amount: 1000, payments: [shared] });
+    const remote = inv({ amount: 1000, payments: [shared] });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.payments).toHaveLength(1);
+    expect(amountPaid(merged)).toBe(300);
+  });
+
+  test("TWO LEGACY INVOICES DO NOT GET UN-PAID (the dangerous case)", () => {
+    // Neither side has a ledger. Without materializing both sides first, the
+    // union would be [] and the recompute would return paid:false — silently
+    // un-paying every legacy paid invoice on its first sync.
+    const local = inv({ id: "i1", amount: 1000, paid: true, paidAt: "2026-06-15", payments: undefined });
+    const remote = inv({ id: "i1", amount: 1000, paid: true, paidAt: "2026-06-15", payments: undefined });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.paid).toBe(true);
+    expect(amountPaid(merged)).toBe(1000);
+    expect(balanceDue(merged)).toBe(0);
+    // The deterministic legacy id means both sides synthesized the SAME entry,
+    // so the union collapses it rather than counting $1,000 twice.
+    expect(merged.payments).toHaveLength(1);
+  });
+
+  test("a legacy invoice on one side merges with a real ledger on the other", () => {
+    const local = inv({ id: "i1", amount: 1000, paid: true, paidAt: "2026-06-15", payments: undefined });
+    const remote = inv({
+      id: "i1", amount: 1000, paid: true, paidAt: "2026-06-15",
+      payments: [pmt({ id: "legacy_i1", amount: 1000, date: "2026-06-15" })],
+    });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.payments).toHaveLength(1);
+    expect(amountPaid(merged)).toBe(1000);
+  });
+
+  test("is COMMUTATIVE — merge(a,b) equals merge(b,a) apart from scalar precedence", () => {
+    const a = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-10" })] });
+    const b = inv({ amount: 1000, payments: [pmt({ id: "stripe_cs_1", amount: 600, date: "2026-07-02" })] });
+    const ab = mergePaymentLedgers(a, b);
+    const ba = mergePaymentLedgers(b, a);
+    expect(ab.payments).toEqual(ba.payments);
+    expect(ab.paid).toBe(ba.paid);
+    expect(ab.paidAt).toBe(ba.paidAt);
+  });
+
+  test("is IDEMPOTENT — merge(x,x) equals x", () => {
+    const x = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p1", amount: 400, date: "2026-07-01" }), pmt({ id: "p2", amount: 600, date: "2026-07-20" })],
+    });
+    const once = mergePaymentLedgers(x, x);
+    expect(once.payments).toEqual(x.payments);
+    expect(amountPaid(once)).toBe(1000);
+    expect(mergePaymentLedgers(once, once).payments).toEqual(once.payments);
+  });
+
+  test("orders the merged ledger canonically by date, then id", () => {
+    // Deliberately supplied out of order and interleaved across sides.
+    const local = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p9", amount: 100, date: "2026-07-20" }), pmt({ id: "p1", amount: 100, date: "2026-07-01" })],
+    });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "p5", amount: 100, date: "2026-07-10" })] });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.payments.map((p) => p.id)).toEqual(["p1", "p5", "p9"]);
+  });
+
+  test("same-date payments tie-break on id so both devices agree", () => {
+    const local = inv({ amount: 1000, payments: [pmt({ id: "pb", amount: 100, date: "2026-07-01" })] });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "pa", amount: 100, date: "2026-07-01" })] });
+    expect(mergePaymentLedgers(local, remote).payments.map((p) => p.id)).toEqual(["pa", "pb"]);
+    expect(mergePaymentLedgers(remote, local).payments.map((p) => p.id)).toEqual(["pa", "pb"]);
+  });
+
+  test("the remote side wins for scalar fields (unchanged last-write-wins)", () => {
+    const local = inv({ amount: 1000, desc: "old description", customer: "Old Name" });
+    const remote = inv({ amount: 1200, desc: "new description", customer: "New Name" });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.amount).toBe(1200);
+    expect(merged.desc).toBe("new description");
+    expect(merged.customer).toBe("New Name");
+  });
+
+  test("a merge that completes the balance marks the invoice paid", () => {
+    const local = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-01" })] });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "stripe_cs_1", amount: 600, date: "2026-07-20" })] });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.paid).toBe(true);
+    expect(merged.paidAt).toBe("2026-07-20");
+    expect(balanceDue(merged)).toBe(0);
+  });
+
+  test("does not mutate either input", () => {
+    const local = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-01" })] });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "p2", amount: 300, date: "2026-07-05" })] });
+    mergePaymentLedgers(local, remote);
+    expect(local.payments).toHaveLength(1);
+    expect(remote.payments).toHaveLength(1);
+    expect(local.payments[0].id).toBe("p1");
+    expect(remote.payments[0].id).toBe("p2");
   });
 });
