@@ -9,6 +9,10 @@ import {
   balanceDue,
   isFullyPaid,
   isPartlyPaid,
+  newPaymentId,
+  materializeLegacyLedger,
+  applyPayment,
+  removePayment,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -115,5 +119,105 @@ describe("isFullyPaid / isPartlyPaid", () => {
     expect(balanceDue(i)).toBeGreaterThan(0);
     expect(isFullyPaid(i)).toBe(true);
     expect(isPartlyPaid(i)).toBe(false);
+  });
+});
+
+describe("newPaymentId", () => {
+  test("ids are unique even within the same millisecond", () => {
+    const ids = new Set();
+    for (let i = 0; i < 100; i++) ids.add(newPaymentId());
+    expect(ids.size).toBe(100);
+  });
+  test("ids do not collide with the webhook's stripe_ namespace", () => {
+    expect(newPaymentId().startsWith("stripe_")).toBe(false);
+  });
+});
+
+describe("materializeLegacyLedger", () => {
+  test("a legacy paid invoice becomes one payment for the full amount", () => {
+    const ledger = materializeLegacyLedger(
+      inv({ paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined }),
+    );
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0].amount).toBe(1000);
+    expect(ledger[0].date).toBe("2026-06-15");
+  });
+  test("falls back to the due date when paidAt is absent", () => {
+    const ledger = materializeLegacyLedger(
+      inv({ paid: true, amount: 1000, due: "2026-07-01", payments: undefined }),
+    );
+    expect(ledger[0].date).toBe("2026-07-01");
+  });
+  test("a legacy unpaid invoice yields an empty ledger", () => {
+    expect(materializeLegacyLedger(inv({ paid: false }))).toEqual([]);
+  });
+  test("an existing ledger is returned untouched", () => {
+    const existing = [pmt({ amount: 400 })];
+    expect(materializeLegacyLedger(inv({ payments: existing }))).toEqual(existing);
+  });
+});
+
+describe("applyPayment", () => {
+  test("appends to an empty invoice and leaves it unpaid", () => {
+    const result = applyPayment(inv({ amount: 1000 }), pmt({ amount: 400 }));
+    expect(result.payments).toHaveLength(1);
+    expect(result.paid).toBe(false);
+    expect(result.paidAt).toBeUndefined();
+    expect(balanceDue(result)).toBe(600);
+  });
+  test("the payment that closes the balance sets paid and paidAt to ITS date", () => {
+    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const second = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-20" }));
+    expect(second.paid).toBe(true);
+    expect(second.paidAt).toBe("2026-07-20");
+    expect(balanceDue(second)).toBe(0);
+  });
+  test("does NOT erase the original amount on a legacy paid invoice", () => {
+    // The bug this guards: without materializing, amountPaid would fall from
+    // 1000 to 50 the moment the ledger became non-empty.
+    const legacy = inv({ paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined });
+    const result = applyPayment(legacy, pmt({ id: "p2", amount: 50, date: "2026-07-02" }));
+    expect(amountPaid(result)).toBe(1050);
+    expect(result.payments).toHaveLength(2);
+  });
+  test("does not mutate the input invoice", () => {
+    const original = inv({ amount: 1000 });
+    applyPayment(original, pmt({ amount: 400 }));
+    expect(original.payments).toBeUndefined();
+    expect(original.paid).toBe(false);
+  });
+});
+
+describe("removePayment", () => {
+  test("removing a payment restores the balance", () => {
+    const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
+    const result = removePayment(withPayment, "p1");
+    expect(result.payments).toHaveLength(0);
+    expect(balanceDue(result)).toBe(1000);
+  });
+  test("removing the closing payment un-pays the invoice", () => {
+    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const settled = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-20" }));
+    const result = removePayment(settled, "p2");
+    expect(result.paid).toBe(false);
+    expect(result.paidAt).toBeUndefined();
+    expect(isPartlyPaid(result)).toBe(true);
+  });
+  test("removing a non-closing payment from a settled invoice keeps it unpaid-but-partial", () => {
+    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const settled = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-20" }));
+    const result = removePayment(settled, "p1");
+    expect(result.paid).toBe(false);
+    expect(amountPaid(result)).toBe(600);
+  });
+  test("an unknown payment id is a no-op", () => {
+    const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
+    const result = removePayment(withPayment, "nope");
+    expect(result.payments).toHaveLength(1);
+  });
+  test("does not mutate the input invoice", () => {
+    const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
+    removePayment(withPayment, "p1");
+    expect(withPayment.payments).toHaveLength(1);
   });
 });
