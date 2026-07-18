@@ -11,6 +11,7 @@
 // identical numbers on legacy data.
 
 import type { Invoice, Payment } from "../types/models";
+import { isInRange } from "./moneyUtils";
 
 /**
  * Balances are floats, so "settled" means "within half a cent", never === 0.
@@ -123,4 +124,22 @@ export function applyPayment(invoice: Invoice, payment: Payment): Invoice {
 export function removePayment(invoice: Invoice, paymentId: string): Invoice {
   const ledger = materializeLegacyLedger(invoice).filter((p) => p.id !== paymentId);
   return withDerivedPaidFields(invoice, ledger);
+}
+
+/**
+ * The payments received in a window. Legacy invoices resolve through
+ * materializeLegacyLedger, so a paid one buckets on `paidAt || due` — exactly
+ * the rule the Money tab already applied before the ledger existed.
+ */
+export function paymentsInRange(invoice: Invoice, start: Date, end: Date): Payment[] {
+  return materializeLegacyLedger(invoice).filter((p) => isInRange(p.date, start, end));
+}
+
+/** Total collected across a set of invoices in a window, bucketed by payment date. */
+export function collectedInRange(invoices: Invoice[], start: Date, end: Date): number {
+  let total = 0;
+  for (const inv of invoices) {
+    for (const p of paymentsInRange(inv, start, end)) total += p.amount;
+  }
+  return total;
 }

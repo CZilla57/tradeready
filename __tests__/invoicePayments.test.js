@@ -13,6 +13,8 @@ import {
   materializeLegacyLedger,
   applyPayment,
   removePayment,
+  paymentsInRange,
+  collectedInRange,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -273,5 +275,46 @@ describe("paidAt ordering — insertion order, not date order (pinned intentiona
     const second = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-01" }));
     expect(second.paid).toBe(true);
     expect(second.paidAt).toBe("2026-07-01");
+  });
+});
+
+describe("paymentsInRange / collectedInRange", () => {
+  const JULY_START = new Date(2026, 6, 1);
+  const JULY_END = new Date(2026, 6, 31);
+
+  test("includes payments inside the window", () => {
+    const i = inv({ amount: 1000, payments: [pmt({ amount: 400, date: "2026-07-10" })] });
+    expect(paymentsInRange(i, JULY_START, JULY_END)).toHaveLength(1);
+  });
+  test("excludes payments outside the window", () => {
+    const i = inv({ amount: 1000, payments: [pmt({ amount: 400, date: "2026-06-10" })] });
+    expect(paymentsInRange(i, JULY_START, JULY_END)).toHaveLength(0);
+  });
+  test("splits a part-paid invoice across two months", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [
+        pmt({ id: "p1", amount: 400, date: "2026-06-20" }),
+        pmt({ id: "p2", amount: 600, date: "2026-07-05" }),
+      ],
+    });
+    expect(collectedInRange([i], JULY_START, JULY_END)).toBe(600);
+    expect(collectedInRange([i], new Date(2026, 5, 1), new Date(2026, 5, 30))).toBe(400);
+  });
+  test("a legacy paid invoice buckets on paidAt, matching the old Money-tab math", () => {
+    const i = inv({ paid: true, amount: 1000, paidAt: "2026-07-15", due: "2026-06-01" });
+    expect(collectedInRange([i], JULY_START, JULY_END)).toBe(1000);
+  });
+  test("a legacy paid invoice with no paidAt falls back to due, as the old math did", () => {
+    const i = inv({ paid: true, amount: 1000, paidAt: undefined, due: "2026-07-15" });
+    expect(collectedInRange([i], JULY_START, JULY_END)).toBe(1000);
+  });
+  test("a legacy unpaid invoice contributes nothing", () => {
+    expect(collectedInRange([inv({ paid: false, due: "2026-07-15" })], JULY_START, JULY_END)).toBe(0);
+  });
+  test("sums across several invoices", () => {
+    const a = inv({ id: "a", amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-10" })] });
+    const b = inv({ id: "b", paid: true, amount: 250, paidAt: "2026-07-11" });
+    expect(collectedInRange([a, b], JULY_START, JULY_END)).toBe(650);
   });
 });
