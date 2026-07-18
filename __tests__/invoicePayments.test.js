@@ -207,6 +207,39 @@ describe("applyPayment", () => {
     const result = applyPayment(legacy, pmt({ id: "p2", amount: 50, date: "2026-07-02" }));
     expect(amountPaid(result)).toBe(1050);
   });
+
+  test("applying the same payment id twice is a no-op (idempotent)", () => {
+    const once = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const twice = applyPayment(once, pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    expect(twice.payments).toHaveLength(1);
+    expect(amountPaid(twice)).toBe(400);
+  });
+
+  test("a duplicate id does not overwrite the existing entry", () => {
+    const once = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const twice = applyPayment(once, pmt({ id: "p1", amount: 999, date: "2026-12-25", method: "card" }));
+    expect(twice.payments).toHaveLength(1);
+    expect(twice.payments[0].amount).toBe(400);
+    expect(twice.payments[0].date).toBe("2026-07-01");
+    expect(amountPaid(twice)).toBe(400);
+  });
+
+  test("a re-applied closing payment does not un-settle or double-count", () => {
+    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const settled = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-20" }));
+    const replayed = applyPayment(settled, pmt({ id: "p2", amount: 600, date: "2026-07-20" }));
+    expect(replayed.paid).toBe(true);
+    expect(replayed.paidAt).toBe("2026-07-20");
+    expect(amountPaid(replayed)).toBe(1000);
+    expect(replayed.payments).toHaveLength(2);
+  });
+
+  test("a duplicate of a legacy materialized entry is not appended", () => {
+    const legacy = inv({ id: "i1", paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined });
+    const result = applyPayment(legacy, pmt({ id: "legacy_i1", amount: 1000, date: "2026-06-15" }));
+    expect(result.payments).toHaveLength(1);
+    expect(amountPaid(result)).toBe(1000);
+  });
 });
 
 describe("removePayment", () => {

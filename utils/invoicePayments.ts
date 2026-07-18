@@ -110,10 +110,25 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
 /**
  * Append a payment and recompute paid/paidAt. Pure — returns a new Invoice and
  * does not save or sync. Callers hand the result to saveInvoices themselves.
+ *
+ * IDEMPOTENT by payment id: if the invoice's effective ledger already contains
+ * an entry whose `id` equals `payment.id`, the existing entry WINS and the new
+ * one is not appended. This guards against silent double-counting when sync
+ * merges two devices' ledgers by UNION ON `id` — a retry or webhook re-delivery
+ * that appends a duplicate id would be silently collapsed by the union, causing
+ * the total to drop. By rejecting duplicates here instead, we ensure the ledger
+ * remains idempotent to any caller pattern.
  */
 export function applyPayment(invoice: Invoice, payment: Payment): Invoice {
-  const ledger = [...materializeLegacyLedger(invoice), payment];
-  return withDerivedPaidFields(invoice, ledger);
+  const ledger = materializeLegacyLedger(invoice);
+  // Check if this payment id already exists in the effective ledger
+  if (ledger.some((p) => p.id === payment.id)) {
+    // Duplicate id: existing entry wins, return invoice with recalculated fields
+    return withDerivedPaidFields(invoice, ledger);
+  }
+  // New id: append and proceed
+  const nextLedger = [...ledger, payment];
+  return withDerivedPaidFields(invoice, nextLedger);
 }
 
 /**
