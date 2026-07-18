@@ -123,3 +123,36 @@ describe("buildReminderEmail", () => {
     expect(email.reply_to).toBeUndefined();
   });
 });
+
+describe("ledger-aware paid detection", () => {
+  const base = {
+    id: "i1", email: "a@b.com", due: "2026-06-01", amount: 1000, paid: false,
+  };
+  const settings = { autoSendEmailEnabled: true, rules: [{ days: 3 }] };
+  const today = new Date(2026, 6, 4);
+
+  test("an invoice fully settled by its ledger is NOT reminded, despite paid:false", () => {
+    // The stored flag is stale — the trigger unioned in a payment the webhook
+    // never saw. The ledger is the truth.
+    const invoices = [{ ...base, paid: false, payments: [{ id: "p1", amount: 1000, date: "2026-07-01" }] }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(0);
+  });
+
+  test("a partly-paid invoice IS still reminded", () => {
+    const invoices = [{ ...base, paid: false, payments: [{ id: "p1", amount: 400, date: "2026-07-01" }] }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(1);
+  });
+
+  test("an invoice whose only payment was voided IS reminded", () => {
+    const invoices = [{
+      ...base, paid: true,
+      payments: [{ id: "p1", amount: 1000, date: "2026-07-01", voidedAt: "2026-07-22" }],
+    }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(1);
+  });
+
+  test("a legacy paid invoice with no ledger is still NOT reminded", () => {
+    const invoices = [{ ...base, paid: true }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(0);
+  });
+});

@@ -3,6 +3,7 @@
 // returns the invoices to email now. No I/O.
 
 const { daysPastDue } = require("./overdue");
+const { isFullyPaid } = require("./paymentMath");
 
 function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, today = new Date() }) {
   if (!settings || !settings.autoSendEmailEnabled) return [];
@@ -18,7 +19,10 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, tod
   return (invoices || []).filter(
     (invoice) =>
       invoice &&
-      !invoice.paid &&
+      // Derive from the ledger rather than trusting the stored flag: the
+      // Postgres trigger can union in payments the webhook never saw, so
+      // `paid` may be stale. A voided payment correctly re-opens the invoice.
+      !isFullyPaid(invoice) &&
       typeof invoice.email === "string" &&
       invoice.email.trim() !== "" &&
       invoice.due &&
