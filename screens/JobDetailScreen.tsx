@@ -24,6 +24,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, resolveCustomer } from "../utils/storage";
 import { scheduleReviewRequest } from "../utils/reviewRequest";
+import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
@@ -119,7 +120,12 @@ function PipelineBar({ currentStatus }: { currentStatus: JobStatus }) {
   );
 }
 
-function JobDetailsCard({ job, navigation }: { job: Job; navigation: JobStackScreenProps<'JobDetail'>['navigation'] }) {
+function JobDetailsCard({ job, navigation, customer, onAppointmentSend }: {
+  job: Job;
+  navigation: JobStackScreenProps<'JobDetail'>['navigation'];
+  customer: Customer | null;
+  onAppointmentSend: (kind: "confirm" | "on_my_way") => void;
+}) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -151,6 +157,22 @@ function JobDetailsCard({ job, navigation }: { job: Job; navigation: JobStackScr
             ? `  ·  ${formatTimeRange(job.scheduledStartTime, job.scheduledEndTime)}`
             : ""}
         </Text>
+      )}
+      {job.scheduledDate && customer && (
+        <View style={styles.apptActions}>
+          <Button
+            label="Send confirmation"
+            variant="secondary"
+            onPress={() => onAppointmentSend("confirm")}
+            style={{ flex: 1 }}
+          />
+          <Button
+            label="I'm on my way"
+            variant="primary"
+            onPress={() => onAppointmentSend("on_my_way")}
+            style={{ flex: 1 }}
+          />
+        </View>
       )}
       {job.notes ? (
         <Text style={styles.notes}>💬 {job.notes}</Text>
@@ -574,6 +596,15 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     }
   }
 
+  async function handleAppointmentSend(kind: "confirm" | "on_my_way") {
+    if (!job || !customer) return;
+    const settings = await loadSettings();
+    const opened = await sendAppointmentMessage({ job, customer, settings, kind });
+    if (opened) {
+      track(kind === "confirm" ? "appointment_confirm_sent" : "on_my_way_sent", {});
+    }
+  }
+
   async function updateJob(changes: Partial<Job>) {
     const jobs = await loadJobs();
     const updated = jobs.map((j: Job) =>
@@ -712,7 +743,12 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
             <Text style={styles.recurringBannerText}>Part of a recurring series</Text>
           </TouchableOpacity>
         ) : null}
-        <JobDetailsCard job={job} navigation={navigation} />
+        <JobDetailsCard
+          job={job}
+          navigation={navigation}
+          customer={customer}
+          onAppointmentSend={handleAppointmentSend}
+        />
         {customer && <CustomerCard customer={customer} />}
         <EstimateCard job={job} navigation={navigation} />
         {TIME_TRACKING_STATUSES.has(job.status) && (
@@ -813,6 +849,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     jobDesc: { fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, marginBottom: 8 },
     addressLink: { fontSize: fontSize.sm, color: colors.accent, marginBottom: 6 },
     metaRow: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 4 },
+    apptActions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
     notes: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 4, fontStyle: "italic" },
 
     // Customer
