@@ -1,11 +1,11 @@
 # Deposits & Partial Payments — Resume Here
 
-**Status as of 2026-07-18:** Phases 1, 2 and 2b are built and green on branch
+**Status as of 2026-07-18:** Phases 1, 2, 2b and 3 are built and green on branch
 `feat/deposits-partial-payments` (37 commits off `master` @ `78383e3`).
 **Nothing is merged, nothing is pushed, the Supabase migration is NOT applied,
 and the backend is NOT deployed.**
 
-Gate at last check: **942 tests / 59 suites, tsc 0 errors, lint 0 warnings.**
+Gate at last check: **974 tests / 61 suites, tsc 0 errors, lint 0 warnings.**
 
 This document exists because the detailed working notes live in
 `.superpowers/sdd/progress.md`, which is git-ignored scratch — a `git clean -fdx`
@@ -79,7 +79,7 @@ which already used push time.
 The bug was not invoice-specific — a backdated stamp could make ANY table's
 late push invisible to a second device's pull, permanently.
 
-### 3b. `screens/InvoicesScreen.tsx:98` — `markPaid` writes a bare `paid: true`
+### 3b. `markPaid` writing a bare `paid: true` — FIXED 2026-07-18 (Phase 3)
 
 ```js
 const updated = invoices.map((i) => (i.id === id ? { ...i, paid: true, paidAt: today } : i));
