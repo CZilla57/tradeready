@@ -25,6 +25,7 @@ import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { readPhotoAsDataUri } from "../utils/photoStorage";
+import { track } from "../utils/analytics";
 import { Badge, StatCard, EmptyState } from "../components/UI";
 import { RecordPaymentSheet } from "../components/RecordPaymentSheet";
 import { PaymentHistoryList } from "../components/PaymentHistoryList";
@@ -114,6 +115,12 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           const updated = invoices.map((i) => (i.id === id ? settled : i));
           setInvoices(updated);
           await saveInvoices(updated);
+          track('payment_recorded', {
+            amount: balanceDue(inv),
+            method: 'other',
+            balanceRemaining: 0,
+          });
+          track('invoice_paid', { amount: inv.amount });
           syncNotifications();
           onSuccess?.();
         },
@@ -126,6 +133,14 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
     const updated = invoices.map((i) => (i.id === invoice.id ? next : i));
     setInvoices(updated);
     await saveInvoices(updated);
+    track('payment_recorded', {
+      amount: draft.amount,
+      method: draft.method,
+      balanceRemaining: balanceDue(next),
+    });
+    if (isFullyPaid(next) && !isFullyPaid(invoice)) {
+      track('invoice_paid', { amount: next.amount });
+    }
     syncNotifications();
     setRecordingFor(null);
   }
@@ -146,6 +161,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
             const updated = invoices.map((i) => (i.id === invoice.id ? after : i));
             setInvoices(updated);
             await saveInvoices(updated);
+            track('payment_voided', { amount: payment.amount, method: payment.method });
             syncNotifications();
             // Refresh the modal's snapshot since it renders from viewingInvoice,
             // not from the live invoices array. Without this, the modal would show
