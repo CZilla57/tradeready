@@ -4,10 +4,14 @@
 //
 // The invoice's `payments` array is the source of truth for what's been paid;
 // `paid`/`paidAt` are written alongside it as a best-effort CACHE (not the
-// source of truth) so simple reads don't need to sum the ledger. A Postgres
-// trigger unions ledger entries from concurrent writers, so this handler's
-// write can only ever ADD an entry — it cannot shrink or clobber one written
-// elsewhere.
+// source of truth) so simple reads don't need to sum the ledger. A FUTURE
+// Postgres trigger will union ledger entries from concurrent writers, so that
+// this handler's write can only ever ADD an entry — it will not be able to
+// shrink or clobber one written elsewhere. That trigger does NOT exist yet:
+// today this is a plain read-modify-write, and a concurrent write landing
+// between this handler's fetch and its upsert is clobbered, not merged.
+// DEPLOY ORDERING: this handler must NOT be deployed before the union trigger
+// is applied.
 //
 // The app's sync layer (pullRemote) picks up the Supabase change on the next
 // focus event, so the invoice appears paid automatically without any manual step.
@@ -25,7 +29,7 @@
 //   SUPABASE_SERVICE_ROLE_KEY
 
 const Stripe = require('stripe');
-const { amountPaid, isFullyPaid } = require('../../lib/paymentMath');
+const { amountPaid, isFullyPaid, materializeLegacyLedger } = require('../../lib/paymentMath');
 
 const STRIPE_SECRET_KEY            = process.env.STRIPE_SECRET_KEY;
 const STRIPE_CONNECT_WEBHOOK_SECRET = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
@@ -111,7 +115,17 @@ async function recordStripePayment(invoiceId, session) {
 
   const { user_id, data } = rows[0];
   const paymentId = `stripe_${session.id}`;
-  const existing = Array.isArray(data?.payments) ? data.payments : [];
+
+  // Materialize the legacy implied payment (if any) BEFORE appending the
+  // Stripe entry. Skipping this would silently erase the invoice's
+  // originally-recorded amount the moment `payments` goes from absent to
+  // non-empty — see the CRITICAL rule on materializeLegacyLedger in
+  // utils/invoicePayments.ts. The stored blob (`data`) is not guaranteed to
+  // carry a reliable `id` field of its own, so `invoiceId` — the id this row
+  // was just fetched by — is used instead, ensuring the synthesized
+  // `legacy_<id>` matches what the device would independently produce for
+  // the same invoice.
+  const existing = materializeLegacyLedger({ ...data, id: invoiceId });
 
   // Idempotency: a repeated Stripe delivery must not append twice. The
   // Postgres trigger's union would collapse the duplicate id anyway, but
@@ -122,9 +136,22 @@ async function recordStripePayment(invoiceId, session) {
   // midnight at a large offset can land on the adjacent day — and since each
   // payment is individually revenue-bucketed, that can shift a month boundary.
   // The server does not know the user's timezone. Accepted limitation.
+  const paymentAmount = (session.amount_total || 0) / 100;
+
+  // Guard: a zero (or missing) amount_total adds no money but WOULD still
+  // flip `payments` from absent to non-empty, which is exactly what kills the
+  // legacy fallback for a paid invoice. Refuse to write rather than risk that.
+  if (!(paymentAmount > 0)) {
+    console.warn(
+      `[stripe/webhook] invoice ${invoiceId}: session ${session.id} has non-positive ` +
+      `amount_total (${session.amount_total}) — skipping write`
+    );
+    return;
+  }
+
   const payment = {
     id: paymentId,
-    amount: (session.amount_total || 0) / 100,
+    amount: paymentAmount,
     date: new Date().toISOString().split('T')[0],
     method: 'card',
     stripeSessionId: session.id,

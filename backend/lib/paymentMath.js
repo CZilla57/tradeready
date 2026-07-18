@@ -7,6 +7,11 @@
 // which runs both over __fixtures__/paymentVectors.js. If you change one,
 // change the other — the gate will catch you if you don't.
 //
+// materializeLegacyLedger is mirrored too (byte-identical synthesized id),
+// since any backend code that STARTS a ledger (e.g. the Stripe webhook) must
+// route through it exactly as the device does — see the CRITICAL note on the
+// TS version.
+//
 // Deliberately does NOT implement paidAt derivation or ledger merging: the
 // server never needs them (the Postgres trigger unions ledgers, and the device
 // derives paidAt). Keeping the mirror small keeps the drift surface small.
@@ -33,4 +38,28 @@ function isFullyPaid(invoice) {
   return balanceDue(invoice) <= PAID_EPSILON;
 }
 
-module.exports = { PAID_EPSILON, amountPaid, balanceDue, isFullyPaid };
+/**
+ * Convert a legacy invoice's implied payment into a real ledger entry.
+ *
+ * CRITICAL: amountPaid falls back to `paid`/`amount` only while the ledger is
+ * empty. Appending to a legacy paid invoice without calling this first would
+ * drop the original amount from the total the moment the array became
+ * non-empty. Any function that starts a ledger must go through here.
+ *
+ * Returns a copy of the existing ledger when one is already present.
+ */
+function materializeLegacyLedger(invoice) {
+  if (invoice.payments && invoice.payments.length > 0) return [...invoice.payments];
+  if (!invoice.paid) return [];
+  return [
+    {
+      id: `legacy_${invoice.id}`,
+      amount: invoice.amount,
+      date: invoice.paidAt || invoice.due,
+      method: "other",
+      note: "Recorded before payment history was itemised",
+    },
+  ];
+}
+
+module.exports = { PAID_EPSILON, amountPaid, balanceDue, isFullyPaid, materializeLegacyLedger };

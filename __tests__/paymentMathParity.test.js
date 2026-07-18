@@ -8,7 +8,13 @@
 // it in the other fails here immediately. That is the entire point of the file;
 // do not weaken it to make a change land.
 
-import { amountPaid, balanceDue, isFullyPaid, PAID_EPSILON } from "../utils/invoicePayments";
+import {
+  amountPaid,
+  balanceDue,
+  isFullyPaid,
+  materializeLegacyLedger,
+  PAID_EPSILON,
+} from "../utils/invoicePayments";
 
 const backend = require("../backend/lib/paymentMath");
 const { paymentVectors } = require("../__fixtures__/paymentVectors");
@@ -36,5 +42,9 @@ describe.each(paymentVectors.map((v) => [v.label, v]))("%s", (_label, v) => {
     expect(backend.amountPaid(v.invoice)).toBe(amountPaid(v.invoice));
     expect(backend.balanceDue(v.invoice)).toBe(balanceDue(v.invoice));
     expect(backend.isFullyPaid(v.invoice)).toBe(isFullyPaid(v.invoice));
+  });
+
+  test("materializeLegacyLedger agrees between implementations", () => {
+    expect(backend.materializeLegacyLedger(v.invoice)).toEqual(materializeLegacyLedger(v.invoice));
   });
 });
