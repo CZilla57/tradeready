@@ -36,6 +36,7 @@ test("emails when there is no phone", async () => {
   expect(ok).toBe(true);
   expect(composeEmail).toHaveBeenCalledWith(expect.objectContaining({ recipients: ["a@x.com"] }));
   expect(composeSMS).not.toHaveBeenCalled();
+  expect(composeEmail.mock.calls[0][0].subject).toBe("Appointment confirmation");
 });
 
 test("alerts and returns false when the customer has no contact info", async () => {
@@ -47,4 +48,31 @@ test("alerts and returns false when the customer has no contact info", async () 
   expect(Alert.alert).toHaveBeenCalled();
   expect(composeSMS).not.toHaveBeenCalled();
   expect(composeEmail).not.toHaveBeenCalled();
+});
+
+test("on-my-way email uses the 'On my way' subject", async () => {
+  await sendAppointmentMessage({
+    job, customer: { id: "c1", name: "Alice", phone: "", email: "a@x.com", address: "" },
+    settings, kind: "on_my_way",
+  });
+  expect(composeEmail.mock.calls[0][0].subject).toBe("On my way");
+});
+
+test("no scheduledDate → no 'Invalid Date' in the message body", async () => {
+  const ok = await sendAppointmentMessage({
+    job: { ...job, scheduledDate: null },
+    customer: { id: "c1", name: "Alice", phone: "5551234567", email: "", address: "" },
+    settings, kind: "confirm",
+  });
+  expect(ok).toBe(true); // composer still opens (mocked)
+  expect(composeSMS.mock.calls[0][0].body).not.toContain("Invalid Date");
+});
+
+test("returns false when the composer can't open (pass-through)", async () => {
+  composeSMS.mockResolvedValueOnce(false);
+  const ok = await sendAppointmentMessage({
+    job, customer: { id: "c1", name: "Alice", phone: "5551234567", email: "", address: "" },
+    settings, kind: "on_my_way",
+  });
+  expect(ok).toBe(false);
 });

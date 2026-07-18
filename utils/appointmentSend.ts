@@ -31,7 +31,13 @@ export async function sendAppointmentMessage(args: {
       ? settings.appointmentConfirmTemplate?.trim() || DEFAULT_CONFIRM_TEMPLATE
       : settings.onMyWayTemplate?.trim() || DEFAULT_ON_MY_WAY_TEMPLATE;
 
-  const { date, time } = formatApptDateTime(job.scheduledDate ?? "", job.scheduledStartTime);
+  // job.scheduledDate is typed `DateString | null`. The UI only shows these
+  // actions on scheduled jobs, but guard anyway: an empty string would make
+  // formatDisplayDate emit the literal "Invalid Date" into the outgoing message.
+  const { date, time } =
+    job.scheduledDate && job.scheduledDate.trim()
+      ? formatApptDateTime(job.scheduledDate, job.scheduledStartTime)
+      : { date: "your upcoming appointment", time: "the scheduled time" };
   const body = renderTemplate(template, {
     customerName: customer.name,
     businessName: settings.businessName || "your contractor",
