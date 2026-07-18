@@ -873,8 +873,17 @@ begin
       value,
       row_number() over (
         partition by value ->> 'id'
-        -- Void wins first; otherwise the incoming (NEW) version wins.
-        order by ((value ->> 'voidedAt') is not null) desc, prio desc
+        -- MUST match pickSurvivingPayment in utils/invoicePayments.ts exactly,
+        -- or the server and the device will store different void dates and
+        -- ping-pong writes at each other.
+        --   1. A voided entry beats a live one (voidedAt is irreversible).
+        --   2. When BOTH are voided, the EARLIEST void date wins — a
+        --      side-independent value is what keeps the union commutative.
+        --   3. Otherwise the incoming (NEW) version wins.
+        order by
+          ((value ->> 'voidedAt') is not null) desc,
+          (value ->> 'voidedAt') asc nulls last,
+          prio desc
       ) as rn
     from all_payments
   )
@@ -907,7 +916,7 @@ Create `supabase/migrations/verify/20260718_invoice_payment_merge_verify.sql`:
 -- Wrapped in a transaction that ALWAYS rolls back, so it touches no real data.
 -- Run once against the project after applying the migration:
 --   psql "$DATABASE_URL" -f supabase/migrations/verify/20260718_invoice_payment_merge_verify.sql
--- Success prints four NOTICE lines and "ALL CHECKS PASSED". Any failure raises.
+-- Success prints five NOTICE lines and "ALL CHECKS PASSED". Any failure raises.
 
 begin;
 
@@ -974,6 +983,28 @@ begin
     raise exception 'CHECK 3 FAILED: the void was reverted by the union: %', ledger;
   end if;
   raise notice 'CHECK 3 ok: void survived the union';
+
+  ------------------------- 3b. earliest void wins when both sides are voided
+  update public.invoices
+     set data = jsonb_build_object(
+       'id', test_id, 'amount', 1000, 'paid', false,
+       'payments', jsonb_build_array(
+         jsonb_build_object('id','p1','amount',400,'date','2026-07-01','method','cash',
+                            'voidedAt','2026-08-01')
+       )
+     )
+   where id = test_id;
+
+  select data -> 'payments' into ledger from public.invoices where id = test_id;
+  if not exists (
+    select 1 from jsonb_array_elements(ledger) e
+     where e ->> 'id' = 'p1' and e ->> 'voidedAt' = '2026-07-22'
+  ) then
+    raise exception
+      'CHECK 3b FAILED: later void (2026-08-01) overwrote the earlier one (2026-07-22): %',
+      ledger;
+  end if;
+  raise notice 'CHECK 3b ok: earliest void date won, matching the client rule';
 
   ------------------------------------ 4. legacy invoice passes through clean
   insert into public.invoices (id, user_id, data, updated_at, deleted)
@@ -1088,7 +1119,7 @@ Then stop and report. The owner decides when to apply the migration and deploy.
 ## After this lands — the owner-gated sequence
 
 1. Apply `supabase/migrations/20260718_invoice_payment_merge.sql` to the live project.
-2. Run the verification script; expect four NOTICEs and `ALL CHECKS PASSED`.
+2. Run the verification script; expect five NOTICEs and `ALL CHECKS PASSED`.
 3. Deploy the backend to Vercel (webhook + cron).
 4. Update the README paragraph from future to present tense.
 5. Only then is Phase 3 (the recording UI) safe to build.
