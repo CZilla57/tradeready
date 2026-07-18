@@ -6,6 +6,7 @@
 
 import type { Invoice, Job, Customer, Settings, TradeId } from "../../types/models";
 import { freshSampleSuffix } from "../sampleData";
+import { DEFAULT_CONFIRM_TEMPLATE, DEFAULT_ON_MY_WAY_TEMPLATE } from "../appointmentMessages";
 
 // Per-install namespace for sample ids. Fixed ids (c1, j1, "1"...) collided
 // across accounts on the per-user cloud tables and RLS rejected every later
@@ -226,6 +227,10 @@ export function defaultSettings(): Settings {
     rules: [{ days: 1 }, { days: 7 }],
     autoOutreachEnabled: false, // opt-in; see docs/superpowers/specs/2026-07-14-overdue-auto-outreach-design.md
     autoSendEmailEnabled: false, // opt-in; Phase 2 server email auto-send
+
+    appointmentRemindersEnabled: false, // opt-in; day-before confirmation reminder
+    appointmentConfirmTemplate: DEFAULT_CONFIRM_TEMPLATE,
+    onMyWayTemplate: DEFAULT_ON_MY_WAY_TEMPLATE,
 
     // AI
     anthropicKey: "",
