@@ -13,7 +13,7 @@ import { formatDisplayDate, formatTimeRange } from "./dateHelpers";
 export { DEFAULT_CONFIRM_TEMPLATE, DEFAULT_ON_MY_WAY_TEMPLATE } from "./appointmentTemplates";
 
 // Statuses for which an appointment reminder / on-my-way action makes sense.
-const ACTIVE_STATUSES: ReadonlySet<JobStatus> = new Set(["approved", "scheduled", "in_progress"]);
+export const ACTIVE_STATUSES: ReadonlySet<JobStatus> = new Set(["approved", "scheduled", "in_progress"]);
 
 export type ApptChannel = "sms" | "email" | "none";
 export type ApptSettings = Pick<

@@ -25,6 +25,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, resolveCustomer } from "../utils/storage";
 import { scheduleReviewRequest } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
+import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
@@ -158,7 +159,7 @@ function JobDetailsCard({ job, navigation, customer, onAppointmentSend }: {
             : ""}
         </Text>
       )}
-      {job.scheduledDate && customer && (
+      {job.scheduledDate && customer && ACTIVE_STATUSES.has(job.status) && (
         <View style={styles.apptActions}>
           <Button
             label="Send confirmation"

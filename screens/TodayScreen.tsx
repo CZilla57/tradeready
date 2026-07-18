@@ -25,6 +25,7 @@ import {
   resolveCustomer,
 } from '../utils/storage';
 import { sendAppointmentMessage } from '../utils/appointmentSend';
+import { ACTIVE_STATUSES } from '../utils/appointmentMessages';
 import { daysPastDue } from '../utils/invoiceHelpers';
 import { formatMoney } from '../utils/format';
 import {
@@ -41,8 +42,6 @@ import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
 import type { Job, Invoice } from '../types/models';
 import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
-
-const ON_MY_WAY_STATUSES: Job['status'][] = ['approved', 'scheduled', 'in_progress'];
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
@@ -233,7 +232,7 @@ function JobCard({ job, onPress, onOnMyWay }: JobCardProps) {
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
   const { label, color } = getJobStatusDisplay(job.status);
-  const canSendOnMyWay = !!job.scheduledDate && ON_MY_WAY_STATUSES.includes(job.status);
+  const canSendOnMyWay = !!job.scheduledDate && ACTIVE_STATUSES.has(job.status);
 
   return (
     <TouchableOpacity style={styles.jobCard} onPress={onPress} activeOpacity={0.7}>

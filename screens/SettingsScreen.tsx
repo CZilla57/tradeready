@@ -595,38 +595,35 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
             Remind me the evening before a scheduled job to confirm with the customer.
           </Text>
         </View>
-        {!!s.appointmentRemindersEnabled && (
-          <>
-            <View style={styles.card}>
-              <Field
-                label="Confirmation message"
-                value={s.appointmentConfirmTemplate ?? DEFAULT_CONFIRM_TEMPLATE}
-                onChangeText={(v) => update("appointmentConfirmTemplate", v)}
-                multiline
-                autoCapitalize="sentences"
-                colors={colors}
-                shadow={shadow}
-              />
-              <Text style={styles.keyNote}>
-                Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
-              </Text>
-            </View>
-            <View style={styles.card}>
-              <Field
-                label="On-my-way message"
-                value={s.onMyWayTemplate ?? DEFAULT_ON_MY_WAY_TEMPLATE}
-                onChangeText={(v) => update("onMyWayTemplate", v)}
-                multiline
-                autoCapitalize="sentences"
-                colors={colors}
-                shadow={shadow}
-              />
-              <Text style={styles.keyNote}>
-                Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
-              </Text>
-            </View>
-          </>
-        )}
+        <Text style={[styles.ruleSubtitle, { marginTop: spacing.sm }]}>Message templates</Text>
+        <View style={styles.card}>
+          <Field
+            label="Confirmation message"
+            value={s.appointmentConfirmTemplate ?? DEFAULT_CONFIRM_TEMPLATE}
+            onChangeText={(v) => update("appointmentConfirmTemplate", v)}
+            multiline
+            autoCapitalize="sentences"
+            colors={colors}
+            shadow={shadow}
+          />
+          <Text style={styles.keyNote}>
+            Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
+          </Text>
+        </View>
+        <View style={styles.card}>
+          <Field
+            label="On-my-way message"
+            value={s.onMyWayTemplate ?? DEFAULT_ON_MY_WAY_TEMPLATE}
+            onChangeText={(v) => update("onMyWayTemplate", v)}
+            multiline
+            autoCapitalize="sentences"
+            colors={colors}
+            shadow={shadow}
+          />
+          <Text style={styles.keyNote}>
+            Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
+          </Text>
+        </View>
 
         <Divider />
 
