@@ -12,7 +12,7 @@ import {
   newPaymentId,
   materializeLegacyLedger,
   applyPayment,
-  removePayment,
+  voidPayment,
   paymentsInRange,
   collectedInRange,
   mergePaymentLedgers,
@@ -243,58 +243,120 @@ describe("applyPayment", () => {
   });
 });
 
-describe("removePayment", () => {
-  test("removing a payment restores the balance", () => {
+describe("voidPayment", () => {
+  test("voiding a payment restores the balance", () => {
     const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
-    const result = removePayment(withPayment, "p1");
-    expect(result.payments).toHaveLength(0);
+    const result = voidPayment(withPayment, "p1", "2026-07-22");
+    expect(result.payments).toHaveLength(1);          // the entry REMAINS
+    expect(result.payments[0].voidedAt).toBe("2026-07-22");
+    expect(amountPaid(result)).toBe(0);               // but no longer counts
     expect(balanceDue(result)).toBe(1000);
   });
-  test("removing the closing payment un-pays the invoice", () => {
+
+  test("voiding the closing payment un-pays the invoice", () => {
     const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
     const settled = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-20" }));
-    const result = removePayment(settled, "p2");
+    const result = voidPayment(settled, "p2", "2026-07-22");
     expect(result.paid).toBe(false);
     expect(result.paidAt).toBeUndefined();
     expect(isPartlyPaid(result)).toBe(true);
+    expect(amountPaid(result)).toBe(400);
   });
-  test("removing a non-closing payment from a settled invoice keeps it unpaid-but-partial", () => {
+
+  test("voiding a non-closing payment leaves the invoice unpaid but partial", () => {
     const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
     const settled = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-20" }));
-    const result = removePayment(settled, "p1");
+    const result = voidPayment(settled, "p1", "2026-07-22");
     expect(result.paid).toBe(false);
     expect(amountPaid(result)).toBe(600);
   });
+
+  test("voiding is idempotent — the original void date is kept", () => {
+    const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
+    const once = voidPayment(withPayment, "p1", "2026-07-22");
+    const twice = voidPayment(once, "p1", "2026-08-01");
+    expect(twice.payments).toHaveLength(1);
+    expect(twice.payments[0].voidedAt).toBe("2026-07-22");
+  });
+
   test("an unknown payment id is a no-op", () => {
     const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
-    const result = removePayment(withPayment, "nope");
-    expect(result.payments).toHaveLength(1);
+    const result = voidPayment(withPayment, "nope", "2026-07-22");
+    expect(result.payments[0].voidedAt).toBeUndefined();
+    expect(amountPaid(result)).toBe(400);
   });
+
+  test("a legacy paid invoice can be un-paid by voiding its materialized entry", () => {
+    const legacy = inv({ id: "i1", paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined });
+    const result = voidPayment(legacy, "legacy_i1", "2026-07-22");
+    expect(result.paid).toBe(false);
+    expect(balanceDue(result)).toBe(1000);
+  });
+
+  test("voiding every payment leaves the invoice fully unpaid, not legacy-paid", () => {
+    // The ledger is non-empty, so amountPaid must NOT fall back to the legacy
+    // `paid` flag — it must report 0. Starting from paid:true with no explicit
+    // ledger means applyPayment's materialize step contributes its own
+    // legacy_i1 entry alongside p1, so BOTH must be voided to empty the total.
+    const withPayment = applyPayment(inv({ amount: 1000, paid: true }), pmt({ id: "p1", amount: 1000 }));
+    expect(withPayment.payments).toHaveLength(2);
+    const voidedOne = voidPayment(withPayment, "p1", "2026-07-22");
+    const result = voidPayment(voidedOne, "legacy_i1", "2026-07-22");
+    expect(amountPaid(result)).toBe(0);
+    expect(result.paid).toBe(false);
+  });
+
   test("does not mutate the input invoice", () => {
     const withPayment = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400 }));
-    removePayment(withPayment, "p1");
-    expect(withPayment.payments).toHaveLength(1);
+    voidPayment(withPayment, "p1", "2026-07-22");
+    expect(withPayment.payments[0].voidedAt).toBeUndefined();
   });
-  test("removing the only payment from a settled invoice un-pays it", () => {
-    const settled = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 1000, date: "2026-07-01" }));
-    const result = removePayment(settled, "p1");
-    expect(result.paid).toBe(false);
-    expect(result.paidAt).toBeUndefined();
-    expect(amountPaid(result)).toBe(0);
-    expect(balanceDue(result)).toBe(1000);
+});
+
+describe("voided entries and paidAt derivation", () => {
+  test("a voided payment does not count toward the closing balance", () => {
+    // $600 voided, so $400 + $500 = $900 never settles a $1000 invoice.
+    const a = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const b = applyPayment(a, pmt({ id: "p2", amount: 600, date: "2026-07-10" }));
+    const c = applyPayment(b, pmt({ id: "p3", amount: 500, date: "2026-07-20" }));
+    const voided = voidPayment(c, "p2", "2026-07-22");
+    expect(amountPaid(voided)).toBe(900);
+    expect(voided.paid).toBe(false);
+    expect(voided.paidAt).toBeUndefined();
   });
-  test("a legacy paid invoice can be un-paid by removing its materialized entry", () => {
-    const legacy = inv({ id: "i1", paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined });
-    const result = removePayment(legacy, "legacy_i1");
-    expect(result.paid).toBe(false);
-    expect(balanceDue(result)).toBe(1000);
+
+  test("paidAt skips voided entries when finding the closing payment", () => {
+    const a = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 900, date: "2026-07-01" }));
+    const b = applyPayment(a, pmt({ id: "p2", amount: 900, date: "2026-07-05" }));
+    const c = applyPayment(b, pmt({ id: "p3", amount: 100, date: "2026-07-30" }));
+    // Void the 07-05 payment: now 900 + 100 settles it, closing on 07-30.
+    const voided = voidPayment(c, "p2", "2026-08-01");
+    expect(voided.paid).toBe(true);
+    expect(voided.paidAt).toBe("2026-07-30");
   });
-  test("a zero-amount invoice with an emptied ledger is not auto-marked paid", () => {
-    // Pins the `payments.length > 0` guard in withDerivedPaidFields: without
-    // it, `0 - 0 <= PAID_EPSILON` would mark an empty ledger as settled.
-    const zero = inv({ amount: 0, paid: true, payments: [pmt({ id: "p1", amount: 0 })] });
-    const result = removePayment(zero, "p1");
-    expect(result.paid).toBe(false);
+});
+
+describe("mergePaymentLedgers — void wins", () => {
+  test("a void on the LOCAL side survives the merge", () => {
+    const local = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-07-22" })] });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400 })] });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.payments[0].voidedAt).toBe("2026-07-22");
+    expect(amountPaid(merged)).toBe(0);
+  });
+
+  test("a void on the REMOTE side survives the merge", () => {
+    const local = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400 })] });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-07-22" })] });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.payments[0].voidedAt).toBe("2026-07-22");
+    expect(amountPaid(merged)).toBe(0);
+  });
+
+  test("void-wins keeps the merge commutative", () => {
+    const a = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-07-22" })] });
+    const b = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400 })] });
+    expect(mergePaymentLedgers(a, b).payments).toEqual(mergePaymentLedgers(b, a).payments);
   });
 });
 

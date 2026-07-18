@@ -10,7 +10,7 @@
 // what every money surface already assumed, so converted analytics return
 // identical numbers on legacy data.
 
-import type { Invoice, Payment } from "../types/models";
+import type { DateString, Invoice, Payment } from "../types/models";
 import { isInRange } from "./moneyUtils";
 
 /**
@@ -23,7 +23,9 @@ export const PAID_EPSILON = 0.005;
 export function amountPaid(invoice: Invoice): number {
   const ledger = invoice.payments;
   if (ledger && ledger.length > 0) {
-    return ledger.reduce((sum, p) => sum + p.amount, 0);
+    // Voided entries stay in the ledger (so a union can't resurrect them) but
+    // contribute nothing.
+    return ledger.reduce((sum, p) => (p.voidedAt ? sum : sum + p.amount), 0);
   }
   return invoice.paid ? invoice.amount : 0;
 }
@@ -93,7 +95,7 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
   // would re-enter the LEGACY FALLBACK and read back the old amount instead
   // of zero. The `payments.length > 0` guard also stops a $0 invoice with an
   // empty ledger from being auto-marked paid.
-  const collected = payments.reduce((sum, p) => sum + p.amount, 0);
+  const collected = payments.reduce((sum, p) => (p.voidedAt ? sum : sum + p.amount), 0);
   const settled = payments.length > 0 && invoice.amount - collected <= PAID_EPSILON;
   const next: Invoice = { ...invoice, payments };
   if (settled) {
@@ -113,6 +115,7 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
     let running = 0;
     let closingDate = chronological[chronological.length - 1].date;
     for (const p of chronological) {
+      if (p.voidedAt) continue;
       running += p.amount;
       if (running >= invoice.amount - PAID_EPSILON) {
         closingDate = p.date;
@@ -151,12 +154,20 @@ export function applyPayment(invoice: Invoice, payment: Payment): Invoice {
 }
 
 /**
- * Remove a payment by id and recompute paid/paidAt. Removing the payment that
- * settled an invoice legitimately flips it back to unpaid — the UI confirms
- * that consequence with the user before calling this.
+ * Void a payment and recompute paid/paidAt. Pure — returns a new Invoice.
+ *
+ * The entry is KEPT and flagged rather than removed: a server-side union
+ * cannot tell "unknown to me" from "deleted by me", so deletion has to be
+ * data. Voiding is idempotent — re-voiding preserves the original void date —
+ * and irreversible; to correct one, record a new payment.
+ *
+ * Voiding the payment that settled an invoice legitimately flips it back to
+ * unpaid. The UI confirms that consequence before calling this.
  */
-export function removePayment(invoice: Invoice, paymentId: string): Invoice {
-  const ledger = materializeLegacyLedger(invoice).filter((p) => p.id !== paymentId);
+export function voidPayment(invoice: Invoice, paymentId: string, voidedAt: DateString): Invoice {
+  const ledger = materializeLegacyLedger(invoice).map((p) =>
+    p.id === paymentId && !p.voidedAt ? { ...p, voidedAt } : p,
+  );
   return withDerivedPaidFields(invoice, ledger);
 }
 
@@ -195,7 +206,11 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
  *    synthesize the identical entry and collapse to one. Skipping the
  *    materialize step would union two legacy invoices to [] and silently
  *    un-pay them.
- *  - On an id collision the remote entry wins. For `p…` (device) and `stripe_…`
+ *  - On an id collision, VOID WINS regardless of side: if either copy has
+ *    `voidedAt` set, the surviving entry is the voided one. `voidedAt` is
+ *    irreversible, so whichever copy carries it is unambiguously the later
+ *    state — that is what keeps this union commutative regardless of arrival
+ *    order. Otherwise the remote entry wins. For `p…` (device) and `stripe_…`
  *    (webhook) namespaces, a shared id means the same payment. The `legacy_…`
  *    namespace is the exception: it synthesizes from the invoice's mutable
  *    `amount`/`paidAt`, so two copies that diverged can emit the same id with
@@ -218,7 +233,13 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
 export function mergePaymentLedgers(local: Invoice, remote: Invoice): Invoice {
   const byId = new Map<string, Payment>();
   for (const p of materializeLegacyLedger(local)) byId.set(p.id, p);
-  for (const p of materializeLegacyLedger(remote)) byId.set(p.id, p);
+  for (const p of materializeLegacyLedger(remote)) {
+    const existing = byId.get(p.id);
+    // Void wins regardless of side. voidedAt is irreversible, so whichever copy
+    // carries it is unambiguously the later state — which is exactly what keeps
+    // this union commutative. Otherwise remote wins, as for scalar fields.
+    byId.set(p.id, existing?.voidedAt && !p.voidedAt ? existing : p);
+  }
 
   const merged = [...byId.values()].sort(comparePayments);
 

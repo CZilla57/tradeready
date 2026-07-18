@@ -179,6 +179,17 @@ export interface Payment {
    * a repeated Stripe delivery for the same session must not append twice.
    */
   stripeSessionId?: string;
+  /**
+   * Set when this payment is voided. Voided entries STAY in the ledger and are
+   * skipped by amountPaid — deletion is recorded as DATA, not absence, so a
+   * server-side union cannot resurrect it.
+   *
+   * Void is IRREVERSIBLE. Nothing may clear this field. That one-way property
+   * is what makes the ledger union commutative: whichever copy carries the
+   * void is unambiguously the later state, regardless of arrival order. To
+   * correct a mistaken void, record a new payment.
+   */
+  voidedAt?: DateString;
 }
 
 /**
