@@ -29,7 +29,7 @@ const legacyInRange = (inv, start, end) =>
 // Every combination of the fields that vary on legacy invoices.
 const AMOUNTS = [0, 0.5, 100, 1234.56, 99999];
 const PAID = [true, false];
-const PAID_AT = ["2026-07-15", undefined];
+const PAID_AT = ["2026-07-15", "2026-05-10", undefined];
 const DUES = ["2026-07-20", "2026-06-01"];
 
 const legacyInvoices = [];
@@ -81,9 +81,15 @@ describe("legacy equivalence", () => {
   test.each(legacyInvoices.map((inv) => [inv.number, inv]))(
     "%s — isFullyPaid matches the old paid flag",
     (_label, inv) => {
-      // A zero-amount invoice is trivially settled either way; every other
-      // invoice must agree with its stored boolean.
-      if (inv.amount === 0) return;
+      if (inv.amount === 0) {
+        // A $0 invoice is trivially settled: balanceDue is 0 whatever the flag
+        // says, so isFullyPaid is true even when paid is false. This divergence
+        // is intentional and inherited by later phases — getStatus and isOverdue
+        // will both treat a $0 invoice as settled. Neither invoice-creation
+        // screen currently allows amount <= 0, so it is not reachable today.
+        expect(isFullyPaid(inv)).toBe(true);
+        return;
+      }
       expect(isFullyPaid(inv)).toBe(inv.paid);
     },
   );
@@ -94,4 +100,13 @@ describe("legacy equivalence", () => {
     const expected = legacyInvoices.reduce((sum, inv) => sum + legacyInRange(inv, start, end), 0);
     expect(collectedInRange(legacyInvoices, start, end)).toBe(expected);
   });
+
+  test.each(legacyInvoices.map((inv) => [inv.number, inv]))(
+    "%s — collectedInRange matches the old date-bucketed formula",
+    (_label, inv) => {
+      const start = new Date(2026, 6, 1);
+      const end = new Date(2026, 6, 31);
+      expect(collectedInRange([inv], start, end)).toBe(legacyInRange(inv, start, end));
+    },
+  );
 });
