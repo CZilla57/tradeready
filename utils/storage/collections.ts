@@ -48,6 +48,7 @@ export async function saveJobs(jobs: Job[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.jobs, JSON.stringify(jobs));
   await enqueueCollectionChanges("jobs", old, jobs);
   trySync();
+  syncNotifications();
 }
 
 // --- Customers ---
