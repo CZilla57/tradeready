@@ -5,7 +5,7 @@
 **Nothing is merged, nothing is pushed, the Supabase migration is NOT applied,
 and the backend is NOT deployed.**
 
-Gate at last check: **937 tests / 59 suites, tsc 0 errors, lint 0 warnings.**
+Gate at last check: **942 tests / 59 suites, tsc 0 errors, lint 0 warnings.**
 
 This document exists because the detailed working notes live in
 `.superpowers/sdd/progress.md`, which is git-ignored scratch — a `git clean -fdx`
@@ -57,28 +57,27 @@ Design decisions that are load-bearing and non-obvious:
   because `amountPaid` falls back to `paid`/`amount` whenever the ledger is
   empty. Nothing may stamp `payments: []` onto rows that lack the key.
 
-## 3. Two defects that gate the recording UI (Phase 3)
+## 3. Defects gating the recording UI (Phase 3)
 
-Neither is fixed. Both are harmless today and become real the moment any
-invoice carries a recorded payment.
+### 3a. `updated_at: item.ts` hiding saved payments — FIXED 2026-07-18 (`e386b7d`)
 
-### 3a. `utils/sync.ts:106` — `updated_at: item.ts` hides saved payments
+`pushQueue` stamped the **save** time rather than the push time, while
+`pullRemote` filters `gt('updated_at', since)`.
 
-`pushQueue` stamps the **save** time, not the push time. `pullRemote` filters
-`gt('updated_at', since)`.
+Sequence that broke: user saves at 10:00 (item stamped 10:00) → that push fails
+→ a later pull advances `lastSynced` to 11:00 → the Stripe webhook appends a
+payment at 11:30 → the queued item retries at 12:00. The union trigger
+preserves the money, but the row lands stamped **backwards to 10:00**, so every
+subsequent pull skips it and the device never learns about the payment.
 
-Sequence: user saves at 10:00 (item stamped 10:00) → that push fails → a later
-pull sets `lastSynced = 11:00` → the Stripe webhook appends a payment at 11:30
-→ the queued item retries at 12:00. The trigger correctly preserves the money,
-but the row's `updated_at` is stamped **backwards to 10:00**, so every
-subsequent pull skips it. The device never learns about the payment.
+Fixed at all four `pushQueue` sites (settings, customer_notes, the collection
+tables, and the soft-delete) by stamping a `pushedAt` computed once per item.
+`item.ts` still records when the user saved; only the `updated_at` COLUMN
+changed. Note this made `pushQueue` consistent with `pushAllLocalToCloud`,
+which already used push time.
 
-Post-trigger this is strictly better than today (the money survives rather than
-being destroyed), so it does not block applying the migration. But once the
-recording UI ships, the user is looking at a balance silently missing a Stripe
-payment.
-
-**Fix:** stamp `new Date().toISOString()` instead of `item.ts`. One line.
+The bug was not invoice-specific — a backdated stamp could make ANY table's
+late push invisible to a second device's pull, permanently.
 
 ### 3b. `screens/InvoicesScreen.tsx:98` — `markPaid` writes a bare `paid: true`
 
