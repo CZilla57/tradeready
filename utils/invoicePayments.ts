@@ -57,7 +57,7 @@ export function newPaymentId(): string {
  * drop the original amount from the total the moment the array became
  * non-empty. Any function that starts a ledger must go through here.
  *
- * Returns the existing ledger untouched when one is already present.
+ * Returns a copy of the existing ledger when one is already present.
  */
 export function materializeLegacyLedger(invoice: Invoice): Payment[] {
   if (invoice.payments && invoice.payments.length > 0) return [...invoice.payments];

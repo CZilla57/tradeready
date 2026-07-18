@@ -253,6 +253,13 @@ describe("removePayment", () => {
     expect(result.paid).toBe(false);
     expect(balanceDue(result)).toBe(1000);
   });
+  test("a zero-amount invoice with an emptied ledger is not auto-marked paid", () => {
+    // Pins the `payments.length > 0` guard in withDerivedPaidFields: without
+    // it, `0 - 0 <= PAID_EPSILON` would mark an empty ledger as settled.
+    const zero = inv({ amount: 0, paid: true, payments: [pmt({ id: "p1", amount: 0 })] });
+    const result = removePayment(zero, "p1");
+    expect(result.paid).toBe(false);
+  });
 });
 
 describe("paidAt ordering — insertion order, not date order (pinned intentional behavior)", () => {
