@@ -118,7 +118,7 @@ amountPaid(inv): number
   // inv.payments?.length ? sum(payments) : (inv.paid ? inv.amount : 0)
 
 balanceDue(inv): number          // max(0, inv.amount - amountPaid(inv))
-isPartlyPaid(inv): boolean       // amountPaid > 0 && balanceDue > 0.005
+isPartlyPaid(inv): boolean       // amountPaid > PAID_EPSILON && !isFullyPaid(inv)
 isFullyPaid(inv): boolean        // balanceDue <= 0.005
 paymentsInRange(inv, start, end): Payment[]
 collectedInRange(invoices, start, end): number
