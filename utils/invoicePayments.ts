@@ -194,9 +194,15 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
  *    synthesize the identical entry and collapse to one. Skipping the
  *    materialize step would union two legacy invoices to [] and silently
  *    un-pay them.
- *  - On an id collision the remote entry wins. Unobservable in practice: the id
- *    namespaces (`p…` device, `stripe_…` webhook, `legacy_…` synthetic) mean a
- *    shared id is the same payment.
+ *  - On an id collision the remote entry wins. For `p…` (device) and `stripe_…`
+ *    (webhook) namespaces, a shared id means the same payment. The `legacy_…`
+ *    namespace is the exception: it synthesizes from the invoice's mutable
+ *    `amount`/`paidAt`, so two copies that diverged can emit the same id with
+ *    different content. This is mostly self-correcting (merged result gets both
+ *    scalars and the remote legacy entry), except when one side is paid and the
+ *    other is unpaid with divergent `amount`: the surviving entry carries one
+ *    side's amount while `invoice.amount` comes from the other, making merge
+ *    commutative in payments membership but not in the `paid` flag.
  *  - The union is sorted canonically by (date, id) using comparePayments
  *    (code-unit comparison, not localeCompare — see that function's doc).
  *    withDerivedPaidFields now derives `paidAt` chronologically regardless of

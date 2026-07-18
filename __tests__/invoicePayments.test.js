@@ -314,13 +314,15 @@ describe("paidAt ordering — chronological order, not insertion order (pinned i
     expect(second.paidAt).toBe("2026-07-20");
   });
 
-  test("a backdated payment does not settle the invoice before the money arrived", () => {
-    // $400 recorded first but dated later; $600 backdated. The invoice was not
-    // fully paid until 2026-07-20, when the last money needed actually arrived.
-    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-20" }));
-    const settled = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-01" }));
-    expect(settled.paid).toBe(true);
-    expect(settled.paidAt).toBe("2026-07-20");
+  test("paidAt is the chronologically-closing payment even when it is mid-ledger", () => {
+    // Recorded p1,p2,p3 but dated out of order. Chronologically: 07-01 ($300),
+    // 07-10 ($700 — this is the one that crosses $1000), 07-25 ($200 extra).
+    // The closing payment is neither the first nor the last entry either way.
+    const a = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 200, date: "2026-07-25" }));
+    const b = applyPayment(a, pmt({ id: "p2", amount: 700, date: "2026-07-10" }));
+    const c = applyPayment(b, pmt({ id: "p3", amount: 300, date: "2026-07-01" }));
+    expect(c.paid).toBe(true);
+    expect(c.paidAt).toBe("2026-07-10");
   });
 });
 
@@ -437,7 +439,12 @@ describe("mergePaymentLedgers", () => {
     expect(ab.paidAt).toBe(ba.paidAt);
   });
 
-  test("is IDEMPOTENT — merge(x,x) equals x", () => {
+  test("reaches a canonical FIXED POINT — once merged, merging again is stable", () => {
+    // merge canonicalizes the ledger by (date, id) order on first merge. The
+    // fixture here is already sorted, so ORDER doesn't change, but this test pins
+    // that paid/paidAt/amountPaid are stable under re-merge. For unsorted input,
+    // merge may reorder the ledger on first call but reaching fixed point is still
+    // the property that matters: merging the canonical result again changes nothing.
     const x = inv({
       amount: 1000,
       payments: [pmt({ id: "p1", amount: 400, date: "2026-07-01" }), pmt({ id: "p2", amount: 600, date: "2026-07-20" })],
