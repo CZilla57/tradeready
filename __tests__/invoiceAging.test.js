@@ -102,10 +102,13 @@ describe("computeInvoiceAging", () => {
     expect(result.paidCount).toBe(0);
   });
 
-  it("excludes a partly-paid invoice — it hasn't finished aging", () => {
+  it("excludes a partly-paid invoice via isFullyPaid check (not just paid flag)", () => {
+    // This test pins the fix: paid=true is stale when a ledger shows a balance.
+    // Old gate (!inv.paid) would skip this naturally and pass identically.
+    // New gate (isFullyPaid) correctly excludes it because $200 of $500 = $300 balance.
     const result = computeInvoiceAging([
       makeInvoice({
-        paid: false, paidAt: "2026-06-11", amount: 500,
+        paid: true, paidAt: "2026-06-11", amount: 500,
         payments: [{ id: "p1", amount: 200, date: "2026-06-11", method: "cash" }],
       }),
     ]);
