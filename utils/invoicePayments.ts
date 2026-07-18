@@ -74,6 +74,18 @@ export function materializeLegacyLedger(invoice: Invoice): Payment[] {
   ];
 }
 
+/**
+ * Deterministic chronological ordering. Code-unit comparison, NOT localeCompare:
+ * localeCompare is locale/ICU-dependent and Hermes may lack full ICU, so two
+ * devices could otherwise sort the same ledger differently and derive different
+ * paidAt values. Dates are "YYYY-MM-DD", so lexicographic equals chronological.
+ */
+function comparePayments(a: Payment, b: Payment): number {
+  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+  if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+  return 0;
+}
+
 /** Recompute the legacy `paid`/`paidAt` fields from a ledger. */
 function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
   // Derive `settled` from the ledger itself, not from amountPaid(next) — that
@@ -85,15 +97,21 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
   const settled = payments.length > 0 && invoice.amount - collected <= PAID_EPSILON;
   const next: Invoice = { ...invoice, payments };
   if (settled) {
-    // paidAt is the date of the payment that closed the balance — walk the
-    // ledger in INSERTION order (not date order) and stop at the one that
-    // crossed the line. A backdated payment recorded after a later-dated one
-    // therefore yields a paidAt earlier than a payment already in the
-    // ledger — that is intentional: paidAt means "the payment that closed
-    // the balance", not "the latest date in the ledger".
+    // paidAt is the date of the payment that closed the balance — walk a
+    // CHRONOLOGICALLY sorted copy of the ledger (never the stored array,
+    // which stays in insertion/recording order) and stop at the payment that
+    // crosses the line. This must be order-independent from how the payments
+    // were recorded: a backdated payment must not report the invoice settled
+    // before all the money had actually arrived. Example: $400 dated
+    // 2026-07-20 recorded first, then $600 backdated to 2026-07-01, on a
+    // $1000 invoice — on 2026-07-01 only $600 had arrived, so the invoice
+    // wasn't settled yet; it settled on 2026-07-20, when the last dollar
+    // needed actually showed up. Walking insertion order would have reported
+    // 2026-07-01, a date on which the balance was not yet paid.
+    const chronological = [...payments].sort(comparePayments);
     let running = 0;
-    let closingDate = payments[payments.length - 1].date;
-    for (const p of payments) {
+    let closingDate = chronological[chronological.length - 1].date;
+    for (const p of chronological) {
       running += p.amount;
       if (running >= invoice.amount - PAID_EPSILON) {
         closingDate = p.date;
@@ -179,11 +197,14 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
  *  - On an id collision the remote entry wins. Unobservable in practice: the id
  *    namespaces (`p…` device, `stripe_…` webhook, `legacy_…` synthetic) mean a
  *    shared id is the same payment.
- *  - The union is sorted canonically by (date, id). Phase 1 derives `paidAt`
- *    from the closing payment in INSERTION order, so an unsorted union would
- *    let two devices disagree on `paidAt`. Sorting makes this merge genuinely
- *    commutative. Canonical ordering applies to merges only — applyPayment
- *    still appends.
+ *  - The union is sorted canonically by (date, id) using comparePayments
+ *    (code-unit comparison, not localeCompare — see that function's doc).
+ *    withDerivedPaidFields now derives `paidAt` chronologically regardless of
+ *    array order, so this sort is no longer load-bearing for `paidAt`
+ *    agreement between devices — but it keeps the stored `payments` array
+ *    itself canonical and stable, which every other order-sensitive consumer
+ *    (equality checks, snapshot-style tests) relies on. Canonical ordering
+ *    applies to merges only — applyPayment still appends.
  *
  * Pure: neither input is mutated.
  */
@@ -192,9 +213,7 @@ export function mergePaymentLedgers(local: Invoice, remote: Invoice): Invoice {
   for (const p of materializeLegacyLedger(local)) byId.set(p.id, p);
   for (const p of materializeLegacyLedger(remote)) byId.set(p.id, p);
 
-  const merged = [...byId.values()].sort((a, b) =>
-    a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date),
-  );
+  const merged = [...byId.values()].sort(comparePayments);
 
   return withDerivedPaidFields(remote, merged);
 }

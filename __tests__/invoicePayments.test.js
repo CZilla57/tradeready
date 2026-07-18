@@ -298,17 +298,29 @@ describe("removePayment", () => {
   });
 });
 
-describe("paidAt ordering — insertion order, not date order (pinned intentional behavior)", () => {
-  test("a backdated payment recorded second still closes on ITS date, even though it precedes the first payment's date", () => {
+describe("paidAt ordering — chronological order, not insertion order (pinned intentional behavior)", () => {
+  test("a backdated payment recorded second still closes on the LATEST date needed to settle the balance", () => {
     // p1 is recorded first with a LATER date; p2 is recorded second (backdated)
-    // with an EARLIER date. Insertion order means p2 — the one that arrives
-    // and crosses the balance — is the closing payment, even though its date
-    // is earlier than p1's. This is the intended reading of "the payment that
-    // closed the balance": it walks recording order, not calendar order.
+    // with an EARLIER date. paidAt must reflect when the invoice was actually
+    // fully paid in the real world, not the order the payments were typed in.
+    // On 2026-07-01 only $600 of $1000 had arrived; the balance wasn't settled
+    // until 2026-07-20, when the last money needed actually arrived. Deriving
+    // paidAt in insertion order would have reported 2026-07-01 — a date on
+    // which the invoice was NOT yet fully paid — so derivation walks a
+    // chronologically sorted copy of the ledger instead.
     const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-20" }));
     const second = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-01" }));
     expect(second.paid).toBe(true);
-    expect(second.paidAt).toBe("2026-07-01");
+    expect(second.paidAt).toBe("2026-07-20");
+  });
+
+  test("a backdated payment does not settle the invoice before the money arrived", () => {
+    // $400 recorded first but dated later; $600 backdated. The invoice was not
+    // fully paid until 2026-07-20, when the last money needed actually arrived.
+    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-20" }));
+    const settled = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-01" }));
+    expect(settled.paid).toBe(true);
+    expect(settled.paidAt).toBe("2026-07-20");
   });
 });
 
@@ -370,6 +382,23 @@ describe("mergePaymentLedgers", () => {
     const merged = mergePaymentLedgers(local, remote);
     expect(merged.payments).toHaveLength(1);
     expect(amountPaid(merged)).toBe(300);
+  });
+
+  test("on an id collision the remote entry wins", () => {
+    const local = inv({ amount: 1000, payments: [pmt({ id: "stripe_cs_1", amount: 300, date: "2026-07-05", note: "local" })] });
+    const remote = inv({ amount: 1000, payments: [pmt({ id: "stripe_cs_1", amount: 300, date: "2026-07-05", note: "remote" })] });
+    const merged = mergePaymentLedgers(local, remote);
+    expect(merged.payments).toHaveLength(1);
+    expect(merged.payments[0].note).toBe("remote");
+  });
+
+  test("merging an unsorted ledger with itself does not change paidAt", () => {
+    const first = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-20" }));
+    const x = applyPayment(first, pmt({ id: "p2", amount: 600, date: "2026-07-01" }));
+    const merged = mergePaymentLedgers(x, x);
+    expect(merged.paidAt).toBe(x.paidAt);
+    expect(merged.paid).toBe(x.paid);
+    expect(amountPaid(merged)).toBe(amountPaid(x));
   });
 
   test("TWO LEGACY INVOICES DO NOT GET UN-PAID (the dangerous case)", () => {
