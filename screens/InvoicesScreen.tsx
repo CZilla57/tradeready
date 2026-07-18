@@ -109,18 +109,24 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
         text: inv && isPartlyPaid(inv) ? "Mark rest paid" : "Mark paid",
         onPress: async () => {
           const today = new Date().toISOString().split('T')[0];
-          const inv = invoices.find((i) => i.id === id);
-          if (!inv) return;
-          const settled = settleRemaining(inv, today);
+          const current = invoices.find((i) => i.id === id);
+          if (!current) return;
+          const settled = settleRemaining(current, today);
+          if (settled === current) {
+            // Already fully paid — settleRemaining is documented to no-op here.
+            // Nothing changed, so there's nothing to save or track.
+            onSuccess?.();
+            return;
+          }
           const updated = invoices.map((i) => (i.id === id ? settled : i));
           setInvoices(updated);
           await saveInvoices(updated);
           track('payment_recorded', {
-            amount: balanceDue(inv),
+            amount: balanceDue(current),
             method: 'other',
             balanceRemaining: 0,
           });
-          track('invoice_paid', { amount: inv.amount });
+          track('invoice_paid', { amount: current.amount });
           syncNotifications();
           onSuccess?.();
         },
@@ -222,7 +228,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
               <Text style={styles.editBtnText}>Record payment</Text>
             </TouchableOpacity>
           )}
-          {!inv.paid && (
+          {!isFullyPaid(inv) && (
             <TouchableOpacity style={styles.paidBtn} onPress={() => markPaid(inv.id)}>
               <Text style={styles.paidBtnText}>Mark paid</Text>
             </TouchableOpacity>
@@ -372,7 +378,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
                 {/* Actions */}
                 <View style={styles.modalDivider} />
 
-                {!inv.paid && (
+                {!isFullyPaid(inv) && (
                   <TouchableOpacity
                     style={styles.modalActionPrimary}
                     onPress={() => { setViewingInvoice(null); navigation.navigate("Outreach", { invoiceId: inv.id }); }}
@@ -394,7 +400,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
                   >
                     <Text style={styles.modalActionBtnText}>Save PDF</Text>
                   </TouchableOpacity>
-                  {!inv.paid && (
+                  {!isFullyPaid(inv) && (
                     <TouchableOpacity
                       style={[styles.modalActionBtn, styles.modalActionBtnPaid]}
                       onPress={() => markPaid(inv.id, () => setViewingInvoice(null))}
