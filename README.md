@@ -319,8 +319,13 @@ invoice — amount, customer, description — still follows last-write-wins.
 The exception exists because a ledger can legitimately grow on both sides at
 once: the Stripe webhook appends a payment server-side while the tradesperson
 records a cash payment on the device. Replacing would destroy whichever side
-lost, i.e. lose money. Union by id is commutative and idempotent, so arrival
-order doesn't matter and a repeated webhook delivery can't double-count.
+lost, i.e. lose money. Union by id is commutative and idempotent, so a
+repeated webhook delivery can't double-count.
+
+**Limitation:** The union protects the device copy on pull. The queued push is
+still a whole-blob replace (`utils/sync.ts` `pushQueue`), so a payment written
+to the cloud (e.g. by a Stripe webhook) can still be overwritten by a later
+device push until a server-side merge lands.
 
 Do NOT "simplify" this back to a plain replace, and do not widen the union to
 other tables without designing a merge for their shape.

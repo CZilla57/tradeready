@@ -99,7 +99,8 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
   if (settled) {
     // paidAt is the date of the payment that closed the balance — walk a
     // CHRONOLOGICALLY sorted copy of the ledger (never the stored array,
-    // which stays in insertion/recording order) and stop at the payment that
+    // whose order is not guaranteed: applyPayment appends; mergePaymentLedgers
+    // stores its union sorted) and stop at the payment that
     // crosses the line. This must be order-independent from how the payments
     // were recorded: a backdated payment must not report the invoice settled
     // before all the money had actually arrived. Example: $400 dated
