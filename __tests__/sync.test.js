@@ -252,5 +252,9 @@ describe("pullRemote merges invoice payment ledgers", () => {
     const write = AsyncStorage.setItem.mock.calls.find(([key]) => key === "jobs");
     const stored = JSON.parse(write[1]);
     expect(stored[0].title).toBe("remote version");
+    // A merge invokes mergePaymentLedgers which adds a payments field even to
+    // non-invoice records. A pure replace would not. If this field exists,
+    // the record went through a merge — which is exactly what must not happen for jobs.
+    expect(stored[0].payments).toBeUndefined();
   });
 });
