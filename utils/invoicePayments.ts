@@ -19,20 +19,36 @@ import { isInRange } from "./moneyUtils";
  */
 export const PAID_EPSILON = 0.005;
 
+/**
+ * Coerce a persisted amount to a finite number.
+ *
+ * Invoice and payment amounts are supposed to be numbers, and both invoice
+ * creation screens validate that. But this data round-trips through JSON blobs
+ * in Supabase and through older app versions, and six money call sites already
+ * carried defensive `parseFloat(String(x)) || 0` wrappers while nine did not.
+ * Rather than scatter that further, the derivations take responsibility: a
+ * malformed amount contributes zero instead of concatenating a string or
+ * poisoning the whole sum with NaN.
+ */
+function toAmount(value: unknown): number {
+  const n = typeof value === "number" ? value : parseFloat(String(value));
+  return Number.isFinite(n) ? n : 0;
+}
+
 /** Total received against this invoice, in dollars. */
 export function amountPaid(invoice: Invoice): number {
   const ledger = invoice.payments;
   if (ledger && ledger.length > 0) {
     // Voided entries stay in the ledger (so a union can't resurrect them) but
     // contribute nothing.
-    return ledger.reduce((sum, p) => (p.voidedAt ? sum : sum + p.amount), 0);
+    return ledger.reduce((sum, p) => (p.voidedAt ? sum : sum + toAmount(p.amount)), 0);
   }
-  return invoice.paid ? invoice.amount : 0;
+  return invoice.paid ? toAmount(invoice.amount) : 0;
 }
 
 /** Still owed, in dollars. Never negative — an overpayment reads as zero due. */
 export function balanceDue(invoice: Invoice): number {
-  return Math.max(0, invoice.amount - amountPaid(invoice));
+  return Math.max(0, toAmount(invoice.amount) - amountPaid(invoice));
 }
 
 export function isFullyPaid(invoice: Invoice): boolean {
@@ -96,7 +112,7 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
   // of zero. The `payments.length > 0` guard also stops a $0 invoice with an
   // empty ledger from being auto-marked paid.
   const collected = payments.reduce((sum, p) => (p.voidedAt ? sum : sum + p.amount), 0);
-  const settled = payments.length > 0 && invoice.amount - collected <= PAID_EPSILON;
+  const settled = payments.length > 0 && toAmount(invoice.amount) - collected <= PAID_EPSILON;
   const next: Invoice = { ...invoice, payments };
   if (settled) {
     // paidAt is the date of the payment that closed the balance — walk a
@@ -117,7 +133,7 @@ function withDerivedPaidFields(invoice: Invoice, payments: Payment[]): Invoice {
     for (const p of chronological) {
       if (p.voidedAt) continue;
       running += p.amount;
-      if (running >= invoice.amount - PAID_EPSILON) {
+      if (running >= toAmount(invoice.amount) - PAID_EPSILON) {
         closingDate = p.date;
         break;
       }

@@ -22,19 +22,30 @@
 const PAID_EPSILON = 0.005;
 
 /**
+ * Coerce a persisted amount to a finite number. Mirrors utils/invoicePayments.ts
+ * `toAmount` — see that copy's doc comment for why this exists: a malformed
+ * amount contributes zero instead of concatenating a string or poisoning the
+ * whole sum with NaN.
+ */
+function toAmount(value) {
+  const n = typeof value === "number" ? value : parseFloat(String(value));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
  * Total received, in dollars. Voided entries stay in the ledger but contribute
  * nothing. An invoice with no ledger falls back to the legacy `paid` flag.
  */
 function amountPaid(invoice) {
   const ledger = invoice && invoice.payments;
   if (ledger && ledger.length > 0) {
-    return ledger.reduce((sum, p) => (p && p.voidedAt ? sum : sum + p.amount), 0);
+    return ledger.reduce((sum, p) => (p && p.voidedAt ? sum : sum + toAmount(p.amount)), 0);
   }
-  return invoice && invoice.paid ? invoice.amount : 0;
+  return invoice && invoice.paid ? toAmount(invoice.amount) : 0;
 }
 
 function balanceDue(invoice) {
-  return Math.max(0, invoice.amount - amountPaid(invoice));
+  return Math.max(0, toAmount(invoice.amount) - amountPaid(invoice));
 }
 
 function isFullyPaid(invoice) {

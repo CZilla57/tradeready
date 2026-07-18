@@ -705,3 +705,40 @@ describe("reconcilePaidFields", () => {
     expect(reconcilePaidFields(i).paid).toBe(false);
   });
 });
+
+describe("amount coercion", () => {
+  test("a string invoice amount does not concatenate", () => {
+    const i = inv({ amount: "1000", paid: true, payments: undefined });
+    expect(amountPaid(i)).toBe(1000);
+  });
+
+  test("an undefined invoice amount reads as zero, not NaN", () => {
+    const i = inv({ amount: undefined, paid: true, payments: undefined });
+    expect(amountPaid(i)).toBe(0);
+    expect(balanceDue(i)).toBe(0);
+  });
+
+  test("a NaN invoice amount reads as zero", () => {
+    const i = inv({ amount: NaN, paid: true, payments: undefined });
+    expect(balanceDue(i)).toBe(0);
+  });
+
+  test("a string payment amount does not concatenate", () => {
+    const i = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: "400" })] });
+    expect(amountPaid(i)).toBe(400);
+    expect(balanceDue(i)).toBe(600);
+  });
+
+  test("a malformed payment amount contributes zero rather than poisoning the sum", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p1", amount: 400 }), pmt({ id: "p2", amount: undefined })],
+    });
+    expect(amountPaid(i)).toBe(400);
+  });
+
+  test("balanceDue is always finite", () => {
+    const i = inv({ amount: "abc", payments: [pmt({ id: "p1", amount: "xyz" })] });
+    expect(Number.isFinite(balanceDue(i))).toBe(true);
+  });
+});

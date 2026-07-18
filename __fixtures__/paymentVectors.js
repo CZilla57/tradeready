@@ -98,6 +98,21 @@ const paymentVectors = [
     invoice: invoice({ paid: true, paidAt: "2026-06-15", due: "2026-07-01" }),
     expectedAmountPaid: 1000, expectedBalance: 0, expectedFullyPaid: true,
   },
+  {
+    label: "string invoice amount coerces rather than concatenating",
+    invoice: invoice({ amount: "1000", paid: true }),
+    expectedAmountPaid: 1000, expectedBalance: 0, expectedFullyPaid: true,
+  },
+  {
+    label: "undefined invoice amount reads as zero",
+    invoice: invoice({ amount: undefined, paid: true }),
+    expectedAmountPaid: 0, expectedBalance: 0, expectedFullyPaid: true,
+  },
+  {
+    label: "string payment amount coerces",
+    invoice: invoice({ amount: 1000, payments: [p({ id: "p1", amount: "400" })] }),
+    expectedAmountPaid: 400, expectedBalance: 600, expectedFullyPaid: false,
+  },
 ];
 
 module.exports = { paymentVectors };
