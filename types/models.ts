@@ -329,6 +329,17 @@ export interface Settings {
    */
   autoSendEmailEnabled: boolean;
 
+  /**
+   * When true, a local notification fires at 5pm the day before a scheduled
+   * job, reminding the tradesperson to send the customer a confirmation.
+   * Opt-in; absent on settings persisted before this field shipped → false.
+   */
+  appointmentRemindersEnabled: boolean;
+  /** Editable day-before confirmation template. Blank/absent → DEFAULT_CONFIRM_TEMPLATE. */
+  appointmentConfirmTemplate: string;
+  /** Editable "on my way" template. Blank/absent → DEFAULT_ON_MY_WAY_TEMPLATE. */
+  onMyWayTemplate: string;
+
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;
   groqKey: string;

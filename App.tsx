@@ -332,6 +332,13 @@ function RootNavigator() {
           params: { screen: "Outreach", params: { invoiceId: String(data.invoiceId) } },
         });
       }
+      if (data?.type === "appointment_confirm" && data?.jobId && navigationRef.isReady()) {
+        track("appointment_confirm_opened", {});
+        navigationRef.navigate("Main", {
+          screen: "Jobs",
+          params: { screen: "JobDetail", params: { jobId: String(data.jobId) } },
+        });
+      }
     });
     return () => sub.remove();
   }, []);

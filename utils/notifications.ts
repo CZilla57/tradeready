@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import type { Invoice, Settings, ReminderRule } from '../types/models';
+import type { Invoice, Settings, ReminderRule, Job, Customer } from '../types/models';
+import { selectAppointmentReminders } from './appointmentMessages';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -23,6 +24,10 @@ export async function setupNotifications(): Promise<void> {
       name: 'Review Requests',
       importance: Notifications.AndroidImportance.DEFAULT,
     });
+    await Notifications.setNotificationChannelAsync('appointment-reminders', {
+      name: 'Appointment Reminders',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
   }
 }
 
@@ -39,12 +44,16 @@ export async function syncNotifications(): Promise<void> {
     const { status } = await Notifications.getPermissionsAsync();
     if (status !== 'granted') return;
 
-    const [invoicesRaw, settingsRaw] = await Promise.all([
+    const [invoicesRaw, settingsRaw, jobsRaw, customersRaw] = await Promise.all([
       AsyncStorage.getItem('invoices'),
       AsyncStorage.getItem('settings'),
+      AsyncStorage.getItem('jobs'),
+      AsyncStorage.getItem('customers'),
     ]);
     const invoices: Invoice[] = invoicesRaw ? JSON.parse(invoicesRaw) : [];
     const settings: Partial<Settings> = settingsRaw ? JSON.parse(settingsRaw) : {};
+    const jobs: Job[] = jobsRaw ? JSON.parse(jobsRaw) : [];
+    const customers: Customer[] = customersRaw ? JSON.parse(customersRaw) : [];
     const rules: ReminderRule[] = settings.rules || [];
     const autoOutreach = !!settings.autoOutreachEnabled;
 
@@ -82,6 +91,28 @@ export async function syncNotifications(): Promise<void> {
         });
         count++;
       }
+    }
+
+    const appointments = selectAppointmentReminders(jobs, customers, {
+      appointmentRemindersEnabled: !!settings.appointmentRemindersEnabled,
+      appointmentConfirmTemplate: settings.appointmentConfirmTemplate ?? '',
+      businessName: settings.businessName ?? '',
+    }, now);
+
+    for (const appt of appointments) {
+      if (count >= 60) break;
+      const secondsUntil = Math.floor((appt.fireDate.getTime() - now.getTime()) / 1000);
+      if (secondsUntil <= 0) continue;
+      await Notifications.scheduleNotificationAsync({
+        identifier: `appt_${appt.jobId}`,
+        content: {
+          title: appt.title,
+          body: appt.body,
+          data: { type: 'appointment_confirm', jobId: appt.jobId },
+        },
+        trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
+      });
+      count++;
     }
   } catch {
     // Not critical — silently skip if notifications are unavailable
