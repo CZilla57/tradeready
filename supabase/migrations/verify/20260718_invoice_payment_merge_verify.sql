@@ -14,7 +14,7 @@
 -- transaction, which would leave the seeded verify_trigger_* rows behind in
 -- real data despite the trailing `rollback`.
 --
--- Success prints nine NOTICE lines, ending with "ALL CHECKS PASSED". Any
+-- Success prints eleven NOTICE lines, ending with "ALL CHECKS PASSED". Any
 -- failure raises an exception and (with ON_ERROR_STOP) a non-zero exit.
 
 begin;
@@ -220,6 +220,69 @@ begin
     raise exception 'CHECK 6 FAILED: ledger did not survive a write omitting the payments key: %', ledger;
   end if;
   raise notice 'CHECK 6 ok: ledger survived a write that omitted the payments key (create_if_missing exercised)';
+
+  ------------------------------------------ 7. poison-pill: JSON null payments
+  -- A device can push `"payments": null` — a jsonb JSON null, present as a
+  -- key, NOT an absent key and NOT a SQL NULL. This is the exact shape that
+  -- the removed early-return bug (Fix 1) mishandled: `return NEW` before the
+  -- union ran, storing NEW.data verbatim and discarding OLD's entire ledger.
+  -- OLD currently carries a two-entry ledger (from CHECK 6, above: p1 voided,
+  -- p2 amount 600). Assert the write does NOT error and OLD's ledger survives
+  -- intact.
+  update public.invoices
+     set data = jsonb_build_object(
+       'id', test_id, 'amount', 1000, 'paid', false,
+       'payments', 'null'::jsonb
+     )
+   where id = test_id;
+
+  select data -> 'payments' into ledger from public.invoices where id = test_id;
+  if jsonb_array_length(ledger) <> 2 then
+    raise exception 'CHECK 7 FAILED: JSON-null payments push shrank the ledger to %', ledger;
+  end if;
+  if not exists (
+    select 1 from jsonb_array_elements(ledger) e
+     where e ->> 'id' = 'p1' and e ->> 'voidedAt' = '2026-07-22'
+  ) then
+    raise exception 'CHECK 7 FAILED: JSON-null payments push lost the voided p1 entry: %', ledger;
+  end if;
+  if not exists (
+    select 1 from jsonb_array_elements(ledger) e
+     where e ->> 'id' = 'p2' and (e ->> 'amount')::numeric = 600
+  ) then
+    raise exception 'CHECK 7 FAILED: JSON-null payments push lost or corrupted p2: %', ledger;
+  end if;
+  raise notice 'CHECK 7 ok: a JSON-null payments push did not error and OLD''s ledger survived intact';
+
+  ---------------------------------------- 8. poison-pill: payments as object
+  -- Same poison-pill shape, but as a JSON OBJECT (`{}`) instead of JSON null —
+  -- another value jsonb_typeof reports as not 'array', which the same
+  -- case-check must degrade to zero contributed entries rather than error or
+  -- shrink. OLD still carries the same two-entry ledger.
+  update public.invoices
+     set data = jsonb_build_object(
+       'id', test_id, 'amount', 1000, 'paid', false,
+       'payments', '{}'::jsonb
+     )
+   where id = test_id;
+
+  select data -> 'payments' into ledger from public.invoices where id = test_id;
+  if jsonb_array_length(ledger) <> 2 then
+    raise exception 'CHECK 8 FAILED: object-shaped payments push shrank the ledger to %', ledger;
+  end if;
+  if not exists (
+    select 1 from jsonb_array_elements(ledger) e
+     where e ->> 'id' = 'p1' and e ->> 'voidedAt' = '2026-07-22'
+  ) then
+    raise exception 'CHECK 8 FAILED: object-shaped payments push lost the voided p1 entry: %', ledger;
+  end if;
+  if not exists (
+    select 1 from jsonb_array_elements(ledger) e
+     where e ->> 'id' = 'p2' and (e ->> 'amount')::numeric = 600
+  ) then
+    raise exception 'CHECK 8 FAILED: object-shaped payments push lost or corrupted p2: %', ledger;
+  end if;
+  raise notice 'CHECK 8 ok: an object-shaped payments push did not error and OLD''s ledger survived intact';
 
   raise notice 'ALL CHECKS PASSED';
 end $$;

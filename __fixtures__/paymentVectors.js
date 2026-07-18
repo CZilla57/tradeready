@@ -84,6 +84,20 @@ const paymentVectors = [
     invoice: invoice({ paid: true, payments: [p({ id: "p1", amount: 1000, voidedAt: "2026-07-22" })] }),
     expectedAmountPaid: 0, expectedBalance: 1000, expectedFullyPaid: false,
   },
+  {
+    // Pins materializeLegacyLedger's synthesized `date: invoice.paidAt ||
+    // invoice.due` precedence. Every other legacy-paid vector above leaves
+    // paidAt unset, so only the `due` fallback branch is exercised — a drift
+    // where an implementation transcribed the rule as `invoice.due ||
+    // invoice.paidAt` would still pass the whole vector set. Here paidAt and
+    // due are set to DIFFERENT months, so precedence is observable: the
+    // parity test's `materializeLegacyLedger` `toEqual` assertion pins the
+    // synthesized entry's `date` to paidAt ("2026-06-15"), not due
+    // ("2026-07-01").
+    label: "legacy paid — paidAt takes precedence over due for the synthesized date",
+    invoice: invoice({ paid: true, paidAt: "2026-06-15", due: "2026-07-01" }),
+    expectedAmountPaid: 1000, expectedBalance: 0, expectedFullyPaid: true,
+  },
 ];
 
 module.exports = { paymentVectors };

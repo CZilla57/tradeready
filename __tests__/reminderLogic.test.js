@@ -155,4 +155,18 @@ describe("ledger-aware paid detection", () => {
     const invoices = [{ ...base, paid: true }];
     expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(0);
   });
+
+  test("a paid invoice with a malformed (undefined) amount is NOT reminded — fails closed", () => {
+    // balanceDue -> Math.max(0, NaN) -> NaN, and `NaN <= PAID_EPSILON` is
+    // false, so isFullyPaid would (without the guard) read this as unpaid and
+    // dun a paid invoice. A malformed amount must fail CLOSED — no email —
+    // not open.
+    const invoices = [{ ...base, paid: true, amount: undefined }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(0);
+  });
+
+  test("a paid invoice with a NaN amount is NOT reminded — fails closed", () => {
+    const invoices = [{ ...base, paid: true, amount: NaN }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(0);
+  });
 });

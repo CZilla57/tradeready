@@ -19,6 +19,13 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, tod
   return (invoices || []).filter(
     (invoice) =>
       invoice &&
+      // A non-finite amount (missing, NaN, etc.) makes balanceDue -> NaN, and
+      // `NaN <= PAID_EPSILON` is false, so isFullyPaid would read a malformed
+      // invoice as NOT fully paid and dun it — a regression versus the old
+      // `!invoice.paid` check, which at least defaulted closed on `paid: true`.
+      // Fail CLOSED here instead: if we cannot determine the balance, do not
+      // send a reminder email over it.
+      Number.isFinite(invoice.amount) &&
       // Derive from the ledger rather than trusting the stored flag: the
       // Postgres trigger can union in payments the webhook never saw, so
       // `paid` may be stale. A voided payment correctly re-opens the invoice.

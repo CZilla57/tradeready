@@ -371,6 +371,23 @@ describe("mergePaymentLedgers — void wins", () => {
     const b = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-08-01" })] });
     expect(mergePaymentLedgers(a, b).payments).toEqual(mergePaymentLedgers(b, a).payments);
   });
+
+  test("on an EXACT voidedAt tie, the incoming (remote) entry wins, matching the SQL trigger", () => {
+    // Both sides voided on the identical date but differing in another field
+    // (method), so which one survives is observable. mergePaymentLedgers(local,
+    // remote) treats `remote` as incoming — pickSurvivingPayment must pick it,
+    // matching the SQL union's `order by voidedAt asc, prio desc`, which also
+    // keeps NEW (incoming) on a tie.
+    const local = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p1", amount: 400, method: "cash", voidedAt: "2026-07-22" })],
+    });
+    const remote = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p1", amount: 400, method: "card", voidedAt: "2026-07-22" })],
+    });
+    expect(mergePaymentLedgers(local, remote).payments[0].method).toBe("card");
+  });
 });
 
 describe("paidAt ordering — chronological order, not insertion order (pinned intentional behavior)", () => {

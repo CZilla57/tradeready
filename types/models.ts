@@ -175,8 +175,11 @@ export interface Payment {
   method: PaymentMethod;
   note?: string;
   /**
-   * Present only on webhook-created payments. Doubles as the idempotency key:
-   * a repeated Stripe delivery for the same session must not append twice.
+   * Present only on webhook-created payments. Informational/traceability
+   * only — nothing reads it. The idempotency key is this Payment's own `id`
+   * field, which the webhook sets to `stripe_<checkout_session_id>` (see
+   * backend/api/stripe/webhook.js); a repeated Stripe delivery for the same
+   * session produces the same `id` and is collapsed by the ledger union.
    */
   stripeSessionId?: string;
   /**

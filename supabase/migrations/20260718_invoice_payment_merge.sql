@@ -61,16 +61,16 @@ begin
     return NEW;
   end if;
 
-  -- A malformed incoming ledger is passed through untouched rather than
-  -- normalized here: the trigger's job is to prevent shrinkage, not to
-  -- validate. Degrade on read (below), don't rewrite on write. This is a
-  -- type check, not money math — it's about not letting a scalar or object
-  -- crash jsonb_array_elements, not about reproducing paid/paidAt/epsilon
-  -- rules in a third dialect (those still live only in
-  -- utils/invoicePayments.ts and backend/lib/paymentMath.js).
-  if new_payments is not null and jsonb_typeof(new_payments) <> 'array' then
-    return NEW;
-  end if;
+  -- Deliberately NO early return here for a malformed new_payments (e.g. a
+  -- device pushing `"payments": null` as jsonb 'null', or an object/scalar).
+  -- A malformed ledger on EITHER side must degrade to contributing ZERO
+  -- entries to the union below, not cause the union to be skipped — skipping
+  -- the union is exactly how a stale/poisoned write would shrink the ledger,
+  -- since `return NEW` here would store NEW.data verbatim and discard OLD's
+  -- entire ledger. The case-check on new_payments inside the CTE below
+  -- already handles this: non-array degrades to '[]'::jsonb, OLD's ledger
+  -- still gets unioned in and written back, and no validation happens here —
+  -- the trigger stays dumb.
 
   with all_payments as (
     -- old_payments/new_payments degrade to an empty array on ANY non-array
@@ -139,3 +139,13 @@ create trigger merge_invoice_payments_trg
   before insert or update on public.invoices
   for each row
   execute function public.merge_invoice_payments();
+
+-- ROLLBACK
+--   drop trigger if exists merge_invoice_payments_trg on public.invoices;
+-- The function can be left in place harmlessly.
+--
+-- NOTE: this is NOT a full undo. Any row the trigger already processed has had
+-- a `payments` key written into it by jsonb_set. Dropping the trigger does not
+-- un-write those. That is benign — the app's legacy fallback keys off ledger
+-- LENGTH, not key presence — but "roll back the trigger" does not mean "return
+-- to the prior state".

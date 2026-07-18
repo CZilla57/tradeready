@@ -251,13 +251,21 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
  * merge commutative. A "remote wins" tie-break here would make merge(a,b) and
  * merge(b,a) store different bytes and let two devices ping-pong writes.
  *
- * NOTE: the Postgres union trigger MUST use this same earliest-void rule, or
- * the server and the device will disagree on the stored void date.
+ * On an EXACT tie (both voidedAt values identical, entries otherwise
+ * differing) `incoming` wins. This is pinned to match the SQL union trigger's
+ * `order by voidedAt asc, prio desc`, which also keeps NEW (incoming) on a
+ * tie — using `<` rather than `<=` here is what makes that true. Nothing about
+ * this tie case moves money either way (voided entries contribute nothing to
+ * amountPaid), but the two implementations must still store the same bytes.
+ *
+ * NOTE: the Postgres union trigger MUST use this same earliest-void rule
+ * (including the exact-tie case), or the server and the device will disagree
+ * on the stored void date.
  */
 function pickSurvivingPayment(existing: Payment | undefined, incoming: Payment): Payment {
   if (!existing) return incoming;
   if (existing.voidedAt && incoming.voidedAt) {
-    return existing.voidedAt <= incoming.voidedAt ? existing : incoming;
+    return existing.voidedAt < incoming.voidedAt ? existing : incoming;
   }
   if (existing.voidedAt) return existing;
   return incoming;

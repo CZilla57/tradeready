@@ -329,7 +329,11 @@ sides on every write to the `invoices` table. This means neither a stale device
 push nor a webhook write can shrink or clobber a ledger entry. The union works
 only because deletion is recorded as a one-way `voidedAt` date rather than
 removal from the array — a union cannot distinguish "unknown to me" from
-"deleted by me" without the data. **NOTE: This protection does NOT yet exist.
+"deleted by me" without the data. This protection covers recorded ledger
+**entries** only: an invoice with no `payments` key on either side has no data
+for the union to merge, so it remains last-write-wins on the `paid` flag —
+legacy invoices (the majority of production data today) are not covered.
+**NOTE: This protection does NOT yet exist.
 The trigger migration has been written but is not yet applied to production.**
 
 Once it lands, do NOT "simplify" this back to a plain replace, and do not widen
