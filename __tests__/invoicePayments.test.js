@@ -98,13 +98,22 @@ describe("isFullyPaid / isPartlyPaid", () => {
     expect(isFullyPaid(i)).toBe(true);
     expect(isPartlyPaid(i)).toBe(false);
   });
-  test("a sub-cent shortfall counts as fully paid (float epsilon)", () => {
-    // 0.1 + 0.2 === 0.30000000000000004 — the classic float trap.
+  test("a float overpayment residual clamps to zero balance", () => {
+    // 0.1 + 0.2 === 0.30000000000000004 — the classic float trap. Math.max(0, …)
+    // already clamps the tiny negative to zero; this tests that path, not epsilon.
     const i = inv({
       amount: 0.3,
       payments: [pmt({ id: "p1", amount: 0.1 }), pmt({ id: "p2", amount: 0.2 })],
     });
     expect(isFullyPaid(i)).toBe(true);
     expect(balanceDue(i)).toBe(0);
+  });
+  test("a positive sub-cent shortfall still counts as fully paid (epsilon)", () => {
+    // 0.003 short of the total. Only passes if isFullyPaid actually tolerates
+    // PAID_EPSILON — an implementation comparing `balanceDue <= 0` would fail.
+    const i = inv({ amount: 100, payments: [pmt({ amount: 99.997 })] });
+    expect(balanceDue(i)).toBeGreaterThan(0);
+    expect(isFullyPaid(i)).toBe(true);
+    expect(isPartlyPaid(i)).toBe(false);
   });
 });
