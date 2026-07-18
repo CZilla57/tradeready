@@ -511,6 +511,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     invoiceActions: {
       flexDirection: "row",
+      flexWrap: "wrap",
       gap: 8,
       justifyContent: "flex-end",
     },

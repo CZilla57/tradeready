@@ -169,6 +169,9 @@ Everything financial in one place.
   `voidedAt` date and is skipped by `amountPaid`. Deletion has to be data rather
   than absence, because the sync union cannot distinguish "unknown to me" from
   "deleted by me".
+  Recorded through the Record payment sheet (`components/RecordPaymentSheet.tsx`)
+  and shown by `components/PaymentHistoryList.tsx`. "Mark paid" records a
+  payment for the outstanding balance rather than setting the flag directly.
 - depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
 
 ### Expense

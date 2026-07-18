@@ -63,6 +63,7 @@ export function PaymentHistoryList({
             accessibilityRole="button"
             accessibilityLabel={`Payment of ${formatMoney(p.amount)} on ${p.date}${voided ? ", voided" : ""}`}
             accessibilityHint={voided ? undefined : "Long press to void this payment"}
+            accessibilityState={voided ? { disabled: true } : undefined}
           >
             <View style={styles.rowMain}>
               <Text style={[styles.amount, voided && styles.struck]}>

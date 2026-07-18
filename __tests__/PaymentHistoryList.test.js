@@ -69,4 +69,22 @@ describe("PaymentHistoryList", () => {
     await fireEvent(getByLabelText(/Payment of \$400\.00/), "longPress");
     expect(onVoid).not.toHaveBeenCalled();
   });
+
+  test("a voided row exposes accessibilityState.disabled === true", async () => {
+    const i = invoice({
+      payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash", voidedAt: "2026-07-22" }],
+    });
+    const { getByLabelText } = await render(<PaymentHistoryList invoice={i} onVoid={noop} />);
+    const voidedRow = getByLabelText(/Payment of \$400\.00.*voided/);
+    expect(voidedRow.props.accessibilityState?.disabled).toBe(true);
+  });
+
+  test("a live row does not have accessibilityState.disabled === true", async () => {
+    const i = invoice({
+      payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash" }],
+    });
+    const { getByLabelText } = await render(<PaymentHistoryList invoice={i} onVoid={noop} />);
+    const liveRow = getByLabelText(/Payment of \$400\.00/);
+    expect(liveRow.props.accessibilityState?.disabled).not.toBe(true);
+  });
 });
