@@ -80,3 +80,41 @@ describe("filterInvoices", () => {
     expect(filterInvoices(invoices, "zzz")).toHaveLength(0);
   });
 });
+
+describe("partial payments", () => {
+  test("outstanding counts only the balance, collected counts what arrived", () => {
+    const invoices = [
+      inv({ id: "1", amount: 1000, paid: false, due: "2026-08-01",
+            payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash" }] }),
+    ];
+    const { outstanding, collected } = summarizeInvoices(invoices);
+    expect(outstanding).toBe(600);
+    expect(collected).toBe(400);
+  });
+
+  test("a fully-paid ledger invoice is all collected, nothing outstanding", () => {
+    const invoices = [
+      inv({ id: "1", amount: 1000, paid: true, due: "2026-08-01",
+            payments: [{ id: "p1", amount: 1000, date: "2026-07-01", method: "cash" }] }),
+    ];
+    const { outstanding, collected } = summarizeInvoices(invoices);
+    expect(outstanding).toBe(0);
+    expect(collected).toBe(1000);
+  });
+
+  test("a voided payment returns the money to outstanding", () => {
+    const invoices = [
+      inv({ id: "1", amount: 1000, paid: false, due: "2026-08-01",
+            payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash", voidedAt: "2026-07-22" }] }),
+    ];
+    const { outstanding, collected } = summarizeInvoices(invoices);
+    expect(outstanding).toBe(1000);
+    expect(collected).toBe(0);
+  });
+
+  test("a partly-paid invoice past due is still overdue", () => {
+    const i = inv({ amount: 1000, paid: false, due: "2026-06-01",
+                    payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash" }] });
+    expect(isOverdue(i)).toBe(true);
+  });
+});

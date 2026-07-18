@@ -10,20 +10,26 @@
 // with the per-row badges. Routing through daysPastDue makes them agree.
 
 import { daysPastDue } from "./invoiceHelpers";
+import { amountPaid, balanceDue, isFullyPaid } from "./invoicePayments";
 import type { Invoice } from "../types/models";
 
 export interface InvoiceSummary {
-  /** Sum of unpaid invoice amounts. */
+  /** Sum of remaining balances. */
   outstanding: number;
   /** Count of unpaid invoices past their due date. */
   overdueCount: number;
-  /** Sum of paid invoice amounts. */
+  /** Sum of payments received. */
   collected: number;
 }
 
-/** Unpaid and past due — matches the "Nd overdue" branch of getStatus. */
+/** Has a remaining balance and is past due — matches the "Nd overdue" badge. */
 export function isOverdue(invoice: Invoice): boolean {
-  return !invoice.paid && daysPastDue(invoice.due) > 0;
+  // Legacy invoices without a ledger use the original logic based on the paid flag
+  if (!invoice.payments || invoice.payments.length === 0) {
+    return !invoice.paid && daysPastDue(invoice.due) > 0;
+  }
+  // Ledger-based invoices check for remaining balance
+  return !isFullyPaid(invoice) && daysPastDue(invoice.due) > 0;
 }
 
 export function summarizeInvoices(invoices: Invoice[]): InvoiceSummary {
@@ -31,8 +37,10 @@ export function summarizeInvoices(invoices: Invoice[]): InvoiceSummary {
   let overdueCount = 0;
   let collected = 0;
   for (const inv of invoices) {
-    if (inv.paid) collected += inv.amount;
-    else outstanding += inv.amount;
+    // Per-invoice rather than per-flag: a partly-paid invoice contributes to
+    // BOTH, which is what makes these totals agree with the rows below them.
+    collected += amountPaid(inv);
+    outstanding += balanceDue(inv);
     if (isOverdue(inv)) overdueCount += 1;
   }
   return { outstanding, overdueCount, collected };
