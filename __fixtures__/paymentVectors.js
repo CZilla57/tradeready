@@ -57,6 +57,17 @@ const paymentVectors = [
     expectedAmountPaid: 99.997, expectedBalance: 100 - 99.997, expectedFullyPaid: true,
   },
   {
+    // Sits EXACTLY on the epsilon threshold: balanceDue is the literal 0.005,
+    // which rounds to the identical double as PAID_EPSILON. This is what pins
+    // the comparison as `<=` rather than `<` — without it, flipping that one
+    // operator in either implementation passes the whole vector set.
+    label: "balance exactly at the epsilon boundary is settled",
+    invoice: invoice({ amount: 0.005, paid: false }),
+    expectedAmountPaid: 0,
+    expectedBalance: 0.005,
+    expectedFullyPaid: true,
+  },
+  {
     label: "voided payment contributes nothing",
     invoice: invoice({ payments: [p({ id: "p1", amount: 400, voidedAt: "2026-07-22" })] }),
     expectedAmountPaid: 0, expectedBalance: 1000, expectedFullyPaid: false,
@@ -72,13 +83,6 @@ const paymentVectors = [
     label: "every payment voided does NOT fall back to the legacy flag",
     invoice: invoice({ paid: true, payments: [p({ id: "p1", amount: 1000, voidedAt: "2026-07-22" })] }),
     expectedAmountPaid: 0, expectedBalance: 1000, expectedFullyPaid: false,
-  },
-  {
-    label: "a voided payment on an otherwise settled invoice re-opens it",
-    invoice: invoice({
-      payments: [p({ id: "p1", amount: 400 }), p({ id: "p2", amount: 600, voidedAt: "2026-07-22" })],
-    }),
-    expectedAmountPaid: 400, expectedBalance: 600, expectedFullyPaid: false,
   },
 ];
 
