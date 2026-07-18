@@ -70,6 +70,7 @@ export function RecordPaymentSheet({
   const parsed = parseFloat(amount);
   const valid = Number.isFinite(parsed) && parsed > 0;
   const overBalance = valid && parsed > balance;
+  const invalidAmount = amount.trim().length > 0 && !valid;
 
   function handleSave() {
     if (!valid) return;
@@ -106,6 +107,9 @@ export function RecordPaymentSheet({
               More than the {formatMoney(balance)} balance — that&apos;s fine, it will
               show as fully paid.
             </Text>
+          )}
+          {invalidAmount && (
+            <Text style={styles.hint}>Enter an amount greater than zero.</Text>
           )}
 
           <Text style={styles.label}>Date</Text>

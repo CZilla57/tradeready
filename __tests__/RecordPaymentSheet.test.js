@@ -43,6 +43,17 @@ describe("RecordPaymentSheet", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  test("shows a hint for a zero amount instead of silently doing nothing", async () => {
+    const onSave = jest.fn();
+    const { getByLabelText, getByText, queryByText } = await render(
+      <RecordPaymentSheet visible invoice={invoice()} onSave={onSave} onClose={noop} />
+    );
+    await fireEvent.changeText(getByLabelText("Amount"), "0");
+    expect(queryByText(/Enter an amount greater than zero/)).not.toBeNull();
+    await fireEvent.press(getByText("Record payment"));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   test("does not call onSave for a negative amount", async () => {
     const onSave = jest.fn();
     const { getByLabelText, getByText } = await render(
