@@ -8,7 +8,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Network from "expo-network";
 import { supabase } from "../utils/supabase";
-import { initialSync } from "../utils/sync";
+import { initialSync, syncIfOnline } from "../utils/sync";
 
 // ── Supabase mock helpers ─────────────────────────────────────────────────────
 //
@@ -176,5 +176,81 @@ describe("initialSync ownership guard", () => {
       ([k]) => k === "__dataOwner"
     );
     expect(dataOwnerRead).toBe(false);
+  });
+});
+
+// ── pullRemote invoice payment-ledger merge ───────────────────────────────────
+
+describe("pullRemote merges invoice payment ledgers", () => {
+  test("a webhook payment in the cloud does not clobber a device payment", async () => {
+    const localInvoice = {
+      id: "i1", customer: "Acme", number: "INV-1", desc: "", email: "", phone: "",
+      amount: 1000, due: "2026-07-01", paid: false,
+      payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash" }],
+    };
+    // The cloud copy has the Stripe payment but NOT the device's cash payment.
+    const remoteInvoice = {
+      ...localInvoice,
+      payments: [{ id: "stripe_cs_1", amount: 600, date: "2026-07-20", method: "stripe" }],
+    };
+
+    supabase.from.mockImplementation((table) => {
+      const chain = {};
+      chain.select = jest.fn(() => chain);
+      chain.eq = jest.fn(() => chain);
+      chain.gt = jest.fn().mockResolvedValue({
+        data: table === "invoices"
+          ? [{ id: "i1", data: remoteInvoice, deleted: false }]
+          : [],
+        error: null,
+      });
+      chain.maybeSingle = jest.fn().mockResolvedValue({ data: null });
+      chain.upsert = jest.fn().mockResolvedValue({ error: null });
+      return chain;
+    });
+
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "invoices") return Promise.resolve(JSON.stringify([localInvoice]));
+      return Promise.resolve(null);
+    });
+
+    await syncIfOnline("user-a");
+
+    const write = AsyncStorage.setItem.mock.calls.find(([key]) => key === "invoices");
+    expect(write).toBeDefined();
+    const stored = JSON.parse(write[1]);
+    expect(stored).toHaveLength(1);
+    // BOTH payments survive — this is the whole point of the phase.
+    expect(stored[0].payments.map((p) => p.id).sort()).toEqual(["p1", "stripe_cs_1"]);
+    expect(stored[0].paid).toBe(true);
+  });
+
+  test("a non-invoice table still replaces wholesale", async () => {
+    const localJob = { id: "j1", title: "local version" };
+    const remoteJob = { id: "j1", title: "remote version" };
+
+    supabase.from.mockImplementation((table) => {
+      const chain = {};
+      chain.select = jest.fn(() => chain);
+      chain.eq = jest.fn(() => chain);
+      chain.gt = jest.fn().mockResolvedValue({
+        data: table === "jobs" ? [{ id: "j1", data: remoteJob, deleted: false }] : [],
+        error: null,
+      });
+      chain.maybeSingle = jest.fn().mockResolvedValue({ data: null });
+      chain.upsert = jest.fn().mockResolvedValue({ error: null });
+      return chain;
+    });
+
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "jobs") return Promise.resolve(JSON.stringify([localJob]));
+      return Promise.resolve(null);
+    });
+
+    await syncIfOnline("user-a");
+
+    const write = AsyncStorage.setItem.mock.calls.find(([key]) => key === "jobs");
+    const stored = JSON.parse(write[1]);
+    expect(stored[0].title).toBe("remote version");
   });
 });

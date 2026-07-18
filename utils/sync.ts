@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import { supabase } from './supabase';
 import { reportError } from './analytics';
+import { mergeRemoteRecord } from './syncMerge';
+import type { SyncRecord } from './syncMerge';
 import type { Settings, CustomerNotes } from '../types/models';
 
 const QUEUE_KEY       = '__syncQueue';
@@ -147,7 +149,7 @@ async function pullRemote(userId: string): Promise<void> {
       if (error || !data?.length) continue;
 
       const localRaw = await AsyncStorage.getItem(table);
-      let local: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+      let local: SyncRecord[] = localRaw ? JSON.parse(localRaw) : [];
 
       for (const remote of data) {
         if (remote.deleted) {
@@ -155,7 +157,9 @@ async function pullRemote(userId: string): Promise<void> {
         } else {
           const idx = local.findIndex(r => r.id === remote.id);
           if (idx >= 0) {
-            local[idx] = remote.data;
+            // invoices union their payment ledgers instead of replacing —
+            // see utils/syncMerge.ts. Every other table replaces as before.
+            local[idx] = mergeRemoteRecord(table, local[idx], remote.data);
           } else {
             local.push(remote.data);
           }
