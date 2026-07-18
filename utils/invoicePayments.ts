@@ -282,3 +282,36 @@ export function mergePaymentLedgers(local: Invoice, remote: Invoice): Invoice {
 
   return withDerivedPaidFields(remote, merged);
 }
+
+/**
+ * This invoice's payments as the UI should display them.
+ *
+ * An alias for materializeLegacyLedger, which is named for WHY it exists
+ * rather than what callers want from it. A legacy paid invoice yields its one
+ * synthesized `legacy_<id>` entry; an invoice with a real ledger yields a copy
+ * of it. Voided entries ARE included — the history UI renders them struck
+ * through, and hiding them would defeat the point of voiding rather than
+ * deleting. Anything SUMMING this list must skip voided entries itself.
+ */
+export const effectivePayments = materializeLegacyLedger;
+
+/**
+ * Record a single payment for whatever is still owed, settling the invoice.
+ *
+ * This is what the "Mark paid" button does. It must go through applyPayment
+ * rather than setting `paid: true` directly: a bare flag write is discarded by
+ * the ledger merge on the next sync once an invoice has any recorded payment,
+ * silently reverting the user's tap.
+ *
+ * A no-op on an already-settled invoice — returns it unchanged rather than
+ * appending a zero-amount entry.
+ */
+export function settleRemaining(invoice: Invoice, date: DateString): Invoice {
+  if (isFullyPaid(invoice)) return invoice;
+  return applyPayment(invoice, {
+    id: newPaymentId(),
+    amount: balanceDue(invoice),
+    date,
+    method: "other",
+  });
+}

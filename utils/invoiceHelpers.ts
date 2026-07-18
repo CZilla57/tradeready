@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import { formatMoney, formatQuote } from './format';
 import { computeEstimateBreakdown } from './pricingEngine';
 import { generateOneShot } from './oneShotAI';
+import { isPartlyPaid } from './invoicePayments';
 import type { Invoice, Job, Customer, Settings, PaymentPlan, PaymentProvider } from '../types/models';
 import type { BadgeColor } from '../components/UI';
 
@@ -25,6 +26,12 @@ export function getStatus(invoice: Invoice): InvoiceStatus {
   }
   const days = daysPastDue(invoice.due);
   if (days <= 0) {
+    // Partly paid only wins while the invoice is NOT past due — overdue is the
+    // more urgent signal, and the row shows the balance next to the badge
+    // either way.
+    if (isPartlyPaid(invoice)) {
+      return { label: "Partly paid", color: "accent", days };
+    }
     return { label: days === 0 ? "Due today" : "Due soon", color: "accent", days };
   }
   if (days <= 14) {

@@ -112,3 +112,42 @@ describe("buildPaymentLink", () => {
     expect(link).toContain("INV-001");
   });
 });
+
+describe("getStatus — partly paid", () => {
+  const partly = (over) => ({
+    id: "i1", customer: "Acme", number: "INV-1", desc: "", email: "", phone: "",
+    amount: 1000, paid: false,
+    payments: [{ id: "p1", amount: 400, date: "2025-06-01", method: "cash" }],
+    ...over,
+  });
+
+  test("a partly-paid invoice not yet due reads 'Partly paid'", () => {
+    const s = getStatus(partly({ due: "2025-06-20" }));
+    expect(s.label).toBe("Partly paid");
+    expect(s.color).toBe("accent");
+  });
+
+  test("a partly-paid invoice due today reads 'Partly paid'", () => {
+    const s = getStatus(partly({ due: "2025-06-15" }));
+    expect(s.label).toBe("Partly paid");
+  });
+
+  test("a partly-paid invoice PAST DUE still reads overdue, not 'Partly paid'", () => {
+    // Overdue is the more urgent signal; the balance is shown next to the badge.
+    const s = getStatus(partly({ due: "2025-06-01" }));
+    expect(s.label).toMatch(/overdue/);
+  });
+
+  test("a fully-paid invoice still reads 'Paid'", () => {
+    const s = getStatus(partly({
+      due: "2025-06-01", paid: true,
+      payments: [{ id: "p1", amount: 1000, date: "2025-06-01", method: "cash" }],
+    }));
+    expect(s.label).toBe("Paid");
+  });
+
+  test("an untouched unpaid invoice is unaffected", () => {
+    const s = getStatus({ ...partly({ due: "2025-06-20" }), payments: undefined });
+    expect(s.label).toBe("Due soon");
+  });
+});

@@ -16,6 +16,8 @@ import {
   paymentsInRange,
   collectedInRange,
   mergePaymentLedgers,
+  effectivePayments,
+  settleRemaining,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -621,5 +623,59 @@ describe("mergePaymentLedgers", () => {
     const merged = mergePaymentLedgers(a, b);
     expect(merged.payments).toHaveLength(0);
     expect(merged.paid).toBe(false);
+  });
+});
+
+describe("effectivePayments", () => {
+  test("returns the ledger for an invoice that has one", () => {
+    const i = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400 })] });
+    expect(effectivePayments(i).map((p) => p.id)).toEqual(["p1"]);
+  });
+
+  test("returns the synthesized entry for a legacy paid invoice", () => {
+    const i = inv({ id: "i1", paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined });
+    const list = effectivePayments(i);
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe("legacy_i1");
+    expect(list[0].amount).toBe(1000);
+  });
+
+  test("returns an empty list for a legacy unpaid invoice", () => {
+    expect(effectivePayments(inv({ paid: false }))).toEqual([]);
+  });
+});
+
+describe("settleRemaining", () => {
+  test("records a payment for the outstanding balance and settles the invoice", () => {
+    const i = inv({ amount: 1000 });
+    const result = settleRemaining(i, "2026-07-22");
+    expect(result.payments).toHaveLength(1);
+    expect(result.payments[0].amount).toBe(1000);
+    expect(result.payments[0].method).toBe("other");
+    expect(result.paid).toBe(true);
+    expect(result.paidAt).toBe("2026-07-22");
+  });
+
+  test("settles only the REMAINDER on a partly-paid invoice", () => {
+    const partly = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 400, date: "2026-07-01" }));
+    const result = settleRemaining(partly, "2026-07-22");
+    expect(result.payments).toHaveLength(2);
+    expect(result.payments[1].amount).toBe(600);
+    expect(amountPaid(result)).toBe(1000);
+    expect(result.paid).toBe(true);
+  });
+
+  test("preserves a legacy invoice's original amount", () => {
+    const legacy = inv({ id: "i1", paid: true, amount: 1000, paidAt: "2026-06-15", payments: undefined });
+    // Already settled — nothing to add.
+    const result = settleRemaining(legacy, "2026-07-22");
+    expect(amountPaid(result)).toBe(1000);
+  });
+
+  test("is a no-op on an already-settled invoice (no zero-amount entry)", () => {
+    const settled = applyPayment(inv({ amount: 1000 }), pmt({ id: "p1", amount: 1000 }));
+    const result = settleRemaining(settled, "2026-07-22");
+    expect(result.payments).toHaveLength(1);
+    expect(result).toBe(settled);
   });
 });

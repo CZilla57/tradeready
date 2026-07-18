@@ -196,6 +196,14 @@ export interface Payment {
 }
 
 /**
+ * The fields the record-payment form collects, before `id` is stamped.
+ * Mirrors the existing ExpenseDraft pattern. `voidedAt` and `stripeSessionId`
+ * are excluded deliberately: a form can never create a voided payment, and
+ * `stripeSessionId` belongs only to webhook-created entries.
+ */
+export type PaymentDraft = Omit<Payment, "id" | "voidedAt" | "stripeSessionId">;
+
+/**
  * An up-front amount requested from the customer, set on the Outreach screen.
  * Recorded so the UI can show "Deposit requested: $500 — unpaid" and reuse the
  * same payment link rather than minting a new one each render.
