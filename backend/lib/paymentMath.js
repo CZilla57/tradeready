@@ -12,9 +12,12 @@
 // route through it exactly as the device does — see the CRITICAL note on the
 // TS version.
 //
-// Deliberately does NOT implement paidAt derivation or ledger merging: the
-// server never needs them (the Postgres trigger unions ledgers, and the device
-// derives paidAt). Keeping the mirror small keeps the drift surface small.
+// Deliberately does NOT implement paidAt derivation or ledger merging: once
+// the Postgres union trigger is applied, the server will not need them (the
+// trigger will union ledgers, and the device derives paidAt). The trigger does
+// NOT exist yet: today the server implements a plain read-modify-write, and a
+// concurrent ledger write landing between reads is clobbered, not merged.
+// Keeping the mirror small keeps the drift surface small.
 
 const PAID_EPSILON = 0.005;
 

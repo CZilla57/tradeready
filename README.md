@@ -322,13 +322,18 @@ records a cash payment on the device. Replacing would destroy whichever side
 lost, i.e. lose money. Union by id is commutative and idempotent, so a
 repeated webhook delivery can't double-count.
 
-**Limitation:** The union protects the device copy on pull. The queued push is
-still a whole-blob replace (`utils/sync.ts` `pushQueue`), so a payment written
-to the cloud (e.g. by a Stripe webhook) can still be overwritten by a later
-device push until a server-side merge lands.
+**Ledger union (PENDING):** Once the Postgres union trigger is applied to the live
+database, the ledger merge will be enforced on both sides — `pullRemote` unites
+the device ledger with what's on the server, and a Postgres trigger unites both
+sides on every write to the `invoices` table. This means neither a stale device
+push nor a webhook write can shrink or clobber a ledger entry. The union works
+only because deletion is recorded as a one-way `voidedAt` date rather than
+removal from the array — a union cannot distinguish "unknown to me" from
+"deleted by me" without the data. **NOTE: This protection does NOT yet exist.
+The trigger migration has been written but is not yet applied to production.**
 
-Do NOT "simplify" this back to a plain replace, and do not widen the union to
-other tables without designing a merge for their shape.
+Once it lands, do NOT "simplify" this back to a plain replace, and do not widen
+the union to other tables without designing a merge for their shape.
 
 **Photos are device-local only.** Photos attached to jobs are stored in the
 device file system via `expo-file-system` and are not synced to the cloud. If

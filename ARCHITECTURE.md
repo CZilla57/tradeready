@@ -165,6 +165,10 @@ Everything financial in one place.
   retained and maintained as "balance within half a cent of zero".
   **Absent on invoices created before the ledger existed** — `utils/invoicePayments.ts`
   derives those from `paid`/`amount`/`paidAt`, which is why no migration was needed.
+  Payments are voided, never removed: a voided entry stays in the ledger with a
+  `voidedAt` date and is skipped by `amountPaid`. Deletion has to be data rather
+  than absence, because the sync union cannot distinguish "unknown to me" from
+  "deleted by me".
 - depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
 
 ### Expense
