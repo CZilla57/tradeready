@@ -258,3 +258,137 @@ describe("pullRemote merges invoice payment ledgers", () => {
     expect(stored[0].payments).toBeUndefined();
   });
 });
+
+// ── pushQueue stamps updated_at with push time, not save time ────────────────
+//
+// item.ts records when the user SAVED (enqueue time). If a push is delayed
+// (failed push retried, offline device reconnecting) and pushQueue stamped
+// updated_at with that old item.ts, the row would land in the database
+// backdated. Any device whose lastSynced watermark already passed that
+// timestamp would then skip the row forever on `gt('updated_at', since)`
+// pulls — a real data-loss path for e.g. a late-arriving payment. pushQueue
+// must stamp updated_at with the actual push time instead.
+
+describe("pushQueue stamps updated_at with push time, not the queued item's ts", () => {
+  const OLD_TS = "2020-01-01T00:00:00.000Z";
+  const PUSH_TIME = new Date(2026, 6, 18, 12, 0, 0);
+
+  // Generic chain: same shape as buildFromMock's, but also records upsert/
+  // update payloads per table so we can assert on the exact object sent to
+  // Supabase (buildFromMock only exposes a single shared upsert mock, which
+  // isn't enough to distinguish settings/customer_notes/collection/delete
+  // calls from each other in the same test).
+  function buildPushMock() {
+    const upsertCalls = [];
+    const updateCalls = [];
+    supabase.from.mockImplementation((table) => {
+      const chain = {};
+      chain.select = jest.fn(() => chain);
+      chain.eq = jest.fn(() => chain);
+      chain.gt = jest.fn().mockResolvedValue({ data: [], error: null });
+      chain.maybeSingle = jest.fn().mockResolvedValue({ data: null });
+      chain.upsert = jest.fn((payload) => {
+        upsertCalls.push({ table, payload });
+        return Promise.resolve({ error: null });
+      });
+      chain.update = jest.fn((payload) => {
+        updateCalls.push({ table, payload });
+        return {
+          eq: jest.fn(() => ({
+            eq: jest.fn().mockResolvedValue({ error: null }),
+          })),
+        };
+      });
+      return chain;
+    });
+    return { upsertCalls, updateCalls };
+  }
+
+  function seedQueue(items) {
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "__syncQueue") return Promise.resolve(JSON.stringify(items));
+      return Promise.resolve(null);
+    });
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(PUSH_TIME);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test("collection table upsert uses push time, not item.ts", async () => {
+    const { upsertCalls } = buildPushMock();
+    seedQueue([
+      { table: "jobs", op: "upsert", recordId: "j1", payload: { id: "j1" }, ts: OLD_TS },
+    ]);
+
+    await syncIfOnline("user-a");
+
+    const call = upsertCalls.find((c) => c.table === "jobs");
+    expect(call).toBeDefined();
+    expect(call.payload.updated_at).not.toBe(OLD_TS);
+    expect(call.payload.updated_at).toBe(PUSH_TIME.toISOString());
+  });
+
+  test("settings upsert uses push time, not item.ts", async () => {
+    const { upsertCalls } = buildPushMock();
+    seedQueue([
+      { table: "settings", op: "upsert", recordId: "settings", payload: { businessName: "Acme" }, ts: OLD_TS },
+    ]);
+
+    await syncIfOnline("user-a");
+
+    const call = upsertCalls.find((c) => c.table === "settings");
+    expect(call).toBeDefined();
+    expect(call.payload.updated_at).not.toBe(OLD_TS);
+    expect(call.payload.updated_at).toBe(PUSH_TIME.toISOString());
+  });
+
+  test("customer_notes upsert uses push time, not item.ts", async () => {
+    const { upsertCalls } = buildPushMock();
+    seedQueue([
+      { table: "customer_notes", op: "upsert", recordId: "acme", payload: "note text", ts: OLD_TS },
+    ]);
+
+    await syncIfOnline("user-a");
+
+    const call = upsertCalls.find((c) => c.table === "customer_notes");
+    expect(call).toBeDefined();
+    expect(call.payload.updated_at).not.toBe(OLD_TS);
+    expect(call.payload.updated_at).toBe(PUSH_TIME.toISOString());
+  });
+
+  test("delete op uses push time, not item.ts", async () => {
+    const { updateCalls } = buildPushMock();
+    seedQueue([
+      { table: "jobs", op: "delete", recordId: "j1", payload: null, ts: OLD_TS },
+    ]);
+
+    await syncIfOnline("user-a");
+
+    const call = updateCalls.find((c) => c.table === "jobs");
+    expect(call).toBeDefined();
+    expect(call.payload.updated_at).not.toBe(OLD_TS);
+    expect(call.payload.updated_at).toBe(PUSH_TIME.toISOString());
+    expect(call.payload.deleted).toBe(true);
+  });
+
+  test("each item in the same push gets its own push-time stamp (computed once per item)", async () => {
+    const { upsertCalls } = buildPushMock();
+    seedQueue([
+      { table: "jobs", op: "upsert", recordId: "j1", payload: { id: "j1" }, ts: OLD_TS },
+      { table: "invoices", op: "upsert", recordId: "i1", payload: { id: "i1" }, ts: OLD_TS },
+    ]);
+
+    await syncIfOnline("user-a");
+
+    const jobsCall = upsertCalls.find((c) => c.table === "jobs");
+    const invoicesCall = upsertCalls.find((c) => c.table === "invoices");
+    expect(jobsCall.payload.updated_at).toBe(PUSH_TIME.toISOString());
+    expect(invoicesCall.payload.updated_at).toBe(PUSH_TIME.toISOString());
+  });
+});

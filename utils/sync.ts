@@ -80,13 +80,21 @@ async function pushQueue(userId: string): Promise<void> {
   const failed: QueueItem[] = [];
   let firstError: unknown = null;
   for (const item of queue) {
+    // Stamp with the moment this item is actually being pushed, not
+    // item.ts (when the user saved / enqueued it). A queued item can be
+    // pushed long after it was saved (failed push retried, offline device
+    // reconnecting) — if updated_at were backdated to save time, it would
+    // be invisible to another device's `gt('updated_at', since)` pull
+    // filter whenever that device's watermark had already advanced past
+    // the backdated stamp, so the row would never propagate.
+    const pushedAt = new Date().toISOString();
     try {
       if (item.op === 'upsert') {
         if (item.table === 'settings') {
           const { error } = await supabase.from('settings').upsert({
             user_id: userId,
             data: item.payload,
-            updated_at: item.ts,
+            updated_at: pushedAt,
           });
           if (error) throw error;
         } else if (item.table === 'customer_notes') {
@@ -94,7 +102,7 @@ async function pushQueue(userId: string): Promise<void> {
             user_id: userId,
             customer_key: item.recordId,
             note: item.payload,
-            updated_at: item.ts,
+            updated_at: pushedAt,
           });
           if (error) throw error;
         } else {
@@ -102,7 +110,7 @@ async function pushQueue(userId: string): Promise<void> {
             id: item.recordId,
             user_id: userId,
             data: item.payload,
-            updated_at: item.ts,
+            updated_at: pushedAt,
             deleted: false,
           });
           if (error) throw error;
@@ -110,7 +118,7 @@ async function pushQueue(userId: string): Promise<void> {
       } else if (item.op === 'delete') {
         const { error } = await supabase
           .from(item.table)
-          .update({ deleted: true, updated_at: item.ts })
+          .update({ deleted: true, updated_at: pushedAt })
           .eq('id', item.recordId)
           .eq('user_id', userId);
         if (error) throw error;
