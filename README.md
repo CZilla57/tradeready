@@ -306,9 +306,24 @@ a network connection is available.
 
 ### Known limitations
 
-**No conflict resolution.** If the same record is edited on two devices while
-both are offline, last-write wins when they both sync. There is no merge or
-conflict detection.
+**Almost no conflict resolution.** If the same record is edited on two devices
+while both are offline, last-write wins when they both sync. There is no
+general merge or conflict detection.
+
+The one exception is an invoice's **payment ledger**, which is merged rather
+than replaced: `pullRemote` unions the two sides' `payments` by payment id
+(`utils/syncMerge.ts` → `mergePaymentLedgers` in `utils/invoicePayments.ts`),
+then recomputes `paid` / `paidAt` from the union. Everything else on the
+invoice — amount, customer, description — still follows last-write-wins.
+
+The exception exists because a ledger can legitimately grow on both sides at
+once: the Stripe webhook appends a payment server-side while the tradesperson
+records a cash payment on the device. Replacing would destroy whichever side
+lost, i.e. lose money. Union by id is commutative and idempotent, so arrival
+order doesn't matter and a repeated webhook delivery can't double-count.
+
+Do NOT "simplify" this back to a plain replace, and do not widen the union to
+other tables without designing a merge for their shape.
 
 **Photos are device-local only.** Photos attached to jobs are stored in the
 device file system via `expo-file-system` and are not synced to the cloud. If

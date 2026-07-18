@@ -37,7 +37,9 @@ AI Coach chat (`backend/api/ai-chat.js`); Claude powers pricebook suggestions
 (`backend/api/pricebook-suggest.js`).
 
 **Sync is live:** Supabase (Postgres + Auth) is the sync backend today, not a future item.
-See the "Sync model" section of README.md for how the local-first queue works.
+See the "Sync model" section of README.md for how the local-first queue works —
+including the one place sync merges rather than replaces (an invoice's payment
+ledger, unioned by payment id).
 
 For the authoritative data shapes, see `types/models.ts`. The Data Models section below
 is a simplified overview.
