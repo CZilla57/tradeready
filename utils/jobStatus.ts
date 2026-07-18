@@ -25,3 +25,19 @@ export function advanceStatusForSchedule(status: JobStatus, hasSchedule: boolean
   }
   return status;
 }
+
+/**
+ * Apply a customer's estimate decision to a job's status. Only acts before the
+ * tradesperson has taken the job forward — never regresses scheduled…paid
+ * (mirrors advanceStatusForSchedule's no-regress guarantee). "approved" derives
+ * from the pipeline; "declined" is the one sanctioned off-`.next` branch, living
+ * here so no screen ever hardcodes it.
+ */
+export function applyEstimateDecision(
+  status: JobStatus,
+  decision: "approved" | "declined",
+): JobStatus {
+  if (status !== "lead" && status !== "estimate_sent") return status;
+  if (decision === "approved") return JOB_STATUSES.estimate_sent.next ?? status;
+  return "declined";
+}

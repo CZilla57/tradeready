@@ -6,15 +6,20 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
+import Constants from "expo-constants";
 import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadJobs, loadCustomers, loadSettings, saveJobs, resolveCustomer } from "../utils/storage";
+import { supabase } from "../utils/supabase";
+import { syncIfOnline } from "../utils/sync";
 import { track } from '../utils/analytics';
 import { formatQuote } from "../utils/format";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { generateEstimateMessage } from "../utils/invoiceHelpers";
+import { buildEstimateSnapshot } from "../utils/estimateSnapshot";
 import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { readPhotoAsDataUri } from "../utils/photoStorage";
@@ -24,6 +29,8 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import type { Job, Customer, Settings } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
+
+const BACKEND_URL = (Constants.expoConfig?.extra as any)?.backendUrl ?? "";
 
 interface ScreenData {
   job: Job;
@@ -43,6 +50,8 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
   const [generating, setGenerating] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [marking, setMarking] = useState<boolean>(false);
+  const [approvalLink, setApprovalLink] = useState<string>("");
+  const [linking, setLinking] = useState<boolean>(false);
 
   useEffect(() => {
     async function load() {
@@ -143,6 +152,67 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
     await saveJobs(updated);
     track('estimate_sent');
     navigation.goBack();
+  }
+
+  async function createApprovalLink(): Promise<string | null> {
+    if (!data) return null;
+    if (!BACKEND_URL) { Alert.alert("Not available", "Approval links need a network connection."); return null; }
+    setLinking(true);
+    try {
+      // Session first: bail early if signed out, and we need the userId to sync.
+      const { data: sess } = await supabase.auth.getSession();
+      const jwt = sess.session?.access_token;
+      const userId = sess.session?.user?.id;
+      if (!jwt || !userId) { Alert.alert("Sign in required", "Please sign in to send an approval link."); return null; }
+
+      const snapshot = buildEstimateSnapshot(data.job, data.customer, data.settings);
+
+      const jobs = await loadJobs();
+      const withSent = jobs.map((j): Job => (j.id === jobId ? { ...j, status: "estimate_sent" } : j));
+      await saveJobs(withSent);
+
+      // saveJobs's sync is fire-and-forget, so the job may not be in Supabase
+      // yet — await an explicit sync so the backend can find the row before
+      // we ask it to attach an approval token.
+      await syncIfOnline(userId);
+
+      const res = await fetch(`${BACKEND_URL}/api/estimate/create-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ jobId, snapshot }),
+      });
+      const out = await res.json();
+      if (!res.ok) { Alert.alert("Couldn't create link", out.error || "Please try again."); return null; }
+
+      // Mirror the server write locally so JobDetail reflects it immediately.
+      const linked = (await loadJobs()).map((j): Job =>
+        j.id === jobId ? { ...j, status: "estimate_sent", approval: { token: out.token, sentAt: out.sentAt, snapshot } } : j
+      );
+      await saveJobs(linked);
+      setApprovalLink(out.url);
+      track("estimate_sent");
+      return out.url as string;
+    } catch {
+      Alert.alert("Couldn't create link", "Please check your connection and try again.");
+      return null;
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  async function sendForApproval() {
+    const url = approvalLink || (await createApprovalLink());
+    if (!url || !data) return;
+    const raw = await generateEstimateMessage({
+      job: data.job, customer: data.customer, channel, biz: data.settings,
+      apiKey: (data.settings as any).anthropicKey, approvalLink: url,
+    });
+    const body = channel === "email" && raw.startsWith("Subject:") ? raw.split("\n").slice(2).join("\n").trim() : raw;
+    if (channel === "email") {
+      await composeEmail({ recipients: (data.customer as any).email ? [(data.customer as any).email] : [], subject: subject || `Estimate for ${data.job.title}`, body });
+    } else {
+      await composeSMS({ recipients: (data.customer as any).phone ? [(data.customer as any).phone] : [], body });
+    }
   }
 
   if (!data) {
@@ -255,6 +325,17 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
           onPress={channel === "email" ? sendEmail : sendSMS}
           style={{ marginBottom: spacing.sm }}
         />
+        <Button
+          label={approvalLink ? `Send approval request via ${channel === "email" ? "Mail" : "Messages"}` : "Create approval link & send"}
+          onPress={sendForApproval}
+          loading={linking}
+          style={{ marginBottom: spacing.sm }}
+        />
+        {approvalLink ? (
+          <TouchableOpacity onPress={() => Clipboard.setStringAsync(approvalLink)} accessibilityRole="button" accessibilityLabel="Copy approval link">
+            <Text style={styles.markHint}>Tap to copy link: {approvalLink}</Text>
+          </TouchableOpacity>
+        ) : null}
         <Button
           label="Mark estimate as sent"
           variant="secondary"

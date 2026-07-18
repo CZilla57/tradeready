@@ -29,6 +29,7 @@ const JOB_STATUS_DISPLAY: Record<JobStatus, JobStatusDisplay> = {
   complete:      { label: "Completed",     color: colors.statusComplete },
   invoiced:      { label: "Invoiced",      color: colors.statusInvoiced },
   paid:          { label: "Paid",          color: colors.statusPaid },
+  declined:      { label: "Declined",      color: colors.statusDeclined },
 };
 
 // Falls back to a grey pill labelled with the raw status for any value outside
