@@ -135,7 +135,12 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
   }
 
   async function handleRecordPayment(invoice: Invoice, draft: PaymentDraft) {
-    const next = applyPayment(invoice, { id: newPaymentId(), ...draft });
+    // Re-resolve against the live list rather than the snapshot captured when
+    // the sheet opened: a double-tap during this await would otherwise
+    // re-derive from that stale snapshot and overwrite the list that already
+    // contains the first payment, silently discarding it.
+    const current = invoices.find((i) => i.id === invoice.id) ?? invoice;
+    const next = applyPayment(current, { id: newPaymentId(), ...draft });
     const updated = invoices.map((i) => (i.id === invoice.id ? next : i));
     setInvoices(updated);
     await saveInvoices(updated);
@@ -144,7 +149,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
       method: draft.method,
       balanceRemaining: balanceDue(next),
     });
-    if (isFullyPaid(next) && !isFullyPaid(invoice)) {
+    if (isFullyPaid(next) && !isFullyPaid(current)) {
       track('invoice_paid', { amount: next.amount });
     }
     syncNotifications();
@@ -154,7 +159,8 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
   function confirmVoid(invoice: Invoice, paymentId: string) {
     const payment = effectivePayments(invoice).find((p) => p.id === paymentId);
     if (!payment) return;
-    const after = voidPayment(invoice, paymentId, new Date().toISOString().split('T')[0]);
+    const voidedAt = new Date().toISOString().split('T')[0];
+    const after = voidPayment(invoice, paymentId, voidedAt);
     Alert.alert(
       "Void this payment?",
       `This can't be undone. ${invoice.number} will go back to ${formatMoney(balanceDue(after))} due.\n\nTo correct a mistake, record a new payment.`,
@@ -164,7 +170,12 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           text: "Void payment",
           style: "destructive",
           onPress: async () => {
-            const updated = invoices.map((i) => (i.id === invoice.id ? after : i));
+            // Same staleness concern as handleRecordPayment: re-resolve against
+            // the live list rather than the snapshot captured when the modal
+            // opened.
+            const current = invoices.find((i) => i.id === invoice.id) ?? invoice;
+            const confirmedAfter = voidPayment(current, paymentId, voidedAt);
+            const updated = invoices.map((i) => (i.id === invoice.id ? confirmedAfter : i));
             setInvoices(updated);
             await saveInvoices(updated);
             track('payment_voided', { amount: payment.amount, method: payment.method });
@@ -172,7 +183,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
             // Refresh the modal's snapshot since it renders from viewingInvoice,
             // not from the live invoices array. Without this, the modal would show
             // pre-void state (payment history, balance) until closed and reopened.
-            setViewingInvoice(after);
+            setViewingInvoice(confirmedAfter);
           },
         },
       ]

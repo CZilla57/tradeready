@@ -51,6 +51,7 @@ export function RecordPaymentSheet({
   const [method, setMethod] = useState<PaymentMethod>("cash");
   const [note, setNote] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Re-seed whenever the sheet reopens or the balance changes underneath it.
   useEffect(() => {
@@ -59,6 +60,7 @@ export function RecordPaymentSheet({
       setDate(new Date());
       setMethod("cash");
       setNote("");
+      setSaving(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, invoice]);
@@ -71,6 +73,10 @@ export function RecordPaymentSheet({
 
   function handleSave() {
     if (!valid) return;
+    // The sheet is unmounted by the parent once its save completes (recordingFor
+    // is cleared), so there's no matching setSaving(false) here — this flag only
+    // needs to disable the button for the lifetime of this in-flight save.
+    setSaving(true);
     const draft: PaymentDraft = {
       amount: parsed,
       date: toDateString(date),
@@ -134,7 +140,7 @@ export function RecordPaymentSheet({
 
           <View style={styles.actions}>
             <Button label="Cancel" variant="secondary" onPress={onClose} style={{ flex: 1 }} />
-            <Button label="Record payment" onPress={handleSave} style={{ flex: 1 }} />
+            <Button label="Record payment" onPress={handleSave} loading={saving} style={{ flex: 1 }} />
           </View>
         </View>
       </View>
