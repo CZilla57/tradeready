@@ -26,12 +26,24 @@ import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { Badge, StatCard, EmptyState } from "../components/UI";
+import { RecordPaymentSheet } from "../components/RecordPaymentSheet";
+import { PaymentHistoryList } from "../components/PaymentHistoryList";
+import {
+  applyPayment,
+  voidPayment,
+  settleRemaining,
+  newPaymentId,
+  balanceDue,
+  amountPaid,
+  isPartlyPaid,
+  isFullyPaid,
+  effectivePayments,
+} from "../utils/invoicePayments";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
-import type { Invoice, Settings } from "../types/models";
-import { track } from "../utils/analytics";
+import type { Invoice, Settings, PaymentDraft } from "../types/models";
 import type { InvoiceStackScreenProps } from "../types/navigation";
 
 export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'InvoiceList'>) {
@@ -42,6 +54,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
   const [search, setSearch] = useState<string>("");
   const [settings, setSettings] = useState<Partial<Settings>>({});
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
+  const [recordingFor, setRecordingFor] = useState<Invoice | null>(null);
 
   // useFocusEffect reloads invoices every time you come back to this screen,
   // so changes made on other screens (like marking paid) show up immediately.
@@ -88,22 +101,56 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
   }
 
   async function markPaid(id: string, onSuccess?: () => void) {
+    const inv = invoices.find((i) => i.id === id);
     Alert.alert("Mark as paid?", "This will mark the invoice as collected.", [
       { text: "Cancel", style: "cancel" },
       {
-        text: "Mark paid",
+        text: inv && isPartlyPaid(inv) ? "Mark rest paid" : "Mark paid",
         onPress: async () => {
           const today = new Date().toISOString().split('T')[0];
           const inv = invoices.find((i) => i.id === id);
-          const updated = invoices.map((i) => (i.id === id ? { ...i, paid: true, paidAt: today } : i));
+          if (!inv) return;
+          const settled = settleRemaining(inv, today);
+          const updated = invoices.map((i) => (i.id === id ? settled : i));
           setInvoices(updated);
           await saveInvoices(updated);
-          track('invoice_paid', { amount: inv?.amount });
           syncNotifications();
           onSuccess?.();
         },
       },
     ]);
+  }
+
+  async function handleRecordPayment(invoice: Invoice, draft: PaymentDraft) {
+    const next = applyPayment(invoice, { id: newPaymentId(), ...draft });
+    const updated = invoices.map((i) => (i.id === invoice.id ? next : i));
+    setInvoices(updated);
+    await saveInvoices(updated);
+    syncNotifications();
+    setRecordingFor(null);
+  }
+
+  function confirmVoid(invoice: Invoice, paymentId: string) {
+    const payment = effectivePayments(invoice).find((p) => p.id === paymentId);
+    if (!payment) return;
+    const after = voidPayment(invoice, paymentId, new Date().toISOString().split('T')[0]);
+    Alert.alert(
+      "Void this payment?",
+      `This can't be undone. ${invoice.number} will go back to ${formatMoney(balanceDue(after))} due.\n\nTo correct a mistake, record a new payment.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Void payment",
+          style: "destructive",
+          onPress: async () => {
+            const updated = invoices.map((i) => (i.id === invoice.id ? after : i));
+            setInvoices(updated);
+            await saveInvoices(updated);
+            syncNotifications();
+          },
+        },
+      ]
+    );
   }
 
   function renderInvoice({ item: inv }: { item: Invoice }) {
@@ -125,7 +172,13 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           <Text style={styles.customerName} numberOfLines={1}>
             {inv.customer}
           </Text>
-          <Text style={styles.amount}>{formatMoney(inv.amount)}</Text>
+          {isPartlyPaid(inv) ? (
+            <Text style={styles.amount}>
+              {formatMoney(balanceDue(inv))} due · {formatMoney(amountPaid(inv))} paid
+            </Text>
+          ) : (
+            <Text style={styles.amount}>{formatMoney(inv.amount)}</Text>
+          )}
         </View>
         <View style={styles.invoiceMeta}>
           <Badge label={status.label} color={status.color} />
@@ -144,6 +197,11 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           <TouchableOpacity style={styles.editBtn} onPress={() => handleExportPdf(inv)}>
             <Text style={styles.editBtnText}>PDF</Text>
           </TouchableOpacity>
+          {!isFullyPaid(inv) && (
+            <TouchableOpacity style={styles.editBtn} onPress={() => setRecordingFor(inv)}>
+              <Text style={styles.editBtnText}>Record payment</Text>
+            </TouchableOpacity>
+          )}
           {!inv.paid && (
             <TouchableOpacity style={styles.paidBtn} onPress={() => markPaid(inv.id)}>
               <Text style={styles.paidBtnText}>Mark paid</Text>
@@ -243,9 +301,15 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
 
                 {/* Customer + amount */}
                 <Text style={styles.modalCustomer}>{inv.customer}</Text>
-                <Text style={[styles.modalAmount, { color: accentColor }]}>
-                  {formatMoney(inv.amount)}
-                </Text>
+                {isPartlyPaid(inv) ? (
+                  <Text style={[styles.modalAmount, { color: accentColor }]}>
+                    {formatMoney(balanceDue(inv))} due · {formatMoney(amountPaid(inv))} paid
+                  </Text>
+                ) : (
+                  <Text style={[styles.modalAmount, { color: accentColor }]}>
+                    {formatMoney(inv.amount)}
+                  </Text>
+                )}
 
                 {/* Due date */}
                 {inv.due ? (
@@ -280,6 +344,10 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
                     </TouchableOpacity>
                   </View>
                 ) : null}
+
+                <View style={styles.modalDivider} />
+                <Text style={styles.modalDetailLabel}>Payment history</Text>
+                <PaymentHistoryList invoice={inv} onVoid={(pid) => confirmVoid(inv, pid)} />
 
                 {/* Actions */}
                 <View style={styles.modalDivider} />
@@ -316,6 +384,14 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
                       </Text>
                     </TouchableOpacity>
                   )}
+                  {!isFullyPaid(inv) && (
+                    <TouchableOpacity
+                      style={styles.modalActionBtn}
+                      onPress={() => { setViewingInvoice(null); setRecordingFor(inv); }}
+                    >
+                      <Text style={styles.modalActionBtnText}>Record payment</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
 
                 <TouchableOpacity
@@ -329,6 +405,15 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           );
         })()}
       </Modal>
+
+      {recordingFor && (
+        <RecordPaymentSheet
+          visible
+          invoice={recordingFor}
+          onSave={(draft) => handleRecordPayment(recordingFor, draft)}
+          onClose={() => setRecordingFor(null)}
+        />
+      )}
     </SafeAreaView>
   );
 }
