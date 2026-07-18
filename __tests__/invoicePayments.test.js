@@ -358,6 +358,19 @@ describe("mergePaymentLedgers — void wins", () => {
     const b = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400 })] });
     expect(mergePaymentLedgers(a, b).payments).toEqual(mergePaymentLedgers(b, a).payments);
   });
+
+  test("when both sides are voided the EARLIEST void date wins", () => {
+    const a = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-07-22" })] });
+    const b = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-08-01" })] });
+    expect(mergePaymentLedgers(a, b).payments[0].voidedAt).toBe("2026-07-22");
+    expect(mergePaymentLedgers(b, a).payments[0].voidedAt).toBe("2026-07-22");
+  });
+
+  test("both-voided merge is commutative in stored bytes", () => {
+    const a = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-07-22" })] });
+    const b = inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-08-01" })] });
+    expect(mergePaymentLedgers(a, b).payments).toEqual(mergePaymentLedgers(b, a).payments);
+  });
 });
 
 describe("paidAt ordering — chronological order, not insertion order (pinned intentional behavior)", () => {
@@ -426,6 +439,25 @@ describe("paymentsInRange / collectedInRange", () => {
     const a = inv({ id: "a", amount: 1000, payments: [pmt({ id: "p1", amount: 400, date: "2026-07-10" })] });
     const b = inv({ id: "b", paid: true, amount: 250, paidAt: "2026-07-11" });
     expect(collectedInRange([a, b], JULY_START, JULY_END)).toBe(650);
+  });
+
+  test("collectedInRange excludes voided payments", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [
+        pmt({ id: "p1", amount: 400, date: "2026-07-10" }),
+        pmt({ id: "p2", amount: 600, date: "2026-07-12", voidedAt: "2026-07-22" }),
+      ],
+    });
+    expect(collectedInRange([i], JULY_START, JULY_END)).toBe(400);
+  });
+
+  test("paymentsInRange still RETURNS voided payments so a history UI can show them", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p1", amount: 400, date: "2026-07-10", voidedAt: "2026-07-22" })],
+    });
+    expect(paymentsInRange(i, JULY_START, JULY_END)).toHaveLength(1);
   });
 });
 
@@ -561,5 +593,16 @@ describe("mergePaymentLedgers", () => {
     expect(remote.payments).toHaveLength(1);
     expect(local.payments[0].id).toBe("p1");
     expect(remote.payments[0].id).toBe("p2");
+  });
+
+  test("merging two unpaid legacy invoices does not auto-mark a zero-amount invoice paid", () => {
+    // Both sides materialize to [], so the merged ledger is empty. Without the
+    // `payments.length > 0` guard in withDerivedPaidFields, `0 - 0 <= EPSILON`
+    // would mark this settled.
+    const a = inv({ id: "z1", amount: 0, paid: false, payments: undefined });
+    const b = inv({ id: "z1", amount: 0, paid: false, payments: undefined });
+    const merged = mergePaymentLedgers(a, b);
+    expect(merged.payments).toHaveLength(0);
+    expect(merged.paid).toBe(false);
   });
 });

@@ -175,6 +175,11 @@ export function voidPayment(invoice: Invoice, paymentId: string, voidedAt: DateS
  * The payments received in a window. Legacy invoices resolve through
  * materializeLegacyLedger, so a paid one buckets on `paidAt || due` — exactly
  * the rule the Money tab already applied before the ledger existed.
+ *
+ * KEEPS voided entries in the returned array — a payment-history UI needs
+ * them so it can render a voided payment struck through rather than have it
+ * silently disappear. Any caller that SUMS this result must filter voided
+ * entries itself (see collectedInRange, which does).
  */
 export function paymentsInRange(invoice: Invoice, start: Date, end: Date): Payment[] {
   return materializeLegacyLedger(invoice).filter((p) => isInRange(p.date, start, end));
@@ -184,7 +189,10 @@ export function paymentsInRange(invoice: Invoice, start: Date, end: Date): Payme
 export function collectedInRange(invoices: Invoice[], start: Date, end: Date): number {
   let total = 0;
   for (const inv of invoices) {
-    for (const p of paymentsInRange(inv, start, end)) total += p.amount;
+    for (const p of paymentsInRange(inv, start, end)) {
+      if (p.voidedAt) continue;
+      total += p.amount;
+    }
   }
   return total;
 }
@@ -210,7 +218,10 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
  *    `voidedAt` set, the surviving entry is the voided one. `voidedAt` is
  *    irreversible, so whichever copy carries it is unambiguously the later
  *    state — that is what keeps this union commutative regardless of arrival
- *    order. Otherwise the remote entry wins. For `p…` (device) and `stripe_…`
+ *    order. When BOTH copies are voided, the EARLIEST void date wins (see
+ *    pickSurvivingPayment) — the first void is the real one, and picking a
+ *    side-independent value keeps the merge commutative even in that case.
+ *    Otherwise the remote entry wins. For `p…` (device) and `stripe_…`
  *    (webhook) namespaces, a shared id means the same payment. The `legacy_…`
  *    namespace is the exception: it synthesizes from the invoice's mutable
  *    `amount`/`paidAt`, so two copies that diverged can emit the same id with
@@ -230,15 +241,33 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
  *
  * Pure: neither input is mutated.
  */
+
+/**
+ * Pick the surviving entry when both sides carry the same payment id.
+ *
+ * Void wins, because voidedAt is irreversible — whichever copy has it is the
+ * later state. When BOTH are voided, the EARLIEST void date wins: the first
+ * void is the real one, and picking a side-independent value is what keeps the
+ * merge commutative. A "remote wins" tie-break here would make merge(a,b) and
+ * merge(b,a) store different bytes and let two devices ping-pong writes.
+ *
+ * NOTE: the Postgres union trigger MUST use this same earliest-void rule, or
+ * the server and the device will disagree on the stored void date.
+ */
+function pickSurvivingPayment(existing: Payment | undefined, incoming: Payment): Payment {
+  if (!existing) return incoming;
+  if (existing.voidedAt && incoming.voidedAt) {
+    return existing.voidedAt <= incoming.voidedAt ? existing : incoming;
+  }
+  if (existing.voidedAt) return existing;
+  return incoming;
+}
+
 export function mergePaymentLedgers(local: Invoice, remote: Invoice): Invoice {
   const byId = new Map<string, Payment>();
   for (const p of materializeLegacyLedger(local)) byId.set(p.id, p);
   for (const p of materializeLegacyLedger(remote)) {
-    const existing = byId.get(p.id);
-    // Void wins regardless of side. voidedAt is irreversible, so whichever copy
-    // carries it is unambiguously the later state — which is exactly what keeps
-    // this union commutative. Otherwise remote wins, as for scalar fields.
-    byId.set(p.id, existing?.voidedAt && !p.voidedAt ? existing : p);
+    byId.set(p.id, pickSurvivingPayment(byId.get(p.id), p));
   }
 
   const merged = [...byId.values()].sort(comparePayments);
