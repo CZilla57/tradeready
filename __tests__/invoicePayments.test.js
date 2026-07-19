@@ -20,6 +20,7 @@ import {
   settleRemaining,
   reconcilePaidFields,
   collectedByPeriod,
+  overpaidAmount,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -762,6 +763,40 @@ describe("collectedByPeriod", () => {
 
   test("an empty ranges array yields an empty result", () => {
     expect(collectedByPeriod([inv({ amount: 1000 })], [])).toEqual([]);
+  });
+});
+
+describe("overpaidAmount", () => {
+  test("is zero for an invoice paid exactly", () => {
+    expect(overpaidAmount(inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 1000 })] }))).toBe(0);
+  });
+
+  test("is zero for a partly-paid invoice", () => {
+    expect(overpaidAmount(inv({ amount: 1000, payments: [pmt({ id: "p1", amount: 400 })] }))).toBe(0);
+  });
+
+  test("reports the excess when overpaid", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p1", amount: 400 }), pmt({ id: "p2", amount: 1000 })],
+    });
+    expect(overpaidAmount(i)).toBe(400);
+  });
+
+  test("ignores voided payments", () => {
+    const i = inv({
+      amount: 1000,
+      payments: [pmt({ id: "p1", amount: 1000 }), pmt({ id: "p2", amount: 500, voidedAt: "2026-07-22" })],
+    });
+    expect(overpaidAmount(i)).toBe(0);
+  });
+
+  test("is zero for a legacy paid invoice", () => {
+    expect(overpaidAmount(inv({ amount: 1000, paid: true, payments: undefined }))).toBe(0);
+  });
+
+  test("is zero for a legacy unpaid invoice", () => {
+    expect(overpaidAmount(inv({ amount: 1000, paid: false, payments: undefined }))).toBe(0);
   });
 });
 

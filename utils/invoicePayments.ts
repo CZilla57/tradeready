@@ -66,6 +66,21 @@ export function isPartlyPaid(invoice: Invoice): boolean {
   return amountPaid(invoice) > PAID_EPSILON && !isFullyPaid(invoice);
 }
 
+/**
+ * Money received BEYOND what the invoice was for, in dollars. Zero normally.
+ *
+ * balanceDue clamps at zero, which is right for "what's still owed" but means
+ * an overpayment vanishes from every surface. A customer who pays a
+ * full-amount link after already paying a deposit hands over more than the
+ * invoice was for, and the tradesperson needs to know they owe it back.
+ *
+ * Voided entries are excluded, and a legacy invoice always reports zero — its
+ * implied payment is exactly its amount by construction.
+ */
+export function overpaidAmount(invoice: Invoice): number {
+  return Math.max(0, amountPaid(invoice) - toAmount(invoice.amount));
+}
+
 // Monotonic within a run so several payments recorded in the same millisecond
 // can't collide on `p<Date.now()>`. Mirrors newCustomerId in storage/customers.
 let _pidCounter = 0;
