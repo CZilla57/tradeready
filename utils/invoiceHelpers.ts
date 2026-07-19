@@ -3,7 +3,7 @@ import { supabase } from './supabase';
 import { formatMoney, formatQuote } from './format';
 import { computeEstimateBreakdown } from './pricingEngine';
 import { generateOneShot } from './oneShotAI';
-import { balanceDue, isPartlyPaid } from './invoicePayments';
+import { PAID_EPSILON, balanceDue, isPartlyPaid } from './invoicePayments';
 import type { Invoice, Job, Customer, Settings, PaymentPlan, PaymentProvider } from '../types/models';
 import type { BadgeColor } from '../components/UI';
 
@@ -75,8 +75,13 @@ export function getProviderKey(settings: Partial<Settings>, provider?: PaymentPr
   return settings.providerKeys?.[p as string] || "";
 }
 
-export function buildPaymentLink(invoice: Invoice, provider: PaymentProvider, providerKey: string): string {
-  const amt = balanceDue(invoice).toFixed(2);
+export function buildPaymentLink(
+  invoice: Invoice,
+  provider: PaymentProvider,
+  providerKey: string,
+  requestedAmount: number,
+): string {
+  const amt = requestedAmount.toFixed(2);
   const desc = encodeURIComponent(`${invoice.number} - ${invoice.desc}`);
   const key = providerKey || "YOUR_KEY";
 
@@ -97,17 +102,57 @@ export function buildPaymentLink(invoice: Invoice, provider: PaymentProvider, pr
   }
 }
 
-export async function resolvePaymentLink(invoice: Invoice, provider: PaymentProvider, providerKey: string): Promise<string> {
-  if (invoice.paymentLinkUrl && invoice.paymentLinkAmount === balanceDue(invoice)) {
-    return invoice.paymentLinkUrl;
+/**
+ * Return the cached payment link when it was minted for the amount being
+ * requested NOW; otherwise fetch a fresh one.
+ *
+ * `requestedAmount` is explicit because the amount is a choice, not a property
+ * of the invoice: the full remaining balance by default, or a deposit the user
+ * picked on the Outreach screen. The epsilon compare (not `===`) is deliberate —
+ * a ledger-derived balance is a float sum and can drift a fraction of a cent
+ * from the stored `paymentLinkAmount`, and half a cent of drift is the same
+ * link (Stripe charges whole cents anyway).
+ *
+ * Anyone DISPLAYING a cached `paymentLinkUrl` without going through here must
+ * apply the same amount check — a link minted for a stale amount quietly asks
+ * the customer to overpay (see cachedLinkMatches).
+ */
+export async function resolvePaymentLink(
+  invoice: Invoice,
+  provider: PaymentProvider,
+  providerKey: string,
+  requestedAmount: number,
+): Promise<string> {
+  if (cachedLinkMatches(invoice, requestedAmount)) {
+    return invoice.paymentLinkUrl as string;
   }
-  return fetchPaymentLink(invoice, provider, providerKey);
+  return fetchPaymentLink(invoice, provider, providerKey, requestedAmount);
+}
+
+/**
+ * Is the invoice's cached payment link good for this amount? The display-side
+ * twin of resolvePaymentLink's cache check: screens showing a stored
+ * `paymentLinkUrl` gate on this instead of showing whatever was cached, so a
+ * link minted before a partial payment (or for a different deposit) is never
+ * presented as current.
+ */
+export function cachedLinkMatches(invoice: Invoice, requestedAmount: number): boolean {
+  return Boolean(
+    invoice.paymentLinkUrl &&
+    typeof invoice.paymentLinkAmount === "number" &&
+    Math.abs(invoice.paymentLinkAmount - requestedAmount) <= PAID_EPSILON,
+  );
 }
 
 const VERCEL_URL = Constants.expoConfig?.extra?.backendUrl ?? '';
 const VERCEL_URL_IS_PLACEHOLDER = Constants.expoConfig?.extra?.backendUrlIsPlaceholder ?? true;
 
-export async function fetchPaymentLink(invoice: Invoice, provider: PaymentProvider, providerKey: string): Promise<string> {
+export async function fetchPaymentLink(
+  invoice: Invoice,
+  provider: PaymentProvider,
+  providerKey: string,
+  requestedAmount: number,
+): Promise<string> {
   const endpoints: Record<string, string> = {
     stripe: `${VERCEL_URL}/api/create-payment-link`,
   };
@@ -115,7 +160,7 @@ export async function fetchPaymentLink(invoice: Invoice, provider: PaymentProvid
   const endpoint = endpoints[provider as string];
 
   if (!endpoint || VERCEL_URL_IS_PLACEHOLDER) {
-    return buildPaymentLink(invoice, provider, providerKey);
+    return buildPaymentLink(invoice, provider, providerKey, requestedAmount);
   }
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -134,7 +179,7 @@ export async function fetchPaymentLink(invoice: Invoice, provider: PaymentProvid
     method: "POST",
     headers,
     body: JSON.stringify({
-      amount: balanceDue(invoice),
+      amount: requestedAmount,
       invoiceNumber: invoice.number,
       description: invoice.desc,
       customerEmail: invoice.email,
@@ -152,18 +197,44 @@ export async function fetchPaymentLink(invoice: Invoice, provider: PaymentProvid
   return data.url as string;
 }
 
+/** The partial amount being asked for right now, when the user chose one. */
+export interface DepositAsk {
+  amount: number;
+  /** Set when the user picked a percentage rather than a fixed dollar amount. */
+  percent?: number;
+}
+
 interface OutreachMessageParams {
   invoice: Invoice;
   channel: 'text' | 'email';
   biz: Partial<Settings>;
   paymentLink?: string;
   paymentPlan?: PaymentPlan;
+  /**
+   * When set, the message asks for this partial amount instead of the full
+   * balance — and the caller GUARANTEES any paymentLink passed alongside was
+   * minted for exactly this amount. The message says the link is for the
+   * deposit; pairing it with a full-balance link would make that a lie.
+   */
+  deposit?: DepositAsk;
 }
 
-function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan }: OutreachMessageParams): string {
+function describeDepositAsk(deposit: DepositAsk, hasLink: boolean, channel: 'text' | 'email'): string {
+  const base = `We're asking for a deposit of ${formatMoney(deposit.amount)}${
+    deposit.percent ? ` (${deposit.percent}% of the total)` : ''
+  } for now`;
+  if (!hasLink) return `${base}.`;
+  return channel === 'email'
+    ? `${base} — the payment link below is for that amount.`
+    : `${base} — the payment link is for that amount.`;
+}
+
+function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan, deposit }: OutreachMessageParams): string {
   const days = daysPastDue(invoice.due);
   const amt = describeAmountOwed(invoice);
   const overdueText = days > 0 ? `${days} days overdue` : days === 0 ? 'due today' : `due in ${Math.abs(days)} days`;
+
+  const depositText = deposit ? ` ${describeDepositAsk(deposit, Boolean(paymentLink), channel)}` : '';
 
   let planText = '';
   if (paymentPlan?.enabled) {
@@ -173,7 +244,7 @@ function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan }
 
   if (channel === 'text') {
     const linkPart = paymentLink ? ` Pay here: ${paymentLink}` : '';
-    return `Hi ${invoice.customer}, this is ${biz.businessName}. Invoice ${invoice.number} — ${amt}, ${overdueText}.${planText}${linkPart} — ${biz.phone}`;
+    return `Hi ${invoice.customer}, this is ${biz.businessName}. Invoice ${invoice.number} — ${amt}, ${overdueText}.${depositText}${planText}${linkPart} — ${biz.phone}`;
   }
 
   const linkSection = paymentLink
@@ -184,7 +255,7 @@ function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan }
 
 Hi ${invoice.customer},
 
-I hope you're doing well. I'm reaching out regarding invoice ${invoice.number} — ${amt}, currently ${overdueText}.
+I hope you're doing well. I'm reaching out regarding invoice ${invoice.number} — ${amt}, currently ${overdueText}.${depositText}
 
 ${linkSection}${planText ? `${planText}\n\n` : ''}If you have any questions or concerns, please don't hesitate to get in touch.
 
@@ -292,9 +363,10 @@ export async function generateOutreachMessage({
   biz,
   paymentLink,
   paymentPlan,
+  deposit,
   apiKey,
 }: OutreachMessageParams & { apiKey?: string }): Promise<string> {
-  const fallback = () => buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan });
+  const fallback = () => buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan, deposit });
   if (!apiKey) return fallback();
 
   const days = daysPastDue(invoice.due);
@@ -305,6 +377,16 @@ export async function generateOutreachMessage({
   if (paymentPlan?.enabled) {
     const per = formatMoney(balanceDue(invoice) / parseInt(String(paymentPlan.installments)));
     planInfo = `\n\nOffer a payment plan: ${paymentPlan.installments} payments of ${per} ${paymentPlan.frequency.toLowerCase()}. Weave this in naturally.`;
+  }
+
+  let depositInfo = "";
+  if (deposit) {
+    const remainder = formatMoney(Math.max(0, balanceDue(invoice) - deposit.amount));
+    depositInfo = `\n\nDEPOSIT REQUEST: ask for a deposit of ${formatMoney(deposit.amount)}${
+      deposit.percent ? ` (${deposit.percent}% of the invoice total)` : ""
+    } now rather than the full balance${
+      paymentLink ? ` — the payment link is for exactly that deposit amount` : ""
+    }. Make clear the remaining ${remainder} is still due by the due date.`;
   }
 
   const paymentLinkInfo = paymentLink
@@ -327,7 +409,7 @@ Business contact: ${biz.phone} | ${biz.email}
 Payment info: ${biz.paymentNotes}
 
 ${paymentLinkInfo}
-${planInfo}
+${depositInfo}${planInfo}
 
 ${channelInstruction}
 

@@ -78,37 +78,37 @@ describe("buildPaymentLink", () => {
   };
 
   test("stripe throws — no valid client-side fallback (providerKey is backend token, not a Stripe link slug)", () => {
-    expect(() => buildPaymentLink(invoice, "stripe", "test_abc123")).toThrow(
+    expect(() => buildPaymentLink(invoice, "stripe", "test_abc123", 350)).toThrow(
       /backend to be configured/
     );
   });
 
   test("venmo link includes amount and username", () => {
-    const link = buildPaymentLink(invoice, "venmo", "mytrades");
+    const link = buildPaymentLink(invoice, "venmo", "mytrades", 350);
     expect(link).toContain("venmo.com");
     expect(link).toContain("350.00");
   });
 
   test("paypal.me link uses username and amount", () => {
-    const link = buildPaymentLink(invoice, "paypal", "johndoe");
+    const link = buildPaymentLink(invoice, "paypal", "johndoe", 350);
     expect(link).toContain("paypal.me/johndoe");
     expect(link).toContain("350.00");
   });
 
   test("square link includes amount", () => {
-    const link = buildPaymentLink(invoice, "square", "sq_key");
+    const link = buildPaymentLink(invoice, "square", "sq_key", 350);
     expect(link).toContain("squareup.com");
     expect(link).toContain("350.00");
   });
 
   test("unknown provider uses providerKey as base URL", () => {
-    const link = buildPaymentLink(invoice, "custom", "https://mypayments.com");
+    const link = buildPaymentLink(invoice, "custom", "https://mypayments.com", 350);
     expect(link).toContain("mypayments.com");
     expect(link).toContain("INV-001");
   });
 
   test("unknown provider with empty key falls back to example placeholder URL", () => {
-    const link = buildPaymentLink(invoice, "custom", "");
+    const link = buildPaymentLink(invoice, "custom", "", 350);
     expect(link).toContain("yourpaymentpage.com");
     expect(link).toContain("INV-001");
   });
@@ -164,8 +164,10 @@ describe("collection surfaces use the remaining balance", () => {
     ...over,
   });
 
-  test("buildPaymentLink charges the balance, not the invoice total", () => {
-    const url = buildPaymentLink(partly({ due: "2025-08-01" }), "paypal", "someone");
+  test("buildPaymentLink charges the requested amount — the caller passes the balance", () => {
+    // The amount is now an explicit parameter (deposits can request less);
+    // OutreachScreen derives the default as roundToCents(balanceDue(invoice)).
+    const url = buildPaymentLink(partly({ due: "2025-08-01" }), "paypal", "someone", 600);
     expect(url).toContain("600");
     expect(url).not.toContain("1000");
   });
@@ -198,5 +200,58 @@ describe("collection surfaces use the remaining balance", () => {
     // $600 / 3 = $200, not $1000 / 3 = $333.33
     expect(msg).toContain("$200.00");
     expect(msg).not.toContain("$333.33");
+  });
+});
+
+describe("deposit-aware outreach messages", () => {
+  const unpaid = (over) => ({
+    id: "i1", customer: "Acme", number: "INV-1", desc: "Work", email: "a@b.com", phone: "",
+    amount: 1000, paid: false, due: "2025-06-20",
+    ...over,
+  });
+
+  test("a deposit ask names the deposit amount and its percentage", async () => {
+    const msg = await generateOutreachMessage({
+      invoice: unpaid(), channel: "text", biz: { businessName: "Acme Co" },
+      deposit: { amount: 500, percent: 50 },
+    });
+    expect(msg).toContain("deposit of $500.00");
+    expect(msg).toContain("(50% of the total)");
+  });
+
+  test("a fixed-amount deposit omits the percentage", async () => {
+    const msg = await generateOutreachMessage({
+      invoice: unpaid(), channel: "text", biz: { businessName: "Acme Co" },
+      deposit: { amount: 250 },
+    });
+    expect(msg).toContain("deposit of $250.00");
+    expect(msg).not.toContain("% of the total");
+  });
+
+  test("with a payment link, the message says the link is for the deposit amount", async () => {
+    const msg = await generateOutreachMessage({
+      invoice: unpaid(), channel: "text", biz: { businessName: "Acme Co" },
+      deposit: { amount: 500, percent: 50 },
+      paymentLink: "https://pay.stripe.com/deposit_500",
+    });
+    expect(msg).toContain("the payment link is for that amount");
+    expect(msg).toContain("https://pay.stripe.com/deposit_500");
+  });
+
+  test("the email variant carries the deposit line too", async () => {
+    const msg = await generateOutreachMessage({
+      invoice: unpaid(), channel: "email", biz: { businessName: "Acme Co", contactName: "Sam", phone: "555" },
+      deposit: { amount: 500, percent: 50 },
+      paymentLink: "https://pay.stripe.com/deposit_500",
+    });
+    expect(msg).toContain("deposit of $500.00");
+    expect(msg).toContain("the payment link below is for that amount");
+  });
+
+  test("no deposit param means no deposit language (existing messages unchanged)", async () => {
+    const msg = await generateOutreachMessage({
+      invoice: unpaid(), channel: "text", biz: { businessName: "Acme Co" },
+    });
+    expect(msg).not.toContain("deposit");
   });
 });
