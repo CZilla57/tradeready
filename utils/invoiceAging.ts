@@ -44,12 +44,19 @@ export function computeInvoiceAging(invoices: Invoice[]): InvoiceAgingResult {
 
     const name = inv.customer || "Unknown";
     const entry = byCustomer.get(name);
+    // Deliberately the invoice's FACE VALUE, not a collected amount — aging
+    // reports "how much settled business did this customer represent", so it
+    // sits outside the invoicePayments.ts ledger contract on purpose. Coerced
+    // with Number(...) rather than routed through amountPaid/balanceDue
+    // (which would change the meaning) because toAmount() is private to that
+    // module and a persisted string would otherwise concatenate into this
+    // number-typed field.
     if (entry) {
       entry.totalDays += days;
       entry.count++;
-      entry.totalAmount += inv.amount || 0;
+      entry.totalAmount += Number(inv.amount) || 0;
     } else {
-      byCustomer.set(name, { totalDays: days, count: 1, totalAmount: inv.amount || 0 });
+      byCustomer.set(name, { totalDays: days, count: 1, totalAmount: Number(inv.amount) || 0 });
     }
   }
 

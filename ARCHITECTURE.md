@@ -175,7 +175,11 @@ Everything financial in one place.
   Every money surface derives from the ledger: `outstanding` sums `balanceDue`,
   `collected` sums `amountPaid`, and revenue is bucketed by each payment's own
   date (`collectedInRange` / `collectedByPeriod` in `utils/invoicePayments.ts`).
-  The invoice `amount` is never summed directly on a money surface.
+  The one deliberate exception is `utils/invoiceAging.ts`, which sums invoice
+  `amount` directly (via `Number(inv.amount) || 0`) to report the face value of
+  settled business per customer — that is a different question from "what was
+  collected", so it sits outside the ledger contract on purpose rather than by
+  oversight.
 - depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
 
 ### Expense

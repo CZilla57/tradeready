@@ -21,6 +21,7 @@ import {
   loadLeadJobs,
 } from '../utils/storage';
 import { daysPastDue } from '../utils/invoiceHelpers';
+import { balanceDue } from '../utils/invoicePayments';
 import { formatMoney } from '../utils/format';
 import {
   getTodayDateString,
@@ -442,7 +443,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   function prevWeek() { setSelectedDate(d => shiftDate(d, -7)); }
   function nextWeek() { setSelectedDate(d => shiftDate(d, 7)); }
 
-  const overdueTotal = overdueInvoices.reduce((s, inv) => s + (Number(inv.amount) || 0), 0);
+  const overdueTotal = overdueInvoices.reduce((s, inv) => s + balanceDue(inv), 0);
   const visibleInvoices = overdueInvoices.slice(0, INVOICE_LIMIT);
   const visibleLeads = leadJobs.slice(0, LEAD_LIMIT);
   const extraInvoices = overdueInvoices.length - INVOICE_LIMIT;

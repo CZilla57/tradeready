@@ -109,6 +109,16 @@ const paymentVectors = [
     expectedAmountPaid: 0, expectedBalance: 0, expectedFullyPaid: true,
   },
   {
+    // The fail-quiet shape: an unpaid invoice with no amount reads as settled,
+    // so it drops off every chasing surface at once. No live code path produces
+    // it (Invoice.amount is required; both creation screens validate), but the
+    // coercion exists precisely because data round-trips through JSON blobs and
+    // older app versions — so pin it rather than leave it incidental.
+    label: "unpaid invoice with no amount reads as settled (fail-quiet, pinned)",
+    invoice: invoice({ amount: undefined, paid: false }),
+    expectedAmountPaid: 0, expectedBalance: 0, expectedFullyPaid: true,
+  },
+  {
     label: "string payment amount coerces",
     invoice: invoice({ amount: 1000, payments: [p({ id: "p1", amount: "400" })] }),
     expectedAmountPaid: 400, expectedBalance: 600, expectedFullyPaid: false,

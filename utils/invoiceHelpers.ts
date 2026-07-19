@@ -21,6 +21,10 @@ export interface InvoiceStatus {
 }
 
 export function getStatus(invoice: Invoice): InvoiceStatus {
+  // The one remaining raw-flag read app-wide, and intentionally so: it's a fast
+  // path ahead of the partly-paid branch below. Safe because every write path
+  // (reconcilePaidFields, applyPayment, mergePaymentLedgers, the Stripe webhook)
+  // maintains `paid` from the ledger, so this stays consistent with isFullyPaid.
   if (invoice.paid) {
     return { label: "Paid", color: "success", days: 0 };
   }

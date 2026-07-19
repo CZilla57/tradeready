@@ -5,7 +5,7 @@
 import { loadInvoices, loadJobs, loadCustomers } from "./storage";
 import { isOverdue } from "./invoiceStats";
 import { buildCustomerList } from "./customerList";
-import { collectedInRange, balanceDue } from "./invoicePayments";
+import { collectedByPeriod, balanceDue } from "./invoicePayments";
 import type { Invoice, Job, Customer, JobStatus } from "../types/models";
 
 export interface TopCustomerEntry {
@@ -51,8 +51,6 @@ export function aggregateSnapshot(
   const lastYear = thisMonth === 0 ? thisYear - 1 : thisYear;
   const lastMonth = thisMonth === 0 ? 11 : thisMonth - 1;
 
-  let revenueThisMonth = 0;
-  let revenueLastMonth = 0;
   let outstandingTotal = 0;
   let overdueTotal = 0;
   let overdueCount = 0;
@@ -61,12 +59,13 @@ export function aggregateSnapshot(
   const thisMonthRange = { start: new Date(thisYear, thisMonth, 1), end: new Date(thisYear, thisMonth + 1, 0) };
   const lastMonthRange = { start: new Date(lastYear, lastMonth, 1), end: new Date(lastYear, lastMonth + 1, 0) };
 
+  // Walk every invoice's ledger once for both months rather than once per
+  // month per invoice (collectedInRange re-materialises the ledger each call).
+  const [revenueThisMonth, revenueLastMonth] = collectedByPeriod(invoices, [thisMonthRange, lastMonthRange]);
+
   for (const inv of invoices) {
     // Not either/or any more: a partly-paid invoice contributes revenue for
     // what arrived AND outstanding for what's still owed.
-    revenueThisMonth += collectedInRange([inv], thisMonthRange.start, thisMonthRange.end);
-    revenueLastMonth += collectedInRange([inv], lastMonthRange.start, lastMonthRange.end);
-
     const balance = balanceDue(inv);
     outstandingTotal += balance;
     if (balance > 0 && isOverdue(inv)) {

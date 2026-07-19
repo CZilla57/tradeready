@@ -363,6 +363,12 @@ export function settleRemaining(invoice: Invoice, date: DateString): Invoice {
  *
  * Voided payments are excluded, matching collectedInRange. A payment falling in
  * two overlapping ranges counts in both — that is the caller's business.
+ *
+ * INVARIANT: `Payment.date` must remain a date-only "YYYY-MM-DD" string. Some
+ * callers build month-end range boundaries as `new Date(y, m + 1, 0)` — local
+ * midnight on the last day of the month, not 23:59:59 — which only matches every
+ * date-only payment because isInRange compares date-only strings. A timestamped
+ * payment date would risk dropping last-day-of-month payments from these buckets.
  */
 export function collectedByPeriod(
   invoices: Invoice[],
