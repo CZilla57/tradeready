@@ -184,6 +184,10 @@ Everything financial in one place.
   date and BALANCE DUE when partly paid, plus a payment history — excluding
   voided entries and the synthesized `legacy_<id>` entry, so pre-existing
   invoices render byte-identically.
+  Collection surfaces — payment links, outreach messages and the cron reminder
+  email — quote `balanceDue`, and name both numbers for a partly-paid invoice
+  so the customer sees their deposit credited. `overpaidAmount` surfaces money
+  received beyond the invoice total, which `balanceDue` clamps away.
 - depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
 
 ### Expense
