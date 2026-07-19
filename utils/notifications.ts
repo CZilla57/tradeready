@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import type { Invoice, Settings, ReminderRule } from '../types/models';
+import { isFullyPaid } from './invoicePayments';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -50,7 +51,7 @@ export async function syncNotifications(): Promise<void> {
 
     await Notifications.cancelAllScheduledNotificationsAsync();
 
-    const unpaid = invoices.filter(inv => !inv.paid && inv.due);
+    const unpaid = invoices.filter(inv => !isFullyPaid(inv) && inv.due);
     const now = new Date();
     let count = 0;
 

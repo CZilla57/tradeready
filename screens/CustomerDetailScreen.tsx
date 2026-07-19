@@ -20,6 +20,7 @@ import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
 import { KeyboardDoneBar } from '../components/KeyboardDoneBar';
+import { isFullyPaid } from '../utils/invoicePayments';
 import type { Job, Invoice } from '../types/models';
 import { reportError } from '../utils/analytics';
 import type { CustomerStackScreenProps } from '../types/navigation';
@@ -39,7 +40,7 @@ interface InvoiceStatusResult {
 }
 
 const invoiceStatus = (inv: Invoice, colors: ColorScheme): InvoiceStatusResult => {
-  if (inv.paid) return { label: 'Paid', color: colors.success };
+  if (isFullyPaid(inv)) return { label: 'Paid', color: colors.success };
   const due = new Date(inv.due);
   const now = new Date();
   if (due < now) return { label: 'Overdue', color: colors.danger };

@@ -1,6 +1,7 @@
 import type { Invoice, Job, Customer, Settings } from '../types/models';
 import { formatMoney, formatQuote } from "./format";
 import { computeEstimateBreakdown } from "./pricingEngine";
+import { isFullyPaid } from "./invoicePayments";
 
 const ACCENT = "#007aff";
 
@@ -143,7 +144,7 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
 
   const issueDate = fmtDate(new Date().toISOString());
   const dueDate   = fmtDate(invoice.due);
-  const isPaid    = invoice.paid;
+  const isPaid    = isFullyPaid(invoice);
 
   const items = invoice.lineItems ?? [];
   const primaryItems = items.filter((li) => li.category === "labor");

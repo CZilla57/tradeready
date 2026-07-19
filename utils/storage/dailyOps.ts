@@ -5,6 +5,7 @@
 
 import { loadJobs, loadInvoices } from "./collections";
 import { reportError } from "../analytics";
+import { isFullyPaid } from "../invoicePayments";
 import type { Job, Invoice } from "../../types/models";
 
 export async function loadJobsForDate(dateString: string): Promise<Job[]> {
@@ -50,7 +51,7 @@ export async function loadOverdueInvoices(): Promise<Invoice[]> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     return invoices
-      .filter((inv) => !inv.paid && new Date(inv.due) < today)
+      .filter((inv) => !isFullyPaid(inv) && new Date(inv.due) < today)
       .sort((a, b) => new Date(a.due).getTime() - new Date(b.due).getTime());
   } catch {
     return [];

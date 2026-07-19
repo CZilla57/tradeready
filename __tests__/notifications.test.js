@@ -59,9 +59,13 @@ describe("permission guard", () => {
 // ── Paid vs unpaid filtering ───────────────────────────────────────────────────
 
 describe("paid vs unpaid invoice filtering", () => {
+  // NOTE: `amount` is load-bearing now. Notification scheduling asks whether
+  // an invoice is settled, which the ledger answers from the balance — an
+  // invoice with no amount owes nothing and is never chased. These tests are
+  // about SCHEDULING, so they need invoices that actually owe something.
   test("schedules a notification for an unpaid invoice with a future threshold", async () => {
     seedStorage([
-      { id: "i1", customer: "Alice", number: "INV-001", paid: false, due: dateInDays(30) },
+      { id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30) },
     ]);
 
     await syncNotifications();
@@ -74,7 +78,7 @@ describe("paid vs unpaid invoice filtering", () => {
 
   test("skips paid invoices entirely", async () => {
     seedStorage([
-      { id: "i1", customer: "Bob", number: "INV-002", paid: true, due: dateInDays(30) },
+      { id: "i1", customer: "Bob", number: "INV-002", paid: true, amount: 500, due: dateInDays(30) },
     ]);
 
     await syncNotifications();
@@ -84,9 +88,9 @@ describe("paid vs unpaid invoice filtering", () => {
 
   test("schedules only for unpaid when the list contains a mix", async () => {
     seedStorage([
-      { id: "i1", customer: "Alice", number: "INV-001", paid: false, due: dateInDays(30) },
-      { id: "i2", customer: "Bob",   number: "INV-002", paid: true,  due: dateInDays(30) },
-      { id: "i3", customer: "Carol", number: "INV-003", paid: false, due: dateInDays(30) },
+      { id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30) },
+      { id: "i2", customer: "Bob",   number: "INV-002", paid: true,  amount: 500, due: dateInDays(30) },
+      { id: "i3", customer: "Carol", number: "INV-003", paid: false, amount: 500, due: dateInDays(30) },
     ]);
 
     await syncNotifications();
@@ -100,6 +104,19 @@ describe("paid vs unpaid invoice filtering", () => {
     expect(titles.some((t) => t.includes("Carol"))).toBe(true);
     expect(titles.every((t) => !t.includes("Bob"))).toBe(true);
   });
+
+  test("an invoice with nothing owed is never chased", async () => {
+    // Deliberate: the ledger answers "settled?" from the balance, so a $0
+    // invoice is never overdue and never reminded. Not reachable in-app —
+    // Invoice.amount is required and both creation screens reject amount <= 0.
+    seedStorage([
+      { id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 0, due: dateInDays(30) },
+    ]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
 });
 
 // ── Threshold date handling ───────────────────────────────────────────────────
@@ -108,7 +125,7 @@ describe("threshold date handling", () => {
   test("skips invoices whose fire date is already in the past", async () => {
     // Due 2020-01-01 + 1 day rule → fire date 2020-01-02 9am → already past
     seedStorage([
-      { id: "i1", customer: "Alice", number: "INV-001", paid: false, due: "2020-01-01" },
+      { id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: "2020-01-01" },
     ]);
 
     await syncNotifications();
@@ -118,7 +135,7 @@ describe("threshold date handling", () => {
 
   test("schedules one notification per rule when multiple rules apply", async () => {
     seedStorage(
-      [{ id: "i1", customer: "Alice", number: "INV-001", paid: false, due: dateInDays(30) }],
+      [{ id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30) }],
       { rules: [{ days: 1 }, { days: 7 }] }
     );
 
@@ -134,7 +151,7 @@ describe("threshold date handling", () => {
 describe("notification identifier", () => {
   test("uses the format inv_{invoiceId}_{days}d", async () => {
     seedStorage(
-      [{ id: "i42", customer: "Alice", number: "INV-001", paid: false, due: dateInDays(30) }],
+      [{ id: "i42", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30) }],
       { rules: [{ days: 7 }] }
     );
 
@@ -151,7 +168,7 @@ describe("notification identifier", () => {
 describe("auto-outreach toggle", () => {
   test("adds overdue_outreach type + daysPastDue to data when enabled", async () => {
     seedStorage(
-      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, due: dateInDays(30) }],
+      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, amount: 500, due: dateInDays(30) }],
       { rules: [{ days: 7 }], autoOutreachEnabled: true }
     );
 
@@ -168,7 +185,7 @@ describe("auto-outreach toggle", () => {
 
   test("keeps the plain reminder (no type) when disabled", async () => {
     seedStorage(
-      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, due: dateInDays(30) }],
+      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, amount: 500, due: dateInDays(30) }],
       { rules: [{ days: 7 }], autoOutreachEnabled: false }
     );
 
@@ -181,7 +198,7 @@ describe("auto-outreach toggle", () => {
 
   test("defaults to the plain reminder when the flag is absent", async () => {
     seedStorage(
-      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, due: dateInDays(30) }],
+      [{ id: "i7", customer: "Alice", number: "INV-007", paid: false, amount: 500, due: dateInDays(30) }],
       { rules: [{ days: 7 }] } // no autoOutreachEnabled key — mirrors a pre-existing user
     );
 

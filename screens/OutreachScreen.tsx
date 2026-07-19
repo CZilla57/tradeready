@@ -20,6 +20,7 @@ import { Badge, Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from '../utils/analytics';
+import { isFullyPaid } from "../utils/invoicePayments";
 import type { Invoice, Settings } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
@@ -165,7 +166,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
   }, [invoice, channel, settings, paymentLink, paymentPlanEnabled, installments, frequency]);
 
   useEffect(() => {
-    if (invoice && !invoice.paid && settings) {
+    if (invoice && !isFullyPaid(invoice) && settings) {
       generate();
     }
   }, [channel, paymentPlanEnabled, installments, frequency, paymentLink, invoice, settings, generate]);
@@ -220,7 +221,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
             <Badge label={status.label} color={status.color} />
           </View>
 
-          {!invoice.paid && configuredProviders.length > 1 && (
+          {!isFullyPaid(invoice) && configuredProviders.length > 1 && (
             <View style={styles.providerRow}>
               <Text style={styles.providerRowLabel}>Pay via</Text>
               <View style={styles.providerChips}>
@@ -248,7 +249,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
                 ✓ {PROVIDER_LABELS[selectedProvider ?? ""] ?? "Payment"} link ready
               </Text>
             </View>
-          ) : !invoice.paid ? (
+          ) : !isFullyPaid(invoice) ? (
             <TouchableOpacity
               style={styles.generateLinkBtn}
               onPress={() => handleGenerateLink()}
@@ -266,7 +267,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
           ) : null}
         </Card>
 
-        {invoice.paid ? (
+        {isFullyPaid(invoice) ? (
           <Card style={styles.paidCard}>
             <Text style={styles.paidTitle}>Invoice paid</Text>
             <Text style={styles.paidSub}>No further outreach needed.</Text>
