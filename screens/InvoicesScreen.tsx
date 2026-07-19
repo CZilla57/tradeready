@@ -38,6 +38,7 @@ import {
   amountPaid,
   isPartlyPaid,
   isFullyPaid,
+  isDepositSatisfied,
   effectivePayments,
   overpaidAmount,
 } from "../utils/invoicePayments";
@@ -367,6 +368,20 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
                   <View style={styles.modalDetailRow}>
                     <Text style={styles.modalDetailLabel}>Due</Text>
                     <Text style={styles.modalDetailValue}>{formatDate(inv.due)}</Text>
+                  </View>
+                ) : null}
+
+                {/* Outstanding deposit ask — hidden once the invoice settles,
+                    where the distinction no longer means anything. */}
+                {inv.depositRequest && !isFullyPaid(inv) ? (
+                  <View style={styles.modalDetailRow}>
+                    <Text style={styles.modalDetailLabel}>Deposit requested</Text>
+                    <Text style={styles.modalDetailValue}>
+                      {formatMoney(inv.depositRequest.amount)}
+                      {inv.depositRequest.percent ? ` (${inv.depositRequest.percent}%)` : ""}
+                      {" · "}
+                      {isDepositSatisfied(inv) ? "received" : "unpaid"}
+                    </Text>
                   </View>
                 ) : null}
 
