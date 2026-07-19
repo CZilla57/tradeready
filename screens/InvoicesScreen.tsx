@@ -39,6 +39,7 @@ import {
   isPartlyPaid,
   isFullyPaid,
   effectivePayments,
+  overpaidAmount,
 } from "../utils/invoicePayments";
 import { spacing, radius, fontSize } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
@@ -214,7 +215,11 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           <Text style={styles.customerName} numberOfLines={1}>
             {inv.customer}
           </Text>
-          {isPartlyPaid(inv) ? (
+          {overpaidAmount(inv) > 0 ? (
+            <Text style={styles.amount}>
+              {formatMoney(inv.amount)} · overpaid by {formatMoney(overpaidAmount(inv))}
+            </Text>
+          ) : isPartlyPaid(inv) ? (
             <Text style={styles.amount}>
               {formatMoney(balanceDue(inv))} due · {formatMoney(amountPaid(inv))} paid
             </Text>
@@ -343,7 +348,11 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
 
                 {/* Customer + amount */}
                 <Text style={styles.modalCustomer}>{inv.customer}</Text>
-                {isPartlyPaid(inv) ? (
+                {overpaidAmount(inv) > 0 ? (
+                  <Text style={[styles.modalAmount, { color: accentColor }]}>
+                    {formatMoney(inv.amount)} · overpaid by {formatMoney(overpaidAmount(inv))}
+                  </Text>
+                ) : isPartlyPaid(inv) ? (
                   <Text style={[styles.modalAmount, { color: accentColor }]}>
                     {formatMoney(balanceDue(inv))} due · {formatMoney(amountPaid(inv))} paid
                   </Text>
