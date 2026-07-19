@@ -24,11 +24,6 @@ export interface InvoiceSummary {
 
 /** Has a remaining balance and is past due — matches the "Nd overdue" badge. */
 export function isOverdue(invoice: Invoice): boolean {
-  // Legacy invoices without a ledger use the original logic based on the paid flag
-  if (!invoice.payments || invoice.payments.length === 0) {
-    return !invoice.paid && daysPastDue(invoice.due) > 0;
-  }
-  // Ledger-based invoices check for remaining balance
   return !isFullyPaid(invoice) && daysPastDue(invoice.due) > 0;
 }
 

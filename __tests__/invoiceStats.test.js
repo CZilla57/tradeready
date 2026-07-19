@@ -17,7 +17,11 @@ afterAll(() => {
   jest.useRealTimers();
 });
 
-const inv = (over) => ({ customer: "Acme", number: "INV-1", desc: "", amount: 0, ...over });
+// NOTE: a non-zero default amount is load-bearing. Under the ledger, a $0
+// invoice owes nothing, so isFullyPaid returns true and it is never overdue.
+// These tests are about DATE logic, so they need an invoice that actually
+// owes something.
+const inv = (over) => ({ customer: "Acme", number: "INV-1", desc: "", amount: 500, ...over });
 
 describe("isOverdue", () => {
   test("unpaid and several days past due", () => {
@@ -31,6 +35,13 @@ describe("isOverdue", () => {
   });
   test("a paid invoice is never overdue, even if past due", () => {
     expect(isOverdue(inv({ paid: true, due: "2020-01-01" }))).toBe(false);
+  });
+  test("a $0 invoice is never overdue — there is nothing owed", () => {
+    // Deliberate change from the pre-ledger behaviour, where a $0 unpaid
+    // invoice past due counted as overdue. Nothing is owed, so nothing is
+    // late. Not reachable in-app: both invoice-creation screens reject
+    // amount <= 0.
+    expect(isOverdue(inv({ amount: 0, paid: false, due: "2026-06-20" }))).toBe(false);
   });
 });
 
