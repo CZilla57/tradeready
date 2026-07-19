@@ -1,11 +1,14 @@
 # Deposits & Partial Payments — Resume Here
 
-**Status as of 2026-07-18:** Phases 1, 2, 2b, 3 and 4 are built and green on branch
-`feat/deposits-partial-payments` (71 commits off `master` @ `78383e3`).
+**Status as of 2026-07-18:** Phases 1, 2, 2b, 3, 4 and 6 are built and green on branch
+`feat/deposits-partial-payments` (76 commits off `master`). **Phase 5 (deposit requests
+and partial-amount Stripe links) is deliberately unbuilt** — it is the phase whose value
+is an end-to-end money path, so it needs the backend live to verify rather than merely
+to ship.
 **Nothing is merged, nothing is pushed, the Supabase migration is NOT applied,
 and the backend is NOT deployed.**
 
-Gate at last check: **1014 tests / 61 suites, tsc 0 errors, lint 0 warnings.**
+Gate at last check: **1031 tests / 62 suites, tsc 0 errors, lint 0 warnings.**
 
 This document exists because the detailed working notes live in
 `.superpowers/sdd/progress.md`, which is git-ignored scratch — a `git clean -fdx`

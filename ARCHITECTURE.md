@@ -180,6 +180,10 @@ Everything financial in one place.
   settled business per customer — that is a different question from "what was
   collected", so it sits outside the ledger contract on purpose rather than by
   oversight.
+  The customer-facing PDF (`utils/pdfTemplates.ts`) shows invoice total, paid to
+  date and BALANCE DUE when partly paid, plus a payment history — excluding
+  voided entries and the synthesized `legacy_<id>` entry, so pre-existing
+  invoices render byte-identically.
 - depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
 
 ### Expense
