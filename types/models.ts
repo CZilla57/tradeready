@@ -54,6 +54,13 @@ export type PaymentProvider =
 /** A date as an ISO string — usually "YYYY-MM-DD", sometimes a full timestamp. */
 export type DateString = string;
 
+/**
+ * The IRS lets a self-employed filer deduct vehicle costs by standard mileage
+ * OR actual expenses, never both in the same year. Persisted on Settings for
+ * the tax set-aside estimate (utils/taxEstimate.ts owns the math).
+ */
+export type VehicleDeductionMethod = "mileage" | "actual";
+
 /** A "HH:MM" 24-hour clock time. */
 export type TimeString = string;
 
@@ -378,6 +385,20 @@ export interface Settings {
   emergencyMultiplier: number;
   /** $ per mile for the mileage tax-deduction estimate (Money → Mileage). */
   mileageRate: number;
+  /**
+   * Effective income-tax rate (%) for the tax set-aside estimate (Money → Tax
+   * set-aside card). OPTIONAL and additive — absent on every pre-existing
+   * settings blob. Unset computes the SE-tax component only, with an in-card
+   * prompt to set it; the app never invents a rate.
+   */
+  taxIncomeRate?: number;
+  /**
+   * IRS vehicle-deduction election for the tax estimate: standard mileage OR
+   * actual (fuel-category) expenses — never both. OPTIONAL and additive.
+   * Unset deducts NEITHER (over-reserving, the safe direction) until the user
+   * explicitly chooses; the app never auto-picks a tax election.
+   */
+  vehicleDeductionMethod?: VehicleDeductionMethod;
 
   // Payment
   paymentNotes: string;
