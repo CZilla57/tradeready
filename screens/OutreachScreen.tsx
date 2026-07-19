@@ -13,14 +13,29 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
-import { getStatus, generateOutreachMessage, resolvePaymentLink, fetchPaymentLink, getProviderKey } from "../utils/invoiceHelpers";
+import {
+  getStatus,
+  generateOutreachMessage,
+  resolvePaymentLink,
+  fetchPaymentLink,
+  getProviderKey,
+  cachedLinkMatches,
+  type DepositAsk,
+} from "../utils/invoiceHelpers";
 import { formatMoney } from "../utils/format";
 import { supabase } from "../utils/supabase";
 import { Badge, Button, Card, Divider } from "../components/UI";
+import Field from "../components/Field";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from '../utils/analytics';
-import { isFullyPaid } from "../utils/invoicePayments";
+import {
+  isFullyPaid,
+  isDepositSatisfied,
+  balanceDue,
+  resolveDepositAmount,
+  roundToCents,
+} from "../utils/invoicePayments";
 import type { Invoice, Settings } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
@@ -42,6 +57,15 @@ function getConfiguredProviders(s: Settings): { id: string; label: string }[] {
     .map(([id, label]) => ({ id, label }));
 }
 
+/** What the payment ask is: everything owed, half up front, or a typed value. */
+type DepositMode = "full" | "half" | "custom";
+
+const DEPOSIT_MODES: { id: DepositMode; label: string }[] = [
+  { id: "full", label: "Full balance" },
+  { id: "half", label: "50% deposit" },
+  { id: "custom", label: "Custom" },
+];
+
 export default function OutreachScreen({ route, navigation }: JobStackScreenProps<'Outreach'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
@@ -61,6 +85,18 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
   const [copied, setCopied] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [autoReminder, setAutoReminder] = useState<{ sent_at: string; status: string } | null>(null);
+  const [depositMode, setDepositMode] = useState<DepositMode>("full");
+  const [customValue, setCustomValue] = useState("50");
+  const [customIsPercent, setCustomIsPercent] = useState(true);
+  // Debounced copy of customValue: the message auto-regenerates (possibly via
+  // an AI call) whenever the deposit ask changes, and that must not fire per
+  // keystroke while the user types an amount.
+  const [debouncedCustom, setDebouncedCustom] = useState("50");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedCustom(customValue), 600);
+    return () => clearTimeout(t);
+  }, [customValue]);
 
   useEffect(() => {
     async function load() {
@@ -70,8 +106,40 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
       setSettings(s);
       setSelectedProvider(s.provider);
       navigation.setOptions({ title: inv?.customer || "Outreach" });
-      if (inv?.paymentLinkUrl) {
-        setPaymentLink(inv.paymentLinkUrl);
+      if (!inv) return;
+
+      // Restore an outstanding deposit ask so the screen can re-show the same
+      // request (and reuse its cached link) instead of silently resetting to
+      // the full balance. Once the deposit has been received — or the invoice
+      // settled — the natural next ask IS the full balance, so no restore.
+      const req = inv.depositRequest;
+      let expectedAmount = roundToCents(balanceDue(inv));
+      if (req && !isFullyPaid(inv) && !isDepositSatisfied(inv)) {
+        if (req.percent === 50) {
+          setDepositMode("half");
+        } else {
+          setDepositMode("custom");
+          if (req.percent) {
+            setCustomValue(String(req.percent));
+            setDebouncedCustom(String(req.percent));
+            setCustomIsPercent(true);
+          } else {
+            setCustomValue(String(req.amount));
+            setDebouncedCustom(String(req.amount));
+            setCustomIsPercent(false);
+          }
+        }
+        expectedAmount = resolveDepositAmount(
+          inv,
+          req.percent ? { percent: req.percent } : { fixed: req.amount },
+        );
+      }
+
+      // Show the cached link ONLY when it was minted for the amount this
+      // screen is about to ask for. An unconditional restore here once showed
+      // a link minted before a partial payment — a quiet overcharge.
+      if (cachedLinkMatches(inv, expectedAmount)) {
+        setPaymentLink(inv.paymentLinkUrl as string);
       }
     }
     load();
@@ -98,25 +166,71 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
     };
   }, [invoiceId]);
 
+  // The amount the payment link should charge, per the deposit selector.
+  // 0 means "nothing to request" (unparseable custom input) and disables
+  // link generation.
+  const requestedAmount = useMemo(() => {
+    if (!invoice) return 0;
+    if (depositMode === "full") return roundToCents(balanceDue(invoice));
+    if (depositMode === "half") return resolveDepositAmount(invoice, { percent: 50 });
+    const parsed = parseFloat(debouncedCustom);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return resolveDepositAmount(invoice, customIsPercent ? { percent: parsed } : { fixed: parsed });
+  }, [invoice, depositMode, debouncedCustom, customIsPercent]);
+
+  // The active deposit ask — null when the request is effectively the full
+  // balance (mode "full", a custom 100%, or a fixed amount at/over the
+  // balance), so messages and persistence never call the whole balance a
+  // "deposit".
+  const depositAsk = useMemo<DepositAsk | null>(() => {
+    if (!invoice || depositMode === "full" || requestedAmount <= 0) return null;
+    if (requestedAmount >= roundToCents(balanceDue(invoice))) return null;
+    const percent =
+      depositMode === "half" ? 50 : customIsPercent ? parseFloat(debouncedCustom) : undefined;
+    return {
+      amount: requestedAmount,
+      ...(percent && Number.isFinite(percent) ? { percent } : {}),
+    };
+  }, [invoice, depositMode, requestedAmount, customIsPercent, debouncedCustom]);
+
   async function handleGenerateLink(providerOverride?: string, explicit: boolean = true) {
     const provider = providerOverride ?? selectedProvider;
     if (!invoice || !provider) return;
+    if (!(requestedAmount > 0)) return;
     setGeneratingLink(true);
     try {
       const link = providerOverride
-        ? await fetchPaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider))
-        : await resolvePaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider));
+        ? await fetchPaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider), requestedAmount)
+        : await resolvePaymentLink(invoice, provider, getProviderKey(settings ?? {}, provider), requestedAmount);
       setPaymentLink(link);
       if (explicit) {
-        track('payment_link_sent', { provider: provider });
+        track('payment_link_sent', { provider: provider, deposit: Boolean(depositAsk) });
       }
+      // Persist the link against the amount it was ACTUALLY minted for — the
+      // cache check compares against this, so writing any other number (the
+      // old code wrote invoice.amount) poisons the cache and re-mints a link
+      // on every visit to a partly-paid invoice. A deposit ask is persisted
+      // alongside; a full-balance link supersedes (clears) any prior one.
+      const today = new Date().toISOString().split("T")[0];
+      const depositRequest = depositAsk
+        ? { amount: depositAsk.amount, ...(depositAsk.percent ? { percent: depositAsk.percent } : {}), requestedAt: today }
+        : undefined;
       const allInvoices = await loadInvoices();
       await saveInvoices(
-        allInvoices.map((i) =>
-          i.id === invoice.id
-            ? { ...i, paymentLinkUrl: link, paymentLinkAmount: invoice.amount }
-            : i
-        )
+        allInvoices.map((i) => {
+          if (i.id !== invoice.id) return i;
+          const next: Invoice = { ...i, paymentLinkUrl: link, paymentLinkAmount: requestedAmount };
+          if (depositRequest) next.depositRequest = depositRequest;
+          else delete next.depositRequest;
+          return next;
+        })
+      );
+      // Keep the in-memory invoice in step with what was just saved, so the
+      // next cache check and the message params see the fresh link.
+      setInvoice((prev) =>
+        prev
+          ? { ...prev, paymentLinkUrl: link, paymentLinkAmount: requestedAmount, depositRequest }
+          : prev
       );
     } catch (err: unknown) {
       reportError(err, { context: 'generatePaymentLink' });
@@ -135,6 +249,26 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
     handleGenerateLink(provider, false);
   }
 
+  // Any change to what's being asked invalidates the on-screen link — it was
+  // minted for the previous amount. The persisted cache is untouched; going
+  // back to the old selection revalidates it through cachedLinkMatches.
+  function handleSelectDepositMode(mode: DepositMode) {
+    if (mode === depositMode) return;
+    setDepositMode(mode);
+    setPaymentLink("");
+  }
+
+  function handleCustomValueChange(v: string) {
+    setCustomValue(v);
+    setPaymentLink("");
+  }
+
+  function handleCustomUnitChange(isPercent: boolean) {
+    if (isPercent === customIsPercent) return;
+    setCustomIsPercent(isPercent);
+    setPaymentLink("");
+  }
+
   const generate = useCallback(async () => {
     if (!invoice || !settings) return;
     setGenerating(true);
@@ -148,6 +282,11 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
         paymentPlan: paymentPlanEnabled
           ? { enabled: true, installments, frequency }
           : { enabled: false },
+        // Only claim the link is for the deposit when it actually is: after a
+        // mode change the stale link is cleared, and a cached link is only
+        // restored when its amount matches the ask — so link+deposit here are
+        // always consistent.
+        deposit: depositAsk ?? undefined,
         apiKey: settings.anthropicKey,
       });
 
@@ -163,7 +302,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
       setMessage("Error generating message. Check your connection.");
     }
     setGenerating(false);
-  }, [invoice, channel, settings, paymentLink, paymentPlanEnabled, installments, frequency]);
+  }, [invoice, channel, settings, paymentLink, paymentPlanEnabled, installments, frequency, depositAsk]);
 
   useEffect(() => {
     if (invoice && !isFullyPaid(invoice) && settings) {
@@ -221,6 +360,67 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
             <Badge label={status.label} color={status.color} />
           </View>
 
+          {!isFullyPaid(invoice) && (
+            <>
+              <View style={styles.providerRow}>
+                <Text style={styles.providerRowLabel}>Request</Text>
+                <View style={styles.providerChips}>
+                  {DEPOSIT_MODES.map((m) => (
+                    <TouchableOpacity
+                      key={m.id}
+                      style={[styles.providerChip, depositMode === m.id && styles.providerChipActive]}
+                      onPress={() => handleSelectDepositMode(m.id)}
+                      accessibilityRole="radio"
+                      accessibilityLabel={m.label}
+                      accessibilityState={{ selected: depositMode === m.id }}
+                    >
+                      <Text style={[styles.providerChipText, depositMode === m.id && styles.providerChipTextActive]}>
+                        {m.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+              {depositMode === "custom" && (
+                <View style={styles.customRow}>
+                  <Field
+                    label={customIsPercent ? "Deposit (% of total)" : "Deposit amount ($)"}
+                    value={customValue}
+                    onChangeText={handleCustomValueChange}
+                    keyboardType="decimal-pad"
+                    flex
+                    containerStyle={styles.customField}
+                  />
+                  <View style={styles.unitToggle}>
+                    {([true, false] as const).map((isPct) => (
+                      <TouchableOpacity
+                        key={String(isPct)}
+                        style={[styles.unitBtn, customIsPercent === isPct && styles.unitBtnActive]}
+                        onPress={() => handleCustomUnitChange(isPct)}
+                        accessibilityRole="radio"
+                        accessibilityLabel={isPct ? "Percent of total" : "Dollar amount"}
+                        accessibilityState={{ selected: customIsPercent === isPct }}
+                      >
+                        <Text style={[styles.unitText, customIsPercent === isPct && styles.unitTextActive]}>
+                          {isPct ? "%" : "$"}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+              {depositAsk ? (
+                <Text style={styles.requestSummary}>
+                  Requesting {formatMoney(depositAsk.amount)}
+                  {depositAsk.percent ? ` (${depositAsk.percent}% of total)` : ""} of the{" "}
+                  {formatMoney(roundToCents(balanceDue(invoice)))} balance
+                </Text>
+              ) : depositMode === "custom" && requestedAmount <= 0 ? (
+                <Text style={styles.requestInvalid}>Enter an amount greater than zero.</Text>
+              ) : null}
+            </>
+          )}
+
           {!isFullyPaid(invoice) && configuredProviders.length > 1 && (
             <View style={styles.providerRow}>
               <Text style={styles.providerRowLabel}>Pay via</Text>
@@ -245,18 +445,21 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
 
           {paymentLink ? (
             <View style={styles.linkBadge}>
+              {/* requestedAmount is always the amount this link charges: any
+                  change to the ask clears the link, and a cached link is only
+                  restored when its amount matches. */}
               <Text style={styles.linkBadgeText}>
-                ✓ {PROVIDER_LABELS[selectedProvider ?? ""] ?? "Payment"} link ready
+                ✓ {PROVIDER_LABELS[selectedProvider ?? ""] ?? "Payment"} link ready · {formatMoney(requestedAmount)}
               </Text>
             </View>
           ) : !isFullyPaid(invoice) ? (
             <TouchableOpacity
               style={styles.generateLinkBtn}
               onPress={() => handleGenerateLink()}
-              disabled={generatingLink}
+              disabled={generatingLink || requestedAmount <= 0}
               accessibilityRole="button"
               accessibilityLabel="Generate payment link"
-              accessibilityState={{ disabled: generatingLink, busy: generatingLink }}
+              accessibilityState={{ disabled: generatingLink || requestedAmount <= 0, busy: generatingLink }}
             >
               {generatingLink ? (
                 <ActivityIndicator size="small" color={colors.accent} />
@@ -430,6 +633,29 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     providerChipActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
     providerChipText: { fontSize: fontSize.xs, color: colors.textSecondary, fontWeight: "500" },
     providerChipTextActive: { color: colors.accent, fontWeight: "600" },
+    customRow: {
+      marginTop: spacing.sm,
+      flexDirection: "row",
+      alignItems: "flex-end",
+      gap: spacing.sm,
+    },
+    customField: { marginBottom: 0 },
+    unitToggle: { flexDirection: "row", gap: 4, paddingBottom: 2 },
+    unitBtn: {
+      minWidth: 44,
+      minHeight: 44,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.surface,
+    },
+    unitBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
+    unitText: { fontSize: fontSize.md, color: colors.textSecondary, fontWeight: "500" },
+    unitTextActive: { color: colors.accent, fontWeight: "700" },
+    requestSummary: { marginTop: spacing.sm, fontSize: fontSize.xs, color: colors.textSecondary },
+    requestInvalid: { marginTop: spacing.sm, fontSize: fontSize.xs, color: colors.warning },
     section: { marginBottom: spacing.sm },
     paidCard: { marginBottom: spacing.sm, alignItems: "center", paddingVertical: spacing.lg },
     paidTitle: { fontSize: fontSize.md, fontWeight: "700", color: colors.success },
