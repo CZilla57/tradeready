@@ -20,7 +20,7 @@ import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
 import { KeyboardDoneBar } from '../components/KeyboardDoneBar';
-import { isFullyPaid } from '../utils/invoicePayments';
+import { isFullyPaid, isPartlyPaid, amountPaid, balanceDue } from '../utils/invoicePayments';
 import type { Job, Invoice } from '../types/models';
 import { reportError } from '../utils/analytics';
 import type { CustomerStackScreenProps } from '../types/navigation';
@@ -44,6 +44,10 @@ const invoiceStatus = (inv: Invoice, colors: ColorScheme): InvoiceStatusResult =
   const due = new Date(inv.due);
   const now = new Date();
   if (due < now) return { label: 'Overdue', color: colors.danger };
+  // Matches getStatus's precedence in utils/invoiceHelpers.ts: overdue wins
+  // when both apply, because an invoice with a deposit on it that is past due
+  // is still late.
+  if (isPartlyPaid(inv)) return { label: 'Partly paid', color: colors.accent };
   return { label: 'Pending', color: colors.warning };
 };
 
@@ -97,12 +101,16 @@ interface InvoiceRowProps {
 
 const InvoiceRow = ({ invoice, onPress, styles, colors }: InvoiceRowProps) => {
   const status = invoiceStatus(invoice, colors);
+  const partly = isPartlyPaid(invoice);
+  const amountText = partly
+    ? `${formatMoney(balanceDue(invoice))} due · ${formatMoney(amountPaid(invoice))} paid`
+    : formatMoney(Number(invoice.amount) || 0);
   return (
     <TouchableOpacity
       style={styles.invoiceRow}
       onPress={() => onPress(invoice)}
       accessibilityRole="button"
-      accessibilityLabel={`Invoice ${invoice.number || 'without number'}, ${formatMoney(parseFloat(String(invoice.amount)) || 0)}, ${status.label}`}
+      accessibilityLabel={`Invoice ${invoice.number || 'without number'}, ${amountText}, ${status.label}`}
     >
       <View style={styles.invoiceRowLeft}>
         <Text style={styles.invoiceNumber}>{invoice.number || 'No #'}</Text>
@@ -110,7 +118,7 @@ const InvoiceRow = ({ invoice, onPress, styles, colors }: InvoiceRowProps) => {
         <Text style={styles.invoiceDate}>Due {formatDate(invoice.due)}</Text>
       </View>
       <View style={styles.invoiceRowRight}>
-        <Text style={styles.invoiceAmount}>{formatMoney(parseFloat(String(invoice.amount)) || 0)}</Text>
+        <Text style={styles.invoiceAmount}>{amountText}</Text>
         <View style={[styles.statusBadge, { backgroundColor: status.color + '22' }]}>
           <Text style={[styles.statusBadgeText, { color: status.color }]}>{status.label}</Text>
         </View>
