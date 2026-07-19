@@ -169,7 +169,10 @@ async function pullRemote(userId: string): Promise<void> {
             // see utils/syncMerge.ts. Every other table replaces as before.
             local[idx] = mergeRemoteRecord(table, local[idx], remote.data);
           } else {
-            local.push(remote.data);
+            // Route new records through the dispatcher too — otherwise an
+            // invoice arriving on a device that has never seen it keeps
+            // whatever `paid` its blob cached.
+            local.push(mergeRemoteRecord(table, undefined, remote.data));
           }
         }
       }

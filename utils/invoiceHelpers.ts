@@ -40,6 +40,11 @@ export function getStatus(invoice: Invoice): InvoiceStatus {
   // path ahead of the partly-paid branch below. Safe because every write path
   // (reconcilePaidFields, applyPayment, mergePaymentLedgers, the Stripe webhook)
   // maintains `paid` from the ledger, so this stays consistent with isFullyPaid.
+  // That includes sync's pull path (utils/syncMerge.ts mergeRemoteRecord): it
+  // derives `paid` via reconcilePaidFields/mergePaymentLedgers for BOTH a
+  // remote record that merges with a local copy AND one arriving with no local
+  // copy at all — a fresh install can't cache a stale `paid` any more than an
+  // existing device can.
   if (invoice.paid) {
     return { label: "Paid", color: "success", days: 0 };
   }

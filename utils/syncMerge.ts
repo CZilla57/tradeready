@@ -15,7 +15,7 @@
 // designing the merge for their shape — a blind union on the wrong record is
 // worse than a replace.
 
-import { mergePaymentLedgers } from "./invoicePayments";
+import { mergePaymentLedgers, reconcilePaidFields } from "./invoicePayments";
 import type { Invoice } from "../types/models";
 
 /** The minimum a synced record must have: sync keys everything by id. */
@@ -28,14 +28,21 @@ export interface SyncRecord {
  * Combine the incoming remote record with the local one.
  *
  * Returns the remote record itself (same reference) whenever the table does not
- * merge or there is no local copy — callers rely on that being cheap.
+ * merge — callers rely on that being cheap. When there IS no local copy, an
+ * invoice still can't be passed through verbatim: its blob may carry a `paid`
+ * that predates a payment applied elsewhere (see reconcilePaidFields), so it
+ * goes through the same derivation as a merge. reconcilePaidFields returns the
+ * same object when the ledger is empty, so a legacy invoice is still cheap.
  */
 export function mergeRemoteRecord(
   table: string,
   local: SyncRecord | undefined,
   remote: SyncRecord,
 ): SyncRecord {
-  if (table !== "invoices" || !local) return remote;
+  if (table !== "invoices") return remote;
+  if (!local) {
+    return reconcilePaidFields(remote as unknown as Invoice) as unknown as SyncRecord;
+  }
   // Both sides are invoice blobs; mergePaymentLedgers owns the ledger rules.
   return mergePaymentLedgers(local as unknown as Invoice, remote as unknown as Invoice) as unknown as SyncRecord;
 }

@@ -21,8 +21,43 @@ describe("mergeRemoteRecord — invoices", () => {
     expect(result.payments).toHaveLength(2);
   });
 
-  test("returns the remote record unchanged when there is no local copy", () => {
+  // Was "returns the remote record unchanged when there is no local copy".
+  // Renamed because the contract itself changed: a `!local` remote invoice is
+  // no longer passed through verbatim — it's routed through reconcilePaidFields
+  // like every other invoice, so a stale `paid` from a queued device write that
+  // predates a webhook payment doesn't survive onto a fresh install. Identity
+  // is no longer guaranteed here; see the LEGACY test below for where it still
+  // holds (empty ledger).
+  test("derives paid from the ledger when there is no local copy, preserving the ledger", () => {
     const remote = invoice({ payments: [pmt({ id: "p1", amount: 400 })] });
+    const result = mergeRemoteRecord("invoices", undefined, remote);
+    expect(result).not.toBe(remote);
+    expect(result.payments).toEqual(remote.payments);
+    expect(result.paid).toBe(false); // $400 paid of $1000 due — not settled
+  });
+
+  test("a remote invoice with no local copy has paid derived from its ledger", () => {
+    const remote = invoice({
+      amount: 1000, paid: false,
+      payments: [{ id: "p1", amount: 1000, date: "2026-07-01", method: "cash" }],
+    });
+    expect(mergeRemoteRecord("invoices", undefined, remote).paid).toBe(true);
+  });
+
+  test("a stale paid:true on a remote invoice with no local copy is re-opened", () => {
+    const remote = invoice({
+      amount: 1000, paid: true, paidAt: "2026-07-01",
+      payments: [{ id: "p1", amount: 400, date: "2026-07-01", method: "cash" }],
+    });
+    const result = mergeRemoteRecord("invoices", undefined, remote);
+    expect(result.paid).toBe(false);
+    expect(result.paidAt).toBeUndefined();
+  });
+
+  test("a LEGACY remote invoice with no local copy passes through by reference", () => {
+    // reconcilePaidFields returns the same object when the ledger is empty, so
+    // legacy invoices are untouched and cheap.
+    const remote = invoice({ amount: 1000, paid: true, paidAt: "2026-06-15" });
     expect(mergeRemoteRecord("invoices", undefined, remote)).toBe(remote);
   });
 });
