@@ -1,16 +1,17 @@
 # Deposits & Partial Payments — Resume Here
 
-**Status as of 2026-07-18:** Phases 1, 2, 2b, 3, 4 and 6 are built and green on branch
-`feat/deposits-partial-payments` (84 commits off `master`). **Phase 5 (deposit requests
-and partial-amount Stripe links) is deliberately unbuilt** — it is the phase whose value
-is an end-to-end money path, so it needs the backend live to verify rather than merely
-to ship. Whole-branch review findings C1 (collection surfaces now quote `balanceDue` with
+**Status as of 2026-07-18 (late session):** ALL phases — 1, 2, 2b, 3, 4, 5 and 6 — are
+built and green on branch `feat/deposits-partial-payments` (90 commits off `master`).
+Phase 5 (deposit requests and partial-amount payment links) landed in the late-18th
+session together with a review fix wave (§2a below). The end-to-end Stripe leg of
+Phase 5 still **cannot be exercised** until the backend is live — build ≠ verified.
+Whole-branch review findings C1 (collection surfaces quote `balanceDue` with
 customer-visible dual-amount naming), C2 (`overpaidAmount` surfaces overpayments), and I1
-(derivation guard in `pullRemote` and `mergeRemoteRecord`) are now closed.
+(derivation guard in `pullRemote` and `mergeRemoteRecord`) are closed.
 **Nothing is merged, nothing is pushed, the Supabase migration is NOT applied,
 and the backend is NOT deployed.**
 
-Gate at last check: **1048 tests / 62 suites, tsc 0 errors, lint 0 warnings.**
+Gate at last check: **1079 tests / 62 suites, tsc 0 errors, lint 0 warnings.**
 
 This document exists because the detailed working notes live in
 `.superpowers/sdd/progress.md`, which is git-ignored scratch — a `git clean -fdx`
@@ -57,7 +58,31 @@ shipping is the thing to hold.
 | 2b | Void-not-delete, Postgres union trigger, webhook ledger append, ledger-aware cron, backend math mirror | Complete, **not applied / not deployed** |
 | 3 | Recording UI: `RecordPaymentSheet`, `PaymentHistoryList`, void flow, wired into Invoices; fixed `markPaid` to append a ledger entry via `applyPayment` instead of writing a bare `paid: true` | Complete, **live in the app** |
 | 4 | Money-tab analytics sweep: invoice stats, the Today-tab overdue total, and the other tested money surfaces (~12 call sites) converted to read the payment ledger instead of the whole invoice amount | Complete, **live in the app** |
+| 5 | Deposit requests: Outreach segmented control (Full balance \| 50% \| Custom %/$), `resolveDepositAmount`/`roundToCents`/`isDepositSatisfied` in `invoicePayments.ts`, link functions take an explicit `requestedAmount` (deposits work on Venmo/PayPal/Square/custom links too), `depositRequest` persisted + restored, deposit-aware messages, deposit row on invoice detail | Complete on-device; **Stripe leg unverified** (backend not deployed) |
 | 6 | Invoice PDF renders the remaining balance instead of the full amount, with byte-identical output preserved for invoices that carry no ledger | Complete, **live in the app** |
+
+### 2a. Fix wave landed with Phase 5 (late 2026-07-18 session)
+
+Four defects found by reviewing the built branch before extending it:
+
+- **Cache poison:** OutreachScreen saved `paymentLinkAmount: invoice.amount`
+  while the link was minted for `balanceDue` — on a partly-paid invoice the
+  cache never validated and every visit minted a fresh Stripe link. It now
+  records the amount actually minted.
+- **Stale link on display:** OutreachScreen showed the cached `paymentLinkUrl`
+  on load with no amount check — after a partial payment, a link charging the
+  old (larger) balance. Restores now gate through `cachedLinkMatches`
+  (`utils/invoiceHelpers.ts`), the display-side twin of the resolve cache
+  check, epsilon-compared because ledger balances are float sums.
+- **Reminder-email overcharge:** `backend/lib/reminderEmail.js` embedded the
+  cached link unconditionally — the unattended variant of the same bug (quote
+  $600, link charges $1,000). The link now goes out only when
+  `paymentLinkAmount` matches the quoted balance within `PAID_EPSILON`; an
+  unverifiable amount omits the link.
+- **Webhook method:** the webhook wrote `method: 'card'`, contradicting the
+  documented reservation of `'stripe'` for webhook entries (types/models.ts,
+  RecordPaymentSheet chips, sync.test.js fixtures). Fixed while the backend
+  has never been deployed, so no production entry carries the wrong value.
 
 Design decisions that are load-bearing and non-obvious:
 
@@ -201,6 +226,7 @@ Specs and plans, which ARE committed:
 - `docs/superpowers/specs/2026-07-18-server-side-ledger-merge-design.md`
 - `docs/superpowers/plans/2026-07-18-server-side-ledger-merge.md`
 
-Remaining roadmap phases (3–6 of the original plan): the recording UI, the
-Money-tab analytics sweep (~12 call sites), deposit requests with partial Stripe
-links, and the PDF. See the phase table in the Phase-1 plan.
+No roadmap phases remain unbuilt. What remains is entirely §4 (owner actions:
+migration, verify script, backend deploy, README flip) plus the device smoke
+tests at the end of the design's Testing section — request a 50% deposit, pay
+it in Stripe test mode, settle the remainder in cash, watch the states flip.
