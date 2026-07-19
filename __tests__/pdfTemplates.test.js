@@ -9,8 +9,18 @@
 // The customer's copy also deliberately excludes voided payments (internal
 // bookkeeping — a mistyped entry, a bounced cheque) and the synthesized
 // legacy_<id> entry (internal language about an app migration).
+//
+// toContain/not.toContain assertions can pin CONTENT but cannot detect a
+// whitespace-only regression — see the golden-fixture block below, which is
+// what actually proves byte-identity.
 
-import { invoiceHtml } from "../utils/pdfTemplates";
+import { invoiceHtml, estimateHtml } from "../utils/pdfTemplates";
+import {
+  GOLDEN_UNTOUCHED_UNPAID,
+  GOLDEN_LEGACY_PAID,
+  GOLDEN_VOIDED_ONLY,
+  GOLDEN_ESTIMATE,
+} from "../__fixtures__/invoiceHtmlGolden";
 
 const inv = (over) => ({
   id: "i1", customer: "Acme", number: "INV-1", desc: "Work done",
@@ -18,6 +28,64 @@ const inv = (over) => ({
 });
 
 const pmt = (over) => ({ id: "p1", amount: 400, date: "2026-06-20", method: "cash", ...over });
+
+// Pinned to the same instant used to capture the goldens in
+// __fixtures__/invoiceHtmlGolden.js. invoiceHtml/estimateHtml stamp an issue
+// date from `new Date()`, so the clock must match exactly or the comparison
+// fails spuriously every day.
+const PINNED_NOW = new Date(2026, 6, 15, 12, 0, 0);
+
+beforeEach(() => {
+  jest.useFakeTimers();
+  jest.setSystemTime(PINNED_NOW);
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+describe("invoiceHtml — byte-identical to commit fbadd88 (pre-balance-block)", () => {
+  // These goldens were captured by running fbadd88's pdfTemplates.ts (the
+  // last commit before db70741 added the balance block, the Partly-paid
+  // badge, and the payment-history table) against these exact three shapes.
+  // A diff here means an already-emailed, archived customer PDF would
+  // re-render differently than what the customer originally received —
+  // exactly the regression Finding 1 found (extra blank lines around the
+  // total block, introduced by the template-literal restructuring).
+  test("an untouched unpaid invoice renders byte-identically to pre-change output", () => {
+    expect(invoiceHtml(inv())).toBe(GOLDEN_UNTOUCHED_UNPAID);
+  });
+
+  test("a legacy paid invoice renders byte-identically to pre-change output", () => {
+    expect(invoiceHtml(inv({ paid: true, paidAt: "2026-06-15", payments: undefined }))).toBe(GOLDEN_LEGACY_PAID);
+  });
+
+  test("an invoice whose only payment is voided renders byte-identically to pre-change output", () => {
+    expect(invoiceHtml(inv({
+      payments: [pmt({ id: "p1", amount: 400, voidedAt: "2026-07-01" })],
+    }))).toBe(GOLDEN_VOIDED_ONLY);
+  });
+});
+
+describe("estimateHtml — byte-identical to commit fbadd88 (Finding 3: CSS relocation)", () => {
+  // Moving the invoice-only CSS (badge-partial/history/sub-row) out of
+  // BASE_CSS must not change estimateHtml's output at all — estimateHtml
+  // never referenced those classes, so this pins that the relocation didn't
+  // leak anything back in.
+  test("renders byte-identically to pre-change output", () => {
+    const job = {
+      id: "j1",
+      title: "Kitchen faucet repair",
+      customerName: "Acme",
+      laborHours: 2,
+      laborRate: 50,
+      materials: [],
+      materialMarkup: 0,
+      estimateTotal: 150,
+    };
+    expect(estimateHtml(job)).toBe(GOLDEN_ESTIMATE);
+  });
+});
 
 describe("invoiceHtml — pre-existing invoices are unchanged", () => {
   test("an untouched unpaid invoice keeps the single TOTAL DUE line", () => {

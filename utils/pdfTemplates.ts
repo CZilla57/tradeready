@@ -125,14 +125,6 @@ const BASE_CSS = `
   }
   .badge-paid   { background: #e8f9f0; color: #25a65b; }
   .badge-unpaid { background: #fff3e0; color: #c47a00; }
-  .badge-partial { background: #eaf2ff; color: #2f6fd0; }
-  .history { margin-top: 18px; }
-  .history-title { font-size: 12px; font-weight: 600; color: #6b6b70; text-transform: uppercase; letter-spacing: 0.4px; }
-  .history table { width: 100%; margin-top: 6px; }
-  .history td { font-size: 12px; color: #48484a; padding: 3px 0; }
-  .history td.amt { text-align: right; color: #1c1c1e; font-weight: 600; }
-  .sub-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 13px; color: #48484a; }
-  .sub-row .sub-amount { font-weight: 600; color: #1c1c1e; }
   .footer {
     margin-top: 56px;
     padding-top: 16px;
@@ -141,6 +133,24 @@ const BASE_CSS = `
     color: #8e8e93;
     text-align: center;
   }
+`;
+
+// Invoice-only rules (the "Partly paid" badge, the payment-history table, the
+// sub-total rows above BALANCE DUE). estimateHtml has no payment ledger and
+// never emits these classes, so they must not be part of the CSS shared with
+// it — see Finding 3. invoiceHtml injects this itself, and only when an
+// invoice's own render actually uses one of these classes, so pre-existing
+// invoices (no partial payment, no history) keep a <style> block that is
+// byte-identical to what commit fbadd88 produced.
+const INVOICE_ONLY_CSS = `
+  .badge-partial { background: #eaf2ff; color: #2f6fd0; }
+  .history { margin-top: 18px; }
+  .history-title { font-size: 12px; font-weight: 600; color: #6b6b70; text-transform: uppercase; letter-spacing: 0.4px; }
+  .history table { width: 100%; margin-top: 6px; }
+  .history td { font-size: 12px; color: #48484a; padding: 3px 0; }
+  .history td.amt { text-align: right; color: #1c1c1e; font-weight: 600; }
+  .sub-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 13px; color: #48484a; }
+  .sub-row .sub-amount { font-weight: 600; color: #1c1c1e; }
 `;
 
 export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoDataUri?: string): string {
@@ -187,8 +197,44 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
     tableRows = `<tr><td>${safe(invoice.desc) || "Services rendered"}</td><td>${formatMoney(invoice.amount)}</td></tr>`;
   }
 
+  // Built procedurally (rather than inline in the returned literal) so the
+  // "old" branch below can reproduce the pre-db70741 literal exactly — no
+  // extra newlines get introduced around it. See Finding 1.
+  const totalBlock = isPartly
+    ? `<div class="sub-row">
+  <span>Invoice total</span>
+  <span class="sub-amount">${formatMoney(invoice.amount)}</span>
+</div>
+<div class="sub-row">
+  <span>Paid to date</span>
+  <span class="sub-amount">−${formatMoney(paidToDate)}</span>
+</div>
+<div class="total-row">
+  <span class="total-label">BALANCE DUE</span>
+  <span class="total-amount">${formatMoney(balance)}</span>
+</div>`
+    : `<div class="total-row">
+  <span class="total-label">TOTAL DUE</span>
+  <span class="total-amount">${formatMoney(invoice.amount)}</span>
+</div>`;
+
+  const historyBlock = historyPayments.length
+    ? `\n\n<div class="history">
+  <div class="history-title">Payment history</div>
+  <table>
+    <tbody>
+      ${historyPayments.map((p) => `<tr><td>${fmtDate(p.date)}</td><td>${safe(METHOD_LABELS[p.method] ?? p.method)}</td><td class="amt">${formatMoney(p.amount)}</td></tr>`).join("")}
+    </tbody>
+  </table>
+</div>`
+    : "";
+
+  // The badge-partial/history/sub-row CSS only matters when this specific
+  // invoice actually renders one of those elements — see Finding 3.
+  const needsInvoiceCss = isPartly || historyPayments.length > 0;
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>${BASE_CSS}</style></head><body>
+<style>${BASE_CSS}${needsInvoiceCss ? INVOICE_ONLY_CSS : ""}</style></head><body>
 
 <div class="header">
   <div>
@@ -226,33 +272,7 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
   </tbody>
 </table>
 
-${isPartly ? `
-<div class="sub-row">
-  <span>Invoice total</span>
-  <span class="sub-amount">${formatMoney(invoice.amount)}</span>
-</div>
-<div class="sub-row">
-  <span>Paid to date</span>
-  <span class="sub-amount">−${formatMoney(paidToDate)}</span>
-</div>
-<div class="total-row">
-  <span class="total-label">BALANCE DUE</span>
-  <span class="total-amount">${formatMoney(balance)}</span>
-</div>` : `
-<div class="total-row">
-  <span class="total-label">TOTAL DUE</span>
-  <span class="total-amount">${formatMoney(invoice.amount)}</span>
-</div>`}
-
-${historyPayments.length ? `
-<div class="history">
-  <div class="history-title">Payment history</div>
-  <table>
-    <tbody>
-      ${historyPayments.map((p) => `<tr><td>${fmtDate(p.date)}</td><td>${safe(METHOD_LABELS[p.method] ?? p.method)}</td><td class="amt">${formatMoney(p.amount)}</td></tr>`).join("")}
-    </tbody>
-  </table>
-</div>` : ""}
+${totalBlock}${historyBlock}
 
 <div class="footer">Thank you for your business — ${safe(bizName)}</div>
 
