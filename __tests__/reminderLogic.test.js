@@ -169,4 +169,14 @@ describe("ledger-aware paid detection", () => {
     const invoices = [{ ...base, paid: true, amount: NaN }];
     expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(0);
   });
+
+  test("an unpaid invoice with a STRING amount is still chased — Number.isFinite('1000') is false but the math handles it", () => {
+    const invoices = [{ ...base, paid: false, amount: "1000" }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(1);
+  });
+
+  test("an unpaid invoice with a malformed (non-numeric) STRING amount is NOT reminded — fails closed", () => {
+    const invoices = [{ ...base, paid: false, amount: "not-a-number" }];
+    expect(selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: [], today })).toHaveLength(0);
+  });
 });

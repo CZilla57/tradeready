@@ -5,6 +5,17 @@
 const { daysPastDue } = require("./overdue");
 const { isFullyPaid } = require("./paymentMath");
 
+/**
+ * Coerce the way paymentMath does before testing: Number.isFinite("1000")
+ * is false, but the math handles a string amount fine. Testing the raw
+ * value would silently stop chasing an invoice whose amount round-tripped
+ * through JSON as a string — which is exactly why toAmount exists.
+ */
+function isChaseableAmount(value) {
+  const n = typeof value === "number" ? value : parseFloat(String(value));
+  return Number.isFinite(n) && n > 0;
+}
+
 function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, today = new Date() }) {
   if (!settings || !settings.autoSendEmailEnabled) return [];
   const rules = Array.isArray(settings.rules) ? settings.rules : [];
@@ -25,7 +36,7 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, tod
       // `!invoice.paid` check, which at least defaulted closed on `paid: true`.
       // Fail CLOSED here instead: if we cannot determine the balance, do not
       // send a reminder email over it.
-      Number.isFinite(invoice.amount) &&
+      isChaseableAmount(invoice.amount) &&
       // Derive from the ledger rather than trusting the stored flag: the
       // Postgres trigger can union in payments the webhook never saw, so
       // `paid` may be stale. A voided payment correctly re-opens the invoice.

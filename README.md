@@ -319,8 +319,11 @@ invoice — amount, customer, description — still follows last-write-wins.
 The exception exists because a ledger can legitimately grow on both sides at
 once: the Stripe webhook appends a payment server-side while the tradesperson
 records a cash payment on the device. Replacing would destroy whichever side
-lost, i.e. lose money. Union by id is commutative and idempotent, so a
-repeated webhook delivery can't double-count.
+lost, i.e. lose money. The union by id is what makes that safe to merge, but a
+repeated webhook delivery can't double-count only because the webhook and
+`applyPayment` each check for an existing entry with that payment id and skip
+appending a duplicate *before* the union ever runs — the union itself has no
+way to tell a genuine second payment from a redelivered one.
 
 **Ledger union (PENDING):** Once the Postgres union trigger is applied to the live
 database, the ledger merge will be enforced on both sides — `pullRemote` unites

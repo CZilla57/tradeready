@@ -79,8 +79,11 @@ begin
     -- old_payments: OLD is never re-validated (it was already stored), so
     -- without this guard a poisoned row could never be repaired — every
     -- UPDATE would re-read the same bad OLD.data and error before the fix
-    -- landed. NEW already passed the early-return above when malformed, so
-    -- this case-check on new_payments is belt-and-suspenders.
+    -- landed. There is deliberately NO early return above for a malformed
+    -- new_payments either (see the comment above this CTE) — so this
+    -- case-check is the thing that actually keeps a poisoned NEW from
+    -- erroring out and discarding OLD's ledger. Removing it would reopen
+    -- exactly the failure this trigger exists to prevent.
     select value, 0 as prio
       from jsonb_array_elements(
         case when jsonb_typeof(old_payments) = 'array' then old_payments else '[]'::jsonb end

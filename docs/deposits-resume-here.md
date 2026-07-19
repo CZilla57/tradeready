@@ -19,7 +19,7 @@ destroys it. Everything below is the part you cannot afford to lose.
 ## 1. Read this before shipping ANY build off this branch
 
 **The client half of this work is already live code.** `mergeRemoteRecord` is
-wired into `pullRemote` (`utils/sync.ts:162`). On every pull of a changed
+wired into `pullRemote` (`utils/sync.ts:170`). On every pull of a changed
 invoice that has a local copy, `mergePaymentLedgers` returns
 `withDerivedPaidFields(remote, merged)` — which writes a `payments` array onto
 the record. A legacy paid invoice gains `[legacy_<id>]`; an unpaid one gains
@@ -27,12 +27,17 @@ the record. A legacy paid invoice gains `[legacy_<id>]`; an unpaid one gains
 
 The results are numerically identical to today (verified: the legacy entry is
 dated `paidAt || due`, which is exactly the bucketing every money surface
-already used). But it is a silent data-shape rewrite shipping to users for a
-feature that does not exist yet.
+already used). The recording UI (Phase 3) already writes and reads real ledger
+entries on-device, and Phase 4 converted the Money tab and Today-tab surfaces
+to read the ledger too — but the migration is NOT applied and the webhook/cron
+backend is NOT deployed (§4). Until then, a device with a real recorded
+payment and a device still on the last deployed backend behavior are trusting
+different sources of truth for `paid`, and nothing server-side is unioning or
+reconciling a queued push against a webhook write.
 
-**So: do not ship a build or OTA off this branch until you are actually
-building the recording UI.** Merging for tidiness is fine; shipping is the
-thing to hold.
+**So: do not ship a build or OTA off this branch until the migration is
+applied and the backend is deployed (§4).** Merging for tidiness is fine;
+shipping is the thing to hold.
 
 ## 2. What is actually built
 
@@ -41,6 +46,9 @@ thing to hold.
 | 1 | Payment ledger model + `utils/invoicePayments.ts` (all payment math) + legacy-equivalence tests | Complete, inert (no UI) |
 | 2 | `pullRemote` unions invoice ledgers instead of replacing (`utils/syncMerge.ts`) | Complete, **live on pull** |
 | 2b | Void-not-delete, Postgres union trigger, webhook ledger append, ledger-aware cron, backend math mirror | Complete, **not applied / not deployed** |
+| 3 | Recording UI: `RecordPaymentSheet`, `PaymentHistoryList`, void flow, wired into Invoices; fixed `markPaid` to append a ledger entry via `applyPayment` instead of writing a bare `paid: true` | Complete, **live in the app** |
+| 4 | Money-tab analytics sweep: invoice stats, the Today-tab overdue total, and the other tested money surfaces (~12 call sites) converted to read the payment ledger instead of the whole invoice amount | Complete, **live in the app** |
+| 6 | Invoice PDF renders the remaining balance instead of the full amount, with byte-identical output preserved for invoices that carry no ledger | Complete, **live in the app** |
 
 Design decisions that are load-bearing and non-obvious:
 
