@@ -212,6 +212,12 @@ backend/                         ← Vercel serverless functions (deployed separ
 This is a separate process that comes after you've tested the app and are
 happy with it. The short version:
 
+> **Before any build that reaches users — including an OTA `eas update` — run
+> through `docs/release-checklist.md`.** It carries a list of merged-but-not-yet
+> shippable features. This repo has long-lived branches whose data-layer changes
+> go live with *any* build off `master`, including one made for an unrelated
+> reason, so "I only changed one small thing" is not a safe assumption.
+
 1. Sign up for an Apple Developer account at developer.apple.com ($99/year).
 2. Install the EAS CLI: `npm install -g eas-cli`
 3. Run `eas build --platform ios` to build the app in the cloud (no Mac needed).

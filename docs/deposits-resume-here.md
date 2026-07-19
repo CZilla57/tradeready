@@ -18,6 +18,13 @@ destroys it. Everything below is the part you cannot afford to lose.
 
 ---
 
+## 0. There is a release gate for this
+
+`docs/release-checklist.md` carries a **blocked-features** entry for this work,
+and `README.md`'s build section points at it. That is the durable guard — this
+document explains the reasoning, the checklist is what someone actually reads
+before pressing build. Delete that entry when §4 is complete.
+
 ## 1. Read this before shipping ANY build off this branch
 
 **The client half of this work is already live code.** `mergeRemoteRecord` is
