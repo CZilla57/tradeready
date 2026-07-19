@@ -20,6 +20,7 @@ import {
   getPreviousRange,
   isInRange,
 } from '../utils/moneyUtils';
+import { collectedInRange } from '../utils/invoicePayments';
 import { formatMoney } from '../utils/format';
 import { useMoneyData }      from '../hooks/useMoneyData';
 import { SummaryCard }       from '../components/money/SummaryCard';
@@ -97,9 +98,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
   const { start, end } = useMemo(() => getDateRange(activeFilter), [activeFilter]);
 
   const filteredIncome: number = useMemo(() =>
-    (invoices as Invoice[])
-      .filter((inv) => inv.paid === true && isInRange(inv.paidAt || inv.due, start, end))
-      .reduce((sum, inv) => sum + (inv.amount || 0), 0),
+    collectedInRange(invoices as Invoice[], start, end),
     [invoices, start, end]
   );
 
@@ -135,9 +134,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
   const prevRange = useMemo(() => getPreviousRange(activeFilter), [activeFilter]);
   const prevFilteredIncome: number | null = useMemo(() =>
     prevRange
-      ? (invoices as Invoice[])
-          .filter((inv) => inv.paid && isInRange(inv.paidAt || inv.due, prevRange.start, prevRange.end))
-          .reduce((sum, inv) => sum + (inv.amount || 0), 0)
+      ? collectedInRange(invoices as Invoice[], prevRange.start, prevRange.end)
       : null,
     [invoices, prevRange]
   );

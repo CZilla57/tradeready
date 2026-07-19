@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { getLast6MonthLabels, parseLocalDate } from '../../utils/moneyUtils';
+import { collectedByPeriod } from '../../utils/invoicePayments';
 import type { Invoice, Expense } from '../../types/models';
 
 const BAR_MAX_HEIGHT = 80;
@@ -18,16 +19,13 @@ export const MonthlyChart = React.memo(function MonthlyChart({ invoices, expense
 
   const chartData = useMemo(() => {
     const months = getLast6MonthLabels();
-    return months.map(({ label, year, month }) => {
-      const monthIncome = invoices
-        .filter(inv => {
-          const dateStr = inv.paidAt || inv.due;
-          if (!inv.paid || !dateStr) return false;
-          const d = parseLocalDate(dateStr);
-          return d.getFullYear() === year && d.getMonth() === month;
-        })
-        .reduce((sum, inv) => sum + (parseFloat(String(inv.amount)) || 0), 0);
+    const windows = months.map(({ year, month }) => ({
+      start: new Date(year, month, 1),
+      end: new Date(year, month + 1, 0),
+    }));
+    const income = collectedByPeriod(invoices, windows);
 
+    return months.map(({ label, year, month }, i) => {
       const monthExpenses = expenses
         .filter(exp => {
           const d = parseLocalDate(exp.date);
@@ -35,7 +33,7 @@ export const MonthlyChart = React.memo(function MonthlyChart({ invoices, expense
         })
         .reduce((sum, exp) => sum + (parseFloat(String(exp.amount)) || 0), 0);
 
-      return { label, income: monthIncome, expenses: monthExpenses };
+      return { label, income: income[i], expenses: monthExpenses };
     });
   }, [invoices, expenses]);
 

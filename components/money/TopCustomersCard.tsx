@@ -2,8 +2,8 @@ import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
-import { isInRange } from '../../utils/moneyUtils';
 import { formatMoney } from '../../utils/format';
+import { collectedInRange } from '../../utils/invoicePayments';
 import type { Invoice } from '../../types/models';
 
 interface TopCustomersCardProps {
@@ -17,12 +17,11 @@ export const TopCustomersCard = React.memo(function TopCustomersCard({ invoices,
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
   const revenueByCustomer: Record<string, number> = {};
-  invoices
-    .filter(inv => inv.paid && isInRange(inv.paidAt || inv.due, start, end))
-    .forEach(inv => {
-      revenueByCustomer[inv.customer] =
-        (revenueByCustomer[inv.customer] || 0) + (parseFloat(String(inv.amount)) || 0);
-    });
+  invoices.forEach(inv => {
+    const collected = collectedInRange([inv], start, end);
+    if (collected === 0) return;
+    revenueByCustomer[inv.customer] = (revenueByCustomer[inv.customer] || 0) + collected;
+  });
 
   const top = Object.entries(revenueByCustomer)
     .map(([name, amount]) => ({ name, amount }))

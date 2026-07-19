@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
+import { balanceDue, isFullyPaid } from '../../utils/invoicePayments';
 import type { Invoice, Job } from '../../types/models';
 
 const PIPELINE_STATUSES = ['lead','estimate_sent','approved','scheduled','in_progress','complete'];
@@ -20,10 +21,12 @@ export const ReceivablesCard = React.memo(function ReceivablesCard({ invoices, j
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const unpaid           = invoices.filter(inv => !inv.paid);
-    const totalOutstanding = unpaid.reduce((s, inv) => s + (parseFloat(String(inv.amount)) || 0), 0);
+    // `unpaid` is RENDERED as a list further down, not just reduced — so this
+    // is "invoices with a balance", and the totals are what's still owed.
+    const unpaid           = invoices.filter(inv => !isFullyPaid(inv));
+    const totalOutstanding = unpaid.reduce((s, inv) => s + balanceDue(inv), 0);
     const overdue          = unpaid.filter(inv => inv.due && new Date(inv.due) < today);
-    const totalOverdue     = overdue.reduce((s, inv) => s + (parseFloat(String(inv.amount)) || 0), 0);
+    const totalOverdue     = overdue.reduce((s, inv) => s + balanceDue(inv), 0);
 
     const pipelineJobs  = jobs.filter(j => PIPELINE_STATUSES.includes(j.status) && j.estimateTotal > 0);
     const pipelineValue = pipelineJobs.reduce((s, j) => s + j.estimateTotal, 0);
