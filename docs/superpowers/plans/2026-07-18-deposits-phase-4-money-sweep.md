@@ -866,7 +866,7 @@ git commit -m "docs: record that every money surface derives from the ledger"
 - [ ] `npm test` — 0 failures, no pre-existing test edited
 - [ ] `npm run lint` — 0 warnings
 - [ ] `__tests__/invoicePaymentsLegacyEquivalence.test.js` passes **completely unchanged** — verify with `git diff master..HEAD -- __tests__/invoicePaymentsLegacyEquivalence.test.js`, which must be empty apart from the vectors added in earlier phases
-- [ ] `grep -rn "parseFloat(String(inv" screens/ components/ utils/` returns nothing
+- [ ] `grep -rn "parseFloat(String(inv" screens/ components/ utils/` returns ONLY the two display sites at `screens/CustomerDetailScreen.tsx:104,112`. Those render an invoice's FACE amount (`formatMoney(...)`) rather than deriving paid/outstanding, so the coercion contract does not cover them and they are correctly left alone. Any OTHER match is a derivation site that did not get converted.
 - [ ] `grep -rn "inv\.paid\|invoice\.paid" utils/ screens/ components/ --include=*.ts --include=*.tsx | grep -v "\.test\." | grep -v invoicePayments.ts` returns only `utils/invoiceHelpers.ts:24`
 - [ ] The Task 1 Step 7 parity mutation check was performed and recorded
 - [ ] No file under `backend/` other than `backend/lib/paymentMath.js` was modified
