@@ -3,9 +3,24 @@ import { supabase } from './supabase';
 import { formatMoney, formatQuote } from './format';
 import { computeEstimateBreakdown } from './pricingEngine';
 import { generateOneShot } from './oneShotAI';
-import { isPartlyPaid } from './invoicePayments';
+import { balanceDue, isPartlyPaid } from './invoicePayments';
 import type { Invoice, Job, Customer, Settings, PaymentPlan, PaymentProvider } from '../types/models';
 import type { BadgeColor } from '../components/UI';
+
+/**
+ * How to describe what a customer owes, in one place for both message builders.
+ *
+ * A partly-paid invoice names BOTH numbers so the customer can see their
+ * deposit was credited — quoting only the balance misstates the invoice, and
+ * quoting only the total asks them to pay money they already sent.
+ */
+function describeAmountOwed(invoice: Invoice): string {
+  const balance = balanceDue(invoice);
+  if (isPartlyPaid(invoice)) {
+    return `${formatMoney(balance)} of ${formatMoney(invoice.amount)} still outstanding`;
+  }
+  return formatMoney(balance);
+}
 
 export function daysPastDue(dueDate: string): number {
   const due = new Date(dueDate);
@@ -56,7 +71,7 @@ export function getProviderKey(settings: Partial<Settings>, provider?: PaymentPr
 }
 
 export function buildPaymentLink(invoice: Invoice, provider: PaymentProvider, providerKey: string): string {
-  const amt = invoice.amount.toFixed(2);
+  const amt = balanceDue(invoice).toFixed(2);
   const desc = encodeURIComponent(`${invoice.number} - ${invoice.desc}`);
   const key = providerKey || "YOUR_KEY";
 
@@ -78,7 +93,7 @@ export function buildPaymentLink(invoice: Invoice, provider: PaymentProvider, pr
 }
 
 export async function resolvePaymentLink(invoice: Invoice, provider: PaymentProvider, providerKey: string): Promise<string> {
-  if (invoice.paymentLinkUrl && invoice.paymentLinkAmount === invoice.amount) {
+  if (invoice.paymentLinkUrl && invoice.paymentLinkAmount === balanceDue(invoice)) {
     return invoice.paymentLinkUrl;
   }
   return fetchPaymentLink(invoice, provider, providerKey);
@@ -114,7 +129,7 @@ export async function fetchPaymentLink(invoice: Invoice, provider: PaymentProvid
     method: "POST",
     headers,
     body: JSON.stringify({
-      amount: invoice.amount,
+      amount: balanceDue(invoice),
       invoiceNumber: invoice.number,
       description: invoice.desc,
       customerEmail: invoice.email,
@@ -142,18 +157,18 @@ interface OutreachMessageParams {
 
 function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan }: OutreachMessageParams): string {
   const days = daysPastDue(invoice.due);
-  const amt = formatMoney(invoice.amount);
+  const amt = describeAmountOwed(invoice);
   const overdueText = days > 0 ? `${days} days overdue` : days === 0 ? 'due today' : `due in ${Math.abs(days)} days`;
 
   let planText = '';
   if (paymentPlan?.enabled) {
-    const per = formatMoney(invoice.amount / parseInt(String(paymentPlan.installments)));
+    const per = formatMoney(balanceDue(invoice) / parseInt(String(paymentPlan.installments)));
     planText = ` We can also arrange ${paymentPlan.installments} payments of ${per} ${paymentPlan.frequency.toLowerCase()} if that works better for you.`;
   }
 
   if (channel === 'text') {
     const linkPart = paymentLink ? ` Pay here: ${paymentLink}` : '';
-    return `Hi ${invoice.customer}, this is ${biz.businessName}. Invoice ${invoice.number} for ${amt} is ${overdueText}.${planText}${linkPart} — ${biz.phone}`;
+    return `Hi ${invoice.customer}, this is ${biz.businessName}. Invoice ${invoice.number} — ${amt}, ${overdueText}.${planText}${linkPart} — ${biz.phone}`;
   }
 
   const linkSection = paymentLink
@@ -164,7 +179,7 @@ function buildGenericMessage({ invoice, channel, biz, paymentLink, paymentPlan }
 
 Hi ${invoice.customer},
 
-I hope you're doing well. I'm reaching out regarding invoice ${invoice.number} for ${amt}, which is currently ${overdueText}.
+I hope you're doing well. I'm reaching out regarding invoice ${invoice.number} — ${amt}, currently ${overdueText}.
 
 ${linkSection}${planText ? `${planText}\n\n` : ''}If you have any questions or concerns, please don't hesitate to get in touch.
 
@@ -278,12 +293,12 @@ export async function generateOutreachMessage({
   if (!apiKey) return fallback();
 
   const days = daysPastDue(invoice.due);
-  const amt = formatMoney(invoice.amount);
+  const amt = describeAmountOwed(invoice);
   const isText = channel === "text";
 
   let planInfo = "";
   if (paymentPlan?.enabled) {
-    const per = formatMoney(invoice.amount / parseInt(String(paymentPlan.installments)));
+    const per = formatMoney(balanceDue(invoice) / parseInt(String(paymentPlan.installments)));
     planInfo = `\n\nOffer a payment plan: ${paymentPlan.installments} payments of ${per} ${paymentPlan.frequency.toLowerCase()}. Weave this in naturally.`;
   }
 
@@ -298,7 +313,7 @@ export async function generateOutreachMessage({
   const prompt = `Draft a ${isText ? "text message (SMS)" : "professional email"} from ${biz.businessName} (${biz.contactName}) to collect an overdue invoice.
 
 Customer: ${invoice.customer}
-Invoice: ${invoice.number} for ${amt}
+Invoice: ${invoice.number} — ${amt}
 Work: ${invoice.desc}
 Days overdue: ${days > 0 ? days + " days past due" : days === 0 ? "due today" : "due in " + Math.abs(days) + " days"}
 Customer email: ${invoice.email} | phone: ${invoice.phone}

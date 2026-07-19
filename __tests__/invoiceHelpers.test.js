@@ -2,6 +2,7 @@ import {
   daysPastDue,
   getStatus,
   buildPaymentLink,
+  generateOutreachMessage,
 } from "../utils/invoiceHelpers";
 
 // Pin "today" so date-dependent tests are deterministic.
@@ -149,5 +150,53 @@ describe("getStatus — partly paid", () => {
   test("an untouched unpaid invoice is unaffected", () => {
     const s = getStatus({ ...partly({ due: "2025-06-20" }), payments: undefined });
     expect(s.label).toBe("Due soon");
+  });
+});
+
+describe("collection surfaces use the remaining balance", () => {
+  // Dates below are chosen relative to MOCK_TODAY (2025-06-15, pinned above):
+  // "2025-06-01" is 14 days in the past (overdue), matching the getStatus
+  // conventions already used in this file.
+  const partly = (over) => ({
+    id: "i1", customer: "Acme", number: "INV-1", desc: "Work", email: "a@b.com", phone: "",
+    amount: 1000, paid: false,
+    payments: [{ id: "p1", amount: 400, date: "2025-06-01", method: "cash" }],
+    ...over,
+  });
+
+  test("buildPaymentLink charges the balance, not the invoice total", () => {
+    const url = buildPaymentLink(partly({ due: "2025-08-01" }), "paypal", "someone");
+    expect(url).toContain("600");
+    expect(url).not.toContain("1000");
+  });
+
+  test("the outreach message shows BOTH the balance and the invoice total", async () => {
+    // No apiKey → generateOutreachMessage falls back to the generic builder,
+    // which is the public entry point for this (buildGenericMessage itself
+    // is not exported).
+    const msg = await generateOutreachMessage({
+      invoice: partly({ due: "2025-06-01" }), channel: "text", biz: { businessName: "Acme Co" },
+    });
+    expect(msg).toContain("$600.00");
+    expect(msg).toContain("$1,000.00");
+  });
+
+  test("an untouched invoice's message is unchanged — one number only", async () => {
+    const msg = await generateOutreachMessage({
+      invoice: { ...partly({ due: "2025-06-01" }), payments: undefined },
+      channel: "text", biz: { businessName: "Acme Co" },
+    });
+    expect(msg).toContain("$1,000.00");
+    expect(msg).not.toContain("still outstanding");
+  });
+
+  test("a payment plan splits the REMAINING balance, not the original total", async () => {
+    const msg = await generateOutreachMessage({
+      invoice: partly({ due: "2025-06-01" }), channel: "text", biz: {},
+      paymentPlan: { enabled: true, installments: 3, frequency: "Monthly" },
+    });
+    // $600 / 3 = $200, not $1000 / 3 = $333.33
+    expect(msg).toContain("$200.00");
+    expect(msg).not.toContain("$333.33");
   });
 });
