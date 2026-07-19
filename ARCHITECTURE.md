@@ -104,9 +104,15 @@ Everything financial in one place.
   see Data Models below.
 - Analytics cards: conversion funnel, avg job value, invoice aging, revenue by type,
   seasonal trends, customer mix, expense trends, revenue forecast
+- Tax set-aside card (`components/money/TaxSetAsideCard.tsx`): current IRS
+  payment-period reserve + YTD + deadline from `utils/taxEstimate.ts` (SE tax +
+  user-set effective income-tax rate; ledger-based cash income). Settings live
+  in a modal off the card (`taxIncomeRate`, `vehicleDeductionMethod` — standard
+  mileage OR actual fuel expenses, never both; unset deducts neither). Estimate
+  only, persistent disclaimer; SS wage base is versioned per year (annual
+  update: docs/ops-monthly-checklist.md)
 - ⚠️ Receipt scanning: not built (manual entry only)
 - ⚠️ GPS auto-tracking of mileage: not built (odometer entry only)
-- ⚠️ Tax center: not built
 
 ### Tab 5 — Customers
 - Customer list with search
@@ -214,8 +220,11 @@ Everything financial in one place.
 - businessName, ownerName, trade
 - phone, email, address, logoPhoto
 - laborRate, materialMarkup, overhead, margin, minimumJobFee
-- taxRate
 - mileageRate (default 0.70 — $ per business mile, mileage deduction estimate)
+- taxIncomeRate (optional — effective income-tax % for the tax set-aside card;
+  unset = SE tax only)
+- vehicleDeductionMethod (optional — 'mileage' | 'actual'; the IRS either/or
+  election for the tax estimate; unset deducts neither)
 - paymentProcessor + providerKey (SecureStore)
 - anthropicKey, groqKey (SecureStore)
 - notificationRules, autoOutreachEnabled, autoSendEmailEnabled
@@ -338,7 +347,7 @@ Build in this sequence so you always have something shippable:
 ✅ Expense tracking
 ⬜ Receipt scanning (OCR)
 ✅ Mileage tracking (odometer-based log + deduction estimate; ⚠️ GPS auto-tracking not built; local-only, not synced)
-⬜ Quarterly tax estimates
+✅ Quarterly tax estimates (set-aside card: SE tax + user rate, IRS payment periods, mileage-vs-fuel election; estimate only, not filing support)
 ⚠️ Revenue reports (monthly chart + top customers built; detailed reports not built)
 
 **Phase 4 — Growth**

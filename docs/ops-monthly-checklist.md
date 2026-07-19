@@ -55,6 +55,29 @@ run this pass mid-month instead of waiting for the next one.
 
 ---
 
+## Annual (each January): tax set-aside constants
+
+The Money-tab tax card computes with IRS values that change every year. In
+January, when the IRS publishes the new figures:
+
+- [ ] **Social Security wage base** — add the new year to `SS_WAGE_BASE` in
+      `utils/taxEstimate.ts` (source: irs.gov/taxtopics/tc751 / the new
+      Schedule SE). Until it's added, the card computes with the latest known
+      base and shows a "this year's rates aren't loaded" notice — users are
+      warned, not wrong, but don't leave it that way past January.
+- [ ] **SE rates sanity check** — confirm 12.4% + 2.9% and the 92.35% net-earnings
+      factor are unchanged (they very rarely move; if they do, the constants are
+      beside the wage base in the same file).
+- [ ] **Standard mileage rate** — the IRS announces the new $/mile in December.
+      The app does NOT hardcode it (users set `Settings → mileageRate`, default
+      `DEFAULT_MILEAGE_RATE` in `utils/mileageUtils.ts`); update the DEFAULT for
+      new users and mention the new rate in release notes so existing users
+      update theirs.
+- [ ] Run `npx jest taxEstimate` after the edit — the constants are pinned by
+      tests, which will fail until the test vectors are updated alongside.
+
+---
+
 ## When a Sentry alert fires: reading the signal
 
 The three rules in Appendix A email the owner when something new breaks, something
