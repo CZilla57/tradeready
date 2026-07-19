@@ -149,11 +149,15 @@ async function recordStripePayment(invoiceId, session) {
     return;
   }
 
+  // method 'stripe' is RESERVED for webhook-created entries (types/models.ts
+  // PaymentMethod; the RecordPaymentSheet chips deliberately omit it), so the
+  // history UI can distinguish an auto-reconciled Stripe-link payment from a
+  // card payment the tradesperson keyed in by hand.
   const payment = {
     id: paymentId,
     amount: paymentAmount,
     date: new Date().toISOString().split('T')[0],
-    method: 'card',
+    method: 'stripe',
     stripeSessionId: session.id,
   };
 
