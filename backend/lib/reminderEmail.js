@@ -3,7 +3,7 @@
 // deterministic, no AI (unattended mail the user never previews). No I/O.
 
 const { daysPastDue, formatMoney } = require("./overdue");
-const { balanceDue, amountPaid } = require("./paymentMath");
+const { balanceDue, amountPaid, PAID_EPSILON } = require("./paymentMath");
 
 const SENDER = "reminders@gettradereadyapp.com";
 
@@ -18,7 +18,21 @@ function buildReminderEmail({ invoice, settings, today = new Date() }) {
     : formatMoney(balance);
   const days = daysPastDue(invoice.due, today);
   const biz = settings.businessName || "your contractor";
-  const linkLine = invoice.paymentLinkUrl
+  // Include the cached payment link ONLY when it was minted for the balance
+  // this email quotes. A link cached before a partial payment — or minted for
+  // a deposit — charges a different amount than the text asks for, and this
+  // mail goes out unattended: nobody is there to catch the customer being
+  // overcharged. Mirrors cachedLinkMatches in utils/invoiceHelpers.ts.
+  // An unparseable/absent paymentLinkAmount fails the match and omits the
+  // link — the honest degradation, since we can't verify what it charges.
+  const linkAmount = typeof invoice.paymentLinkAmount === "number"
+    ? invoice.paymentLinkAmount
+    : parseFloat(String(invoice.paymentLinkAmount));
+  const linkCurrent =
+    invoice.paymentLinkUrl &&
+    Number.isFinite(linkAmount) &&
+    Math.abs(linkAmount - balance) <= PAID_EPSILON;
+  const linkLine = linkCurrent
     ? `\nYou can pay securely here: ${invoice.paymentLinkUrl}\n`
     : "";
   const notes = settings.paymentNotes ? `\n${settings.paymentNotes}\n` : "";

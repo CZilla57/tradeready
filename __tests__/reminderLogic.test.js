@@ -129,11 +129,65 @@ describe("buildReminderEmail", () => {
     // Ensure the balance due is calculated correctly: 1000 - 400 = 600
   });
 
-  test("includes the payment link only when present", () => {
-    const withLink = buildReminderEmail({ invoice: inv({ paymentLinkUrl: "https://pay.example/abc" }), settings, today: TODAY });
+  test("includes the payment link only when it was minted for the balance being quoted", () => {
+    // The base invoice is $1,200 with no payments — a link cached for exactly
+    // that balance is current and goes out.
+    const withLink = buildReminderEmail({
+      invoice: inv({ paymentLinkUrl: "https://pay.example/abc", paymentLinkAmount: 1200 }),
+      settings,
+      today: TODAY,
+    });
     expect(withLink.text).toContain("https://pay.example/abc");
     const without = buildReminderEmail({ invoice: inv(), settings, today: TODAY });
     expect(without.text).not.toContain("pay securely here");
+  });
+
+  test("OMITS a link cached before a partial payment — it charges the old, larger amount", () => {
+    // $1,000 invoice, link minted for the full $1,000, then $400 recorded in
+    // cash. The email quotes $600 — mailing the $1,000 link unattended would
+    // invite a $400 overcharge.
+    const stale = inv({
+      amount: 1000,
+      paymentLinkUrl: "https://pay.example/full_1000",
+      paymentLinkAmount: 1000,
+      payments: [{ id: "p1", amount: 400, date: "2026-07-01" }],
+    });
+    const email = buildReminderEmail({ invoice: stale, settings, today: TODAY });
+    expect(email.text).toContain("$600.00 of $1,000.00 still outstanding");
+    expect(email.text).not.toContain("https://pay.example/full_1000");
+    expect(email.text).not.toContain("pay securely here");
+  });
+
+  test("OMITS a deposit link — it charges less than the balance the email asks for", () => {
+    const depositLink = inv({
+      amount: 1000,
+      paymentLinkUrl: "https://pay.example/deposit_500",
+      paymentLinkAmount: 500,
+      depositRequest: { amount: 500, percent: 50, requestedAt: "2026-07-01" },
+    });
+    const email = buildReminderEmail({ invoice: depositLink, settings, today: TODAY });
+    expect(email.text).not.toContain("https://pay.example/deposit_500");
+  });
+
+  test("OMITS a link whose minted amount was never recorded — unverifiable", () => {
+    const unknownAmount = inv({ paymentLinkUrl: "https://pay.example/abc" });
+    const email = buildReminderEmail({ invoice: unknownAmount, settings, today: TODAY });
+    expect(email.text).not.toContain("https://pay.example/abc");
+  });
+
+  test("a link matching a ledger-derived balance within half a cent still goes out", () => {
+    // Float sums drift: 1000 - 333.33 - 333.33 = 333.34000000000003.
+    const drifted = inv({
+      amount: 1000,
+      paymentLinkUrl: "https://pay.example/balance_333_34",
+      paymentLinkAmount: 333.34,
+      payments: [
+        { id: "p1", amount: 333.33, date: "2026-07-01" },
+        { id: "p2", amount: 333.33, date: "2026-07-02" },
+      ],
+    });
+    const email = buildReminderEmail({ invoice: drifted, settings, today: TODAY });
+    expect(email.text).toContain("https://pay.example/balance_333_34");
   });
 
   test("omits reply_to when the business has no email", () => {
