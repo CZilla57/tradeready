@@ -250,6 +250,48 @@ export function collectedInRange(invoices: Invoice[], start: Date, end: Date): n
   return total;
 }
 
+/** Round to whole cents. Requested amounts become Stripe unit_amounts and
+ * cached `paymentLinkAmount`s that later equality-check against a recomputed
+ * value — rounding at the boundary is what makes those comparisons exact. */
+export function roundToCents(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** How a deposit was asked for: a share of the invoice total, or a flat sum. */
+export type DepositSpec = { percent: number } | { fixed: number };
+
+/**
+ * Resolve a requested deposit to the dollar amount a payment link should
+ * charge.
+ *
+ * Percent applies to the INVOICE TOTAL, not the remaining balance — "50% up
+ * front" in trade usage means half the job price. The resolved amount (percent
+ * or fixed alike) is then clamped to the remaining balance, so a request can
+ * never ask for more than is still owed — e.g. a 50% deposit request on an
+ * invoice already 60% paid resolves to the 40% that remains.
+ *
+ * Returns 0 for nonsense input (non-finite, zero, negative) — callers treat 0
+ * as "nothing to request" and disable link generation.
+ */
+export function resolveDepositAmount(invoice: Invoice, spec: DepositSpec): number {
+  const requested =
+    "percent" in spec
+      ? (toAmount(invoice.amount) * toAmount(spec.percent)) / 100
+      : toAmount(spec.fixed);
+  if (!(requested > 0)) return 0;
+  return roundToCents(Math.min(requested, balanceDue(invoice)));
+}
+
+/**
+ * Has the customer paid at least what the deposit request asked for?
+ * False when no deposit was ever requested — "satisfied" implies an ask.
+ */
+export function isDepositSatisfied(invoice: Invoice): boolean {
+  const request = invoice.depositRequest;
+  if (!request) return false;
+  return amountPaid(invoice) >= toAmount(request.amount) - PAID_EPSILON;
+}
+
 /**
  * Combine two versions of the same invoice, keeping the payments from BOTH.
  *

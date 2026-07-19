@@ -21,6 +21,9 @@ import {
   reconcilePaidFields,
   collectedByPeriod,
   overpaidAmount,
+  roundToCents,
+  resolveDepositAmount,
+  isDepositSatisfied,
 } from "../utils/invoicePayments";
 
 const inv = (over) => ({
@@ -872,5 +875,104 @@ describe("amount coercion", () => {
     const ledger = materializeLegacyLedger(legacy);
     expect(ledger).toHaveLength(1);
     expect(ledger[0].amount).toBe(0);
+  });
+});
+
+describe("resolveDepositAmount — deposit math", () => {
+  test("a percentage applies to the INVOICE TOTAL, not the balance", () => {
+    // $1000 invoice with $400 already paid: 50% deposit still means $500
+    // (half the job price) — but see the clamp test below.
+    const i = inv({ payments: [pmt({ id: "p1", amount: 100, date: "2026-06-01" })] });
+    expect(resolveDepositAmount(i, { percent: 50 })).toBe(500);
+  });
+
+  test("a fixed amount passes through, rounded to cents", () => {
+    expect(resolveDepositAmount(inv(), { fixed: 250 })).toBe(250);
+    expect(resolveDepositAmount(inv(), { fixed: 333.3333 })).toBe(333.33);
+  });
+
+  test("a percentage result is rounded to whole cents", () => {
+    // 33% of $1000 = $330; 33% of $999.99 = $329.9967 -> $330.00
+    expect(resolveDepositAmount(inv({ amount: 999.99 }), { percent: 33 })).toBe(330);
+  });
+
+  test("the resolved amount is clamped to the remaining balance", () => {
+    // $1000 invoice, $700 already paid: a 50% deposit ($500) exceeds the $300
+    // still owed, so the request resolves to $300.
+    const i = inv({ payments: [pmt({ id: "p1", amount: 700, date: "2026-06-01" })] });
+    expect(resolveDepositAmount(i, { percent: 50 })).toBe(300);
+    expect(resolveDepositAmount(i, { fixed: 600 })).toBe(300);
+  });
+
+  test("nonsense input resolves to zero", () => {
+    expect(resolveDepositAmount(inv(), { fixed: 0 })).toBe(0);
+    expect(resolveDepositAmount(inv(), { fixed: -50 })).toBe(0);
+    expect(resolveDepositAmount(inv(), { percent: 0 })).toBe(0);
+    expect(resolveDepositAmount(inv(), { percent: NaN })).toBe(0);
+    expect(resolveDepositAmount(inv(), { fixed: NaN })).toBe(0);
+  });
+
+  test("a fully-paid invoice resolves every request to zero (nothing owed)", () => {
+    const i = inv({ paid: true });
+    expect(resolveDepositAmount(i, { percent: 50 })).toBe(0);
+    expect(resolveDepositAmount(i, { fixed: 100 })).toBe(0);
+  });
+
+  test("voided payments do not shrink the clamp", () => {
+    // A voided $700 contributes nothing, so the full $1000 is still owed.
+    const i = inv({ payments: [pmt({ id: "p1", amount: 700, date: "2026-06-01", voidedAt: "2026-06-02" })] });
+    expect(resolveDepositAmount(i, { percent: 50 })).toBe(500);
+  });
+});
+
+describe("roundToCents", () => {
+  test("rounds float dust to whole cents", () => {
+    expect(roundToCents(333.34000000000003)).toBe(333.34);
+    expect(roundToCents(1000 - 333.33 - 333.33)).toBe(333.34);
+    expect(roundToCents(0.005)).toBe(0.01);
+  });
+});
+
+describe("isDepositSatisfied", () => {
+  test("false when no deposit was ever requested", () => {
+    expect(isDepositSatisfied(inv())).toBe(false);
+    const i = inv({ payments: [pmt({ id: "p1", amount: 500, date: "2026-06-01" })] });
+    expect(isDepositSatisfied(i)).toBe(false);
+  });
+
+  test("false while payments total less than the ask", () => {
+    const i = inv({
+      depositRequest: { amount: 500, percent: 50, requestedAt: "2026-06-01" },
+      payments: [pmt({ id: "p1", amount: 400, date: "2026-06-02" })],
+    });
+    expect(isDepositSatisfied(i)).toBe(false);
+  });
+
+  test("true once payments cover the ask", () => {
+    const i = inv({
+      depositRequest: { amount: 500, percent: 50, requestedAt: "2026-06-01" },
+      payments: [
+        pmt({ id: "p1", amount: 300, date: "2026-06-02" }),
+        pmt({ id: "p2", amount: 200, date: "2026-06-03" }),
+      ],
+    });
+    expect(isDepositSatisfied(i)).toBe(true);
+  });
+
+  test("a legacy paid invoice satisfies its deposit through the implied payment", () => {
+    const i = inv({
+      paid: true,
+      paidAt: "2026-06-10",
+      depositRequest: { amount: 500, requestedAt: "2026-06-01" },
+    });
+    expect(isDepositSatisfied(i)).toBe(true);
+  });
+
+  test("voided payments do not count toward the ask", () => {
+    const i = inv({
+      depositRequest: { amount: 500, requestedAt: "2026-06-01" },
+      payments: [pmt({ id: "p1", amount: 500, date: "2026-06-02", voidedAt: "2026-06-03" })],
+    });
+    expect(isDepositSatisfied(i)).toBe(false);
   });
 });
