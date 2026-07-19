@@ -172,6 +172,10 @@ Everything financial in one place.
   Recorded through the Record payment sheet (`components/RecordPaymentSheet.tsx`)
   and shown by `components/PaymentHistoryList.tsx`. "Mark paid" records a
   payment for the outstanding balance rather than setting the flag directly.
+  Every money surface derives from the ledger: `outstanding` sums `balanceDue`,
+  `collected` sums `amountPaid`, and revenue is bucketed by each payment's own
+  date (`collectedInRange` / `collectedByPeriod` in `utils/invoicePayments.ts`).
+  The invoice `amount` is never summed directly on a money surface.
 - depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
 
 ### Expense

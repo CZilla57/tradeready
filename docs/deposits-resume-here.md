@@ -1,11 +1,11 @@
 # Deposits & Partial Payments — Resume Here
 
-**Status as of 2026-07-18:** Phases 1, 2, 2b and 3 are built and green on branch
+**Status as of 2026-07-18:** Phases 1, 2, 2b, 3 and 4 are built and green on branch
 `feat/deposits-partial-payments` (37 commits off `master` @ `78383e3`).
 **Nothing is merged, nothing is pushed, the Supabase migration is NOT applied,
 and the backend is NOT deployed.**
 
-Gate at last check: **974 tests / 61 suites, tsc 0 errors, lint 0 warnings.**
+Gate at last check: **1014 tests / 61 suites, tsc 0 errors, lint 0 warnings.**
 
 This document exists because the detailed working notes live in
 `.superpowers/sdd/progress.md`, which is git-ignored scratch — a `git clean -fdx`
