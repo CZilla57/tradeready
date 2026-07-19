@@ -1,9 +1,13 @@
 import type { Invoice, Job, Customer, Settings } from '../types/models';
 import { formatMoney, formatQuote } from "./format";
 import { computeEstimateBreakdown } from "./pricingEngine";
-import { isFullyPaid } from "./invoicePayments";
+import { isFullyPaid, isPartlyPaid, amountPaid, balanceDue, effectivePayments } from "./invoicePayments";
 
 const ACCENT = "#007aff";
+
+const METHOD_LABELS: Record<string, string> = {
+  cash: "Cash", check: "Cheque", card: "Card", stripe: "Card", other: "Payment",
+};
 
 function escapeHtml(str: string): string {
   return str
@@ -121,6 +125,14 @@ const BASE_CSS = `
   }
   .badge-paid   { background: #e8f9f0; color: #25a65b; }
   .badge-unpaid { background: #fff3e0; color: #c47a00; }
+  .badge-partial { background: #eaf2ff; color: #2f6fd0; }
+  .history { margin-top: 18px; }
+  .history-title { font-size: 12px; font-weight: 600; color: #6b6b70; text-transform: uppercase; letter-spacing: 0.4px; }
+  .history table { width: 100%; margin-top: 6px; }
+  .history td { font-size: 12px; color: #48484a; padding: 3px 0; }
+  .history td.amt { text-align: right; color: #1c1c1e; font-weight: 600; }
+  .sub-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 13px; color: #48484a; }
+  .sub-row .sub-amount { font-weight: 600; color: #1c1c1e; }
   .footer {
     margin-top: 56px;
     padding-top: 16px;
@@ -145,6 +157,16 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
   const issueDate = fmtDate(new Date().toISOString());
   const dueDate   = fmtDate(invoice.due);
   const isPaid    = isFullyPaid(invoice);
+  const isPartly = isPartlyPaid(invoice);
+  const paidToDate = amountPaid(invoice);
+  const balance = balanceDue(invoice);
+
+  // The customer's copy excludes voided entries (internal bookkeeping) and the
+  // synthesized legacy_<id> entry (internal language about an app migration).
+  // Between those two rules a pre-existing invoice has nothing left to show,
+  // which is what keeps its PDF byte-identical.
+  const historyPayments = effectivePayments(invoice)
+    .filter((p) => !p.voidedAt && !p.id.startsWith("legacy_"));
 
   const items = invoice.lineItems ?? [];
   const primaryItems = items.filter((li) => li.category === "labor");
@@ -190,7 +212,7 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
     ${issueDate ? `<div style="margin-top:8px"><span class="label">Issue date</span><br><span class="value">${issueDate}</span></div>` : ""}
     ${dueDate ? `<div style="margin-top:8px"><span class="label">Due date</span><br><span class="value">${dueDate}</span></div>` : ""}
     <div style="margin-top:10px">
-      <span class="badge ${isPaid ? "badge-paid" : "badge-unpaid"}">${isPaid ? "Paid" : "Outstanding"}</span>
+      <span class="badge ${isPaid ? "badge-paid" : isPartly ? "badge-partial" : "badge-unpaid"}">${isPaid ? "Paid" : isPartly ? "Partly paid" : "Outstanding"}</span>
     </div>
   </div>
 </div>
@@ -204,10 +226,33 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
   </tbody>
 </table>
 
+${isPartly ? `
+<div class="sub-row">
+  <span>Invoice total</span>
+  <span class="sub-amount">${formatMoney(invoice.amount)}</span>
+</div>
+<div class="sub-row">
+  <span>Paid to date</span>
+  <span class="sub-amount">−${formatMoney(paidToDate)}</span>
+</div>
+<div class="total-row">
+  <span class="total-label">BALANCE DUE</span>
+  <span class="total-amount">${formatMoney(balance)}</span>
+</div>` : `
 <div class="total-row">
   <span class="total-label">TOTAL DUE</span>
   <span class="total-amount">${formatMoney(invoice.amount)}</span>
-</div>
+</div>`}
+
+${historyPayments.length ? `
+<div class="history">
+  <div class="history-title">Payment history</div>
+  <table>
+    <tbody>
+      ${historyPayments.map((p) => `<tr><td>${fmtDate(p.date)}</td><td>${safe(METHOD_LABELS[p.method] ?? p.method)}</td><td class="amt">${formatMoney(p.amount)}</td></tr>`).join("")}
+    </tbody>
+  </table>
+</div>` : ""}
 
 <div class="footer">Thank you for your business — ${safe(bizName)}</div>
 
