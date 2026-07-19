@@ -51,7 +51,8 @@ carries a recorded payment.
 
 **To unblock,** work through `docs/deposits-resume-here.md` §4 in order. The
 ordering is load-bearing: **never deploy the backend before applying the
-migration.** Then delete this entry.
+migration.** Then delete this entry **and** the `SHIPPING GATE` comment block in
+`utils/sync.ts` (above `pullRemote`'s record loop), which points back here.
 
 **Also note:** the Postgres trigger has never executed against a real database,
 and the `invoices` table's `id` column type is inferred rather than confirmed.
