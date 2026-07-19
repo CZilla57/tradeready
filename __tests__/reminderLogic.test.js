@@ -106,9 +106,27 @@ describe("buildReminderEmail", () => {
     expect(email.reply_to).toBe("bob@bobplumbing.com");
     expect(email.subject).toBe("Payment reminder – INV-001");
     expect(email.text).toContain("INV-001");
-    expect(email.text).toMatch(/\d+ days past due/);
+    expect(email.text).toMatch(/\d+ days overdue/);
     expect(email.text).toContain("$1,200.00");
     expect(email.text).toContain("reply to this email");
+  });
+
+  test("quotes balance due for an unpaid invoice (no ledger)", () => {
+    const email = buildReminderEmail({ invoice: inv(), settings, today: TODAY });
+    expect(email.subject).toBe("Payment reminder – INV-001");
+    expect(email.text).toMatch(/INV-001.*\$1,200\.00.*14 days overdue/);
+  });
+
+  test("quotes balance due and total for a partly-paid invoice", () => {
+    const partlyPaid = inv({
+      amount: 1000,
+      payments: [{ id: "p1", amount: 400, date: "2026-07-01" }],
+    });
+    const email = buildReminderEmail({ invoice: partlyPaid, settings, today: TODAY });
+    expect(email.subject).toBe("Payment reminder – INV-001");
+    expect(email.text).toContain("$600.00 of $1,000.00 still outstanding");
+    expect(email.text).toMatch(/14 days overdue/);
+    // Ensure the balance due is calculated correctly: 1000 - 400 = 600
   });
 
   test("includes the payment link only when present", () => {

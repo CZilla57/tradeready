@@ -3,11 +3,19 @@
 // deterministic, no AI (unattended mail the user never previews). No I/O.
 
 const { daysPastDue, formatMoney } = require("./overdue");
+const { balanceDue, amountPaid } = require("./paymentMath");
 
 const SENDER = "reminders@gettradereadyapp.com";
 
 function buildReminderEmail({ invoice, settings, today = new Date() }) {
-  const amount = formatMoney(invoice.amount);
+  // Mirrors describeAmountOwed in utils/invoiceHelpers.ts. A partly-paid
+  // invoice names both numbers so the customer sees their deposit credited.
+  // backend/ is a separate package and cannot import the TS util.
+  const paid = amountPaid(invoice);
+  const balance = balanceDue(invoice);
+  const amount = paid > 0 && balance > 0
+    ? `${formatMoney(balance)} of ${formatMoney(invoice.amount)} still outstanding`
+    : formatMoney(balance);
   const days = daysPastDue(invoice.due, today);
   const biz = settings.businessName || "your contractor";
   const linkLine = invoice.paymentLinkUrl
@@ -17,7 +25,7 @@ function buildReminderEmail({ invoice, settings, today = new Date() }) {
 
   const text = `Hi ${invoice.customer},
 
-This is a friendly reminder that invoice ${invoice.number} for ${amount} is now ${days} days past due.
+Invoice ${invoice.number} — ${amount}, now ${days} days overdue.
 ${linkLine}
 If you've already sent payment, thank you — please disregard this note. Questions, or want to stop these reminders? Just reply to this email or contact ${biz}.
 ${notes}
