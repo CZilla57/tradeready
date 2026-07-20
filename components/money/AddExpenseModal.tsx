@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
+  ActivityIndicator,
   Animated,
   StyleSheet,
   ScrollView,
@@ -14,7 +15,9 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { persistPhoto } from '../../utils/photoStorage';
+import { persistPhoto, readPhotoAsDataUri } from '../../utils/photoStorage';
+import { extractReceipt } from '../../utils/receiptOCR';
+import { track } from '../../utils/analytics';
 import { DateTimePickerSheet } from '../DateTimePickerSheet';
 import { KeyboardDoneBar } from '../KeyboardDoneBar';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
@@ -28,6 +31,9 @@ interface AddExpenseModalProps {
   onSave: (fields: ExpenseDraft) => void;
 }
 
+/** Receipt-scan lifecycle for the banner under the photo preview. */
+type ScanState = 'idle' | 'reading' | 'filled' | 'empty' | 'failed';
+
 export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
@@ -39,6 +45,18 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
   const [notes, setNotes]                   = useState('');
   const [receiptUri, setReceiptUri]         = useState<string | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [scanState, setScanState]           = useState<ScanState>('idle');
+  const [scanLooksBlurry, setScanLooksBlurry] = useState(false);
+
+  // Which fields the user has edited themselves. Scan results only land in
+  // untouched fields — user input is never clobbered (a re-scan after swapping
+  // the photo MAY replace values a previous scan filled, since those aren't
+  // the user's typing). Refs, not state: read inside the async scan callback,
+  // so they must always be current.
+  const touchedRef = useRef({ description: false, amount: false, date: false, category: false });
+  // Monotonic scan id — results from a scan that's no longer current (photo
+  // removed/replaced, modal reopened) are discarded.
+  const scanIdRef = useRef(0);
 
   const onCloseRef  = useRef(onClose);
   onCloseRef.current = onClose;
@@ -54,6 +72,10 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
     setNotes('');
     setReceiptUri(null);
     setShowDatePicker(false);
+    setScanState('idle');
+    setScanLooksBlurry(false);
+    touchedRef.current = { description: false, amount: false, date: false, category: false };
+    scanIdRef.current++;
     translateY.setValue(600);
     Animated.spring(translateY, {
       toValue: 0,
@@ -93,6 +115,65 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
     })
   ).current;
 
+  /**
+   * Read the attached photo and pre-fill untouched fields from it. Extraction
+   * NEVER blocks or replaces manual entry: every failure just shows the
+   * one-line "couldn't read it" note, and saving stays entirely manual.
+   */
+  async function runReceiptScan(uri: string) {
+    const scanId = ++scanIdRef.current;
+    setScanState('reading');
+    setScanLooksBlurry(false);
+
+    const dataUri = await readPhotoAsDataUri(uri);
+    if (scanIdRef.current !== scanId) return;
+    if (!dataUri) {
+      setScanState('failed');
+      track('receipt_scanned', { outcome: 'failed' });
+      return;
+    }
+
+    const result = await extractReceipt(dataUri);
+    if (scanIdRef.current !== scanId) return;
+    if (!result) {
+      setScanState('failed');
+      track('receipt_scanned', { outcome: 'failed' });
+      return;
+    }
+
+    const { extraction, route } = result;
+    const touched = touchedRef.current;
+    let applied = 0;
+    if (!touched.description && extraction.merchant) {
+      setDescription(extraction.merchant);
+      applied++;
+    }
+    if (!touched.amount && extraction.amount != null) {
+      setAmount(Number.isInteger(extraction.amount) ? String(extraction.amount) : extraction.amount.toFixed(2));
+      applied++;
+    }
+    if (!touched.date && extraction.date) {
+      setDate(extraction.date);
+      applied++;
+    }
+    if (!touched.category && extraction.category) {
+      setCategory(extraction.category);
+      applied++;
+    }
+
+    setScanLooksBlurry(extraction.confidence === 'low');
+    setScanState(applied > 0 ? 'filled' : 'empty');
+    track('receipt_scanned', { outcome: applied > 0 ? 'filled' : 'empty', route });
+  }
+
+  async function attachReceipt(tempUri: string) {
+    const persisted = await persistPhoto(tempUri, 'receipts');
+    setReceiptUri(persisted);
+    // Awaited so the whole attach-and-scan chain is one promise (nothing in
+    // prod awaits it; the UI updates via state as the scan progresses).
+    await runReceiptScan(persisted);
+  }
+
   async function pickReceipt() {
     Alert.alert('Add Receipt Photo', undefined, [
       {
@@ -107,7 +188,7 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
             mediaTypes: ['images'], quality: 0.7, allowsEditing: true, aspect: [4, 3],
           });
           if (!result.canceled) {
-            setReceiptUri(await persistPhoto(result.assets[0].uri, 'receipts'));
+            await attachReceipt(result.assets[0].uri);
           }
         },
       },
@@ -123,12 +204,19 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
             mediaTypes: ['images'], quality: 0.7, allowsEditing: true, aspect: [4, 3],
           });
           if (!result.canceled) {
-            setReceiptUri(await persistPhoto(result.assets[0].uri, 'receipts'));
+            await attachReceipt(result.assets[0].uri);
           }
         },
       },
       { text: 'Cancel', style: 'cancel' },
     ]);
+  }
+
+  function removeReceipt() {
+    scanIdRef.current++;
+    setReceiptUri(null);
+    setScanState('idle');
+    setScanLooksBlurry(false);
   }
 
   function handleSave() {
@@ -175,7 +263,10 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
               placeholder="e.g. PVC fittings from Home Depot"
               placeholderTextColor={colors.textMuted}
               value={description}
-              onChangeText={setDescription}
+              onChangeText={(t) => {
+                touchedRef.current.description = true;
+                setDescription(t);
+              }}
               returnKeyType="done"
             />
 
@@ -185,7 +276,10 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
               placeholder="0.00"
               placeholderTextColor={colors.textMuted}
               value={amount}
-              onChangeText={setAmount}
+              onChangeText={(t) => {
+                touchedRef.current.amount = true;
+                setAmount(t);
+              }}
               keyboardType="decimal-pad"
               inputAccessoryViewID="expenseModalDone"
             />
@@ -205,7 +299,10 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
               mode="date"
               title="Select Date"
               value={new Date(date + 'T00:00:00')}
-              onChange={(d) => setDate(d.toISOString().split('T')[0])}
+              onChange={(d) => {
+                touchedRef.current.date = true;
+                setDate(d.toISOString().split('T')[0]);
+              }}
               onClose={() => setShowDatePicker(false)}
             />
 
@@ -215,7 +312,10 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
                 <TouchableOpacity
                   key={cat.id}
                   style={[styles.categoryChip, category === cat.id && styles.categoryChipSelected]}
-                  onPress={() => setCategory(cat.id)}
+                  onPress={() => {
+                    touchedRef.current.category = true;
+                    setCategory(cat.id);
+                  }}
                 >
                   <Text style={styles.categoryChipIcon}>{cat.icon}</Text>
                   <Text style={[
@@ -248,7 +348,32 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
             {receiptUri ? (
               <View style={styles.receiptPreview}>
                 <Image source={{ uri: receiptUri }} style={styles.receiptImage} contentFit="cover" />
-                <TouchableOpacity style={styles.receiptRemoveRow} onPress={() => setReceiptUri(null)}>
+                {scanState !== 'idle' && (
+                  <View style={styles.scanBanner}>
+                    {scanState === 'reading' && (
+                      <>
+                        <ActivityIndicator size="small" color={colors.accent} />
+                        <Text style={styles.scanBannerText}>Reading receipt…</Text>
+                      </>
+                    )}
+                    {scanState === 'filled' && (
+                      <Text style={styles.scanBannerTextAccent}>
+                        {scanLooksBlurry
+                          ? '✨ Filled from receipt — the photo looks blurry, double-check the details'
+                          : '✨ Filled from receipt — double-check the details'}
+                      </Text>
+                    )}
+                    {scanState === 'empty' && (
+                      <Text style={styles.scanBannerText}>Receipt read — nothing new to fill in</Text>
+                    )}
+                    {scanState === 'failed' && (
+                      <Text style={styles.scanBannerText}>
+                        Couldn't read the receipt — enter the details manually
+                      </Text>
+                    )}
+                  </View>
+                )}
+                <TouchableOpacity style={styles.receiptRemoveRow} onPress={removeReceipt}>
                   <Text style={styles.receiptRemoveText}>✕  Remove photo</Text>
                 </TouchableOpacity>
               </View>
@@ -431,6 +556,28 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     receiptImage: {
       width: '100%',
       height: 180,
+    },
+    scanBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      backgroundColor: colors.surfaceSecondary,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    scanBannerText: {
+      color: colors.textSecondary,
+      fontSize: fontSize.sm,
+      textAlign: 'center',
+    },
+    scanBannerTextAccent: {
+      color: colors.accent,
+      fontSize: fontSize.sm,
+      fontWeight: '500',
+      textAlign: 'center',
     },
     receiptRemoveRow: {
       padding: spacing.sm,
