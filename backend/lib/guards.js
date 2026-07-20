@@ -90,13 +90,43 @@ function validatePricebookPayload(body) {
   return null;
 }
 
+// Input caps for the receipt-extract proxy. The cap matches the client's
+// MAX_RECEIPT_BASE64_CHARS (utils/receiptOCR.ts) — ~3.7 MB decoded, under
+// Vercel's 4.5 MB body limit and Anthropic's 5 MB image limit — and is
+// enforced here independently so a modified client can't ship huge images
+// through the owner's vendor key.
+const MAX_RECEIPT_IMAGE_CHARS = 5000000;
+const RECEIPT_MEDIA_TYPES = ['image/jpeg', 'image/png'];
+const BASE64_RE = /^[A-Za-z0-9+/=\r\n]+$/;
+
+// Returns null when valid, or a client-safe error string.
+function validateReceiptPayload(body) {
+  const { imageBase64, mediaType } = body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return 'imageBase64 is required.';
+  }
+  if (imageBase64.length > MAX_RECEIPT_IMAGE_CHARS) {
+    return `Image too large (max ${MAX_RECEIPT_IMAGE_CHARS} base64 characters).`;
+  }
+  if (!BASE64_RE.test(imageBase64)) {
+    return 'imageBase64 is not valid base64.';
+  }
+  if (!RECEIPT_MEDIA_TYPES.includes(mediaType)) {
+    return `mediaType must be one of: ${RECEIPT_MEDIA_TYPES.join(', ')}.`;
+  }
+  return null;
+}
+
 module.exports = {
   createRateLimiter,
   validateChatPayload,
   validatePricebookPayload,
+  validateReceiptPayload,
   MAX_MESSAGES,
   MAX_MESSAGE_CHARS,
   MAX_SYSTEM_PROMPT_CHARS,
   MAX_FIELD_CHARS,
   MAX_MATERIALS,
+  MAX_RECEIPT_IMAGE_CHARS,
+  RECEIPT_MEDIA_TYPES,
 };

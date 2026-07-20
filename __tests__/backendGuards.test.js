@@ -2,11 +2,14 @@ const {
   createRateLimiter,
   validateChatPayload,
   validatePricebookPayload,
+  validateReceiptPayload,
   MAX_MESSAGES,
   MAX_MESSAGE_CHARS,
   MAX_SYSTEM_PROMPT_CHARS,
   MAX_FIELD_CHARS,
   MAX_MATERIALS,
+  MAX_RECEIPT_IMAGE_CHARS,
+  RECEIPT_MEDIA_TYPES,
 } = require("../backend/lib/guards");
 
 describe("createRateLimiter", () => {
@@ -134,5 +137,44 @@ describe("validatePricebookPayload", () => {
   it("rejects an over-long material name", () => {
     const materials = [{ name: "x".repeat(MAX_FIELD_CHARS + 1) }];
     expect(validatePricebookPayload({ ...base, materials })).toMatch(/material name too long/);
+  });
+});
+
+describe("validateReceiptPayload", () => {
+  const valid = { imageBase64: "aGVsbG8=", mediaType: "image/jpeg" };
+
+  it("accepts a valid jpeg and png payload", () => {
+    expect(validateReceiptPayload(valid)).toBeNull();
+    expect(validateReceiptPayload({ ...valid, mediaType: "image/png" })).toBeNull();
+  });
+
+  it("rejects a missing or non-string image", () => {
+    expect(validateReceiptPayload({})).toBe("imageBase64 is required.");
+    expect(validateReceiptPayload(undefined)).toBe("imageBase64 is required.");
+    expect(validateReceiptPayload({ ...valid, imageBase64: 42 })).toBe(
+      "imageBase64 is required."
+    );
+  });
+
+  it("rejects an oversize image", () => {
+    const big = "A".repeat(MAX_RECEIPT_IMAGE_CHARS + 1);
+    expect(validateReceiptPayload({ ...valid, imageBase64: big })).toMatch(
+      /Image too large/
+    );
+  });
+
+  it("rejects non-base64 content", () => {
+    expect(validateReceiptPayload({ ...valid, imageBase64: "not base64!!!" })).toMatch(
+      /not valid base64/
+    );
+  });
+
+  it("rejects unsupported media types", () => {
+    for (const mediaType of ["image/gif", "application/pdf", undefined, 7]) {
+      expect(validateReceiptPayload({ ...valid, mediaType })).toMatch(
+        /mediaType must be one of/
+      );
+    }
+    expect(RECEIPT_MEDIA_TYPES).toEqual(["image/jpeg", "image/png"]);
   });
 });
