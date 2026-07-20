@@ -88,4 +88,39 @@ describe("generateMessage", () => {
     global.fetch.mockRejectedValue(new Error("network down"));
     await expect(generateMessage(opts())).resolves.toBe(FALLBACK);
   });
+
+  test("sends image + text content blocks when an image is provided", async () => {
+    global.fetch.mockResolvedValue({
+      json: async () => ({ content: [{ text: "ok" }] }),
+    });
+    await generateMessage(
+      opts({
+        prompt: "Read this receipt.",
+        image: { base64: "IMGDATA", mediaType: "image/png" },
+      })
+    );
+
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "IMGDATA" },
+          },
+          { type: "text", text: "Read this receipt." },
+        ],
+      },
+    ]);
+  });
+
+  test("keeps content a plain string when no image is provided (regression pin)", async () => {
+    global.fetch.mockResolvedValue({
+      json: async () => ({ content: [{ text: "ok" }] }),
+    });
+    await generateMessage(opts({ prompt: "text only" }));
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.messages[0].content).toBe("text only");
+  });
 });
