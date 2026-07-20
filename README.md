@@ -66,11 +66,15 @@ The backend is deployed at `backend-tradeready1.vercel.app`. The app reads
 
 ## Step 4 — AI setup
 
-AI features (business chat, pricebook suggestions) are proxied through the
-Vercel backend using server-side API keys — no user-supplied keys required.
+AI features (business chat, pricebook suggestions, receipt scanning) are proxied
+through the Vercel backend using server-side API keys — no user-supplied keys
+required.
 
 - **AI Coach chat** — Groq (Llama 3.1) via `backend/api/ai-chat.js`
 - **Pricebook AI Assist** — Claude (Anthropic) via `backend/api/pricebook-suggest.js`
+- **Receipt scanning** — Claude vision via `backend/api/receipt-extract.js`; attaching
+  a receipt photo to an expense pre-fills merchant/amount/date/category for review
+  (never auto-saves; extraction failure falls back to plain manual entry)
 
 Required Vercel env vars: `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_URL`,
 `SUPABASE_ANON_KEY`.
@@ -119,6 +123,7 @@ utils/
   photoStorage.ts                ← Device photo management (expo-file-system)
   aiService.ts                   ← Groq AI integration (backend-proxied via Vercel)
   pricebookAI.ts                 ← Pricebook AI Assist (backend-proxied via Vercel)
+  receiptOCR.ts                  ← Receipt scan: parse/clamp + routing (user key / backend)
   subscription.ts                ← RevenueCat subscription helpers
   paywallCopy.ts                 ← Trial wording derived from the store's real intro offer
   recurringJobs.ts               ← Recurring job scheduling engine
