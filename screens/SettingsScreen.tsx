@@ -32,7 +32,7 @@ import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useSubscription } from "../context/SubscriptionContext";
-import { showManageSubscriptions } from "../utils/subscription";
+import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
 import type { Settings } from "../types/models";
@@ -708,10 +708,16 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           )}
           {isSubscribed || isTrialing ? (
             <TouchableOpacity style={[styles.stripeBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Manage subscription" onPress={async () => {
-              try { await showManageSubscriptions(); } catch {
-                const url = Platform.OS === "ios" ? "https://apps.apple.com/account/subscriptions" : "https://play.google.com/store/account/subscriptions";
-                Linking.openURL(url);
-              }
+              if (await openManageSubscriptions()) return;
+              // Neither the StoreKit sheet nor the store deep link is available
+              // (sandbox / iPad compatibility mode) — tell the user where to go
+              // rather than letting the failure surface as an error.
+              Alert.alert(
+                "Manage your subscription",
+                Platform.OS === "ios"
+                  ? "Open the Settings app, tap your name, then tap Subscriptions to change or cancel TradeReady Pro."
+                  : "Open the Google Play Store, tap your profile picture, then tap Payments & subscriptions."
+              );
             }}>
               <Text style={styles.stripeBtnText}>Manage subscription</Text>
             </TouchableOpacity>
