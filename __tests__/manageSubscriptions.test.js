@@ -47,3 +47,29 @@ describe("openManageSubscriptions", () => {
     await expect(openManageSubscriptions()).resolves.toBe(false);
   });
 });
+
+describe("getOfferings without the native module", () => {
+  let getOfferings;
+
+  beforeEach(() => {
+    jest.resetModules();
+    ({ getOfferings } = require("../utils/subscription"));
+  });
+
+  // Previously this dereferenced a null Purchases and threw a TypeError, which
+  // the paywall surfaced as "check your connection".
+  test("resolves to empty offerings instead of throwing", async () => {
+    const result = await getOfferings();
+
+    expect(result.current).toBeNull();
+    expect(result.all).toEqual({});
+  });
+
+  test("empty offerings land on the paywall's empty state, not its error state", async () => {
+    const { offeringsDisplayState } = require("../utils/paywallCopy");
+    const result = await getOfferings();
+    const packages = result?.current?.availablePackages ?? [];
+
+    expect(offeringsDisplayState(packages, null)).toBe("empty");
+  });
+});

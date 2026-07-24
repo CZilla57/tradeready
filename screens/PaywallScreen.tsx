@@ -63,7 +63,11 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
       const ids = pkgs.map((p: any) => p.product?.identifier).filter(Boolean);
       checkTrialEligibility(ids).then(setEligibility).catch(() => {});
     } catch {
-      setLoadError("Could not load subscription options. Check your connection and try again.");
+      // Deliberately not "check your connection" — the usual cause is store-side
+      // (products still propagating after an App Store Connect state change, a
+      // stale RevenueCat offerings cache), and pointing at the network sends
+      // people chasing the wrong thing.
+      setLoadError("We couldn't load subscription options. This is usually temporary — please try again in a moment.");
     }
   }
 
@@ -181,7 +185,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>
               Subscription plans aren't available right now. This is usually temporary —
-              check your connection and try again in a moment.
+              please try again in a moment.
             </Text>
             <TouchableOpacity
               style={styles.emptyRetryBtn}

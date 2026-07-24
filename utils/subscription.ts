@@ -42,7 +42,13 @@ export async function getCustomerInfo(): Promise<CustomerInfo> {
   return Purchases.getCustomerInfo();
 }
 
+// Guarded like its siblings: without the native module (Expo Go, simulator
+// without a dev build) this used to throw a raw TypeError on a null Purchases,
+// which the paywall reported as a connection problem. Returning no offerings
+// instead lands on the paywall's designed "empty" state, which explains itself
+// and offers a retry.
 export async function getOfferings(): Promise<PurchasesOfferings> {
+  if (!RC_CONFIGURED) return { all: {}, current: null } as PurchasesOfferings;
   return Purchases.getOfferings();
 }
 
