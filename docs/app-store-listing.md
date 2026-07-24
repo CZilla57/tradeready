@@ -166,9 +166,11 @@ everything.** No ATT prompt exists in the app, correctly.
   2-week free trial; both products "Ready to Submit")
 - Age rating questionnaire: all "No" → **4+**
 - Copyright: **© 2026 Chad Rector**
-- Support URL: https://czilla57.github.io/tradeready-legal/ (verify it
-  renders and shows support@gettradereadyapp.com; any page with the support
-  email satisfies Apple)
+- Support URL: https://czilla57.github.io/tradeready-legal/ — serves
+  `index.html`, a support page with support@gettradereadyapp.com and a FAQ.
+  Added 2026-07-24 after App Review rejected this URL as non-functional: the
+  repo had no index.html, so the site root returned 404. Do not delete
+  index.html from tradeready-legal.
 - Privacy Policy URL: https://czilla57.github.io/tradeready-legal/privacy.html
 - Version: 1.0.0 — attach **build 5** (2f33dfff, smoke-passed 2026-07-16)
 
@@ -184,7 +186,8 @@ everything.** No ATT prompt exists in the app, correctly.
       copy: Pricebook, Recurring jobs, Review requests, Mileage log
 - [ ] Screenshots: Today, Jobs, Pricing calculator, Invoice + payment link,
       AI chat, dark mode variant (6.7" and 6.1" sets)
-- [ ] Verify the support URL renders (see quick answers above)
+- [ ] Verify the support URL renders (see quick answers above) — index.html
+      added 2026-07-24; re-check the live root URL after the Pages deploy
 - [ ] **Attach BOTH subscriptions to the 1.0 version** (In-App Purchases and
       Subscriptions section on the version page) — first-time subs are
       reviewed with the binary; forgetting this is a guaranteed rejection
