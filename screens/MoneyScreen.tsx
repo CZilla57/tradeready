@@ -28,6 +28,7 @@ import { MonthlyChart }      from '../components/money/MonthlyChart';
 import { ReceivablesCard }   from '../components/money/ReceivablesCard';
 import { TopCustomersCard }  from '../components/money/TopCustomersCard';
 import { MileageCard }       from '../components/money/MileageCard';
+import { TaxSetAsideCard }   from '../components/money/TaxSetAsideCard';
 import { PricebookCard }     from '../components/money/PricebookCard';
 import { ConversionFunnelCard } from '../components/money/ConversionFunnelCard';
 import { RevenueForecastCard } from '../components/money/RevenueForecastCard';
@@ -278,6 +279,9 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
 
           {/* ── Tools ───────────────────────────────────────────────────── */}
           <MileageCard start={start} end={end} onPress={handleMileagePress} />
+          {/* Tax card ignores the screen's date filter on purpose: its windows
+              are the IRS payment periods + calendar YTD, not the filter. */}
+          <TaxSetAsideCard invoices={invoices as Invoice[]} expenses={expenses as Expense[]} />
           <PricebookCard onPress={handlePricebookPress} />
 
           {filteredIncome === 0 && filteredExpenseTotal === 0 && (

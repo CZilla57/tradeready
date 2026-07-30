@@ -2,16 +2,34 @@
 // Reads live storage and produces a compact business summary for the AI advisor.
 // The aggregation logic lives in the pure `aggregateSnapshot` function (unit-testable).
 
-import { loadInvoices, loadJobs, loadCustomers } from "./storage";
+import { loadInvoices, loadJobs, loadCustomers, loadExpenses, loadTrips, loadSettings } from "./storage";
 import { isOverdue } from "./invoiceStats";
 import { buildCustomerList } from "./customerList";
 import { collectedByPeriod, balanceDue } from "./invoicePayments";
-import type { Invoice, Job, Customer, JobStatus } from "../types/models";
+import { summarizeTaxWindow, formatPeriodRange, formatDeadline } from "./taxEstimate";
+import type { Invoice, Job, Customer, JobStatus, Expense, Trip, Settings } from "../types/models";
 
 export interface TopCustomerEntry {
   name: string;
   lifetimeSpend: number;
   amountOwed: number;
+}
+
+/**
+ * The tax set-aside figures the AI coach may CITE. The coach's system prompt
+ * pairs these with a hard constraint: guidance only — filing, eligibility,
+ * election, and entity questions get declined and referred to a professional.
+ */
+export interface TaxSnapshotBlock {
+  periodReserve: number;
+  ytdReserve: number;
+  /** "Jun 1 – Aug 31" */
+  periodLabel: string;
+  /** "Sep 15" */
+  dueLabel: string;
+  incomeRateSet: boolean;
+  needsVehicleChoice: boolean;
+  ratesKnown: boolean;
 }
 
 export interface BusinessSnapshot {
@@ -29,6 +47,8 @@ export interface BusinessSnapshot {
   topCustomers: TopCustomerEntry[];
   /** Mean estimateTotal for complete/invoiced/paid jobs (0 when no done jobs). */
   avgCompletedJobValue: number;
+  /** Tax set-aside figures; absent when the tax inputs failed to load. */
+  tax?: TaxSnapshotBlock;
 }
 
 const ACTIVE_STATUSES = new Set<JobStatus>([
@@ -109,16 +129,44 @@ export function aggregateSnapshot(
   };
 }
 
+/**
+ * Pure: reduce a tax window summary to the compact block the system prompt
+ * renders. Kept separate from aggregateSnapshot so its inputs (expenses,
+ * trips, settings) stay out of that function's signature and tests.
+ */
+export function buildTaxSnapshotBlock(args: {
+  invoices: Invoice[];
+  expenses: Expense[];
+  trips: Trip[];
+  settings: Partial<Settings>;
+  now?: Date;
+}): TaxSnapshotBlock {
+  const s = summarizeTaxWindow(args);
+  return {
+    periodReserve: s.current.reserve,
+    ytdReserve: s.ytd.reserve,
+    periodLabel: formatPeriodRange(s.period),
+    dueLabel: formatDeadline(s.period),
+    incomeRateSet: s.incomeRateSet,
+    needsVehicleChoice: s.needsVehicleChoice,
+    ratesKnown: s.current.ratesKnown,
+  };
+}
+
 /** Loads all collections from storage and returns a snapshot for the AI system prompt. */
 export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
-  const [invoices, jobs, customers] = await Promise.all([
+  const [invoices, jobs, customers, expenses, trips, settings] = await Promise.all([
     loadInvoices(),
     loadJobs(),
     loadCustomers(),
+    loadExpenses(),
+    loadTrips(),
+    loadSettings(),
   ]);
   const now = new Date();
   return {
     asOf: now.toISOString().split("T")[0],
     ...aggregateSnapshot(invoices, jobs, customers, now),
+    tax: buildTaxSnapshotBlock({ invoices, expenses, trips, settings, now }),
   };
 }

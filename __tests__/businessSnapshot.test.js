@@ -140,3 +140,36 @@ describe("aggregateSnapshot", () => {
     expect(snap.totalCustomers).toBe(0);
   });
 });
+
+describe("buildTaxSnapshotBlock", () => {
+  const { buildTaxSnapshotBlock } = require("../utils/businessSnapshot");
+
+  test("reduces a tax window to the compact prompt block", () => {
+    const block = buildTaxSnapshotBlock({
+      invoices: [inv({ id: "i1", amount: 10000, payments: [{ id: "p1", amount: 10000, date: "2026-06-15", method: "cash" }] })],
+      expenses: [],
+      trips: [],
+      settings: { taxIncomeRate: 10, vehicleDeductionMethod: "mileage", mileageRate: 0.7 },
+      now: NOW,
+    });
+    expect(block.periodLabel).toBe("Jun 1 – Aug 31");
+    expect(block.dueLabel).toBe("Sep 15");
+    expect(block.periodReserve).toBeGreaterThan(0);
+    expect(block.ytdReserve).toBeGreaterThanOrEqual(block.periodReserve);
+    expect(block.incomeRateSet).toBe(true);
+    expect(block.needsVehicleChoice).toBe(false);
+    expect(block.ratesKnown).toBe(true);
+  });
+
+  test("flags the unset states the coach must caveat", () => {
+    const block = buildTaxSnapshotBlock({
+      invoices: [],
+      expenses: [{ id: "e1", createdAt: "2026-07-01", description: "", amount: 100, category: "fuel", date: "2026-07-01", notes: "", receiptUri: null }],
+      trips: [],
+      settings: {},
+      now: NOW,
+    });
+    expect(block.incomeRateSet).toBe(false);
+    expect(block.needsVehicleChoice).toBe(true);
+  });
+});

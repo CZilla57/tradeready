@@ -102,6 +102,15 @@ function buildSystemPrompt(s: Partial<Settings>, snapshot: any): string {
       ? ` ($${snapshot.overdueTotal.toFixed(0)} overdue, ${snapshot.overdueCount} invoice${snapshot.overdueCount === 1 ? "" : "s"})`
       : "";
     prompt += `\n\nBUSINESS DATA (${snapshot.asOf}):\nRevenue: $${snapshot.revenueThisMonth.toFixed(0)} this month, $${snapshot.revenueLastMonth.toFixed(0)} last month.\nOutstanding: $${snapshot.outstandingTotal.toFixed(0)}${overdueStr}.\nActive jobs: ${statusLines || "none"}.\nCustomers: ${snapshot.totalCustomers} total${custLines ? `. Top: ${custLines}` : ""}.\n${snapshot.avgCompletedJobValue > 0 ? `Avg completed job: $${snapshot.avgCompletedJobValue.toFixed(0)}.` : ""}`.trim();
+
+    if (snapshot.tax) {
+      const t = snapshot.tax;
+      const caveats = [
+        t.incomeRateSet ? "" : " Income-tax rate not set — figure is SE tax only.",
+        t.needsVehicleChoice ? " Vehicle deduction method not chosen." : "",
+      ].join("");
+      prompt += `\nTax set-aside estimate: $${t.periodReserve.toFixed(0)} for ${t.periodLabel} (set aside by ${t.dueLabel}); $${t.ytdReserve.toFixed(0)} year to date.${caveats} You may cite these as set-aside guidance only — for filing, deduction elections, eligibility, or business-entity questions, decline and refer the user to a tax professional.`;
+    }
   }
 
   return prompt;

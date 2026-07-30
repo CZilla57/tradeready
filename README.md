@@ -108,6 +108,7 @@ utils/
   jobStatusDisplay.ts            ← getJobStatusDisplay — badge labels + colors
   timeTracking.ts                ← computeTimeTracking — clock-in/out session math
   mileageUtils.ts                ← computeTripMiles, mileageSummary — mileage deduction math
+  taxEstimate.ts                 ← Tax set-aside math: IRS payment periods, SE tax, reserve estimate
   invoiceStats.ts                ← summarizeInvoices, isOverdue, filterInvoices
   numberInput.ts                 ← parseNumberInput, buildEstimateInput (safe 0-handling)
   customerList.ts                ← buildCustomerList — invoice/record join + rollup
@@ -155,6 +156,8 @@ components/
     ExpenseRow.tsx               ← Single expense list row
     AddExpenseModal.tsx          ← Log-expense bottom sheet
     MileageCard.tsx              ← Mileage deduction card on the Money dashboard
+    TaxSetAsideCard.tsx          ← Quarterly tax set-aside card (reserve + deadline)
+    TaxSettingsModal.tsx         ← Income-tax rate + vehicle-deduction election sheet
     PricebookCard.tsx            ← Pricebook quick-access card
     ConversionFunnelCard.tsx     ← Lead → paid conversion funnel
     AvgJobValueCard.tsx          ← Average job value chart
@@ -269,6 +272,9 @@ npm run test:watch    # watch mode — re-runs on file save
 | `__tests__/dateHelpers.test.js` | Date formatting, week math, greeting, time range |
 | `__tests__/timeTracking.test.js` | Clock-in/out session math, live timer string |
 | `__tests__/mileageUtils.test.js` | `computeTripMiles`, `mileageSummary` — mileage deduction math |
+| `__tests__/taxEstimate.test.js` | Tax set-aside math: payment periods, deadline shifts, SE tax, vehicle election |
+| `__tests__/TaxSetAsideCard.test.js` | Tax card presentation: figures, unset-state prompts, disclaimer |
+| `__tests__/TaxSettingsModal.test.js` | Tax settings sheet: pre-fill, validation, draft shape |
 | `__tests__/jobStatus.test.js` | Status pipeline; approved → scheduled transition |
 | `__tests__/jobStatusDisplay.test.js` | Badge labels and colors for all 8 job statuses |
 | `__tests__/customerList.test.js` | Customer aggregation from invoices + manual records |
@@ -359,7 +365,9 @@ are never written to Supabase. You must re-enter them on each device.
 records, under Money → Mileage deduction) is stored in AsyncStorage only,
 the same as recurring jobs — it is not in the sync engine's `COLLECTION_TABLES`
 list (`utils/sync.ts:11`) and is cleared on sign-out. If you reinstall the app
-or sign in on a different device, logged trips will not be present. Adding
+or sign in on a different device, logged trips will not be present. The tax
+set-aside card's standard-mileage deduction reads this same local log, so its
+estimate can differ across devices; the card discloses this with a trip count. Adding
 cloud sync later means adding a `trips` Supabase table plus one entry in
 `COLLECTION_TABLES`.
 
