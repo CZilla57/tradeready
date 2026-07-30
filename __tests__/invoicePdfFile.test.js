@@ -111,6 +111,14 @@ describe("buildInvoicePdfFile", () => {
     });
   });
 
+  test("still returns the pdf when only the pre-clear delete fails", async () => {
+    FileSystem.deleteAsync.mockRejectedValueOnce(new Error("locked"));
+    const uri = await buildInvoicePdfFile(invoice, {});
+    expect(uri).toBe("file:///mock/cache/Invoice-INV-0001-Jane-Smith.pdf");
+    expect(FileSystem.copyAsync).toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
   test("returns null when the copy fails", async () => {
     FileSystem.copyAsync.mockRejectedValueOnce(new Error("denied"));
     const uri = await buildInvoicePdfFile(invoice, {});

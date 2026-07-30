@@ -189,8 +189,9 @@ export interface Invoice {
   paymentLinkAmount?: number;
   /** Itemised breakdown from the job estimate; absent on manually-created invoices. */
   lineItems?: InvoiceLineItem[];
-  // NOTE: pdfTemplates references `invoice.created`, which is NOT a field here —
-  // that is why the generated PDF's issue date always renders as "today".
+  // NOTE: there is no `created` field. The PDF's issue date is recovered from the
+  // ms timestamp both creation paths embed in `id` (see invoiceIssueDate in
+  // pdfTemplates); sample and legacy rows with non-timestamp ids render as "today".
 }
 
 export interface Customer {

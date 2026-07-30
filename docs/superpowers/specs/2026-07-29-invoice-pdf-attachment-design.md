@@ -100,27 +100,78 @@ present**, so the call shape for existing callers (`SendEstimateScreen`,
 New state `preparingPdf: boolean`. `sendEmail()` becomes:
 
 1. `setPreparingPdf(true)`
-2. `const uri = await buildInvoicePdfFile(invoice, settings)`
-3. `setPreparingPdf(false)`
-4. If `uri === null`: `Alert.alert("PDF not attached", "Couldn't attach the invoice
-   PDF. The message is ready to send without it.")`
-5. `composeEmail({ recipients: [invoice.email], subject: subject || \`Payment
-   reminder: ${invoice.number}\`, body: message, attachments: uri ? [uri] : undefined })`
+2. `const pdfUri = await buildInvoicePdfFile(invoice, settings ?? {}).catch(() => null)`
+3. `const opened = await composeEmail({ recipients: [invoice.email], subject: subject ||
+   \`Payment reminder: ${invoice.number}\`, body: message, attachments: pdfUri ? [pdfUri]
+   : undefined })`
+4. If `opened && !pdfUri`: `Alert.alert("PDF not attached", "Couldn't attach the invoice
+   PDF, so the draft didn't include it.")`
+5. All of the above inside a `try`; the `catch` reports to Sentry under context
+   `invoiceEmailCompose` and alerts "Couldn't open Mail"; the `finally` clears
+   `preparingPdf`.
 
-The "Open in Mail" `Button` receives `loading={preparingPdf}`. The shared `Button`
-(`components/UI.tsx:55`) already renders an `ActivityIndicator` and sets
-`disabled` + `accessibilityState.busy` when `loading` is true, so the ~1s print
-reads as progress rather than a frozen tap, and double-taps can't fire two prints.
+Three details of that ordering are load-bearing. Each was corrected during review
+rather than designed in, so they are recorded here to stop them being "simplified" back:
+
+- **The warning fires after the composer closes, not before it.** `Alert.alert` is
+  non-blocking and presents a `UIAlertController`; expo-modules-core's
+  `currentViewController()` resolves to the topmost *presented* controller, so alerting
+  first makes iOS present the mail sheet from that alert — often not at all. That would
+  break exactly the path whose purpose is "the PDF failed but the send must still go
+  out." Gating on `opened` also avoids stacking this alert on top of `composeEmail`'s
+  own "Mail not available" one.
+- **`preparingPdf` is held across both awaits and cleared in `finally`.** Clearing it
+  when the PDF resolves re-enables the button while the composer is still opening,
+  letting a second tap produce a duplicate draft. `finally` also means a rejection can
+  never leave the button stuck spinning. Note the flag therefore stays true for the
+  whole lifetime of the Mail sheet, which is invisible to the user because that sheet
+  covers the screen.
+- **The alert copy stays neutral about the outcome.** `composeEmail` reports only
+  whether the composer opened, not whether the user sent, saved, or cancelled. Copy
+  asserting a message went out would be wrong for a cancelled draft.
+
+Attaching a file also introduces native throw paths that did not exist before — the iOS
+compose session throws if the attachment URI is missing or unreadable at compose time —
+which is why `composeEmail` needs a real `catch` and not just a `finally`.
+
+The "Open in Mail" `Button` receives `loading={channel === "email" && preparingPdf}`.
+The shared `Button` (`components/UI.tsx:55`) already renders an `ActivityIndicator` and
+sets `disabled` + `accessibilityState.busy` when `loading` is true, so the ~1s print
+reads as progress rather than a frozen tap.
 
 `sendSMS` is untouched.
+
+### Changed — `utils/pdfTemplates.ts` (found during review)
+
+`invoiceHtml` rendered `issueDate` as `new Date()`, so every invoice PDF claimed it was
+issued today — harmless while the PDF was a manual export, wrong on every emailed
+invoice (an overdue reminder would read "Issue date: Jul 29 / Due date: Jul 8"). There
+is no `created` field on `Invoice` and adding one is a persisted data-shape change, so
+a new exported `invoiceIssueDate(id, now?)` recovers the date from the ms timestamp both
+creation paths embed in the id (`inv${Date.now()}` from `CreateInvoiceFromJobScreen`,
+`String(Date.now())` from `AddInvoiceScreen`). Ids that aren't plausible timestamps —
+sample rows like `1-<seed>`, and legacy rows — fall back to `now`, which is the old
+behavior. The guard is all-digits plus a year between 2000 and 2100; a bare `parseInt`
+would turn the sample id `1-…` into 1 January 1970.
+
+### Changed — `screens/InvoicesScreen.tsx` (found during review)
+
+`handleExportPdf` built its own filename, which already disagreed with
+`invoicePdfFilename` (it left `&`, `.` and `/` intact and emitted a trailing dash for an
+empty customer). It now calls the shared helper, so the emailed attachment and the
+manual "Save PDF" export cannot drift apart.
 
 ## Edge cases
 
 | Case | Behavior |
 |---|---|
-| PDF generation fails | Alert, then open Mail without the attachment (decision 3) |
+| PDF generation fails | Open Mail without the attachment, then alert (decision 3) |
+| PDF generation *rejects* rather than resolving `null` | `.catch(() => null)` folds it into the same path, so the send still happens |
+| `composeEmail` rejects (unreadable attachment at compose time) | Reported to Sentry, one "Couldn't open Mail" alert, loading flag cleared |
 | Logo file missing/corrupt | PDF renders without a logo; send proceeds normally |
-| Mail app not set up | `composeEmail`'s existing "Mail not available" alert; unchanged |
+| Pre-clear `deleteAsync` fails but the PDF rendered | Delete failure is non-fatal; the PDF is still attached |
+| Mail app not set up | `composeEmail`'s existing "Mail not available" alert, and the PDF warning is suppressed so two alerts can't stack |
+| Invoice id isn't a timestamp (sample/legacy rows) | PDF issue date falls back to today |
 | Invoice already paid | No send UI is rendered for paid invoices; nothing to do |
 | Customer name with spaces or `/` | Sanitized in the filename |
 | Empty invoice number | Filename falls back to `invoice.id` |

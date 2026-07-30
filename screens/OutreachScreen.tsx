@@ -188,10 +188,12 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
       // Warned only after the composer closes: alerting first leaves a UIAlertController
       // on top, and iOS presents the mail sheet from the topmost controller, which can
       // stop it appearing at all. Skipped when composeEmail already alerted itself.
+      // Copy stays neutral about the outcome — `opened` only tells us the sheet was
+      // dismissed, not whether the draft was sent, saved, or cancelled.
       if (opened && !pdfUri) {
         Alert.alert(
           "PDF not attached",
-          "Couldn't attach the invoice PDF, so it wasn't included with your message."
+          "Couldn't attach the invoice PDF, so the draft didn't include it."
         );
       }
     } catch (err: unknown) {
