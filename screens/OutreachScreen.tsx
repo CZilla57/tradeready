@@ -14,6 +14,7 @@ import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import { getStatus, generateOutreachMessage, resolvePaymentLink, fetchPaymentLink, getProviderKey } from "../utils/invoiceHelpers";
+import { buildInvoicePdfFile } from "../utils/invoicePdfFile";
 import { formatMoney } from "../utils/format";
 import { supabase } from "../utils/supabase";
 import { Badge, Button, Card, Divider } from "../components/UI";
@@ -58,6 +59,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
   const [installments, setInstallments] = useState("3");
   const [frequency, setFrequency] = useState("Bi-weekly");
   const [copied, setCopied] = useState(false);
+  const [preparingPdf, setPreparingPdf] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [autoReminder, setAutoReminder] = useState<{ sent_at: string; status: string } | null>(null);
 
@@ -172,10 +174,20 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
 
   async function sendEmail() {
     if (!invoice) return;
+    setPreparingPdf(true);
+    const pdfUri = await buildInvoicePdfFile(invoice, settings ?? {});
+    setPreparingPdf(false);
+    if (!pdfUri) {
+      Alert.alert(
+        "PDF not attached",
+        "Couldn't attach the invoice PDF. The message is ready to send without it."
+      );
+    }
     await composeEmail({
       recipients: [invoice.email],
       subject: subject || `Payment reminder: ${invoice.number}`,
       body: message,
+      attachments: pdfUri ? [pdfUri] : undefined,
     });
   }
 
@@ -363,6 +375,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
             <Button
               label={`Open in ${channel === "email" ? "Mail" : "Messages"}`}
               onPress={channel === "email" ? sendEmail : sendSMS}
+              loading={channel === "email" && preparingPdf}
               style={{ marginBottom: spacing.sm }}
             />
             <Button
