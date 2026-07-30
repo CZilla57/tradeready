@@ -121,15 +121,13 @@ module.exports = async function handler(req, res) {
       stripeOpts
     );
 
-    // Archive the one-time product/price so they don't clutter the Stripe dashboard.
-    try {
-      await Promise.all([
-        stripe.products.update(product.id, { active: false }, stripeOpts),
-        stripe.prices.update(price.id, { active: false }, stripeOpts),
-      ]);
-    } catch {
-      // Non-fatal — the link is live.
-    }
+    // Do NOT deactivate product/price here. A Payment Link's `active` field on
+    // a Price means "usable for a NEW purchase" — every visit to a Payment
+    // Link creates a new purchase attempt against its underlying price at
+    // click-time, not at link-creation time. Deactivating the price the
+    // instant the link is minted makes the link permanently unusable
+    // ("this link is no longer active"), for every customer, immediately.
+    // The dashboard-clutter tradeoff is real but the link must work.
 
     return res.status(200).json({ url: paymentLink.url });
   } catch (err) {
