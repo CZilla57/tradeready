@@ -4,12 +4,16 @@
 // create-payment-link.js. The device never needs a secure RNG.
 
 const crypto = require('crypto');
-const { fetchJobForUser, upsertJob, planApprovalWrite } = require('../../lib/estimateStore');
-const { createRateLimiter } = require('../../lib/guards');
+const { fetchJobForUser, upsertJob, planApprovalWrite } = require('../estimateStore');
+const { createRateLimiter } = require('../guards');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const PUBLIC_BASE = 'https://czilla57.github.io/tradeready-legal/estimate.html';
+// Env-overridable so the branded domain can be switched on from Vercel without
+// a code change - and so it stays on github.io until DNS for the custom domain
+// actually resolves. Flipping this only affects NEWLY minted links; old ones
+// keep working via the Pages redirect (and CORS accepts both hosts).
+const PUBLIC_BASE = process.env.ESTIMATE_PUBLIC_BASE || 'https://czilla57.github.io/tradeready-legal/estimate.html';
 
 const allow = createRateLimiter({ limit: 10 });
 

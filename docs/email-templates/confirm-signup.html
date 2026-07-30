@@ -1,0 +1,75 @@
+<!-- Supabase → Authentication → Emails → Templates → "Confirm signup"
+     Subject: Confirm your email to activate your TradeReady account
+     Paste everything below into the Message body field. -->
+<div style="display:none;font-size:1px;color:#f5f5f7;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">Confirm your address to finish setting up your TradeReady account.</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f5f7;margin:0;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#ffffff;border-radius:16px;padding:32px 28px;">
+
+        <tr>
+          <td style="font-size:22px;font-weight:800;color:#1d6ef2;padding-bottom:20px;">TradeReady</td>
+        </tr>
+
+        <tr>
+          <td style="font-size:19px;font-weight:700;color:#1d1d1f;padding-bottom:14px;">Confirm your email address</td>
+        </tr>
+
+        <tr>
+          <td style="font-size:15px;line-height:1.6;color:#3a3a3c;padding-bottom:14px;">
+            Thanks for signing up for TradeReady — the job, estimate and invoicing
+            app for tradespeople.
+          </td>
+        </tr>
+
+        <tr>
+          <td style="font-size:15px;line-height:1.6;color:#3a3a3c;padding-bottom:24px;">
+            Confirm <strong style="color:#1d1d1f;">{{ .Email }}</strong> using the button
+            below to activate your account. Then open TradeReady on your phone and
+            sign in with your email and password.
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding-bottom:24px;">
+            <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#1d6ef2;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 28px;border-radius:10px;">Confirm my email address</a>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="font-size:13px;line-height:1.6;color:#6e6e73;padding-bottom:20px;">
+            If the button doesn't work, copy this link into your browser:<br>
+            <a href="{{ .ConfirmationURL }}" style="color:#1d6ef2;word-break:break-all;">{{ .ConfirmationURL }}</a>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="font-size:13px;line-height:1.6;color:#6e6e73;padding-bottom:24px;border-bottom:1px solid #e5e5ea;">
+            This link expires in 1 hour and works only once. If it has already
+            expired, open the app and tap <strong>Resend confirmation email</strong>
+            on the sign-in screen to get a fresh one.
+          </td>
+        </tr>
+
+        <tr>
+          <td style="font-size:12px;line-height:1.6;color:#8e8e93;padding-top:20px;">
+            You're getting this email because this address was used to sign up for
+            TradeReady. If that wasn't you, no action is needed — the account stays
+            inactive until it's confirmed, and nobody can sign in without your password.
+          </td>
+        </tr>
+
+        <tr>
+          <td style="font-size:12px;line-height:1.6;color:#8e8e93;padding-top:14px;">
+            TradeReady &middot; Questions? Reply to this email or write to
+            <a href="mailto:support@gettradereadyapp.com" style="color:#6e6e73;">support@gettradereadyapp.com</a><br>
+            <a href="https://gettradereadyapp.com/privacy.html" style="color:#8e8e93;">Privacy Policy</a> &nbsp;&middot;&nbsp;
+            <a href="https://gettradereadyapp.com/terms.html" style="color:#8e8e93;">Terms of Service</a>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>

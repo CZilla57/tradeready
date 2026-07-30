@@ -3,10 +3,9 @@
 // capability). Stamps consentAt SERVER-SIDE and merges only approval.* into the
 // job blob (service role). The device performs the status transition on pull.
 
-const { fetchJob, upsertJob, constantTimeEqual } = require('../../lib/estimateStore');
-const { createRateLimiter } = require('../../lib/guards');
-
-const ALLOWED_ORIGIN = 'https://czilla57.github.io';
+const { fetchJob, upsertJob, constantTimeEqual } = require('../estimateStore');
+const { createRateLimiter } = require('../guards');
+const { applyCors } = require('./cors');
 const allow = createRateLimiter({ limit: 10 });
 
 // Pure decision merge — exported for unit tests. Returns the SAME reference when
@@ -26,9 +25,7 @@ function nextApproval(existing, body, meta) {
 }
 
 async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  applyCors(req, res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 

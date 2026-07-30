@@ -1,4 +1,4 @@
-const { nextApproval } = require('../backend/api/estimate/respond');
+const { nextApproval } = require('../backend/lib/estimate/respond');
 
 const base = { token: 't', sentAt: 'x', snapshot: {} };
 const meta = { consentAt: '2026-07-17T00:00:00.000Z', ip: '1.2.3.4', userAgent: 'ua' };

@@ -16,6 +16,7 @@ import {
   KeyboardAvoidingView,
   type AppStateStatus,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
@@ -36,6 +37,10 @@ import { useSubscription } from "../context/SubscriptionContext";
 import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
+import { useAuth } from "../context/AuthContext";
+import { promptForLogo } from "../utils/logoPicker";
+import { deletePhoto, photoExists, listPhotos } from "../utils/photoStorage";
+import { orphanedLogoPaths, sweepableLogoPaths } from "../utils/logoLifecycle";
 import type { Settings } from "../types/models";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import type { MainTabParamList } from "../types/navigation";
@@ -76,6 +81,27 @@ function formatPhone(raw: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
+/**
+ * Reclaims logo files no persisted setting references — a pick the user
+ * abandoned without reaching a commit point, or a cleanup interrupted part-way.
+ * Per-session cleanup (cleanupLogoFiles) only knows the paths THIS session
+ * touched, so it can never see those; this reads the folder itself.
+ *
+ * Runs from the load effect before `setS`, and the screen renders null until `s`
+ * is set, so the picker cannot be reached mid-sweep. `logos/` is written only by
+ * the logo picker — job photos and receipts live in their own folders — so the
+ * sweep cannot reach any other kind of image.
+ *
+ * `persistedLogoPath` must be the RAW stored path, not one already blanked by
+ * the dangling-path check: see the comment at the call site.
+ */
+async function sweepOrphanedLogos(persistedLogoPath: string | undefined): Promise<void> {
+  const onDisk = await listPhotos("logos");
+  for (const path of sweepableLogoPaths(onDisk, persistedLogoPath)) {
+    await deletePhoto(path);
+  }
+}
+
 export default function SettingsScreen({ navigation }: BottomTabScreenProps<MainTabParamList, 'Settings'>) {
   const { colors, shadow, preference, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
@@ -91,6 +117,15 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   const [ruleDrafts, setRuleDrafts] = useState<Record<number, string>>({});
   const { isSubscribed, isTrialing } = useSubscription();
   const { pendingCount } = useSyncStatusContext();
+  // The sweep's precondition is that the settings we just loaded are
+  // authoritative for this user. While initialSync is still pulling them down
+  // they are not — right after a sign-out/sign-in on the same device, local
+  // settings read back as defaults (logoPhoto "") while the user's real logo
+  // file is still on disk, and sweeping against that would delete it. Mirrored
+  // into a ref because the load effect is registered once.
+  const { bootstrapping } = useAuth();
+  const bootstrappingRef = useRef(bootstrapping);
+  useEffect(() => { if (bootstrapping) bootstrappingRef.current = true; }, [bootstrapping]);
 
   const [stripeStatus, setStripeStatus] = useState<StripeStatus | null>(null);
   const [stripeConnecting, setStripeConnecting] = useState(false);
@@ -105,6 +140,23 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   const sRef = useRef<Settings | null>(null);
   const savedSnapshotRef = useRef<Settings | null>(null);
   const suppressDirtyWarnRef = useRef(false); // sign-out/delete wipe data on purpose
+
+  // Every logo path this session has referenced — the one loaded from settings plus
+  // each file the picker copied in. At each commit point, whichever of these the
+  // persisted settings no longer reference is deleted. Seeded on load so an
+  // untouched logo is trivially "kept".
+  const touchedLogoPathsRef = useRef<string[]>([]);
+
+  // Delete the image files the just-committed settings no longer reference, then
+  // reset the session's tracking to that surviving path.
+  async function cleanupLogoFiles(committedLogoPath: string | undefined) {
+    const orphans = orphanedLogoPaths(touchedLogoPathsRef.current, committedLogoPath);
+    touchedLogoPathsRef.current = committedLogoPath ? [committedLogoPath] : [];
+    for (const path of orphans) {
+      await deletePhoto(path);
+    }
+  }
+
   useEffect(() => { sRef.current = s; }, [s]);
   useEffect(() => { savedSnapshotRef.current = savedSnapshot; }, [savedSnapshot]);
 
@@ -121,7 +173,14 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           {
             text: "Discard",
             style: "destructive",
-            onPress: () => { if (savedSnapshotRef.current) setS(savedSnapshotRef.current); },
+            onPress: () => {
+              const saved = savedSnapshotRef.current;
+              if (!saved) return;
+              setS(saved);
+              // Files copied in during the abandoned edit are unreferenced now;
+              // the saved logo is passed as the keeper so it is never deleted.
+              cleanupLogoFiles(saved.logoPhoto);
+            },
           },
           {
             text: "Save",
@@ -131,6 +190,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               await saveSettings(toSave);
               syncNotifications();
               setSavedSnapshot(toSave);
+              await cleanupLogoFiles(toSave.logoPhoto);
             },
           },
         ]
@@ -140,7 +200,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   }, [navigation]);
 
   useEffect(() => {
-    loadSettings().then((loaded) => {
+    loadSettings().then(async (loaded) => {
       if (
         loaded.provider !== "stripe" &&
         loaded.providerKey &&
@@ -151,8 +211,29 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           providerKeys: { ...loaded.providerKeys, [loaded.provider]: loaded.providerKey },
         };
       }
+      // Captured BEFORE the sanitization below, and swept against, deliberately.
+      // photoExists fails closed, so a transient filesystem error blanks
+      // logoPhoto — and sweeping against a blank keeper would delete the user's
+      // real logo, turning a one-session display glitch into permanent loss.
+      // The raw path still matches the real file, so it survives.
+      const persistedLogoPath = loaded.logoPhoto;
+
+      // A logoPhoto path can outlive the file it points at (reinstall, or a path
+      // synced from another device). Treat a dangling path as unset so the "Add
+      // logo" placeholder shows instead of an invisible circle, and so the next
+      // save clears the stale reference.
+      if (loaded.logoPhoto && !(await photoExists(loaded.logoPhoto))) {
+        loaded = { ...loaded, logoPhoto: "" };
+      }
+      // Skipping a sweep costs only disk; sweeping against non-authoritative
+      // settings costs the user's logo. When in doubt, skip — the next launch
+      // sweeps instead.
+      if (!bootstrappingRef.current) {
+        await sweepOrphanedLogos(persistedLogoPath);
+      }
       setS(loaded);
       setSavedSnapshot(loaded);
+      touchedLogoPathsRef.current = loaded.logoPhoto ? [loaded.logoPhoto] : [];
     });
   }, []);
 
@@ -238,6 +319,21 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     setS(prev => prev ? { ...prev, [field]: value } as Settings : prev);
   }
 
+  // The logo follows this screen's draft contract: picking copies the file in and
+  // points the draft at it, removing only clears the draft reference. Neither
+  // deletes anything — cleanup happens once settings are committed, so "Discard"
+  // can still restore the previous image. See utils/logoLifecycle.ts.
+  function handlePickLogo() {
+    promptForLogo((uri) => {
+      touchedLogoPathsRef.current = [...touchedLogoPathsRef.current, uri];
+      update("logoPhoto", uri);
+    });
+  }
+
+  function handleRemoveLogo() {
+    update("logoPhoto", "");
+  }
+
   // Keep only the raw text while typing so the box can be emptied to enter a new
   // number; the value is normalized to a number on blur (commitRule).
   function updateRule(index: number, text: string) {
@@ -309,6 +405,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     setS(flushed);
     setRuleDrafts({});
     setSavedSnapshot(flushed);
+    await cleanupLogoFiles(flushed.logoPhoto);
     setSaving(false);
     Alert.alert("Saved", "Your settings have been saved.");
   }
@@ -364,6 +461,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           <Field label="Your name" value={s.contactName} onChangeText={(v) => update("contactName", v)} colors={colors} shadow={shadow} />
           <Field label="Phone" value={s.phone} onChangeText={(v) => update("phone", formatPhone(v))} keyboardType="phone-pad" colors={colors} shadow={shadow} />
           <Field label="Email" value={s.email} onChangeText={(v) => update("email", v)} keyboardType="email-address" colors={colors} shadow={shadow} />
+          <Field label="Business address" value={s.address} onChangeText={(v) => update("address", v)} multiline autoCapitalize="words" colors={colors} shadow={shadow} />
           <Field label="Payment instructions" value={s.paymentNotes} onChangeText={(v) => update("paymentNotes", v)} multiline autoCapitalize="sentences" colors={colors} shadow={shadow} />
           <Field label="Region" value={s.region || ""} onChangeText={(v) => update("region", v)} colors={colors} shadow={shadow} />
           <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>Your trade</Text>
@@ -381,6 +479,34 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               </TouchableOpacity>
             ))}
           </View>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Your logo</Text>
+          <Text style={styles.logoHint}>Optional — appears on invoices and estimates.</Text>
+          <TouchableOpacity
+            style={styles.logoPicker}
+            onPress={handlePickLogo}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={s.logoPhoto ? "Change your business logo" : "Add your business logo"}
+          >
+            {s.logoPhoto ? (
+              <Image source={{ uri: s.logoPhoto }} style={styles.logoImage} contentFit="cover" />
+            ) : (
+              <View style={styles.logoPlaceholder}>
+                <Text style={styles.logoPlaceholderIcon}>📷</Text>
+                <Text style={styles.logoPlaceholderText}>Add logo</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          {!!s.logoPhoto && (
+            <TouchableOpacity
+              onPress={handleRemoveLogo}
+              style={styles.logoRemoveBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Remove your business logo"
+            >
+              <Text style={styles.logoRemoveText}>Remove</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Divider />
@@ -903,7 +1029,23 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     fieldGroup: { marginBottom: spacing.sm },
     fieldLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5, fontWeight: "500" },
     input: { backgroundColor: colors.background, borderRadius: radius.md, height: 44, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
-    inputMultiline: { height: 80, paddingTop: spacing.sm, textAlignVertical: "top" },
+    // `height: undefined` is load-bearing — do NOT delete it as redundant. This
+    // style is applied after `input` above, so it has to cancel that fixed
+    // `height: 44`; otherwise the field is pinned to a definite height, paints
+    // taller than its layout box, and later siblings (the logo block) render on
+    // top of it (device finding, 2026-07-14, see OnboardingScreen).
+    // The 88pt floor comes from BaseField's own `inputMulti` and is deliberately
+    // not overridden here — setting a smaller minHeight would shrink the
+    // pre-existing Payment instructions field.
+    inputMultiline: { height: undefined, paddingTop: spacing.sm, textAlignVertical: "top" },
+    logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
+    logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
+    logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background },
+    logoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+    logoPlaceholderIcon: { fontSize: 24, marginBottom: 2 },
+    logoPlaceholderText: { fontSize: fontSize.xs, color: colors.textMuted },
+    logoRemoveBtn: { alignSelf: "flex-start", marginTop: 4, minHeight: 44, justifyContent: "center" },
+    logoRemoveText: { fontSize: fontSize.xs, color: colors.danger },
     providerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: spacing.sm },
     providerBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     providerBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },

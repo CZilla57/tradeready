@@ -3,7 +3,7 @@
 // AddJobScreen used to save a scheduledDate without ever advancing the status,
 // so an approved job stayed "approved" while holding a schedule.
 
-import { advanceStatusForSchedule } from "../utils/jobStatus";
+import { advanceStatusForSchedule, canSendEstimate } from "../utils/jobStatus";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 
 describe("advanceStatusForSchedule", () => {
@@ -55,5 +55,31 @@ describe('applyEstimateDecision', () => {
   it('leaves a declined job unchanged (no resurrection to approved)', () => {
     expect(applyEstimateDecision('declined', 'approved')).toBe('declined');
     expect(applyEstimateDecision('declined', 'declined')).toBe('declined');
+  });
+});
+
+// Phase 1 of the estimate-approval reachability fix. Emailing an estimate from
+// the Pricing Calculator advances lead → estimate_sent, and every route to
+// SendEstimateScreen was gated on status === "lead" — so the approval link
+// became permanently unreachable for exactly the jobs that needed it.
+describe("canSendEstimate", () => {
+  test("a lead with a priced estimate can reach the send screen", () => {
+    expect(canSendEstimate("lead", 1200)).toBe(true);
+  });
+
+  test("an already-sent estimate can still reach it — the reachability fix", () => {
+    expect(canSendEstimate("estimate_sent", 1200)).toBe(true);
+  });
+
+  test("no estimate priced yet means nothing to send", () => {
+    expect(canSendEstimate("lead", 0)).toBe(false);
+    expect(canSendEstimate("estimate_sent", 0)).toBe(false);
+  });
+
+  test("once the customer has decided, sending is the wrong action", () => {
+    // declined has its own "Revise & re-send" path that resets state first.
+    for (const s of ["approved", "declined", "scheduled", "in_progress", "complete", "invoiced", "paid"]) {
+      expect(canSendEstimate(s, 1200)).toBe(false);
+    }
   });
 });
