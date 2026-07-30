@@ -58,12 +58,13 @@ import { fontScaleChanged } from "./utils/fontScaleRestart";
 import { getTradeNickname } from "./utils/pricingEngine";
 
 import * as Sentry from "@sentry/react-native";
-import { PostHogProvider, usePostHog } from "posthog-react-native";
+import { PostHogProvider, usePostHog, useNavigationTracker } from "posthog-react-native";
 import Constants from "expo-constants";
 import { posthogRef, track } from "./utils/analytics";
 
 const SENTRY_DSN = Constants.expoConfig?.extra?.sentryDsn ?? "";
 const POSTHOG_API_KEY = Constants.expoConfig?.extra?.posthogApiKey ?? "";
+const POSTHOG_ENABLED = Boolean(POSTHOG_API_KEY) && !POSTHOG_API_KEY.startsWith("PLACEHOLDER");
 
 if (SENTRY_DSN && !SENTRY_DSN.startsWith("PLACEHOLDER")) {
   Sentry.init({
@@ -365,6 +366,8 @@ function RootNavigator() {
 
   return (
     <NavigationContainer ref={navigationRef} theme={navTheme}>
+      {/* Must live INSIDE the container — see ScreenTracker. */}
+      {POSTHOG_ENABLED && <ScreenTracker />}
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         {!session ? (
           <RootStack.Screen name="Auth" component={AuthScreen} />
@@ -495,6 +498,21 @@ function PostHogBridge() {
   return null;
 }
 
+// PostHog's screen autocapture calls useNavigationState/useNavigation, so it only
+// works inside a NavigationContainer. PostHogProvider renders that hook itself, but
+// the provider has to stay at the root (it owns the client and the app-lifecycle
+// events, and remounting it inside the root gate would recreate both) — from there
+// the hooks can't see a navigation object and every launch logged
+//   ERROR useNavigationState error [Error: Couldn't find a navigation object...]
+//   ERROR useNavigation error     [Error: Couldn't find a navigation object...]
+// and then bailed out, so no screen was ever captured. Fix: turn the provider's own
+// tracker off with autocapture.captureScreens and call the exported hook from in
+// here, rendered inside the container.
+function ScreenTracker() {
+  useNavigationTracker();
+  return null;
+}
+
 function AppRoot() {
   const content = (
     <SafeAreaProvider>
@@ -514,11 +532,14 @@ function AppRoot() {
     </SafeAreaProvider>
   );
 
-  if (POSTHOG_API_KEY && !POSTHOG_API_KEY.startsWith("PLACEHOLDER")) {
+  if (POSTHOG_ENABLED) {
     return (
       <PostHogProvider
         apiKey={POSTHOG_API_KEY}
         options={{ host: "https://us.i.posthog.com" }}
+        // captureScreens defaults to true and renders a tracker here, outside the
+        // NavigationContainer, where its hooks throw. ScreenTracker does it inside.
+        autocapture={{ captureScreens: false }}
       >
         <PostHogBridge />
         {content}
