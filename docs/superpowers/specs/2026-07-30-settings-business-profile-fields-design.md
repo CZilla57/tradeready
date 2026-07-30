@@ -13,8 +13,9 @@ contact name, phone, email, payment instructions, region and trade — but not t
 
 A user who skipped or rushed those two onboarding inputs has no way to supply them
 later, and no way to correct or replace them. The logo is the more visible loss: it
-renders on invoice PDFs (`utils/invoicePdfFile.ts:49`), so "add my logo to my
-invoices" is currently a one-shot, onboarding-only opportunity.
+already renders on invoice PDFs, invoice print/HTML and estimates (three existing
+consumers, listed below), so "put my logo on my invoices" is currently a one-shot,
+onboarding-only opportunity — and a business that rebrands cannot update it at all.
 
 ## What already exists
 
@@ -28,6 +29,8 @@ built:
 | Defaults | `utils/storage/defaults.ts` | exists |
 | Persistence + sync | `saveSettings` / settings sync | exists, shape-complete |
 | Logo consumed on invoice PDF | `utils/invoicePdfFile.ts:49` | exists |
+| Logo consumed on invoice print/HTML | `screens/InvoicesScreen.tsx:66` | exists |
+| Logo consumed on estimates | `screens/SendEstimateScreen.tsx:126` | exists |
 | Collection UI | `screens/OnboardingScreen.tsx` | onboarding only |
 | **Editing UI** | `screens/SettingsScreen.tsx` | **missing — this spec** |
 
@@ -148,18 +151,30 @@ so it carries the test weight:
 - Pick → Discard deletes the newly-copied orphan, not the saved logo.
 - `settingsEqual` reports dirty for an `address` edit and for a `logoPhoto` change.
 
-**Render** — both controls appear in "Your business"; typing an address updates the
-draft; the logo thumbnail renders when set and the placeholder when not.
+**No screen render tests.** Revised 2026-07-30 during planning, on evidence: the repo
+has 66 test suites and **not one renders a screen** — every suite is a pure-logic unit
+test using CommonJS `require` (pattern: `__tests__/settingsDirty.test.js`). Rendering
+`SettingsScreen` would mean inventing a harness mocking supabase, the subscription and
+sync-status contexts, navigation, notifications, analytics and three expo modules —
+a large, flaky, precedent-setting lift for weak coverage. Rejected.
 
-**Device smoke (cannot be covered by Jest)** — camera and library branches with real
-permission prompts; address-then-logo layout on a physical device (the 2026-07-14 bug
-only ever manifested on hardware, never in tests).
+Instead the testable risk is pushed into the pure `orphanedLogoPaths` helper, which
+needs zero mocking and covers the entire data-loss surface. The UI wiring is verified
+on device.
+
+**Device smoke (carries what Jest cannot)** — camera and library branches with real
+permission prompts; pick / replace / remove / Save / Discard against the real
+filesystem; and the address-then-logo layout on physical hardware (the 2026-07-14 bug
+never manifested anywhere else).
 
 ## Out of scope
 
 - Address autocomplete / geocoding.
 - Logo cropping, rotation or size validation.
-- Showing the logo anywhere new (estimates, emails, app header) — PDF-only today.
+- Showing the logo anywhere new (emails, app header). It already renders on invoice
+  PDFs, invoice print/HTML and estimates — all three are existing consumers and need
+  no change, which is why onboarding's "appears on invoices and estimates" copy is
+  accurate and is reused verbatim in Settings.
 - Region auto-derive in Settings (see §1).
 - Backfilling `address`/`logoPhoto` for existing users.
 
