@@ -16,6 +16,7 @@ import {
   KeyboardAvoidingView,
   type AppStateStatus,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
@@ -36,6 +37,7 @@ import { useSubscription } from "../context/SubscriptionContext";
 import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
+import { promptForLogo } from "../utils/logoPicker";
 import type { Settings } from "../types/models";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import type { MainTabParamList } from "../types/navigation";
@@ -238,6 +240,18 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     setS(prev => prev ? { ...prev, [field]: value } as Settings : prev);
   }
 
+  // The logo follows this screen's draft contract: picking copies the file in and
+  // points the draft at it, removing only clears the draft reference. Neither
+  // deletes anything — cleanup happens once settings are committed, so "Discard"
+  // can still restore the previous image. See utils/logoLifecycle.ts.
+  function handlePickLogo() {
+    promptForLogo((uri) => update("logoPhoto", uri));
+  }
+
+  function handleRemoveLogo() {
+    update("logoPhoto", "");
+  }
+
   // Keep only the raw text while typing so the box can be emptied to enter a new
   // number; the value is normalized to a number on blur (commitRule).
   function updateRule(index: number, text: string) {
@@ -382,6 +396,34 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               </TouchableOpacity>
             ))}
           </View>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Your logo</Text>
+          <Text style={styles.logoHint}>Optional — appears on invoices and estimates.</Text>
+          <TouchableOpacity
+            style={styles.logoPicker}
+            onPress={handlePickLogo}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={s.logoPhoto ? "Change your business logo" : "Add your business logo"}
+          >
+            {s.logoPhoto ? (
+              <Image source={{ uri: s.logoPhoto }} style={styles.logoImage} contentFit="cover" />
+            ) : (
+              <View style={styles.logoPlaceholder}>
+                <Text style={styles.logoPlaceholderIcon}>📷</Text>
+                <Text style={styles.logoPlaceholderText}>Add logo</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          {!!s.logoPhoto && (
+            <TouchableOpacity
+              onPress={handleRemoveLogo}
+              style={styles.logoRemoveBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Remove your business logo"
+            >
+              <Text style={styles.logoRemoveText}>Remove</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Divider />
@@ -908,6 +950,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     // the input paints taller than its layout box and later siblings (the logo
     // block) render on top of it (device finding, 2026-07-14, see OnboardingScreen).
     inputMultiline: { height: undefined, minHeight: 80, paddingTop: spacing.sm, textAlignVertical: "top" },
+    logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
+    logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
+    logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background },
+    logoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+    logoPlaceholderIcon: { fontSize: 24, marginBottom: 2 },
+    logoPlaceholderText: { fontSize: fontSize.xs, color: colors.textMuted },
+    logoRemoveBtn: { alignSelf: "flex-start", marginTop: 4, minHeight: 44, justifyContent: "center" },
+    logoRemoveText: { fontSize: fontSize.xs, color: colors.danger },
     providerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: spacing.sm },
     providerBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     providerBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
