@@ -8,6 +8,8 @@ jest.mock("expo-constants", () => ({
     extra: {
       backendUrl: "https://backend-tradeready1.vercel.app",
       backendUrlIsPlaceholder: false,
+      googleWebClientId: "test-web.apps.googleusercontent.com",
+      googleIosClientId: "test-ios.apps.googleusercontent.com",
       posthogApiKey: "PLACEHOLDER_POSTHOG_KEY",
       sentryDsn: "PLACEHOLDER_SENTRY_DSN",
     },
@@ -97,12 +99,48 @@ jest.mock("expo-network", () => ({
   ),
 }));
 
+jest.mock("expo-apple-authentication", () => {
+  const { View } = require("react-native");
+  return {
+    isAvailableAsync: jest.fn(() => Promise.resolve(true)),
+    signInAsync: jest.fn(() =>
+      Promise.resolve({ identityToken: "apple-id-token", fullName: null, email: null })
+    ),
+    AppleAuthenticationScope: { FULL_NAME: 0, EMAIL: 1 },
+    AppleAuthenticationButtonType: { SIGN_IN: 0, CONTINUE: 1, SIGN_UP: 2 },
+    AppleAuthenticationButtonStyle: { WHITE: 0, WHITE_OUTLINE: 1, BLACK: 2 },
+    AppleAuthenticationButton: (props) => <View {...props} />,
+  };
+});
+
+jest.mock("@react-native-google-signin/google-signin", () => ({
+  GoogleSignin: {
+    configure: jest.fn(),
+    hasPlayServices: jest.fn(() => Promise.resolve(true)),
+    signIn: jest.fn(() =>
+      Promise.resolve({ type: "success", data: { idToken: "google-id-token" } })
+    ),
+  },
+  statusCodes: {
+    SIGN_IN_CANCELLED: "SIGN_IN_CANCELLED",
+    IN_PROGRESS: "IN_PROGRESS",
+    PLAY_SERVICES_NOT_AVAILABLE: "PLAY_SERVICES_NOT_AVAILABLE",
+  },
+}));
+
+jest.mock("expo-crypto", () => ({
+  digestStringAsync: jest.fn(() => Promise.resolve("hashed-nonce")),
+  randomUUID: jest.fn(() => "11111111-1111-1111-1111-111111111111"),
+  CryptoDigestAlgorithm: { SHA256: "SHA-256" },
+}));
+
 jest.mock("@supabase/supabase-js", () => ({
   createClient: jest.fn(() => ({
     auth: {
       getSession: jest.fn(() => Promise.resolve({ data: { session: null } })),
       onAuthStateChange: jest.fn(() => ({ data: { subscription: { unsubscribe: jest.fn() } } })),
       signInWithPassword: jest.fn(),
+      signInWithIdToken: jest.fn(() => Promise.resolve({ data: {}, error: null })),
       signOut: jest.fn(),
     },
     from: jest.fn(() => ({
