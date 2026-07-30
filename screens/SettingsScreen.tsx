@@ -364,6 +364,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           <Field label="Your name" value={s.contactName} onChangeText={(v) => update("contactName", v)} colors={colors} shadow={shadow} />
           <Field label="Phone" value={s.phone} onChangeText={(v) => update("phone", formatPhone(v))} keyboardType="phone-pad" colors={colors} shadow={shadow} />
           <Field label="Email" value={s.email} onChangeText={(v) => update("email", v)} keyboardType="email-address" colors={colors} shadow={shadow} />
+          <Field label="Business address" value={s.address} onChangeText={(v) => update("address", v)} multiline autoCapitalize="words" colors={colors} shadow={shadow} />
           <Field label="Payment instructions" value={s.paymentNotes} onChangeText={(v) => update("paymentNotes", v)} multiline autoCapitalize="sentences" colors={colors} shadow={shadow} />
           <Field label="Region" value={s.region || ""} onChangeText={(v) => update("region", v)} colors={colors} shadow={shadow} />
           <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>Your trade</Text>
@@ -903,7 +904,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     fieldGroup: { marginBottom: spacing.sm },
     fieldLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5, fontWeight: "500" },
     input: { backgroundColor: colors.background, borderRadius: radius.md, height: 44, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
-    inputMultiline: { height: 80, paddingTop: spacing.sm, textAlignVertical: "top" },
+    // minHeight (not height): a fixed height fights BaseField's multiline sizing —
+    // the input paints taller than its layout box and later siblings (the logo
+    // block) render on top of it (device finding, 2026-07-14, see OnboardingScreen).
+    inputMultiline: { minHeight: 80, paddingTop: spacing.sm, textAlignVertical: "top" },
     providerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: spacing.sm },
     providerBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     providerBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
