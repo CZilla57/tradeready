@@ -39,6 +39,7 @@ jest.mock("expo-file-system/legacy", () => ({
   cacheDirectory: "file:///mock/cache/",
   readAsStringAsync: jest.fn(() => Promise.resolve("")),
   writeAsStringAsync: jest.fn(() => Promise.resolve()),
+  copyAsync: jest.fn(() => Promise.resolve()),
   deleteAsync: jest.fn(() => Promise.resolve()),
   getInfoAsync: jest.fn(() => Promise.resolve({ exists: false })),
 }));

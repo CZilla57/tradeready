@@ -35,6 +35,7 @@ export const lightColors = {
   statusComplete:   "#10B981",
   statusInvoiced:   "#06B6D4",
   statusPaid:       "#34C759",
+  statusDeclined:   "#EF4444",   // red — declined estimate
 };
 
 export const darkColors = {
@@ -74,6 +75,7 @@ export const darkColors = {
   statusComplete:   "#34d399",
   statusInvoiced:   "#22d3ee",
   statusPaid:       "#30d158",
+  statusDeclined:   "#f87171",   // red — declined estimate (dark)
 };
 
 export type ColorScheme = typeof lightColors;

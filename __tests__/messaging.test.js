@@ -31,6 +31,29 @@ describe("composeEmail", () => {
     expect(MailComposer.composeAsync).not.toHaveBeenCalled();
     expect(alertSpy).toHaveBeenCalledWith("Mail not available", expect.any(String));
   });
+
+  test("forwards attachments to the composer when provided", async () => {
+    MailComposer.isAvailableAsync.mockResolvedValueOnce(true);
+    await composeEmail({
+      recipients: ["jane@example.com"],
+      subject: "Invoice INV-0001",
+      body: "Attached.",
+      attachments: ["file:///mock/cache/Invoice-INV-0001-Jane-Smith.pdf"],
+    });
+    expect(MailComposer.composeAsync).toHaveBeenCalledWith({
+      recipients: ["jane@example.com"],
+      subject: "Invoice INV-0001",
+      body: "Attached.",
+      attachments: ["file:///mock/cache/Invoice-INV-0001-Jane-Smith.pdf"],
+    });
+  });
+
+  test("sends no attachments key when none are given or the list is empty", async () => {
+    MailComposer.isAvailableAsync.mockResolvedValueOnce(true);
+    await composeEmail({ recipients: [], subject: "s", body: "b", attachments: [] });
+    const payload = MailComposer.composeAsync.mock.calls[0][0];
+    expect(Object.keys(payload)).toEqual(["recipients", "subject", "body"]);
+  });
 });
 
 describe("composeSMS", () => {

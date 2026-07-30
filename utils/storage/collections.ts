@@ -48,6 +48,7 @@ export async function saveJobs(jobs: Job[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.jobs, JSON.stringify(jobs));
   await enqueueCollectionChanges("jobs", old, jobs);
   trySync();
+  syncNotifications();
 }
 
 // --- Customers ---
@@ -67,6 +68,7 @@ export async function saveCustomers(customers: Customer[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.customers, JSON.stringify(customers));
   await enqueueCollectionChanges("customers", old, customers);
   trySync();
+  syncNotifications();
 }
 
 // --- Expenses ---

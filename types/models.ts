@@ -23,7 +23,8 @@ export type JobStatus =
   | "in_progress"
   | "complete"
   | "invoiced"
-  | "paid";
+  | "paid"
+  | "declined";
 
 /** `id` values in TRADE_TYPES (utils/pricingEngine.js). */
 export type TradeId =
@@ -78,6 +79,34 @@ export interface TimeSession {
   end: string | null;
 }
 
+/**
+ * Estimate-approval record. Absent until the estimate is "sent for approval".
+ * `snapshot` freezes the estimate as sent so the customer approves exactly what
+ * they saw and the backend never re-runs pricing math. `decision`/`consentAt`/
+ * signature fields are written SERVER-SIDE (service role) when the customer acts;
+ * the device only reads them and performs the status transition locally.
+ */
+export interface EstimateApprovalSnapshot {
+  businessName: string;
+  customerName: string;
+  jobTitle: string;
+  lineItems: { label: string; amount: number }[];
+  total: number;
+  currency: string;
+}
+
+export interface EstimateApproval {
+  token: string;
+  sentAt: DateString;
+  snapshot: EstimateApprovalSnapshot;
+  decision?: "approved" | "declined";
+  consentAt?: DateString;
+  signerName?: string;
+  declineReason?: string;
+  ip?: string;
+  userAgent?: string;
+}
+
 export interface Job {
   id: string;
   /**
@@ -113,6 +142,7 @@ export interface Job {
   timeSessions?: TimeSession[];
   recurringJobId?: string;
   occurrenceNumber?: number;
+  approval?: EstimateApproval;
 }
 
 export interface PricebookEntry {
@@ -263,8 +293,9 @@ export interface Invoice {
   paymentLinkAmount?: number;
   /** Itemised breakdown from the job estimate; absent on manually-created invoices. */
   lineItems?: InvoiceLineItem[];
-  // NOTE: pdfTemplates references `invoice.created`, which is NOT a field here —
-  // that is why the generated PDF's issue date always renders as "today".
+  // NOTE: there is no `created` field. The PDF's issue date is recovered from the
+  // ms timestamp both creation paths embed in `id` (see invoiceIssueDate in
+  // pdfTemplates); sample and legacy rows with non-timestamp ids render as "today".
 }
 
 export interface Customer {
@@ -402,6 +433,17 @@ export interface Settings {
    * Vercel Cron + Resend). Opt-in; independent of autoOutreachEnabled.
    */
   autoSendEmailEnabled: boolean;
+
+  /**
+   * When true, a local notification fires at 5pm the day before a scheduled
+   * job, reminding the tradesperson to send the customer a confirmation.
+   * Opt-in; absent on settings persisted before this field shipped → false.
+   */
+  appointmentRemindersEnabled: boolean;
+  /** Editable day-before confirmation template. Blank/absent → DEFAULT_CONFIRM_TEMPLATE. */
+  appointmentConfirmTemplate: string;
+  /** Editable "on my way" template. Blank/absent → DEFAULT_ON_MY_WAY_TEMPLATE. */
+  onMyWayTemplate: string;
 
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;
