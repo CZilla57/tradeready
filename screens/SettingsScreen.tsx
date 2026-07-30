@@ -38,6 +38,8 @@ import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
 import { promptForLogo } from "../utils/logoPicker";
+import { deletePhoto } from "../utils/photoStorage";
+import { orphanedLogoPaths } from "../utils/logoLifecycle";
 import type { Settings } from "../types/models";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import type { MainTabParamList } from "../types/navigation";
@@ -107,6 +109,23 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   const sRef = useRef<Settings | null>(null);
   const savedSnapshotRef = useRef<Settings | null>(null);
   const suppressDirtyWarnRef = useRef(false); // sign-out/delete wipe data on purpose
+
+  // Every logo path this session has referenced — the one loaded from settings plus
+  // each file the picker copied in. At each commit point, whichever of these the
+  // persisted settings no longer reference is deleted. Seeded on load so an
+  // untouched logo is trivially "kept".
+  const touchedLogoPathsRef = useRef<string[]>([]);
+
+  // Delete the image files the just-committed settings no longer reference, then
+  // reset the session's tracking to that surviving path.
+  async function cleanupLogoFiles(committedLogoPath: string | undefined) {
+    const orphans = orphanedLogoPaths(touchedLogoPathsRef.current, committedLogoPath);
+    touchedLogoPathsRef.current = committedLogoPath ? [committedLogoPath] : [];
+    for (const path of orphans) {
+      await deletePhoto(path);
+    }
+  }
+
   useEffect(() => { sRef.current = s; }, [s]);
   useEffect(() => { savedSnapshotRef.current = savedSnapshot; }, [savedSnapshot]);
 
@@ -123,7 +142,14 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           {
             text: "Discard",
             style: "destructive",
-            onPress: () => { if (savedSnapshotRef.current) setS(savedSnapshotRef.current); },
+            onPress: () => {
+              const saved = savedSnapshotRef.current;
+              if (!saved) return;
+              setS(saved);
+              // Files copied in during the abandoned edit are unreferenced now;
+              // the saved logo is passed as the keeper so it is never deleted.
+              cleanupLogoFiles(saved.logoPhoto);
+            },
           },
           {
             text: "Save",
@@ -133,6 +159,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               await saveSettings(toSave);
               syncNotifications();
               setSavedSnapshot(toSave);
+              await cleanupLogoFiles(toSave.logoPhoto);
             },
           },
         ]
@@ -155,6 +182,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
       }
       setS(loaded);
       setSavedSnapshot(loaded);
+      touchedLogoPathsRef.current = loaded.logoPhoto ? [loaded.logoPhoto] : [];
     });
   }, []);
 
@@ -245,7 +273,10 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   // deletes anything — cleanup happens once settings are committed, so "Discard"
   // can still restore the previous image. See utils/logoLifecycle.ts.
   function handlePickLogo() {
-    promptForLogo((uri) => update("logoPhoto", uri));
+    promptForLogo((uri) => {
+      touchedLogoPathsRef.current = [...touchedLogoPathsRef.current, uri];
+      update("logoPhoto", uri);
+    });
   }
 
   function handleRemoveLogo() {
@@ -323,6 +354,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     setS(flushed);
     setRuleDrafts({});
     setSavedSnapshot(flushed);
+    await cleanupLogoFiles(flushed.logoPhoto);
     setSaving(false);
     Alert.alert("Saved", "Your settings have been saved.");
   }
