@@ -38,7 +38,7 @@ import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
 import { promptForLogo } from "../utils/logoPicker";
-import { deletePhoto } from "../utils/photoStorage";
+import { deletePhoto, photoExists } from "../utils/photoStorage";
 import { orphanedLogoPaths } from "../utils/logoLifecycle";
 import type { Settings } from "../types/models";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
@@ -169,7 +169,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   }, [navigation]);
 
   useEffect(() => {
-    loadSettings().then((loaded) => {
+    loadSettings().then(async (loaded) => {
       if (
         loaded.provider !== "stripe" &&
         loaded.providerKey &&
@@ -179,6 +179,13 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           ...loaded,
           providerKeys: { ...loaded.providerKeys, [loaded.provider]: loaded.providerKey },
         };
+      }
+      // A logoPhoto path can outlive the file it points at (reinstall, or a path
+      // synced from another device). Treat a dangling path as unset so the "Add
+      // logo" placeholder shows instead of an invisible circle, and so the next
+      // save clears the stale reference.
+      if (loaded.logoPhoto && !(await photoExists(loaded.logoPhoto))) {
+        loaded = { ...loaded, logoPhoto: "" };
       }
       setS(loaded);
       setSavedSnapshot(loaded);
@@ -981,7 +988,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     // minHeight (not height): a fixed height fights BaseField's multiline sizing —
     // the input paints taller than its layout box and later siblings (the logo
     // block) render on top of it (device finding, 2026-07-14, see OnboardingScreen).
-    inputMultiline: { height: undefined, minHeight: 80, paddingTop: spacing.sm, textAlignVertical: "top" },
+    inputMultiline: { height: undefined, paddingTop: spacing.sm, textAlignVertical: "top" },
     logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
     logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
     logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background },

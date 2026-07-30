@@ -10,7 +10,10 @@ const PICKED_A = "file:///docs/logos/a.jpg";
 const PICKED_B = "file:///docs/logos/b.jpg";
 
 describe("orphanedLogoPaths", () => {
-  test("logo untouched — nothing is deleted", () => {
+  // Two user scenarios collapse to this same call: the logo was never touched, and
+  // the logo was removed in the draft then the edit was discarded. Removing adds
+  // nothing to `touched`, so in both cases the persisted path is the keeper.
+  test("keepPath present in touched — nothing is deleted (untouched, or removed then discarded)", () => {
     expect(orphanedLogoPaths([ORIGINAL], ORIGINAL)).toEqual([]);
   });
 
@@ -24,10 +27,6 @@ describe("orphanedLogoPaths", () => {
 
   test("picked then discarded — the new copy is orphaned, the saved one survives", () => {
     expect(orphanedLogoPaths([ORIGINAL, PICKED_A], ORIGINAL)).toEqual([PICKED_A]);
-  });
-
-  test("removed then discarded — nothing is deleted", () => {
-    expect(orphanedLogoPaths([ORIGINAL], ORIGINAL)).toEqual([]);
   });
 
   test("picked twice then saved — every superseded file is orphaned", () => {
