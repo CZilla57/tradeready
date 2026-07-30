@@ -12,6 +12,27 @@ export async function persistPhoto(tempUri: string, folder = "photos"): Promise<
   return dest;
 }
 
+/**
+ * Absolute URIs of every file in a photo folder, or `[]` if the folder does not
+ * exist yet. Paths are built exactly as `persistPhoto` builds them, so they
+ * compare equal to a stored path for the same file.
+ *
+ * Reports an unreadable folder as empty rather than throwing: callers use this
+ * to reclaim disk, and a failed listing should skip the reclaim, never break the
+ * screen that triggered it.
+ */
+export async function listPhotos(folder: string): Promise<string[]> {
+  const dir = `${FileSystem.documentDirectory}${folder}/`;
+  try {
+    const info = await FileSystem.getInfoAsync(dir);
+    if (!info.exists) return [];
+    const names = await FileSystem.readDirectoryAsync(dir);
+    return names.map((name) => `${dir}${name}`);
+  } catch {
+    return [];
+  }
+}
+
 export async function deletePhoto(uri: string): Promise<void> {
   try {
     await FileSystem.deleteAsync(uri, { idempotent: true });
