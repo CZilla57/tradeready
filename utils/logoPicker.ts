@@ -1,15 +1,23 @@
 import { Alert } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { persistPhoto } from "./photoStorage";
+import { persistPhotoSafe } from "./photoStorage";
 
 // Copy the chosen image into app storage and hand back the persisted path.
 // Shared tail of both pick branches; a cancelled or empty result is a no-op.
+// A failed copy tells the user their logo is unchanged rather than leaving the
+// tap looking ignored, and never calls onPicked — so no caller records a path
+// to a file that was not written.
 async function persistPicked(
   result: { canceled: boolean; assets?: { uri: string }[] | null },
   onPicked: (uri: string) => void,
 ): Promise<void> {
   if (result.canceled || !result.assets?.[0]) return;
-  onPicked(await persistPhoto(result.assets[0].uri, "logos"));
+  const uri = await persistPhotoSafe(result.assets[0].uri, "logos");
+  if (!uri) {
+    Alert.alert("Couldn't save that image", "Your logo wasn't changed. Please try again.");
+    return;
+  }
+  onPicked(uri);
 }
 
 /**

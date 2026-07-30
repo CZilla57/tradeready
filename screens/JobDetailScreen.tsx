@@ -19,7 +19,7 @@ import {
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { persistPhoto, deletePhoto } from "../utils/photoStorage";
+import { persistPhotoSafe, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, resolveCustomer } from "../utils/storage";
@@ -669,7 +669,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           }
           const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
           if (!result.canceled && job) {
-            const uri = await persistPhoto(result.assets[0].uri, "job-photos");
+            const uri = await persistPhotoSafe(result.assets[0].uri, "job-photos");
+            if (!uri) {
+              Alert.alert("Couldn't save that photo", "The photo wasn't added to this job. Please try again.");
+              return;
+            }
             await updateJob({ photos: [...(job.photos || []), uri] });
           }
         },
@@ -684,7 +688,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           }
           const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
           if (!result.canceled && job) {
-            const uri = await persistPhoto(result.assets[0].uri, "job-photos");
+            const uri = await persistPhotoSafe(result.assets[0].uri, "job-photos");
+            if (!uri) {
+              Alert.alert("Couldn't save that photo", "The photo wasn't added to this job. Please try again.");
+              return;
+            }
             await updateJob({ photos: [...(job.photos || []), uri] });
           }
         },
