@@ -3,8 +3,8 @@
 // capability). Stamps consentAt SERVER-SIDE and merges only approval.* into the
 // job blob (service role). The device performs the status transition on pull.
 
-const { fetchJob, upsertJob, constantTimeEqual } = require('../../lib/estimateStore');
-const { createRateLimiter } = require('../../lib/guards');
+const { fetchJob, upsertJob, constantTimeEqual } = require('../estimateStore');
+const { createRateLimiter } = require('../guards');
 
 const ALLOWED_ORIGIN = 'https://czilla57.github.io';
 const allow = createRateLimiter({ limit: 10 });

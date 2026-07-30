@@ -4,8 +4,8 @@
 // create-payment-link.js. The device never needs a secure RNG.
 
 const crypto = require('crypto');
-const { fetchJobForUser, upsertJob, planApprovalWrite } = require('../../lib/estimateStore');
-const { createRateLimiter } = require('../../lib/guards');
+const { fetchJobForUser, upsertJob, planApprovalWrite } = require('../estimateStore');
+const { createRateLimiter } = require('../guards');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;

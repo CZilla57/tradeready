@@ -2,8 +2,8 @@
 // Sanitized, token-gated read for the public viewer. Returns ONLY this estimate's
 // frozen snapshot + decision state — never other jobs or extra PII.
 
-const { fetchJob, constantTimeEqual } = require('../../lib/estimateStore');
-const { createRateLimiter } = require('../../lib/guards');
+const { fetchJob, constantTimeEqual } = require('../estimateStore');
+const { createRateLimiter } = require('../guards');
 
 const ALLOWED_ORIGIN = 'https://czilla57.github.io';
 const allow = createRateLimiter({ limit: 30 });
