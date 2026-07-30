@@ -1,11 +1,16 @@
-// Vercel serverless function — proxies Anthropic vision for receipt scanning
+// Vercel serverless function — proxies Groq vision for receipt scanning
 // (expense form pre-fill), using a server-side API key so users without their
-// own Anthropic key can still scan receipts.
+// own Anthropic key can still scan receipts. Groq, not Anthropic, because
+// GROQ_API_KEY was already funded and configured (ai-chat.js) while no
+// ANTHROPIC_API_KEY has ever been set — see backend/lib/guards.js comment
+// history and tradeready-ai-layer skill for the routing rationale. The user's-
+// own-key path (utils/receiptOCR.ts, no user key set here) is unaffected and
+// still calls Anthropic directly.
 //
 // Auth: Supabase JWT via "Authorization: Bearer <token>"
 //
 // Required Vercel env vars:
-//   ANTHROPIC_API_KEY
+//   GROQ_API_KEY
 //   SUPABASE_URL
 //   SUPABASE_ANON_KEY
 //
@@ -15,12 +20,14 @@
 
 const { createRateLimiter, validateReceiptPayload } = require("../lib/guards");
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const ANTHROPIC_VERSION = "2023-06-01";
+// Groq's only vision-capable model as of 2026-07-30 (verified against
+// console.groq.com/docs/vision — do not assume llama-3.1-8b-instant, the
+// text-only model used elsewhere in this backend, supports images).
+const GROQ_VISION_MODEL = "qwen/qwen3.6-27b";
 
 const ALLOWED_ORIGINS = ["https://tradeready.app"];
 
@@ -36,7 +43,7 @@ module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  if (!ANTHROPIC_API_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  if (!GROQ_API_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return res.status(500).json({ error: "Server misconfiguration." });
   }
 
@@ -67,25 +74,21 @@ module.exports = async function handler(req, res) {
   const { imageBase64, mediaType } = req.body;
 
   try {
-    const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+    const aiRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": ANTHROPIC_VERSION,
+        Authorization: `Bearer ${GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
+        model: GROQ_VISION_MODEL,
         max_tokens: 300,
         messages: [
           {
             role: "user",
             content: [
-              {
-                type: "image",
-                source: { type: "base64", media_type: mediaType, data: imageBase64 },
-              },
               { type: "text", text: buildReceiptPrompt() },
+              { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
             ],
           },
         ],
@@ -98,7 +101,7 @@ module.exports = async function handler(req, res) {
       return res.status(502).json({ error: "AI provider error. Please try again." });
     }
 
-    const text = data.content?.map((b) => b.text || "").join("") || "";
+    const text = data.choices?.[0]?.message?.content || "";
     if (!text) {
       return res.status(502).json({ error: "No response from AI" });
     }
