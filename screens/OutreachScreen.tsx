@@ -22,6 +22,7 @@ import {
   cachedLinkMatches,
   type DepositAsk,
 } from "../utils/invoiceHelpers";
+import { buildInvoicePdfFile } from "../utils/invoicePdfFile";
 import { formatMoney } from "../utils/format";
 import { supabase } from "../utils/supabase";
 import { Badge, Button, Card, Divider } from "../components/UI";
@@ -83,6 +84,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
   const [installments, setInstallments] = useState("3");
   const [frequency, setFrequency] = useState("Bi-weekly");
   const [copied, setCopied] = useState(false);
+  const [preparingPdf, setPreparingPdf] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [autoReminder, setAutoReminder] = useState<{ sent_at: string; status: string } | null>(null);
   const [depositMode, setDepositMode] = useState<DepositMode>("full");
@@ -312,11 +314,38 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
 
   async function sendEmail() {
     if (!invoice) return;
-    await composeEmail({
-      recipients: [invoice.email],
-      subject: subject || `Payment reminder: ${invoice.number}`,
-      body: message,
-    });
+    setPreparingPdf(true);
+    try {
+      // buildInvoicePdfFile reports its own errors and resolves null on failure;
+      // the catch is belt-and-braces so a PDF problem can never block the send.
+      const pdfUri = await buildInvoicePdfFile(invoice, settings ?? {}).catch(() => null);
+      const opened = await composeEmail({
+        recipients: [invoice.email],
+        subject: subject || `Payment reminder: ${invoice.number}`,
+        body: message,
+        attachments: pdfUri ? [pdfUri] : undefined,
+      });
+      // Warned only after the composer closes: alerting first leaves a UIAlertController
+      // on top, and iOS presents the mail sheet from the topmost controller, which can
+      // stop it appearing at all. Skipped when composeEmail already alerted itself.
+      // Copy stays neutral about the outcome — `opened` only tells us the sheet was
+      // dismissed, not whether the draft was sent, saved, or cancelled.
+      if (opened && !pdfUri) {
+        Alert.alert(
+          "PDF not attached",
+          "Couldn't attach the invoice PDF, so the draft didn't include it."
+        );
+      }
+    } catch (err: unknown) {
+      reportError(err, { context: 'invoiceEmailCompose' });
+      Alert.alert(
+        "Couldn't open Mail",
+        "Something went wrong opening your mail app. Please try again."
+      );
+    } finally {
+      // Held across both awaits so a second tap can't open a duplicate draft.
+      setPreparingPdf(false);
+    }
   }
 
   async function sendSMS() {
@@ -567,6 +596,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
             <Button
               label={`Open in ${channel === "email" ? "Mail" : "Messages"}`}
               onPress={channel === "email" ? sendEmail : sendSMS}
+              loading={channel === "email" && preparingPdf}
               style={{ marginBottom: spacing.sm }}
             />
             <Button

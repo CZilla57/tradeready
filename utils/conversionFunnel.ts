@@ -19,6 +19,10 @@ const STATUS_ORDINAL: Record<JobStatus, number> = {
   complete: 5,
   invoiced: 6,
   paid: 7,
+  // A declined job DID reach "estimate sent" but not "approved", so it counts in
+  // the estimate_sent denominator and lowers win rate — the honest analytic for a
+  // lost deal. (Deliberate, reversible: set to -1 to exclude it entirely.)
+  declined: 1,
 };
 
 export interface FunnelStage {

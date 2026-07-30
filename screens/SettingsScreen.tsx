@@ -19,6 +19,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
+import { DEFAULT_CONFIRM_TEMPLATE, DEFAULT_ON_MY_WAY_TEMPLATE } from "../utils/appointmentTemplates";
 import { syncNotifications } from "../utils/notifications";
 import { composeEmail } from "../utils/messaging";
 import { syncIfOnline } from "../utils/sync";
@@ -32,7 +33,7 @@ import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useSubscription } from "../context/SubscriptionContext";
-import { showManageSubscriptions } from "../utils/subscription";
+import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
 import type { Settings } from "../types/models";
@@ -580,6 +581,50 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           </Text>
         </View>
 
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Appointment reminders</Text>
+            <Switch
+              value={!!s.appointmentRemindersEnabled}
+              onValueChange={(v) => update("appointmentRemindersEnabled", v)}
+              trackColor={{ true: colors.accent }}
+              accessibilityLabel="Appointment reminders"
+            />
+          </View>
+          <Text style={styles.keyNote}>
+            Remind me the evening before a scheduled job to confirm with the customer.
+          </Text>
+        </View>
+        <Text style={[styles.ruleSubtitle, { marginTop: spacing.sm }]}>Message templates</Text>
+        <View style={styles.card}>
+          <Field
+            label="Confirmation message"
+            value={s.appointmentConfirmTemplate ?? DEFAULT_CONFIRM_TEMPLATE}
+            onChangeText={(v) => update("appointmentConfirmTemplate", v)}
+            multiline
+            autoCapitalize="sentences"
+            colors={colors}
+            shadow={shadow}
+          />
+          <Text style={styles.keyNote}>
+            Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
+          </Text>
+        </View>
+        <View style={styles.card}>
+          <Field
+            label="On-my-way message"
+            value={s.onMyWayTemplate ?? DEFAULT_ON_MY_WAY_TEMPLATE}
+            onChangeText={(v) => update("onMyWayTemplate", v)}
+            multiline
+            autoCapitalize="sentences"
+            colors={colors}
+            shadow={shadow}
+          />
+          <Text style={styles.keyNote}>
+            Available: {"{customerName}"}, {"{businessName}"}, {"{date}"}, {"{time}"}, {"{address}"}
+          </Text>
+        </View>
+
         <Divider />
 
         <SectionHeader title="Review requests" />
@@ -708,10 +753,16 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           )}
           {isSubscribed || isTrialing ? (
             <TouchableOpacity style={[styles.stripeBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Manage subscription" onPress={async () => {
-              try { await showManageSubscriptions(); } catch {
-                const url = Platform.OS === "ios" ? "https://apps.apple.com/account/subscriptions" : "https://play.google.com/store/account/subscriptions";
-                Linking.openURL(url);
-              }
+              if (await openManageSubscriptions()) return;
+              // Neither the StoreKit sheet nor the store deep link is available
+              // (sandbox / iPad compatibility mode) — tell the user where to go
+              // rather than letting the failure surface as an error.
+              Alert.alert(
+                "Manage your subscription",
+                Platform.OS === "ios"
+                  ? "Open the Settings app, tap your name, then tap Subscriptions to change or cancel TradeReady Pro."
+                  : "Open the Google Play Store, tap your profile picture, then tap Payments & subscriptions."
+              );
             }}>
               <Text style={styles.stripeBtnText}>Manage subscription</Text>
             </TouchableOpacity>

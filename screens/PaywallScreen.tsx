@@ -14,11 +14,15 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useSubscription } from "../context/SubscriptionContext";
+import { useSyncStatusContext } from "../context/SyncStatusContext";
 import { getOfferings, purchasePackage, restorePurchases, checkTrialEligibility, ENTITLEMENT_ID } from "../utils/subscription";
 import { trialCopy, NO_TRIAL_COPY, offeringsDisplayState } from "../utils/paywallCopy";
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import { track, reportError } from "../utils/analytics";
+import { clearAllUserData } from "../utils/storage";
+import { syncIfOnline } from "../utils/sync";
+import { supabase } from "../utils/supabase";
+import { track, reportError, resetUser } from "../utils/analytics";
 import type { RootStackScreenProps } from "../types/navigation";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "";
@@ -39,6 +43,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
   const insets = useSafeAreaInsets();
   const canDismiss: boolean = route?.params?.canDismiss ?? false;
   const { updateFromPurchase, refresh } = useSubscription();
+  const { pendingCount } = useSyncStatusContext();
 
   const [offerings, setOfferings]   = useState<any[] | null>(null);
   const [selectedPkg, setSelectedPkg] = useState<any>(null);
@@ -63,7 +68,11 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
       const ids = pkgs.map((p: any) => p.product?.identifier).filter(Boolean);
       checkTrialEligibility(ids).then(setEligibility).catch(() => {});
     } catch {
-      setLoadError("Could not load subscription options. Check your connection and try again.");
+      // Deliberately not "check your connection" — the usual cause is store-side
+      // (products still propagating after an App Store Connect state change, a
+      // stale RevenueCat offerings cache), and pointing at the network sends
+      // people chasing the wrong thing.
+      setLoadError("We couldn't load subscription options. This is usually temporary — please try again in a moment.");
     }
   }
 
@@ -102,6 +111,44 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
       Alert.alert("Restore failed", err.message ?? "Could not restore purchases. Please try again.");
     } finally {
       setRestoring(false);
+    }
+  }
+
+  // Escape hatch for the HARD gate only (!canDismiss). Without it an
+  // unsubscribed user — a lapsed subscriber, or the wrong account signed in on
+  // this device — is trapped on the paywall with no way back to sign-in.
+  // Deliberately NOT a "skip into the app" bypass: that would hand free access
+  // to unsubscribed users and defeat the gate. Mirrors SettingsScreen's
+  // sign-out exactly (clearAllUserData → supabase.auth.signOut); the resulting
+  // SIGNED_OUT event returns the app to the Auth screen.
+  function handleSignOut() {
+    const doSignOut = async () => {
+      resetUser();
+      await clearAllUserData();
+      await supabase.auth.signOut();
+    };
+    if (pendingCount > 0) {
+      Alert.alert(
+        "Unsynced changes",
+        "You have changes that haven't been saved to the cloud yet. Sync now to keep them.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Sync & sign out",
+            onPress: async () => {
+              const { data: { session } } = await supabase.auth.getSession();
+              if (session?.user?.id) await syncIfOnline(session.user.id);
+              await doSignOut();
+            },
+          },
+          { text: "Sign out anyway", style: "destructive", onPress: doSignOut },
+        ],
+      );
+    } else {
+      Alert.alert("Sign out", "Are you sure you want to sign out?", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Sign out", style: "destructive", onPress: doSignOut },
+      ]);
     }
   }
 
@@ -181,7 +228,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>
               Subscription plans aren't available right now. This is usually temporary —
-              check your connection and try again in a moment.
+              please try again in a moment.
             </Text>
             <TouchableOpacity
               style={styles.emptyRetryBtn}
@@ -283,6 +330,17 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
             ? <ActivityIndicator color={colors.textMuted} size="small" />
             : <Text style={styles.restoreText}>Restore purchases</Text>}
         </TouchableOpacity>
+
+        {!canDismiss && (
+          <TouchableOpacity
+            style={styles.signOutBtn}
+            onPress={handleSignOut}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out"
+          >
+            <Text style={styles.signOutText}>Sign out</Text>
+          </TouchableOpacity>
+        )}
 
         <View style={styles.legalRow}>
           {PRIVACY_URL ? (
@@ -394,6 +452,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     ctaSub:      { textAlign: "center", fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: spacing.lg },
     restoreBtn:  { alignItems: "center", paddingVertical: spacing.sm, marginBottom: spacing.md },
     restoreText: { fontSize: fontSize.sm, color: colors.textMuted },
+    signOutBtn:  { alignItems: "center", paddingVertical: spacing.sm, marginBottom: spacing.md },
+    signOutText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: "600" },
     legalRow:  { flexDirection: "row", justifyContent: "center", alignItems: "center", marginBottom: spacing.sm },
     legalLink: { fontSize: fontSize.xs, color: colors.textMuted },
     legalDot:  { fontSize: fontSize.xs, color: colors.textMuted },

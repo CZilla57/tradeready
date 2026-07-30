@@ -1,5 +1,6 @@
-import { Platform } from 'react-native';
+import { Platform, Linking } from 'react-native';
 import Constants from 'expo-constants';
+import { reportError } from './analytics';
 import type { CustomerInfo, PurchasesOfferings, PurchasesPackage, MakePurchaseResult } from 'react-native-purchases';
 
 const RC_APPLE_KEY  = Constants.expoConfig?.extra?.rcAppleApiKey  ?? '';
@@ -22,10 +23,22 @@ export const RC_CONFIGURED = Boolean(Purchases) && RC_API_KEY.length > 0;
 
 export const ENTITLEMENT_ID = 'TradeReady Pro';
 
+// Guarded like its siblings. RevenueCat throws from configure() on a key it rejects —
+// notably a live `appl_` key under Expo Go's Browser Mode, which requires a Test Store
+// key. This runs inside AuthProvider's useEffect, so an escaping throw reaches the root
+// ErrorBoundary and the whole app becomes "Something went wrong. Please restart."
+// (device-verified 2026-07-30). The same would hit every user in production if the key
+// were rotated or mistyped. Subscription state failing open is the designed behaviour
+// here; a dead app is not — a failed configure leaves getCustomerInfo throwing, which
+// SubscriptionContext already treats as fetchFailed.
 export function configurePurchases(): void {
   if (!RC_CONFIGURED) return;
-  if (__DEV__ && PurchasesLogLevel) Purchases.setLogLevel(PurchasesLogLevel.DEBUG);
-  Purchases.configure({ apiKey: RC_API_KEY });
+  try {
+    if (__DEV__ && PurchasesLogLevel) Purchases.setLogLevel(PurchasesLogLevel.DEBUG);
+    Purchases.configure({ apiKey: RC_API_KEY });
+  } catch (err: unknown) {
+    reportError(err, { context: 'configurePurchases' });
+  }
 }
 
 export async function loginPurchases(userId: string): Promise<void> {
@@ -42,7 +55,13 @@ export async function getCustomerInfo(): Promise<CustomerInfo> {
   return Purchases.getCustomerInfo();
 }
 
+// Guarded like its siblings: without the native module (Expo Go, simulator
+// without a dev build) this used to throw a raw TypeError on a null Purchases,
+// which the paywall reported as a connection problem. Returning no offerings
+// instead lands on the paywall's designed "empty" state, which explains itself
+// and offers a retry.
 export async function getOfferings(): Promise<PurchasesOfferings> {
+  if (!RC_CONFIGURED) return { all: {}, current: null } as PurchasesOfferings;
   return Purchases.getOfferings();
 }
 
@@ -54,12 +73,40 @@ export async function restorePurchases(): Promise<CustomerInfo> {
   return Purchases.restorePurchases();
 }
 
-export async function showManageSubscriptions(): Promise<void> {
-  if (!RC_CONFIGURED) return;
-  if (typeof Purchases.showManageSubscriptions === 'function') {
-    await Purchases.showManageSubscriptions();
-  } else {
-    throw new Error('Not supported on this platform');
+// Store deep link for managing subscriptions. iOS uses the itms-apps scheme so
+// it opens the App Store's subscription screen directly instead of bouncing
+// through a Safari page that a sandbox Apple ID cannot load.
+const MANAGE_SUBSCRIPTIONS_URL = Platform.select({
+  ios: 'itms-apps://apps.apple.com/account/subscriptions',
+  android: 'https://play.google.com/store/account/subscriptions',
+  default: '',
+}) ?? '';
+
+// Opens the platform's subscription-management UI. Tries RevenueCat's native
+// StoreKit sheet first, then the store deep link. Returns false only when both
+// paths fail, so the caller can show manual instructions instead of letting an
+// error reach the user.
+//
+// App Review rejected 1.0(5) under guideline 2.1(a) for an error on this
+// button, reviewed on an iPad running the iPhone-compatibility build against a
+// sandbox account — an environment where the StoreKit sheet is unavailable.
+// The previous version awaited only the native call and fired the fallback
+// openURL without awaiting or catching it, so a second failure surfaced raw.
+export async function openManageSubscriptions(): Promise<boolean> {
+  if (RC_CONFIGURED && typeof Purchases.showManageSubscriptions === 'function') {
+    try {
+      await Purchases.showManageSubscriptions();
+      return true;
+    } catch {
+      // Sheet unavailable — fall through to the store deep link.
+    }
+  }
+  if (!MANAGE_SUBSCRIPTIONS_URL) return false;
+  try {
+    await Linking.openURL(MANAGE_SUBSCRIPTIONS_URL);
+    return true;
+  } catch {
+    return false;
   }
 }
 
