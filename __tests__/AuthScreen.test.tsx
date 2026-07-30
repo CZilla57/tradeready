@@ -21,6 +21,11 @@ jest.mock("../utils/socialAuth", () => ({
   signInWithGoogle: jest.fn(() => Promise.resolve({ ok: true })),
 }));
 
+jest.mock("../utils/socialAuth", () => ({
+  signInWithApple: jest.fn(() => Promise.resolve({ ok: true })),
+  signInWithGoogle: jest.fn(() => Promise.resolve({ ok: true })),
+}));
+
 describe("AuthScreen social sign-in", () => {
   beforeEach(() => jest.clearAllMocks());
 

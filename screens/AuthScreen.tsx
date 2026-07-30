@@ -119,6 +119,7 @@ export default function AuthScreen() {
       if (mode === 'login') {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (error) throw error;
+        track('sign_in', { method: 'password' });
       } else {
         const { error } = await supabase.auth.signUp({
           email: email.trim(),
