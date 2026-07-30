@@ -1,27 +1,31 @@
-// Vercel serverless function — proxies Anthropic pricing suggestions for the
+// Vercel serverless function — proxies Groq pricing suggestions for the
 // Pricebook AI Assist feature, using a server-side API key so users without
-// their own Anthropic key can still get suggestions.
+// their own Anthropic key can still get suggestions. Groq, not Anthropic,
+// because GROQ_API_KEY was already funded and configured (ai-chat.js) while
+// no ANTHROPIC_API_KEY has ever been set — see backend/api/receipt-extract.js
+// for the same fix applied there, and the tradeready-ai-layer skill for the
+// routing rationale. The user's-own-key path (utils/pricebookAI.ts, no user
+// key set here) is unaffected and still calls Anthropic directly.
 //
 // Auth: Supabase JWT via "Authorization: Bearer <token>"
 //
 // Required Vercel env vars:
-//   ANTHROPIC_API_KEY
+//   GROQ_API_KEY
 //   SUPABASE_URL
 //   SUPABASE_ANON_KEY
 
 const { createRateLimiter, validatePricebookPayload } = require("../lib/guards");
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const ANTHROPIC_VERSION = "2023-06-01";
+const GROQ_MODEL = "llama-3.1-8b-instant";
 
 const ALLOWED_ORIGINS = ["https://tradeready.app"];
 
 // 10 suggestions per user per minute — pricebook entries are one-shot lookups;
-// this caps abuse of the server-side Anthropic key.
+// this caps abuse of the server-side Groq key.
 const allowRequest = createRateLimiter({ limit: 10 });
 
 module.exports = async function handler(req, res) {
@@ -32,7 +36,7 @@ module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  if (!ANTHROPIC_API_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  if (!GROQ_API_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return res.status(500).json({ error: "Server misconfiguration." });
   }
 
@@ -65,15 +69,14 @@ module.exports = async function handler(req, res) {
   const prompt = buildPricingSuggestionPrompt({ serviceName, description, category, materials, laborHours, laborRate, trade, region });
 
   try {
-    const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+    const aiRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": ANTHROPIC_VERSION,
+        Authorization: `Bearer ${GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
+        model: GROQ_MODEL,
         max_tokens: 1000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -85,7 +88,7 @@ module.exports = async function handler(req, res) {
       return res.status(502).json({ error: "AI provider error. Please try again." });
     }
 
-    const text = data.content?.map((b) => b.text || "").join("") || "";
+    const text = data.choices?.[0]?.message?.content || "";
     if (!text) {
       return res.status(502).json({ error: "No response from AI" });
     }
