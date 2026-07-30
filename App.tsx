@@ -407,6 +407,13 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     Sentry.captureException(error, { extra: { componentStack: errorInfo.componentStack } });
+    if (__DEV__) {
+      // Sentry.init passes enabled: !__DEV__, so in development the line above is a
+      // no-op and this boundary would otherwise swallow the error entirely — leaving
+      // only the "Something went wrong" screen with no way to find out what broke.
+      // eslint-disable-next-line no-console -- the only channel that surfaces a caught render error in dev
+      console.error("ErrorBoundary caught:", error, errorInfo.componentStack);
+    }
   }
 
   render() {
