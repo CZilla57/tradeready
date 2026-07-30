@@ -32,6 +32,7 @@ import {
   cannedScope,
 } from "../utils/estimateDocument";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook, resolveCustomer } from "../utils/storage";
+import { createApprovalLink } from "../utils/estimateApprovalLink";
 import { Button, Card, Divider } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
@@ -71,6 +72,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
   const [taxPercent, setTaxPercent] = useState("0");
 
   const [tab, setTab] = useState<"calculator" | "estimate">("calculator");
+  const [linking, setLinking] = useState(false);
   const [generatedEstimate, setGeneratedEstimate] = useState("");
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -282,6 +284,27 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     track("estimate_sent");
   }
 
+  // Persist what's currently on the calculator onto the job. The approval
+  // snapshot is built from the JOB, not from this screen's state, so minting a
+  // link before saving would show the customer a stale (often zero) estimate.
+  async function persistPricingToJob(): Promise<Job | null> {
+    if (!job || !jobId) return null;
+    const updated: Job = {
+      ...job,
+      laborHours: params.laborHours,
+      laborRate: params.laborRate,
+      materials,
+      materialMarkup: params.materialMarkup,
+      overhead: params.overheadPercent,
+      margin: params.marginPercent,
+      estimateTotal: breakdown.total,
+    };
+    const jobs = await loadJobs();
+    await saveJobs(jobs.map((j) => (j.id === jobId ? updated : j)));
+    setJob(updated);
+    return updated;
+  }
+
   async function sendEstimateByEmail() {
     if (!customer || !customer.email) {
       Alert.alert(
@@ -290,10 +313,38 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
       );
       return;
     }
+
+    // Attach a customer approval link so the estimate can be approved or
+    // declined online. Best-effort: minting needs a session, the network, and
+    // the job synced to Supabase, none of which are guaranteed — so a failure
+    // offers to send the plain estimate rather than blocking the send outright.
+    let body = generatedEstimate;
+    const saved = await persistPricingToJob();
+    if (saved && settings) {
+      setLinking(true);
+      const result = await createApprovalLink(saved, customer, settings);
+      setLinking(false);
+      if (result.ok) {
+        body = `${generatedEstimate}\n\nView and approve your estimate here:\n${result.url}`;
+      } else {
+        const proceed = await new Promise<boolean>((resolve) =>
+          Alert.alert(
+            "Couldn't create approval link",
+            `${result.message}\n\nSend the estimate without an approval link?`,
+            [
+              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+              { text: "Send anyway", onPress: () => resolve(true) },
+            ]
+          )
+        );
+        if (!proceed) return;
+      }
+    }
+
     const sent = await composeEmail({
       recipients: [customer.email],
       subject: `Estimate: ${job?.title || "Your job"} — ${formatQuote(breakdown.total)}`,
-      body: generatedEstimate,
+      body,
     });
     if (!sent) return;
     await markEstimateSent();
@@ -367,6 +418,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
             onRegenerate={generateEstimate}
             onCopy={copyEstimate}
             onEmail={sendEstimateByEmail}
+            linking={linking}
             onMarkSent={async () => {
               await markEstimateSent();
               Alert.alert("Marked as sent", 'The job moved to "Estimate sent".');
@@ -568,13 +620,14 @@ interface EstimateTabProps {
   onRegenerate: () => void;
   onCopy: () => void;
   onEmail: () => void;
+  linking: boolean;
   onMarkSent: () => void;
   canMarkSent: boolean;
   copied: boolean;
   total: number;
 }
 
-function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEmail, onMarkSent, canMarkSent, copied, total }: EstimateTabProps) {
+function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEmail, onMarkSent, canMarkSent, copied, total, linking }: EstimateTabProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
@@ -604,7 +657,12 @@ function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEm
       ) : null}
 
       {!generating && generatedEstimate ? (
-        <Button label="✉ Email to customer →" onPress={onEmail} style={{ marginTop: spacing.sm }} />
+        <Button
+          label={linking ? "Creating approval link..." : "✉ Email to customer →"}
+          onPress={onEmail}
+          loading={linking}
+          style={{ marginTop: spacing.sm }}
+        />
       ) : null}
 
       {!generating && generatedEstimate && canMarkSent ? (
