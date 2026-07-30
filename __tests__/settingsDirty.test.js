@@ -59,4 +59,28 @@ describe("settingsEqual", () => {
     expect(settingsEqual({ a: 1 }, "a")).toBe(false);
     expect(settingsEqual([1], [1, 2])).toBe(false);
   });
+
+  test("a changed address is detected, an otherwise-identical pair is not", () => {
+    const a = {
+      businessName: "Acme Plumbing",
+      address: "123 Main St, Springfield",
+      logoPhoto: "file:///docs/logos/original.jpg",
+    };
+    const b = { ...a, address: "456 Oak Ave, Springfield" };
+    const c = { ...a };
+    expect(settingsEqual(a, b)).toBe(false);
+    expect(settingsEqual(a, c)).toBe(true);
+  });
+
+  test("a changed logoPhoto is detected, an otherwise-identical pair is not", () => {
+    const a = {
+      businessName: "Acme Plumbing",
+      address: "123 Main St, Springfield",
+      logoPhoto: "file:///docs/logos/original.jpg",
+    };
+    const b = { ...a, logoPhoto: "file:///docs/logos/a.jpg" };
+    const c = { ...a };
+    expect(settingsEqual(a, b)).toBe(false);
+    expect(settingsEqual(a, c)).toBe(true);
+  });
 });

@@ -20,6 +20,19 @@ export async function deletePhoto(uri: string): Promise<void> {
   }
 }
 
+// A logo/photo path is an absolute documentDirectory URI, which does not survive
+// a reinstall or a move to a new device (iOS reassigns the app-container UUID) —
+// and settings sync carries the path across devices. Callers use this to tell a
+// genuinely-unset image apart from a dangling reference.
+export async function photoExists(uri: string): Promise<boolean> {
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    return info.exists;
+  } catch {
+    return false;
+  }
+}
+
 export async function readPhotoAsDataUri(uri: string): Promise<string | null> {
   try {
     const info = await FileSystem.getInfoAsync(uri);
