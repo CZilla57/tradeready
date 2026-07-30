@@ -39,7 +39,7 @@ export async function buildInvoicePdfFile(
     // Re-sending the same invoice would hit an existing destination file, which
     // copyAsync rejects on iOS — clear it first.
     const dest = `${FileSystem.cacheDirectory}${invoicePdfFilename(invoice)}`;
-    await FileSystem.deleteAsync(dest, { idempotent: true });
+    await FileSystem.deleteAsync(dest, { idempotent: true }).catch(() => {});
     await FileSystem.copyAsync({ from: uri, to: dest });
     return dest;
   } catch (err: unknown) {

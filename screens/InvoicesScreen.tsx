@@ -24,6 +24,7 @@ import { summarizeInvoices, filterInvoices } from "../utils/invoiceStats";
 import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
+import { invoicePdfFilename } from "../utils/invoicePdfFile";
 import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { Badge, StatCard, EmptyState } from "../components/UI";
 import { spacing, radius, fontSize } from "../utils/theme";
@@ -66,7 +67,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
       ? await readPhotoAsDataUri(settings.logoPhoto)
       : null;
     const html = invoiceHtml(inv, settings, logoDataUri ?? undefined);
-    const filename = `Invoice-${inv.number || inv.id}-${inv.customer.replace(/\s+/g, "-")}`;
+    const filename = invoicePdfFilename(inv).replace(/\.pdf$/, "");
     await exportPdf(html, filename);
   }
 

@@ -179,18 +179,27 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
       // buildInvoicePdfFile reports its own errors and resolves null on failure;
       // the catch is belt-and-braces so a PDF problem can never block the send.
       const pdfUri = await buildInvoicePdfFile(invoice, settings ?? {}).catch(() => null);
-      if (!pdfUri) {
-        Alert.alert(
-          "PDF not attached",
-          "Couldn't attach the invoice PDF. The message is ready to send without it."
-        );
-      }
-      await composeEmail({
+      const opened = await composeEmail({
         recipients: [invoice.email],
         subject: subject || `Payment reminder: ${invoice.number}`,
         body: message,
         attachments: pdfUri ? [pdfUri] : undefined,
       });
+      // Warned only after the composer closes: alerting first leaves a UIAlertController
+      // on top, and iOS presents the mail sheet from the topmost controller, which can
+      // stop it appearing at all. Skipped when composeEmail already alerted itself.
+      if (opened && !pdfUri) {
+        Alert.alert(
+          "PDF not attached",
+          "Couldn't attach the invoice PDF, so it wasn't included with your message."
+        );
+      }
+    } catch (err: unknown) {
+      reportError(err, { context: 'invoiceEmailCompose' });
+      Alert.alert(
+        "Couldn't open Mail",
+        "Something went wrong opening your mail app. Please try again."
+      );
     } finally {
       // Held across both awaits so a second tap can't open a duplicate draft.
       setPreparingPdf(false);

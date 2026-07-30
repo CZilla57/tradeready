@@ -130,6 +130,23 @@ const BASE_CSS = `
   }
 `;
 
+/**
+ * Invoice has no `created` field, so the issue date is recovered from the ms
+ * timestamp both creation paths embed in the id (`inv${Date.now()}` from
+ * CreateInvoiceFromJobScreen, `String(Date.now())` from AddInvoiceScreen).
+ * Sample and legacy rows use non-timestamp ids (e.g. `1-<seed>`) — those fall
+ * back to today, which is the old behaviour for every invoice.
+ */
+export function invoiceIssueDate(id: string, now: Date = new Date()): string {
+  const raw = id.replace(/^inv/, "");
+  const ms = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  const year = Number.isFinite(ms) ? new Date(ms).getUTCFullYear() : NaN;
+  // The range guard rejects all-digit ids that aren't plausible timestamps.
+  return year >= 2000 && year <= 2100
+    ? new Date(ms).toISOString()
+    : now.toISOString();
+}
+
 export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoDataUri?: string): string {
   const bizName    = biz.businessName || "Your Business";
   const bizPhone   = biz.phone   || "";
@@ -141,7 +158,7 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
     .filter(Boolean)
     .join(" · ");
 
-  const issueDate = fmtDate(new Date().toISOString());
+  const issueDate = fmtDate(invoiceIssueDate(invoice.id));
   const dueDate   = fmtDate(invoice.due);
   const isPaid    = invoice.paid;
 
