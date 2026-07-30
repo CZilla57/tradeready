@@ -985,9 +985,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     fieldGroup: { marginBottom: spacing.sm },
     fieldLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5, fontWeight: "500" },
     input: { backgroundColor: colors.background, borderRadius: radius.md, height: 44, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
-    // minHeight (not height): a fixed height fights BaseField's multiline sizing —
-    // the input paints taller than its layout box and later siblings (the logo
-    // block) render on top of it (device finding, 2026-07-14, see OnboardingScreen).
+    // `height: undefined` is load-bearing — do NOT delete it as redundant. This
+    // style is applied after `input` above, so it has to cancel that fixed
+    // `height: 44`; otherwise the field is pinned to a definite height, paints
+    // taller than its layout box, and later siblings (the logo block) render on
+    // top of it (device finding, 2026-07-14, see OnboardingScreen).
+    // The 88pt floor comes from BaseField's own `inputMulti` and is deliberately
+    // not overridden here — setting a smaller minHeight would shrink the
+    // pre-existing Payment instructions field.
     inputMultiline: { height: undefined, paddingTop: spacing.sm, textAlignVertical: "top" },
     logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
     logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
