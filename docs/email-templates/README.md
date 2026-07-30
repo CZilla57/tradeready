@@ -34,12 +34,21 @@ spam to filters. The deliverability-relevant choices:
 
 ## Before pasting — two things to check
 
-1. **Link expiry wording.** Both templates say "expires in 24 hours". Confirm
-   this against Authentication → Emails → **Email OTP Expiration** and edit the
-   copy if that setting differs. Wrong expiry copy generates support email.
+1. **Link expiry wording.** Both templates say "expires in 1 hour", matching the
+   Supabase default of 3600 seconds (set to 1 hour deliberately, 2026-07-30).
+   The setting is **Authentication → Sign In / Providers → Auth Providers →
+   Email → Email OTP expiration** — it belongs to the Email *provider*, not to
+   the Emails/Templates section, which is why it is easy to miss. One value
+   governs confirmation, password-recovery, email-change and invite links, not
+   just OTP codes. Re-check it after applying a migration: it has been reported
+   to reset itself (supabase/supabase#43871). Wrong expiry copy generates
+   support email — a user told "24 hours" who clicks at hour two just sees a
+   dead link.
 2. **Sender identity.** Under SMTP Settings, the sender email must be on
    `gettradereadyapp.com` (the DKIM-signed domain) or DMARC alignment fails no
-   matter how good the template is. Set a human sender name too.
+   matter how good the template is. Confirmed 2026-07-30:
+   `no-reply@gettradereadyapp.com`. Set a human sender **display name** too —
+   that is separate from the address and is what recipients actually see.
 
 ## Known limitation
 
