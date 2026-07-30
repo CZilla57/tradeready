@@ -59,7 +59,15 @@ export async function signInWithGoogle(): Promise<SocialAuthResult> {
     ensureGoogleConfigured();
     await GoogleSignin.hasPlayServices();
     const response = await GoogleSignin.signIn();
-    const idToken = response?.data?.idToken ?? null;
+    // The installed @react-native-google-signin/google-signin (v16) never lets
+    // a user cancellation reach the catch block below: signIn() internally
+    // catches the native rejection and resolves with { type: "cancelled",
+    // data: null } instead (see translateNativeRejection.js). Detect that
+    // here rather than relying on a thrown SIGN_IN_CANCELLED error code.
+    if (response.type === "cancelled" || !response.data) {
+      return { ok: false, cancelled: true };
+    }
+    const idToken = response.data.idToken ?? null;
     if (!idToken) {
       return { ok: false, error: "Google did not return an ID token." };
     }
@@ -71,6 +79,9 @@ export async function signInWithGoogle(): Promise<SocialAuthResult> {
     return { ok: true };
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string };
+    // Defensive fallback: older/patched versions of the library (or a
+    // future upgrade) could still throw SIGN_IN_CANCELLED instead of
+    // resolving. Keep this check so that path degrades gracefully too.
     if (err?.code === statusCodes.SIGN_IN_CANCELLED) return { ok: false, cancelled: true };
     return { ok: false, error: err?.message ?? "Google sign-in failed." };
   }

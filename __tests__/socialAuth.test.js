@@ -45,7 +45,9 @@ describe("signInWithGoogle", () => {
   });
 
   it("returns cancelled when the user dismisses the Google sheet", async () => {
-    GoogleSignin.signIn.mockRejectedValueOnce({ code: "SIGN_IN_CANCELLED" });
+    // The installed google-signin library resolves (rather than rejects)
+    // on cancellation, with { type: "cancelled", data: null }.
+    GoogleSignin.signIn.mockResolvedValueOnce({ type: "cancelled", data: null });
     const res = await signInWithGoogle();
     expect(res).toEqual({ ok: false, cancelled: true });
     expect(supabase.auth.signInWithIdToken).not.toHaveBeenCalled();
