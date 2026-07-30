@@ -1,4 +1,5 @@
 import * as FileSystem from "expo-file-system/legacy";
+import { reportError } from "./analytics";
 
 export async function persistPhoto(tempUri: string, folder = "photos"): Promise<string> {
   const dir = `${FileSystem.documentDirectory}${folder}/`;
@@ -10,6 +11,31 @@ export async function persistPhoto(tempUri: string, folder = "photos"): Promise<
   const dest = `${dir}${filename}`;
   await FileSystem.copyAsync({ from: tempUri, to: dest });
   return dest;
+}
+
+/**
+ * `persistPhoto` that reports failure instead of rejecting.
+ *
+ * Every caller runs inside an async Alert button handler, where a rejection
+ * becomes an unhandled promise rejection: the user picks an image and simply
+ * nothing happens, with no error and no telemetry. `copyAsync` can genuinely
+ * fail — a corrupt asset, a full disk, an iCloud photo that never finishes
+ * downloading — so this returns `null` and records the failure instead.
+ *
+ * The nullable return is deliberate: it makes the compiler force a guard at the
+ * call sites that feed a `string` into persisted data. An unguarded `null`
+ * reaching storage would be worse than the silent no-op this replaces.
+ *
+ * Callers own the user-facing message, because what was lost differs (a logo, a
+ * job photo, a receipt).
+ */
+export async function persistPhotoSafe(tempUri: string, folder: string): Promise<string | null> {
+  try {
+    return await persistPhoto(tempUri, folder);
+  } catch (err) {
+    reportError(err, { context: "persistPhoto", folder });
+    return null;
+  }
 }
 
 /**
