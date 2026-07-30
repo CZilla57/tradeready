@@ -1,5 +1,6 @@
 import { Platform, Linking } from 'react-native';
 import Constants from 'expo-constants';
+import { reportError } from './analytics';
 import type { CustomerInfo, PurchasesOfferings, PurchasesPackage, MakePurchaseResult } from 'react-native-purchases';
 
 const RC_APPLE_KEY  = Constants.expoConfig?.extra?.rcAppleApiKey  ?? '';
@@ -22,10 +23,22 @@ export const RC_CONFIGURED = Boolean(Purchases) && RC_API_KEY.length > 0;
 
 export const ENTITLEMENT_ID = 'TradeReady Pro';
 
+// Guarded like its siblings. RevenueCat throws from configure() on a key it rejects —
+// notably a live `appl_` key under Expo Go's Browser Mode, which requires a Test Store
+// key. This runs inside AuthProvider's useEffect, so an escaping throw reaches the root
+// ErrorBoundary and the whole app becomes "Something went wrong. Please restart."
+// (device-verified 2026-07-30). The same would hit every user in production if the key
+// were rotated or mistyped. Subscription state failing open is the designed behaviour
+// here; a dead app is not — a failed configure leaves getCustomerInfo throwing, which
+// SubscriptionContext already treats as fetchFailed.
 export function configurePurchases(): void {
   if (!RC_CONFIGURED) return;
-  if (__DEV__ && PurchasesLogLevel) Purchases.setLogLevel(PurchasesLogLevel.DEBUG);
-  Purchases.configure({ apiKey: RC_API_KEY });
+  try {
+    if (__DEV__ && PurchasesLogLevel) Purchases.setLogLevel(PurchasesLogLevel.DEBUG);
+    Purchases.configure({ apiKey: RC_API_KEY });
+  } catch (err: unknown) {
+    reportError(err, { context: 'configurePurchases' });
+  }
 }
 
 export async function loginPurchases(userId: string): Promise<void> {
