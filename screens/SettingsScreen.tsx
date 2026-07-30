@@ -37,9 +37,10 @@ import { useSubscription } from "../context/SubscriptionContext";
 import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
+import { useAuth } from "../context/AuthContext";
 import { promptForLogo } from "../utils/logoPicker";
-import { deletePhoto, photoExists } from "../utils/photoStorage";
-import { orphanedLogoPaths } from "../utils/logoLifecycle";
+import { deletePhoto, photoExists, listPhotos } from "../utils/photoStorage";
+import { orphanedLogoPaths, sweepableLogoPaths } from "../utils/logoLifecycle";
 import type { Settings } from "../types/models";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import type { MainTabParamList } from "../types/navigation";
@@ -80,6 +81,27 @@ function formatPhone(raw: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
+/**
+ * Reclaims logo files no persisted setting references — a pick the user
+ * abandoned without reaching a commit point, or a cleanup interrupted part-way.
+ * Per-session cleanup (cleanupLogoFiles) only knows the paths THIS session
+ * touched, so it can never see those; this reads the folder itself.
+ *
+ * Runs from the load effect before `setS`, and the screen renders null until `s`
+ * is set, so the picker cannot be reached mid-sweep. `logos/` is written only by
+ * the logo picker — job photos and receipts live in their own folders — so the
+ * sweep cannot reach any other kind of image.
+ *
+ * `persistedLogoPath` must be the RAW stored path, not one already blanked by
+ * the dangling-path check: see the comment at the call site.
+ */
+async function sweepOrphanedLogos(persistedLogoPath: string | undefined): Promise<void> {
+  const onDisk = await listPhotos("logos");
+  for (const path of sweepableLogoPaths(onDisk, persistedLogoPath)) {
+    await deletePhoto(path);
+  }
+}
+
 export default function SettingsScreen({ navigation }: BottomTabScreenProps<MainTabParamList, 'Settings'>) {
   const { colors, shadow, preference, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
@@ -95,6 +117,15 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   const [ruleDrafts, setRuleDrafts] = useState<Record<number, string>>({});
   const { isSubscribed, isTrialing } = useSubscription();
   const { pendingCount } = useSyncStatusContext();
+  // The sweep's precondition is that the settings we just loaded are
+  // authoritative for this user. While initialSync is still pulling them down
+  // they are not — right after a sign-out/sign-in on the same device, local
+  // settings read back as defaults (logoPhoto "") while the user's real logo
+  // file is still on disk, and sweeping against that would delete it. Mirrored
+  // into a ref because the load effect is registered once.
+  const { bootstrapping } = useAuth();
+  const bootstrappingRef = useRef(bootstrapping);
+  useEffect(() => { if (bootstrapping) bootstrappingRef.current = true; }, [bootstrapping]);
 
   const [stripeStatus, setStripeStatus] = useState<StripeStatus | null>(null);
   const [stripeConnecting, setStripeConnecting] = useState(false);
@@ -180,12 +211,25 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           providerKeys: { ...loaded.providerKeys, [loaded.provider]: loaded.providerKey },
         };
       }
+      // Captured BEFORE the sanitization below, and swept against, deliberately.
+      // photoExists fails closed, so a transient filesystem error blanks
+      // logoPhoto — and sweeping against a blank keeper would delete the user's
+      // real logo, turning a one-session display glitch into permanent loss.
+      // The raw path still matches the real file, so it survives.
+      const persistedLogoPath = loaded.logoPhoto;
+
       // A logoPhoto path can outlive the file it points at (reinstall, or a path
       // synced from another device). Treat a dangling path as unset so the "Add
       // logo" placeholder shows instead of an invisible circle, and so the next
       // save clears the stale reference.
       if (loaded.logoPhoto && !(await photoExists(loaded.logoPhoto))) {
         loaded = { ...loaded, logoPhoto: "" };
+      }
+      // Skipping a sweep costs only disk; sweeping against non-authoritative
+      // settings costs the user's logo. When in doubt, skip — the next launch
+      // sweeps instead.
+      if (!bootstrappingRef.current) {
+        await sweepOrphanedLogos(persistedLogoPath);
       }
       setS(loaded);
       setSavedSnapshot(loaded);
