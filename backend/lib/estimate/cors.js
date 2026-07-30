@@ -13,11 +13,25 @@
 
 const GITHUB_PAGES_ORIGIN = 'https://czilla57.github.io';
 
-// Override per-environment if the branded host ever changes; the default is the
-// domain the CNAME in the tradeready-legal repo points at.
-const BRANDED_ORIGIN = process.env.ESTIMATE_PUBLIC_ORIGIN || 'https://estimates.gettradereadyapp.com';
+// Every host the approval page has been or will be served from, kept as a
+// cumulative list rather than swapped one-for-one.
+//
+// GitHub Pages allows a single custom domain per repo and 301s the others to
+// it, so a link minted under an old host still lands on the current one — but
+// the browser then reports the CURRENT host as the Origin. Retiring an entry
+// here would therefore break links that are already in customers' inboxes, and
+// the failure is silent (the page renders, then claims the link is invalid).
+// Entries are cheap; leave them.
+const ALLOWED_ORIGINS = [
+  GITHUB_PAGES_ORIGIN,                          // original Pages host
+  'https://estimates.gettradereadyapp.com',     // first branded host
+  'https://gettradereadyapp.com',               // apex — the intended home
+  'https://www.gettradereadyapp.com',           // www, in case it serves directly
+];
 
-const ALLOWED_ORIGINS = [GITHUB_PAGES_ORIGIN, BRANDED_ORIGIN];
+// Escape hatch for a host not anticipated here; additive, never a replacement.
+const EXTRA_ORIGIN = process.env.ESTIMATE_PUBLIC_ORIGIN;
+if (EXTRA_ORIGIN && !ALLOWED_ORIGINS.includes(EXTRA_ORIGIN)) ALLOWED_ORIGINS.push(EXTRA_ORIGIN);
 
 /**
  * The value to send back in Access-Control-Allow-Origin.
@@ -43,4 +57,4 @@ function applyCors(req, res, methods) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-module.exports = { ALLOWED_ORIGINS, GITHUB_PAGES_ORIGIN, BRANDED_ORIGIN, pickAllowedOrigin, applyCors };
+module.exports = { ALLOWED_ORIGINS, GITHUB_PAGES_ORIGIN, pickAllowedOrigin, applyCors };
