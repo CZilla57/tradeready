@@ -26,12 +26,24 @@ interface AnthropicResponse {
   error?: { message?: string } | string;
 }
 
+export interface GenerateMessageImage {
+  /** Raw base64 payload — no `data:` prefix. */
+  base64: string;
+  mediaType: "image/jpeg" | "image/png";
+}
+
 export interface GenerateMessageOptions {
   /** The fully-built prompt to send as the single user message. */
   prompt: string;
   /** The user's Anthropic key. Falsy → skip the network call and use `fallback`. */
   apiKey?: string | null;
   max_tokens: number;
+  /**
+   * Optional image sent ahead of the prompt text (vision requests, e.g. receipt
+   * scanning). When absent the request body is exactly the pre-vision shape —
+   * content stays a plain string — so text-only callers are unaffected.
+   */
+  image?: GenerateMessageImage;
   /**
    * Produces the message when there's no key, the API errors, or the response is
    * empty. Deferred (a function) so callers don't pay to build a template unless
@@ -49,9 +61,20 @@ export async function generateMessage({
   prompt,
   apiKey,
   max_tokens,
+  image,
   fallback,
 }: GenerateMessageOptions): Promise<string> {
   if (!apiKey) return fallback();
+
+  const content = image
+    ? [
+        {
+          type: "image",
+          source: { type: "base64", media_type: image.mediaType, data: image.base64 },
+        },
+        { type: "text", text: prompt },
+      ]
+    : prompt;
 
   try {
     const res = await fetch(ANTHROPIC_URL, {
@@ -64,7 +87,7 @@ export async function generateMessage({
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens,
-        messages: [{ role: "user", content: prompt }],
+        messages: [{ role: "user", content }],
       }),
     });
 

@@ -26,7 +26,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 2 | Appointment & "on my way" reminders | 🔥🔥🔥 | Low–Med | Notifications + composers (as built — cron/Resend rejected in design) | **BUILT** — PR #3 open |
 | 3 | Deposits / partial payments | 🔥🔥 | Med | Stripe Connect, invoice model | **BUILT** — ship-gated (migration + backend) |
 | 4 | Tax set-aside / quarterly estimate | 🔥🔥🔥 (differentiator) | Med | P&L data, mileage, AI coach | **BUILT** — stacked on #3's branch |
-| 5 | Receipt OCR | 🔥🔥 | Med | Photo pipeline, backend AI proxy | backlog |
+| 5 | Receipt OCR | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **BUILT** — on this branch (`feat/receipt-ocr`) |
 | 6 | Recurring invoices (maintenance plans) | 🔥 | Med | RecurringJobs engine, invoice model | backlog |
 | 7 | Accounting / CSV export | 🔥 | Low | Existing money/expense data | backlog |
 | 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog |
@@ -105,9 +105,20 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 ## Phase 5 — Receipt OCR
 
+> **STATUS: BUILT 2026-07-19** on `feat/receipt-ocr` (off master — deliberately
+> NOT stacked on the deposits/tax chain; merges independently). As designed
+> here: attach a receipt photo → Claude vision extracts merchant/amount/date/
+> category → pre-fills only fields the user hasn't touched, never auto-saves.
+> Routing mirrors pricebookAI (user anthropicKey → direct; else backend
+> `receipt-extract.js`, JWT + 5/min rate limit); every failure degrades to
+> plain manual entry. No new dependencies, no data-shape changes. Spec:
+> `docs/superpowers/specs/2026-07-19-receipt-ocr-design.md`. **To go live:**
+> merge, deploy backend, push the held `feat/receipt-ocr-legal` privacy-policy
+> branch (tradeready-legal), device smoke.
+
 **Why:** Receipts are attach-only today. QuickBooks' pitch to solos is "snap a receipt → expense auto-fills." This reuses your existing photo pipeline and the backend AI proxy for extraction — much cheaper than it sounds.
 
-**Kickoff prompt:**
+**Kickoff prompt (historical — already executed):**
 > Load `superpowers:brainstorming` and `tradeready-ai-layer`. I want receipt OCR: when a user attaches a receipt photo to an expense, extract merchant, amount, date, and a suggested category and pre-fill the expense form for confirmation (never auto-save without review). Reuse the existing photo pipeline and route extraction through the backend AI proxy (respect rate limits and payload caps). Handle low-confidence/failed extraction gracefully. Phase-gated plan, stop for go-ahead.
 
 ## Phase 6 — Recurring invoices (maintenance plans)

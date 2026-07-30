@@ -18,7 +18,7 @@ Seven tabs are live. Items marked ⚠️ are stubs or partial implementations.
 | **Today** | Jobs scheduled for today (time-sorted), earnings summary, route map launch |
 | **Jobs** | Full lifecycle lead → paid; time tracking; materials; job photos; estimate PDF + send |
 | **Invoices** | Invoice list, overdue detection, collection messages, Stripe/Square/PayPal payment links |
-| **Money** | Income/expense dashboard, monthly bar chart, top-customers card, expense logging |
+| **Money** | Income/expense dashboard, monthly bar chart, top-customers card, expense logging with receipt scanning (photo → pre-filled form for review) |
 | **Customers** | Customer list + detail, job history, notes, one-tap call/text/email |
 | **Chat (AI Coach)** | Chat interface backed by Claude (Anthropic) or Groq |
 | **Settings** | Business profile, AI keys, payment processor |
@@ -26,7 +26,6 @@ Seven tabs are live. Items marked ⚠️ are stubs or partial implementations.
 **Not yet built from the original vision:**
 - Route optimization — the Route screen is a deep-link to Apple/Google Maps, not a waypoint optimizer
 - Dedicated scheduling/calendar tab
-- Receipt photo scanning for expenses (manual entry only)
 - GPS auto-tracking of mileage (the mileage log is odometer-based manual entry, not GPS)
 - Tax center and quarterly estimates
 - Proactive AI insights feed
@@ -34,7 +33,8 @@ Seven tabs are live. Items marked ⚠️ are stubs or partial implementations.
 **AI on the backend:** AI calls are proxied through Vercel serverless functions
 using server-side API keys — no user-supplied keys required. Groq powers the
 AI Coach chat (`backend/api/ai-chat.js`); Claude powers pricebook suggestions
-(`backend/api/pricebook-suggest.js`).
+(`backend/api/pricebook-suggest.js`) and receipt scanning
+(`backend/api/receipt-extract.js`, vision).
 
 **Sync is live:** Supabase (Postgres + Auth) is the sync backend today, not a future item.
 See the "Sync model" section of README.md for how the local-first queue works —
@@ -345,7 +345,7 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 
 ### Backend (Vercel serverless)
 - **Stripe Connect** — Express account onboarding, payment link generation, webhook-driven invoice marking
-- AI proxy — Groq chat completions (`ai-chat.js`) + Anthropic pricebook suggestions (`pricebook-suggest.js`)
+- AI proxy — Groq chat completions (`ai-chat.js`) + Anthropic pricebook suggestions (`pricebook-suggest.js`) + Anthropic vision receipt extraction (`receipt-extract.js`)
 - RevenueCat subscription webhook (`subscription/webhook.js`)
 - Push notification scheduling
 - PDF generation for proposals and invoices
