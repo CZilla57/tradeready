@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { persistPhoto } from '../../utils/photoStorage';
+import { persistPhotoSafe } from '../../utils/photoStorage';
 import { DateTimePickerSheet } from '../DateTimePickerSheet';
 import { KeyboardDoneBar } from '../KeyboardDoneBar';
 import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
@@ -107,7 +107,14 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
             mediaTypes: ['images'], quality: 0.7, allowsEditing: true, aspect: [4, 3],
           });
           if (!result.canceled) {
-            setReceiptUri(await persistPhoto(result.assets[0].uri, 'receipts'));
+            // Guarded by hand: receiptUri is already `string | null`, so passing a
+            // failed save straight through would type-check and silently clear it.
+            const uri = await persistPhotoSafe(result.assets[0].uri, 'receipts');
+            if (!uri) {
+              Alert.alert("Couldn't save that receipt", "The receipt wasn't attached. Please try again.");
+              return;
+            }
+            setReceiptUri(uri);
           }
         },
       },
@@ -123,7 +130,14 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
             mediaTypes: ['images'], quality: 0.7, allowsEditing: true, aspect: [4, 3],
           });
           if (!result.canceled) {
-            setReceiptUri(await persistPhoto(result.assets[0].uri, 'receipts'));
+            // Guarded by hand: receiptUri is already `string | null`, so passing a
+            // failed save straight through would type-check and silently clear it.
+            const uri = await persistPhotoSafe(result.assets[0].uri, 'receipts');
+            if (!uri) {
+              Alert.alert("Couldn't save that receipt", "The receipt wasn't attached. Please try again.");
+              return;
+            }
+            setReceiptUri(uri);
           }
         },
       },

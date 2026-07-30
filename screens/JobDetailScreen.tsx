@@ -19,7 +19,7 @@ import {
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { persistPhoto, deletePhoto } from "../utils/photoStorage";
+import { persistPhotoSafe, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, resolveCustomer } from "../utils/storage";
@@ -28,6 +28,7 @@ import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
+import { canSendEstimate } from "../utils/jobStatus";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
@@ -271,15 +272,15 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
           >
             <Text style={styles.editLink}>Edit</Text>
           </TouchableOpacity>
-          {job.status === "lead" && (
+          {canSendEstimate(job.status, job.estimateTotal) && (
             <>
               <Text style={styles.editLinkSep}>·</Text>
               <TouchableOpacity
                 onPress={() => navigation.navigate("SendEstimate", { jobId: job.id })}
                 accessibilityRole="button"
-                accessibilityLabel="Send estimate"
+                accessibilityLabel={job.status === "estimate_sent" ? "Re-send estimate" : "Send estimate"}
               >
-                <Text style={styles.editLink}>Send →</Text>
+                <Text style={styles.editLink}>{job.status === "estimate_sent" ? "Re-send →" : "Send →"}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -668,7 +669,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           }
           const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
           if (!result.canceled && job) {
-            const uri = await persistPhoto(result.assets[0].uri, "job-photos");
+            const uri = await persistPhotoSafe(result.assets[0].uri, "job-photos");
+            if (!uri) {
+              Alert.alert("Couldn't save that photo", "The photo wasn't added to this job. Please try again.");
+              return;
+            }
             await updateJob({ photos: [...(job.photos || []), uri] });
           }
         },
@@ -683,7 +688,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           }
           const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
           if (!result.canceled && job) {
-            const uri = await persistPhoto(result.assets[0].uri, "job-photos");
+            const uri = await persistPhotoSafe(result.assets[0].uri, "job-photos");
+            if (!uri) {
+              Alert.alert("Couldn't save that photo", "The photo wasn't added to this job. Please try again.");
+              return;
+            }
             await updateJob({ photos: [...(job.photos || []), uri] });
           }
         },

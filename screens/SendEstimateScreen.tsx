@@ -10,16 +10,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
-import Constants from "expo-constants";
 import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadJobs, loadCustomers, loadSettings, saveJobs, resolveCustomer } from "../utils/storage";
-import { supabase } from "../utils/supabase";
-import { syncIfOnline } from "../utils/sync";
 import { track } from '../utils/analytics';
 import { formatQuote } from "../utils/format";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { generateEstimateMessage } from "../utils/invoiceHelpers";
-import { buildEstimateSnapshot } from "../utils/estimateSnapshot";
+import { createApprovalLink } from "../utils/estimateApprovalLink";
 import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { readPhotoAsDataUri } from "../utils/photoStorage";
@@ -30,7 +27,6 @@ import { useTheme } from '../hooks/useTheme';
 import type { Job, Customer, Settings } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
-const BACKEND_URL = (Constants.expoConfig?.extra as any)?.backendUrl ?? "";
 
 interface ScreenData {
   job: Job;
@@ -154,60 +150,35 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
     navigation.goBack();
   }
 
-  async function createApprovalLink(): Promise<string | null> {
+  async function createLink(): Promise<string | null> {
     if (!data) return null;
-    if (!BACKEND_URL) { Alert.alert("Not available", "Approval links need a network connection."); return null; }
     setLinking(true);
     try {
-      // Session first: bail early if signed out, and we need the userId to sync.
-      const { data: sess } = await supabase.auth.getSession();
-      const jwt = sess.session?.access_token;
-      const userId = sess.session?.user?.id;
-      if (!jwt || !userId) { Alert.alert("Sign in required", "Please sign in to send an approval link."); return null; }
-
-      const snapshot = buildEstimateSnapshot(data.job, data.customer, data.settings);
-
-      const jobs = await loadJobs();
-      const withSent = jobs.map((j): Job => (j.id === jobId ? { ...j, status: "estimate_sent" } : j));
-      await saveJobs(withSent);
-
-      // saveJobs's sync is fire-and-forget, so the job may not be in Supabase
-      // yet — await an explicit sync so the backend can find the row before
-      // we ask it to attach an approval token.
-      await syncIfOnline(userId);
-
-      const res = await fetch(`${BACKEND_URL}/api/estimate/create-link`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
-        body: JSON.stringify({ jobId, snapshot }),
-      });
-      const out = await res.json();
-      if (!res.ok) { Alert.alert("Couldn't create link", out.error || "Please try again."); return null; }
-
-      // Mirror the server write locally so JobDetail reflects it immediately.
-      const linked = (await loadJobs()).map((j): Job =>
-        j.id === jobId ? { ...j, status: "estimate_sent", approval: { token: out.token, sentAt: out.sentAt, snapshot } } : j
-      );
-      await saveJobs(linked);
-      setApprovalLink(out.url);
+      const result = await createApprovalLink(data.job, data.customer, data.settings);
+      if (!result.ok) {
+        Alert.alert(result.reason === "signed-out" ? "Sign in required" : "Couldn't create link", result.message);
+        return null;
+      }
+      setApprovalLink(result.url);
       track("estimate_sent");
-      return out.url as string;
-    } catch {
-      Alert.alert("Couldn't create link", "Please check your connection and try again.");
-      return null;
+      return result.url;
     } finally {
       setLinking(false);
     }
   }
 
   async function sendForApproval() {
-    const url = approvalLink || (await createApprovalLink());
+    const url = approvalLink || (await createLink());
     if (!url || !data) return;
+    // Regenerate with the link so the customer gets a message that contains it.
+    // generate() then refreshes the on-screen preview to match what was sent —
+    // the preview used to show link-less text while this sent something else.
     const raw = await generateEstimateMessage({
       job: data.job, customer: data.customer, channel, biz: data.settings,
       apiKey: (data.settings as any).anthropicKey, approvalLink: url,
     });
     const body = channel === "email" && raw.startsWith("Subject:") ? raw.split("\n").slice(2).join("\n").trim() : raw;
+    setMessage(body);
     if (channel === "email") {
       await composeEmail({ recipients: (data.customer as any).email ? [(data.customer as any).email] : [], subject: subject || `Estimate for ${data.job.title}`, body });
     } else {

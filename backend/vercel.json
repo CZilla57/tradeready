@@ -5,6 +5,12 @@
       "maxDuration": 10
     }
   },
+  "rewrites": [
+    { "source": "/api/stripe/connect-status", "destination": "/api/stripe/connect?action=connect-status" },
+    { "source": "/api/stripe/create-connect-account", "destination": "/api/stripe/connect?action=create-connect-account" },
+    { "source": "/api/stripe/disconnect", "destination": "/api/stripe/connect?action=disconnect" },
+    { "source": "/api/stripe/connect-return", "destination": "/api/stripe/connect?action=connect-return" }
+  ],
   "crons": [
     { "path": "/api/cron/send-reminders", "schedule": "0 15 * * *" }
   ]

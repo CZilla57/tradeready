@@ -23,8 +23,8 @@ import { saveSettings, saveInvoices, defaultSettings, defaultInvoices, markOnboa
 import { requestPermissions } from "../utils/notifications";
 import { sendOnboardingAI } from "../utils/aiService";
 import { useAuth } from "../context/AuthContext";
-import * as ImagePicker from "expo-image-picker";
-import { persistPhoto, deletePhoto } from "../utils/photoStorage";
+import { promptForLogo } from "../utils/logoPicker";
+import { deletePhoto } from "../utils/photoStorage";
 import { track, reportError } from "../utils/analytics";
 import { regionFromAddress } from "../utils/regionFromAddress";
 
@@ -105,39 +105,7 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
   }
 
   function handlePickLogo() {
-    Alert.alert("Add your logo", "", [
-      {
-        text: "Take Photo",
-        onPress: async () => {
-          const { status } = await ImagePicker.requestCameraPermissionsAsync();
-          if (status !== "granted") {
-            Alert.alert("Permission needed", "Camera access is required to take a photo.");
-            return;
-          }
-          const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
-          if (!result.canceled) {
-            const uri = await persistPhoto(result.assets[0].uri, "logos");
-            setLogoUri(uri);
-          }
-        },
-      },
-      {
-        text: "Choose from Library",
-        onPress: async () => {
-          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (status !== "granted") {
-            Alert.alert("Permission needed", "Photo library access is required.");
-            return;
-          }
-          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
-          if (!result.canceled) {
-            const uri = await persistPhoto(result.assets[0].uri, "logos");
-            setLogoUri(uri);
-          }
-        },
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    promptForLogo(setLogoUri);
   }
 
   async function handleRemoveLogo() {

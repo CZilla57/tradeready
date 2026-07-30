@@ -53,6 +53,10 @@ const BASE_CSS = `
   .logo { max-height: 56px; max-width: 140px; object-fit: contain; margin-bottom: 8px; display: block; }
   .biz-name { font-size: 22px; font-weight: 700; color: ${ACCENT}; }
   .biz-sub { font-size: 12px; color: #636366; margin-top: 4px; }
+  /* The address gets its own line: appended to .biz-sub it made the contact line
+     long enough to wrap mid-address. Tighter margin so it reads as a continuation
+     of the same block rather than a separate one. */
+  .biz-addr { font-size: 12px; color: #636366; margin-top: 2px; }
   .section-header td {
     padding: 10px 0 6px;
     font-size: 11px;
@@ -170,16 +174,25 @@ export function invoiceIssueDate(id: string, now: Date = new Date()): string {
     : now.toISOString();
 }
 
-export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoDataUri?: string): string {
-  const bizName    = biz.businessName || "Your Business";
-  const bizPhone   = biz.phone   || "";
-  const bizEmail   = biz.email   || "";
-  const bizAddress = biz.address || "";
-  const bizContact = biz.contactName || "";
+/**
+ * Splits the business header into two lines. The address used to be joined onto
+ * the contact line, which made it long enough to wrap mid-address on both the
+ * invoice and the estimate — so the address now starts on its own line.
+ *
+ * Either line can come back empty (a business with no address, or one with an
+ * address but no contact details); callers must skip an empty line rather than
+ * emit a blank div.
+ */
+function bizHeaderLines(biz: Partial<Settings>): { contactLine: string; addressLine: string } {
+  return {
+    contactLine: [biz.contactName, biz.phone, biz.email].filter(Boolean).join(" · "),
+    addressLine: biz.address || "",
+  };
+}
 
-  const bizSubLines = [bizContact, bizPhone, bizEmail, bizAddress]
-    .filter(Boolean)
-    .join(" · ");
+export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoDataUri?: string): string {
+  const bizName = biz.businessName || "Your Business";
+  const { contactLine, addressLine } = bizHeaderLines(biz);
 
   const issueDate = fmtDate(invoiceIssueDate(invoice.id));
   const dueDate   = fmtDate(invoice.due);
@@ -257,7 +270,8 @@ export function invoiceHtml(invoice: Invoice, biz: Partial<Settings> = {}, logoD
   <div>
     ${logoDataUri ? `<img class="logo" src="${logoDataUri}" />` : ""}
     <div class="biz-name">${safe(bizName)}</div>
-    ${bizSubLines ? `<div class="biz-sub">${safe(bizSubLines)}</div>` : ""}
+    ${contactLine ? `<div class="biz-sub">${safe(contactLine)}</div>` : ""}
+    ${addressLine ? `<div class="biz-addr">${safe(addressLine)}</div>` : ""}
   </div>
   <div class="doc-type">Invoice</div>
 </div>
@@ -297,15 +311,8 @@ ${totalBlock}${historyBlock}
 }
 
 export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Partial<Settings> = {}, logoDataUri?: string): string {
-  const bizName    = biz.businessName || "Your Business";
-  const bizPhone   = biz.phone   || "";
-  const bizEmail   = biz.email   || "";
-  const bizAddress = biz.address || "";
-  const bizContact = biz.contactName || "";
-
-  const bizSubLines = [bizContact, bizPhone, bizEmail, bizAddress]
-    .filter(Boolean)
-    .join(" · ");
+  const bizName = biz.businessName || "Your Business";
+  const { contactLine, addressLine } = bizHeaderLines(biz);
 
   const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
   const hasOverhead = overheadLine > 1;
@@ -334,7 +341,8 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
   <div>
     ${logoDataUri ? `<img class="logo" src="${logoDataUri}" />` : ""}
     <div class="biz-name">${safe(bizName)}</div>
-    ${bizSubLines ? `<div class="biz-sub">${safe(bizSubLines)}</div>` : ""}
+    ${contactLine ? `<div class="biz-sub">${safe(contactLine)}</div>` : ""}
+    ${addressLine ? `<div class="biz-addr">${safe(addressLine)}</div>` : ""}
   </div>
   <div class="doc-type">Estimate</div>
 </div>

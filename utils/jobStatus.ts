@@ -27,6 +27,26 @@ export function advanceStatusForSchedule(status: JobStatus, hasSchedule: boolean
 }
 
 /**
+ * Whether a job should offer a route to SendEstimateScreen (where the customer
+ * approval link is minted).
+ *
+ * `estimate_sent` is included deliberately. The Pricing Calculator's "Email to
+ * customer" advances lead → estimate_sent without ever attaching an approval
+ * link, and every entry point to SendEstimateScreen used to require
+ * status === "lead" — so the most common way to send an estimate permanently
+ * locked the job out of the approval flow. Sending again from `estimate_sent`
+ * is also just re-sending, which is safe: create-link is idempotent per job and
+ * the server freezes the snapshot once a decision exists.
+ *
+ * Stops at a decision: `approved` needs no link, and `declined` has its own
+ * "Revise & re-send" action that resets the approval state first.
+ */
+export function canSendEstimate(status: JobStatus, estimateTotal: number): boolean {
+  if (estimateTotal <= 0) return false;
+  return status === "lead" || status === "estimate_sent";
+}
+
+/**
  * Apply a customer's estimate decision to a job's status. Only acts before the
  * tradesperson has taken the job forward — never regresses scheduled…paid
  * (mirrors advanceStatusForSchedule's no-regress guarantee). "approved" derives

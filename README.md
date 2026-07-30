@@ -337,22 +337,20 @@ repeated webhook delivery can't double-count only because the webhook and
 appending a duplicate *before* the union ever runs — the union itself has no
 way to tell a genuine second payment from a redelivered one.
 
-**Ledger union (PENDING):** Once the Postgres union trigger is applied to the live
-database, the ledger merge will be enforced on both sides — `pullRemote` unites
-the device ledger with what's on the server, and a Postgres trigger unites both
-sides on every write to the `invoices` table. This means neither a stale device
-push nor a webhook write can shrink or clobber a ledger entry. The union works
+**Ledger union:** The Postgres union trigger is applied to the live database, so
+the ledger merge is enforced on both sides — `pullRemote` unites the device
+ledger with what's on the server, and a Postgres trigger unites both sides on
+every write to the `invoices` table. This means neither a stale device push
+nor a webhook write can shrink or clobber a ledger entry. The union works
 only because deletion is recorded as a one-way `voidedAt` date rather than
 removal from the array — a union cannot distinguish "unknown to me" from
 "deleted by me" without the data. This protection covers recorded ledger
 **entries** only: an invoice with no `payments` key on either side has no data
 for the union to merge, so it remains last-write-wins on the `paid` flag —
 legacy invoices (the majority of production data today) are not covered.
-**NOTE: This protection does NOT yet exist.
-The trigger migration has been written but is not yet applied to production.**
 
-Once it lands, do NOT "simplify" this back to a plain replace, and do not widen
-the union to other tables without designing a merge for their shape.
+Do NOT "simplify" this back to a plain replace, and do not widen the union to
+other tables without designing a merge for their shape.
 
 **Photos are device-local only.** Photos attached to jobs are stored in the
 device file system via `expo-file-system` and are not synced to the cloud. If
