@@ -28,6 +28,7 @@ import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
+import { canSendEstimate } from "../utils/jobStatus";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
@@ -271,15 +272,15 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
           >
             <Text style={styles.editLink}>Edit</Text>
           </TouchableOpacity>
-          {job.status === "lead" && (
+          {canSendEstimate(job.status, job.estimateTotal) && (
             <>
               <Text style={styles.editLinkSep}>·</Text>
               <TouchableOpacity
                 onPress={() => navigation.navigate("SendEstimate", { jobId: job.id })}
                 accessibilityRole="button"
-                accessibilityLabel="Send estimate"
+                accessibilityLabel={job.status === "estimate_sent" ? "Re-send estimate" : "Send estimate"}
               >
-                <Text style={styles.editLink}>Send →</Text>
+                <Text style={styles.editLink}>{job.status === "estimate_sent" ? "Re-send →" : "Send →"}</Text>
               </TouchableOpacity>
             </>
           )}
