@@ -18,6 +18,8 @@ type EmailOptions = {
   recipients: string[];
   subject: string;
   body: string;
+  /** File URIs to attach (e.g. an invoice PDF from utils/invoicePdfFile.ts). */
+  attachments?: string[];
 };
 
 // Returns true if the mail composer opened, false if Mail isn't set up.
@@ -25,6 +27,7 @@ export async function composeEmail({
   recipients,
   subject,
   body,
+  attachments,
 }: EmailOptions): Promise<boolean> {
   const available = await MailComposer.isAvailableAsync();
   if (!available) {
@@ -34,7 +37,14 @@ export async function composeEmail({
     );
     return false;
   }
-  await MailComposer.composeAsync({ recipients, subject, body });
+  await MailComposer.composeAsync({
+    recipients,
+    subject,
+    body,
+    // Omit the key entirely when there's nothing to attach, so callers that
+    // never attach keep their exact previous call shape.
+    ...(attachments?.length ? { attachments } : {}),
+  });
   return true;
 }
 
