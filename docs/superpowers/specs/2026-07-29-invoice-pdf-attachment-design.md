@@ -62,10 +62,19 @@ Steps:
 3. `expo-print` writes to a random cache filename, which would become the attachment
    name in the customer's inbox. Copy the file to
    `${FileSystem.cacheDirectory}Invoice-<number>-<Customer>.pdf` so the customer sees
-   a meaningful name. Filename segments are sanitized: runs of characters outside
-   `[A-Za-z0-9]` collapse to a single `-`, leading/trailing `-` trimmed. Falls back
-   to `invoice.id` when `invoice.number` is empty (matching the existing
-   `handleExportPdf` filename logic in `InvoicesScreen.tsx:69`).
+   a meaningful name. Filename segments are sanitized with a **blocklist, not an
+   allowlist** — only `\ / : * ? " < > | # %` and whitespace are replaced (the first
+   nine are filesystem-reserved; `#` and `%` change the meaning of the `file://` URI
+   the path is embedded in). Runs collapse to a single `-`, adjacent dashes collapse,
+   leading/trailing `-` are trimmed. Everything else survives, so `&` and `.` are kept
+   and accented or non-Latin names stay readable.
+   **This started as an `[A-Za-z0-9]` allowlist and was changed on 2026-07-30 (owner
+   decision) because the allowlist mangled ordinary customer names — "José Núñez"
+   came out as "Jos-N-ez".** Control codes are deliberately not matched: they cannot
+   come from the `TextInput` these names are typed into, and matching them would
+   require an `eslint-disable` for `no-control-regex`, which this project's rules
+   don't permit for a hypothetical.
+   Falls back to `invoice.id` when `invoice.number` is empty.
    Import is `expo-file-system/legacy`, matching `utils/photoStorage.ts`.
    Because the destination name is deterministic, re-sending the same invoice would
    copy onto an existing file — which `copyAsync` rejects on iOS — so the destination
@@ -157,9 +166,10 @@ would turn the sample id `1-…` into 1 January 1970.
 ### Changed — `screens/InvoicesScreen.tsx` (found during review)
 
 `handleExportPdf` built its own filename, which already disagreed with
-`invoicePdfFilename` (it left `&`, `.` and `/` intact and emitted a trailing dash for an
-empty customer). It now calls the shared helper, so the emailed attachment and the
-manual "Save PDF" export cannot drift apart.
+`invoicePdfFilename` (it replaced only whitespace, so `/` survived into the name, and it
+emitted a trailing dash for an empty customer). It now calls the shared helper, so the
+emailed attachment and the manual "Save PDF" export cannot drift apart — including the
+2026-07-30 blocklist change, which both inherit.
 
 ## Edge cases
 
@@ -173,7 +183,9 @@ manual "Save PDF" export cannot drift apart.
 | Mail app not set up | `composeEmail`'s existing "Mail not available" alert, and the PDF warning is suppressed so two alerts can't stack |
 | Invoice id isn't a timestamp (sample/legacy rows) | PDF issue date falls back to today |
 | Invoice already paid | No send UI is rendered for paid invoices; nothing to do |
-| Customer name with spaces or `/` | Sanitized in the filename |
+| Customer name with spaces or `/` | Replaced with `-` in the filename |
+| Accented or non-Latin customer name | Preserved — "José Núñez" → `Invoice-INV-0001-José-Núñez.pdf` |
+| Customer name that is entirely path-hostile (e.g. `"///"`) | Sanitizes to empty, so the customer segment is omitted: `Invoice-INV-0001.pdf` |
 | Empty invoice number | Filename falls back to `invoice.id` |
 | Same invoice emailed twice | Destination file is deleted (`idempotent`) before the copy, so the second send re-uses the same name without erroring |
 | Cache growth | Files land in the OS-reclaimable cache directory with no cleanup code, matching how `exportPdf` already behaves |
@@ -186,7 +198,9 @@ New suite `__tests__/invoicePdfFile.test.js`:
 - logo read failure still yields a PDF (no logo passed, no throw)
 - `printToFileAsync` rejection → returns `null` and calls `reportError`
 - `copyAsync` rejection → returns `null`
-- filename sanitizing: spaces, slashes, and an empty `number` falling back to `id`
+- filename sanitizing: the full set of blocked characters, accented and non-Latin names
+  surviving, no doubled dashes beside a literal dash, trimmed edges, and an empty
+  `number` falling back to `id`
 
 Extended `__tests__/messaging.test.js`:
 

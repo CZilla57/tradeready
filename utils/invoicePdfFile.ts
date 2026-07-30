@@ -12,9 +12,25 @@ import { readPhotoAsDataUri } from "./photoStorage";
 import { reportError } from "./analytics";
 import type { Invoice, Settings } from "../types/models";
 
-// "Smith & Co. / West" -> "Smith-Co-West"
+// Blocklist, not an allowlist: only characters a filesystem rejects, or that change
+// the meaning of the file:// URI this path gets embedded in, are replaced. An
+// A-Za-z0-9 allowlist mangled ordinary customer names — "José Núñez" came out as
+// "Jos-N-ez".
+//   \ / : * ? " < > |  reserved on Windows; / on every platform
+//   # %                significant once the path is parsed as a URI
+//   whitespace         folded to dashes, as before
+// Everything else survives, so accented and non-Latin names stay readable. Control
+// codes are not covered: they can't come from the TextInput these names are typed
+// into, and matching them would need an eslint-disable for no-control-regex.
+const UNSAFE_IN_FILENAME = /[\\/:*?"<>|#%\s]+/g;
+
+// "Smith & Co. / West" -> "Smith-&-Co.-West"; "José Núñez" -> "José-Núñez"
 function slug(value: string): string {
-  return value.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return value
+    .replace(UNSAFE_IN_FILENAME, "-")
+    // A literal dash beside a replaced run ("Smith - Jones") would double up.
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 // The customer sees this name in their inbox, so it gets the invoice number and

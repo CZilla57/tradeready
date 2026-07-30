@@ -37,9 +37,32 @@ describe("invoicePdfFilename", () => {
     expect(invoicePdfFilename(invoice)).toBe("Invoice-INV-0001-Jane-Smith.pdf");
   });
 
-  test("collapses runs of non-alphanumerics and trims stray dashes", () => {
+  test("replaces path-hostile characters and collapses the runs they leave", () => {
+    // `/` is replaced, `&` and `.` are legal in a filename and survive.
     expect(invoicePdfFilename({ ...invoice, customer: "Smith & Co. / West" }))
-      .toBe("Invoice-INV-0001-Smith-Co-West.pdf");
+      .toBe("Invoice-INV-0001-Smith-&-Co.-West.pdf");
+  });
+
+  test("keeps accented and non-Latin names readable", () => {
+    expect(invoicePdfFilename({ ...invoice, customer: "José Núñez" }))
+      .toBe("Invoice-INV-0001-José-Núñez.pdf");
+    expect(invoicePdfFilename({ ...invoice, customer: "Müller Bau" }))
+      .toBe("Invoice-INV-0001-Müller-Bau.pdf");
+  });
+
+  test("replaces every character a filesystem or file:// URI would reject", () => {
+    expect(invoicePdfFilename({ ...invoice, customer: 'a\\b/c:d*e?f"g<h>i|j#k%l' }))
+      .toBe("Invoice-INV-0001-a-b-c-d-e-f-g-h-i-j-k-l.pdf");
+  });
+
+  test("does not double up dashes around a literal dash", () => {
+    expect(invoicePdfFilename({ ...invoice, customer: "Smith - Jones" }))
+      .toBe("Invoice-INV-0001-Smith-Jones.pdf");
+  });
+
+  test("trims leading and trailing dashes from a replaced edge", () => {
+    expect(invoicePdfFilename({ ...invoice, customer: " /Smith/ " }))
+      .toBe("Invoice-INV-0001-Smith.pdf");
   });
 
   test("falls back to the invoice id when the number is empty", () => {
