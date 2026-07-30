@@ -4,14 +4,11 @@
 
 const { fetchJob, constantTimeEqual } = require('../estimateStore');
 const { createRateLimiter } = require('../guards');
-
-const ALLOWED_ORIGIN = 'https://czilla57.github.io';
+const { applyCors } = require('./cors');
 const allow = createRateLimiter({ limit: 30 });
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  applyCors(req, res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
