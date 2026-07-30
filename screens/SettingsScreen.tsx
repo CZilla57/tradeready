@@ -907,7 +907,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     // minHeight (not height): a fixed height fights BaseField's multiline sizing —
     // the input paints taller than its layout box and later siblings (the logo
     // block) render on top of it (device finding, 2026-07-14, see OnboardingScreen).
-    inputMultiline: { minHeight: 80, paddingTop: spacing.sm, textAlignVertical: "top" },
+    inputMultiline: { height: undefined, minHeight: 80, paddingTop: spacing.sm, textAlignVertical: "top" },
     providerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: spacing.sm },
     providerBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     providerBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
