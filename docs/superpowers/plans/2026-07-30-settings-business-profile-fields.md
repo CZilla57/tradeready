@@ -27,10 +27,15 @@
 |---|---|
 | **Create** `utils/logoLifecycle.ts` | Pure decision: which logo paths are safe to delete. No I/O, no React. |
 | **Create** `__tests__/logoLifecycle.test.js` | Covers all six pick/remove/save/discard scenarios. |
+| **Create** `utils/logoPicker.ts` | The shared pick-a-logo interaction: alert, permissions, launch, persist. Used by both screens. |
+| **Modify** `screens/OnboardingScreen.tsx` | Route its existing picker through the shared helper. Behavior unchanged. |
 | **Modify** `screens/SettingsScreen.tsx` | Address field, logo picker UI, and cleanup wiring at three commit points. |
-| **Modify** spec doc | Only if reality diverges; note it in the phase report. |
 
-**Why a separate util:** the data-loss edge is pure logic, and isolating it makes it fully testable without a screen harness. Matches the project's established born-typed-util pattern (`utils/settingsDirty.ts`, `utils/deleteConfirm.ts`).
+**Why `logoLifecycle` is a separate util:** the data-loss edge is pure logic, and isolating it makes it fully testable without a screen harness. Matches the project's established born-typed-util pattern (`utils/settingsDirty.ts`, `utils/deleteConfirm.ts`).
+
+**Why `logoPicker` is a separate util (owner-approved scope expansion, 2026-07-30):** Settings needs the identical interaction onboarding already has — same alert, same permission checks, same `quality: 0.8`, same `persistPhoto(uri, "logos")` — differing only in what it does with the resulting path. Copying it would put the same logic in two screens. The owner approved extracting it and routing **both** screens through it. Precedent for a util that imports `react-native`: `utils/messaging.ts`, `utils/appointmentSend.ts`, `utils/pdfExport.ts`, `utils/motion.ts`.
+
+**Out of scope:** `screens/JobDetailScreen.tsx` also uses `expo-image-picker`, but for job photos (multiple, different folder, different semantics). It is not a logo call site and must not be touched.
 
 ### Anchors in `screens/SettingsScreen.tsx` (verified 2026-07-30)
 
@@ -240,16 +245,139 @@ git commit -m "feat: let users edit their business address from Settings"
 
 ---
 
-### Task 3: Logo picker UI (draft-only)
+### Task 3: Extract the shared logo picker; route onboarding through it
+
+**Files:**
+- Create: `utils/logoPicker.ts`
+- Modify: `screens/OnboardingScreen.tsx` — imports (`:26-27`), `handlePickLogo` (`:107-141`)
+
+**Interfaces:**
+- Consumes: `persistPhoto` from `utils/photoStorage`.
+- Produces: `promptForLogo(onPicked: (uri: string) => void): void` — shows the pick-a-logo alert, handles permissions, copies the chosen image into the `logos/` folder, and calls `onPicked` with the persisted path. Fires `onPicked` **only** on a successful pick; cancels and denied permissions are handled internally. Task 4 (Settings) consumes this.
+
+**This is a pure refactor of onboarding — its behavior must not change.** `handleRemoveLogo` in onboarding is **out of scope**: onboarding deletes immediately because it has no draft/Save model, and that is correct there. Only the *pick* path is shared.
+
+- [ ] **Step 1: Create the helper**
+
+Create `utils/logoPicker.ts`:
+
+```ts
+import { Alert } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { persistPhoto } from "./photoStorage";
+
+// Copy the chosen image into app storage and hand back the persisted path.
+// Shared tail of both pick branches; a cancelled or empty result is a no-op.
+async function persistPicked(
+  result: { canceled: boolean; assets?: { uri: string }[] | null },
+  onPicked: (uri: string) => void,
+): Promise<void> {
+  if (result.canceled || !result.assets?.[0]) return;
+  onPicked(await persistPhoto(result.assets[0].uri, "logos"));
+}
+
+/**
+ * Prompts for a business logo (camera or photo library), copies the chosen image
+ * into app storage, and hands the caller the persisted path.
+ *
+ * Shared by OnboardingScreen and SettingsScreen. The interaction, permission
+ * handling and storage folder are identical in both; only what each screen does
+ * with the resulting path differs, which is why that is the callback.
+ *
+ * `onPicked` fires only on a successful pick — cancels and denied permissions
+ * are handled here and never invoke it. The caller decides whether the path is
+ * saved immediately (onboarding) or held in a draft (Settings).
+ */
+export function promptForLogo(onPicked: (uri: string) => void): void {
+  Alert.alert("Add your logo", "", [
+    {
+      text: "Take Photo",
+      onPress: async () => {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission needed", "Camera access is required to take a photo.");
+          return;
+        }
+        const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
+        await persistPicked(result, onPicked);
+      },
+    },
+    {
+      text: "Choose from Library",
+      onPress: async () => {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission needed", "Photo library access is required.");
+          return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
+        await persistPicked(result, onPicked);
+      },
+    },
+    { text: "Cancel", style: "cancel" },
+  ]);
+}
+```
+
+Keep `mediaTypes: ["images"] as any` — it matches `OnboardingScreen.tsx:117,132` and keeps typecheck green against the installed `expo-image-picker` types. Every user-facing string above is copied verbatim from onboarding; do not reword any of them.
+
+The `!result.assets?.[0]` guard is intentionally stricter than onboarding's bare `result.assets[0]`: it cannot crash on an empty asset list. This is the one deliberate behavior difference, and it only removes a crash path.
+
+- [ ] **Step 2: Route onboarding through the helper**
+
+In `screens/OnboardingScreen.tsx`, replace the whole `handlePickLogo` function (`:107-141`) with:
+
+```tsx
+  function handlePickLogo() {
+    promptForLogo(setLogoUri);
+  }
+```
+
+- [ ] **Step 3: Fix the onboarding imports**
+
+`ImagePicker` is now unused in that file (an unused import is a lint warning and a red gate), but `persistPhoto` may still be used elsewhere in the file and `deletePhoto` is still used by `handleRemoveLogo`. Check before editing:
+
+```bash
+grep -n "ImagePicker\|persistPhoto\|deletePhoto" screens/OnboardingScreen.tsx
+```
+
+Then, in the import block: **delete** `import * as ImagePicker from "expo-image-picker";` (`:26`), **add** `import { promptForLogo } from "../utils/logoPicker";`, and adjust `:27` to import only what the file still uses — if `persistPhoto` has no remaining references, narrow it to `import { deletePhoto } from "../utils/photoStorage";`.
+
+- [ ] **Step 4: Verify onboarding's pick behavior is unchanged by inspection**
+
+```bash
+grep -n "promptForLogo\|handlePickLogo\|handleRemoveLogo" screens/OnboardingScreen.tsx
+```
+
+Expected: `handlePickLogo` is a one-line delegation; `handleRemoveLogo` is **untouched** and still calls `deletePhoto`; `onPickLogo={handlePickLogo}` / `onRemoveLogo={handleRemoveLogo}` props (`:234-235`) still wired.
+
+- [ ] **Step 5: Run the gate**
+
+```bash
+npm run typecheck && npm test && npm run lint
+```
+
+Expected: 0 tsc errors; 642 tests / 67 suites pass (Task 1 added a suite); 0 lint warnings. A lint warning naming `ImagePicker` or `persistPhoto` means Step 3 was incomplete.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add utils/logoPicker.ts screens/OnboardingScreen.tsx
+git commit -m "refactor: extract the shared logo picker out of OnboardingScreen"
+```
+
+---
+
+### Task 4: Logo picker UI (draft-only)
 
 **Files:**
 - Modify: `screens/SettingsScreen.tsx` — imports (`:1–41`), handlers (after `update`, `:239`), JSX (after the trade grid, `:383`), styles (in `createStyles`, near `:906`)
 
 **Interfaces:**
-- Consumes: `persistPhoto` from `utils/photoStorage`, `update` (`:237`), `s.logoPhoto`.
-- Produces: `handlePickLogo(): void` and `handleRemoveLogo(): void`. Task 4 modifies the body of `handlePickLogo` to record picked paths; it does not rename either function.
+- Consumes: `promptForLogo` from `utils/logoPicker` (Task 3), `update` (`:237`), `s.logoPhoto`.
+- Produces: `handlePickLogo(): void` and `handleRemoveLogo(): void`. Task 5 modifies the body of `handlePickLogo` to record picked paths; it does not rename either function.
 
-**Deliberately incomplete:** this task never calls `deletePhoto`, so replaced files linger on disk. That is safe (nothing is destroyed) and Task 4 closes it. Do **not** import `deletePhoto` here — it would be an unused import and a red gate.
+**Deliberately incomplete:** this task never calls `deletePhoto`, so replaced files linger on disk. That is safe (nothing is destroyed) and Task 5 closes it. Do **not** import `deletePhoto` here — it would be an unused import and a red gate.
 
 - [ ] **Step 1: Add the imports**
 
@@ -257,11 +385,10 @@ In the import block of `screens/SettingsScreen.tsx`, add:
 
 ```tsx
 import { Image } from "expo-image";
-import * as ImagePicker from "expo-image-picker";
-import { persistPhoto } from "../utils/photoStorage";
+import { promptForLogo } from "../utils/logoPicker";
 ```
 
-Place `import { Image } from "expo-image";` after the `react-native` import block (matching `OnboardingScreen.tsx:14`), and the other two alongside the existing `../utils/*` imports.
+Place `import { Image } from "expo-image";` after the `react-native` import block (matching `OnboardingScreen.tsx:14`), and `promptForLogo` alongside the existing `../utils/*` imports. Do **not** import `ImagePicker` or `persistPhoto` here — the helper owns both; importing them would be unused-import lint warnings and a red gate.
 
 - [ ] **Step 2: Add the handlers**
 
@@ -273,47 +400,13 @@ Immediately after the `update` function (`:239`), insert:
   // deletes anything — cleanup happens once settings are committed, so "Discard"
   // can still restore the previous image. See utils/logoLifecycle.ts.
   function handlePickLogo() {
-    Alert.alert("Add your logo", "", [
-      {
-        text: "Take Photo",
-        onPress: async () => {
-          const { status } = await ImagePicker.requestCameraPermissionsAsync();
-          if (status !== "granted") {
-            Alert.alert("Permission needed", "Camera access is required to take a photo.");
-            return;
-          }
-          const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
-          if (!result.canceled) {
-            const uri = await persistPhoto(result.assets[0].uri, "logos");
-            update("logoPhoto", uri);
-          }
-        },
-      },
-      {
-        text: "Choose from Library",
-        onPress: async () => {
-          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (status !== "granted") {
-            Alert.alert("Permission needed", "Photo library access is required.");
-            return;
-          }
-          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
-          if (!result.canceled) {
-            const uri = await persistPhoto(result.assets[0].uri, "logos");
-            update("logoPhoto", uri);
-          }
-        },
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    promptForLogo((uri) => update("logoPhoto", uri));
   }
 
   function handleRemoveLogo() {
     update("logoPhoto", "");
   }
 ```
-
-`mediaTypes: ["images"] as any` matches `OnboardingScreen.tsx:117,132` — keep the cast so typecheck stays green against the installed `expo-image-picker` types.
 
 - [ ] **Step 3: Add the JSX**
 
@@ -386,23 +479,23 @@ git commit -m "feat: add a logo picker to the Settings business section"
 
 ---
 
-### Task 4: Wire file cleanup into all three commit points
+### Task 5: Wire file cleanup into all three commit points
 
 **Files:**
-- Modify: `screens/SettingsScreen.tsx` — imports, a new ref near `:107`, load effect `:154–155`, blur handler `:124` and `:128–134`, `handleSave` `:303–314`, `handlePickLogo` (from Task 3)
+- Modify: `screens/SettingsScreen.tsx` — imports, a new ref near `:107`, load effect `:154–155`, blur handler `:124` and `:128–134`, `handleSave` `:303–314`, `handlePickLogo` (from Task 4)
 
 **Interfaces:**
-- Consumes: `orphanedLogoPaths` (Task 1), `handlePickLogo` (Task 3), `deletePhoto` from `utils/photoStorage`.
+- Consumes: `orphanedLogoPaths` (Task 1), `handlePickLogo` (Task 4), `deletePhoto` from `utils/photoStorage`.
 - Produces: nothing further.
 
 **The three commit points.** `handleSave` is not the only one — the blur handler has its own Save branch that calls `saveSettings` directly, and its Discard branch abandons draft files. All three must clean up, or the blur paths leak.
 
-- [ ] **Step 1: Extend the imports**
+- [ ] **Step 1: Add the imports**
 
-Change the Task 3 photoStorage import to add `deletePhoto`, and import the helper:
+Settings does not import `photoStorage` yet (the picker helper owns `persistPhoto`), so add both:
 
 ```tsx
-import { persistPhoto, deletePhoto } from "../utils/photoStorage";
+import { deletePhoto } from "../utils/photoStorage";
 import { orphanedLogoPaths } from "../utils/logoLifecycle";
 ```
 
@@ -447,19 +540,15 @@ to:
 
 - [ ] **Step 4: Record each picked file**
 
-In `handlePickLogo`, in **both** the Take Photo and Choose from Library branches, change:
+Replace the Task 4 `handlePickLogo` body so the callback records the path before pointing the draft at it. Because the pick interaction now lives in `utils/logoPicker.ts`, this is a single edit rather than one per branch:
 
 ```tsx
-            const uri = await persistPhoto(result.assets[0].uri, "logos");
-            update("logoPhoto", uri);
-```
-
-to:
-
-```tsx
-            const uri = await persistPhoto(result.assets[0].uri, "logos");
-            touchedLogoPathsRef.current = [...touchedLogoPathsRef.current, uri];
-            update("logoPhoto", uri);
+  function handlePickLogo() {
+    promptForLogo((uri) => {
+      touchedLogoPathsRef.current = [...touchedLogoPathsRef.current, uri];
+      update("logoPhoto", uri);
+    });
+  }
 ```
 
 - [ ] **Step 5: Clean up in `handleSave`**
@@ -530,7 +619,7 @@ git commit -m "fix: delete superseded logo files only once settings are committe
 
 ---
 
-## Device smoke checklist (owner, after Task 4)
+## Device smoke checklist (owner, after Task 5)
 
 Jest cannot reach any of this. Run on a physical device:
 
@@ -549,7 +638,9 @@ Jest cannot reach any of this. Run on a physical device:
 
 ## Self-review notes
 
-- **Spec coverage:** §1 address → Task 2. §2 picker → Task 3. §3 draft semantics → Tasks 1 + 4. §4 `minHeight` + logo placement → Task 2 (style) + Task 3 (placement at card end). §Testing → Task 1 unit tests + the device checklist. All six of the spec's lifecycle scenarios appear as named tests in Task 1, plus five edge cases.
+- **Spec coverage:** §1 address → Task 2. §2 picker → Tasks 3 + 4. §3 draft semantics → Tasks 1 + 5. §4 `minHeight` + logo placement → Task 2 (style) + Task 4 (placement at card end). §Testing → Task 1 unit tests + the device checklist. All six of the spec's lifecycle scenarios appear as named tests in Task 1, plus five edge cases.
 - **Deviation from spec, flagged:** the spec's "render test" bullet is dropped — the repo has zero screen render tests. Recorded in the spec's Testing section, reasoning included.
-- **Type consistency:** `orphanedLogoPaths(touched, keepPath)` is defined in Task 1 and called only via `cleanupLogoFiles(committedLogoPath)` in Task 4. `handlePickLogo` / `handleRemoveLogo` keep the same names across Tasks 3 and 4. `logoPhoto` is typed `string | undefined` (optional on `Settings`), which is why `cleanupLogoFiles` takes `string | undefined` and `orphanedLogoPaths` accepts `null | undefined` for `keepPath`.
-- **Task independence:** Task 1 is standalone. Task 2 is standalone. Task 3 depends on nothing but itself (safe-but-leaky). Task 4 depends on 1 and 3. Each ends on a green gate.
+- **Owner-approved scope expansion (2026-07-30):** Task 3 extracts `utils/logoPicker.ts` and refactors `OnboardingScreen` through it, rather than copying ~35 lines of picker logic into Settings. Raised in pre-flight review because the plan originally mandated duplication that a quality reviewer would flag; the owner chose extraction. Onboarding's `handleRemoveLogo` stays as-is — its immediate delete is correct for a screen with no draft model.
+- **Type consistency:** `orphanedLogoPaths(touched, keepPath)` is defined in Task 1 and called only via `cleanupLogoFiles(committedLogoPath)` in Task 5. `promptForLogo(onPicked)` is defined in Task 3 and consumed in Tasks 4 and 5. `handlePickLogo` / `handleRemoveLogo` keep the same names across Tasks 4 and 5. `logoPhoto` is typed `string | undefined` (optional on `Settings`), which is why `cleanupLogoFiles` takes `string | undefined` and `orphanedLogoPaths` accepts `null | undefined` for `keepPath`.
+- **Task independence:** Tasks 1, 2 and 3 are standalone. Task 4 depends on 3 (safe-but-leaky on its own). Task 5 depends on 1 and 4. Each ends on a green gate.
+- **Baseline measured on the branch point (2026-07-30):** tsc 0 errors · 642 tests / 66 suites · lint 0 warnings. Task 1 adds one suite (67).
