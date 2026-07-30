@@ -34,8 +34,19 @@ describe("signInWithApple", () => {
 describe("signInWithGoogle", () => {
   beforeEach(() => jest.clearAllMocks());
 
+  // This is the first test in the file to call signInWithGoogle, so it's the
+  // one that actually exercises ensureGoogleConfigured()'s first (and only)
+  // GoogleSignin.configure() call — the module-level `googleConfigured` latch
+  // isn't a jest.fn(), so jest.clearAllMocks() in beforeEach doesn't reset it,
+  // and a later test wouldn't re-trigger configure(). Asserting here, rather
+  // than restructuring the latch, keeps the "configure once" behavior itself
+  // under test instead of engineering it away.
   it("exchanges the Google id token with Supabase", async () => {
     const res = await signInWithGoogle();
+    expect(GoogleSignin.configure).toHaveBeenCalledWith({
+      webClientId: "test-web.apps.googleusercontent.com",
+      iosClientId: "test-ios.apps.googleusercontent.com",
+    });
     expect(GoogleSignin.hasPlayServices).toHaveBeenCalled();
     expect(supabase.auth.signInWithIdToken).toHaveBeenCalledWith({
       provider: "google",

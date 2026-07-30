@@ -21,6 +21,7 @@ jest.mock("@expo/vector-icons", () => ({
 jest.mock("../utils/socialAuth", () => ({
   signInWithApple: jest.fn(() => Promise.resolve({ ok: true })),
   signInWithGoogle: jest.fn(() => Promise.resolve({ ok: true })),
+  SOCIAL_GOOGLE_AVAILABLE: true,
 }));
 
 describe("AuthScreen social sign-in", () => {

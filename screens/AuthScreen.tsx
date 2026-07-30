@@ -21,7 +21,7 @@ import { track } from '../utils/analytics';
 import { canResend, resendSecondsRemaining } from '../utils/resendCooldown';
 import { friendlyAuthError } from '../utils/authErrors';
 import * as AppleAuthentication from 'expo-apple-authentication';
-import { signInWithApple, signInWithGoogle } from '../utils/socialAuth';
+import { signInWithApple, signInWithGoogle, SOCIAL_GOOGLE_AVAILABLE } from '../utils/socialAuth';
 
 type AuthMode = 'login' | 'signup' | 'forgot';
 
@@ -200,7 +200,10 @@ export default function AuthScreen() {
     mode === 'login'  ? 'Sign In' :
                         'Create Account';
 
-  const submitDisabled = loading || (mode === 'forgot' && !resetReady);
+  // Disabled while a social flow is in progress too, so no two auth flows
+  // (password + Apple, password + Google, or Apple + Google) can run at once.
+  const submitDisabled = loading || socialBusy !== null || (mode === 'forgot' && !resetReady);
+  const socialDisabled = loading || socialBusy !== null;
 
   return (
     <KeyboardAvoidingView
@@ -296,7 +299,7 @@ export default function AuthScreen() {
           </TouchableOpacity>
         </View>
 
-        {mode !== 'forgot' && (
+        {mode !== 'forgot' && (appleAvailable || SOCIAL_GOOGLE_AVAILABLE) && (
           <View style={styles.socialSection}>
             <View style={styles.dividerRow}>
               <View style={styles.dividerLine} />
@@ -305,7 +308,11 @@ export default function AuthScreen() {
             </View>
 
             {appleAvailable && (
-              <View testID="apple-signin-button" style={styles.appleWrap}>
+              <View
+                testID="apple-signin-button"
+                style={[styles.appleWrap, socialDisabled && styles.appleWrapDisabled]}
+                pointerEvents={socialDisabled ? 'none' : 'auto'}
+              >
                 <AppleAuthentication.AppleAuthenticationButton
                   buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
                   buttonStyle={
@@ -320,24 +327,26 @@ export default function AuthScreen() {
               </View>
             )}
 
-            <TouchableOpacity
-              style={styles.googleBtn}
-              onPress={handleGoogle}
-              disabled={socialBusy !== null}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="Continue with Google"
-              accessibilityState={{ disabled: socialBusy !== null, busy: socialBusy === 'google' }}
-            >
-              {socialBusy === 'google' ? (
-                <ActivityIndicator color={colors.textPrimary} />
-              ) : (
-                <>
-                  <Ionicons name="logo-google" size={18} color="#4285F4" style={styles.googleIcon} />
-                  <Text style={styles.googleBtnText}>Continue with Google</Text>
-                </>
-              )}
-            </TouchableOpacity>
+            {SOCIAL_GOOGLE_AVAILABLE && (
+              <TouchableOpacity
+                style={styles.googleBtn}
+                onPress={handleGoogle}
+                disabled={socialDisabled}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Continue with Google"
+                accessibilityState={{ disabled: socialDisabled, busy: socialBusy === 'google' }}
+              >
+                {socialBusy === 'google' ? (
+                  <ActivityIndicator color={colors.textPrimary} />
+                ) : (
+                  <>
+                    <Ionicons name="logo-google" size={18} color="#4285F4" style={styles.googleIcon} />
+                    <Text style={styles.googleBtnText}>Continue with Google</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -475,6 +484,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
     dividerText: { marginHorizontal: spacing.md, color: colors.textMuted, fontSize: fontSize.sm },
     appleWrap: { marginBottom: spacing.sm },
+    appleWrapDisabled: { opacity: 0.5 },
     appleBtn: { height: 48, width: '100%' },
     googleBtn: {
       flexDirection: 'row',
