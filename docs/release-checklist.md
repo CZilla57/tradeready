@@ -31,32 +31,8 @@ Written 2026-07-18.
 
 ## Blocked features — do not ship while any of these is unresolved
 
-### Deposits & partial payments — BLOCKED as of 2026-07-18
-
-**Branch:** `feat/deposits-partial-payments` (unmerged at time of writing).
-
-**Why it blocks a release once merged:** the client half is live code, not
-dormant. `pullRemote` routes invoice records through a payment-ledger merge
-(`utils/sync.ts` → `utils/syncMerge.ts`), so any build off a `master` that
-contains this branch will start deriving and writing `payments` arrays on
-users' devices and pushing them to Supabase — whether or not the feature's UI
-is reachable, and whether or not that build was made for this feature.
-
-**The blocking dependency:** the Supabase migration
-`supabase/migrations/20260718_invoice_payment_merge.sql` is **written but not
-applied**, and the Vercel backend is **not deployed**. The currently deployed
-Stripe webhook writes a bare `paid: true` with no ledger entry, which the
-ledger merge discards — erasing a real customer payment on any invoice that
-carries a recorded payment.
-
-**To unblock,** work through `docs/deposits-resume-here.md` §4 in order. The
-ordering is load-bearing: **never deploy the backend before applying the
-migration.** Then delete this entry **and** the `SHIPPING GATE` comment block in
-`utils/sync.ts` (above `pullRemote`'s record loop), which points back here.
-
-**Also note:** the Postgres trigger has never executed against a real database,
-and the `invoices` table's `id` column type is inferred rather than confirmed.
-Run `\d public.invoices` before applying.
+None currently. See "Adding an entry here" below for the bar a new one needs
+to clear.
 
 ---
 

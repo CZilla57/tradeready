@@ -159,23 +159,6 @@ async function pullRemote(userId: string): Promise<void> {
       const localRaw = await AsyncStorage.getItem(table);
       let local: SyncRecord[] = localRaw ? JSON.parse(localRaw) : [];
 
-      // ⚠ SHIPPING GATE — read docs/release-checklist.md before any build.
-      //
-      // Both branches below route invoices through mergeRemoteRecord, which
-      // derives and writes a `payments` ledger onto records on the device and,
-      // on the next save, into Supabase. That happens on EVERY pull, whether or
-      // not the deposits UI is reachable and whether or not the build was made
-      // for that feature — so an unrelated hotfix shipped off a master
-      // containing this code carries the ledger behaviour to users with it.
-      //
-      // It is not safe to ship until the Supabase migration is applied and the
-      // backend deployed: the currently deployed Stripe webhook writes a bare
-      // `paid: true` with no ledger entry, which this merge discards — erasing
-      // a real customer payment. See docs/deposits-resume-here.md §4.
-      //
-      // DELETE THIS BLOCK when the deposits entry is removed from
-      // docs/release-checklist.md. The merge itself is permanent; only this
-      // warning is temporary, and a stale warning trains people to ignore them.
       for (const remote of data) {
         if (remote.deleted) {
           local = local.filter(r => r.id !== remote.id);
