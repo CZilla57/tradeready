@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -19,7 +20,12 @@ import {
   getExpectedEarningsForDate,
   loadOverdueInvoices,
   loadLeadJobs,
+  loadCustomers,
+  loadSettings,
+  resolveCustomer,
 } from '../utils/storage';
+import { sendAppointmentMessage } from '../utils/appointmentSend';
+import { ACTIVE_STATUSES } from '../utils/appointmentMessages';
 import { daysPastDue } from '../utils/invoiceHelpers';
 import { formatMoney } from '../utils/format';
 import {
@@ -34,7 +40,7 @@ import {
 } from '../utils/dateHelpers';
 import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
 import type { Job, Invoice } from '../types/models';
-import { reportError } from '../utils/analytics';
+import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -218,13 +224,15 @@ function SeeMoreRow({ label, onPress }: SeeMoreRowProps) {
 interface JobCardProps {
   job: Job;
   onPress: () => void;
+  onOnMyWay: () => void;
 }
 
-function JobCard({ job, onPress }: JobCardProps) {
+function JobCard({ job, onPress, onOnMyWay }: JobCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
   const { label, color } = getJobStatusDisplay(job.status);
+  const canSendOnMyWay = !!job.scheduledDate && ACTIVE_STATUSES.has(job.status);
 
   return (
     <TouchableOpacity style={styles.jobCard} onPress={onPress} activeOpacity={0.7}>
@@ -241,8 +249,21 @@ function JobCard({ job, onPress }: JobCardProps) {
         <Text style={styles.jobCustomer} numberOfLines={1}>
           {job.customerName}{job.address ? ` · ${job.address}` : ''}
         </Text>
-        <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
-          <Text style={[styles.statusText, { color }]}>{label}</Text>
+        <View style={styles.jobCardFooter}>
+          <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
+            <Text style={[styles.statusText, { color }]}>{label}</Text>
+          </View>
+          {canSendOnMyWay && (
+            <TouchableOpacity
+              style={styles.onMyWayButton}
+              onPress={onOnMyWay}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`On my way to ${job.customerName}`}
+            >
+              <Text style={styles.onMyWayButtonText}>On my way</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </TouchableOpacity>
@@ -415,6 +436,17 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId: job.id } });
   }
 
+  async function handleOnMyWay(job: Job) {
+    const [customers, settings] = await Promise.all([loadCustomers(), loadSettings()]);
+    const customer = resolveCustomer(customers, job);
+    if (!customer) {
+      Alert.alert('No customer', 'This job has no linked customer to message.');
+      return;
+    }
+    const opened = await sendAppointmentMessage({ job, customer, settings, kind: 'on_my_way' });
+    if (opened) track('on_my_way_sent', {});
+  }
+
   function handleScheduleJob() {
     navigation.getParent()?.navigate('Jobs', { screen: 'AddJob' });
   }
@@ -548,7 +580,12 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
           <EmptySchedule onScheduleJob={handleScheduleJob} />
         )}
         {!loading && selectedDayJobs.map((job) => (
-          <JobCard key={job.id} job={job} onPress={() => handleJobPress(job)} />
+          <JobCard
+            key={job.id}
+            job={job}
+            onPress={() => handleJobPress(job)}
+            onOnMyWay={() => handleOnMyWay(job)}
+          />
         ))}
       </BriefingSection>
 
@@ -865,6 +902,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       color: colors.textMuted,
       marginBottom: spacing.sm,
     },
+    jobCardFooter: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
     statusBadge: {
       alignSelf: 'flex-start',
       paddingHorizontal: spacing.sm,
@@ -874,6 +916,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     statusText: {
       fontSize: fontSize.xs,
       fontWeight: '700',
+    },
+    onMyWayButton: {
+      alignSelf: 'flex-start',
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 3,
+      borderRadius: radius.sm,
+      backgroundColor: colors.accent + '1a',
+    },
+    onMyWayButtonText: {
+      fontSize: fontSize.xs,
+      fontWeight: '700',
+      color: colors.accent,
     },
 
     // Empty schedule state

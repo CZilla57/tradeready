@@ -19,11 +19,13 @@ function dateInDays(offsetDays) {
   return d.toISOString().split("T")[0];
 }
 
-// Populates AsyncStorage mock so syncNotifications reads the right invoices/settings.
-function seedStorage(invoices, settings = { rules: [{ days: 1 }] }) {
+// Populates AsyncStorage mock so syncNotifications reads the right invoices/settings/jobs/customers.
+function seedStorage(invoices, settings = { rules: [{ days: 1 }] }, jobs = [], customers = []) {
   AsyncStorage.getItem.mockImplementation((key) => {
     if (key === "invoices") return Promise.resolve(JSON.stringify(invoices));
     if (key === "settings") return Promise.resolve(JSON.stringify(settings));
+    if (key === "jobs") return Promise.resolve(JSON.stringify(jobs));
+    if (key === "customers") return Promise.resolve(JSON.stringify(customers));
     return Promise.resolve(null);
   });
 }
@@ -189,5 +191,40 @@ describe("auto-outreach toggle", () => {
 
     const [call] = Notifications.scheduleNotificationAsync.mock.calls;
     expect(call[0].content.data.type).toBeUndefined();
+  });
+});
+
+// ── Appointment confirmations ────────────────────────────────────────────────
+
+describe("syncNotifications — appointment confirmations", () => {
+  function apptJob(overrides = {}) {
+    return {
+      id: "j1", customerId: "c1", customerName: "Alice", status: "scheduled",
+      scheduledDate: dateInDays(3), scheduledStartTime: "09:00", scheduledEndTime: "11:00",
+      address: "12 Oak St", ...overrides,
+    };
+  }
+  const cust = { id: "c1", name: "Alice", phone: "5551234567", email: "a@x.com", address: "12 Oak St" };
+  const apptSettings = {
+    rules: [], appointmentRemindersEnabled: true,
+    appointmentConfirmTemplate: "", businessName: "Bob Plumbing",
+  };
+
+  test("schedules an appointment_confirm notification for a qualifying job", async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: "granted" });
+    seedStorage([], apptSettings, [apptJob()], [cust]);
+    await syncNotifications();
+    const calls = Notifications.scheduleNotificationAsync.mock.calls.map((c) => c[0]);
+    const appt = calls.find((c) => c.identifier === "appt_j1");
+    expect(appt).toBeTruthy();
+    expect(appt.content.data).toEqual({ type: "appointment_confirm", jobId: "j1" });
+  });
+
+  test("schedules nothing when the toggle is off", async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: "granted" });
+    seedStorage([], { ...apptSettings, appointmentRemindersEnabled: false }, [apptJob()], [cust]);
+    await syncNotifications();
+    const ids = Notifications.scheduleNotificationAsync.mock.calls.map((c) => c[0].identifier);
+    expect(ids).not.toContain("appt_j1");
   });
 });
