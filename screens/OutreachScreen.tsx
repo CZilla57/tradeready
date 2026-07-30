@@ -175,20 +175,26 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
   async function sendEmail() {
     if (!invoice) return;
     setPreparingPdf(true);
-    const pdfUri = await buildInvoicePdfFile(invoice, settings ?? {});
-    setPreparingPdf(false);
-    if (!pdfUri) {
-      Alert.alert(
-        "PDF not attached",
-        "Couldn't attach the invoice PDF. The message is ready to send without it."
-      );
+    try {
+      // buildInvoicePdfFile reports its own errors and resolves null on failure;
+      // the catch is belt-and-braces so a PDF problem can never block the send.
+      const pdfUri = await buildInvoicePdfFile(invoice, settings ?? {}).catch(() => null);
+      if (!pdfUri) {
+        Alert.alert(
+          "PDF not attached",
+          "Couldn't attach the invoice PDF. The message is ready to send without it."
+        );
+      }
+      await composeEmail({
+        recipients: [invoice.email],
+        subject: subject || `Payment reminder: ${invoice.number}`,
+        body: message,
+        attachments: pdfUri ? [pdfUri] : undefined,
+      });
+    } finally {
+      // Held across both awaits so a second tap can't open a duplicate draft.
+      setPreparingPdf(false);
     }
-    await composeEmail({
-      recipients: [invoice.email],
-      subject: subject || `Payment reminder: ${invoice.number}`,
-      body: message,
-      attachments: pdfUri ? [pdfUri] : undefined,
-    });
   }
 
   async function sendSMS() {
