@@ -21,3 +21,4 @@ export { migrateSampleDataIds } from "./sampleMigration";
 export { loadRecurringJobs, saveRecurringJobs } from "./recurringJobs";
 export { loadTrips, saveTrips } from "./trips";
 export { loadPricebook, savePricebook } from "./pricebook";
+export { applyEstimateDecisions } from "./estimateApprovals";

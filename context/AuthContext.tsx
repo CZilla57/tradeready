@@ -7,6 +7,7 @@ import { setupNotifications, requestPermissions, syncNotifications } from '../ut
 import { configurePurchases, loginPurchases, logoutPurchases } from '../utils/subscription';
 import { checkAndGenerateRecurringJobs } from '../utils/recurringJobs';
 import { identifyUser } from '../utils/analytics';
+import { applyEstimateDecisions } from '../utils/storage';
 
 interface AuthContextValue {
   session: Session | null;
@@ -75,7 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const sub = AppState.addEventListener('change', state => {
       if (state === 'active' && session?.user?.id) {
-        syncIfOnline(session.user.id);
+        syncIfOnline(session.user.id).then(() => applyEstimateDecisions()).catch(() => {});
         syncNotifications();
         checkAndGenerateRecurringJobs();
       }

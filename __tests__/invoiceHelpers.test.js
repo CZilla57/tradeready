@@ -2,6 +2,7 @@ import {
   daysPastDue,
   getStatus,
   buildPaymentLink,
+  buildGenericEstimateMessage,
 } from "../utils/invoiceHelpers";
 
 // Pin "today" so date-dependent tests are deterministic.
@@ -110,5 +111,16 @@ describe("buildPaymentLink", () => {
     const link = buildPaymentLink(invoice, "custom", "");
     expect(link).toContain("yourpaymentpage.com");
     expect(link).toContain("INV-001");
+  });
+});
+
+describe("buildGenericEstimateMessage", () => {
+  it('includes the approval link in the generic estimate message', () => {
+    const msg = buildGenericEstimateMessage({
+      job: { title: 'X', laborHours: 1, laborRate: 1, materials: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1 },
+      customer: { name: 'Sam' }, channel: 'text', biz: { businessName: 'Ace', phone: '5551234' },
+      approvalLink: 'https://example.test/e?j=1&t=2',
+    });
+    expect(msg).toContain('https://example.test/e?j=1&t=2');
   });
 });

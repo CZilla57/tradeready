@@ -223,6 +223,42 @@ anything that seems off (e.g. "that's below your break-even rate")
 
 ---
 
+## Estimate Approval Loop
+
+Lets a customer approve or decline a sent estimate from a hosted link, and
+flows that decision back into the job pipeline — the same "service role
+writes the blob, device reconciles on pull" pattern as the Stripe
+payment-link/webhook flow (`backend/api/stripe/webhook.js`), applied to a
+`Job` instead of an `Invoice`.
+
+- **App side:** `SendEstimateScreen`'s "Send for approval" builds a frozen
+  snapshot (`computeEstimateBreakdown` output — labor/materials/overhead/total)
+  and calls the JWT-authed `POST /api/estimate/create-link`, which mints a
+  token with Node `crypto.randomBytes` and writes `{token, sentAt, snapshot}`
+  into the job's blob via the Supabase service role. The app mirrors that
+  back into the local job so `JobDetail` reflects it immediately.
+- **Customer side:** the link opens `estimate.html` on the GitHub Pages legal
+  site. Token-gated `GET /api/estimate/view` and `POST /api/estimate/respond`
+  (both service-role, constant-time token compare) return the sanitized
+  snapshot and, on Approve/Decline, write the decision.
+- **Server writes are additive and confined to `job.approval.*`** — decision,
+  a server-stamped `consentAt` (authoritative clock), typed-name signature,
+  decline reason, IP, and user-agent. The server never writes `job.status`.
+- **Device owns every pipeline transition.** The existing `pullRemote` poll
+  (sign-in / app-foreground, no new sync infrastructure) picks up the
+  updated blob; `applyEstimateDecisions()` (`utils/storage/estimateApprovals.ts`)
+  reconciles it via `applyEstimateDecision()` (`utils/jobStatus.ts`), which
+  advances `estimate_sent → approved` or branches to the terminal `declined`
+  status — never regressing a job already past `estimate_sent`. Idempotent
+  and flag-free: a no-op run performs no write.
+- **Conflict model:** inherits the app's last-write-wins envelope as-is (no
+  new merge/conflict logic). Because server writes only touch `approval.*`,
+  a device that pulls before pushing preserves them; a device that pushes a
+  stale blob after the server write can still clobber `approval.*` — the
+  same accepted risk as the Stripe invoice-paid case.
+
+---
+
 ## Route Planning
 
 **Current implementation:** The Route screen deep-links today's scheduled jobs

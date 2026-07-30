@@ -168,9 +168,10 @@ interface EstimateMessageParams {
   customer: Customer;
   channel: 'text' | 'email';
   biz: Partial<Settings>;
+  approvalLink?: string;
 }
 
-function buildGenericEstimateMessage({ job, customer, channel, biz }: EstimateMessageParams): string {
+export function buildGenericEstimateMessage({ job, customer, channel, biz, approvalLink }: EstimateMessageParams): string {
   const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
 
   if (channel === 'text') {
@@ -181,7 +182,7 @@ function buildGenericEstimateMessage({ job, customer, channel, biz }: EstimateMe
     ];
     if (hasMaterials) parts.push(`Materials: ${formatQuote(materialCost)}`);
     parts.push(`Total: ${formatQuote(job.estimateTotal)}.`);
-    parts.push(`Reply YES to approve or call ${biz.phone}.`);
+    parts.push(approvalLink ? `View & approve: ${approvalLink}` : `Reply YES to approve or call ${biz.phone}.`);
     return parts.join(' ');
   }
 
@@ -208,6 +209,7 @@ function buildGenericEstimateMessage({ job, customer, channel, biz }: EstimateMe
     'To approve this estimate, simply reply to this email or give me a call.',
     'I can typically schedule work within a few business days of approval.',
   );
+  if (approvalLink) lines.push('', `View and approve your estimate here:\n${approvalLink}`);
   if (biz.paymentNotes) lines.push('', biz.paymentNotes);
   lines.push('', `Best regards,`, `${biz.contactName}`, `${biz.businessName}`, `${biz.phone}`);
   return lines.join('\n');
@@ -219,8 +221,9 @@ export async function generateEstimateMessage({
   channel,
   biz,
   apiKey,
+  approvalLink,
 }: EstimateMessageParams & { apiKey?: string }): Promise<string> {
-  const fallback = () => buildGenericEstimateMessage({ job, customer, channel, biz });
+  const fallback = () => buildGenericEstimateMessage({ job, customer, channel, biz, approvalLink });
   if (!apiKey) return fallback();
 
   const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
@@ -252,7 +255,11 @@ ${isText
 
 Write only the message, no commentary.`;
 
-  return generateOneShot({ prompt, apiKey, max_tokens: 800, fallback });
+  const promptWithLink = approvalLink
+    ? `${prompt}\n\nEnd with a clear call to action to review and approve online at this link (include it verbatim): ${approvalLink}`
+    : prompt;
+
+  return generateOneShot({ prompt: promptWithLink, apiKey, max_tokens: 800, fallback });
 }
 
 export async function generateOutreachMessage({

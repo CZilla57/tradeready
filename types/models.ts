@@ -23,7 +23,8 @@ export type JobStatus =
   | "in_progress"
   | "complete"
   | "invoiced"
-  | "paid";
+  | "paid"
+  | "declined";
 
 /** `id` values in TRADE_TYPES (utils/pricingEngine.js). */
 export type TradeId =
@@ -78,6 +79,34 @@ export interface TimeSession {
   end: string | null;
 }
 
+/**
+ * Estimate-approval record. Absent until the estimate is "sent for approval".
+ * `snapshot` freezes the estimate as sent so the customer approves exactly what
+ * they saw and the backend never re-runs pricing math. `decision`/`consentAt`/
+ * signature fields are written SERVER-SIDE (service role) when the customer acts;
+ * the device only reads them and performs the status transition locally.
+ */
+export interface EstimateApprovalSnapshot {
+  businessName: string;
+  customerName: string;
+  jobTitle: string;
+  lineItems: { label: string; amount: number }[];
+  total: number;
+  currency: string;
+}
+
+export interface EstimateApproval {
+  token: string;
+  sentAt: DateString;
+  snapshot: EstimateApprovalSnapshot;
+  decision?: "approved" | "declined";
+  consentAt?: DateString;
+  signerName?: string;
+  declineReason?: string;
+  ip?: string;
+  userAgent?: string;
+}
+
 export interface Job {
   id: string;
   /**
@@ -113,6 +142,7 @@ export interface Job {
   timeSessions?: TimeSession[];
   recurringJobId?: string;
   occurrenceNumber?: number;
+  approval?: EstimateApproval;
 }
 
 export interface PricebookEntry {

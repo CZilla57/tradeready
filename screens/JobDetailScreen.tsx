@@ -178,6 +178,21 @@ function JobDetailsCard({ job, navigation, customer, onAppointmentSend }: {
       {job.notes ? (
         <Text style={styles.notes}>💬 {job.notes}</Text>
       ) : null}
+      {job.approval?.decision === "approved" && (
+        <Text style={styles.metaRow}>
+          ✓ Approved{job.approval.consentAt ? ` ${new Date(job.approval.consentAt).toLocaleDateString()}` : ""}
+          {job.approval.signerName ? ` by ${job.approval.signerName}` : ""}
+        </Text>
+      )}
+      {job.approval?.decision === "declined" && (
+        <Text style={styles.metaRow}>
+          ✗ Declined{job.approval.consentAt ? ` ${new Date(job.approval.consentAt).toLocaleDateString()}` : ""}
+          {job.approval.declineReason ? ` — “${job.approval.declineReason}”` : ""}
+        </Text>
+      )}
+      {job.approval && !job.approval.decision && (
+        <Text style={styles.metaRow}>⧗ Sent for approval {new Date(job.approval.sentAt).toLocaleDateString()}</Text>
+      )}
     </Card>
   );
 }
@@ -630,6 +645,16 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     ]);
   }
 
+  async function handleReviseAndResend() {
+    if (!job) return;
+    const jobs = await loadJobs();
+    const reset = jobs.map((j): Job =>
+      j.id === job.id ? { ...j, status: "estimate_sent", approval: j.approval ? { ...j.approval, decision: undefined, consentAt: undefined, declineReason: undefined, signerName: undefined } : undefined } : j
+    );
+    await saveJobs(reset);
+    navigation.navigate("SendEstimate", { jobId: job.id });
+  }
+
   async function handleAddPhoto() {
     if (!job) return;
     Alert.alert("Add Photo", undefined, [
@@ -773,6 +798,15 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           navigation={navigation}
           onAdvance={advanceStatus}
         />
+
+        {job.status === "declined" && (
+          <Button
+            label="Revise & re-send estimate"
+            variant="secondary"
+            onPress={handleReviseAndResend}
+            style={{ marginBottom: spacing.sm }}
+          />
+        )}
 
         <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} accessibilityRole="button" accessibilityLabel="Delete job">
           <Text style={styles.deleteBtnText}>Delete job</Text>

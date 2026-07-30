@@ -318,6 +318,10 @@ export const JOB_STATUSES: Record<
   complete: { label: "Complete", color: "success", next: "invoiced" },
   invoiced: { label: "Invoiced", color: "accent", next: "paid" },
   paid: { label: "Paid", color: "success", next: null },
+  // Branch off estimate_sent — reached only via a customer decline, never via the
+  // linear `.next` walk. `next: null` so JobDetail's "advance" action treats it as
+  // an endpoint (re-sending a revised estimate is a separate explicit reset).
+  declined: { label: "Declined", color: "danger", next: null },
 };
 
 export const TRADE_TYPES: { id: TradeId; label: string }[] = [
