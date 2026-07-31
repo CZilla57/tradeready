@@ -128,15 +128,33 @@ automatically via `utils/invoicePayments.ts`, unchanged.
 
 ## Testing plan
 
-Extend existing suites, no new test infra:
-- `JobDetailScreen` — secondary-action visibility/label across the
-  `status × invoiceId` matrix (approved/scheduled/in_progress × with/without
-  invoiceId), and the `"complete"` primary-action label switching between "Create
-  invoice" and "Finalize invoice".
-- `CreateInvoiceFromJobScreen` — all three modes, with explicit assertions that:
-  - Mode B never writes `status: "invoiced"`.
-  - Mode C updates the existing invoice by `id` rather than appending a new one.
-  - Mode A's existing tests still pass unchanged (regression guard).
+This codebase has no screen-level (RNTL) tests anywhere — `utils/jobStatus.ts`
+already exists specifically to hold status-transition logic "kept out of the
+screens so it's unit-tested." Following that established pattern, all of the new
+*decision* logic is extracted into pure functions in `utils/jobStatus.ts` and
+covered in `__tests__/jobStatus.test.js`; the screens stay thin callers and are
+not separately unit-tested (consistent with `JobDetailScreen.tsx` and
+`CreateInvoiceFromJobScreen.tsx` today, neither of which has a test file).
+
+New pure helpers, all unit-tested:
+- `canRequestDeposit(status: JobStatus): boolean` — true for
+  `approved`/`scheduled`/`in_progress`.
+- `invoiceScreenMode(status: JobStatus, hasInvoice: boolean): "create" |
+  "requestDeposit" | "finalize" | null` — the single source of truth for which of
+  the three `CreateInvoiceFromJobScreen` modes applies (see Design §2). Returns
+  `null` for any status/invoiceId combination that should never reach the screen.
+- `jobChangesAfterInvoiceSave(mode, invoiceId): Partial<Job>` — the exact `Job`
+  patch to apply after saving the invoice. This is the function that encodes the
+  core invariant: `"requestDeposit"` returns `{ invoiceId }` only, never touching
+  `status`; `"create"` and `"finalize"` both return `{ status: "invoiced",
+  invoiceId }`. Directly unit-testable without touching AsyncStorage or navigation.
+- `invoiceScreenCopy(mode): { title: string; cta: string }` — the title/button text
+  per mode ("Request Deposit" / "Finalize Invoice" / "Create Invoice").
+
+`CreateInvoiceFromJobScreen.handleCreate` and `prefillFromJob` call these helpers
+rather than re-deriving the branching inline, so the only untested code is
+straight-line UI wiring (which field maps to which `<Field>`, which navigation
+call fires) — no conditional business logic left unverified.
 
 Full gate (`tsc`, tests, lint) must stay green before merge, per
 `tradeready-change-control`.
