@@ -65,12 +65,16 @@ module.exports = async function handler(req, res) {
   let failed = 0;
 
   try {
-    const [invRows, setRows, logRows] = await Promise.all([
+    const [invRows, setRows, logRows, jobRows] = await Promise.all([
       // All non-deleted invoices; selectInvoicesToRemind filters out paid ones.
       // (Avoids fragile JSONB-filter URL encoding; scale is small at launch.)
       sbFetch("invoices?deleted=is.false&select=id,user_id,data").then((r) => r.json()),
       sbFetch("settings?select=user_id,data").then((r) => r.json()),
       sbFetch("auto_reminder_log?select=user_id,invoice_id").then((r) => r.json()),
+      // Needed so selectInvoicesToRemind can exclude a pre-work deposit
+      // invoice whose job isn't done yet — "overdue" on that due date doesn't
+      // mean the customer is late on a finished bill.
+      sbFetch("jobs?deleted=is.false&select=id,user_id,data").then((r) => r.json()),
     ]);
 
     const settingsByUser = new Map((setRows || []).map((r) => [r.user_id, r.data]));
@@ -87,10 +91,18 @@ module.exports = async function handler(req, res) {
       invByUser.get(row.user_id).push(invoice);
     }
 
+    const jobsByUser = new Map();
+    for (const row of jobRows || []) {
+      const job = { ...row.data, id: row.id };
+      if (!jobsByUser.has(row.user_id)) jobsByUser.set(row.user_id, []);
+      jobsByUser.get(row.user_id).push(job);
+    }
+
     for (const [userId, invoices] of invByUser) {
       const settings = settingsByUser.get(userId);
       const alreadySent = [...(sentByUser.get(userId) || [])];
-      const toSend = selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: alreadySent, today });
+      const jobs = jobsByUser.get(userId) || [];
+      const toSend = selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: alreadySent, jobs, today });
 
       for (const invoice of toSend) {
         scanned++;

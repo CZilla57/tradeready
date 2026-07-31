@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import type { Invoice, Settings, ReminderRule, Job, Customer } from '../types/models';
 import { isFullyPaid } from './invoicePayments';
 import { selectAppointmentReminders } from './appointmentMessages';
+import { isJobDunningEligible } from './jobStatus';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -60,7 +61,13 @@ export async function syncNotifications(): Promise<void> {
 
     await Notifications.cancelAllScheduledNotificationsAsync();
 
-    const unpaid = invoices.filter(inv => !isFullyPaid(inv) && inv.due);
+    const jobStatusById = new Map(jobs.map((j) => [j.id, j.status]));
+    const unpaid = invoices.filter(
+      (inv) =>
+        !isFullyPaid(inv) &&
+        inv.due &&
+        isJobDunningEligible(inv.jobId ? jobStatusById.get(inv.jobId) : undefined)
+    );
     const now = new Date();
     let count = 0;
 

@@ -35,7 +35,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer } from "../utils/storage";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
-import { amountPaid } from "../utils/invoicePayments";
+import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
 import Field from "../components/Field";
 import { spacing, radius, fontSize } from "../utils/theme";
@@ -106,7 +106,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
 
         const screenMode = invoiceScreenMode(j.status, !!j.invoiceId);
         if (!screenMode) {
-          Alert.alert("Error", "This job isn't ready for an invoice yet.");
+          Alert.alert("Error", "This job's invoice is already open — find it from the Invoices tab.");
           navigation.goBack();
           return;
         }
@@ -128,7 +128,10 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           setCustomer(existing.customer);
           setNumber(existing.number);
           setAmount(String(existing.amount));
-          setDue(existing.due);
+          // Deliberately NOT existing.due: that was computed as "30 days from
+          // deposit-request time," which can already be in the past by the
+          // time the job finishes. Payment terms restart when the real bill
+          // is issued, so `due` keeps its useState initial default (today+30).
           setEmail(existing.email);
           setPhone(existing.phone);
           setDesc(existing.desc);
@@ -143,6 +146,12 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
       } catch (err: unknown) {
         console.error("CreateInvoiceFromJobScreen: prefill failed", err);
         reportError(err, { context: 'invoicePrefill' });
+        // Do not leave `mode` at its "create" default here: a save from this
+        // degraded state would take the create branch and advance job.status
+        // to "invoiced" regardless of the job's real status (invoiceScreenMode
+        // never ran to guard it). Bail out instead.
+        Alert.alert("Error", "Could not load this job. Please try again.");
+        navigation.goBack();
       } finally {
         setLoading(false);
       }
@@ -201,22 +210,32 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
       let savedInvoiceId: string;
 
       if (mode === "finalize" && existingInvoice) {
-        const updatedInvoice: Invoice = {
-          ...existingInvoice,
+        // Build from the freshly-loaded row, not the `existingInvoice` state
+        // captured back at mount/prefill time — a background sync pull could
+        // have landed a payment (e.g. a Stripe webhook write from another
+        // device) on this invoice while the screen sat open, and spreading
+        // the stale snapshot would silently drop it from the ledger.
+        const freshInvoice = invoices.find((inv) => inv.id === existingInvoice.id) ?? existingInvoice;
+        // reconcilePaidFields re-derives paid/paidAt from the ledger (a no-op
+        // if there's no ledger yet) — required because `amount` just changed:
+        // AddInvoiceScreen.tsx follows this same edit-existing-invoice pattern
+        // for the same reason (see its handleSave).
+        const updatedInvoice: Invoice = reconcilePaidFields({
+          ...freshInvoice,
           customer:   customer.trim(),
-          customerId: record?.id ?? existingInvoice.customerId ?? "",
-          number:     number.trim() || existingInvoice.number,
+          customerId: record?.id ?? freshInvoice.customerId ?? "",
+          number:     number.trim() || freshInvoice.number,
           amount:     parsedAmount,
           due,
           email:      email.trim(),
           phone:      phone.trim(),
           desc:       desc.trim(),
-          lineItems:  lineItems.length > 0 ? lineItems : existingInvoice.lineItems,
-        };
-        const updatedInvoices = invoices.map((inv) => (inv.id === existingInvoice.id ? updatedInvoice : inv));
+          lineItems:  lineItems.length > 0 ? lineItems : freshInvoice.lineItems,
+        });
+        const updatedInvoices = invoices.map((inv) => (inv.id === freshInvoice.id ? updatedInvoice : inv));
         await saveInvoices(updatedInvoices);
         track('invoice_finalized', { source: 'from_job' });
-        savedInvoiceId = existingInvoice.id;
+        savedInvoiceId = freshInvoice.id;
       } else {
         const newInvoice = {
           id:         `inv${Date.now()}`,

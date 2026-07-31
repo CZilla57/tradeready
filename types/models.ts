@@ -300,6 +300,15 @@ export interface Invoice {
   paymentLinkAmount?: number;
   /** Itemised breakdown from the job estimate; absent on manually-created invoices. */
   lineItems?: InvoiceLineItem[];
+  /**
+   * FK to Job.id when this invoice was created from a job — both
+   * CreateInvoiceFromJobScreen paths ("create at complete" and "request
+   * deposit early") set this; manually-added invoices (AddInvoiceScreen) have
+   * none. Written since this field's creation paths existed but never read
+   * until isJobDunningEligible (utils/jobStatus.ts) needed it to keep an
+   * unpaid pre-work deposit on an unfinished job out of overdue dunning.
+   */
+  jobId?: string;
   // NOTE: there is no `created` field. The PDF's issue date is recovered from the
   // ms timestamp both creation paths embed in `id` (see invoiceIssueDate in
   // pdfTemplates); sample and legacy rows with non-timestamp ids render as "today".

@@ -16,7 +16,23 @@ function isChaseableAmount(value) {
   return Number.isFinite(n) && n > 0;
 }
 
-function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, today = new Date() }) {
+/**
+ * Mirrors utils/jobStatus.ts isJobDunningEligible — kept in sync by
+ * __tests__/jobDunningParity.test.js (see __tests__/paymentMathParity.test.js
+ * for the established pattern this follows). backend/ is a separate
+ * CommonJS package and cannot import the TS version directly.
+ *
+ * A pre-work deposit invoice tied to a job that isn't done yet must never
+ * trigger the auto-email cron, however overdue its due date looks. Invoices
+ * with no linked job, or whose job can no longer be found, are eligible.
+ */
+const JOB_DONE_STATUSES = new Set(["complete", "invoiced", "paid"]);
+function isJobDunningEligible(status) {
+  if (!status) return true;
+  return JOB_DONE_STATUSES.has(status);
+}
+
+function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, jobs, today = new Date() }) {
   if (!settings || !settings.autoSendEmailEnabled) return [];
   const rules = Array.isArray(settings.rules) ? settings.rules : [];
   if (rules.length === 0) return [];
@@ -27,6 +43,8 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, tod
   if (!Number.isFinite(earliest)) return [];
 
   const sent = new Set(alreadySentInvoiceIds || []);
+  const jobStatusById = new Map((jobs || []).filter(Boolean).map((j) => [j.id, j.status]));
+
   return (invoices || []).filter(
     (invoice) =>
       invoice &&
@@ -45,8 +63,9 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, tod
       invoice.email.trim() !== "" &&
       invoice.due &&
       daysPastDue(invoice.due, today) >= earliest &&
-      !sent.has(invoice.id)
+      !sent.has(invoice.id) &&
+      isJobDunningEligible(invoice.jobId ? jobStatusById.get(invoice.jobId) : undefined)
   );
 }
 
-module.exports = { selectInvoicesToRemind };
+module.exports = { selectInvoicesToRemind, isJobDunningEligible };

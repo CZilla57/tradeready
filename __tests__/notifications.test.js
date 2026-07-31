@@ -211,6 +211,64 @@ describe("auto-outreach toggle", () => {
   });
 });
 
+// ── Job-completion gating for pre-work deposit invoices ─────────────────────
+
+describe("job-completion gating (pre-work deposits)", () => {
+  test("an unpaid deposit invoice on a job that hasn't started is NOT chased", async () => {
+    seedStorage(
+      [{ id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30), jobId: "job1" }],
+      { rules: [{ days: 1 }] },
+      [{ id: "job1", status: "scheduled" }],
+    );
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("the same invoice becomes chaseable once its job is complete", async () => {
+    seedStorage(
+      [{ id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30), jobId: "job1" }],
+      { rules: [{ days: 1 }] },
+      [{ id: "job1", status: "complete" }],
+    );
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ identifier: "inv_i1_1d" })
+    );
+  });
+
+  test("an invoice with no linked job is unaffected (unchanged behavior)", async () => {
+    seedStorage(
+      [{ id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30) }],
+      { rules: [{ days: 1 }] },
+      [],
+    );
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ identifier: "inv_i1_1d" })
+    );
+  });
+
+  test("an invoice whose linked job can no longer be found is still chased (fail-open)", async () => {
+    seedStorage(
+      [{ id: "i1", customer: "Alice", number: "INV-001", paid: false, amount: 500, due: dateInDays(30), jobId: "deleted-job" }],
+      { rules: [{ days: 1 }] },
+      [],
+    );
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ identifier: "inv_i1_1d" })
+    );
+  });
+});
+
 // ── Appointment confirmations ────────────────────────────────────────────────
 
 describe("syncNotifications — appointment confirmations", () => {

@@ -62,7 +62,7 @@ export function applyEstimateDecision(
   return "declined";
 }
 
-const DEPOSIT_ELIGIBLE_STATUSES: JobStatus[] = ["approved", "scheduled", "in_progress"];
+const DEPOSIT_ELIGIBLE_STATUSES: readonly JobStatus[] = ["approved", "scheduled", "in_progress"];
 
 /**
  * Whether a deposit can be requested for a job at this status — any point
@@ -106,7 +106,26 @@ export function invoiceScreenCopy(mode: InvoiceScreenMode): { title: string; cta
     case "finalize":
       return { title: "Finalize Invoice", cta: "Finalize invoice →" };
     case "create":
-    default:
       return { title: "Create Invoice", cta: "Create invoice →" };
   }
+}
+
+const JOB_DONE_STATUSES: readonly JobStatus[] = ["complete", "invoiced", "paid"];
+
+/**
+ * Whether a job's own invoice should be eligible for overdue dunning (local
+ * notifications in utils/notifications.ts, and the auto-email cron in
+ * backend/lib/selectInvoicesToRemind.js — mirrored there since backend/ is a
+ * separate CommonJS package; kept in sync by __tests__/jobDunningParity.test.js).
+ *
+ * A pre-work deposit invoice tied to a job that isn't done yet must never
+ * trigger dunning, however overdue its due date looks — the job hasn't
+ * started or finished, so "overdue" doesn't mean what it means for a
+ * finished job's bill. Invoices with no linked job, or whose job can no
+ * longer be found (e.g. deleted), are always eligible: only a job we can
+ * positively confirm isn't done yet suppresses dunning.
+ */
+export function isJobDunningEligible(status: JobStatus | undefined): boolean {
+  if (!status) return true;
+  return JOB_DONE_STATUSES.includes(status);
 }
