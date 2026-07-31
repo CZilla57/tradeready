@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -43,8 +43,7 @@ import { promptForLogo } from "../utils/logoPicker";
 import { deletePhoto, photoExists, listPhotos } from "../utils/photoStorage";
 import { orphanedLogoPaths, sweepableLogoPaths } from "../utils/logoLifecycle";
 import type { Settings } from "../types/models";
-import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import type { MainTabParamList } from "../types/navigation";
+import type { TodayStackScreenProps } from "../types/navigation";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
@@ -83,6 +82,28 @@ function formatPhone(raw: string): string {
 }
 
 /**
+ * Folds any notification-rule box that is still being edited (a pending
+ * draft, keyed by rule index, holding raw typed text) into `settings.rules`,
+ * so saving while a field is focused persists what's typed instead of the
+ * last-committed number. Mirrors commitRule's parse/normalize exactly:
+ * an empty or non-numeric draft parses to NaN, and NaN (or anything < 1)
+ * falls back to 1 — the same fallback commitRule itself commits, not the
+ * previously-committed rule.days. Pure, so it can be applied to either the
+ * live `s`/`ruleDrafts` state (handleSave, `dirty`) or the ref mirrors read
+ * by the once-registered blur/beforeRemove guards.
+ */
+function applyRuleDrafts(settings: Settings, drafts: Record<number, string>): Settings {
+  if (Object.keys(drafts).length === 0) return settings;
+  const rules = settings.rules.map((rule, i) => {
+    const draft = drafts[i];
+    if (draft === undefined) return rule;
+    const parsed = parseInt(draft, 10);
+    return { days: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed };
+  });
+  return { ...settings, rules };
+}
+
+/**
  * Reclaims logo files no persisted setting references — a pick the user
  * abandoned without reaching a commit point, or a cleanup interrupted part-way.
  * Per-session cleanup (cleanupLogoFiles) only knows the paths THIS session
@@ -103,7 +124,7 @@ async function sweepOrphanedLogos(persistedLogoPath: string | undefined): Promis
   }
 }
 
-export default function SettingsScreen({ navigation }: BottomTabScreenProps<MainTabParamList, 'Settings'>) {
+export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Settings'>) {
   const { colors, shadow, preference, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -138,8 +159,45 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
   // last-saved snapshot and warn on blur. Refs mirror state because the blur
   // listener is registered once and would otherwise close over stale values.
   const [savedSnapshot, setSavedSnapshot] = useState<Settings | null>(null);
+
+  // Sticky Save in the native header (the screen only has a header at all
+  // since the gear move). Enabled exactly when the dirty-guard would fire.
+  // Compared against the flushed settings (drafts folded into `rules`) so an
+  // in-progress "days past due" edit — never committed to `s` until blur —
+  // still counts as a change; otherwise Save would stay disabled and the
+  // unsaved-edits guards below would silently let the typing be discarded.
+  const dirty = !!s && !!savedSnapshot && !settingsEqual(applyRuleDrafts(s, ruleDrafts), savedSnapshot);
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={handleSave}
+          disabled={!dirty || saving}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          // Header buttons: paddingLeft/alignSelf are what center the text;
+          // alignItems/justifyContent are no-ops in a native-stack header slot.
+          style={{ alignSelf: "center", paddingLeft: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Save settings"
+          accessibilityState={{ disabled: !dirty || saving, busy: saving }}
+        >
+          <Text
+            style={{
+              fontFamily: fonts.bodySemiBold,
+              fontSize: fontSize.md,
+              color: !dirty || saving ? colors.textMuted : colors.accent,
+            }}
+          >
+            Save
+          </Text>
+        </TouchableOpacity>
+      ),
+    });
+  });
+
   const sRef = useRef<Settings | null>(null);
   const savedSnapshotRef = useRef<Settings | null>(null);
+  const ruleDraftsRef = useRef<Record<number, string>>({});
   const suppressDirtyWarnRef = useRef(false); // sign-out/delete wipe data on purpose
 
   // Every logo path this session has referenced — the one loaded from settings plus
@@ -160,13 +218,40 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
 
   useEffect(() => { sRef.current = s; }, [s]);
   useEffect(() => { savedSnapshotRef.current = savedSnapshot; }, [savedSnapshot]);
+  useEffect(() => { ruleDraftsRef.current = ruleDrafts; }, [ruleDrafts]);
 
+  // Tab-switch-away used to leave Settings sitting on the Today stack, so
+  // returning to the Today tab landed back here (owner smoke finding,
+  // 2026-07-31). Pop to TodayHome instead. The pop is a removal, so the
+  // beforeRemove guard below owns the unsaved-edits prompt for this path
+  // too — one prompt path for back, swipe, and tab-switch alike.
+  // The parent-state check keeps root-stack covers (PaywallModal via
+  // Subscribe) from popping Settings out from under the modal: those blur
+  // this screen without changing the active tab.
   useEffect(() => {
     const unsub = navigation.addListener("blur", () => {
+      const tabState = navigation.getParent()?.getState();
+      const activeTab = tabState ? tabState.routes[tabState.index]?.name : undefined;
+      if (activeTab && activeTab !== "Today") {
+        navigation.popToTop();
+      }
+    });
+    return unsub;
+  }, [navigation]);
+
+  // THE unsaved-edits guard — the single prompt for every removal path:
+  // back button, swipe-back, and the tab-switch pop dispatched by the blur
+  // listener above. Intercept the removal, ask, then resume the same action.
+  // suppressDirtyWarnRef is set before each resumed dispatch so re-entering
+  // this listener during the resumed removal stays quiet; sign-out and
+  // delete-account set it too, so root resets pass through silently.
+  useEffect(() => {
+    const unsub = navigation.addListener("beforeRemove", (e) => {
       const current = sRef.current;
       const saved = savedSnapshotRef.current;
       if (suppressDirtyWarnRef.current || !current || !saved) return;
-      if (settingsEqual(current, saved)) return;
+      if (settingsEqual(applyRuleDrafts(current, ruleDraftsRef.current), saved)) return;
+      e.preventDefault();
       Alert.alert(
         "Unsaved settings",
         "You changed settings but didn't tap Save. Keep your changes?",
@@ -175,23 +260,28 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
             text: "Discard",
             style: "destructive",
             onPress: () => {
-              const saved = savedSnapshotRef.current;
-              if (!saved) return;
-              setS(saved);
-              // Files copied in during the abandoned edit are unreferenced now;
-              // the saved logo is passed as the keeper so it is never deleted.
+              // No setS: the screen is about to unmount; next mount reloads
+              // from storage. Logo files copied during the abandoned edit are
+              // orphans now — same cleanup as the blur path.
+              suppressDirtyWarnRef.current = true;
               cleanupLogoFiles(saved.logoPhoto);
+              navigation.dispatch(e.data.action);
             },
           },
           {
             text: "Save",
             onPress: async () => {
-              const toSave = sRef.current;
-              if (!toSave) return;
+              const current = sRef.current;
+              if (!current) return;
+              // Flush any in-progress "days past due" draft before saving —
+              // saving sRef.current raw would silently drop it.
+              const toSave = applyRuleDrafts(current, ruleDraftsRef.current);
               await saveSettings(toSave);
               syncNotifications();
               setSavedSnapshot(toSave);
               await cleanupLogoFiles(toSave.logoPhoto);
+              suppressDirtyWarnRef.current = true;
+              navigation.dispatch(e.data.action);
             },
           },
         ]
@@ -384,22 +474,9 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
     }
   }
 
-  // Fold any notification-rule box that is still being edited (a pending draft)
-  // into the numeric model, so saving while a field is focused persists what's typed.
-  function flushRuleDrafts(settings: Settings): Settings {
-    if (Object.keys(ruleDrafts).length === 0) return settings;
-    const rules = settings.rules.map((rule, i) => {
-      const draft = ruleDrafts[i];
-      if (draft === undefined) return rule;
-      const parsed = parseInt(draft, 10);
-      return { days: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed };
-    });
-    return { ...settings, rules };
-  }
-
   async function handleSave() {
     if (!s) return;
-    const flushed = flushRuleDrafts(s);
+    const flushed = applyRuleDrafts(s, ruleDrafts);
     setSaving(true);
     await saveSettings(flushed);
     syncNotifications();
@@ -521,16 +598,31 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
           <Field label="Profit margin %" value={String(s.marginPercent || "")} onChangeText={(v) => update("marginPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
           <Field label="Minimum job fee ($)" value={String(s.minimumJobFee || "")} onChangeText={(v) => update("minimumJobFee", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
           <Field label="Emergency/after-hours multiplier (e.g. 1.5 = 50% extra)" value={String(s.emergencyMultiplier || "")} onChangeText={(v) => update("emergencyMultiplier", parseFloat(v) || 1)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Field label="Mileage rate ($ per mile)" value={String(s.mileageRate ?? 0.70)} onChangeText={(v) => update("mileageRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Text style={styles.keyNote}>
+            Used to estimate the tax deduction for logged trips (Money → Mileage). Set to the standard mileage rate for your tax year.
+          </Text>
         </View>
 
         <Divider />
 
-        <SectionHeader title="Mileage deduction" />
-        <Text style={styles.ruleSubtitle}>
-          Used to estimate your tax deduction from logged trips (Money → Mileage). Set this to the standard mileage rate for your tax year.
-        </Text>
+        <SectionHeader title="Appearance" />
         <View style={styles.card}>
-          <Field label="Mileage rate ($ per mile)" value={String(s.mileageRate ?? 0.70)} onChangeText={(v) => update("mileageRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Text style={styles.providerHint}>Choose how TradeReady looks on your device.</Text>
+          <View style={styles.providerGrid}>
+            {([{ key: "light", label: "Light" }, { key: "system", label: "System" }, { key: "dark", label: "Dark" }] as const).map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.providerBtn, preference === opt.key && styles.providerBtnActive]}
+                onPress={() => setTheme(opt.key)}
+                accessibilityRole="radio"
+                accessibilityLabel={`${opt.label} appearance`}
+                accessibilityState={{ selected: preference === opt.key }}
+              >
+                <Text style={[styles.providerLabel, preference === opt.key && styles.providerLabelActive]}>{opt.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         <Divider />
@@ -639,27 +731,6 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
             </View>
           </>
         )}
-
-        <Divider />
-
-        <SectionHeader title="Appearance" />
-        <View style={styles.card}>
-          <Text style={styles.providerHint}>Choose how TradeReady looks on your device.</Text>
-          <View style={styles.providerGrid}>
-            {([{ key: "light", label: "Light" }, { key: "system", label: "System" }, { key: "dark", label: "Dark" }] as const).map((opt) => (
-              <TouchableOpacity
-                key={opt.key}
-                style={[styles.providerBtn, preference === opt.key && styles.providerBtnActive]}
-                onPress={() => setTheme(opt.key)}
-                accessibilityRole="radio"
-                accessibilityLabel={`${opt.label} appearance`}
-                accessibilityState={{ selected: preference === opt.key }}
-              >
-                <Text style={[styles.providerLabel, preference === opt.key && styles.providerLabelActive]}>{opt.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
 
         <Divider />
 
@@ -815,6 +886,90 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
 
         <Button label="Save settings" onPress={handleSave} loading={saving} />
 
+        <Divider />
+
+        <SectionHeader title="Subscription" />
+        <View style={styles.card}>
+          {isTrialing ? (
+            <View style={styles.subStatusRow}>
+              <View style={[styles.subStatusDot, { backgroundColor: colors.warning }]} />
+              <Text style={[styles.subStatusLabel, { color: colors.warning }]}>Free trial active</Text>
+            </View>
+          ) : isSubscribed ? (
+            <View style={styles.subStatusRow}>
+              <View style={[styles.subStatusDot, { backgroundColor: colors.success }]} />
+              <Text style={[styles.subStatusLabel, { color: colors.success }]}>Subscription active</Text>
+            </View>
+          ) : (
+            <Text style={styles.providerHint}>Subscribe to unlock all features.</Text>
+          )}
+          {isSubscribed || isTrialing ? (
+            <TouchableOpacity style={[styles.stripeBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Manage subscription" onPress={async () => {
+              if (await openManageSubscriptions()) return;
+              // Neither the StoreKit sheet nor the store deep link is available
+              // (sandbox / iPad compatibility mode) — tell the user where to go
+              // rather than letting the failure surface as an error.
+              Alert.alert(
+                "Manage your subscription",
+                Platform.OS === "ios"
+                  ? "Open the Settings app, tap your name, then tap Subscriptions to change or cancel TradeReady Pro."
+                  : "Open the Google Play Store, tap your profile picture, then tap Payments & subscriptions."
+              );
+            }}>
+              <Text style={styles.stripeBtnText}>Manage subscription</Text>
+            </TouchableOpacity>
+          ) : (
+            /* PaywallModal lives on the ROOT stack: TodayStack → MainTabs → RootStack, hence two hops. */
+            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Subscribe" onPress={() => navigation.getParent()?.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
+              <Text style={styles.stripeConnectBtnText}>Subscribe</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <Divider />
+
+        <SectionHeader title="Help & Support" />
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.listRow}
+            onPress={() =>
+              composeEmail({
+                recipients: [SUPPORT_EMAIL],
+                subject: `TradeReady support (v${APP_VERSION}, ${Platform.OS})`,
+                body: "",
+              })
+            }
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Contact support by email"
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.listRowText}>Contact Support</Text>
+              <Text style={styles.listRowSub}>{SUPPORT_EMAIL}</Text>
+            </View>
+            <Text style={styles.listRowChevron}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Divider />
+
+        <SectionHeader title="Legal" />
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(PRIVACY_URL)} activeOpacity={0.7} accessibilityRole="link" accessibilityLabel="Privacy Policy">
+            <Text style={styles.listRowText}>Privacy Policy</Text>
+            <Text style={styles.listRowChevron}>›</Text>
+          </TouchableOpacity>
+          <View style={styles.listRowDivider} />
+          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(TERMS_URL)} activeOpacity={0.7} accessibilityRole="link" accessibilityLabel="Terms of Service">
+            <Text style={styles.listRowText}>Terms of Service</Text>
+            <Text style={styles.listRowChevron}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Divider />
+
+        <SectionHeader title="Account" />
+
         <TouchableOpacity
           style={styles.clearSampleBtn}
           accessibilityRole="button"
@@ -860,85 +1015,6 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
         >
           <Text style={styles.deleteAccountText}>{deleting ? "Deleting account…" : "Delete Account"}</Text>
         </TouchableOpacity>
-
-        <Divider />
-
-        <SectionHeader title="Subscription" />
-        <View style={styles.card}>
-          {isTrialing ? (
-            <View style={styles.subStatusRow}>
-              <View style={[styles.subStatusDot, { backgroundColor: colors.warning }]} />
-              <Text style={[styles.subStatusLabel, { color: colors.warning }]}>Free trial active</Text>
-            </View>
-          ) : isSubscribed ? (
-            <View style={styles.subStatusRow}>
-              <View style={[styles.subStatusDot, { backgroundColor: colors.success }]} />
-              <Text style={[styles.subStatusLabel, { color: colors.success }]}>Subscription active</Text>
-            </View>
-          ) : (
-            <Text style={styles.providerHint}>Subscribe to unlock all features.</Text>
-          )}
-          {isSubscribed || isTrialing ? (
-            <TouchableOpacity style={[styles.stripeBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Manage subscription" onPress={async () => {
-              if (await openManageSubscriptions()) return;
-              // Neither the StoreKit sheet nor the store deep link is available
-              // (sandbox / iPad compatibility mode) — tell the user where to go
-              // rather than letting the failure surface as an error.
-              Alert.alert(
-                "Manage your subscription",
-                Platform.OS === "ios"
-                  ? "Open the Settings app, tap your name, then tap Subscriptions to change or cancel TradeReady Pro."
-                  : "Open the Google Play Store, tap your profile picture, then tap Payments & subscriptions."
-              );
-            }}>
-              <Text style={styles.stripeBtnText}>Manage subscription</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Subscribe" onPress={() => navigation.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
-              <Text style={styles.stripeConnectBtnText}>Subscribe</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <Divider />
-
-        <SectionHeader title="Help & Support" />
-        <View style={styles.card}>
-          <TouchableOpacity
-            style={styles.listRow}
-            onPress={() =>
-              composeEmail({
-                recipients: [SUPPORT_EMAIL],
-                subject: `TradeReady support (v${APP_VERSION}, ${Platform.OS})`,
-                body: "",
-              })
-            }
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Contact support by email"
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={styles.listRowText}>Contact Support</Text>
-              <Text style={styles.listRowSub}>{SUPPORT_EMAIL}</Text>
-            </View>
-            <Text style={styles.listRowChevron}>›</Text>
-          </TouchableOpacity>
-        </View>
-
-        <Divider />
-
-        <SectionHeader title="Legal" />
-        <View style={styles.card}>
-          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(PRIVACY_URL)} activeOpacity={0.7} accessibilityRole="link" accessibilityLabel="Privacy Policy">
-            <Text style={styles.listRowText}>Privacy Policy</Text>
-            <Text style={styles.listRowChevron}>›</Text>
-          </TouchableOpacity>
-          <View style={styles.listRowDivider} />
-          <TouchableOpacity style={styles.listRow} onPress={() => Linking.openURL(TERMS_URL)} activeOpacity={0.7} accessibilityRole="link" accessibilityLabel="Terms of Service">
-            <Text style={styles.listRowText}>Terms of Service</Text>
-            <Text style={styles.listRowChevron}>›</Text>
-          </TouchableOpacity>
-        </View>
       </ScrollView>
       </KeyboardAvoidingView>
       {/* Serves the number-pad reminder-rule inputs. */}

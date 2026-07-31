@@ -155,7 +155,7 @@ export default function ReviewRequestScreen({
             </Text>
             <Button
               label="Go to Settings"
-              onPress={() => navigation.navigate("Settings")}
+              onPress={() => navigation.navigate("Today", { screen: "Settings" })}
               style={{ marginTop: spacing.md }}
             />
             <TouchableOpacity
