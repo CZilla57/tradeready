@@ -6,7 +6,7 @@
 // fire automatically.
 
 import { JOB_STATUSES } from "./pricingEngine";
-import type { JobStatus } from "../types/models";
+import type { Job, JobStatus } from "../types/models";
 
 /**
  * When a job gains a scheduled date, an `approved` job should advance to
@@ -60,4 +60,53 @@ export function applyEstimateDecision(
   if (status !== "lead" && status !== "estimate_sent") return status;
   if (decision === "approved") return JOB_STATUSES.estimate_sent.next ?? status;
   return "declined";
+}
+
+const DEPOSIT_ELIGIBLE_STATUSES: JobStatus[] = ["approved", "scheduled", "in_progress"];
+
+/**
+ * Whether a deposit can be requested for a job at this status — any point
+ * after the customer has approved the estimate but before the job is done.
+ * Once "complete", invoicing takes over (see invoiceScreenMode).
+ */
+export function canRequestDeposit(status: JobStatus): boolean {
+  return DEPOSIT_ELIGIBLE_STATUSES.includes(status);
+}
+
+export type InvoiceScreenMode = "create" | "requestDeposit" | "finalize";
+
+/**
+ * Which of CreateInvoiceFromJobScreen's three modes applies for a given job.
+ * Returns null for any status/invoiceId combination that should never reach
+ * that screen — e.g. a deposit-eligible status that already has an invoice,
+ * which JobDetailScreen routes straight to Outreach for instead.
+ */
+export function invoiceScreenMode(status: JobStatus, hasInvoice: boolean): InvoiceScreenMode | null {
+  if (status === "complete") return hasInvoice ? "finalize" : "create";
+  if (canRequestDeposit(status) && !hasInvoice) return "requestDeposit";
+  return null;
+}
+
+/**
+ * The Job patch to apply once CreateInvoiceFromJobScreen saves. The core
+ * invariant lives here: requesting a deposit early must never advance the job
+ * to "invoiced" — only finishing the job (create at complete, or finalize an
+ * existing deposit invoice at complete) does that.
+ */
+export function jobChangesAfterInvoiceSave(mode: InvoiceScreenMode, invoiceId: string): Partial<Job> {
+  if (mode === "requestDeposit") return { invoiceId };
+  return { status: "invoiced", invoiceId };
+}
+
+/** Screen title + primary-button copy for each CreateInvoiceFromJobScreen mode. */
+export function invoiceScreenCopy(mode: InvoiceScreenMode): { title: string; cta: string } {
+  switch (mode) {
+    case "requestDeposit":
+      return { title: "Request Deposit", cta: "Request deposit →" };
+    case "finalize":
+      return { title: "Finalize Invoice", cta: "Finalize invoice →" };
+    case "create":
+    default:
+      return { title: "Create Invoice", cta: "Create invoice →" };
+  }
 }

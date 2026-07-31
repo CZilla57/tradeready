@@ -83,3 +83,79 @@ describe("canSendEstimate", () => {
     }
   });
 });
+
+const {
+  canRequestDeposit,
+  invoiceScreenMode,
+  jobChangesAfterInvoiceSave,
+  invoiceScreenCopy,
+} = require('../utils/jobStatus');
+
+// Pre-work deposits: a deposit can be requested as soon as the estimate is
+// approved, not just after the job is marked complete. These helpers decide
+// which of CreateInvoiceFromJobScreen's three modes applies, and — critically
+// — that requesting a deposit early never advances job.status.
+describe('canRequestDeposit', () => {
+  it('is true for approved, scheduled, and in_progress', () => {
+    expect(canRequestDeposit('approved')).toBe(true);
+    expect(canRequestDeposit('scheduled')).toBe(true);
+    expect(canRequestDeposit('in_progress')).toBe(true);
+  });
+
+  it('is false before approval and once the job is done', () => {
+    for (const s of ['lead', 'estimate_sent', 'complete', 'invoiced', 'paid', 'declined']) {
+      expect(canRequestDeposit(s)).toBe(false);
+    }
+  });
+});
+
+describe('invoiceScreenMode', () => {
+  it('is "requestDeposit" for deposit-eligible statuses with no invoice yet', () => {
+    expect(invoiceScreenMode('approved', false)).toBe('requestDeposit');
+    expect(invoiceScreenMode('scheduled', false)).toBe('requestDeposit');
+    expect(invoiceScreenMode('in_progress', false)).toBe('requestDeposit');
+  });
+
+  it('is "create" at complete with no invoice yet', () => {
+    expect(invoiceScreenMode('complete', false)).toBe('create');
+  });
+
+  it('is "finalize" at complete once a deposit invoice already exists', () => {
+    expect(invoiceScreenMode('complete', true)).toBe('finalize');
+  });
+
+  it('is null for a deposit-eligible status that already has an invoice (JobDetailScreen routes to Outreach instead)', () => {
+    expect(invoiceScreenMode('approved', true)).toBeNull();
+    expect(invoiceScreenMode('scheduled', true)).toBeNull();
+    expect(invoiceScreenMode('in_progress', true)).toBeNull();
+  });
+
+  it('is null before approval and after invoicing, regardless of invoiceId', () => {
+    for (const s of ['lead', 'estimate_sent', 'invoiced', 'paid', 'declined']) {
+      expect(invoiceScreenMode(s, false)).toBeNull();
+      expect(invoiceScreenMode(s, true)).toBeNull();
+    }
+  });
+});
+
+describe('jobChangesAfterInvoiceSave', () => {
+  it('requesting a deposit early never advances status — the core invariant', () => {
+    expect(jobChangesAfterInvoiceSave('requestDeposit', 'inv123')).toEqual({ invoiceId: 'inv123' });
+  });
+
+  it('creating at complete advances to invoiced', () => {
+    expect(jobChangesAfterInvoiceSave('create', 'inv123')).toEqual({ status: 'invoiced', invoiceId: 'inv123' });
+  });
+
+  it('finalizing advances to invoiced', () => {
+    expect(jobChangesAfterInvoiceSave('finalize', 'inv123')).toEqual({ status: 'invoiced', invoiceId: 'inv123' });
+  });
+});
+
+describe('invoiceScreenCopy', () => {
+  it('returns distinct title/cta per mode', () => {
+    expect(invoiceScreenCopy('requestDeposit')).toEqual({ title: 'Request Deposit', cta: 'Request deposit →' });
+    expect(invoiceScreenCopy('finalize')).toEqual({ title: 'Finalize Invoice', cta: 'Finalize invoice →' });
+    expect(invoiceScreenCopy('create')).toEqual({ title: 'Create Invoice', cta: 'Create invoice →' });
+  });
+});
