@@ -28,7 +28,7 @@ import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
-import { canSendEstimate } from "../utils/jobStatus";
+import { canSendEstimate, canRequestDeposit } from "../utils/jobStatus";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
@@ -512,7 +512,7 @@ function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: J
       variant: "primary",
     },
     complete: {
-      label: "Create invoice",
+      label: job.invoiceId ? "Finalize invoice" : "Create invoice",
       onPress: () =>
         navigation.navigate("CreateInvoiceFromJob", { jobId: job.id }),
       variant: "primary",
@@ -541,6 +541,31 @@ function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: J
       label={action.label}
       onPress={action.onPress}
       variant={action.variant}
+      style={{ marginBottom: spacing.sm }}
+    />
+  );
+}
+
+function DepositAction({ job, navigation }: { job: Job; navigation: JobStackScreenProps<'JobDetail'>['navigation'] }) {
+  if (!canRequestDeposit(job.status)) return null;
+
+  if (job.invoiceId) {
+    const invoiceId = job.invoiceId;
+    return (
+      <Button
+        label="View deposit →"
+        variant="secondary"
+        onPress={() => navigation.navigate("Outreach", { invoiceId })}
+        style={{ marginBottom: spacing.sm }}
+      />
+    );
+  }
+
+  return (
+    <Button
+      label="Request deposit →"
+      variant="secondary"
+      onPress={() => navigation.navigate("CreateInvoiceFromJob", { jobId: job.id })}
       style={{ marginBottom: spacing.sm }}
     />
   );
@@ -807,6 +832,8 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           navigation={navigation}
           onAdvance={advanceStatus}
         />
+
+        <DepositAction job={job} navigation={navigation} />
 
         {job.status === "declined" && (
           <Button
