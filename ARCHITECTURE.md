@@ -15,7 +15,7 @@ Six tabs are live. Items marked ⚠️ are stubs or partial implementations.
 
 | Tab | What's built |
 |---|---|
-| **Today** | Jobs scheduled for today (time-sorted), earnings summary, route map launch, gear icon opens Settings |
+| **Today** | Jobs scheduled for today (time-sorted), earnings summary, route map launch, gear icon opens Settings (switching tabs away pops Settings back to TodayHome, so Today always lands on TodayHome) |
 | **Jobs** | Full lifecycle lead → paid; time tracking; materials; job photos; estimate PDF + send |
 | **Invoices** | Invoice list, overdue detection, collection messages, Stripe/Square/PayPal payment links |
 | **Money** | Income/expense dashboard, monthly bar chart, top-customers card, expense logging with receipt scanning (photo → pre-filled form for review) |

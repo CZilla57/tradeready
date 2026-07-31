@@ -220,44 +220,21 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
   useEffect(() => { savedSnapshotRef.current = savedSnapshot; }, [savedSnapshot]);
   useEffect(() => { ruleDraftsRef.current = ruleDrafts; }, [ruleDrafts]);
 
+  // Tab-switch-away used to leave Settings sitting on the Today stack, so
+  // returning to the Today tab landed back here (owner smoke finding,
+  // 2026-07-31). Pop to TodayHome instead. The pop is a removal, so the
+  // beforeRemove guard below owns the unsaved-edits prompt for this path
+  // too — one prompt path for back, swipe, and tab-switch alike.
+  // The parent-state check keeps root-stack covers (PaywallModal via
+  // Subscribe) from popping Settings out from under the modal: those blur
+  // this screen without changing the active tab.
   useEffect(() => {
     const unsub = navigation.addListener("blur", () => {
-      const current = sRef.current;
-      const saved = savedSnapshotRef.current;
-      if (suppressDirtyWarnRef.current || !current || !saved) return;
-      if (settingsEqual(applyRuleDrafts(current, ruleDraftsRef.current), saved)) return;
-      Alert.alert(
-        "Unsaved settings",
-        "You changed settings but didn't tap Save. Keep your changes?",
-        [
-          {
-            text: "Discard",
-            style: "destructive",
-            onPress: () => {
-              const saved = savedSnapshotRef.current;
-              if (!saved) return;
-              setS(saved);
-              // Files copied in during the abandoned edit are unreferenced now;
-              // the saved logo is passed as the keeper so it is never deleted.
-              cleanupLogoFiles(saved.logoPhoto);
-            },
-          },
-          {
-            text: "Save",
-            onPress: async () => {
-              const current = sRef.current;
-              if (!current) return;
-              // Flush any in-progress "days past due" draft before saving —
-              // saving sRef.current raw would silently drop it.
-              const toSave = applyRuleDrafts(current, ruleDraftsRef.current);
-              await saveSettings(toSave);
-              syncNotifications();
-              setSavedSnapshot(toSave);
-              await cleanupLogoFiles(toSave.logoPhoto);
-            },
-          },
-        ]
-      );
+      const tabState = navigation.getParent()?.getState();
+      const activeTab = tabState ? tabState.routes[tabState.index]?.name : undefined;
+      if (activeTab && activeTab !== "Today") {
+        navigation.popToTop();
+      }
     });
     return unsub;
   }, [navigation]);
