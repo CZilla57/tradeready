@@ -57,7 +57,7 @@
       [
         "@react-native-google-signin/google-signin",
         {
-          "iosUrlScheme": "com.googleusercontent.apps.REPLACE_WITH_REVERSED_IOS_CLIENT_ID"
+          "iosUrlScheme": "com.googleusercontent.apps.246232122952-b2trko1uog7593a3sg8n25tklifc85nn"
         }
       ]
     ],
@@ -77,8 +77,8 @@
       "emailConfirmedUrl": "https://gettradereadyapp.com/confirmed.html",
       "rcAppleApiKey": "appl_wHNdVnMEdRdTnMHbDEUgpdhppMO",
       "rcGoogleApiKey": "test_jRUbFDjBtWFscqgdqaEaPUfnxXt",
-      "googleWebClientId": "REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com",
-      "googleIosClientId": "REPLACE_WITH_IOS_CLIENT_ID.apps.googleusercontent.com",
+      "googleWebClientId": "246232122952-37tucdttgsrkjs59l46oo29eggalvn92.apps.googleusercontent.com",
+      "googleIosClientId": "246232122952-b2trko1uog7593a3sg8n25tklifc85nn.apps.googleusercontent.com",
       "posthogApiKey": "phc_n8uzAhbpcm5ygKiE2Xztnb9u7jj8ohZFB3qnCzBFGZJ7",
       "sentryDsn": "https://a3f3e50131ae0edac8e8981bab9dde17@o4511707186528256.ingest.us.sentry.io/4511707197472768",
       "eas": {
