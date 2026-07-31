@@ -239,12 +239,12 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
     return unsub;
   }, [navigation]);
 
-  // Back/pop path of the unsaved-edits guard. The blur listener above covers
-  // switching TABS while Settings is pushed (screen stays mounted, alert shows
-  // after the fact); popping the stack UNMOUNTS the screen, so that pattern
-  // can't work here — intercept the removal, ask, then resume the same action.
-  // suppressDirtyWarnRef is set before dispatching so the blur listener (which
-  // fires during the resumed removal, before the refs settle) stays quiet.
+  // THE unsaved-edits guard — the single prompt for every removal path:
+  // back button, swipe-back, and the tab-switch pop dispatched by the blur
+  // listener above. Intercept the removal, ask, then resume the same action.
+  // suppressDirtyWarnRef is set before each resumed dispatch so re-entering
+  // this listener during the resumed removal stays quiet; sign-out and
+  // delete-account set it too, so root resets pass through silently.
   useEffect(() => {
     const unsub = navigation.addListener("beforeRemove", (e) => {
       const current = sRef.current;
