@@ -1,12 +1,23 @@
 // screens/CreateInvoiceFromJobScreen.tsx
-// Bridges a completed job into a new invoice.
-// Pre-fills everything it can from the job record so the user just reviews
-// and taps "Create invoice" — no retyping.
+// Bridges a job into an invoice — either the final bill (job complete) or an
+// up-front deposit request (job approved/scheduled/in_progress, before work is
+// done). Pre-fills everything it can so the user just reviews and taps the
+// button — no retyping.
 //
-// Flow: JobDetailScreen (complete) → here → InvoiceList
+// Three modes (utils/jobStatus.ts invoiceScreenMode), keyed off
+// (job.status, job.invoiceId):
+//   "create"         — job complete, no invoice yet. Creates one, job -> invoiced.
+//   "requestDeposit" — job approved/scheduled/in_progress, no invoice yet.
+//                       Creates one WITHOUT advancing job.status.
+//   "finalize"       — job complete, invoice already exists (deposit was
+//                       requested earlier). Updates that invoice in place,
+//                       job -> invoiced.
+//
+// Flow: JobDetailScreen → here → Outreach
 // Side effects:
-//   1. Saves new invoice to AsyncStorage (invoices key)
-//   2. Updates job status to "invoiced" and writes invoiceId back to the job
+//   1. Saves the invoice to AsyncStorage (invoices key) — new row for
+//      "create"/"requestDeposit", in-place update for "finalize".
+//   2. Applies jobChangesAfterInvoiceSave(mode, invoiceId) to the job.
 
 import React, { useState, useEffect, useMemo } from "react";
 import {
@@ -23,6 +34,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer } from "../utils/storage";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
+import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
+import { amountPaid } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
 import Field from "../components/Field";
 import { spacing, radius, fontSize } from "../utils/theme";
@@ -66,8 +79,11 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
   const [loading, setLoading]   = useState<boolean>(true);
   const [saving, setSaving]     = useState<boolean>(false);
   const [job, setJob]           = useState<Job | null>(null);
+  const [mode, setMode]         = useState<InvoiceScreenMode>("create");
+  const [existingInvoice, setExistingInvoice] = useState<Invoice | null>(null);
 
-  // Editable invoice fields — pre-filled from the job
+  // Editable invoice fields — pre-filled from the job (or, in "finalize" mode,
+  // from the existing deposit invoice, so a manually-adjusted amount survives).
   const [customer, setCustomer] = useState<string>("");
   const [number, setNumber]     = useState<string>("");
   const [amount, setAmount]     = useState<string>("");
@@ -77,7 +93,6 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
   const [desc, setDesc]         = useState<string>("");
 
   useEffect(() => {
-    navigation.setOptions({ title: "Create Invoice" });
     async function prefillFromJob() {
       try {
         const [jobs, invoices, customers] = await Promise.all([loadJobs(), loadInvoices(), loadCustomers()]);
@@ -89,15 +104,42 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           return;
         }
 
+        const screenMode = invoiceScreenMode(j.status, !!j.invoiceId);
+        if (!screenMode) {
+          Alert.alert("Error", "This job isn't ready for an invoice yet.");
+          navigation.goBack();
+          return;
+        }
+        setMode(screenMode);
+        navigation.setOptions({ title: invoiceScreenCopy(screenMode).title });
+
         const matchingCustomer: Customer | undefined = customers.find((c: Customer) => c.id === j.customerId);
 
         setJob(j);
-        setCustomer(j.customerName || "");
-        setAmount(j.estimateTotal > 0 ? String(j.estimateTotal) : "");
-        setEmail(matchingCustomer?.email || "");
-        setPhone(matchingCustomer?.phone || "");
-        setDesc(j.title || "");
-        setNumber(nextInvoiceNumber(invoices));
+
+        if (screenMode === "finalize") {
+          const existing = invoices.find((inv) => inv.id === j.invoiceId);
+          if (!existing) {
+            Alert.alert("Error", "The deposit invoice for this job could not be found.");
+            navigation.goBack();
+            return;
+          }
+          setExistingInvoice(existing);
+          setCustomer(existing.customer);
+          setNumber(existing.number);
+          setAmount(String(existing.amount));
+          setDue(existing.due);
+          setEmail(existing.email);
+          setPhone(existing.phone);
+          setDesc(existing.desc);
+        } else {
+          setCustomer(j.customerName || "");
+          setAmount(j.estimateTotal > 0 ? String(j.estimateTotal) : "");
+          setEmail(matchingCustomer?.email || "");
+          setPhone(matchingCustomer?.phone || "");
+          setDesc(j.title || "");
+          setNumber(nextInvoiceNumber(invoices));
+        }
       } catch (err: unknown) {
         console.error("CreateInvoiceFromJobScreen: prefill failed", err);
         reportError(err, { context: 'invoicePrefill' });
@@ -131,7 +173,9 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
         phone: phone.trim(),
       });
 
-      // Derive line items from the job's estimate breakdown
+      // Derive line items from the job's current estimate breakdown — recomputed
+      // fresh even in "finalize" mode, so estimate edits made after the deposit
+      // was requested (extra materials, a change order) are picked up.
       const lineItems: InvoiceLineItem[] = [];
       if (job) {
         const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
@@ -154,43 +198,64 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
         }
       }
 
-      const newInvoice = {
-        id:         `inv${Date.now()}`,
-        customer:   customer.trim(),
-        customerId: record?.id ?? "",
-        number:   number.trim() || nextInvoiceNumber(invoices),
-        amount:   parsedAmount,
-        due,
-        email:    email.trim(),
-        phone:    phone.trim(),
-        desc:     desc.trim(),
-        paid:     false,
-        jobId,
-        ...(lineItems.length > 0 ? { lineItems } : {}),
-      };
+      let savedInvoiceId: string;
 
-      await saveInvoices([...invoices, newInvoice]);
-      track('invoice_created', { source: 'from_job' });
+      if (mode === "finalize" && existingInvoice) {
+        const updatedInvoice: Invoice = {
+          ...existingInvoice,
+          customer:   customer.trim(),
+          customerId: record?.id ?? existingInvoice.customerId ?? "",
+          number:     number.trim() || existingInvoice.number,
+          amount:     parsedAmount,
+          due,
+          email:      email.trim(),
+          phone:      phone.trim(),
+          desc:       desc.trim(),
+          lineItems:  lineItems.length > 0 ? lineItems : existingInvoice.lineItems,
+        };
+        const updatedInvoices = invoices.map((inv) => (inv.id === existingInvoice.id ? updatedInvoice : inv));
+        await saveInvoices(updatedInvoices);
+        track('invoice_finalized', { source: 'from_job' });
+        savedInvoiceId = existingInvoice.id;
+      } else {
+        const newInvoice = {
+          id:         `inv${Date.now()}`,
+          customer:   customer.trim(),
+          customerId: record?.id ?? "",
+          number:   number.trim() || nextInvoiceNumber(invoices),
+          amount:   parsedAmount,
+          due,
+          email:    email.trim(),
+          phone:    phone.trim(),
+          desc:     desc.trim(),
+          paid:     false,
+          jobId,
+          ...(lineItems.length > 0 ? { lineItems } : {}),
+        };
+        await saveInvoices([...invoices, newInvoice]);
+        track('invoice_created', { source: 'from_job', mode });
+        savedInvoiceId = newInvoice.id;
+      }
 
-      // Advance the job to "invoiced" and record which invoice was created
+      const jobChanges = jobChangesAfterInvoiceSave(mode, savedInvoiceId);
       const updatedJobs = jobs.map((j): Job =>
-        j.id === jobId
-          ? { ...j, status: "invoiced", invoiceId: newInvoice.id }
-          : j
+        j.id === jobId ? { ...j, ...jobChanges } : j
       );
       await saveJobs(updatedJobs);
 
-      // Go straight to the outreach screen so they can send the invoice immediately.
+      // Go straight to the outreach screen so they can send it immediately.
       // Replace this screen in the stack so Back doesn't return here.
-      navigation.replace("Outreach", { invoiceId: newInvoice.id });
+      navigation.replace("Outreach", { invoiceId: savedInvoiceId });
     } catch (err: unknown) {
       console.error("CreateInvoiceFromJobScreen: save failed", err);
       reportError(err, { context: 'invoiceCreate' });
-      Alert.alert("Error", "Could not create invoice. Please try again.");
+      Alert.alert("Error", "Could not save invoice. Please try again.");
     } finally {
       setSaving(false);
     }
   }
+
+  const copy = invoiceScreenCopy(mode);
 
   if (loading) {
     return (
@@ -210,8 +275,23 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Pre-fill notice */}
-          {job && job.estimateTotal > 0 && (
+          {/* Deposit-already-requested notice (finalize mode only) */}
+          {mode === "finalize" && existingInvoice?.depositRequest && (
+            <View style={styles.prefillBanner}>
+              <Text style={styles.prefillBannerText}>
+                Deposit already requested: {formatQuote(existingInvoice.depositRequest.amount)}
+                {existingInvoice.depositRequest.percent ? ` (${existingInvoice.depositRequest.percent}%)` : ""}
+                {amountPaid(existingInvoice) > 0
+                  ? ` — ${formatQuote(amountPaid(existingInvoice))} received.`
+                  : " — not yet received."}
+                {" "}Review the total below before finalizing.
+              </Text>
+            </View>
+          )}
+
+          {/* Pre-fill notice (create / requestDeposit modes only — finalize
+              prefills from the existing invoice, not the raw estimate) */}
+          {mode !== "finalize" && job && job.estimateTotal > 0 && (
             <View style={styles.prefillBanner}>
               <Text style={styles.prefillBannerText}>
                 Pre-filled from job estimate ({formatQuote(job.estimateTotal)}). Review and adjust if needed.
@@ -296,11 +376,11 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
               onPress={handleCreate}
               disabled={saving}
               accessibilityRole="button"
-              accessibilityLabel="Create invoice"
+              accessibilityLabel={copy.title}
               accessibilityState={{ disabled: saving, busy: saving }}
             >
               <Text style={styles.createBtnText}>
-                {saving ? "Creating..." : "Create invoice →"}
+                {saving ? "Saving..." : copy.cta}
               </Text>
             </TouchableOpacity>
           </View>
