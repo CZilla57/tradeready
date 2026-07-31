@@ -11,17 +11,20 @@ collect payments, and grow — without needing a business degree.
 
 ## Current State (as of v1.0)
 
-Seven tabs are live. Items marked ⚠️ are stubs or partial implementations.
+Six tabs are live. Items marked ⚠️ are stubs or partial implementations.
 
 | Tab | What's built |
 |---|---|
-| **Today** | Jobs scheduled for today (time-sorted), earnings summary, route map launch |
+| **Today** | Jobs scheduled for today (time-sorted), earnings summary, route map launch, gear icon opens Settings |
 | **Jobs** | Full lifecycle lead → paid; time tracking; materials; job photos; estimate PDF + send |
 | **Invoices** | Invoice list, overdue detection, collection messages, Stripe/Square/PayPal payment links |
 | **Money** | Income/expense dashboard, monthly bar chart, top-customers card, expense logging with receipt scanning (photo → pre-filled form for review) |
 | **Customers** | Customer list + detail, job history, notes, one-tap call/text/email |
 | **Chat (AI Coach)** | Chat interface backed by Claude (Anthropic) or Groq |
-| **Settings** | Business profile, AI keys, payment processor |
+
+**Settings** (business profile, AI keys, payment processor) moved off the tab
+bar 2026-07-31 — it's now reached via the gear icon in Today's header, not a
+tab of its own.
 
 **Not yet built from the original vision:**
 - Route optimization — the Route screen is a deep-link to Apple/Google Maps, not a waypoint optimizer
@@ -64,6 +67,7 @@ The home screen. Shows what matters right now.
 - Route map launch (opens Apple/Google Maps — ⚠️ not optimized)
 - Quick actions: Start job, Mark complete, Call customer
 - Earnings summary for today
+- Gear icon in the header → Settings (see below)
 - ⚠️ Weather alerts: not built
 - ⚠️ Turn-by-turn route optimization: not built
 
@@ -129,7 +133,7 @@ Everything financial in one place.
 - ⚠️ Suggested questions / contextual prompts: not built
 - ⚠️ Proactive insights feed: not built
 
-### Tab 7 — Settings
+### Settings (opened via the gear icon in Today's header — not a tab)
 - Business profile (name, trade, contact, logo)
 - Appearance (dark / light mode toggle)
 - Stripe Connect onboarding and status
