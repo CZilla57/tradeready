@@ -29,7 +29,7 @@ import {
   type ViewStyle,
   type TextStyle,
 } from "react-native";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { KeyboardDoneBar, needsDoneBar } from "./KeyboardDoneBar";
@@ -113,12 +113,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     fieldGroup: { marginBottom: spacing.md },
     flex: { flex: 1 },
     label: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.sm,
       color: colors.textSecondary,
       marginBottom: 5,
-      fontWeight: "500",
     },
     input: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.surface,
       borderRadius: radius.md,
       // minHeight (not height) so larger accessibility text grows the field

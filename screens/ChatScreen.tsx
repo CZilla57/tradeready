@@ -17,7 +17,7 @@ import { loadSettings } from "../utils/storage";
 import { sendGroqMessage, sendClaudeMessage, sendBackendGroqMessage } from "../utils/aiService";
 import { getBusinessSnapshot } from "../utils/businessSnapshot";
 import { TRADE_TYPES, getTradeNickname } from "../utils/pricingEngine";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { Ionicons } from "@expo/vector-icons";
@@ -132,7 +132,7 @@ export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHom
       headerRight: () =>
         messages.length > 0 ? (
           <TouchableOpacity onPress={() => setMessages([])} style={{ marginRight: 4 }}>
-            <Text style={{ color: colors.accent, fontSize: fontSize.md }}>New chat</Text>
+            <Text style={{ fontFamily: fonts.bodyRegular, color: colors.accent, fontSize: fontSize.md }}>New chat</Text>
           </TouchableOpacity>
         ) : null,
     });
@@ -239,7 +239,7 @@ export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHom
             accessibilityLabel="Send message"
             accessibilityState={{ disabled: !input.trim() || sending }}
           >
-            <Text style={styles.sendBtnText}>↑</Text>
+            <Ionicons name="arrow-up" size={20} color="#fff" />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -294,13 +294,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     container: { flex: 1, backgroundColor: colors.background },
     flex: { flex: 1 },
     emptyWrap: { flex: 1, padding: spacing.lg, paddingTop: 48, alignItems: "center" },
-    emptyTitle: { fontSize: fontSize.xl, fontWeight: "700", color: colors.textPrimary, marginBottom: spacing.sm },
-    emptySubtitle: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
+    emptyTitle: { fontFamily: fonts.display, fontSize: fontSize.xl, color: colors.textPrimary, marginBottom: spacing.sm },
+    emptySubtitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
     quickGrid: { width: "100%", gap: spacing.sm },
     quickBtn: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
     quickBtnInner: { flexDirection: "row", alignItems: "center" },
     quickBtnIcon: { marginRight: spacing.sm },
-    quickBtnText: { fontSize: fontSize.md, color: colors.accent, fontWeight: "500" },
+    quickBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.accent },
     listContent: { padding: spacing.md, paddingBottom: spacing.sm },
     bubbleRow: { marginBottom: spacing.sm, flexDirection: "row" },
     bubbleRowUser: { justifyContent: "flex-end" },
@@ -310,13 +310,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     aiBubble: { backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
     errorBubble: { backgroundColor: colors.dangerBg, borderColor: colors.danger + "80" },
     typingBubble: { paddingVertical: 12 },
-    bubbleText: { fontSize: fontSize.md, lineHeight: 22 },
+    bubbleText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, lineHeight: 22 },
     userText: { color: "#fff" },
     aiText: { color: colors.textPrimary },
     inputRow: { flexDirection: "row", alignItems: "flex-end", gap: spacing.sm, padding: spacing.sm, paddingBottom: spacing.md, backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-    textInput: { flex: 1, backgroundColor: colors.background, borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingTop: 10, paddingBottom: 10, fontSize: fontSize.md, color: colors.textPrimary, maxHeight: 120, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+    textInput: { fontFamily: fonts.bodyRegular, flex: 1, backgroundColor: colors.background, borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingTop: 10, paddingBottom: 10, fontSize: fontSize.md, color: colors.textPrimary, maxHeight: 120, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
     sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" },
     sendBtnDisabled: { backgroundColor: colors.border },
-    sendBtnText: { color: "#fff", fontSize: 22, fontWeight: "700", lineHeight: 24 },
   });
 }

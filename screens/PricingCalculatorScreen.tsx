@@ -13,6 +13,7 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail } from "../utils/messaging";
 import {
@@ -36,7 +37,7 @@ import { createApprovalLink } from "../utils/estimateApprovalLink";
 import { Button, Card, Divider } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, Settings, PricebookEntry } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
@@ -366,8 +367,13 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
           accessibilityLabel="Calculator"
           accessibilityState={{ selected: tab === "calculator" }}
         >
+          <Ionicons
+            name="calculator-outline"
+            size={14}
+            color={tab === "calculator" ? colors.textOnAccent : colors.textSecondary}
+          />
           <Text style={[styles.tabText, tab === "calculator" && styles.tabTextActive]}>
-            🧮 Calculator
+            Calculator
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -377,8 +383,13 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
           accessibilityLabel="Estimate"
           accessibilityState={{ selected: tab === "estimate" }}
         >
+          <Ionicons
+            name="document-text-outline"
+            size={14}
+            color={tab === "estimate" ? colors.textOnAccent : colors.textSecondary}
+          />
           <Text style={[styles.tabText, tab === "estimate" && styles.tabTextActive]}>
-            📄 Estimate
+            Estimate
           </Text>
         </TouchableOpacity>
       </View>
@@ -483,9 +494,9 @@ function CalculatorTab({
   return (
     <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
       <View style={{ flexDirection: "row", marginBottom: spacing.md, gap: spacing.sm }}>
-        <Button label="📋 Load from Pricebook" variant="secondary" onPress={onLoadFromPricebook} style={{ flex: 1 }} />
+        <Button label="Load from Pricebook" variant="secondary" onPress={onLoadFromPricebook} style={{ flex: 1 }} />
         {breakdown.total > 0 && (
-          <Button label="💾 Save to Pricebook" variant="ghost" onPress={onSaveToPricebook} style={{ flex: 1 }} />
+          <Button label="Save to Pricebook" variant="ghost" onPress={onSaveToPricebook} style={{ flex: 1 }} />
         )}
       </View>
 
@@ -500,7 +511,7 @@ function CalculatorTab({
 
       {warnings.map((w, i) => (
         <View key={i} style={styles.warningBox}>
-          <Text style={styles.warningText}>⚠️ {w}</Text>
+          <Text style={styles.warningText}>⚠ {w}</Text>
         </View>
       ))}
 
@@ -562,7 +573,7 @@ function CalculatorTab({
               accessibilityRole="button"
               accessibilityLabel={`Remove material ${m.name || "item"}`}
             >
-              <Text style={styles.removeBtnText}>✕</Text>
+              <Ionicons name="close" size={16} color={colors.danger} />
             </TouchableOpacity>
           </View>
         ))}
@@ -658,7 +669,7 @@ function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEm
 
       {!generating && generatedEstimate ? (
         <Button
-          label={linking ? "Creating approval link..." : "✉ Email to customer →"}
+          label={linking ? "Creating approval link..." : "Email to customer →"}
           onPress={onEmail}
           loading={linking}
           style={{ marginTop: spacing.sm }}
@@ -728,10 +739,10 @@ function BreakdownRow({ label, value, bold }: { label: string; value: number; bo
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   return (
     <View style={styles.breakdownRow}>
-      <Text style={[styles.breakdownLabel, bold && { fontWeight: "700", color: colors.textPrimary }]}>
+      <Text style={[styles.breakdownLabel, bold && { fontFamily: fonts.bodySemiBold, color: colors.textPrimary }]}>
         {label}
       </Text>
-      <Text style={[styles.breakdownValue, bold && { fontWeight: "700", fontSize: fontSize.md }]}>
+      <Text style={[styles.breakdownValue, bold && { fontFamily: fonts.display, fontSize: fontSize.md }]}>
         {formatQuote(value)}
       </Text>
     </View>
@@ -746,42 +757,44 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.surface,
       borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
     },
-    tab: { flex: 1, paddingVertical: 8, borderRadius: radius.md, alignItems: "center", backgroundColor: colors.background },
+    tab: { flex: 1, paddingVertical: 8, borderRadius: radius.md, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6, backgroundColor: colors.background },
     tabActive: { backgroundColor: colors.accent },
-    tabText: { fontSize: fontSize.sm, color: colors.textSecondary, fontWeight: "500" },
-    tabTextActive: { color: colors.textOnAccent, fontWeight: "600" },
+    tabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    tabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.textOnAccent },
     scroll: { padding: spacing.md, paddingBottom: 60 },
     priceCard: { alignItems: "center", paddingVertical: spacing.lg, marginBottom: spacing.sm, backgroundColor: colors.accent },
-    priceLabel: { fontSize: fontSize.sm, color: "rgba(255,255,255,0.8)", marginBottom: 4 },
-    priceMain: { fontSize: 40, fontWeight: "700", color: colors.textOnAccent },
-    priceRange: { fontSize: fontSize.sm, color: "rgba(255,255,255,0.9)", marginTop: 4 },
-    breakEven: { fontSize: fontSize.xs, color: "rgba(255,255,255,0.7)", marginTop: 2 },
+    priceLabel: { fontFamily: fonts.mono, fontSize: 10, color: "rgba(255,255,255,0.8)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 },
+    priceMain: { fontFamily: fonts.display, fontSize: 40, color: colors.textOnAccent, fontVariant: ["tabular-nums"] },
+    priceRange: { fontFamily: fonts.mono, fontSize: 11, color: "rgba(255,255,255,0.9)", marginTop: 4 },
+    breakEven: { fontFamily: fonts.mono, fontSize: 10, color: "rgba(255,255,255,0.7)", marginTop: 2 },
     warningBox: {
       backgroundColor: colors.warningBg, borderRadius: radius.md, padding: spacing.sm,
       marginBottom: spacing.sm, borderLeftWidth: 3, borderLeftColor: colors.warning,
     },
-    warningText: { fontSize: fontSize.sm, color: colors.warning },
+    warningText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.warning },
     sectionLabel: {
-      fontSize: fontSize.xs, fontWeight: "600", color: colors.textSecondary,
-      textTransform: "uppercase", letterSpacing: 0.6,
+      fontFamily: fonts.mono, fontSize: fontSize.xs, color: colors.textSecondary,
+      textTransform: "uppercase", letterSpacing: 0.8,
       marginTop: spacing.md, marginBottom: spacing.sm,
     },
     inputRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end" },
     smallInputWrap: { flex: 1 },
-    smallLabel: { fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: 4 },
+    smallLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: 4 },
     smallInputRow: { flexDirection: "row", alignItems: "center" },
     smallInput: {
+      fontFamily: fonts.bodyRegular,
       flex: 1, height: 44, backgroundColor: colors.background, borderRadius: radius.sm,
       paddingHorizontal: spacing.sm, fontSize: fontSize.sm, color: colors.textPrimary,
       borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     },
-    inputAdornment: { fontSize: fontSize.sm, color: colors.textMuted, paddingHorizontal: 4 },
+    inputAdornment: { fontFamily: fonts.mono, fontSize: 11, color: colors.textMuted, paddingHorizontal: 4 },
     calcResult: { flex: 1, alignItems: "flex-end" },
-    calcResultLabel: { fontSize: fontSize.xs, color: colors.textMuted },
-    calcResultValue: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
-    toggleLabel: { flex: 1, fontSize: fontSize.sm, color: colors.textPrimary },
+    calcResultLabel: { fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted, textTransform: "uppercase", letterSpacing: 0.4 },
+    calcResultValue: { fontFamily: fonts.display, fontSize: fontSize.md, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
+    toggleLabel: { fontFamily: fonts.bodyRegular, flex: 1, fontSize: fontSize.sm, color: colors.textPrimary },
     materialRow: { flexDirection: "row", gap: 6, marginBottom: 6, alignItems: "center" },
     matInput: {
+      fontFamily: fonts.bodyRegular,
       flex: 1, height: 44, backgroundColor: colors.background, borderRadius: radius.sm,
       paddingHorizontal: spacing.sm, fontSize: fontSize.sm, color: colors.textPrimary,
       borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
@@ -793,26 +806,25 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: "center",
       alignItems: "center",
     },
-    removeBtnText: { color: colors.danger, fontSize: fontSize.md },
     addMaterialBtn: {
       paddingVertical: spacing.sm, alignItems: "center", borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", marginTop: 4,
     },
-    addMaterialText: { fontSize: fontSize.sm, color: colors.accent },
-    emptyMaterials: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.sm },
+    addMaterialText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.accent },
+    emptyMaterials: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.sm },
     breakdownRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
-    breakdownLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1 },
-    breakdownValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
-    effectiveRate: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs, textAlign: "right" },
+    breakdownLabel: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, flex: 1 },
+    breakdownValue: { fontFamily: fonts.mono, fontSize: 12, color: colors.textPrimary },
+    effectiveRate: { fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted, marginTop: spacing.xs, textAlign: "right" },
     actions: { flexDirection: "row", marginTop: spacing.lg },
     estimateHeader: { alignItems: "center", paddingVertical: spacing.md, marginBottom: spacing.sm, backgroundColor: colors.successBg },
-    estimateHeaderLabel: { fontSize: fontSize.sm, color: colors.success },
-    estimateHeaderTotal: { fontSize: fontSize.xl, fontWeight: "700", color: colors.success },
+    estimateHeaderLabel: { fontFamily: fonts.mono, fontSize: 10, color: colors.success, textTransform: "uppercase", letterSpacing: 0.8 },
+    estimateHeaderTotal: { fontFamily: fonts.display, fontSize: fontSize.xl, color: colors.success, fontVariant: ["tabular-nums"], marginTop: 2 },
     estimateBody: { marginBottom: spacing.sm, minHeight: 200 },
     generatingRow: { flexDirection: "row", alignItems: "center", padding: spacing.md },
-    generatingText: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
-    estimateText: { fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
+    generatingText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+    estimateText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
     estimateActions: { flexDirection: "row", marginBottom: spacing.sm },
-    estimateNote: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: "center", marginTop: spacing.md, lineHeight: 18 },
+    estimateNote: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, textAlign: "center", marginTop: spacing.md, lineHeight: 18 },
   });
 }

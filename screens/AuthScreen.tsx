@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { supabase } from '../utils/supabase';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
 import { canResend, resendSecondsRemaining } from '../utils/resendCooldown';
@@ -410,8 +410,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: spacing.xl,
     },
     header: { alignItems: 'center', marginBottom: spacing.xl },
-    appName: { fontSize: 40, fontWeight: '800', color: colors.accent, letterSpacing: -1 },
-    tagline: { fontSize: fontSize.md, color: colors.textMuted, marginTop: spacing.xs },
+    appName: { fontFamily: fonts.display, fontSize: 40, color: colors.accent, letterSpacing: -1 },
+    tagline: { fontFamily: fonts.mono, fontSize: 11, color: colors.textMuted, marginTop: spacing.sm, textTransform: 'uppercase', letterSpacing: 1.2 },
     card: {
       backgroundColor: colors.surface,
       borderRadius: radius.lg,
@@ -420,8 +420,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
       ...shadow.card,
     },
-    cardTitle: { fontSize: fontSize.xl, fontWeight: '700', color: colors.textPrimary, marginBottom: spacing.md },
+    cardTitle: { fontFamily: fonts.display, fontSize: fontSize.xl, color: colors.textPrimary, marginBottom: spacing.md },
     errorText: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.danger,
       backgroundColor: colors.dangerBg,
@@ -430,13 +431,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.md,
     },
     label: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.sm,
-      fontWeight: '600',
       color: colors.textSecondary,
       marginBottom: spacing.xs,
       marginTop: spacing.sm,
     },
     input: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.background,
       borderWidth: 1,
       borderColor: colors.border,
@@ -463,7 +465,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginTop: spacing.lg,
     },
     submitBtnDisabled: { opacity: 0.6 },
-    submitText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
+    submitText: { fontFamily: fonts.bodyBold, color: '#fff', fontSize: fontSize.md },
     resendBox: {
       marginTop: spacing.md,
       padding: spacing.md,
@@ -472,17 +474,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderWidth: 1,
       borderColor: colors.border,
     },
-    resendText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
+    resendText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
     resendBtn: { alignItems: 'center', marginTop: spacing.sm, paddingVertical: spacing.xs },
-    resendLink: { fontSize: fontSize.sm, color: colors.accent, fontWeight: '600' },
-    resendLinkDisabled: { color: colors.textMuted, fontWeight: '400' },
+    resendLink: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent },
+    resendLinkDisabled: { fontFamily: fonts.bodyRegular, color: colors.textMuted },
     toggle: { alignItems: 'center', marginTop: spacing.lg, paddingVertical: spacing.sm },
-    toggleText: { fontSize: fontSize.sm, color: colors.textMuted },
-    toggleLink: { color: colors.accent, fontWeight: '600' },
+    toggleText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted },
+    toggleLink: { fontFamily: fonts.bodySemiBold, color: colors.accent },
     socialSection: { marginTop: spacing.lg },
     dividerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
     dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
-    dividerText: { marginHorizontal: spacing.md, color: colors.textMuted, fontSize: fontSize.sm },
+    dividerText: { fontFamily: fonts.mono, marginHorizontal: spacing.md, color: colors.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
     appleWrap: { marginBottom: spacing.sm },
     appleWrapDisabled: { opacity: 0.5 },
     appleBtn: { height: 48, width: '100%' },
@@ -498,6 +500,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: 12,
     },
     googleIcon: {},
-    googleBtnText: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '600' },
+    googleBtnText: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md },
   });
 }

@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
@@ -27,7 +28,7 @@ import { formatMoney } from "../utils/format";
 import { supabase } from "../utils/supabase";
 import { Badge, Button, Card, Divider } from "../components/UI";
 import Field from "../components/Field";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from '../utils/analytics';
 import {
@@ -560,8 +561,13 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
                   accessibilityLabel={ch === "email" ? "Email" : "Text message"}
                   accessibilityState={{ selected: channel === ch }}
                 >
+                  <Ionicons
+                    name={ch === "email" ? "mail-outline" : "chatbubble-outline"}
+                    size={14}
+                    color={channel === ch ? colors.accent : colors.textSecondary}
+                  />
                   <Text style={[styles.tabText, channel === ch && styles.tabTextActive]}>
-                    {ch === "email" ? "✉ Email" : "💬 Text message"}
+                    {ch === "email" ? "Email" : "Text message"}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -619,9 +625,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     scroll: { padding: spacing.md, paddingBottom: 40 },
     summaryCard: { marginBottom: spacing.sm },
     summaryRow: { flexDirection: "row", alignItems: "flex-start" },
-    customerName: { fontSize: fontSize.lg, fontWeight: "600", color: colors.textPrimary },
-    invoiceMeta: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
-    autoReminderNote: { fontSize: fontSize.xs, color: colors.success, marginTop: 4, fontWeight: "500" },
+    customerName: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.lg, color: colors.textPrimary },
+    invoiceMeta: { fontFamily: fonts.mono, fontSize: 11, color: colors.textSecondary, marginTop: 3 },
+    autoReminderNote: { fontFamily: fonts.bodyMedium, fontSize: fontSize.xs, color: colors.success, marginTop: 4 },
     linkBadge: {
       marginTop: spacing.sm,
       backgroundColor: colors.successBg,
@@ -630,7 +636,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: 4,
       alignSelf: "flex-start",
     },
-    linkBadgeText: { fontSize: fontSize.xs, color: colors.success, fontWeight: "600" },
+    linkBadgeText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.xs, color: colors.success },
     generateLinkBtn: {
       marginTop: spacing.sm,
       paddingHorizontal: 14,
@@ -642,7 +648,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       minWidth: 44,
       alignItems: "center",
     },
-    generateLinkText: { fontSize: fontSize.xs, color: colors.accent, fontWeight: "600" },
+    generateLinkText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.xs, color: colors.accent },
     providerRow: {
       marginTop: spacing.sm,
       flexDirection: "row",
@@ -650,7 +656,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       flexWrap: "wrap",
       gap: spacing.sm,
     },
-    providerRowLabel: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: "500" },
+    providerRowLabel: { fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted, textTransform: "uppercase", letterSpacing: 0.4 },
     providerChips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
     providerChip: {
       paddingHorizontal: 10,
@@ -661,8 +667,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.surface,
     },
     providerChipActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    providerChipText: { fontSize: fontSize.xs, color: colors.textSecondary, fontWeight: "500" },
-    providerChipTextActive: { color: colors.accent, fontWeight: "600" },
+    providerChipText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.xs, color: colors.textSecondary },
+    providerChipTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
     customRow: {
       marginTop: spacing.sm,
       flexDirection: "row",
@@ -682,18 +688,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.surface,
     },
     unitBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    unitText: { fontSize: fontSize.md, color: colors.textSecondary, fontWeight: "500" },
-    unitTextActive: { color: colors.accent, fontWeight: "700" },
-    requestSummary: { marginTop: spacing.sm, fontSize: fontSize.xs, color: colors.textSecondary },
-    requestInvalid: { marginTop: spacing.sm, fontSize: fontSize.xs, color: colors.warning },
+    unitText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textSecondary },
+    unitTextActive: { fontFamily: fonts.bodyBold, color: colors.accent },
+    requestSummary: { fontFamily: fonts.bodyRegular, marginTop: spacing.sm, fontSize: fontSize.xs, color: colors.textSecondary },
+    requestInvalid: { fontFamily: fonts.bodyRegular, marginTop: spacing.sm, fontSize: fontSize.xs, color: colors.warning },
     section: { marginBottom: spacing.sm },
     paidCard: { marginBottom: spacing.sm, alignItems: "center", paddingVertical: spacing.lg },
-    paidTitle: { fontSize: fontSize.md, fontWeight: "700", color: colors.success },
-    paidSub: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: 4 },
+    paidTitle: { fontFamily: fonts.display, fontSize: fontSize.md, color: colors.success },
+    paidSub: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginTop: 4 },
     toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-    toggleLabel: { fontSize: fontSize.md, color: colors.textPrimary },
+    toggleLabel: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary },
     planOptions: { marginTop: spacing.sm },
-    planLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 6, fontWeight: "500" },
+    planLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 6 },
     chipBtn: {
       display: "flex", flexDirection: "row", flexWrap: "wrap",
       paddingHorizontal: 12, paddingVertical: 6,
@@ -702,39 +708,41 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.surface,
     },
     chipBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    chipText: { fontSize: fontSize.sm, color: colors.textSecondary },
-    chipTextActive: { color: colors.accent, fontWeight: "600" },
+    chipText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    chipTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
     channelTabs: { flexDirection: "row", gap: 8, marginBottom: spacing.sm },
     tab: {
       flex: 1, paddingVertical: 8, borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.border,
-      alignItems: "center", backgroundColor: colors.surface,
+      alignItems: "center", justifyContent: "center",
+      flexDirection: "row", gap: 6,
+      backgroundColor: colors.surface,
     },
     tabActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    tabText: { fontSize: fontSize.sm, color: colors.textSecondary },
-    tabTextActive: { color: colors.accent, fontWeight: "600" },
+    tabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    tabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
     messageCard: { marginBottom: spacing.sm, minHeight: 120 },
     subjectLine: {
-      fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary,
+      fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary,
       marginBottom: spacing.sm, paddingBottom: spacing.sm,
       borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
     },
     generatingRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.sm },
-    generatingText: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
-    messageText: { fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
+    generatingText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+    messageText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
     actionRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
     copyBtn: {
       flex: 1, height: 44, borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.borderStrong,
       alignItems: "center", justifyContent: "center",
     },
-    copyBtnText: { fontSize: fontSize.sm, color: colors.textPrimary },
+    copyBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textPrimary },
     regenBtn: {
       flex: 1, height: 44, borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.borderStrong,
       alignItems: "center", justifyContent: "center",
     },
-    regenBtnText: { fontSize: fontSize.sm, color: colors.textPrimary },
-    sendLabel: { fontSize: fontSize.sm, color: colors.textSecondary, fontWeight: "500", marginBottom: spacing.sm },
+    regenBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textPrimary },
+    sendLabel: { fontFamily: fonts.mono, fontSize: fontSize.xs, color: colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: spacing.sm },
   });
 }

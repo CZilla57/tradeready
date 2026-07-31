@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { getStatus, formatDate } from "../utils/invoiceHelpers";
@@ -43,7 +44,7 @@ import {
   effectivePayments,
   overpaidAmount,
 } from "../utils/invoicePayments";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -232,7 +233,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
         <View style={styles.invoiceMeta}>
           <Badge label={status.label} color={status.color} />
           <Text style={styles.metaText}>{inv.number}</Text>
-          <Text style={[styles.metaText, styles.descText]} numberOfLines={1}>
+          <Text style={styles.descText} numberOfLines={1}>
             {inv.desc}
           </Text>
         </View>
@@ -337,7 +338,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
               <View style={styles.modalHeader}>
                 <View style={styles.modalHandle} />
                 <TouchableOpacity onPress={() => setViewingInvoice(null)} style={styles.modalCloseBtn}>
-                  <Text style={styles.modalCloseText}>✕</Text>
+                  <Ionicons name="close" size={20} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
 
@@ -446,7 +447,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
                       style={[styles.modalActionBtn, styles.modalActionBtnPaid]}
                       onPress={() => markPaid(inv.id, () => setViewingInvoice(null))}
                     >
-                      <Text style={[styles.modalActionBtnText, { color: colors.success, fontWeight: "600" }]}>
+                      <Text style={[styles.modalActionBtnText, { color: colors.success, fontFamily: fonts.bodySemiBold }]}>
                         Mark paid
                       </Text>
                     </TouchableOpacity>
@@ -502,6 +503,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingBottom: spacing.sm,
     },
     searchInput: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.surface,
       borderRadius: radius.md,
       height: 40,
@@ -529,16 +531,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: 6,
     },
     customerName: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.md,
-      fontWeight: "600",
       color: colors.textPrimary,
       flex: 1,
       marginRight: spacing.sm,
     },
     amount: {
+      fontFamily: fonts.display,
       fontSize: fontSize.md,
-      fontWeight: "600",
       color: colors.textPrimary,
+      fontVariant: ["tabular-nums"],
     },
     invoiceMeta: {
       flexDirection: "row",
@@ -548,10 +551,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: 8,
     },
     metaText: {
-      fontSize: fontSize.sm,
+      fontFamily: fonts.mono,
+      fontSize: 11,
       color: colors.textSecondary,
     },
     descText: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.textSecondary,
       flex: 1,
@@ -570,6 +575,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.borderStrong,
     },
     editBtnText: {
+      fontFamily: fonts.bodyMedium,
       fontSize: fontSize.sm,
       color: colors.textPrimary,
     },
@@ -580,9 +586,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.success,
     },
     paidBtnText: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.sm,
       color: colors.textOnAccent,
-      fontWeight: "600",
     },
     // Invoice detail modal
     modalBackdrop: {
@@ -620,10 +626,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: "center",
       alignItems: "center",
     },
-    modalCloseText: {
-      fontSize: fontSize.md,
-      color: colors.textMuted,
-    },
     modalBody: {
       padding: spacing.md,
       paddingBottom: 40,
@@ -635,21 +637,23 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: 6,
     },
     modalInvoiceNum: {
-      fontSize: fontSize.sm,
+      fontFamily: fonts.mono,
+      fontSize: 11,
       color: colors.textMuted,
-      fontWeight: "500",
+      letterSpacing: 0.4,
     },
     modalCustomer: {
+      fontFamily: fonts.display,
       fontSize: fontSize.xl,
-      fontWeight: "700",
       color: colors.textPrimary,
       marginBottom: 4,
     },
     modalAmount: {
+      fontFamily: fonts.display,
       fontSize: 36,
-      fontWeight: "700",
-      letterSpacing: -1,
+      letterSpacing: -0.5,
       marginBottom: spacing.md,
+      fontVariant: ["tabular-nums"],
     },
     modalDetailRow: {
       flexDirection: "row",
@@ -660,11 +664,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderBottomColor: colors.border,
     },
     modalDetailLabel: {
-      fontSize: fontSize.sm,
+      fontFamily: fonts.mono,
+      fontSize: 10,
       color: colors.textMuted,
-      fontWeight: "500",
+      textTransform: "uppercase",
+      letterSpacing: 0.4,
     },
     modalDetailValue: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.textPrimary,
     },
@@ -684,9 +691,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.sm,
     },
     modalActionPrimaryText: {
+      fontFamily: fonts.bodyBold,
       color: colors.textOnAccent,
       fontSize: fontSize.md,
-      fontWeight: "700",
     },
     modalActionRow: {
       flexDirection: "row",
@@ -705,6 +712,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.successBg,
     },
     modalActionBtnText: {
+      fontFamily: fonts.bodyMedium,
       fontSize: fontSize.sm,
       color: colors.textPrimary,
     },
@@ -718,9 +726,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.dangerBg,
     },
     modalDeleteBtnText: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.sm,
       color: colors.danger,
-      fontWeight: "600",
     },
 
     fab: {

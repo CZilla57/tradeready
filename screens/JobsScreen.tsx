@@ -19,7 +19,7 @@ import { loadJobs } from "../utils/storage";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -94,10 +94,13 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 
         {/* Date line if scheduled */}
         {job.scheduledDate && (
-          <Text style={styles.jobMeta}>
-            📅 {formatDate(job.scheduledDate)}
-            {job.scheduledStartTime ? `  ·  ${formatTime(job.scheduledStartTime)}` : ""}
-          </Text>
+          <View style={styles.jobMetaRow}>
+            <Ionicons name="calendar-outline" size={12} color={colors.textSecondary} />
+            <Text style={styles.jobMeta}>
+              {formatDate(job.scheduledDate)}
+              {job.scheduledStartTime ? `  ·  ${formatTime(job.scheduledStartTime)}` : ""}
+            </Text>
+          </View>
         )}
 
         {/* Description preview */}
@@ -241,6 +244,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     searchRow: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
     searchInput: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.surface,
       borderRadius: radius.md,
       height: 40,
@@ -267,8 +271,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.accent,
       borderColor: colors.accent,
     },
-    filterTabText: { fontSize: fontSize.sm, color: colors.textSecondary },
-    filterTabTextActive: { color: colors.textOnAccent, fontWeight: "600" },
+    filterTabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    filterTabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.textOnAccent },
     listContent: { paddingHorizontal: spacing.md, paddingBottom: 100 },
     jobCard: {
       backgroundColor: colors.surface,
@@ -278,11 +282,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     cardTop: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
-    jobTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
-    jobCustomer: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
-    jobAmount: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
-    jobMeta: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 4 },
-    jobDesc: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 8 },
+    jobTitle: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary },
+    jobCustomer: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    jobAmount: { fontFamily: fonts.display, fontSize: fontSize.md, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
+    jobMetaRow: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 4 },
+    jobMeta: { fontFamily: fonts.mono, fontSize: 11, color: colors.textSecondary },
+    jobDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 8 },
     quickActions: { flexDirection: "row", justifyContent: "flex-end" },
     quickActionBtn: {
       paddingHorizontal: 12,
@@ -290,7 +295,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.sm,
       backgroundColor: colors.accentBg,
     },
-    quickActionText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "600" },
+    quickActionText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent },
     fab: {
       position: "absolute",
       right: spacing.lg,

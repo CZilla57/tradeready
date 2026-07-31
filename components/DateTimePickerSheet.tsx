@@ -29,7 +29,7 @@ import {
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 
@@ -131,8 +131,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderBottomColor: colors.border,
       marginBottom: spacing.sm,
     },
-    title: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
-    done: { fontSize: fontSize.md, fontWeight: "600", color: colors.accent },
+    title: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary },
+    done: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.accent },
     iosDate: { alignSelf: "center" },
   });
 }

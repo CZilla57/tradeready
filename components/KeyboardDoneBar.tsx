@@ -21,7 +21,7 @@ import {
   View,
   type TextInputProps,
 } from "react-native";
-import { spacing, fontSize } from "../utils/theme";
+import { spacing, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 
@@ -78,6 +78,6 @@ function createStyles(colors: ColorScheme) {
       paddingVertical: spacing.xs,
     },
     btn: { paddingVertical: 6, paddingHorizontal: 10 },
-    btnText: { color: colors.accent, fontSize: fontSize.md, fontWeight: "600" },
+    btnText: { fontFamily: fonts.bodySemiBold, color: colors.accent, fontSize: fontSize.md },
   });
 }

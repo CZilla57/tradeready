@@ -9,7 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { loadPricebook, savePricebook } from "../utils/storage";
 import { formatQuote } from "../utils/format";
 import { Button } from "../components/UI";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -65,7 +65,7 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
     return (
       <SafeAreaView style={styles.container} edges={["bottom"]}>
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>📋</Text>
+          <Ionicons name="list-outline" size={44} color={colors.textMuted} style={styles.emptyIcon} />
           <Text style={styles.emptyTitle}>No services yet</Text>
           <Text style={styles.emptyBody}>
             Your Pricebook saves your standard services so you can load them into
@@ -128,7 +128,7 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
               accessibilityLabel={`Delete ${item.name}`}
               accessibilityRole="button"
             >
-              <Text style={styles.rowDeleteText}>✕</Text>
+              <Ionicons name="close" size={14} color={colors.danger} />
             </TouchableOpacity>
           </TouchableOpacity>
         )}
@@ -162,6 +162,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
     },
     searchInput: {
+      fontFamily: fonts.bodyRegular,
       flex: 1,
       paddingVertical: spacing.sm + 2,
       paddingHorizontal: spacing.sm,
@@ -169,11 +170,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       fontSize: fontSize.md,
     },
     sectionHeader: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.sm,
-      fontWeight: "600",
+      fontSize: fontSize.xs,
       textTransform: "uppercase",
-      letterSpacing: 0.5,
+      letterSpacing: 0.8,
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.md,
       paddingBottom: spacing.xs,
@@ -190,9 +191,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
       ...shadow.card,
     },
-    rowName: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "600" },
-    rowDesc: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
-    rowPrice: { color: colors.accent, fontSize: fontSize.md, fontWeight: "700", marginLeft: spacing.sm },
+    rowName: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md },
+    rowDesc: { fontFamily: fonts.bodyRegular, color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
+    rowPrice: { fontFamily: fonts.display, color: colors.accent, fontSize: fontSize.md, marginLeft: spacing.sm, fontVariant: ["tabular-nums"] },
     rowDeleteBtn: {
       marginLeft: 10,
       width: 28,
@@ -201,11 +202,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.dangerBg,
       alignItems: "center" as const,
       justifyContent: "center" as const,
-    },
-    rowDeleteText: {
-      fontSize: 13,
-      fontWeight: "600" as const,
-      color: colors.danger,
     },
     listContent: { paddingBottom: 100 },
     fab: {
@@ -220,8 +216,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: "center",
       paddingHorizontal: spacing.xl,
     },
-    emptyIcon: { fontSize: 48, marginBottom: spacing.md },
-    emptyTitle: { color: colors.textPrimary, fontSize: fontSize.lg, fontWeight: "700", marginBottom: spacing.sm },
-    emptyBody: { color: colors.textSecondary, fontSize: fontSize.md, textAlign: "center", lineHeight: 22 },
+    emptyIcon: { marginBottom: spacing.md },
+    emptyTitle: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.lg, marginBottom: spacing.sm },
+    emptyBody: { fontFamily: fonts.bodyRegular, color: colors.textSecondary, fontSize: fontSize.md, textAlign: "center", lineHeight: 22 },
   });
 }

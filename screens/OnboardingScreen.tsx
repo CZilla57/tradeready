@@ -13,7 +13,8 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { Ionicons } from "@expo/vector-icons";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import BaseField from "../components/Field";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
@@ -258,13 +259,13 @@ function StepWelcome() {
       </Text>
       <View style={styles.featureList}>
         {([
-          ["📅", "Today", "Your schedule and earnings at a glance"],
-          ["🔨", "Jobs", "From lead to invoice in seconds"],
-          ["💰", "Invoices", "Send, track, and get paid faster"],
-          ["🤖", "AI", "Your personal business assistant"],
+          ["calendar-outline", "Today", "Your schedule and earnings at a glance"],
+          ["hammer-outline", "Jobs", "From lead to invoice in seconds"],
+          ["cash-outline", "Invoices", "Send, track, and get paid faster"],
+          ["sparkles-outline", "AI", "Your personal business assistant"],
         ] as const).map(([icon, title, desc]) => (
           <View key={title} style={styles.featureRow}>
-            <Text style={styles.featureIcon}>{icon}</Text>
+            <Ionicons name={icon} size={22} color={colors.accent} style={styles.featureIcon} />
             <View style={styles.featureText}>
               <Text style={styles.featureTitle}>{title}</Text>
               <Text style={styles.featureDesc}>{desc}</Text>
@@ -315,7 +316,7 @@ function StepBusiness({ form, update, logoUri, onPickLogo, onRemoveLogo, touched
           <Image source={{ uri: logoUri }} style={styles.logoImage} contentFit="cover" />
         ) : (
           <View style={styles.logoPlaceholder}>
-            <Text style={styles.logoPlaceholderIcon}>📷</Text>
+            <Ionicons name="camera-outline" size={22} color={colors.textMuted} style={styles.logoPlaceholderIcon} />
             <Text style={styles.logoPlaceholderText}>Add logo</Text>
           </View>
         )}
@@ -406,7 +407,7 @@ function StepTrade({ form, update, touched, markTouched }: StepProps & { touched
           ) : (
             tips.map((tip, i) => (
               <View key={i} style={styles.tipRow}>
-                <Text style={styles.tipBullet}>💡</Text>
+                <Ionicons name="bulb-outline" size={14} color={colors.warning} style={styles.tipIcon} />
                 <Text style={styles.tipText}>{tip}</Text>
               </View>
             ))
@@ -553,8 +554,8 @@ function StepDataChoice({ form, update }: StepProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const options = [
-    { id: "sample" as const, emoji: "📊", title: "Show me around", desc: "Start with sample jobs, customers, and invoices already set up so you can explore the app right away." },
-    { id: "fresh" as const, emoji: "✨", title: "Start fresh", desc: "Begin with a clean slate. Add your own customers and jobs from day one." },
+    { id: "sample" as const, icon: "bar-chart-outline" as const, title: "Show me around", desc: "Start with sample jobs, customers, and invoices already set up so you can explore the app right away." },
+    { id: "fresh" as const, icon: "sparkles-outline" as const, title: "Start fresh", desc: "Begin with a clean slate. Add your own customers and jobs from day one." },
   ];
 
   return (
@@ -571,7 +572,7 @@ function StepDataChoice({ form, update }: StepProps) {
             activeOpacity={0.8}
           >
             <View style={styles.dataCardHeader}>
-              <Text style={styles.dataCardEmoji}>{opt.emoji}</Text>
+              <Ionicons name={opt.icon} size={22} color={active ? colors.accent : colors.textSecondary} />
               <Text style={[styles.dataCardTitle, active && styles.dataCardTitleActive]}>{opt.title}</Text>
               <View style={[styles.radioOuter, active && styles.radioOuterActive]}>
                 {active && <View style={styles.radioInner} />}
@@ -635,11 +636,11 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
 
   return (
     <View style={styles.doneContent}>
-      <Text style={styles.doneEmoji}>✅</Text>
+      <Ionicons name="checkmark-circle" size={64} color={colors.success} style={styles.doneIcon} />
       <Text style={styles.doneTitle}>You're all set, {firstName}!</Text>
       <View style={styles.notifCard}>
         <View style={styles.notifHeader}>
-          <Text style={styles.notifIcon}>🔔</Text>
+          <Ionicons name="notifications-outline" size={24} color={colors.accent} style={styles.notifIcon} />
           <View style={styles.notifText}>
             <Text style={styles.notifTitle}>Invoice reminders</Text>
             <Text style={styles.notifDesc}>Get notified when invoices go overdue so nothing slips through the cracks.</Text>
@@ -648,7 +649,7 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
         {notifAsked ? (
           <View style={styles.notifResult}>
             <Text style={styles.notifResultText}>
-              {notifGranted ? "✅ Notifications enabled" : "Notifications off — enable in device Settings any time."}
+              {notifGranted ? "✓ Notifications enabled" : "Notifications off — enable in device Settings any time."}
             </Text>
           </View>
         ) : (
@@ -659,7 +660,7 @@ function StepDone({ form, notifAsked, notifGranted, onRequestNotif }: StepDonePr
       </View>
       <View style={styles.stripeInfoCard}>
         <View style={styles.notifHeader}>
-          <Text style={styles.notifIcon}>💳</Text>
+          <Ionicons name="card-outline" size={24} color={colors.accent} style={styles.notifIcon} />
           <View style={styles.notifText}>
             <Text style={styles.notifTitle}>Accept payments</Text>
             <Text style={styles.notifDesc}>Connect your Stripe account in Settings → Payment Processor to send payment links with your invoices.</Text>
@@ -728,92 +729,92 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     dotTouchable: { padding: 4 },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
     stepContent: {},
-    appName: { fontSize: 44, fontWeight: "800", color: colors.accent, letterSpacing: -1, textAlign: "center", marginTop: spacing.xl },
-    welcomeTagline: { fontSize: fontSize.lg, color: colors.textSecondary, textAlign: "center", marginTop: spacing.xs, marginBottom: spacing.xl },
-    welcomeBody: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
+    appName: { fontFamily: fonts.display, fontSize: 44, color: colors.accent, letterSpacing: -1, textAlign: "center", marginTop: spacing.xl },
+    welcomeTagline: { fontFamily: fonts.mono, fontSize: 12, color: colors.textSecondary, textAlign: "center", textTransform: "uppercase", letterSpacing: 1.2, marginTop: spacing.sm, marginBottom: spacing.xl },
+    welcomeBody: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
     featureList: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, gap: spacing.md, ...shadow.card },
     featureRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-    featureIcon: { fontSize: 24 },
+    featureIcon: { width: 26, textAlign: "center" },
     featureText: { flex: 1 },
-    featureTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
-    featureDesc: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
-    stepTitle: { fontSize: fontSize.xxl, fontWeight: "700", color: colors.textPrimary, marginBottom: spacing.xs },
-    stepSubtitle: { fontSize: fontSize.md, color: colors.textSecondary, marginBottom: spacing.lg, lineHeight: 22 },
+    featureTitle: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary },
+    featureDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    stepTitle: { fontFamily: fonts.display, fontSize: fontSize.xxl, color: colors.textPrimary, marginBottom: spacing.xs },
+    stepSubtitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, marginBottom: spacing.lg, lineHeight: 22 },
     fieldGroup: { marginBottom: spacing.md },
-    fieldLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.xs },
+    fieldLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.xs },
     // minHeight (not height): a fixed height fought BaseField's multiline
     // sizing — the address input painted taller than its layout box and the
     // logo section rendered on top of it (device finding, 2026-07-14).
-    fieldInput: { backgroundColor: colors.surface, borderRadius: radius.md, minHeight: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
+    fieldInput: { fontFamily: fonts.bodyRegular, backgroundColor: colors.surface, borderRadius: radius.md, minHeight: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
     tradeGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.lg },
     tradeBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     tradeBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    tradeLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
-    tradeLabelActive: { color: colors.accent, fontWeight: "600" },
-    rateLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.xs },
-    rateInput: { backgroundColor: colors.surface, borderRadius: radius.md, minHeight: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
-    rateNote: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs },
+    tradeLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    tradeLabelActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
+    rateLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.xs },
+    rateInput: { fontFamily: fonts.bodyRegular, backgroundColor: colors.surface, borderRadius: radius.md, minHeight: 48, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, ...shadow.card },
+    rateNote: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs },
     dataCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md, borderWidth: 2, borderColor: colors.border, ...shadow.card },
     dataCardActive: { borderColor: colors.accent, backgroundColor: colors.accentBg },
     dataCardHeader: { flexDirection: "row", alignItems: "center", marginBottom: spacing.sm, gap: spacing.sm },
-    dataCardEmoji: { fontSize: 22 },
-    dataCardTitle: { flex: 1, fontSize: fontSize.lg, fontWeight: "600", color: colors.textPrimary },
+    dataCardTitle: { fontFamily: fonts.bodySemiBold, flex: 1, fontSize: fontSize.lg, color: colors.textPrimary },
     dataCardTitleActive: { color: colors.accent },
-    dataCardDesc: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
+    dataCardDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
     dataCardDescActive: { color: colors.accent + "cc" },
     radioOuter: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
     radioOuterActive: { borderColor: colors.accent },
     radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accent },
     doneContent: { alignItems: "center", paddingTop: spacing.xl },
-    doneEmoji: { fontSize: 64, marginBottom: spacing.md },
-    doneTitle: { fontSize: fontSize.xxl, fontWeight: "700", color: colors.textPrimary, textAlign: "center", marginBottom: spacing.lg },
+    doneIcon: { marginBottom: spacing.md },
+    doneTitle: { fontFamily: fonts.display, fontSize: fontSize.xxl, color: colors.textPrimary, textAlign: "center", marginBottom: spacing.lg },
     notifCard: { width: "100%", backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.lg, ...shadow.card },
     stripeInfoCard: { width: "100%", backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.lg, ...shadow.card },
     notifHeader: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md },
-    notifIcon: { fontSize: 24 },
+    notifIcon: { width: 26, textAlign: "center" },
     notifText: { flex: 1 },
-    notifTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: 2 },
-    notifDesc: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
+    notifTitle: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary, marginBottom: 2 },
+    notifDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
     notifBtn: { backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 12, alignItems: "center" },
-    notifBtnText: { color: "#fff", fontSize: fontSize.md, fontWeight: "600" },
+    notifBtnText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.md },
     notifResult: { paddingTop: spacing.xs },
-    notifResultText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: "center" },
-    doneBody: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, paddingHorizontal: spacing.md },
+    notifResultText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, textAlign: "center" },
+    doneBody: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, paddingHorizontal: spacing.md },
     footer: { flexDirection: "row", padding: spacing.lg, gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.background },
     backBtn: { height: 50, justifyContent: "center", alignItems: "center", paddingHorizontal: spacing.lg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
-    backText: { fontSize: fontSize.md, color: colors.textSecondary, fontWeight: "500" },
+    backText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textSecondary },
     nextBtn: { flex: 1, height: 50, justifyContent: "center", alignItems: "center", backgroundColor: colors.accent, borderRadius: radius.md },
     nextBtnFull: { flex: 1 },
     nextBtnDisabled: { opacity: 0.5 },
-    nextText: { color: "#fff", fontSize: fontSize.md, fontWeight: "700" },
+    nextText: { fontFamily: fonts.bodyBold, color: "#fff", fontSize: fontSize.md },
     aiCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginTop: spacing.md, ...shadow.card },
     aiLoadingRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-    aiLoadingText: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+    aiLoadingText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
     tipRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
-    tipBullet: { fontSize: fontSize.sm },
-    tipText: { flex: 1, fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
-    rateSuggestTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
-    rateSuggestRange: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    tipIcon: { marginTop: 2 },
+    tipBullet: { fontFamily: fonts.mono, fontSize: 12, color: colors.textSecondary, marginTop: 1 },
+    tipText: { fontFamily: fonts.bodyRegular, flex: 1, fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
+    rateSuggestTitle: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary },
+    rateSuggestRange: { fontFamily: fonts.mono, fontSize: 11, color: colors.textSecondary, marginTop: 3 },
     useRateBtn: { marginTop: spacing.sm, backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 10, alignItems: "center" },
-    useRateBtnText: { color: "#fff", fontSize: fontSize.sm, fontWeight: "600" },
-    actionsTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
+    useRateBtnText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.sm },
+    actionsTitle: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary, marginBottom: spacing.sm },
     // StepDone centers its children, which shrank the first-steps card to its
     // content and clipped the text (device finding); stretch it like the
     // notification/Stripe cards above it.
     aiCardFull: { width: "100%" },
-    logoLabel: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary, marginTop: spacing.md, marginBottom: spacing.xs },
-    logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
+    logoLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginTop: spacing.md, marginBottom: spacing.xs },
+    logoHint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
     logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
     logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.surface },
     logoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
-    logoPlaceholderIcon: { fontSize: 24, marginBottom: 2 },
-    logoPlaceholderText: { fontSize: fontSize.xs, color: colors.textMuted },
+    logoPlaceholderIcon: { marginBottom: 2 },
+    logoPlaceholderText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted },
     logoRemoveBtn: { alignSelf: "flex-start", marginTop: 4 },
-    logoRemoveText: { fontSize: fontSize.xs, color: colors.danger },
+    logoRemoveText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.xs, color: colors.danger },
     retryRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-    retryText: { fontSize: fontSize.sm, color: colors.textMuted },
+    retryText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted },
     retryBtn: { paddingVertical: 2, paddingHorizontal: 4 },
-    retryBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "600" },
-    warningText: { fontSize: fontSize.xs, color: colors.warning, marginTop: 2, marginBottom: spacing.xs },
+    retryBtnText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent },
+    warningText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.warning, marginTop: 2, marginBottom: spacing.xs },
   });
 }

@@ -15,7 +15,7 @@ import { DateTimePickerSheet } from "./DateTimePickerSheet";
 import { Button } from "./UI";
 import { balanceDue } from "../utils/invoicePayments";
 import { formatMoney } from "../utils/format";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Invoice, PaymentDraft, PaymentMethod } from "../types/models";
@@ -171,15 +171,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       padding: spacing.lg,
       ...shadow.card,
     },
-    title: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary },
-    sub: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.md },
-    label: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: spacing.sm },
-    hint: { fontSize: fontSize.sm, color: colors.warning, marginTop: spacing.xs },
+    title: { fontFamily: fonts.display, fontSize: fontSize.lg, color: colors.textPrimary },
+    sub: { fontFamily: fonts.mono, fontSize: 11, color: colors.textMuted, marginTop: 2, marginBottom: spacing.md },
+    label: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textMuted, marginTop: spacing.sm },
+    hint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.warning, marginTop: spacing.xs },
     dateBtn: {
       borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
       padding: spacing.md, marginTop: spacing.xs, minHeight: 44, justifyContent: "center",
     },
-    dateText: { fontSize: fontSize.md, color: colors.textPrimary },
+    dateText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary },
     chipRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, marginTop: spacing.xs },
     chip: {
       paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
@@ -187,8 +187,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       minHeight: 44, justifyContent: "center",
     },
     chipActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    chipText: { color: colors.textPrimary, fontSize: fontSize.sm },
-    chipTextActive: { color: colors.accent, fontWeight: "600" },
+    chipText: { fontFamily: fonts.bodyMedium, color: colors.textPrimary, fontSize: fontSize.sm },
+    chipTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
     actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.lg },
   });
 }

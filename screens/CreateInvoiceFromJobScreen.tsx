@@ -38,7 +38,7 @@ import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type 
 import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
 import Field from "../components/Field";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import { track, reportError } from '../utils/analytics';
@@ -424,6 +424,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderLeftColor: colors.accent,
   },
   prefillBannerText: {
+    fontFamily: fonts.bodyRegular,
     fontSize: fontSize.sm,
     color: colors.accent,
     lineHeight: 20,
@@ -437,6 +438,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderLeftColor: colors.textMuted,
   },
   trackBannerText: {
+    fontFamily: fonts.bodyRegular,
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     lineHeight: 20,
@@ -459,9 +461,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     justifyContent: "center",
   },
   cancelBtnText: {
+    fontFamily: fonts.bodyMedium,
     fontSize: fontSize.md,
     color: colors.textSecondary,
-    fontWeight: "500",
   },
   createBtn: {
     flex: 2,
@@ -475,9 +477,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     opacity: 0.6,
   },
   createBtnText: {
+    fontFamily: fonts.bodyBold,
     fontSize: fontSize.md,
     color: colors.textOnAccent,
-    fontWeight: "700",
   },
   });
 }

@@ -17,6 +17,7 @@ import {
   Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, getOrCreateCustomer, loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
 import { advanceStatusForSchedule } from "../utils/jobStatus";
 import { calculateNextDate } from "../utils/recurringJobs";
@@ -24,7 +25,7 @@ import { track } from '../utils/analytics';
 import { Button } from "../components/UI";
 import Field from "../components/Field";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import type { Customer, RecurrenceCadence, RecurrenceEndCondition, RecurringJob } from "../types/models";
@@ -73,7 +74,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
           accessibilityRole="button"
           accessibilityLabel="Cancel"
         >
-          <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
+          <Text style={{ fontFamily: fonts.bodyRegular, color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
         </TouchableOpacity>
       ),
     });
@@ -373,7 +374,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
             <Text style={customerName ? styles.customerSelected : styles.customerPlaceholder}>
               {customerName || "Select a customer..."}
             </Text>
-            <Text style={styles.chevron}>{showCustomerPicker ? "▲" : "▼"}</Text>
+            <Ionicons name={showCustomerPicker ? "chevron-up" : "chevron-down"} size={14} color={colors.textMuted} />
           </TouchableOpacity>
 
           {showCustomerPicker && (
@@ -429,7 +430,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                 accessibilityRole="button"
                 accessibilityLabel="Add new customer"
               >
-                <Text style={{ fontSize: fontSize.sm, color: colors.accent }}>
+                <Text style={{ fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.accent }}>
                   + Add new customer →
                 </Text>
               </TouchableOpacity>
@@ -493,7 +494,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
               <Text style={scheduledDate ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                 {scheduledDate ? displayDate(scheduledDate) : "Select date…"}
               </Text>
-              <Text style={styles.pickerIcon}>📅</Text>
+              <Ionicons name="calendar-outline" size={16} color={colors.textMuted} style={styles.pickerIcon} />
             </TouchableOpacity>
           </View>
 
@@ -522,7 +523,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                   <Text style={scheduledStartTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                     {scheduledStartTime ? displayTime(scheduledStartTime) : "Start…"}
                   </Text>
-                  <Text style={styles.pickerIcon}>🕐</Text>
+                  <Ionicons name="time-outline" size={16} color={colors.textMuted} style={styles.pickerIcon} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -550,7 +551,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                   <Text style={scheduledEndTime ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                     {scheduledEndTime ? displayTime(scheduledEndTime) : "End…"}
                   </Text>
-                  <Text style={styles.pickerIcon}>🕐</Text>
+                  <Ionicons name="time-outline" size={16} color={colors.textMuted} style={styles.pickerIcon} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -662,7 +663,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
                         <Text style={endDate ? styles.pickerBtnText : styles.pickerBtnPlaceholder}>
                           {endDate ? displayDate(endDate) : 'Select end date…'}
                         </Text>
-                        <Text style={styles.pickerIcon}>📅</Text>
+                        <Ionicons name="calendar-outline" size={16} color={colors.textMuted} style={styles.pickerIcon} />
                       </TouchableOpacity>
                     </View>
                   )}
@@ -733,8 +734,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   container: { flex: 1, backgroundColor: colors.background },
   scroll: { padding: spacing.md, paddingBottom: 160 },
   sectionLabel: {
-    fontSize: fontSize.xs, fontWeight: "600", color: colors.textSecondary,
-    textTransform: "uppercase", letterSpacing: 0.6,
+    fontFamily: fonts.mono, fontSize: fontSize.xs, color: colors.textSecondary,
+    textTransform: "uppercase", letterSpacing: 0.8,
     marginTop: spacing.md, marginBottom: spacing.sm,
   },
   customerSelector: {
@@ -749,9 +750,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderColor: colors.border,
     ...shadow.card,
   },
-  customerSelected: { fontSize: fontSize.md, color: colors.textPrimary },
-  customerPlaceholder: { fontSize: fontSize.md, color: colors.textMuted },
-  chevron: { fontSize: fontSize.sm, color: colors.textMuted },
+  customerSelected: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary },
+  customerPlaceholder: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textMuted },
   customerList: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
@@ -762,6 +762,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     ...shadow.card,
   },
   customerSearch: {
+    fontFamily: fonts.bodyRegular,
     margin: spacing.sm,
     marginBottom: 0,
     backgroundColor: colors.background,
@@ -776,11 +777,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   customerScroll: { maxHeight: 210 },
   customerOption: { padding: spacing.md },
   customerOptionAdd: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  customerOptionName: { fontSize: fontSize.md, color: colors.textPrimary, fontWeight: "500" },
-  customerOptionSub: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+  customerOptionName: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textPrimary },
+  customerOptionSub: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
   fieldGroup: { marginBottom: spacing.sm },
-  fieldLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5, fontWeight: "500" },
+  fieldLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5 },
   input: {
+    fontFamily: fonts.bodyRegular,
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     height: 44,
@@ -797,7 +799,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   pickerLabelRow: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 5,
   },
-  pickerClear: { fontSize: fontSize.xs, color: colors.accent },
+  pickerClear: { fontFamily: fonts.mono, fontSize: 10, color: colors.accent, textTransform: "uppercase", letterSpacing: 0.4 },
   pickerBtn: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
@@ -809,9 +811,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
-  pickerBtnText: { fontSize: fontSize.md, color: colors.textPrimary, flex: 1 },
-  pickerBtnPlaceholder: { fontSize: fontSize.md, color: colors.textMuted, flex: 1 },
-  pickerIcon: { fontSize: 16, marginLeft: spacing.sm },
+  pickerBtnText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary, flex: 1 },
+  pickerBtnPlaceholder: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textMuted, flex: 1 },
+  pickerIcon: { marginLeft: spacing.sm },
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -825,9 +827,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginBottom: spacing.sm,
   },
   toggleLabel: {
+    fontFamily: fonts.bodyMedium,
     fontSize: fontSize.md,
     color: colors.textPrimary,
-    fontWeight: '500',
   },
   chipRow: {
     flexDirection: 'row',
@@ -848,12 +850,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     backgroundColor: colors.accent,
   },
   chipText: {
+    fontFamily: fonts.bodyMedium,
     fontSize: fontSize.sm,
     color: colors.textSecondary,
   },
   chipTextSelected: {
+    fontFamily: fonts.bodySemiBold,
     color: colors.surface,
-    fontWeight: '600',
   },
   recurringNotice: {
     backgroundColor: colors.surface,
@@ -864,11 +867,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginBottom: spacing.sm,
   },
   recurringNoticeText: {
+    fontFamily: fonts.bodyMedium,
     fontSize: fontSize.md,
     color: colors.textPrimary,
-    fontWeight: '500',
   },
   recurringNoticeSubText: {
+    fontFamily: fonts.bodyRegular,
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     marginTop: 2,

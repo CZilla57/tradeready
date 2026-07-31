@@ -11,10 +11,11 @@ import {
   TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
 import { buildCustomerList, type CustomerListEntry } from '../utils/customerList';
-import { spacing, radius, fontSize } from '../utils/theme';
+import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
@@ -144,7 +145,7 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
       </View>
 
       <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔍</Text>
+        <Ionicons name="search" size={16} color={colors.textMuted} style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
           placeholder="Search by name, email, or phone"
@@ -170,7 +171,7 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>👷</Text>
+            <Ionicons name="people-outline" size={44} color={colors.textMuted} style={styles.emptyIcon} />
             <Text style={styles.emptyTitle}>
               {searchText ? 'No customers found' : 'No customers yet'}
             </Text>
@@ -205,15 +206,16 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingBottom: spacing.md,
   },
   headerTitle: {
+    fontFamily: fonts.display,
     fontSize: fontSize.xxl,
-    fontWeight: '700',
     color: colors.textPrimary,
-    letterSpacing: -0.5,
+    letterSpacing: -0.3,
   },
   headerSub: {
-    fontSize: fontSize.sm,
+    fontFamily: fonts.mono,
+    fontSize: 11,
     color: colors.textSecondary,
-    marginTop: 2,
+    marginTop: 3,
   },
   addButton: {
     backgroundColor: colors.accent,
@@ -222,8 +224,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderRadius: radius.full,
   },
   addButtonText: {
+    fontFamily: fonts.bodyBold,
     color: colors.textOnAccent,
-    fontWeight: '700',
     fontSize: fontSize.sm,
   },
 
@@ -240,10 +242,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderColor: colors.border,
   },
   searchIcon: {
-    fontSize: 16,
     marginRight: spacing.sm,
   },
   searchInput: {
+    fontFamily: fonts.bodyRegular,
     flex: 1,
     height: 44,
     color: colors.textPrimary,
@@ -278,20 +280,21 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderColor: colors.accent + '40',
   },
   avatarText: {
+    fontFamily: fonts.display,
     color: colors.accent,
     fontSize: fontSize.md,
-    fontWeight: '700',
   },
   rowInfo: {
     flex: 1,
   },
   rowName: {
+    fontFamily: fonts.bodySemiBold,
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: '600',
     marginBottom: 3,
   },
   rowMeta: {
+    fontFamily: fonts.bodyRegular,
     color: colors.textSecondary,
     fontSize: fontSize.sm,
   },
@@ -300,9 +303,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     gap: 2,
   },
   rowSpent: {
+    fontFamily: fonts.display,
     color: colors.success,
     fontSize: fontSize.md,
-    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   rowChevron: {
     color: colors.textMuted,
@@ -317,17 +321,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingHorizontal: 40,
   },
   emptyIcon: {
-    fontSize: 48,
     marginBottom: spacing.md,
   },
   emptyTitle: {
+    fontFamily: fonts.display,
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: '600',
     marginBottom: spacing.sm,
     textAlign: 'center',
   },
   emptyBody: {
+    fontFamily: fonts.bodyRegular,
     color: colors.textSecondary,
     fontSize: fontSize.sm,
     textAlign: 'center',

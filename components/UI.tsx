@@ -8,7 +8,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { useTheme } from "../hooks/useTheme";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 
 export type BadgeColor = "danger" | "warning" | "success" | "accent" | "muted";
 
@@ -158,8 +158,10 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
   badgeText: {
-    fontSize: fontSize.xs,
-    fontWeight: "600",
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.2,
   },
   btn: {
     // minHeight (not height) so clamped-but-larger accessibility text can
@@ -172,8 +174,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   btnText: {
+    fontFamily: fonts.bodySemiBold,
     fontSize: fontSize.md,
-    fontWeight: "600",
   },
   statCard: {
     flex: 1,
@@ -181,16 +183,20 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   statLabel: {
-    fontSize: fontSize.xs,
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
     marginBottom: 4,
   },
   statValue: {
+    fontFamily: fonts.display,
     fontSize: fontSize.xl,
-    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
   },
   sectionHeader: {
+    fontFamily: fonts.mono,
     fontSize: fontSize.xs,
-    fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 0.8,
     marginBottom: spacing.sm,
@@ -205,6 +211,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
   },
   emptyText: {
+    fontFamily: fonts.bodyRegular,
     fontSize: fontSize.md,
     textAlign: "center",
     lineHeight: 24,

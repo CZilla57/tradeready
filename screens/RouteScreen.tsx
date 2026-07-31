@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobsForDate, loadSettings } from "../utils/storage";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
 import type { Job } from "../types/models";
@@ -290,7 +290,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     scroll: { padding: spacing.md },
-    hint: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.lg, lineHeight: 20 },
+    hint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.lg, lineHeight: 20 },
     stopList: { marginBottom: spacing.lg },
     stopRow: { flexDirection: "row", alignItems: "flex-start" },
     timeline: { width: BADGE_SIZE + spacing.md, alignItems: "center" },
@@ -298,7 +298,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       width: BADGE_SIZE, height: BADGE_SIZE, borderRadius: BADGE_SIZE / 2,
       backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", zIndex: 1,
     },
-    numberText: { color: "#fff", fontSize: fontSize.sm, fontWeight: "700" },
+    numberText: { fontFamily: fonts.mono, color: "#fff", fontSize: fontSize.sm },
     connector: { width: CONNECTOR_WIDTH, flex: 1, minHeight: 24, backgroundColor: colors.border, marginTop: 0 },
     stopCard: {
       flex: 1, backgroundColor: colors.surface, borderRadius: radius.lg,
@@ -307,11 +307,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     stopTop: { flexDirection: "row", alignItems: "flex-start" },
     stopInfo: { flex: 1, marginRight: spacing.sm },
-    stopTitle: { fontSize: fontSize.md, fontWeight: "700", color: colors.textPrimary, marginBottom: 2 },
-    stopCustomer: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 2 },
-    stopTime: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500", marginBottom: 4 },
-    stopAddress: { fontSize: fontSize.sm, color: colors.textMuted, lineHeight: 18 },
-    noAddress: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+    stopTitle: { fontFamily: fonts.bodyBold, fontSize: fontSize.md, color: colors.textPrimary, marginBottom: 2 },
+    stopCustomer: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 2 },
+    stopTime: { fontFamily: fonts.mono, fontSize: 11, color: colors.accent, marginBottom: 4 },
+    stopAddress: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, lineHeight: 18 },
+    noAddress: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
     reorderCol: { gap: 6 },
     reorderBtn: {
       width: 32, height: 32, borderRadius: radius.sm,
@@ -325,19 +325,19 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginTop: spacing.sm, paddingVertical: 8, paddingHorizontal: spacing.md,
       backgroundColor: colors.accentBg, borderRadius: radius.md, alignItems: "center",
     },
-    navigateBtnText: { fontSize: fontSize.sm, fontWeight: "600", color: colors.accent },
+    navigateBtnText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent },
     actions: { gap: spacing.sm },
     resetBtn: {
       paddingVertical: 12, alignItems: "center", borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.border, borderStyle: "dashed",
     },
-    resetBtnText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: "500" },
+    resetBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textMuted },
     fullRouteBtn: { paddingVertical: 14, alignItems: "center", backgroundColor: colors.accent, borderRadius: radius.md },
-    fullRouteBtnText: { fontSize: fontSize.md, fontWeight: "700", color: "#fff" },
+    fullRouteBtnText: { fontFamily: fonts.bodyBold, fontSize: fontSize.md, color: "#fff" },
     emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
-    emptyTitle: { fontSize: fontSize.xl, fontWeight: "700", color: colors.textPrimary, marginBottom: spacing.sm },
-    emptySub: { fontSize: fontSize.md, color: colors.textMuted, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
+    emptyTitle: { fontFamily: fonts.display, fontSize: fontSize.xl, color: colors.textPrimary, marginBottom: spacing.sm },
+    emptySub: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textMuted, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
     emptyBtn: { paddingHorizontal: spacing.xl, paddingVertical: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
-    emptyBtnText: { fontSize: fontSize.md, color: colors.textSecondary, fontWeight: "500" },
+    emptyBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textSecondary },
   });
 }

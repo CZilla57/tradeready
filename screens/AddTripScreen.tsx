@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useLayoutEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { spacing, radius, fontSize } from '../utils/theme';
+import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { loadJobs, loadTrips, saveTrips } from '../utils/storage';
@@ -188,8 +188,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     content: { padding: spacing.lg },
-    label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs, marginTop: spacing.md },
+    label: { fontFamily: fonts.bodySemiBold, color: colors.textSecondary, fontSize: fontSize.sm, marginBottom: spacing.xs, marginTop: spacing.md },
     input: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
@@ -211,13 +212,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       maxWidth: 180,
     },
     chipActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    chipText: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '500' },
-    chipTextActive: { color: colors.accent, fontWeight: '600' },
-    milesPreview: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '600', marginTop: spacing.md },
+    chipText: { fontFamily: fonts.bodyMedium, color: colors.textSecondary, fontSize: fontSize.sm },
+    chipTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
+    milesPreview: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md, marginTop: spacing.md },
     milesInvalid: { color: colors.danger },
     saveBtn: { backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 14, alignItems: 'center', marginTop: spacing.xl },
-    saveBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
+    saveBtnText: { fontFamily: fonts.bodyBold, color: '#fff', fontSize: fontSize.md },
     deleteBtn: { borderRadius: radius.md, paddingVertical: 14, alignItems: 'center', marginTop: spacing.md },
-    deleteBtnText: { color: colors.danger, fontSize: fontSize.md, fontWeight: '600' },
+    deleteBtnText: { fontFamily: fonts.bodySemiBold, color: colors.danger, fontSize: fontSize.md },
   });
 }

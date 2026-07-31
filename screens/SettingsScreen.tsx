@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
 import { DEFAULT_CONFIRM_TEMPLATE, DEFAULT_ON_MY_WAY_TEMPLATE } from "../utils/appointmentTemplates";
@@ -32,7 +33,7 @@ import { settingsEqual } from "../utils/settingsDirty";
 import BaseField from "../components/Field";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useSubscription } from "../context/SubscriptionContext";
 import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
@@ -492,7 +493,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               <Image source={{ uri: s.logoPhoto }} style={styles.logoImage} contentFit="cover" />
             ) : (
               <View style={styles.logoPlaceholder}>
-                <Text style={styles.logoPlaceholderIcon}>📷</Text>
+                <Ionicons name="camera-outline" size={22} color={colors.textMuted} style={styles.logoPlaceholderIcon} />
                 <Text style={styles.logoPlaceholderText}>Add logo</Text>
               </View>
             )}
@@ -669,7 +670,7 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
             <TextInput style={styles.ruleInput} value={ruleDrafts[i] !== undefined ? ruleDrafts[i] : String(rule.days)} onChangeText={(v) => updateRule(i, v)} onBlur={() => commitRule(i)} keyboardType="number-pad" maxLength={3} inputAccessoryViewID="settingsDone" accessibilityLabel={`Reminder rule ${i + 1}: days past due`} />
             <Text style={styles.ruleSuffix}>days past due</Text>
             <TouchableOpacity onPress={() => removeRule(i)} style={styles.removeBtn} accessibilityRole="button" accessibilityLabel={`Remove reminder rule ${i + 1}`}>
-              <Text style={styles.removeBtnText}>✕</Text>
+              <Ionicons name="close" size={16} color={colors.danger} />
             </TouchableOpacity>
           </View>
         ))}
@@ -1027,8 +1028,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     scroll: { padding: spacing.md, paddingBottom: 60 },
     card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.sm, ...shadow.card },
     fieldGroup: { marginBottom: spacing.sm },
-    fieldLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5, fontWeight: "500" },
-    input: { backgroundColor: colors.background, borderRadius: radius.md, height: 44, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+    fieldLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5 },
+    input: { fontFamily: fonts.bodyRegular, backgroundColor: colors.background, borderRadius: radius.md, height: 44, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
     // `height: undefined` is load-bearing — do NOT delete it as redundant. This
     // style is applied after `input` above, so it has to cancel that fixed
     // `height: 44`; otherwise the field is pinned to a definite height, paints
@@ -1038,69 +1039,68 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     // not overridden here — setting a smaller minHeight would shrink the
     // pre-existing Payment instructions field.
     inputMultiline: { height: undefined, paddingTop: spacing.sm, textAlignVertical: "top" },
-    logoHint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
+    logoHint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
     logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
     logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background },
     logoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
-    logoPlaceholderIcon: { fontSize: 24, marginBottom: 2 },
-    logoPlaceholderText: { fontSize: fontSize.xs, color: colors.textMuted },
+    logoPlaceholderIcon: { marginBottom: 2 },
+    logoPlaceholderText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted },
     logoRemoveBtn: { alignSelf: "flex-start", marginTop: 4, minHeight: 44, justifyContent: "center" },
-    logoRemoveText: { fontSize: fontSize.xs, color: colors.danger },
+    logoRemoveText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.xs, color: colors.danger },
     providerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: spacing.sm },
     providerBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     providerBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    providerLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
-    providerLabelActive: { color: colors.accent, fontWeight: "600" },
-    providerHint: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
-    keyNote: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 6 },
-    ruleSubtitle: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+    providerLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    providerLabelActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
+    providerHint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+    keyNote: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: 6 },
+    ruleSubtitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
     ruleRow: { flexDirection: "row", alignItems: "center", backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm, ...shadow.card },
-    ruleInput: { width: 56, height: 36, backgroundColor: colors.background, borderRadius: radius.sm, textAlign: "center", fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, marginRight: spacing.sm },
-    ruleSuffix: { flex: 1, fontSize: fontSize.sm, color: colors.textSecondary },
+    ruleInput: { fontFamily: fonts.bodyRegular, width: 56, height: 36, backgroundColor: colors.background, borderRadius: radius.sm, textAlign: "center", fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, marginRight: spacing.sm },
+    ruleSuffix: { fontFamily: fonts.bodyRegular, flex: 1, fontSize: fontSize.sm, color: colors.textSecondary },
     removeBtn: { padding: spacing.sm },
-    removeBtnText: { color: colors.danger, fontSize: fontSize.md },
     addRuleBtn: { paddingVertical: spacing.sm, alignItems: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed", marginBottom: spacing.sm },
-    addRuleBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
+    addRuleBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.accent },
     toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-    toggleLabel: { fontSize: fontSize.md, color: colors.textPrimary },
+    toggleLabel: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary },
     clearSampleBtn: { marginTop: spacing.lg, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
-    clearSampleText: { color: colors.textSecondary, fontSize: fontSize.md, fontWeight: "500" },
+    clearSampleText: { fontFamily: fonts.bodyMedium, color: colors.textSecondary, fontSize: fontSize.md },
     signOutBtn: { marginTop: spacing.sm, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.danger + "50", backgroundColor: colors.dangerBg },
-    signOutText: { color: colors.danger, fontSize: fontSize.md, fontWeight: "600" },
+    signOutText: { fontFamily: fonts.bodySemiBold, color: colors.danger, fontSize: fontSize.md },
     deleteAccountBtn: { marginTop: spacing.sm, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, backgroundColor: colors.danger },
-    deleteAccountText: { color: "#fff", fontSize: fontSize.md, fontWeight: "600" },
+    deleteAccountText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.md },
     modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
     modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, ...shadow.card },
-    modalTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: spacing.sm },
-    modalBody: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+    modalTitle: { fontFamily: fonts.display, fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: spacing.sm },
+    modalBody: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
     modalBtnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 12, marginTop: spacing.md },
     modalCancelBtn: { minHeight: 44, justifyContent: "center", paddingHorizontal: 16, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
-    modalCancelText: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "500" },
+    modalCancelText: { fontFamily: fonts.bodyMedium, color: colors.textPrimary, fontSize: fontSize.md },
     modalDeleteBtn: { minHeight: 44, justifyContent: "center", paddingHorizontal: 16, borderRadius: radius.md, backgroundColor: colors.danger },
-    modalDeleteText: { color: "#fff", fontSize: fontSize.md, fontWeight: "600" },
+    modalDeleteText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.md },
     tradeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
     tradeBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background },
     tradeBtnActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    tradeLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
-    tradeLabelActive: { color: colors.accent, fontWeight: "600" },
+    tradeLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    tradeLabelActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
     listRow: { flexDirection: "row", alignItems: "center", paddingVertical: 13 },
-    listRowText: { flex: 1, fontSize: fontSize.md, color: colors.textPrimary },
-    listRowSub: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
+    listRowText: { fontFamily: fonts.bodyRegular, flex: 1, fontSize: fontSize.md, color: colors.textPrimary },
+    listRowSub: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
     listRowChevron: { fontSize: 20, color: colors.textMuted },
     listRowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
     subStatusRow: { flexDirection: "row", alignItems: "center" },
     subStatusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
-    subStatusLabel: { fontSize: fontSize.sm, fontWeight: "600" },
+    subStatusLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm },
     stripeConnectedRow: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
     stripeConnectedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success, marginRight: 8 },
-    stripeConnectedLabel: { fontSize: fontSize.sm, color: colors.success, fontWeight: "600" },
-    stripeOnboardingHint: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+    stripeConnectedLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.success },
+    stripeOnboardingHint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
     stripeButtonRow: { flexDirection: "row", gap: 8, marginTop: spacing.sm },
     stripeBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.accent, alignItems: "center", justifyContent: "center" },
-    stripeBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "600" },
+    stripeBtnText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent },
     stripeBtnDanger: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.danger + "80", alignItems: "center", justifyContent: "center" },
-    stripeBtnDangerText: { fontSize: fontSize.sm, color: colors.danger },
+    stripeBtnDangerText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.danger },
     stripeConnectBtn: { marginTop: spacing.sm, paddingVertical: 12, borderRadius: radius.md, backgroundColor: colors.accent, alignItems: "center" },
-    stripeConnectBtnText: { fontSize: fontSize.sm, color: "#fff", fontWeight: "700" },
+    stripeConnectBtnText: { fontFamily: fonts.bodyBold, fontSize: fontSize.sm, color: "#fff" },
   });
 }

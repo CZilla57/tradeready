@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadCustomers, saveCustomers, loadInvoices, saveInvoices, backfillInvoiceContacts } from "../utils/storage";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import Field from "../components/Field";
@@ -86,7 +86,7 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
           accessibilityRole="button"
           accessibilityLabel="Cancel"
         >
-          <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
+          <Text style={{ fontFamily: fonts.bodyRegular, color: colors.accent, fontSize: fontSize.md }}>Cancel</Text>
         </TouchableOpacity>
       ),
     });
@@ -343,12 +343,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
 
   fieldGroup:  { marginBottom: spacing.md },
   label: {
+    fontFamily: fonts.bodySemiBold,
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     marginBottom: 5,
-    fontWeight: "500",
   },
   input: {
+    fontFamily: fonts.bodyRegular,
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     height: 44,
@@ -378,6 +379,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderBottomColor: colors.border,
   },
   suggestionText: {
+    fontFamily: fonts.bodyRegular,
     fontSize: fontSize.sm,
     color: colors.textPrimary,
     lineHeight: 18,
@@ -398,9 +400,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     justifyContent: "center",
   },
   cancelBtnText: {
+    fontFamily: fonts.bodyMedium,
     fontSize: fontSize.md,
     color: colors.textSecondary,
-    fontWeight: "500",
   },
   saveBtn: {
     flex: 2,
@@ -414,9 +416,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     opacity: 0.6,
   },
   saveBtnText: {
+    fontFamily: fonts.bodyBold,
     fontSize: fontSize.md,
     color: colors.textOnAccent,
-    fontWeight: "700",
   },
   });
 }

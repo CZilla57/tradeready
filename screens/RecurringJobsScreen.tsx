@@ -11,7 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
 import { Badge, EmptyState } from "../components/UI";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -161,11 +161,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.xs,
     },
     ruleTitle: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.md,
-      fontWeight: "600",
       color: colors.textPrimary,
     },
     ruleCustomer: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.textSecondary,
       marginTop: 2,
@@ -176,11 +177,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginTop: spacing.xs,
     },
     ruleMeta: {
-      fontSize: fontSize.xs,
+      fontFamily: fonts.mono,
+      fontSize: 10,
       color: colors.textMuted,
     },
     ruleNext: {
-      fontSize: fontSize.xs,
+      fontFamily: fonts.mono,
+      fontSize: 10,
       color: colors.accent,
       marginTop: spacing.xs,
     },

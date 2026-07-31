@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSyncStatusContext } from '../context/SyncStatusContext';
 import { useThemeContext } from '../context/ThemeContext';
 import { animationDuration, useReduceMotion } from '../utils/motion';
+import { fonts } from '../utils/theme';
 
 export function SyncBanner() {
   const { isOnline, pendingCount, syncing, syncNow } = useSyncStatusContext();
@@ -98,8 +99,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   text: {
+    fontFamily: fonts.bodySemiBold,
     fontSize: 14,
-    fontWeight: '600',
   },
   button: {
     minHeight: 44,
@@ -109,8 +110,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   buttonText: {
+    fontFamily: fonts.bodyBold,
     color: '#fff',
     fontSize: 13,
-    fontWeight: '700',
   },
 });

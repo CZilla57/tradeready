@@ -6,7 +6,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { loadPricebook } from "../utils/storage";
 import { formatQuote } from "../utils/format";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { PricebookEntry } from "../types/models";
@@ -190,7 +190,7 @@ function ModalButton({ label, onPress, variant = "primary", style }: ModalButton
     >
       <Text style={{
         color: isPrimary ? "#fff" : colors.textPrimary,
-        fontWeight: "600" as const,
+        fontFamily: fonts.bodySemiBold,
         fontSize: fontSize.md,
       }}>
         {label}
@@ -224,6 +224,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
     },
     searchInput: {
+      fontFamily: fonts.bodyRegular,
       flex: 1,
       paddingVertical: spacing.sm + 2,
       paddingHorizontal: spacing.sm,
@@ -231,10 +232,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       fontSize: fontSize.md,
     },
     sectionHeader: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.sm,
-      fontWeight: "600",
+      fontSize: fontSize.xs,
       textTransform: "uppercase",
+      letterSpacing: 0.8,
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.sm,
       paddingBottom: spacing.xs,
@@ -247,12 +249,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
     },
-    rowName: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "500" },
-    rowPrice: { color: colors.accent, fontSize: fontSize.md, fontWeight: "700", marginLeft: spacing.sm },
+    rowName: { fontFamily: fonts.bodyMedium, color: colors.textPrimary, fontSize: fontSize.md },
+    rowPrice: { fontFamily: fonts.display, color: colors.accent, fontSize: fontSize.md, marginLeft: spacing.sm, fontVariant: ["tabular-nums"] },
     emptyContainer: { padding: spacing.xl, alignItems: "center" },
-    emptyText: { color: colors.textSecondary, fontSize: fontSize.md },
+    emptyText: { fontFamily: fonts.bodyRegular, color: colors.textSecondary, fontSize: fontSize.md },
     confirmContainer: { padding: spacing.lg },
-    confirmTitle: { color: colors.textPrimary, fontSize: fontSize.lg, fontWeight: "700", marginBottom: spacing.sm },
-    confirmBody: { color: colors.textSecondary, fontSize: fontSize.md, marginBottom: spacing.lg, lineHeight: 22 },
+    confirmTitle: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.lg, marginBottom: spacing.sm },
+    confirmBody: { fontFamily: fonts.bodyRegular, color: colors.textSecondary, fontSize: fontSize.md, marginBottom: spacing.lg, lineHeight: 22 },
   });
 }

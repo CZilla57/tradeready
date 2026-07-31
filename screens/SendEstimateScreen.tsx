@@ -9,6 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
 import { loadJobs, loadCustomers, loadSettings, saveJobs, resolveCustomer } from "../utils/storage";
@@ -21,7 +22,7 @@ import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { Button, Card, Divider } from "../components/UI";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import type { Job, Customer, Settings } from "../types/models";
@@ -253,8 +254,13 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
               accessibilityLabel={ch === "email" ? "Email" : "Text message"}
               accessibilityState={{ selected: channel === ch }}
             >
+              <Ionicons
+                name={ch === "email" ? "mail-outline" : "chatbubble-outline"}
+                size={14}
+                color={channel === ch ? colors.accent : colors.textSecondary}
+              />
               <Text style={[styles.tabText, channel === ch && styles.tabTextActive]}>
-                {ch === "email" ? "✉ Email" : "💬 Text message"}
+                {ch === "email" ? "Email" : "Text message"}
               </Text>
             </TouchableOpacity>
           ))}
@@ -329,18 +335,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   scroll: { padding: spacing.md, paddingBottom: 40 },
 
   summaryCard: { marginBottom: spacing.sm },
-  jobTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 2 },
-  customerName: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+  jobTitle: { fontFamily: fonts.bodyBold, fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: 2 },
+  customerName: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
   lineRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 6,
   },
-  lineLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
-  lineValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
-  totalLabel: { fontWeight: "700", color: colors.textPrimary },
-  totalValue: { fontWeight: "700", fontSize: fontSize.lg, color: colors.textPrimary },
+  lineLabel: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
+  lineValue: { fontFamily: fonts.mono, fontSize: 12, color: colors.textPrimary },
+  totalLabel: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary },
+  totalValue: { fontFamily: fonts.display, fontSize: fontSize.lg, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
 
   channelTabs: { flexDirection: "row", gap: 8, marginBottom: spacing.sm },
   tab: {
@@ -350,16 +356,19 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
     backgroundColor: colors.surface,
   },
   tabActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-  tabText: { fontSize: fontSize.sm, color: colors.textSecondary },
-  tabTextActive: { color: colors.accent, fontWeight: "600" },
+  tabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+  tabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
 
   messageCard: { marginBottom: spacing.sm, minHeight: 120 },
   subjectLine: {
+    fontFamily: fonts.bodySemiBold,
     fontSize: fontSize.sm,
-    fontWeight: "600",
     color: colors.textSecondary,
     marginBottom: spacing.sm,
     paddingBottom: spacing.sm,
@@ -367,8 +376,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderBottomColor: colors.border,
   },
   generatingRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.sm },
-  generatingText: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
-  messageText: { fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
+  generatingText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+  messageText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
 
   actionRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
   actionBtn: {
@@ -380,15 +389,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     alignItems: "center",
     justifyContent: "center",
   },
-  actionBtnText: { fontSize: fontSize.sm, color: colors.textPrimary },
+  actionBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textPrimary },
 
   sendLabel: {
-    fontSize: fontSize.sm,
+    fontFamily: fonts.mono,
+    fontSize: fontSize.xs,
     color: colors.textSecondary,
-    fontWeight: "500",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
     marginBottom: spacing.sm,
   },
   markHint: {
+    fontFamily: fonts.bodyRegular,
     fontSize: fontSize.xs,
     color: colors.textMuted,
     textAlign: "center",

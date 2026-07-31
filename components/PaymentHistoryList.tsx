@@ -19,7 +19,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { effectivePayments } from "../utils/invoicePayments";
 import { formatMoney } from "../utils/format";
 import { formatDate } from "../utils/invoiceHelpers";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Invoice, Payment } from "../types/models";
@@ -88,7 +88,7 @@ export function PaymentHistoryList({
 
 function createStyles(colors: ColorScheme) {
   return StyleSheet.create({
-    empty: { color: colors.textMuted, fontSize: fontSize.sm, paddingVertical: spacing.sm },
+    empty: { fontFamily: fonts.bodyRegular, color: colors.textMuted, fontSize: fontSize.sm, paddingVertical: spacing.sm },
     row: {
       backgroundColor: colors.surface,
       paddingVertical: spacing.sm,
@@ -100,10 +100,10 @@ function createStyles(colors: ColorScheme) {
       justifyContent: "center",
     },
     rowMain: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-    amount: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
+    amount: { fontFamily: fonts.display, fontSize: fontSize.md, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
     struck: { textDecorationLine: "line-through", color: colors.textMuted },
-    meta: { fontSize: fontSize.sm, color: colors.textMuted },
-    note: { fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
-    voided: { fontSize: fontSize.sm, color: colors.warning },
+    meta: { fontFamily: fonts.mono, fontSize: 11, color: colors.textMuted },
+    note: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, fontStyle: "italic" },
+    voided: { fontFamily: fonts.mono, fontSize: 11, color: colors.warning },
   });
 }

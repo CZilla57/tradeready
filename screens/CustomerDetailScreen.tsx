@@ -13,9 +13,10 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
-import { spacing, radius, fontSize } from '../utils/theme';
+import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
@@ -65,14 +66,15 @@ const JOB_STAGES: Record<string, string> = {
 // ─── SUB-COMPONENTS ───────────────────────────────────────────────────────────
 
 interface InfoRowProps {
-  icon: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
   value?: string;
   onPress?: (() => void) | null;
   styles: ReturnType<typeof createStyles>;
+  colors: ColorScheme;
 }
 
-const InfoRow = ({ icon, label, value, onPress, styles }: InfoRowProps) => (
+const InfoRow = ({ icon, label, value, onPress, styles, colors }: InfoRowProps) => (
   <TouchableOpacity
     style={styles.infoRow}
     onPress={onPress ?? undefined}
@@ -81,7 +83,7 @@ const InfoRow = ({ icon, label, value, onPress, styles }: InfoRowProps) => (
     accessibilityRole={onPress ? 'button' : 'text'}
     accessibilityLabel={`${label}: ${value || 'not set'}`}
   >
-    <Text style={styles.infoIcon}>{icon}</Text>
+    <Ionicons name={icon} size={18} color={colors.textSecondary} style={styles.infoIcon} />
     <View style={styles.infoContent}>
       <Text style={styles.infoLabel}>{label}</Text>
       <Text style={[styles.infoValue, onPress && styles.infoValueTappable]}>
@@ -171,7 +173,7 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
           accessibilityRole="button"
           accessibilityLabel="Edit customer"
         >
-          <Text style={{ color: colors.accent, fontSize: fontSize.md }}>Edit</Text>
+          <Text style={{ fontFamily: fonts.bodyRegular, color: colors.accent, fontSize: fontSize.md }}>Edit</Text>
         </TouchableOpacity>
       ),
     });
@@ -293,18 +295,18 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
           <View style={styles.heroActions}>
             {displayCustomer.phone ? (
               <TouchableOpacity style={styles.heroAction} onPress={handleCall} accessibilityRole="button" accessibilityLabel={`Call ${displayCustomer.name}`}>
-                <Text style={styles.heroActionIcon}>📞</Text>
+                <Ionicons name="call-outline" size={22} color={colors.accent} style={styles.heroActionIcon} />
                 <Text style={styles.heroActionLabel}>Call</Text>
               </TouchableOpacity>
             ) : null}
             {displayCustomer.email ? (
               <TouchableOpacity style={styles.heroAction} onPress={handleEmail} accessibilityRole="button" accessibilityLabel={`Email ${displayCustomer.name}`}>
-                <Text style={styles.heroActionIcon}>✉️</Text>
+                <Ionicons name="mail-outline" size={22} color={colors.accent} style={styles.heroActionIcon} />
                 <Text style={styles.heroActionLabel}>Email</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity style={styles.heroAction} onPress={handleNewInvoice} accessibilityRole="button" accessibilityLabel="New invoice for this customer">
-              <Text style={styles.heroActionIcon}>🧾</Text>
+              <Ionicons name="receipt-outline" size={22} color={colors.accent} style={styles.heroActionIcon} />
               <Text style={styles.heroActionLabel}>Invoice</Text>
             </TouchableOpacity>
           </View>
@@ -335,19 +337,21 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
           <Text style={styles.sectionTitle}>Contact</Text>
           <View style={styles.card}>
             <InfoRow
-              icon="📞"
+              icon="call-outline"
               label="Phone"
               value={displayCustomer.phone}
               onPress={displayCustomer.phone ? handleCall : null}
               styles={styles}
+              colors={colors}
             />
             <View style={styles.cardSeparator} />
             <InfoRow
-              icon="✉️"
+              icon="mail-outline"
               label="Email"
               value={displayCustomer.email}
               onPress={displayCustomer.email ? handleEmail : null}
               styles={styles}
+              colors={colors}
             />
           </View>
         </View>
@@ -452,14 +456,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderColor: colors.accent + '60',
   },
   heroAvatarText: {
+    fontFamily: fonts.display,
     color: colors.accent,
     fontSize: 28,
-    fontWeight: '700',
   },
   heroName: {
+    fontFamily: fonts.display,
     color: colors.textPrimary,
     fontSize: fontSize.xl,
-    fontWeight: '700',
     letterSpacing: -0.3,
     marginBottom: spacing.lg,
     textAlign: 'center',
@@ -479,13 +483,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     minWidth: 72,
   },
   heroActionIcon: {
-    fontSize: 22,
     marginBottom: 4,
   },
   heroActionLabel: {
+    fontFamily: fonts.bodyMedium,
     color: colors.textSecondary,
     fontSize: fontSize.xs,
-    fontWeight: '500',
   },
 
   // Stats row
@@ -504,15 +507,19 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     alignItems: 'center',
   },
   statValue: {
+    fontFamily: fonts.display,
     color: colors.success,
     fontSize: fontSize.lg,
-    fontWeight: '700',
     letterSpacing: -0.3,
     marginBottom: 4,
+    fontVariant: ['tabular-nums'],
   },
   statLabel: {
+    fontFamily: fonts.mono,
     color: colors.textSecondary,
-    fontSize: fontSize.xs,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   statDivider: {
     width: 1,
@@ -526,11 +533,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginBottom: spacing.lg,
   },
   sectionTitle: {
+    fontFamily: fonts.mono,
     color: colors.textSecondary,
     fontSize: fontSize.xs,
-    fontWeight: '600',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
     marginBottom: spacing.sm,
   },
   card: {
@@ -553,7 +560,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     padding: spacing.md,
   },
   infoIcon: {
-    fontSize: 18,
     marginRight: spacing.md,
     width: 24,
     textAlign: 'center',
@@ -562,14 +568,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     flex: 1,
   },
   infoLabel: {
+    fontFamily: fonts.mono,
     color: colors.textMuted,
-    fontSize: fontSize.xs,
-    fontWeight: '500',
+    fontSize: 10,
     textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    letterSpacing: 0.4,
     marginBottom: 2,
   },
   infoValue: {
+    fontFamily: fonts.bodyRegular,
     color: colors.textPrimary,
     fontSize: fontSize.md,
   },
@@ -592,29 +599,31 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginRight: spacing.md,
   },
   invoiceNumber: {
+    fontFamily: fonts.mono,
     color: colors.textSecondary,
-    fontSize: fontSize.xs,
-    fontWeight: '600',
+    fontSize: 11,
     marginBottom: 2,
   },
   invoiceDesc: {
+    fontFamily: fonts.bodyMedium,
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: '500',
     marginBottom: 2,
   },
   invoiceDate: {
+    fontFamily: fonts.mono,
     color: colors.textMuted,
-    fontSize: fontSize.xs,
+    fontSize: 10,
   },
   invoiceRowRight: {
     alignItems: 'flex-end',
     gap: 6,
   },
   invoiceAmount: {
+    fontFamily: fonts.display,
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   statusBadge: {
     paddingHorizontal: spacing.sm,
@@ -622,8 +631,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderRadius: radius.sm,
   },
   statusBadgeText: {
-    fontSize: fontSize.xs,
-    fontWeight: '600',
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.2,
   },
 
   // Job rows
@@ -637,23 +648,26 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginRight: spacing.md,
   },
   jobTitle: {
+    fontFamily: fonts.bodyMedium,
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: '500',
     marginBottom: 3,
   },
   jobMeta: {
+    fontFamily: fonts.bodyRegular,
     color: colors.textSecondary,
     fontSize: fontSize.sm,
   },
   jobValue: {
+    fontFamily: fonts.display,
     color: colors.textSecondary,
     fontSize: fontSize.md,
-    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
 
   // Notes
   notesInput: {
+    fontFamily: fonts.bodyRegular,
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -671,6 +685,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginTop: spacing.sm,
   },
   deleteBtnText: {
+    fontFamily: fonts.bodyMedium,
     fontSize: fontSize.sm,
     color: colors.danger,
   },
@@ -683,8 +698,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     borderRadius: radius.full,
   },
   saveNotesButtonText: {
+    fontFamily: fonts.bodyBold,
     color: colors.textOnAccent,
-    fontWeight: '700',
     fontSize: fontSize.sm,
   },
   });

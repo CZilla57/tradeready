@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { spacing, radius, fontSize } from '../utils/theme';
+import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
@@ -91,7 +92,7 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>🚗</Text>
+            <Ionicons name="car-outline" size={44} color={colors.textMuted} style={styles.emptyIcon} />
             <Text style={styles.emptyTitle}>No trips logged</Text>
             <Text style={styles.emptyBody}>Tap "+ Add trip" to log your first business drive for this period.</Text>
           </View>
@@ -119,22 +120,22 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     filterScrollContent: { paddingRight: spacing.lg, gap: spacing.sm, alignItems: 'flex-start' as const },
     filterChip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radius.full, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, marginRight: spacing.sm },
     filterChipActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    filterChipText: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '500' },
-    filterChipTextActive: { color: colors.accent, fontWeight: '600' },
+    filterChipText: { fontFamily: fonts.bodyMedium, color: colors.textSecondary, fontSize: fontSize.sm },
+    filterChipTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
     summaryCard: { marginHorizontal: spacing.lg, marginBottom: spacing.md, backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
-    summaryLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
-    summaryAmount: { color: colors.accent, fontSize: fontSize.xxl, fontWeight: '800', marginTop: spacing.xs },
-    summarySub: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: spacing.xs },
+    summaryLabel: { fontFamily: fonts.mono, color: colors.textSecondary, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
+    summaryAmount: { fontFamily: fonts.display, color: colors.accent, fontSize: fontSize.xxl, marginTop: spacing.xs, fontVariant: ['tabular-nums'] },
+    summarySub: { fontFamily: fonts.mono, color: colors.textSecondary, fontSize: 10, marginTop: spacing.xs },
     list: { paddingHorizontal: spacing.lg },
     row: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginBottom: spacing.sm },
-    rowRoute: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '600' },
-    rowMeta: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
-    rowMiles: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '700', marginLeft: spacing.md },
+    rowRoute: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md },
+    rowMeta: { fontFamily: fonts.mono, color: colors.textSecondary, fontSize: 11, marginTop: 3 },
+    rowMiles: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.md, marginLeft: spacing.md, fontVariant: ['tabular-nums'] },
     empty: { alignItems: 'center', paddingVertical: 60, paddingHorizontal: 40 },
-    emptyIcon: { fontSize: 48, marginBottom: spacing.md },
-    emptyTitle: { color: colors.textPrimary, fontSize: fontSize.lg, fontWeight: '600', marginBottom: spacing.sm },
-    emptyBody: { color: colors.textSecondary, fontSize: fontSize.sm, textAlign: 'center', lineHeight: 20 },
+    emptyIcon: { marginBottom: spacing.md },
+    emptyTitle: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.lg, marginBottom: spacing.sm },
+    emptyBody: { fontFamily: fonts.bodyRegular, color: colors.textSecondary, fontSize: fontSize.sm, textAlign: 'center', lineHeight: 20 },
     addBtn: { position: 'absolute', bottom: spacing.xl, alignSelf: 'center', backgroundColor: colors.accent, borderRadius: radius.full, paddingVertical: 14, paddingHorizontal: 28, ...shadow.card },
-    addBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
+    addBtnText: { fontFamily: fonts.bodyBold, color: '#fff', fontSize: fontSize.md },
   });
 }

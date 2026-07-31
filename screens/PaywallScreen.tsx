@@ -17,7 +17,7 @@ import { useSubscription } from "../context/SubscriptionContext";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
 import { getOfferings, purchasePackage, restorePurchases, checkTrialEligibility, ENTITLEMENT_ID } from "../utils/subscription";
 import { trialCopy, NO_TRIAL_COPY, offeringsDisplayState } from "../utils/paywallCopy";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { clearAllUserData } from "../utils/storage";
 import { syncIfOnline } from "../utils/sync";
@@ -380,8 +380,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: "center", justifyContent: "center",
       marginBottom: spacing.md,
     },
-    title:    { fontSize: fontSize.xxl, fontWeight: "800", color: colors.textPrimary, marginBottom: 6 },
-    subtitle: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center" },
+    title:    { fontFamily: fonts.display, fontSize: fontSize.xxl, color: colors.textPrimary, marginBottom: 6 },
+    subtitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center" },
     trialBadge: {
       flexDirection: "row", alignItems: "center", gap: 6,
       backgroundColor: colors.successBg,
@@ -389,7 +389,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: 8, paddingHorizontal: 14,
       alignSelf: "center", marginBottom: spacing.lg,
     },
-    trialBadgeText: { fontSize: fontSize.sm, color: colors.success, fontWeight: "600" },
+    trialBadgeText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.success },
     featureCard: {
       backgroundColor: colors.surface, borderRadius: radius.lg,
       padding: spacing.md, marginBottom: spacing.lg, ...shadow.card,
@@ -402,7 +402,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: "center", justifyContent: "center",
       flexShrink: 0,
     },
-    featureText: { flex: 1, fontSize: fontSize.sm, color: colors.textPrimary },
+    featureText: { fontFamily: fonts.bodyRegular, flex: 1, fontSize: fontSize.sm, color: colors.textPrimary },
     plans: { gap: spacing.sm, marginBottom: spacing.md },
     planCard: {
       backgroundColor: colors.surface, borderRadius: radius.lg,
@@ -421,12 +421,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     radioSelected: { borderColor: colors.accent },
     radioDot:      { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accent },
-    planName:         { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary },
+    planName:         { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary },
     planNameSelected: { color: colors.accent },
-    planSub:          { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },
+    planSub:          { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },
     saveBadge:        { backgroundColor: colors.success, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.sm },
-    saveBadgeText:    { fontSize: 10, fontWeight: "700", color: "#fff", letterSpacing: 0.5 },
-    planPrice:        { fontSize: fontSize.md, fontWeight: "700", color: colors.textPrimary },
+    saveBadgeText:    { fontFamily: fonts.mono, fontSize: 10, color: "#fff", letterSpacing: 0.5, textTransform: "uppercase" },
+    planPrice:        { fontFamily: fonts.display, fontSize: fontSize.md, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
     planPriceSelected: { color: colors.accent },
     errorCard: {
       backgroundColor: colors.dangerBg, borderRadius: radius.lg,
@@ -437,26 +437,26 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       padding: spacing.md, marginBottom: spacing.md, alignItems: "center",
       ...shadow.card,
     },
-    emptyText: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm, textAlign: "center" },
+    emptyText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm, textAlign: "center" },
     emptyRetryBtn: { paddingVertical: 8, paddingHorizontal: 16, backgroundColor: colors.accent, borderRadius: radius.md },
-    emptyRetryBtnText: { color: "#fff", fontWeight: "600", fontSize: fontSize.sm },
-    errorText:    { fontSize: fontSize.sm, color: colors.danger, marginBottom: spacing.sm, textAlign: "center" },
+    emptyRetryBtnText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.sm },
+    errorText:    { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.danger, marginBottom: spacing.sm, textAlign: "center" },
     retryBtn:     { paddingVertical: 8, paddingHorizontal: 16, backgroundColor: colors.danger, borderRadius: radius.md },
-    retryBtnText: { color: "#fff", fontWeight: "600", fontSize: fontSize.sm },
+    retryBtnText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.sm },
     cta: {
       backgroundColor: colors.accent, borderRadius: radius.lg,
       paddingVertical: 16, alignItems: "center", marginBottom: spacing.sm,
     },
     ctaDisabled: { opacity: 0.6 },
-    ctaText:     { fontSize: fontSize.lg, fontWeight: "700", color: "#fff" },
-    ctaSub:      { textAlign: "center", fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: spacing.lg },
+    ctaText:     { fontFamily: fonts.bodyBold, fontSize: fontSize.lg, color: "#fff" },
+    ctaSub:      { fontFamily: fonts.bodyRegular, textAlign: "center", fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: spacing.lg },
     restoreBtn:  { alignItems: "center", paddingVertical: spacing.sm, marginBottom: spacing.md },
-    restoreText: { fontSize: fontSize.sm, color: colors.textMuted },
+    restoreText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textMuted },
     signOutBtn:  { alignItems: "center", paddingVertical: spacing.sm, marginBottom: spacing.md },
-    signOutText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: "600" },
+    signOutText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textMuted },
     legalRow:  { flexDirection: "row", justifyContent: "center", alignItems: "center", marginBottom: spacing.sm },
-    legalLink: { fontSize: fontSize.xs, color: colors.textMuted },
-    legalDot:  { fontSize: fontSize.xs, color: colors.textMuted },
-    legalNote: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: "center", lineHeight: 17 },
+    legalLink: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted },
+    legalDot:  { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted },
+    legalNote: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, textAlign: "center", lineHeight: 17 },
   });
 }

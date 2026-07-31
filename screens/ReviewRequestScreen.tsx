@@ -18,7 +18,7 @@ import {
   markReviewRequestSent,
 } from "../utils/reviewRequest";
 import { Button, Card, Divider } from "../components/UI";
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Settings } from "../types/models";
 import { track } from '../utils/analytics';
@@ -212,25 +212,27 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     scroll: { padding: spacing.md, paddingBottom: 40 },
     headerCard: { marginBottom: spacing.sm },
     customerName: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.lg,
-      fontWeight: "600",
       color: colors.textPrimary,
     },
     contactInfo: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.textSecondary,
       marginTop: 2,
     },
     messageCard: { marginBottom: spacing.sm },
     messageLabel: {
+      fontFamily: fonts.mono,
       fontSize: fontSize.xs,
-      fontWeight: "600",
       color: colors.textMuted,
       textTransform: "uppercase",
-      letterSpacing: 0.5,
+      letterSpacing: 0.8,
       marginBottom: spacing.sm,
     },
     messageText: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.md,
       color: colors.textPrimary,
       lineHeight: 22,
@@ -240,11 +242,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginTop: spacing.sm,
     },
     sentTitle: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.md,
-      fontWeight: "600",
       color: colors.success,
     },
     sentSub: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.success,
       marginTop: 2,
@@ -254,20 +257,23 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginTop: spacing.sm,
     },
     noticeTitle: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.md,
-      fontWeight: "600",
       color: colors.warning,
     },
     noticeSub: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.textSecondary,
       marginTop: spacing.xs,
       lineHeight: 20,
     },
     sendLabel: {
-      fontSize: fontSize.sm,
-      fontWeight: "600",
+      fontFamily: fonts.mono,
+      fontSize: fontSize.xs,
       color: colors.textSecondary,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
       marginBottom: spacing.sm,
     },
     actionRow: {
@@ -284,9 +290,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
     },
     copyBtnText: {
+      fontFamily: fonts.bodyMedium,
       fontSize: fontSize.sm,
       color: colors.textSecondary,
-      fontWeight: "500",
     },
     skipBtn: {
       paddingHorizontal: 16,
@@ -294,9 +300,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.md,
     },
     skipBtnText: {
+      fontFamily: fonts.bodyMedium,
       fontSize: fontSize.sm,
       color: colors.textMuted,
-      fontWeight: "500",
     },
   });
 }

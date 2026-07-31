@@ -4,12 +4,13 @@ import {
   Alert, StyleSheet, KeyboardAvoidingView, Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { loadPricebook, savePricebook, loadSettings } from "../utils/storage";
 import { calculateEstimate, buildEstimateInput } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Button, Card } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { PricebookEntry, Settings, AIPricingSuggestion } from "../types/models";
@@ -310,7 +311,7 @@ export default function PricebookEntryScreen({
                   accessibilityRole="button"
                   accessibilityLabel={`Remove material ${String(m.name) || "item"}`}
                 >
-                  <Text style={styles.removeBtnText}>✕</Text>
+                  <Ionicons name="close" size={16} color={colors.danger} />
                 </TouchableOpacity>
               </View>
             ))}
@@ -345,7 +346,7 @@ export default function PricebookEntryScreen({
 
           <Card style={{ marginTop: spacing.md }}>
             <Button
-              label={aiLoading ? "Getting suggestions..." : "🤖 Get AI Pricing Suggestions"}
+              label={aiLoading ? "Getting suggestions..." : "Get AI Pricing Suggestions"}
               variant="secondary"
               onPress={handleAISuggest}
               loading={aiLoading}
@@ -453,9 +454,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     scroll: { padding: spacing.lg, paddingBottom: 40 },
-    label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: "500", marginBottom: 4 },
-    sectionTitle: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "700", marginBottom: spacing.sm },
+    label: { fontFamily: fonts.bodySemiBold, color: colors.textSecondary, fontSize: fontSize.sm, marginBottom: 4 },
+    sectionTitle: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.md, marginBottom: spacing.sm },
     input: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.background,
       borderRadius: radius.md,
       padding: spacing.sm + 2,
@@ -473,6 +475,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       gap: 4,
     },
     matInput: {
+      fontFamily: fonts.bodyRegular,
       flex: 1,
       backgroundColor: colors.background,
       borderRadius: radius.sm,
@@ -486,9 +489,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       padding: spacing.xs,
       marginLeft: 2,
     },
-    removeBtnText: { color: colors.danger, fontSize: fontSize.md, fontWeight: "600" },
     addMaterialBtn: { paddingVertical: spacing.sm },
-    addMaterialText: { color: colors.accent, fontSize: fontSize.sm, fontWeight: "600" },
+    addMaterialText: { fontFamily: fonts.bodySemiBold, color: colors.accent, fontSize: fontSize.sm },
     suggestions: {
       backgroundColor: colors.surface,
       borderRadius: radius.sm,
@@ -498,14 +500,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginTop: -spacing.sm + 2,
     },
     suggestionRow: { padding: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
-    suggestionText: { color: colors.textPrimary, fontSize: fontSize.md },
+    suggestionText: { fontFamily: fonts.bodyRegular, color: colors.textPrimary, fontSize: fontSize.md },
     totalRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
     },
-    totalLabel: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "600" },
-    totalValue: { color: colors.accent, fontSize: fontSize.xl, fontWeight: "700" },
+    totalLabel: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md },
+    totalValue: { fontFamily: fonts.display, color: colors.accent, fontSize: fontSize.xl, fontVariant: ["tabular-nums"] },
     actions: { marginTop: spacing.lg },
     suggestionItem: {
       flexDirection: "row",
@@ -514,8 +516,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
     },
-    suggestionLabel: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: "600" },
-    suggestionReasoning: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
+    suggestionLabel: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md },
+    suggestionReasoning: { fontFamily: fonts.bodyRegular, color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
     applyBtn: {
       backgroundColor: colors.accent,
       borderRadius: radius.sm,
@@ -523,6 +525,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: spacing.xs + 2,
       marginLeft: spacing.sm,
     },
-    applyBtnText: { color: "#fff", fontSize: fontSize.sm, fontWeight: "600" },
+    applyBtnText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.sm },
   });
 }

@@ -33,7 +33,7 @@ import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
 import { Button, Card, Divider } from "../components/UI";
-import { spacing, radius, fontSize } from "../utils/theme";
+import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, JobStatus } from "../types/models";
@@ -149,16 +149,22 @@ function JobDetailsCard({ job, navigation, customer, onAppointmentSend }: {
       ) : null}
       {job.address ? (
         <TouchableOpacity onPress={() => openMaps(job.address)} accessibilityRole="button" accessibilityLabel={`Open ${job.address} in Maps`}>
-          <Text style={styles.addressLink}>📍 {job.address}</Text>
+          <View style={styles.iconRow}>
+            <Ionicons name="location-outline" size={13} color={colors.accent} />
+            <Text style={styles.addressLink}>{job.address}</Text>
+          </View>
         </TouchableOpacity>
       ) : null}
       {job.scheduledDate && (
-        <Text style={styles.metaRow}>
-          📅 {formatDisplayDate(job.scheduledDate)}
-          {job.scheduledStartTime
-            ? `  ·  ${formatTimeRange(job.scheduledStartTime, job.scheduledEndTime)}`
-            : ""}
-        </Text>
+        <View style={styles.iconRow}>
+          <Ionicons name="calendar-outline" size={12} color={colors.textSecondary} />
+          <Text style={styles.scheduleText}>
+            {formatDisplayDate(job.scheduledDate)}
+            {job.scheduledStartTime
+              ? `  ·  ${formatTimeRange(job.scheduledStartTime, job.scheduledEndTime)}`
+              : ""}
+          </Text>
+        </View>
       )}
       {job.scheduledDate && customer && ACTIVE_STATUSES.has(job.status) && (
         <View style={styles.apptActions}>
@@ -177,7 +183,10 @@ function JobDetailsCard({ job, navigation, customer, onAppointmentSend }: {
         </View>
       )}
       {job.notes ? (
-        <Text style={styles.notes}>💬 {job.notes}</Text>
+        <View style={styles.notesRow}>
+          <Ionicons name="chatbubble-ellipses-outline" size={13} color={colors.textSecondary} style={styles.notesIcon} />
+          <Text style={styles.notes}>{job.notes}</Text>
+        </View>
       ) : null}
       {job.approval?.decision === "approved" && (
         <Text style={styles.metaRow}>
@@ -213,7 +222,8 @@ function CustomerCard({ customer }: { customer: Customer }) {
           accessibilityRole="button"
           accessibilityLabel={`Call ${customer.name}`}
         >
-          <Text style={styles.contactBtnText}>📞 Call</Text>
+          <Ionicons name="call-outline" size={14} color={colors.accent} />
+          <Text style={styles.contactBtnText}>Call</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.contactBtn}
@@ -221,7 +231,8 @@ function CustomerCard({ customer }: { customer: Customer }) {
           accessibilityRole="button"
           accessibilityLabel={`Text ${customer.name}`}
         >
-          <Text style={styles.contactBtnText}>💬 Text</Text>
+          <Ionicons name="chatbubble-outline" size={14} color={colors.accent} />
+          <Text style={styles.contactBtnText}>Text</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.contactBtn}
@@ -229,7 +240,8 @@ function CustomerCard({ customer }: { customer: Customer }) {
           accessibilityRole="button"
           accessibilityLabel={`Email ${customer.name}`}
         >
-          <Text style={styles.contactBtnText}>✉ Email</Text>
+          <Ionicons name="mail-outline" size={14} color={colors.accent} />
+          <Text style={styles.contactBtnText}>Email</Text>
         </TouchableOpacity>
       </View>
     </Card>
@@ -374,7 +386,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
                 accessibilityLabel="Delete photo"
                 accessibilityRole="button"
               >
-                <Text style={styles.photoDeleteText}>✕</Text>
+                <Ionicons name="close" size={13} color="#fff" />
               </TouchableOpacity>
             </View>
           ))}
@@ -389,7 +401,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
       >
         <View style={styles.viewerBg}>
           <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }} accessibilityRole="button" accessibilityLabel="Close photo viewer">
-            <Text style={styles.viewerCloseText}>✕</Text>
+            <Ionicons name="close" size={20} color="#fff" />
           </TouchableOpacity>
           {viewerUri && (
             <Image source={{ uri: viewerUri }} style={styles.viewerImage} contentFit="contain" />
@@ -462,8 +474,13 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
           accessibilityRole="button"
           accessibilityLabel={isClocked ? "Clock out" : "Clock in"}
         >
+          <Ionicons
+            name={isClocked ? "stop" : "play"}
+            size={12}
+            color={isClocked ? colors.danger : colors.accent}
+          />
           <Text style={[styles.clockBtnText, isClocked && styles.clockBtnTextOut]}>
-            {isClocked ? "⏹  Clock Out" : "▶  Clock In"}
+            {isClocked ? "Clock Out" : "Clock In"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -879,9 +896,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     pipelineLineDone: { backgroundColor: colors.success },
     pipelineStatusLabel: {
       marginTop: spacing.sm, textAlign: "center",
-      fontSize: fontSize.sm, fontWeight: "600", color: colors.accent,
+      fontFamily: fonts.mono, fontSize: 11, color: colors.accent,
+      textTransform: "uppercase", letterSpacing: 0.6,
     },
-    pipelineStepCount: { fontSize: fontSize.xs, fontWeight: "400", color: colors.textMuted },
+    pipelineStepCount: { fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted },
 
     recurringBanner: {
       flexDirection: 'row',
@@ -897,6 +915,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
     },
     recurringBannerText: {
+      fontFamily: fonts.bodyMedium,
       fontSize: fontSize.sm,
       color: colors.accent,
     },
@@ -908,40 +927,48 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: "center", marginBottom: spacing.sm,
     },
     sectionTitle: {
-      fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary,
-      textTransform: "uppercase", letterSpacing: 0.5,
+      fontFamily: fonts.mono, fontSize: fontSize.xs, color: colors.textSecondary,
+      textTransform: "uppercase", letterSpacing: 0.8,
     },
-    editLink: { fontSize: fontSize.sm, color: colors.accent },
+    editLink: {
+      fontFamily: fonts.mono, fontSize: 11, color: colors.accent,
+      textTransform: "uppercase", letterSpacing: 0.4,
+    },
     estimateHeaderActions: { flexDirection: "row", alignItems: "center", gap: 6 },
     editLinkSep: { fontSize: fontSize.sm, color: colors.textMuted },
 
     // Job details
-    jobTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 6 },
-    jobDesc: { fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, marginBottom: 8 },
-    addressLink: { fontSize: fontSize.sm, color: colors.accent, marginBottom: 6 },
-    metaRow: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 4 },
+    jobTitle: { fontFamily: fonts.bodyBold, fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: 6 },
+    jobDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, marginBottom: 8 },
+    iconRow: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 6 },
+    addressLink: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.accent },
+    scheduleText: { fontFamily: fonts.mono, fontSize: 11, color: colors.textSecondary },
+    metaRow: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 4 },
     apptActions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
-    notes: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 4, fontStyle: "italic" },
+    notesRow: { flexDirection: "row", alignItems: "flex-start", gap: 5, marginTop: 4 },
+    notesIcon: { marginTop: 2 },
+    notes: { fontFamily: fonts.bodyRegular, flex: 1, fontSize: fontSize.sm, color: colors.textSecondary, fontStyle: "italic" },
 
     // Customer
-    customerName: { fontSize: fontSize.md, fontWeight: "600", color: colors.textPrimary, marginBottom: spacing.sm },
+    customerName: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary, marginBottom: spacing.sm },
     contactRow: { flexDirection: "row", gap: 8 },
     contactBtn: {
       flex: 1, paddingVertical: 8, borderRadius: radius.md,
       backgroundColor: colors.accentBg, alignItems: "center",
+      flexDirection: "row", justifyContent: "center", gap: 5,
     },
-    contactBtnText: { fontSize: fontSize.sm, color: colors.accent, fontWeight: "500" },
+    contactBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.accent },
 
     // Estimate
     estimateRow: {
       flexDirection: "row", justifyContent: "space-between",
       alignItems: "center", marginBottom: 6,
     },
-    estimateLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
-    estimateValue: { fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: "500" },
-    estimateTotalLabel: { fontWeight: "700", color: colors.textPrimary },
-    estimateTotalValue: { fontWeight: "700", fontSize: fontSize.lg },
-    noEstimateText: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 4 },
+    estimateLabel: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, marginRight: spacing.sm },
+    estimateValue: { fontFamily: fonts.mono, fontSize: 12, color: colors.textPrimary },
+    estimateTotalLabel: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary },
+    estimateTotalValue: { fontFamily: fonts.display, fontSize: fontSize.lg, fontVariant: ["tabular-nums"] },
+    noEstimateText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 4 },
 
     // Photos
     photoStrip: { marginTop: spacing.xs },
@@ -966,12 +993,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
     },
-    photoDeleteText: {
-      color: '#fff',
-      fontSize: 11,
-      fontWeight: '700' as const,
-    },
-    noPhotosText: { fontSize: fontSize.sm, color: colors.textMuted },
+    noPhotosText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted },
     viewerBg: {
       flex: 1,
       backgroundColor: "rgba(0,0,0,0.95)",
@@ -991,10 +1013,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: "center",
       zIndex: 10,
     },
-    viewerCloseText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-
     // Time tracking
-    sessionCountText: { fontSize: fontSize.xs, color: colors.textMuted },
+    sessionCountText: { fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted, textTransform: "uppercase", letterSpacing: 0.4 },
     timerRow: {
       flexDirection: "row",
       justifyContent: "space-between",
@@ -1002,14 +1022,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: 6,
     },
     timerDisplay: {
+      fontFamily: fonts.display,
       fontSize: 32,
-      fontWeight: "700",
       color: colors.textPrimary,
       letterSpacing: -0.5,
       fontVariant: ["tabular-nums"],
     },
     timerDisplayActive: { color: colors.accent },
-    timerSub: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
+    timerSub: { fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted, marginTop: 2 },
     clockBtn: {
       paddingHorizontal: 16,
       paddingVertical: 10,
@@ -1017,27 +1037,30 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.accentBg,
       borderWidth: 1,
       borderColor: colors.accent,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
     },
     clockBtnOut: {
       backgroundColor: colors.dangerBg,
       borderColor: colors.danger,
     },
     clockBtnText: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.sm,
-      fontWeight: "600",
       color: colors.accent,
     },
     clockBtnTextOut: { color: colors.danger },
-    clockedSince: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 4 },
+    clockedSince: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: 4 },
 
     // Delete
     deleteBtn: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
-    deleteBtnText: { fontSize: fontSize.sm, color: colors.danger },
+    deleteBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.danger },
 
     // Error state
-    errorTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.textPrimary, marginBottom: 8, textAlign: "center" },
-    errorSubtext: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: "center", marginBottom: 32 },
+    errorTitle: { fontFamily: fonts.display, fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: 8, textAlign: "center" },
+    errorSubtext: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, textAlign: "center", marginBottom: 32 },
     errorButton: { backgroundColor: colors.accent, paddingHorizontal: 32, paddingVertical: 14, borderRadius: radius.md },
-    errorButtonText: { color: colors.textOnAccent, fontSize: fontSize.md, fontWeight: "700" },
+    errorButtonText: { fontFamily: fonts.bodyBold, color: colors.textOnAccent, fontSize: fontSize.md },
   });
 }
