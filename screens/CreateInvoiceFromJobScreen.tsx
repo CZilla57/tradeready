@@ -208,6 +208,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
       }
 
       let savedInvoiceId: string;
+      let savedInvoicePaid = false;
 
       if (mode === "finalize" && existingInvoice) {
         // Build from the freshly-loaded row, not the `existingInvoice` state
@@ -236,6 +237,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
         await saveInvoices(updatedInvoices);
         track('invoice_finalized', { source: 'from_job' });
         savedInvoiceId = freshInvoice.id;
+        savedInvoicePaid = !!updatedInvoice.paid;
       } else {
         const newInvoice = {
           id:         `inv${Date.now()}`,
@@ -256,7 +258,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
         savedInvoiceId = newInvoice.id;
       }
 
-      const jobChanges = jobChangesAfterInvoiceSave(mode, savedInvoiceId);
+      const jobChanges = jobChangesAfterInvoiceSave(mode, savedInvoiceId, savedInvoicePaid);
       const updatedJobs = jobs.map((j): Job =>
         j.id === jobId ? { ...j, ...jobChanges } : j
       );
