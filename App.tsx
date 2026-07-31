@@ -5,6 +5,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Text, View, ActivityIndicator, TouchableOpacity, Alert, Dimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useFonts } from "expo-font";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { SubscriptionProvider, useSubscription } from "./context/SubscriptionContext";
 import { ThemeProvider, useThemeContext } from "./context/ThemeContext";
@@ -60,7 +61,7 @@ import { getTradeNickname } from "./utils/pricingEngine";
 import * as Sentry from "@sentry/react-native";
 import { PostHogProvider, usePostHog, useNavigationTracker } from "posthog-react-native";
 import Constants from "expo-constants";
-import { posthogRef, track } from "./utils/analytics";
+import { posthogRef, track, reportError } from "./utils/analytics";
 
 const SENTRY_DSN = Constants.expoConfig?.extra?.sentryDsn ?? "";
 const POSTHOG_API_KEY = Constants.expoConfig?.extra?.posthogApiKey ?? "";
@@ -529,20 +530,53 @@ function ScreenTracker() {
   return null;
 }
 
+// Gates first paint on the custom typeface set loading. Sits inside
+// ThemeProvider (not above it) so the loading spinner itself can use the
+// live background/accent tokens instead of a hardcoded fallback.
+function FontGate({ children }: { children: React.ReactNode }) {
+  const { colors } = useThemeContext();
+  const [fontsLoaded, fontError] = useFonts({
+    "ChakraPetch-Bold":   require("./assets/fonts/ChakraPetch-Bold.ttf"),
+    "PublicSans-Regular": require("./assets/fonts/PublicSans-Regular.ttf"),
+    "PublicSans-Medium":  require("./assets/fonts/PublicSans-Medium.ttf"),
+    "PublicSans-SemiBold": require("./assets/fonts/PublicSans-SemiBold.ttf"),
+    "PublicSans-Bold":    require("./assets/fonts/PublicSans-Bold.ttf"),
+    "PlexMono-Medium":    require("./assets/fonts/IBMPlexMono-Medium.ttf"),
+  });
+
+  useEffect(() => {
+    if (fontError) reportError(fontError, { context: "fontGateLoad" });
+  }, [fontError]);
+
+  // A font load failure shouldn't hard-lock the app on the spinner forever —
+  // fall through to system fonts (styles that set fontFamily just silently
+  // miss and render the platform default) rather than blocking startup.
+  if (!fontsLoaded && !fontError) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background }}>
+        <ActivityIndicator color={colors.accent} size="large" />
+      </View>
+    );
+  }
+  return <>{children}</>;
+}
+
 function AppRoot() {
   const content = (
     <SafeAreaProvider>
       <ErrorBoundary>
         <ThemeProvider>
-          <SyncStatusProvider>
-            <AuthProvider>
-              <SubscriptionProvider>
-                <RootNavigator />
-              </SubscriptionProvider>
-            </AuthProvider>
-            <SyncBanner />
-            <FontScaleWatcher />
-          </SyncStatusProvider>
+          <FontGate>
+            <SyncStatusProvider>
+              <AuthProvider>
+                <SubscriptionProvider>
+                  <RootNavigator />
+                </SubscriptionProvider>
+              </AuthProvider>
+              <SyncBanner />
+              <FontScaleWatcher />
+            </SyncStatusProvider>
+          </FontGate>
         </ThemeProvider>
       </ErrorBoundary>
     </SafeAreaProvider>

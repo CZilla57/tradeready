@@ -1,30 +1,30 @@
 export const lightColors = {
   // Backgrounds
-  background: "#f2f2f7",       // iOS system grouped background
+  background: "#f5f5f1",       // vellum — cool-warm paper, not iOS gray
   surface: "#ffffff",           // Card / sheet background
-  surfaceSecondary: "#f2f2f7",
+  surfaceSecondary: "#f5f5f1",
 
   // Text
-  textPrimary: "#000000",
-  textSecondary: "#6c6c70",
-  textMuted: "#757578",
+  textPrimary: "#14213d",       // ink — deep blueprint navy
+  textSecondary: "#4b5568",
+  textMuted: "#8b93a3",
   textOnAccent: "#ffffff",
 
   // Brand / accent
-  accent: "#007aff",            // iOS blue
+  accent: "#1d5c9e",             // blueprint blue
 
   // Semantic
-  danger: "#ff3b30",            // iOS red
-  warning: "#ff9500",           // iOS orange
-  success: "#34c759",           // iOS green
-  dangerBg: "#fff1f0",
-  warningBg: "#fff8ed",
-  successBg: "#f0faf3",
-  accentBg: "#f0f6ff",
+  danger: "#b8432b",             // rust
+  warning: "#c97f1d",            // hazard amber
+  success: "#2e8b67",            // patina green
+  dangerBg: "#fbe9e4",
+  warningBg: "#fbeedd",
+  successBg: "#e4f3ec",
+  accentBg: "#e4eef7",
 
   // Borders
-  border: "#e5e5ea",
-  borderStrong: "#c7c7cc",
+  border: "#dedfd8",
+  borderStrong: "#c7c9be",
 
   // Job pipeline status colors
   statusLead:       "#6B7280",
@@ -40,31 +40,31 @@ export const lightColors = {
 
 export const darkColors = {
   // Backgrounds
-  background: "#000000",        // iOS true black (OLED-friendly)
-  surface: "#1c1c1e",           // iOS dark secondary grouped background
-  surfaceSecondary: "#000000",
+  background: "#101826",        // deep blueprint-ink — not pure OLED black
+  surface: "#182238",
+  surfaceSecondary: "#101826",
 
   // Text
-  textPrimary: "#ffffff",
-  textSecondary: "#aeaeb2",     // iOS dark secondary label
-  textMuted: "#8e8e93",         // WCAG AA compliant on #000 and #1c1c1e
+  textPrimary: "#f2f4f8",
+  textSecondary: "#aeb6c6",
+  textMuted: "#6e7789",
   textOnAccent: "#ffffff",
 
   // Brand / accent
-  accent: "#0a84ff",            // iOS blue dark
+  accent: "#5b9bdb",             // blueprint blue, brightened for dark ground
 
   // Semantic
-  danger: "#ff453a",            // iOS red dark
-  warning: "#ff9f0a",           // iOS orange dark
-  success: "#30d158",           // iOS green dark
-  dangerBg: "#2d0f0f",
-  warningBg: "#2d1f00",
-  successBg: "#0a2a15",
-  accentBg: "#001830",
+  danger: "#e06a4f",             // rust, brightened
+  warning: "#e4a039",            // hazard amber, brightened
+  success: "#4fbf93",            // patina, brightened
+  dangerBg: "#3a1712",
+  warningBg: "#3a2a10",
+  successBg: "#123326",
+  accentBg: "#1b2c40",
 
   // Borders
-  border: "#38383a",
-  borderStrong: "#48484a",
+  border: "#263248",
+  borderStrong: "#34405a",
 
   // Job pipeline status colors (brighter for dark backgrounds)
   statusLead:       "#8D95A0",
@@ -106,6 +106,18 @@ export const fontSize = {
   lg: 17,
   xl: 22,
   xxl: 28,
+};
+
+// Registered with expo-font in App.tsx (see FontGate). Display is used
+// sparingly — screen/section titles and hero numbers only; body carries
+// everything read as prose; mono carries labels, timestamps, and codes.
+export const fonts = {
+  display: "ChakraPetch-Bold",
+  bodyRegular: "PublicSans-Regular",
+  bodyMedium: "PublicSans-Medium",
+  bodySemiBold: "PublicSans-SemiBold",
+  bodyBold: "PublicSans-Bold",
+  mono: "PlexMono-Medium",
 };
 
 export const shadow = {

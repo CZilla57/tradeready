@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { spacing, radius, fontSize } from '../utils/theme';
+import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
@@ -108,7 +108,7 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
         accessibilityLabel={`Overdue invoices: ${overdueCount > 0 ? `${overdueCount}, ${formatMoney(overdueTotal)}` : 'none'}`}
       >
         <Text style={[styles.statLabel, !loading && overdueCount > 0 && { color: colors.danger }]}>
-          OVERDUE
+          {!loading && overdueCount > 0 ? '⚠ OVERDUE' : 'OVERDUE'}
         </Text>
         {loading
           ? <ActivityIndicator color={colors.textMuted} size="small" style={styles.statSpinner} />
@@ -169,7 +169,7 @@ function OverdueInvoiceRow({ invoice, isLast, onPress }: OverdueInvoiceRowProps)
     >
       <View style={styles.listRowMain}>
         <Text style={styles.listRowTitle} numberOfLines={1}>{invoice.customer}</Text>
-        <Text style={styles.listRowSub}>{invoice.number}</Text>
+        <Text style={styles.listRowSubMono}>{invoice.number}</Text>
       </View>
       <View style={styles.listRowRight}>
         <Text style={[styles.listRowAmount, { color: tagColor }]}>{formatMoney(invoice.amount)}</Text>
@@ -237,37 +237,60 @@ function JobCard({ job, onPress, onOnMyWay }: JobCardProps) {
 
   return (
     <TouchableOpacity style={styles.jobCard} onPress={onPress} activeOpacity={0.7}>
-      <View style={[styles.jobTimeColumn, { borderRightColor: colors.border }]}>
-        <Text style={styles.jobStartTime}>
+      <Text style={styles.jobTitle} numberOfLines={1}>{job.title}</Text>
+      <Text style={styles.jobCustomer} numberOfLines={1}>
+        {job.customerName}{job.address ? ` · ${job.address}` : ''}
+      </Text>
+      <View style={styles.jobCardFooter}>
+        <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
+          <Text style={[styles.statusText, { color }]}>{label}</Text>
+        </View>
+        {canSendOnMyWay && (
+          <TouchableOpacity
+            style={styles.onMyWayButton}
+            onPress={onOnMyWay}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`On my way to ${job.customerName}`}
+          >
+            <Text style={styles.onMyWayButtonText}>On my way</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+interface ScheduleStopProps {
+  job: Job;
+  isLast: boolean;
+  onPress: () => void;
+  onOnMyWay: () => void;
+}
+
+// The route line down the left gutter is what makes "today" read as a single
+// sequence of stops rather than a stack of unrelated cards — it mirrors the
+// existing "Plan Route" action instead of just decorating the list.
+function ScheduleStop({ job, isLast, onPress, onOnMyWay }: ScheduleStopProps) {
+  const { colors, shadow } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
+  return (
+    <View style={styles.stopRow}>
+      <View style={styles.stopGutter}>
+        <Text style={styles.stopStartTime}>
           {job.scheduledStartTime ? formatTimeRange(job.scheduledStartTime, null) : '—'}
         </Text>
         {job.scheduledEndTime && (
-          <Text style={styles.jobEndTime}>{formatTimeRange(job.scheduledEndTime, null)}</Text>
+          <Text style={styles.stopEndTime}>{formatTimeRange(job.scheduledEndTime, null)}</Text>
         )}
+        <View style={styles.stopDot} />
+        {!isLast && <View style={styles.stopLine} />}
       </View>
-      <View style={styles.jobDetailsColumn}>
-        <Text style={styles.jobTitle} numberOfLines={1}>{job.title}</Text>
-        <Text style={styles.jobCustomer} numberOfLines={1}>
-          {job.customerName}{job.address ? ` · ${job.address}` : ''}
-        </Text>
-        <View style={styles.jobCardFooter}>
-          <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
-            <Text style={[styles.statusText, { color }]}>{label}</Text>
-          </View>
-          {canSendOnMyWay && (
-            <TouchableOpacity
-              style={styles.onMyWayButton}
-              onPress={onOnMyWay}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel={`On my way to ${job.customerName}`}
-            >
-              <Text style={styles.onMyWayButtonText}>On my way</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+      <View style={styles.stopCardWrap}>
+        <JobCard job={job} onPress={onPress} onOnMyWay={onOnMyWay} />
       </View>
-    </TouchableOpacity>
+    </View>
   );
 }
 
@@ -580,10 +603,11 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         {!loading && selectedDayJobs.length === 0 && (
           <EmptySchedule onScheduleJob={handleScheduleJob} />
         )}
-        {!loading && selectedDayJobs.map((job) => (
-          <JobCard
+        {!loading && selectedDayJobs.map((job, i) => (
+          <ScheduleStop
             key={job.id}
             job={job}
+            isLast={i === selectedDayJobs.length - 1}
             onPress={() => handleJobPress(job)}
             onOnMyWay={() => handleOnMyWay(job)}
           />
@@ -614,17 +638,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingBottom: spacing.sm,
     },
     greeting: {
-      fontSize: fontSize.sm,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 11,
       color: colors.textMuted,
-      letterSpacing: 0.3,
-      marginBottom: 2,
+      letterSpacing: 1,
+      textTransform: 'uppercase',
+      marginBottom: 4,
     },
     dateText: {
+      fontFamily: fonts.display,
       fontSize: fontSize.xxl,
-      fontWeight: '700',
       color: colors.textPrimary,
-      letterSpacing: -0.5,
+      letterSpacing: -0.3,
     },
 
     // Week strip
@@ -641,8 +666,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     weekMonthLabel: {
+      fontFamily: fonts.mono,
       fontSize: 10,
-      fontWeight: '700',
       color: colors.textMuted,
       letterSpacing: 0.8,
       textAlign: 'center',
@@ -669,8 +694,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: 4,
     },
     dayLetter: {
+      fontFamily: fonts.mono,
       fontSize: 10,
-      fontWeight: '600',
       color: colors.textMuted,
       marginBottom: 4,
     },
@@ -692,8 +717,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.accent,
     },
     dayNum: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.sm,
-      fontWeight: '600',
       color: colors.textPrimary,
     },
     dayNumSelected: {
@@ -739,10 +764,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.warningBg,
     },
     statLabel: {
+      fontFamily: fonts.mono,
       fontSize: 10,
-      fontWeight: '700',
       color: colors.textMuted,
-      letterSpacing: 0.8,
+      letterSpacing: 0.6,
+      textTransform: 'uppercase',
     },
     statSpinner: {
       marginTop: 6,
@@ -750,12 +776,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignSelf: 'flex-start',
     },
     statValue: {
+      fontFamily: fonts.display,
       fontSize: fontSize.lg,
-      fontWeight: '700',
       color: colors.textPrimary,
       marginTop: 4,
+      fontVariant: ['tabular-nums'],
     },
     statSub: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.xs,
       color: colors.textMuted,
       marginTop: 2,
@@ -773,14 +801,16 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.sm,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       fontSize: fontSize.xl,
-      fontWeight: '700',
       color: colors.textPrimary,
     },
     sectionAction: {
-      fontSize: fontSize.sm,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 11,
       color: colors.accent,
+      letterSpacing: 0.4,
+      textTransform: 'uppercase',
     },
 
     // Shared list card
@@ -813,22 +843,29 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginRight: spacing.sm,
     },
     listRowTitle: {
+      fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.md,
-      fontWeight: '600',
       color: colors.textPrimary,
       marginBottom: 2,
     },
     listRowSub: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
+      color: colors.textMuted,
+    },
+    listRowSubMono: {
+      fontFamily: fonts.mono,
+      fontSize: 11,
       color: colors.textMuted,
     },
     listRowRight: {
       alignItems: 'flex-end',
     },
     listRowAmount: {
+      fontFamily: fonts.display,
       fontSize: fontSize.md,
-      fontWeight: '700',
       marginBottom: 4,
+      fontVariant: ['tabular-nums'],
     },
     listRowChevron: {
       fontSize: 22,
@@ -843,8 +880,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.full,
     },
     overdueTagText: {
-      fontSize: fontSize.xs,
-      fontWeight: '700',
+      fontFamily: fonts.mono,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.2,
     },
 
     // See more row
@@ -856,9 +895,52 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center',
     },
     seeMoreText: {
-      fontSize: fontSize.sm,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 11,
       color: colors.accent,
+      textTransform: 'uppercase',
+      letterSpacing: 0.4,
+    },
+
+    // Schedule timeline — the left gutter carries time + a route line that
+    // runs stop-to-stop; height is matched to the card via flex stretch, not
+    // fixed pixels, so it survives dynamic type and variable card heights.
+    stopRow: {
+      flexDirection: 'row',
+    },
+    stopGutter: {
+      width: 52,
+      alignItems: 'center',
+      paddingTop: 3,
+    },
+    stopStartTime: {
+      fontFamily: fonts.mono,
+      fontSize: 12,
+      color: colors.textPrimary,
+    },
+    stopEndTime: {
+      fontFamily: fonts.mono,
+      fontSize: 10,
+      color: colors.textMuted,
+      marginTop: 1,
+    },
+    stopDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: colors.accent,
+      marginTop: 6,
+    },
+    stopLine: {
+      flex: 1,
+      width: 1.5,
+      backgroundColor: colors.border,
+      marginTop: 4,
+      marginBottom: -spacing.sm,
+    },
+    stopCardWrap: {
+      flex: 1,
+      marginLeft: spacing.sm,
     },
 
     // Job cards
@@ -867,38 +949,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.lg,
       padding: spacing.md,
       marginBottom: spacing.sm,
-      flexDirection: 'row',
       borderWidth: 1,
       borderColor: colors.border,
       ...shadow.card,
     },
-    jobTimeColumn: {
-      width: 76,
-      borderRightWidth: 1,
-      marginRight: 14,
-      justifyContent: 'center',
-      paddingRight: 10,
-    },
-    jobStartTime: {
-      fontSize: fontSize.md,
-      fontWeight: '700',
-      color: colors.textPrimary,
-    },
-    jobEndTime: {
-      fontSize: fontSize.xs,
-      color: colors.textMuted,
-      marginTop: 2,
-    },
-    jobDetailsColumn: {
-      flex: 1,
-    },
     jobTitle: {
+      fontFamily: fonts.bodyBold,
       fontSize: fontSize.lg,
-      fontWeight: '700',
       color: colors.textPrimary,
       marginBottom: 3,
     },
     jobCustomer: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.textMuted,
       marginBottom: spacing.sm,
@@ -915,8 +977,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.sm,
     },
     statusText: {
-      fontSize: fontSize.xs,
-      fontWeight: '700',
+      fontFamily: fonts.mono,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.2,
     },
     onMyWayButton: {
       alignSelf: 'flex-start',
@@ -926,8 +990,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.accent + '1a',
     },
     onMyWayButtonText: {
+      fontFamily: fonts.bodyBold,
       fontSize: fontSize.xs,
-      fontWeight: '700',
       color: colors.accent,
     },
 
@@ -937,12 +1001,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingVertical: 40,
     },
     emptyTitle: {
+      fontFamily: fonts.display,
       fontSize: fontSize.lg - 1,
-      fontWeight: '700',
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
     emptySubtitle: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
       color: colors.textMuted,
       textAlign: 'center',
@@ -956,9 +1021,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.md,
     },
     emptyButtonText: {
+      fontFamily: fonts.bodyBold,
       color: colors.textOnAccent,
       fontSize: fontSize.md,
-      fontWeight: '700',
     },
   });
 }
