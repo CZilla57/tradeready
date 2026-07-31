@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -137,6 +137,38 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
   // last-saved snapshot and warn on blur. Refs mirror state because the blur
   // listener is registered once and would otherwise close over stale values.
   const [savedSnapshot, setSavedSnapshot] = useState<Settings | null>(null);
+
+  // Sticky Save in the native header (the screen only has a header at all
+  // since the gear move). Enabled exactly when the dirty-guard would fire.
+  const dirty = !!s && !!savedSnapshot && !settingsEqual(s, savedSnapshot);
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={handleSave}
+          disabled={!dirty || saving}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          // Header buttons: paddingLeft/alignSelf are what center the text;
+          // alignItems/justifyContent are no-ops in a native-stack header slot.
+          style={{ alignSelf: "center", paddingLeft: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Save settings"
+          accessibilityState={{ disabled: !dirty || saving, busy: saving }}
+        >
+          <Text
+            style={{
+              fontFamily: fonts.bodySemiBold,
+              fontSize: fontSize.md,
+              color: !dirty || saving ? colors.textMuted : colors.accent,
+            }}
+          >
+            Save
+          </Text>
+        </TouchableOpacity>
+      ),
+    });
+  });
+
   const sRef = useRef<Settings | null>(null);
   const savedSnapshotRef = useRef<Settings | null>(null);
   const suppressDirtyWarnRef = useRef(false); // sign-out/delete wipe data on purpose
@@ -520,16 +552,31 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
           <Field label="Profit margin %" value={String(s.marginPercent || "")} onChangeText={(v) => update("marginPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
           <Field label="Minimum job fee ($)" value={String(s.minimumJobFee || "")} onChangeText={(v) => update("minimumJobFee", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
           <Field label="Emergency/after-hours multiplier (e.g. 1.5 = 50% extra)" value={String(s.emergencyMultiplier || "")} onChangeText={(v) => update("emergencyMultiplier", parseFloat(v) || 1)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Field label="Mileage rate ($ per mile)" value={String(s.mileageRate ?? 0.70)} onChangeText={(v) => update("mileageRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Text style={styles.keyNote}>
+            Used to estimate the tax deduction for logged trips (Money → Mileage). Set to the standard mileage rate for your tax year.
+          </Text>
         </View>
 
         <Divider />
 
-        <SectionHeader title="Mileage deduction" />
-        <Text style={styles.ruleSubtitle}>
-          Used to estimate your tax deduction from logged trips (Money → Mileage). Set this to the standard mileage rate for your tax year.
-        </Text>
+        <SectionHeader title="Appearance" />
         <View style={styles.card}>
-          <Field label="Mileage rate ($ per mile)" value={String(s.mileageRate ?? 0.70)} onChangeText={(v) => update("mileageRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} shadow={shadow} />
+          <Text style={styles.providerHint}>Choose how TradeReady looks on your device.</Text>
+          <View style={styles.providerGrid}>
+            {([{ key: "light", label: "Light" }, { key: "system", label: "System" }, { key: "dark", label: "Dark" }] as const).map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.providerBtn, preference === opt.key && styles.providerBtnActive]}
+                onPress={() => setTheme(opt.key)}
+                accessibilityRole="radio"
+                accessibilityLabel={`${opt.label} appearance`}
+                accessibilityState={{ selected: preference === opt.key }}
+              >
+                <Text style={[styles.providerLabel, preference === opt.key && styles.providerLabelActive]}>{opt.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         <Divider />
@@ -638,27 +685,6 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
             </View>
           </>
         )}
-
-        <Divider />
-
-        <SectionHeader title="Appearance" />
-        <View style={styles.card}>
-          <Text style={styles.providerHint}>Choose how TradeReady looks on your device.</Text>
-          <View style={styles.providerGrid}>
-            {([{ key: "light", label: "Light" }, { key: "system", label: "System" }, { key: "dark", label: "Dark" }] as const).map((opt) => (
-              <TouchableOpacity
-                key={opt.key}
-                style={[styles.providerBtn, preference === opt.key && styles.providerBtnActive]}
-                onPress={() => setTheme(opt.key)}
-                accessibilityRole="radio"
-                accessibilityLabel={`${opt.label} appearance`}
-                accessibilityState={{ selected: preference === opt.key }}
-              >
-                <Text style={[styles.providerLabel, preference === opt.key && styles.providerLabelActive]}>{opt.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
 
         <Divider />
 
@@ -814,52 +840,6 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
 
         <Button label="Save settings" onPress={handleSave} loading={saving} />
 
-        <TouchableOpacity
-          style={styles.clearSampleBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Clear sample data"
-          onPress={() => Alert.alert("Clear sample data", "This permanently removes all sample customers, jobs, and invoices. Your own data is not affected.", [
-            { text: "Cancel", style: "cancel" },
-            { text: "Clear sample data", style: "destructive", onPress: async () => { await clearSampleData(); Alert.alert("Done", "Sample data has been removed."); } },
-          ])}
-        >
-          <Text style={styles.clearSampleText}>Clear Sample Data</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.signOutBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Sign out"
-          onPress={() => {
-            const doSignOut = async () => { suppressDirtyWarnRef.current = true; resetUser(); await clearAllUserData(); await supabase.auth.signOut(); };
-            if (pendingCount > 0) {
-              Alert.alert("Unsynced changes", "You have changes that haven't been saved to the cloud yet. Sync now to keep them.", [
-                { text: "Cancel", style: "cancel" },
-                { text: "Sync & sign out", onPress: async () => { const { data: { session } } = await supabase.auth.getSession(); if (session?.user?.id) await syncIfOnline(session.user.id); await doSignOut(); } },
-                { text: "Sign out anyway", style: "destructive", onPress: doSignOut },
-              ]);
-            } else {
-              Alert.alert("Sign out", "Are you sure you want to sign out?", [
-                { text: "Cancel", style: "cancel" },
-                { text: "Sign out", style: "destructive", onPress: doSignOut },
-              ]);
-            }
-          }}
-        >
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.deleteAccountBtn, deleting && { opacity: 0.5 }]}
-          disabled={deleting}
-          accessibilityRole="button"
-          accessibilityLabel="Delete account"
-          accessibilityState={{ disabled: deleting, busy: deleting }}
-          onPress={() => { setDeleteConfirmText(""); setDeleteModalVisible(true); }}
-        >
-          <Text style={styles.deleteAccountText}>{deleting ? "Deleting account…" : "Delete Account"}</Text>
-        </TouchableOpacity>
-
         <Divider />
 
         <SectionHeader title="Subscription" />
@@ -939,6 +919,56 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
             <Text style={styles.listRowChevron}>›</Text>
           </TouchableOpacity>
         </View>
+
+        <Divider />
+
+        <SectionHeader title="Account" />
+
+        <TouchableOpacity
+          style={styles.clearSampleBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Clear sample data"
+          onPress={() => Alert.alert("Clear sample data", "This permanently removes all sample customers, jobs, and invoices. Your own data is not affected.", [
+            { text: "Cancel", style: "cancel" },
+            { text: "Clear sample data", style: "destructive", onPress: async () => { await clearSampleData(); Alert.alert("Done", "Sample data has been removed."); } },
+          ])}
+        >
+          <Text style={styles.clearSampleText}>Clear Sample Data</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.signOutBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Sign out"
+          onPress={() => {
+            const doSignOut = async () => { suppressDirtyWarnRef.current = true; resetUser(); await clearAllUserData(); await supabase.auth.signOut(); };
+            if (pendingCount > 0) {
+              Alert.alert("Unsynced changes", "You have changes that haven't been saved to the cloud yet. Sync now to keep them.", [
+                { text: "Cancel", style: "cancel" },
+                { text: "Sync & sign out", onPress: async () => { const { data: { session } } = await supabase.auth.getSession(); if (session?.user?.id) await syncIfOnline(session.user.id); await doSignOut(); } },
+                { text: "Sign out anyway", style: "destructive", onPress: doSignOut },
+              ]);
+            } else {
+              Alert.alert("Sign out", "Are you sure you want to sign out?", [
+                { text: "Cancel", style: "cancel" },
+                { text: "Sign out", style: "destructive", onPress: doSignOut },
+              ]);
+            }
+          }}
+        >
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.deleteAccountBtn, deleting && { opacity: 0.5 }]}
+          disabled={deleting}
+          accessibilityRole="button"
+          accessibilityLabel="Delete account"
+          accessibilityState={{ disabled: deleting, busy: deleting }}
+          onPress={() => { setDeleteConfirmText(""); setDeleteModalVisible(true); }}
+        >
+          <Text style={styles.deleteAccountText}>{deleting ? "Deleting account…" : "Delete Account"}</Text>
+        </TouchableOpacity>
       </ScrollView>
       </KeyboardAvoidingView>
       {/* Serves the number-pad reminder-rule inputs. */}
