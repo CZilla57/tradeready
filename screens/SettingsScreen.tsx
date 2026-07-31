@@ -231,6 +231,54 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
     return unsub;
   }, [navigation]);
 
+  // Back/pop path of the unsaved-edits guard. The blur listener above covers
+  // switching TABS while Settings is pushed (screen stays mounted, alert shows
+  // after the fact); popping the stack UNMOUNTS the screen, so that pattern
+  // can't work here — intercept the removal, ask, then resume the same action.
+  // suppressDirtyWarnRef is set before dispatching so the blur listener (which
+  // fires during the resumed removal, before the refs settle) stays quiet.
+  useEffect(() => {
+    const unsub = navigation.addListener("beforeRemove", (e) => {
+      const current = sRef.current;
+      const saved = savedSnapshotRef.current;
+      if (suppressDirtyWarnRef.current || !current || !saved) return;
+      if (settingsEqual(current, saved)) return;
+      e.preventDefault();
+      Alert.alert(
+        "Unsaved settings",
+        "You changed settings but didn't tap Save. Keep your changes?",
+        [
+          {
+            text: "Discard",
+            style: "destructive",
+            onPress: () => {
+              // No setS: the screen is about to unmount; next mount reloads
+              // from storage. Logo files copied during the abandoned edit are
+              // orphans now — same cleanup as the blur path.
+              suppressDirtyWarnRef.current = true;
+              cleanupLogoFiles(saved.logoPhoto);
+              navigation.dispatch(e.data.action);
+            },
+          },
+          {
+            text: "Save",
+            onPress: async () => {
+              const toSave = sRef.current;
+              if (!toSave) return;
+              await saveSettings(toSave);
+              syncNotifications();
+              setSavedSnapshot(toSave);
+              await cleanupLogoFiles(toSave.logoPhoto);
+              suppressDirtyWarnRef.current = true;
+              navigation.dispatch(e.data.action);
+            },
+          },
+        ]
+      );
+    });
+    return unsub;
+  }, [navigation]);
+
   useEffect(() => {
     loadSettings().then(async (loaded) => {
       if (
