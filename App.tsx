@@ -101,6 +101,7 @@ function TodayTab() {
     <TodayStack.Navigator screenOptions={navOpts}>
       <TodayStack.Screen name="TodayHome" component={TodayScreen} options={{ headerShown: false }} />
       <TodayStack.Screen name="Route" component={RouteScreen} options={{ title: "Today's Route" }} />
+      <TodayStack.Screen name="Settings" component={SettingsScreen} options={{ title: "Settings" }} />
     </TodayStack.Navigator>
   );
 }
@@ -233,7 +234,6 @@ const TAB_ICONS: Record<string, { active: string; inactive: string }> = {
   Customers: { active: "people",               inactive: "people-outline" },
   Money:     { active: "cash",                 inactive: "cash-outline" },
   AI:        { active: "chatbubble-ellipses",  inactive: "chatbubble-ellipses-outline" },
-  Settings:  { active: "settings",             inactive: "settings-outline" },
 };
 
 // ── Root ──────────────────────────────────────────────────────────────────────
@@ -272,16 +272,6 @@ function MainTabs() {
       <Tab.Screen name="Customers" component={CustomersTab} />
       <Tab.Screen name="Money"     component={MoneyTab} />
       <Tab.Screen name="AI" component={ChatTab} options={{ tabBarHideOnKeyboard: true, tabBarLabel: nickname }} />
-      <Tab.Screen
-        name="Settings"
-        component={SettingsScreen}
-        options={{
-          headerShown:      true,
-          title:            "Settings",
-          headerStyle:      { backgroundColor: colors.surface },
-          headerTitleStyle: { color: colors.textPrimary, fontWeight: "600" as const },
-        }}
-      />
     </Tab.Navigator>
   );
 }

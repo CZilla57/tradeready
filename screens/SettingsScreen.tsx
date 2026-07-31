@@ -43,8 +43,7 @@ import { promptForLogo } from "../utils/logoPicker";
 import { deletePhoto, photoExists, listPhotos } from "../utils/photoStorage";
 import { orphanedLogoPaths, sweepableLogoPaths } from "../utils/logoLifecycle";
 import type { Settings } from "../types/models";
-import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import type { MainTabParamList } from "../types/navigation";
+import type { TodayStackScreenProps } from "../types/navigation";
 
 const PRIVACY_URL = Constants.expoConfig?.extra?.privacyPolicyUrl ?? "https://tradeready.app/privacy";
 const TERMS_URL   = Constants.expoConfig?.extra?.termsUrl          ?? "https://tradeready.app/terms";
@@ -103,7 +102,7 @@ async function sweepOrphanedLogos(persistedLogoPath: string | undefined): Promis
   }
 }
 
-export default function SettingsScreen({ navigation }: BottomTabScreenProps<MainTabParamList, 'Settings'>) {
+export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Settings'>) {
   const { colors, shadow, preference, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -894,7 +893,8 @@ export default function SettingsScreen({ navigation }: BottomTabScreenProps<Main
               <Text style={styles.stripeBtnText}>Manage subscription</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Subscribe" onPress={() => navigation.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
+            /* PaywallModal lives on the ROOT stack: TodayStack → MainTabs → RootStack, hence two hops. */
+            <TouchableOpacity style={[styles.stripeConnectBtn, { marginTop: spacing.sm }]} accessibilityRole="button" accessibilityLabel="Subscribe" onPress={() => navigation.getParent()?.getParent()?.navigate("PaywallModal", { canDismiss: true })}>
               <Text style={styles.stripeConnectBtnText}>Subscribe</Text>
             </TouchableOpacity>
           )}

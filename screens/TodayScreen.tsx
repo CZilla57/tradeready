@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
@@ -512,8 +513,19 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     >
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.greeting}>{getGreeting()}</Text>
-        <Text style={styles.dateText}>{formatDisplayDate(todayString)}</Text>
+        <View style={styles.headerText}>
+          <Text style={styles.greeting}>{getGreeting()}</Text>
+          <Text style={styles.dateText}>{formatDisplayDate(todayString)}</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.settingsBtn}
+          onPress={() => navigation.navigate('Settings')}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Open settings"
+        >
+          <Ionicons name="settings-outline" size={22} color={colors.textSecondary} />
+        </TouchableOpacity>
       </View>
 
       {/* Week strip */}
@@ -633,9 +645,22 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
 
     // Header
     header: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.md,
       paddingBottom: spacing.sm,
+    },
+    headerText: {
+      flex: 1,
+      marginRight: spacing.sm,
+    },
+    settingsBtn: {
+      minWidth: 44,
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     greeting: {
       fontFamily: fonts.mono,

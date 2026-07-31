@@ -23,7 +23,6 @@ export type MainTabParamList = {
   Customers: NavigatorScreenParams<CustomerStackParamList>;
   Money: NavigatorScreenParams<MoneyStackParamList>;
   AI: NavigatorScreenParams<ChatStackParamList>;
-  Settings: undefined;
 };
 
 // ── Tab Stacks ──────────────────────────────────────────────────────────────
@@ -31,6 +30,7 @@ export type MainTabParamList = {
 export type TodayStackParamList = {
   TodayHome: undefined;
   Route: undefined;
+  Settings: undefined;
 };
 
 export type JobStackParamList = {
