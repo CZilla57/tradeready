@@ -20,6 +20,8 @@ import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
 import { canResend, resendSecondsRemaining } from '../utils/resendCooldown';
 import { friendlyAuthError } from '../utils/authErrors';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import { signInWithApple, signInWithGoogle, SOCIAL_GOOGLE_AVAILABLE } from '../utils/socialAuth';
 
 type AuthMode = 'login' | 'signup' | 'forgot';
 
@@ -35,7 +37,7 @@ const PASSWORD_RESET_URL: string = Constants.expoConfig?.extra?.passwordResetUrl
 const EMAIL_CONFIRMED_URL: string = Constants.expoConfig?.extra?.emailConfirmedUrl ?? '';
 
 export default function AuthScreen() {
-  const { colors, shadow } = useTheme();
+  const { colors, shadow, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<AuthMode>('login');
@@ -53,6 +55,8 @@ export default function AuthScreen() {
   const [resetLastSentAt, setResetLastSentAt] = useState<number | null>(null);
   const [resendNow, setResendNow] = useState<number>(Date.now());
   const [resending, setResending] = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState(false);
+  const [socialBusy, setSocialBusy] = useState<null | 'apple' | 'google'>(null);
 
   const resendReady = canResend(resendLastSentAt, resendNow);
   const resetReady = canResend(resetLastSentAt, resendNow);
@@ -65,6 +69,13 @@ export default function AuthScreen() {
     const id = setInterval(() => setResendNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [resendLastSentAt, resetLastSentAt, resendNow]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    let active = true;
+    AppleAuthentication.isAvailableAsync().then(v => { if (active) setAppleAvailable(v); });
+    return () => { active = false; };
+  }, []);
 
   async function handleSubmit() {
     if (mode === 'forgot') {
@@ -108,6 +119,7 @@ export default function AuthScreen() {
       if (mode === 'login') {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (error) throw error;
+        track('sign_in', { method: 'password' });
       } else {
         const { error } = await supabase.auth.signUp({
           email: email.trim(),
@@ -152,6 +164,24 @@ export default function AuthScreen() {
     }
   }
 
+  async function handleApple() {
+    setError('');
+    setSocialBusy('apple');
+    const res = await signInWithApple();
+    setSocialBusy(null);
+    if (res.ok) { track('sign_in', { method: 'apple' }); return; }
+    if (!res.cancelled) setError(friendlyAuthError(res.error ?? ''));
+  }
+
+  async function handleGoogle() {
+    setError('');
+    setSocialBusy('google');
+    const res = await signInWithGoogle();
+    setSocialBusy(null);
+    if (res.ok) { track('sign_in', { method: 'google' }); return; }
+    if (!res.cancelled) setError(friendlyAuthError(res.error ?? ''));
+  }
+
   function toggle() {
     setMode(m => (m === 'login' ? 'signup' : 'login'));
     setError('');
@@ -170,7 +200,10 @@ export default function AuthScreen() {
     mode === 'login'  ? 'Sign In' :
                         'Create Account';
 
-  const submitDisabled = loading || (mode === 'forgot' && !resetReady);
+  // Disabled while a social flow is in progress too, so no two auth flows
+  // (password + Apple, password + Google, or Apple + Google) can run at once.
+  const submitDisabled = loading || socialBusy !== null || (mode === 'forgot' && !resetReady);
+  const socialDisabled = loading || socialBusy !== null;
 
   return (
     <KeyboardAvoidingView
@@ -265,6 +298,57 @@ export default function AuthScreen() {
             }
           </TouchableOpacity>
         </View>
+
+        {mode !== 'forgot' && (appleAvailable || SOCIAL_GOOGLE_AVAILABLE) && (
+          <View style={styles.socialSection}>
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {appleAvailable && (
+              <View
+                testID="apple-signin-button"
+                style={[styles.appleWrap, socialDisabled && styles.appleWrapDisabled]}
+                pointerEvents={socialDisabled ? 'none' : 'auto'}
+              >
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                  buttonStyle={
+                    isDark
+                      ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                      : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
+                  }
+                  cornerRadius={radius.md}
+                  style={styles.appleBtn}
+                  onPress={handleApple}
+                />
+              </View>
+            )}
+
+            {SOCIAL_GOOGLE_AVAILABLE && (
+              <TouchableOpacity
+                style={styles.googleBtn}
+                onPress={handleGoogle}
+                disabled={socialDisabled}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Continue with Google"
+                accessibilityState={{ disabled: socialDisabled, busy: socialBusy === 'google' }}
+              >
+                {socialBusy === 'google' ? (
+                  <ActivityIndicator color={colors.textPrimary} />
+                ) : (
+                  <>
+                    <Ionicons name="logo-google" size={18} color="#4285F4" style={styles.googleIcon} />
+                    <Text style={styles.googleBtnText}>Continue with Google</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {mode === 'login' && pendingConfirmEmail ? (
           <View style={styles.resendBox}>
@@ -395,5 +479,25 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     toggle: { alignItems: 'center', marginTop: spacing.lg, paddingVertical: spacing.sm },
     toggleText: { fontSize: fontSize.sm, color: colors.textMuted },
     toggleLink: { color: colors.accent, fontWeight: '600' },
+    socialSection: { marginTop: spacing.lg },
+    dividerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
+    dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
+    dividerText: { marginHorizontal: spacing.md, color: colors.textMuted, fontSize: fontSize.sm },
+    appleWrap: { marginBottom: spacing.sm },
+    appleWrapDisabled: { opacity: 0.5 },
+    appleBtn: { height: 48, width: '100%' },
+    googleBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.sm,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      paddingVertical: 12,
+    },
+    googleIcon: {},
+    googleBtnText: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '600' },
   });
 }

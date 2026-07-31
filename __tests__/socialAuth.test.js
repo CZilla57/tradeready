@@ -1,0 +1,66 @@
+import { signInWithApple, signInWithGoogle } from "../utils/socialAuth";
+import * as AppleAuthentication from "expo-apple-authentication";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import { supabase } from "../utils/supabase";
+
+describe("signInWithApple", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("exchanges the Apple identity token with Supabase", async () => {
+    const res = await signInWithApple();
+    expect(AppleAuthentication.signInAsync).toHaveBeenCalled();
+    expect(supabase.auth.signInWithIdToken).toHaveBeenCalledWith({
+      provider: "apple",
+      token: "apple-id-token",
+      nonce: expect.any(String),
+    });
+    expect(res).toEqual({ ok: true });
+  });
+
+  it("returns cancelled when the user dismisses the Apple sheet", async () => {
+    AppleAuthentication.signInAsync.mockRejectedValueOnce({ code: "ERR_REQUEST_CANCELED" });
+    const res = await signInWithApple();
+    expect(res).toEqual({ ok: false, cancelled: true });
+    expect(supabase.auth.signInWithIdToken).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a Supabase error message", async () => {
+    supabase.auth.signInWithIdToken.mockResolvedValueOnce({ data: {}, error: { message: "bad token" } });
+    const res = await signInWithApple();
+    expect(res).toEqual({ ok: false, error: "bad token" });
+  });
+});
+
+describe("signInWithGoogle", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  // This is the first test in the file to call signInWithGoogle, so it's the
+  // one that actually exercises ensureGoogleConfigured()'s first (and only)
+  // GoogleSignin.configure() call — the module-level `googleConfigured` latch
+  // isn't a jest.fn(), so jest.clearAllMocks() in beforeEach doesn't reset it,
+  // and a later test wouldn't re-trigger configure(). Asserting here, rather
+  // than restructuring the latch, keeps the "configure once" behavior itself
+  // under test instead of engineering it away.
+  it("exchanges the Google id token with Supabase", async () => {
+    const res = await signInWithGoogle();
+    expect(GoogleSignin.configure).toHaveBeenCalledWith({
+      webClientId: "test-web.apps.googleusercontent.com",
+      iosClientId: "test-ios.apps.googleusercontent.com",
+    });
+    expect(GoogleSignin.hasPlayServices).toHaveBeenCalled();
+    expect(supabase.auth.signInWithIdToken).toHaveBeenCalledWith({
+      provider: "google",
+      token: "google-id-token",
+    });
+    expect(res).toEqual({ ok: true });
+  });
+
+  it("returns cancelled when the user dismisses the Google sheet", async () => {
+    // The installed google-signin library resolves (rather than rejects)
+    // on cancellation, with { type: "cancelled", data: null }.
+    GoogleSignin.signIn.mockResolvedValueOnce({ type: "cancelled", data: null });
+    const res = await signInWithGoogle();
+    expect(res).toEqual({ ok: false, cancelled: true });
+    expect(supabase.auth.signInWithIdToken).not.toHaveBeenCalled();
+  });
+});

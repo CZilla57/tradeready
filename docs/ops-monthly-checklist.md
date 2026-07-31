@@ -78,6 +78,28 @@ January, when the IRS publishes the new figures:
 
 ---
 
+## Recurring (~every 6 months): Apple Sign-In client secret expiry
+
+Supabase's Apple provider (Authentication → Providers → Apple, project
+`ncbqswfdvckmdocbawaa`) authenticates with a hand-built ES256 JWT pasted into its
+**Secret Key** field — Apple caps this token's lifetime at 6 months, and Supabase
+does not auto-rotate it (unlike some later dashboard versions that accept a raw
+`.p8` key directly). When it expires, Apple sign-in silently starts failing.
+
+- [ ] **Current secret expires 2027-01-29.** Before then, generate a replacement:
+      header `{alg: ES256, kid: <Key ID>}`, payload `{iss: <Team ID>, iat: now,
+      exp: now + up to 15777000s, aud: "https://appleid.apple.com", sub:
+      "com.gettradereadyapp.tradeready.signin"}`, signed with the `.p8` private
+      key from the Sign in with Apple key in Apple Developer (Team ID
+      `96J48TJWX3`, Key ID `RP5KPPX3DT` as of the key created 2026-07-30 — if
+      that key was ever revoked/replaced, use the new Team ID/Key ID/private key
+      instead). Paste the new JWT into Supabase's Secret Key field, replacing the
+      old one.
+- [ ] Put the *next* expiry date here once regenerated, so this stays a rolling
+      reminder rather than a one-time note.
+
+---
+
 ## When a Sentry alert fires: reading the signal
 
 The three rules in Appendix A email the owner when something new breaks, something
