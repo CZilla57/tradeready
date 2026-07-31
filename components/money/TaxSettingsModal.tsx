@@ -19,8 +19,9 @@ import {
   TextInput,
   Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { KeyboardDoneBar } from '../KeyboardDoneBar';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { DEFAULT_MILEAGE_RATE } from '../../utils/mileageUtils';
@@ -121,8 +122,14 @@ export const TaxSettingsModal = React.memo(function TaxSettingsModal({
                 accessibilityLabel="Standard mileage"
                 accessibilityState={{ selected: method === 'mileage' }}
               >
+                <Ionicons
+                  name="car-outline"
+                  size={14}
+                  color={method === 'mileage' ? colors.accent : colors.textSecondary}
+                  style={styles.methodIcon}
+                />
                 <Text style={[styles.methodText, method === 'mileage' && styles.methodTextActive]}>
-                  🚗 Standard mileage
+                  Standard mileage
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -132,8 +139,14 @@ export const TaxSettingsModal = React.memo(function TaxSettingsModal({
                 accessibilityLabel="Actual fuel costs"
                 accessibilityState={{ selected: method === 'actual' }}
               >
+                <Ionicons
+                  name="speedometer-outline"
+                  size={14}
+                  color={method === 'actual' ? colors.accent : colors.textSecondary}
+                  style={styles.methodIcon}
+                />
                 <Text style={[styles.methodText, method === 'actual' && styles.methodTextActive]}>
-                  ⛽ Actual fuel costs
+                  Actual fuel costs
                 </Text>
               </TouchableOpacity>
             </View>
@@ -173,10 +186,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       maxHeight: '85%',
       ...shadow.card,
     },
-    title: { color: colors.textPrimary, fontSize: fontSize.xl, fontWeight: '700', marginBottom: spacing.md },
-    label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginTop: spacing.sm },
-    help: { color: colors.textMuted, fontSize: fontSize.sm, marginTop: 4, marginBottom: spacing.sm, lineHeight: 18 },
+    title: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.xl, marginBottom: spacing.md },
+    label: { fontFamily: fonts.bodySemiBold, color: colors.textSecondary, fontSize: fontSize.sm, marginTop: spacing.sm },
+    help: { fontFamily: fonts.bodyRegular, color: colors.textMuted, fontSize: fontSize.sm, marginTop: 4, marginBottom: spacing.sm, lineHeight: 18 },
     input: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.surfaceSecondary,
       borderRadius: radius.sm + 2,
       padding: 14,
@@ -188,6 +202,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     methodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.sm },
     methodChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
       borderRadius: radius.full,
@@ -198,21 +214,22 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: 'center',
     },
     methodChipActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
-    methodText: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '500' },
-    methodTextActive: { color: colors.accent, fontWeight: '600' },
-    unsetNote: { color: colors.textMuted, fontSize: fontSize.xs, marginBottom: spacing.sm },
-    disclaimer: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.sm, lineHeight: 16 },
+    methodIcon: { marginRight: 6 },
+    methodText: { fontFamily: fonts.bodyMedium, color: colors.textSecondary, fontSize: fontSize.sm },
+    methodTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
+    unsetNote: { fontFamily: fonts.bodyRegular, color: colors.textMuted, fontSize: fontSize.xs, marginBottom: spacing.sm },
+    disclaimer: { fontFamily: fonts.bodyRegular, color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.sm, lineHeight: 16 },
     actions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md, paddingBottom: spacing.sm },
     cancelBtn: {
       flex: 1, padding: spacing.md, borderRadius: radius.md,
       backgroundColor: colors.surfaceSecondary, alignItems: 'center',
       borderWidth: 1, borderColor: colors.border,
     },
-    cancelText: { color: colors.textSecondary, fontWeight: '600', fontSize: fontSize.md },
+    cancelText: { fontFamily: fonts.bodySemiBold, color: colors.textSecondary, fontSize: fontSize.md },
     saveBtn: {
       flex: 2, padding: spacing.md, borderRadius: radius.md,
       backgroundColor: colors.accent, alignItems: 'center',
     },
-    saveText: { color: colors.textOnAccent, fontWeight: '700', fontSize: fontSize.md },
+    saveText: { fontFamily: fonts.bodyBold, color: colors.textOnAccent, fontSize: fontSize.md },
   });
 }

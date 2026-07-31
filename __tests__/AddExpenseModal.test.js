@@ -62,7 +62,7 @@ afterEach(() => {
  */
 async function attachPhoto(screen) {
   await act(async () => {
-    fireEvent.press(screen.getByText("📷  Add receipt photo"));
+    fireEvent.press(screen.getByText("Add receipt photo"));
   });
   const buttons = Alert.alert.mock.calls[0][2];
   const library = buttons.find((b) => b.text === "Choose from Library");
@@ -205,10 +205,10 @@ describe("AddExpenseModal receipt scan", () => {
     expect(screen.getByText(/Filled from receipt/)).toBeTruthy();
 
     await act(async () => {
-      fireEvent.press(screen.getByText("✕  Remove photo"));
+      fireEvent.press(screen.getByText("Remove photo"));
     });
 
     expect(screen.queryByText(/Filled from receipt/)).toBeNull();
-    expect(screen.getByText("📷  Add receipt photo")).toBeTruthy();
+    expect(screen.getByText("Add receipt photo")).toBeTruthy();
   });
 });

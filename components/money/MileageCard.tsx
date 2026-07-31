@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { spacing, radius, fontSize } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts } from '../../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
@@ -29,7 +30,10 @@ export const MileageCard = React.memo(function MileageCard({ start, end, onPress
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.85}>
       <View style={styles.headerRow}>
-        <Text style={styles.title}>🚗 Mileage deduction</Text>
+        <View style={styles.titleRow}>
+          <Ionicons name="car-outline" size={16} color={colors.textSecondary} />
+          <Text style={styles.title}>Mileage deduction</Text>
+        </View>
         <Text style={styles.chevron}>›</Text>
       </View>
       <Text style={styles.amount}>{formatMoney(summary.deduction)}</Text>
@@ -53,9 +57,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    title: { color: colors.textPrimary, fontSize: fontSize.md + 1, fontWeight: '600' },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    title: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.md + 1 },
     chevron: { color: colors.textMuted, fontSize: fontSize.lg + 4, fontWeight: '400' },
-    amount: { color: colors.accent, fontSize: fontSize.xl, fontWeight: '700', marginTop: spacing.sm },
-    sub: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: spacing.xs },
+    amount: { fontFamily: fonts.display, color: colors.accent, fontSize: fontSize.xl, marginTop: spacing.sm, fontVariant: ['tabular-nums'] },
+    sub: { fontFamily: fonts.mono, color: colors.textSecondary, fontSize: 10, marginTop: spacing.xs },
   });
 }

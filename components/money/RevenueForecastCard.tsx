@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeRevenueForecast } from '../../utils/revenueForecast';
@@ -19,6 +19,7 @@ export const RevenueForecastCard = React.memo(function RevenueForecastCard({ job
   if (data.totalForecast === 0) return null;
 
   const winRatePct = data.winRate !== null ? Math.round(data.winRate * 100) : null;
+  const likelyPct = data.totalForecast > 0 ? (data.certainValue / data.totalForecast) * 100 : 0;
 
   return (
     <View style={styles.card}>
@@ -26,7 +27,7 @@ export const RevenueForecastCard = React.memo(function RevenueForecastCard({ job
         <Text style={styles.sectionTitle}>Revenue Forecast</Text>
         {winRatePct !== null && (
           <Text style={[styles.winRateBadge, { color: winRatePct > 50 ? colors.success : colors.warning }]}>
-            Win Rate: {winRatePct}%
+            {winRatePct}% win rate
           </Text>
         )}
       </View>
@@ -38,9 +39,19 @@ export const RevenueForecastCard = React.memo(function RevenueForecastCard({ job
         <Text style={styles.headlineLabel}>Forecasted Revenue</Text>
       </View>
 
+      {/* Confidence bar: opacity stands in for certainty since the app has no
+          gradient/pattern-fill primitive — solid "likely", faint "projected". */}
+      <View style={styles.confidenceBar}>
+        <View style={[styles.confidenceLikely, { width: `${likelyPct}%` }]} />
+        <View style={[styles.confidenceProjected, { width: `${100 - likelyPct}%` }]} />
+      </View>
+
       <View style={styles.breakdownRow}>
         <View style={styles.breakdownCol}>
-          <Text style={styles.breakdownLabel}>Likely</Text>
+          <View style={styles.breakdownLabelRow}>
+            <View style={[styles.swatch, { backgroundColor: colors.accent }]} />
+            <Text style={styles.breakdownLabel}>Likely</Text>
+          </View>
           <Text style={styles.breakdownValue}>{formatMoney(data.certainValue)}</Text>
           <Text style={styles.breakdownSub}>
             {data.certainCount} job{data.certainCount !== 1 ? 's' : ''} at 100%
@@ -50,7 +61,10 @@ export const RevenueForecastCard = React.memo(function RevenueForecastCard({ job
         <View style={styles.breakdownDivider} />
 
         <View style={styles.breakdownCol}>
-          <Text style={styles.breakdownLabel}>Projected</Text>
+          <View style={styles.breakdownLabelRow}>
+            <View style={[styles.swatch, styles.swatchProjected, { borderColor: colors.accent }]} />
+            <Text style={styles.breakdownLabel}>Projected</Text>
+          </View>
           <Text style={styles.breakdownValue}>{formatMoney(data.projectedValue)}</Text>
           <Text style={styles.breakdownSub}>
             {data.speculativeCount} job{data.speculativeCount !== 1 ? 's' : ''}{' '}
@@ -81,27 +95,48 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.md,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
     },
     winRateBadge: {
-      fontSize: fontSize.sm,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 11,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
     },
     headlineBlock: {
       alignItems: 'center',
       marginBottom: spacing.md,
     },
     headlineValue: {
-      fontSize: fontSize.xl,
-      fontWeight: '700',
-      letterSpacing: -0.5,
+      fontFamily: fonts.display,
+      fontSize: fontSize.xxl,
+      letterSpacing: -0.3,
+      fontVariant: ['tabular-nums'],
     },
     headlineLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.sm,
-      marginTop: 4,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginTop: 6,
+    },
+    confidenceBar: {
+      flexDirection: 'row',
+      height: 10,
+      borderRadius: 5,
+      overflow: 'hidden',
+      backgroundColor: colors.border,
+      marginBottom: spacing.md,
+    },
+    confidenceLikely: {
+      backgroundColor: colors.accent,
+    },
+    confidenceProjected: {
+      backgroundColor: colors.accent,
+      opacity: 0.3,
     },
     breakdownRow: {
       flexDirection: 'row',
@@ -114,17 +149,36 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       flex: 1,
       alignItems: 'center',
     },
-    breakdownLabel: {
-      color: colors.textSecondary,
-      fontSize: fontSize.xs,
+    breakdownLabelRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
       marginBottom: 4,
     },
+    swatch: {
+      width: 8,
+      height: 8,
+      borderRadius: 2,
+    },
+    swatchProjected: {
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+    },
+    breakdownLabel: {
+      fontFamily: fonts.mono,
+      color: colors.textSecondary,
+      fontSize: 9.5,
+      textTransform: 'uppercase',
+      letterSpacing: 0.4,
+    },
     breakdownValue: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
-      fontSize: fontSize.sm + 1,
-      fontWeight: '600',
+      fontSize: fontSize.md,
+      fontVariant: ['tabular-nums'],
     },
     breakdownSub: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textMuted,
       fontSize: fontSize.xs,
       marginTop: 2,

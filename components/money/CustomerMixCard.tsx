@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeCustomerMix } from '../../utils/customerMix';
@@ -79,9 +79,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
       marginBottom: spacing.md,
     },
     columns: {
@@ -94,20 +94,24 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center',
     },
     colCount: {
+      fontFamily: fonts.display,
       fontSize: fontSize.xl + 4,
-      fontWeight: '700',
       letterSpacing: -0.5,
+      fontVariant: ['tabular-nums'],
     },
     colLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
       marginTop: 2,
       marginBottom: 4,
     },
     colRevenue: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '600',
     },
     divider: {
       width: 1,
@@ -130,8 +134,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginTop: 6,
     },
     pctLabel: {
-      fontSize: fontSize.xs,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 10,
     },
   });
 }

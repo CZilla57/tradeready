@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 
@@ -21,8 +21,8 @@ function ChangeLabel({ pct, inverse, colors }: { pct: number | null; inverse: bo
 }
 
 const styles_changeLabel = {
-  fontSize: fontSize.xs,
-  fontWeight: '600' as const,
+  fontFamily: fonts.mono,
+  fontSize: 10,
   marginTop: 2,
 };
 
@@ -122,9 +122,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.md,
     },
     summaryPeriodLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.sm,
-      fontWeight: '500',
+      fontSize: 11,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
     },
@@ -137,14 +137,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center',
     },
     summaryColumnLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
       marginBottom: 6,
     },
     summaryAmount: {
+      fontFamily: fonts.display,
       fontSize: fontSize.xl - 4,
-      fontWeight: '700',
       letterSpacing: -0.3,
+      fontVariant: ['tabular-nums'],
     },
     summaryDivider: {
       width: 1,
@@ -170,14 +174,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: 3,
     },
     marginLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
       minWidth: 70,
       textAlign: 'right',
     },
     changeLabel: {
-      fontSize: fontSize.xs,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 10,
       marginTop: 2,
     },
   });

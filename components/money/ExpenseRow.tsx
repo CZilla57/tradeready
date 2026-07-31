@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { Ionicons } from '@expo/vector-icons';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { EXPENSE_CATEGORIES } from '../../utils/moneyUtils';
 import { formatMoney } from '../../utils/format';
@@ -35,16 +36,21 @@ export const ExpenseRow = React.memo(function ExpenseRow({ expense, onDelete }: 
   return (
     <View style={styles.expenseRow}>
       <View style={styles.expenseIcon}>
-        <Text style={styles.expenseIconText}>{category.icon}</Text>
+        <Ionicons name={category.icon as keyof typeof Ionicons.glyphMap} size={18} color={colors.textSecondary} />
       </View>
 
       <View style={styles.expenseDetails}>
         <Text style={styles.expenseDescription} numberOfLines={1}>
           {expense.description}
         </Text>
-        <Text style={styles.expenseMeta}>
-          {category.label} · {dateStr}{expense.receiptUri ? ' · 📷' : ''}
-        </Text>
+        <View style={styles.expenseMetaRow}>
+          <Text style={styles.expenseMeta}>
+            {category.label} · {dateStr}
+          </Text>
+          {expense.receiptUri && (
+            <Ionicons name="camera-outline" size={12} color={colors.textMuted} style={styles.receiptGlyph} />
+          )}
+        </View>
         {expense.notes ? (
           <Text style={styles.expenseNotes} numberOfLines={1}>{expense.notes}</Text>
         ) : null}
@@ -59,7 +65,7 @@ export const ExpenseRow = React.memo(function ExpenseRow({ expense, onDelete }: 
         accessibilityLabel="Delete expense"
         accessibilityRole="button"
       >
-        <Text style={styles.deleteBtnText}>✕</Text>
+        <Ionicons name="close" size={14} color={colors.danger} />
       </TouchableOpacity>
     </View>
   );
@@ -87,32 +93,39 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: 'center',
       marginRight: spacing.md,
     },
-    expenseIconText: {
-      fontSize: 18,
-    },
     expenseDetails: {
       flex: 1,
       marginRight: spacing.md,
     },
     expenseDescription: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textPrimary,
       fontSize: fontSize.md,
-      fontWeight: '600',
       marginBottom: 2,
     },
+    expenseMetaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
     expenseMeta: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+    },
+    receiptGlyph: {
+      marginLeft: 5,
     },
     expenseNotes: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textMuted,
       fontSize: fontSize.xs - 1,
       marginTop: 2,
     },
     expenseAmount: {
+      fontFamily: fonts.display,
       color: colors.danger,
       fontSize: fontSize.md,
-      fontWeight: '700',
+      fontVariant: ['tabular-nums'],
     },
     deleteBtn: {
       marginLeft: 10,
@@ -122,11 +135,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.dangerBg,
       alignItems: 'center',
       justifyContent: 'center',
-    },
-    deleteBtnText: {
-      fontSize: 13,
-      fontWeight: '600',
-      color: colors.danger,
     },
   });
 }

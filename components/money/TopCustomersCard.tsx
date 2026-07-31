@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { collectedInRange } from '../../utils/invoicePayments';
@@ -71,9 +71,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
       marginBottom: spacing.md,
     },
     categoryBreakdownRow: {
@@ -82,8 +82,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: 14,
     },
     topCustomerRank: {
+      fontFamily: fonts.mono,
       fontSize: fontSize.sm,
-      fontWeight: '700',
       color: colors.textMuted,
       width: 20,
       marginRight: spacing.sm,
@@ -98,14 +98,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.xs,
     },
     categoryBreakdownLabel: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '500',
     },
     categoryBreakdownAmount: {
+      fontFamily: fonts.display,
       color: colors.danger,
       fontSize: fontSize.sm + 1,
-      fontWeight: '600',
+      fontVariant: ['tabular-nums'],
     },
     categoryProgressBg: {
       height: 4,

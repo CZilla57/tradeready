@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeAvgJobValue } from '../../utils/avgJobValue';
@@ -77,9 +77,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
       marginBottom: spacing.md,
     },
     heroRow: {
@@ -89,14 +89,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.md,
     },
     heroValue: {
+      fontFamily: fonts.display,
       color: colors.accent,
       fontSize: fontSize.xl + 4,
-      fontWeight: '700',
       letterSpacing: -0.5,
+      fontVariant: ['tabular-nums'],
     },
     changeBadge: {
-      fontSize: fontSize.sm,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 10,
     },
     detailRow: {
       flexDirection: 'row',
@@ -110,14 +111,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center',
     },
     detailLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
       marginBottom: 4,
     },
     detailValue: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '600',
     },
     detailDivider: {
       width: 1,
@@ -126,6 +130,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginHorizontal: spacing.sm,
     },
     allTimeNote: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textMuted,
       fontSize: fontSize.xs,
       textAlign: 'center',

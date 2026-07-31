@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeSeasonalTrends } from '../../utils/seasonalTrends';
@@ -107,13 +107,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.md,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
     },
     yoyBadge: {
-      fontSize: fontSize.sm,
-      fontWeight: '600',
+      fontFamily: fonts.mono,
+      fontSize: 10,
     },
     legend: {
       flexDirection: 'row',
@@ -131,8 +131,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: 4,
     },
     legendLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.2,
     },
     chartArea: {
       flexDirection: 'row',
@@ -164,6 +167,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       opacity: 0.5,
     },
     monthLabel: {
+      fontFamily: fonts.mono,
       color: colors.textMuted,
       fontSize: 9,
       marginTop: 4,
@@ -181,14 +185,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center',
     },
     totalLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
       marginBottom: 4,
     },
     totalValue: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '600',
+      fontVariant: ['tabular-nums'],
     },
     totalDivider: {
       width: 1,

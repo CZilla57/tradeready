@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { getLast6MonthLabels, parseLocalDate } from '../../utils/moneyUtils';
 import { collectedByPeriod } from '../../utils/invoicePayments';
@@ -93,9 +93,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
       marginBottom: spacing.md,
     },
     chartLegend: {
@@ -114,8 +114,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: 4,
     },
     legendLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.2,
     },
     chartArea: {
       flexDirection: 'row',
@@ -137,8 +140,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       minHeight: 2,
     },
     chartMonthLabel: {
+      fontFamily: fonts.mono,
       color: colors.textMuted,
-      fontSize: fontSize.xs,
+      fontSize: 10,
       marginTop: 6,
     },
   });

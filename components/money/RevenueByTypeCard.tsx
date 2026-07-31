@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeRevenueByType } from '../../utils/revenueByType';
@@ -54,12 +54,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
       marginBottom: 4,
     },
     subtitle: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textSecondary,
       fontSize: fontSize.xs,
       marginBottom: spacing.md,
@@ -74,14 +75,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: 4,
     },
     rowLabel: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '500',
     },
     rowAmount: {
+      fontFamily: fonts.display,
       color: colors.textSecondary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '600',
+      fontVariant: ['tabular-nums'],
     },
     barBg: {
       height: 6,
@@ -94,8 +96,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: 3,
     },
     rowPct: {
+      fontFamily: fonts.mono,
       color: colors.textMuted,
-      fontSize: fontSize.xs,
+      fontSize: 10,
       marginTop: 2,
     },
   });

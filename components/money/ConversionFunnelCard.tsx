@@ -1,9 +1,13 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { computeConversionFunnel } from '../../utils/conversionFunnel';
 import type { Job, JobStatus } from '../../types/models';
+
+// Floor so a zero-count stage still renders a visible sliver instead of
+// vanishing — the bar means "reached this stage at all", not just "count".
+const MIN_BAR_PCT = 6;
 
 const STATUS_COLOR_KEY: Record<JobStatus, keyof ColorScheme> = {
   lead: 'statusLead',
@@ -33,35 +37,36 @@ export const ConversionFunnelCard = React.memo(function ConversionFunnelCard({ j
 
   return (
     <View style={styles.card}>
-      <Text style={styles.sectionTitle}>Job Pipeline</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.sectionTitle}>Job Pipeline</Text>
+        {funnel.winRate !== null && (
+          <Text style={styles.winRateBadge}>{Math.round(funnel.winRate * 100)}% win rate</Text>
+        )}
+      </View>
 
       {funnel.stages.map((stage, i) => {
-        const barWidth = maxCount > 0 ? (stage.count / maxCount) * 100 : 0;
+        const barWidth = maxCount > 0
+          ? Math.max((stage.count / maxCount) * 100, MIN_BAR_PCT)
+          : MIN_BAR_PCT;
         const color = colors[STATUS_COLOR_KEY[stage.status]];
 
         return (
-          <View key={stage.status} style={styles.stageRow}>
-            <View style={styles.stageHeader}>
-              <Text style={styles.stageLabel}>{stage.label}</Text>
-              <Text style={styles.stageCount}>{stage.count}</Text>
-            </View>
-            <View style={styles.barBg}>
-              <View style={[styles.barFill, { width: `${barWidth}%`, backgroundColor: color }]} />
-            </View>
-            {stage.rate !== null && i > 0 && (
-              <Text style={styles.stageRate}>{Math.round(stage.rate * 100)}% from {funnel.stages[i - 1].label}</Text>
+          <View key={stage.status}>
+            {i > 0 && stage.rate !== null && (
+              <Text style={styles.stageConnector}>
+                ↓ {Math.round(stage.rate * 100)}% from {funnel.stages[i - 1].label}
+              </Text>
             )}
+            <View style={styles.stageCaption}>
+              <Text style={styles.stageCount}>{stage.count}</Text>
+              <Text style={styles.stageLabel}>{stage.label}</Text>
+            </View>
+            <View style={styles.stageTrack}>
+              <View style={[styles.stageBar, { width: `${barWidth}%`, backgroundColor: color }]} />
+            </View>
           </View>
         );
       })}
-
-      {funnel.winRate !== null && (
-        <View style={styles.winRateBox}>
-          <Text style={styles.winRateLabel}>Win Rate</Text>
-          <Text style={styles.winRateValue}>{Math.round(funnel.winRate * 100)}%</Text>
-          <Text style={styles.winRateSub}>Estimates → Approved</Text>
-        </View>
-      )}
     </View>
   );
 });
@@ -78,71 +83,55 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
       ...shadow.card,
     },
-    sectionTitle: {
-      color: colors.textPrimary,
-      fontSize: fontSize.md + 1,
-      fontWeight: '600',
-      marginBottom: spacing.md,
-    },
-    stageRow: {
-      marginBottom: spacing.sm + 2,
-    },
-    stageHeader: {
+    headerRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: 4,
+      alignItems: 'baseline',
+      marginBottom: spacing.md,
     },
-    stageLabel: {
+    sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
-      fontSize: fontSize.sm + 1,
-      fontWeight: '500',
+      fontSize: fontSize.md + 1,
+    },
+    winRateBadge: {
+      fontFamily: fonts.mono,
+      color: colors.success,
+      fontSize: 11,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
+    },
+    stageConnector: {
+      fontFamily: fonts.mono,
+      color: colors.textMuted,
+      fontSize: 10,
+      textAlign: 'center',
+      marginVertical: 3,
+    },
+    stageCaption: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'baseline',
+      gap: 6,
+      marginBottom: 4,
     },
     stageCount: {
-      color: colors.textSecondary,
+      fontFamily: fonts.display,
+      color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '600',
+      fontVariant: ['tabular-nums'],
     },
-    barBg: {
-      height: 6,
-      backgroundColor: colors.border,
-      borderRadius: 3,
-      overflow: 'hidden',
+    stageLabel: {
+      fontFamily: fonts.bodyRegular,
+      color: colors.textSecondary,
+      fontSize: fontSize.sm,
     },
-    barFill: {
-      height: '100%',
-      borderRadius: 3,
-    },
-    stageRate: {
-      color: colors.textMuted,
-      fontSize: fontSize.xs,
-      marginTop: 2,
-    },
-    winRateBox: {
-      marginTop: spacing.md,
-      paddingTop: spacing.md,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
+    stageTrack: {
       alignItems: 'center',
     },
-    winRateLabel: {
-      color: colors.textSecondary,
-      fontSize: fontSize.xs,
-      fontWeight: '500',
-      textTransform: 'uppercase',
-      letterSpacing: 0.5,
-      marginBottom: 4,
-    },
-    winRateValue: {
-      color: colors.success,
-      fontSize: fontSize.xl,
-      fontWeight: '700',
-      letterSpacing: -0.5,
-    },
-    winRateSub: {
-      color: colors.textMuted,
-      fontSize: fontSize.xs,
-      marginTop: 2,
+    stageBar: {
+      height: 24,
+      borderRadius: radius.sm,
     },
   });
 }

@@ -175,6 +175,17 @@ jest.mock("@sentry/react-native", () => ({
   Severity: { Error: "error", Warning: "warning" },
 }));
 
+// The Ionicons component is a thin wrapper over expo-font's custom font
+// loading, which pulls in expo-asset — not installed, since nothing in the
+// app actually needs it here (Ionicons ships pre-bundled). Render the glyph
+// name as plain text instead of pulling in that chain.
+jest.mock("@expo/vector-icons", () => {
+  const { Text } = require("react-native");
+  const Ionicons = (props) => <Text {...props}>{props.name}</Text>;
+  Ionicons.glyphMap = {};
+  return { Ionicons };
+});
+
 jest.mock("posthog-react-native", () => ({
   PostHogProvider: ({ children }) => children,
   usePostHog: jest.fn(() => ({

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeInvoiceAging } from '../../utils/invoiceAging';
@@ -81,9 +81,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
       marginBottom: spacing.md,
     },
     heroRow: {
@@ -91,13 +91,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.md,
     },
     heroValue: {
+      fontFamily: fonts.display,
       fontSize: fontSize.xl + 4,
-      fontWeight: '700',
       letterSpacing: -0.5,
     },
     heroSub: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
       marginTop: 4,
     },
     slowSection: {
@@ -106,9 +107,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderTopColor: colors.border,
     },
     slowHeader: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
-      fontWeight: '500',
+      fontSize: 10,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
       marginBottom: spacing.sm,
@@ -124,18 +125,19 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginRight: spacing.sm,
     },
     slowName: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '500',
     },
     slowMeta: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textMuted,
       fontSize: fontSize.xs,
       marginTop: 2,
     },
     slowDays: {
+      fontFamily: fonts.display,
       fontSize: fontSize.md + 1,
-      fontWeight: '700',
       minWidth: 40,
       textAlign: 'right',
     },

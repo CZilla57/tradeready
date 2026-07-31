@@ -15,12 +15,13 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
+import { Ionicons } from '@expo/vector-icons';
 import { persistPhotoSafe, readPhotoAsDataUri } from '../../utils/photoStorage';
 import { extractReceipt } from '../../utils/receiptOCR';
 import { track } from '../../utils/analytics';
 import { DateTimePickerSheet } from '../DateTimePickerSheet';
 import { KeyboardDoneBar } from '../KeyboardDoneBar';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { EXPENSE_CATEGORIES } from '../../utils/moneyUtils';
 import type { ExpenseDraft } from '../../types/models';
@@ -323,7 +324,12 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
                     setCategory(cat.id);
                   }}
                 >
-                  <Text style={styles.categoryChipIcon}>{cat.icon}</Text>
+                  <Ionicons
+                    name={cat.icon as keyof typeof Ionicons.glyphMap}
+                    size={15}
+                    color={category === cat.id ? colors.accent : colors.textSecondary}
+                    style={styles.categoryChipIcon}
+                  />
                   <Text style={[
                     styles.categoryChipLabel,
                     category === cat.id && styles.categoryChipLabelSelected,
@@ -380,12 +386,14 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
                   </View>
                 )}
                 <TouchableOpacity style={styles.receiptRemoveRow} onPress={removeReceipt}>
-                  <Text style={styles.receiptRemoveText}>✕  Remove photo</Text>
+                  <Ionicons name="close" size={14} color={colors.danger} />
+                  <Text style={styles.receiptRemoveText}>Remove photo</Text>
                 </TouchableOpacity>
               </View>
             ) : (
               <TouchableOpacity style={styles.receiptBtn} onPress={pickReceipt}>
-                <Text style={styles.receiptBtnText}>📷  Add receipt photo</Text>
+                <Ionicons name="camera-outline" size={16} color={colors.accent} />
+                <Text style={styles.receiptBtnText}>Add receipt photo</Text>
               </TouchableOpacity>
             )}
 
@@ -431,23 +439,24 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: 2,
     },
     modalTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.xl,
-      fontWeight: '700',
       marginBottom: spacing.lg,
     },
     fieldLabel: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textSecondary,
       fontSize: fontSize.sm,
-      fontWeight: '500',
       marginBottom: spacing.sm,
       marginTop: spacing.xs,
     },
     optionalLabel: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textMuted,
-      fontWeight: '400',
     },
     textInput: {
+      fontFamily: fonts.bodyRegular,
       backgroundColor: colors.surfaceSecondary,
       borderRadius: radius.sm + 2,
       padding: 14,
@@ -480,17 +489,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.accentBg,
       borderColor: colors.accent,
     },
-    categoryChipIcon: {
-      fontSize: fontSize.sm,
-    },
+    categoryChipIcon: {},
     categoryChipLabel: {
+      fontFamily: fonts.bodyMedium,
       color: colors.textSecondary,
       fontSize: fontSize.sm,
-      fontWeight: '500',
     },
     categoryChipLabelSelected: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.accent,
-      fontWeight: '600',
     },
     modalActions: {
       flexDirection: 'row',
@@ -508,8 +515,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
     },
     cancelButtonText: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textSecondary,
-      fontWeight: '600',
       fontSize: fontSize.md,
     },
     saveButton: {
@@ -520,8 +527,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center',
     },
     saveButtonText: {
+      fontFamily: fonts.bodyBold,
       color: colors.textOnAccent,
-      fontWeight: '700',
       fontSize: fontSize.md,
     },
     expenseDateBtn: {
@@ -536,19 +543,24 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.md,
     },
     expenseDateBtnText: {
+      fontFamily: fonts.bodyRegular,
       fontSize: fontSize.md,
       color: colors.textPrimary,
     },
     receiptBtn: {
+      flexDirection: 'row',
+      gap: 8,
       backgroundColor: colors.surfaceSecondary,
       borderRadius: radius.sm + 2,
       padding: 14,
       borderWidth: 1,
       borderColor: colors.border,
       alignItems: 'center',
+      justifyContent: 'center',
       marginBottom: spacing.md,
     },
     receiptBtnText: {
+      fontFamily: fonts.bodyMedium,
       color: colors.textSecondary,
       fontSize: fontSize.md,
     },
@@ -575,25 +587,29 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderBottomColor: colors.border,
     },
     scanBannerText: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textSecondary,
       fontSize: fontSize.sm,
       textAlign: 'center',
     },
     scanBannerTextAccent: {
+      fontFamily: fonts.bodyMedium,
       color: colors.accent,
       fontSize: fontSize.sm,
-      fontWeight: '500',
       textAlign: 'center',
     },
     receiptRemoveRow: {
+      flexDirection: 'row',
+      gap: 6,
       padding: spacing.sm,
       alignItems: 'center',
+      justifyContent: 'center',
       backgroundColor: colors.surfaceSecondary,
     },
     receiptRemoveText: {
+      fontFamily: fonts.bodyMedium,
       color: colors.danger,
       fontSize: fontSize.sm,
-      fontWeight: '500',
     },
   });
 }

@@ -9,7 +9,8 @@ import {
   RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { spacing, radius, fontSize } from '../utils/theme';
+import { Ionicons } from '@expo/vector-icons';
+import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
@@ -63,7 +64,9 @@ function ExpenseCategoryCard({ expensesByCategory, filteredExpenseTotal }: Expen
           : 0;
         return (
           <View key={cat.id} style={styles.categoryBreakdownRow}>
-            <Text style={styles.categoryBreakdownIcon}>{cat.icon}</Text>
+            <View style={styles.categoryBreakdownIcon}>
+              <Ionicons name={cat.icon as keyof typeof Ionicons.glyphMap} size={16} color={colors.textSecondary} />
+            </View>
             <View style={styles.categoryBreakdownInfo}>
               <View style={styles.categoryBreakdownHeader}>
                 <Text style={styles.categoryBreakdownLabel}>{cat.label}</Text>
@@ -286,7 +289,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
 
           {filteredIncome === 0 && filteredExpenseTotal === 0 && (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyStateIcon}>💰</Text>
+              <Ionicons name="cash-outline" size={40} color={colors.textMuted} style={styles.emptyStateIcon} />
               <Text style={styles.emptyStateTitle}>No financial data yet</Text>
               <Text style={styles.emptyStateBody}>
                 Mark invoices as paid and log your expenses to see your P&L here.
@@ -318,7 +321,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
           }
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <Text style={styles.emptyStateIcon}>🧾</Text>
+              <Ionicons name="receipt-outline" size={40} color={colors.textMuted} style={styles.emptyStateIcon} />
               <Text style={styles.emptyStateTitle}>No expenses logged</Text>
               <Text style={styles.emptyStateBody}>
                 Tap "+ Expense" to log your first expense for this period.
@@ -392,14 +395,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.accent,
     },
     filterChipText: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.sm,
-      fontWeight: '500',
+      fontSize: 11,
       lineHeight: 18,
     },
     filterChipTextActive: {
       color: colors.accent,
-      fontWeight: '600',
     },
 
     // ── Content tabs (Overview / Expenses)
@@ -423,13 +425,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.background,
     },
     tabButtonText: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontWeight: '500',
-      fontSize: fontSize.sm + 1,
+      fontSize: 11,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
     },
     tabButtonTextActive: {
       color: colors.textPrimary,
-      fontWeight: '600',
     },
     scrollContent: {
       flex: 1,
@@ -447,9 +450,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     sectionTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.md + 1,
-      fontWeight: '600',
       marginBottom: spacing.md,
     },
     categoryBreakdownRow: {
@@ -458,10 +461,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: 14,
     },
     categoryBreakdownIcon: {
-      fontSize: 20,
       marginRight: spacing.md,
       width: 28,
-      textAlign: 'center',
+      alignItems: 'center',
     },
     categoryBreakdownInfo: {
       flex: 1,
@@ -472,14 +474,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginBottom: spacing.xs,
     },
     categoryBreakdownLabel: {
+      fontFamily: fonts.bodySemiBold,
       color: colors.textPrimary,
       fontSize: fontSize.sm + 1,
-      fontWeight: '500',
     },
     categoryBreakdownAmount: {
+      fontFamily: fonts.display,
       color: colors.danger,
       fontSize: fontSize.sm + 1,
-      fontWeight: '600',
+      fontVariant: ['tabular-nums'],
     },
     categoryProgressBg: {
       height: 4,
@@ -507,8 +510,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.full,
     },
     addExpenseBtnText: {
+      fontFamily: fonts.bodyBold,
       color: colors.textOnAccent,
-      fontWeight: '700',
       fontSize: fontSize.sm,
     },
     expenseList: {
@@ -523,17 +526,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingHorizontal: 40,
     },
     emptyStateIcon: {
-      fontSize: 48,
       marginBottom: spacing.md,
     },
     emptyStateTitle: {
+      fontFamily: fonts.display,
       color: colors.textPrimary,
       fontSize: fontSize.lg + 1,
-      fontWeight: '600',
       marginBottom: spacing.sm,
       textAlign: 'center',
     },
     emptyStateBody: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textSecondary,
       fontSize: fontSize.sm + 1,
       textAlign: 'center',

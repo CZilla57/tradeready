@@ -3,6 +3,7 @@ import type { ExpenseCategoryId } from '../types/models';
 export interface ExpenseCategory {
   id: ExpenseCategoryId;
   label: string;
+  /** Ionicons glyph name (see @expo/vector-icons), not an emoji. */
   icon: string;
 }
 
@@ -23,14 +24,14 @@ export interface MonthLabel {
 }
 
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
-  { id: 'materials', label: 'Materials',         icon: '🪵' },
-  { id: 'tools',     label: 'Tools & Equipment', icon: '🔧' },
-  { id: 'fuel',      label: 'Fuel & Transport',  icon: '⛽' },
-  { id: 'labor',     label: 'Subcontractors',    icon: '👷' },
-  { id: 'insurance', label: 'Insurance',         icon: '🛡️' },
-  { id: 'software',  label: 'Software & Apps',   icon: '💻' },
-  { id: 'marketing', label: 'Marketing',         icon: '📣' },
-  { id: 'other',     label: 'Other',             icon: '📦' },
+  { id: 'materials', label: 'Materials',         icon: 'layers-outline' },
+  { id: 'tools',     label: 'Tools & Equipment', icon: 'construct-outline' },
+  { id: 'fuel',      label: 'Fuel & Transport',  icon: 'car-outline' },
+  { id: 'labor',     label: 'Subcontractors',    icon: 'people-outline' },
+  { id: 'insurance', label: 'Insurance',         icon: 'shield-checkmark-outline' },
+  { id: 'software',  label: 'Software & Apps',   icon: 'laptop-outline' },
+  { id: 'marketing', label: 'Marketing',         icon: 'megaphone-outline' },
+  { id: 'other',     label: 'Other',             icon: 'cube-outline' },
 ];
 
 export const DATE_FILTERS: DateFilter[] = [

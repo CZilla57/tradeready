@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { spacing, radius, fontSize, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { balanceDue, isFullyPaid } from '../../utils/invoicePayments';
@@ -42,7 +42,7 @@ export const ReceivablesCard = React.memo(function ReceivablesCard({ invoices, j
       <View style={styles.summaryRow}>
         <View style={styles.summaryColumn}>
           <Text style={styles.summaryColumnLabel}>Outstanding</Text>
-          <Text style={styles.summaryAmount}>{formatMoney(totalOutstanding)}</Text>
+          <Text style={[styles.summaryAmount, { color: colors.textPrimary }]}>{formatMoney(totalOutstanding)}</Text>
           <Text style={styles.receivablesSub}>
             {unpaid.length} invoice{unpaid.length !== 1 ? 's' : ''}
           </Text>
@@ -92,14 +92,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       ...shadow.card,
     },
     receivablesTitle: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.sm,
-      fontWeight: '500',
+      fontSize: 11,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
       marginBottom: spacing.md,
     },
     receivablesSub: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textMuted,
       fontSize: fontSize.xs,
       marginTop: 2,
@@ -113,14 +114,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center',
     },
     summaryColumnLabel: {
+      fontFamily: fonts.mono,
       color: colors.textSecondary,
-      fontSize: fontSize.xs,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
       marginBottom: 6,
     },
     summaryAmount: {
+      fontFamily: fonts.display,
       fontSize: fontSize.xl - 4,
-      fontWeight: '700',
       letterSpacing: -0.3,
+      fontVariant: ['tabular-nums'],
     },
     summaryDivider: {
       width: 1,
