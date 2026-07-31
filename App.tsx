@@ -227,7 +227,7 @@ function ChatTab() {
 
 // ── Tab icons ─────────────────────────────────────────────────────────────────
 
-const TAB_ICONS: Record<string, { active: string; inactive: string }> = {
+const TAB_ICONS: Record<keyof MainTabParamList, { active: string; inactive: string }> = {
   Today:     { active: "calendar",             inactive: "calendar-outline" },
   Jobs:      { active: "hammer",               inactive: "hammer-outline" },
   Invoices:  { active: "receipt",              inactive: "receipt-outline" },

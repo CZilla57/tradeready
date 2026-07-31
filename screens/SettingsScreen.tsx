@@ -82,6 +82,28 @@ function formatPhone(raw: string): string {
 }
 
 /**
+ * Folds any notification-rule box that is still being edited (a pending
+ * draft, keyed by rule index, holding raw typed text) into `settings.rules`,
+ * so saving while a field is focused persists what's typed instead of the
+ * last-committed number. Mirrors commitRule's parse/normalize exactly:
+ * an empty or non-numeric draft parses to NaN, and NaN (or anything < 1)
+ * falls back to 1 — the same fallback commitRule itself commits, not the
+ * previously-committed rule.days. Pure, so it can be applied to either the
+ * live `s`/`ruleDrafts` state (handleSave, `dirty`) or the ref mirrors read
+ * by the once-registered blur/beforeRemove guards.
+ */
+function applyRuleDrafts(settings: Settings, drafts: Record<number, string>): Settings {
+  if (Object.keys(drafts).length === 0) return settings;
+  const rules = settings.rules.map((rule, i) => {
+    const draft = drafts[i];
+    if (draft === undefined) return rule;
+    const parsed = parseInt(draft, 10);
+    return { days: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed };
+  });
+  return { ...settings, rules };
+}
+
+/**
  * Reclaims logo files no persisted setting references — a pick the user
  * abandoned without reaching a commit point, or a cleanup interrupted part-way.
  * Per-session cleanup (cleanupLogoFiles) only knows the paths THIS session
@@ -140,7 +162,11 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
 
   // Sticky Save in the native header (the screen only has a header at all
   // since the gear move). Enabled exactly when the dirty-guard would fire.
-  const dirty = !!s && !!savedSnapshot && !settingsEqual(s, savedSnapshot);
+  // Compared against the flushed settings (drafts folded into `rules`) so an
+  // in-progress "days past due" edit — never committed to `s` until blur —
+  // still counts as a change; otherwise Save would stay disabled and the
+  // unsaved-edits guards below would silently let the typing be discarded.
+  const dirty = !!s && !!savedSnapshot && !settingsEqual(applyRuleDrafts(s, ruleDrafts), savedSnapshot);
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
@@ -171,6 +197,7 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
 
   const sRef = useRef<Settings | null>(null);
   const savedSnapshotRef = useRef<Settings | null>(null);
+  const ruleDraftsRef = useRef<Record<number, string>>({});
   const suppressDirtyWarnRef = useRef(false); // sign-out/delete wipe data on purpose
 
   // Every logo path this session has referenced — the one loaded from settings plus
@@ -191,13 +218,14 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
 
   useEffect(() => { sRef.current = s; }, [s]);
   useEffect(() => { savedSnapshotRef.current = savedSnapshot; }, [savedSnapshot]);
+  useEffect(() => { ruleDraftsRef.current = ruleDrafts; }, [ruleDrafts]);
 
   useEffect(() => {
     const unsub = navigation.addListener("blur", () => {
       const current = sRef.current;
       const saved = savedSnapshotRef.current;
       if (suppressDirtyWarnRef.current || !current || !saved) return;
-      if (settingsEqual(current, saved)) return;
+      if (settingsEqual(applyRuleDrafts(current, ruleDraftsRef.current), saved)) return;
       Alert.alert(
         "Unsaved settings",
         "You changed settings but didn't tap Save. Keep your changes?",
@@ -217,8 +245,11 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
           {
             text: "Save",
             onPress: async () => {
-              const toSave = sRef.current;
-              if (!toSave) return;
+              const current = sRef.current;
+              if (!current) return;
+              // Flush any in-progress "days past due" draft before saving —
+              // saving sRef.current raw would silently drop it.
+              const toSave = applyRuleDrafts(current, ruleDraftsRef.current);
               await saveSettings(toSave);
               syncNotifications();
               setSavedSnapshot(toSave);
@@ -242,7 +273,7 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
       const current = sRef.current;
       const saved = savedSnapshotRef.current;
       if (suppressDirtyWarnRef.current || !current || !saved) return;
-      if (settingsEqual(current, saved)) return;
+      if (settingsEqual(applyRuleDrafts(current, ruleDraftsRef.current), saved)) return;
       e.preventDefault();
       Alert.alert(
         "Unsaved settings",
@@ -263,8 +294,11 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
           {
             text: "Save",
             onPress: async () => {
-              const toSave = sRef.current;
-              if (!toSave) return;
+              const current = sRef.current;
+              if (!current) return;
+              // Flush any in-progress "days past due" draft before saving —
+              // saving sRef.current raw would silently drop it.
+              const toSave = applyRuleDrafts(current, ruleDraftsRef.current);
               await saveSettings(toSave);
               syncNotifications();
               setSavedSnapshot(toSave);
@@ -463,22 +497,9 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
     }
   }
 
-  // Fold any notification-rule box that is still being edited (a pending draft)
-  // into the numeric model, so saving while a field is focused persists what's typed.
-  function flushRuleDrafts(settings: Settings): Settings {
-    if (Object.keys(ruleDrafts).length === 0) return settings;
-    const rules = settings.rules.map((rule, i) => {
-      const draft = ruleDrafts[i];
-      if (draft === undefined) return rule;
-      const parsed = parseInt(draft, 10);
-      return { days: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed };
-    });
-    return { ...settings, rules };
-  }
-
   async function handleSave() {
     if (!s) return;
-    const flushed = flushRuleDrafts(s);
+    const flushed = applyRuleDrafts(s, ruleDrafts);
     setSaving(true);
     await saveSettings(flushed);
     syncNotifications();
