@@ -72,6 +72,7 @@ export type MoneyStackParamList = {
   AddTrip: { tripId?: string };
   Pricebook: undefined;
   PricebookEntry: { entryId?: string };
+  ExportData: undefined;
 };
 
 export type ChatStackParamList = {

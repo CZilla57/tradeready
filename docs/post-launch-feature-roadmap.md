@@ -28,7 +28,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 4 | Tax set-aside / quarterly estimate | 🔥🔥🔥 (differentiator) | Med | P&L data, mileage, AI coach | **BUILT** — stacked on #3's branch |
 | 5 | Receipt OCR | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **BUILT** — on this branch (`feat/receipt-ocr`) |
 | 6 | Recurring invoices (maintenance plans) | 🔥 | Med | RecurringJobs engine, invoice model | backlog |
-| 7 | Accounting / CSV export | 🔥 | Low | Existing money/expense data | backlog |
+| 7 | Accounting / CSV export | 🔥 | Low | Existing money/expense data | **BUILT** — on feat/csv-export |
 | 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog |
 | 9 | Online booking / request-a-quote link | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | backlog |
 | 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | backlog (evaluate first) |
@@ -129,6 +129,14 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 > Load `superpowers:brainstorming` and `tradeready-architecture-contract`, and read the recurring-jobs engine (`utils/recurringJobs.ts`, `RecurringJobsScreen`). I want recurring invoices for maintenance plans: generate an invoice on a schedule for a customer, optionally with a payment link. Mirror the recurring-jobs pattern rather than inventing a new one. Cover pause/skip/end and how generated invoices appear in the Invoices list. Phase-gated plan, stop for go-ahead.
 
 ## Phase 7 — Accounting / CSV export
+
+> **STATUS: BUILT 2026-07-31** on `feat/csv-export`. As designed in
+> `docs/superpowers/specs/2026-07-31-csv-export-design.md`: income/expenses/
+> mileage CSVs from a Money-tab Export Data modal (header download icon),
+> range presets + custom, share-sheet delivery. Income rows are payment-level
+> and sum-equivalent to `collectedInRange` (tested). No new dependencies; no
+> schema changes; JS-only → OTA-eligible. **To go live:** merge + device
+> smoke test.
 
 **Why:** Low effort, high value once a year at tax time. Export income and expenses to CSV (and optionally a QuickBooks-friendly format) so the numbers can leave the app.
 
