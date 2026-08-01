@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadInvoices, saveInvoices, getOrCreateCustomer } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
+import { nextInvoiceNumber } from "../utils/invoiceNumber";
 import { Button } from "../components/UI";
 import Field from "../components/Field";
 import { spacing } from "../utils/theme";
@@ -84,7 +85,7 @@ export default function AddInvoiceScreen({ route, navigation }: InvoiceStackScre
     const invoiceFields = {
       customer: customer.trim(),
       customerId: record?.id ?? "",
-      number: number.trim() || autoInvoiceNumber(invoices),
+      number: number.trim() || nextInvoiceNumber(invoices),
       amount: parsedAmount,
       due,
       email: email.trim(),
@@ -151,14 +152,6 @@ function defaultDueDate(): string {
   const d = new Date();
   d.setDate(d.getDate() + 30);
   return d.toISOString().split("T")[0];
-}
-
-function autoInvoiceNumber(invoices: Invoice[]): string {
-  const nums = invoices
-    .map((i) => parseInt(i.number.replace(/\D/g, "")))
-    .filter(Boolean);
-  const next = nums.length ? Math.max(...nums) + 1 : 1;
-  return `INV-${String(next).padStart(4, "0")}`;
 }
 
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {

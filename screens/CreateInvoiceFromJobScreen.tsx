@@ -38,6 +38,7 @@ import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type 
 import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
 import Field from "../components/Field";
+import { nextInvoiceNumber } from "../utils/invoiceNumber";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
@@ -60,15 +61,6 @@ function defaultDueDate(): string {
   const d = new Date();
   d.setDate(d.getDate() + 30);
   return d.toISOString().split("T")[0];
-}
-
-// Auto-generate the next invoice number from existing invoices
-function nextInvoiceNumber(invoices: Invoice[]): string {
-  const nums = invoices
-    .map((inv) => parseInt((inv.number || "").replace(/\D/g, ""), 10))
-    .filter(Boolean);
-  const next = nums.length ? Math.max(...nums) + 1 : 1;
-  return `INV-${String(next).padStart(4, "0")}`;
 }
 
 export default function CreateInvoiceFromJobScreen({ route, navigation }: JobStackScreenProps<'CreateInvoiceFromJob'>) {
