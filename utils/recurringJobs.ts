@@ -1,21 +1,10 @@
-import { DateString, Job, RecurrenceCadence, RecurringJob } from '../types/models';
+import { Job } from '../types/models';
 import { loadJobs, saveJobs, loadRecurringJobs, saveRecurringJobs } from './storage';
+import { calculateNextDate, isEndConditionMet } from './recurrence';
 
-export function calculateNextDate(from: DateString, cadence: RecurrenceCadence): DateString {
-  const d = new Date(from + 'T00:00:00');
-  if (cadence === 'daily') d.setDate(d.getDate() + 1);
-  else if (cadence === 'weekly') d.setDate(d.getDate() + 7);
-  else if (cadence === 'monthly') d.setMonth(d.getMonth() + 1);
-  else if (cadence === 'quarterly') d.setMonth(d.getMonth() + 3);
-  else if (cadence === 'annually') d.setFullYear(d.getFullYear() + 1);
-  return d.toISOString().split('T')[0];
-}
-
-function isEndConditionMet(rule: RecurringJob): boolean {
-  if (rule.endCondition === 'count') return rule.occurrenceCount >= rule.endCount!;
-  if (rule.endCondition === 'date') return rule.nextDueDate > rule.endDate!;
-  return false;
-}
+// Re-exported so existing consumers (AddJobScreen.tsx:23,
+// recurringJobs.test.ts:1) keep importing the cadence math from here.
+export { calculateNextDate };
 
 let generating = false;
 
