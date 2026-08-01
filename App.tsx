@@ -25,6 +25,7 @@ import type {
   MoneyStackParamList,
   ChatStackParamList,
 } from "./types/navigation";
+import type { Invoice } from "./types/models";
 
 import InvoicesScreen             from "./screens/InvoicesScreen";
 import AddInvoiceScreen           from "./screens/AddInvoiceScreen";
@@ -54,7 +55,7 @@ import ExportDataScreen           from "./screens/ExportDataScreen";
 import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
-import { loadSettings, migrateCustomerIdentity, migrateSampleDataIds, applyEstimateDecisions } from "./utils/storage";
+import { loadSettings, loadInvoices, migrateCustomerIdentity, migrateSampleDataIds, applyEstimateDecisions } from "./utils/storage";
 import { rootGateLoading } from "./utils/rootGate";
 import { fontScaleChanged } from "./utils/fontScaleRestart";
 import { getTradeNickname } from "./utils/pricingEngine";
@@ -355,6 +356,31 @@ function RootNavigator() {
           screen: "Jobs",
           params: { screen: "JobDetail", params: { jobId: String(data.jobId) } },
         });
+      }
+      if (data?.type === "recurring_invoice" && data?.ruleId && navigationRef.isReady()) {
+        const ruleId = String(data.ruleId);
+        // Generation happens on app open (AuthContext), not at tap time — by
+        // the time this runs the invoice usually exists; fall back to the
+        // plain list when it doesn't yet.
+        loadInvoices()
+          .then((invoices) => {
+            const latest = invoices
+              .filter((inv) => inv.recurringInvoiceId === ruleId)
+              .reduce<Invoice | null>(
+                (best, inv) =>
+                  !best || (inv.occurrenceNumber ?? 0) > (best.occurrenceNumber ?? 0) ? inv : best,
+                null
+              );
+            if (!navigationRef.isReady()) return;
+            navigationRef.navigate("Main", {
+              screen: "Invoices",
+              params: {
+                screen: "InvoiceList",
+                params: latest ? { openInvoiceId: latest.id } : undefined,
+              },
+            });
+          })
+          .catch(() => {});
       }
     });
     return () => sub.remove();

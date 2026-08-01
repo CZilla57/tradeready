@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import type { Invoice, Settings, ReminderRule, Job, Customer } from '../types/models';
+import type { Invoice, Settings, ReminderRule, Job, Customer, RecurringInvoice } from '../types/models';
 import { isFullyPaid } from './invoicePayments';
 import { selectAppointmentReminders } from './appointmentMessages';
 import { isJobDunningEligible } from './jobStatus';
@@ -46,16 +46,20 @@ export async function syncNotifications(): Promise<void> {
     const { status } = await Notifications.getPermissionsAsync();
     if (status !== 'granted') return;
 
-    const [invoicesRaw, settingsRaw, jobsRaw, customersRaw] = await Promise.all([
+    const [invoicesRaw, settingsRaw, jobsRaw, customersRaw, recurringInvoicesRaw] = await Promise.all([
       AsyncStorage.getItem('invoices'),
       AsyncStorage.getItem('settings'),
       AsyncStorage.getItem('jobs'),
       AsyncStorage.getItem('customers'),
+      AsyncStorage.getItem('recurringInvoices'),
     ]);
     const invoices: Invoice[] = invoicesRaw ? JSON.parse(invoicesRaw) : [];
     const settings: Partial<Settings> = settingsRaw ? JSON.parse(settingsRaw) : {};
     const jobs: Job[] = jobsRaw ? JSON.parse(jobsRaw) : [];
     const customers: Customer[] = customersRaw ? JSON.parse(customersRaw) : [];
+    const recurringInvoiceRules: RecurringInvoice[] = recurringInvoicesRaw
+      ? JSON.parse(recurringInvoicesRaw)
+      : [];
     const rules: ReminderRule[] = settings.rules || [];
     const autoOutreach = !!settings.autoOutreachEnabled;
 
@@ -117,6 +121,34 @@ export async function syncNotifications(): Promise<void> {
           title: appt.title,
           body: appt.body,
           data: { type: 'appointment_confirm', jobId: appt.jobId },
+        },
+        trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
+      });
+      count++;
+    }
+
+    // Maintenance-plan (recurring invoice) "review & send" reminders — one
+    // per ACTIVE rule, 9:00am on the rule's next generation date. Own
+    // identifier namespace (rinv_) beside inv_/appt_; shares the 60 cap.
+    // Android reuses the invoice-reminders channel: like every branch above,
+    // no per-notification channelId is passed and setupNotifications creates
+    // no new channel. The notification is an invitation to open the app —
+    // generation itself happens on next open (AuthContext), not here.
+    for (const rule of recurringInvoiceRules) {
+      if (count >= 60) break;
+      if (!rule.isActive) continue;
+
+      const fireDate = new Date(rule.nextDueDate);
+      fireDate.setHours(9, 0, 0, 0);
+      const secondsUntil = Math.floor((fireDate.getTime() - now.getTime()) / 1000);
+      if (secondsUntil <= 0) continue;
+
+      await Notifications.scheduleNotificationAsync({
+        identifier: `rinv_${rule.id}`,
+        content: {
+          title: `Maintenance invoice ready — ${rule.customerName}`,
+          body: 'Open to review & send.',
+          data: { type: 'recurring_invoice', ruleId: rule.id },
         },
         trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
       });

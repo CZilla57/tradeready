@@ -19,13 +19,14 @@ function dateInDays(offsetDays) {
   return d.toISOString().split("T")[0];
 }
 
-// Populates AsyncStorage mock so syncNotifications reads the right invoices/settings/jobs/customers.
-function seedStorage(invoices, settings = { rules: [{ days: 1 }] }, jobs = [], customers = []) {
+// Populates AsyncStorage mock so syncNotifications reads the right invoices/settings/jobs/customers/recurring-invoice rules.
+function seedStorage(invoices, settings = { rules: [{ days: 1 }] }, jobs = [], customers = [], recurringInvoices = []) {
   AsyncStorage.getItem.mockImplementation((key) => {
     if (key === "invoices") return Promise.resolve(JSON.stringify(invoices));
     if (key === "settings") return Promise.resolve(JSON.stringify(settings));
     if (key === "jobs") return Promise.resolve(JSON.stringify(jobs));
     if (key === "customers") return Promise.resolve(JSON.stringify(customers));
+    if (key === "recurringInvoices") return Promise.resolve(JSON.stringify(recurringInvoices));
     return Promise.resolve(null);
   });
 }
@@ -301,5 +302,62 @@ describe("syncNotifications — appointment confirmations", () => {
     await syncNotifications();
     const ids = Notifications.scheduleNotificationAsync.mock.calls.map((c) => c[0].identifier);
     expect(ids).not.toContain("appt_j1");
+  });
+});
+
+// ── Recurring-invoice (maintenance plan) reminders ───────────────────────────
+
+describe("syncNotifications — recurring-invoice rules", () => {
+  function riRule(overrides = {}) {
+    return {
+      id: "ri1", customerId: "c1", customerName: "Alice",
+      description: "Monthly maintenance", amount: 150, dueDays: 30,
+      cadence: "monthly", endCondition: "never",
+      occurrenceCount: 0, lastGeneratedDate: null,
+      nextDueDate: dateInDays(5), isActive: true, createdAt: dateInDays(-30),
+      ...overrides,
+    };
+  }
+
+  test("schedules one rinv_ notification per active rule with the exact content", async () => {
+    seedStorage([], { rules: [] }, [], [], [riRule()]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(1);
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("rinv_ri1");
+    expect(call[0].content.title).toBe("Maintenance invoice ready — Alice");
+    expect(call[0].content.body).toBe("Open to review & send.");
+    expect(call[0].content.data).toEqual({ type: "recurring_invoice", ruleId: "ri1" });
+  });
+
+  test("paused rules schedule nothing", async () => {
+    seedStorage([], { rules: [] }, [], [], [riRule({ isActive: false })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("a rule whose 9am fire time is already past is skipped", async () => {
+    seedStorage([], { rules: [] }, [], [], [riRule({ nextDueDate: dateInDays(-1) })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("shares the 60-notification cap with invoice reminders", async () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => ({
+      id: `i${i}`, customer: "A", number: `INV-${i}`, paid: false, amount: 100, due: dateInDays(30),
+    }));
+    seedStorage(sixty, { rules: [{ days: 1 }] }, [], [], [riRule()]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(60);
+    const ids = Notifications.scheduleNotificationAsync.mock.calls.map((c) => c[0].identifier);
+    expect(ids.some((id) => id.startsWith("rinv_"))).toBe(false);
   });
 });
