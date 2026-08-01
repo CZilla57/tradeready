@@ -12,6 +12,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KEYS } from "./keys";
 import { saveCustomers, saveJobs, saveInvoices } from "./collections";
 import { saveRecurringJobs } from "./recurringJobs";
+import { saveRecurringInvoices } from "./recurringInvoices";
 import { resolveCustomer } from "./customers";
 import { pruneQueueRecords } from "../sync";
 import {
@@ -21,7 +22,7 @@ import {
   rewriteSampleIds,
   relinkCustomerIds,
 } from "../sampleData";
-import type { Customer, Job, Invoice, RecurringJob } from "../../types/models";
+import type { Customer, Job, Invoice, RecurringJob, RecurringInvoice } from "../../types/models";
 
 async function readRaw<T>(key: string): Promise<T[] | null> {
   try {
@@ -37,11 +38,13 @@ async function readRaw<T>(key: string): Promise<T[] | null> {
 // dangles (the customer was remapped in a PREVIOUS run, before rules were
 // covered) fall back to the normalized-name join. Conservative on purpose —
 // real (non-sample) customerIds and sample ids that still exist are untouched.
-export function relinkDanglingRuleCustomers(
-  rules: RecurringJob[],
+export function relinkDanglingRuleCustomers<
+  T extends { customerId: string; customerName: string },
+>(
+  rules: T[],
   customers: Customer[],
   idMap: Record<string, string>,
-): { changed: boolean; records: RecurringJob[] } {
+): { changed: boolean; records: T[] } {
   let changed = false;
   const liveIds = new Set(customers.map((c) => c.id));
   const records = rules.map((rule) => {
@@ -61,11 +64,12 @@ export function relinkDanglingRuleCustomers(
 }
 
 export async function migrateSampleDataIds(): Promise<void> {
-  const [customers, jobs, invoices, rules] = await Promise.all([
+  const [customers, jobs, invoices, rules, invoiceRules] = await Promise.all([
     readRaw<Customer>(KEYS.customers),
     readRaw<Job>(KEYS.jobs),
     readRaw<Invoice>(KEYS.invoices),
     readRaw<RecurringJob>(KEYS.recurringJobs),
+    readRaw<RecurringInvoice>(KEYS.recurringInvoices),
   ]);
 
   const suffix = freshSampleSuffix();
@@ -89,6 +93,14 @@ export async function migrateSampleDataIds(): Promise<void> {
     ? relinkDanglingRuleCustomers(rules, (c?.records ?? customers) || [], idMap)
     : null;
   if (r?.changed) await saveRecurringJobs(r.records);
+
+  // Recurring-invoice rules have the same exposure (a rule can be created
+  // against a seed customer before migration) and the same local-only,
+  // no-queue-side-effect save.
+  const ri = invoiceRules
+    ? relinkDanglingRuleCustomers(invoiceRules, (c?.records ?? customers) || [], idMap)
+    : null;
+  if (ri?.changed) await saveRecurringInvoices(ri.records);
 
   const anyChange =
     (c?.changed ?? false) ||

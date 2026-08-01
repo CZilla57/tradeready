@@ -94,4 +94,15 @@ describe("relinkDanglingRuleCustomers", () => {
     expect(second.changed).toBe(false);
     expect(second.records[0].customerId).toBe("c1751000000000_1");
   });
+
+  test("also heals recurring-INVOICE rules (generic over both rule shapes)", () => {
+    const { changed, records } = relinkDanglingRuleCustomers(
+      [{ id: "ri_1", customerId: "c1", customerName: "Riverside Bakery", amount: 120, dueDays: 30 }],
+      customers,
+      { c1: "c1-snew" },
+    );
+    expect(changed).toBe(true);
+    expect(records[0].customerId).toBe("c1-snew");
+    expect(records[0].amount).toBe(120); // non-job fields pass through untouched
+  });
 });

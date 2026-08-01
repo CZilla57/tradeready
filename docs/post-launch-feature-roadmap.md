@@ -27,7 +27,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 3 | Deposits / partial payments | 🔥🔥 | Med | Stripe Connect, invoice model | **BUILT** — ship-gated (migration + backend) |
 | 4 | Tax set-aside / quarterly estimate | 🔥🔥🔥 (differentiator) | Med | P&L data, mileage, AI coach | **BUILT** — stacked on #3's branch |
 | 5 | Receipt OCR | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **BUILT** — on this branch (`feat/receipt-ocr`) |
-| 6 | Recurring invoices (maintenance plans) | 🔥 | Med | RecurringJobs engine, invoice model | backlog |
+| 6 | Recurring invoices (maintenance plans) | 🔥 | Med | RecurringJobs engine, invoice model | **BUILT** — on feat/recurring-invoices |
 | 7 | Accounting / CSV export | 🔥 | Low | Existing money/expense data | **BUILT** — on feat/csv-export |
 | 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog |
 | 9 | Online booking / request-a-quote link | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | backlog |
@@ -122,6 +122,13 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 > Load `superpowers:brainstorming` and `tradeready-ai-layer`. I want receipt OCR: when a user attaches a receipt photo to an expense, extract merchant, amount, date, and a suggested category and pre-fill the expense form for confirmation (never auto-save without review). Reuse the existing photo pipeline and route extraction through the backend AI proxy (respect rate limits and payload caps). Handle low-confidence/failed extraction gracefully. Phase-gated plan, stop for go-ahead.
 
 ## Phase 6 — Recurring invoices (maintenance plans)
+
+> **STATUS: BUILT 2026-08-01** on `feat/recurring-invoices`. As designed in
+> `docs/superpowers/specs/2026-07-31-recurring-invoices-design.md`: standalone
+> per-customer rules (amount + cadence + end conditions + pause/resume),
+> shared recurrence helpers extracted to `utils/recurrence.ts`, generation on
+> sign-in/app-foreground, review-and-send notification (`rinv_` namespace) —
+> never auto-sent; payment links mint on demand in the existing send flow.
 
 **Why:** You have recurring *jobs* but not recurring *billing*. Maintenance plans (monthly/quarterly service) are steady solo revenue and a natural extension of the recurring-jobs engine.
 

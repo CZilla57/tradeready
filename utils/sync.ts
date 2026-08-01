@@ -258,7 +258,7 @@ export async function initialSync(userId: string): Promise<void> {
       await pushAllLocalToCloud(userId);
     } else {
       if (localDataBelongsToOtherUser) {
-        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', 'recurringJobs', 'trips']);
+        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', 'recurringJobs', 'recurringInvoices', 'trips']);
         await AsyncStorage.removeItem(QUEUE_KEY);
       }
       await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify({}));

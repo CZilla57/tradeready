@@ -19,6 +19,7 @@ export { loadSettings, saveSettings } from "./settings";
 export { defaultSettings, defaultInvoices } from "./defaults";
 export { migrateSampleDataIds } from "./sampleMigration";
 export { loadRecurringJobs, saveRecurringJobs } from "./recurringJobs";
+export { loadRecurringInvoices, saveRecurringInvoices } from "./recurringInvoices";
 export { loadTrips, saveTrips } from "./trips";
 export { loadPricebook, savePricebook } from "./pricebook";
 export { applyEstimateDecisions } from "./estimateApprovals";

@@ -128,6 +128,9 @@ utils/
   subscription.ts                ← RevenueCat subscription helpers
   paywallCopy.ts                 ← Trial wording derived from the store's real intro offer
   recurringJobs.ts               ← Recurring job scheduling engine
+  recurrence.ts                  ← Shared recurrence math (cadence step + end conditions)
+  recurringInvoices.ts           ← Recurring invoice (maintenance plan) engine
+  invoiceNumber.ts               ← Next-invoice-number rule (INV-%04d)
   reviewRequest.ts               ← Customer review request helpers
   moneyUtils.ts                  ← Expense categories, date filters, date range math
   businessSnapshot.ts            ← Business metrics snapshot for AI context
@@ -199,6 +202,8 @@ screens/
   PricebookEntryScreen.tsx       ← Add / edit pricebook entry
   PaywallScreen.tsx              ← RevenueCat subscription paywall
   RecurringJobsScreen.tsx        ← Recurring job schedule manager
+  RecurringInvoicesScreen.tsx    ← Maintenance-plan (recurring invoice) manager
+  AddRecurringInvoiceScreen.tsx  ← Add / edit maintenance plan
   ReviewRequestScreen.tsx        ← Customer review request generator
 
 context/
@@ -375,6 +380,12 @@ set-aside card's standard-mileage deduction reads this same local log, so its
 estimate can differ across devices; the card discloses this with a trip count. Adding
 cloud sync later means adding a `trips` Supabase table plus one entry in
 `COLLECTION_TABLES`.
+
+**Recurring-invoice rules are device-local only.** Maintenance-plan rules
+(`RecurringInvoice` records, behind the repeat icon on the Invoices tab) are
+stored in AsyncStorage only, the same as recurring jobs and mileage trips —
+not synced, cleared on sign-out. The invoices they generate are normal
+records and sync like any other invoice.
 
 **Estimate approvals are the one server-authoritative write path.** When a
 customer approves or declines an estimate via the hosted link, the Vercel
