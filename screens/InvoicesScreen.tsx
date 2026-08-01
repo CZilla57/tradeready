@@ -18,7 +18,7 @@ import {
 import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
+import { loadInvoices, saveInvoices, loadSettings, loadJobs, saveJobs } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { getStatus, formatDate } from "../utils/invoiceHelpers";
 import { summarizeInvoices, filterInvoices } from "../utils/invoiceStats";
@@ -28,6 +28,7 @@ import { exportPdf } from "../utils/pdfExport";
 import { invoicePdfFilename } from "../utils/invoicePdfFile";
 import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { track } from "../utils/analytics";
+import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { Badge, StatCard, EmptyState } from "../components/UI";
 import { RecordPaymentSheet } from "../components/RecordPaymentSheet";
 import { PaymentHistoryList } from "../components/PaymentHistoryList";
@@ -125,6 +126,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
           const updated = invoices.map((i) => (i.id === id ? settled : i));
           setInvoices(updated);
           await saveInvoices(updated);
+          await reconcileJobsWith(updated);
           track('payment_recorded', {
             amount: balanceDue(current),
             method: 'other',
@@ -148,6 +150,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
     const updated = invoices.map((i) => (i.id === invoice.id ? next : i));
     setInvoices(updated);
     await saveInvoices(updated);
+    await reconcileJobsWith(updated);
     track('payment_recorded', {
       amount: draft.amount,
       method: draft.method,
@@ -158,6 +161,15 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
     }
     syncNotifications();
     setRecordingFor(null);
+  }
+
+  // Jobs follow invoice truth (FA-037): after any save that can settle an
+  // invoice, advance its linked job invoiced -> paid. Same-reference return
+  // means nothing changed and the save is skipped.
+  async function reconcileJobsWith(updatedInvoices: Invoice[]) {
+    const jobs = await loadJobs();
+    const advanced = advanceJobsForPaidInvoices(jobs, updatedInvoices);
+    if (advanced !== jobs) await saveJobs(advanced);
   }
 
   function confirmVoid(invoice: Invoice, paymentId: string) {
