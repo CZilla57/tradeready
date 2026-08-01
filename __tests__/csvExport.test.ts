@@ -1,6 +1,6 @@
-import { buildIncomeCsv, escapeCsvField, toCsv } from "../utils/csvExport";
+import { buildIncomeCsv, buildExpensesCsv, buildTripsCsv, escapeCsvField, toCsv } from "../utils/csvExport";
 import { collectedInRange } from "../utils/invoicePayments";
-import type { Invoice } from "../types/models";
+import type { Invoice, Expense, Trip } from "../types/models";
 
 describe("escapeCsvField", () => {
   test("plain value passes through unquoted", () => {
@@ -187,5 +187,117 @@ describe("buildIncomeCsv", () => {
       }, 0);
       expect(sum).toBeCloseTo(collectedInRange(invoices, start, end), 2);
     }
+  });
+});
+
+const expense = (over: Partial<Expense> = {}): Expense => ({
+  id: "e1",
+  createdAt: "2026-03-01",
+  description: "Lumber",
+  amount: 250.5,
+  category: "materials",
+  date: "2026-03-01",
+  notes: "",
+  receiptUri: null,
+  ...over,
+});
+
+const trip = (over: Partial<Trip> = {}): Trip => ({
+  id: "t1",
+  date: "2026-03-02",
+  odometerStart: 10000,
+  odometerEnd: 10024,
+  miles: 24,
+  fromJobId: null,
+  fromLabel: "Home / Shop",
+  toJobId: "j1",
+  toLabel: "Smith deck job",
+  purpose: "Site visit",
+  createdAt: "2026-03-02",
+  ...over,
+});
+
+describe("buildExpensesCsv", () => {
+  const HEADER = "Date,Description,Category,Amount,Notes,Has Receipt";
+
+  test("header only for empty range", () => {
+    expect(buildExpensesCsv([], JAN1, DEC31)).toBe(HEADER + "\r\n");
+  });
+
+  test("emits label from EXPENSE_CATEGORIES and receipt flag", () => {
+    const rows = buildExpensesCsv(
+      [expense({ receiptUri: "file:///r.jpg" })],
+      JAN1,
+      DEC31
+    ).trimEnd().split("\r\n");
+    expect(rows[1]).toBe("2026-03-01,Lumber,Materials,250.50,,Yes");
+  });
+
+  test("unknown category id falls back to Other (ExpenseRow's rule)", () => {
+    const rows = buildExpensesCsv(
+      [expense({ category: "bogus" as Expense["category"] })],
+      JAN1,
+      DEC31
+    ).trimEnd().split("\r\n");
+    expect(rows[1]).toContain(",Other,");
+  });
+
+  test("out-of-range expenses excluded; rows sorted by date", () => {
+    const rows = buildExpensesCsv(
+      [
+        expense({ id: "e2", date: "2026-06-01", description: "Blades" }),
+        expense({ id: "e3", date: "2026-01-15", description: "Fuel" }),
+        expense({ id: "e4", date: "2025-11-01", description: "OldStuff" }),
+      ],
+      JAN1,
+      DEC31
+    ).trimEnd().split("\r\n");
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toContain("Fuel");
+    expect(rows[2]).toContain("Blades");
+  });
+
+  test("notes with newlines are escaped", () => {
+    const csv = buildExpensesCsv(
+      [expense({ notes: "line1\nline2" })],
+      JAN1,
+      DEC31
+    );
+    expect(csv).toContain('"line1\nline2"');
+  });
+});
+
+describe("buildTripsCsv", () => {
+  const HEADER = "Date,From,To,Purpose,Odometer Start,Odometer End,Miles";
+
+  test("header only for empty range", () => {
+    expect(buildTripsCsv([], JAN1, DEC31)).toBe(HEADER + "\r\n");
+  });
+
+  test("emits raw trip values (miles not money-formatted)", () => {
+    const rows = buildTripsCsv([trip()], JAN1, DEC31).trimEnd().split("\r\n");
+    expect(rows[1]).toBe(
+      "2026-03-02,Home / Shop,Smith deck job,Site visit,10000,10024,24"
+    );
+  });
+
+  test("fractional miles survive as-is", () => {
+    const csv = buildTripsCsv([trip({ miles: 12.4 })], JAN1, DEC31);
+    expect(csv).toContain(",12.4");
+  });
+
+  test("out-of-range trips excluded; rows sorted by date", () => {
+    const rows = buildTripsCsv(
+      [
+        trip({ id: "t2", date: "2026-08-01", purpose: "Later" }),
+        trip({ id: "t3", date: "2026-02-01", purpose: "Earlier" }),
+        trip({ id: "t4", date: "2027-01-01", purpose: "NextYear" }),
+      ],
+      JAN1,
+      DEC31
+    ).trimEnd().split("\r\n");
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toContain("Earlier");
+    expect(rows[2]).toContain("Later");
   });
 });

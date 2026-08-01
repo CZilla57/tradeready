@@ -3,8 +3,9 @@
 // Builders do NO I/O — everything above shareCsv is unit-testable strings.
 // Spec: docs/superpowers/specs/2026-07-31-csv-export-design.md
 
-import type { Invoice } from "../types/models";
+import type { Invoice, Expense, Trip } from "../types/models";
 import { paymentsInRange, toAmount } from "./invoicePayments";
+import { EXPENSE_CATEGORIES, isInRange } from "./moneyUtils";
 
 /**
  * RFC-4180 field escaping: quote when the value contains a comma, quote,
@@ -74,4 +75,45 @@ export function buildIncomeCsv(invoices: Invoice[], start: Date, end: Date): str
   // comparePayments in invoicePayments.ts). "YYYY-MM-DD" sorts chronologically.
   rows.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? -1 : 1));
   return toCsv(INCOME_HEADER, rows.map((r) => r.fields));
+}
+
+const EXPENSE_HEADER = ["Date", "Description", "Category", "Amount", "Notes", "Has Receipt"];
+
+/** Category exports the LABEL; unknown ids fall back to Other exactly like ExpenseRow. */
+export function buildExpensesCsv(expenses: Expense[], start: Date, end: Date): string {
+  const rows = expenses
+    .filter((e) => isInRange(e.date, start, end))
+    .sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? -1 : 1))
+    .map((e) => {
+      const category =
+        EXPENSE_CATEGORIES.find((c) => c.id === e.category) || EXPENSE_CATEGORIES[7];
+      return [
+        e.date,
+        e.description || "",
+        category.label,
+        toAmount(e.amount).toFixed(2),
+        e.notes || "",
+        e.receiptUri ? "Yes" : "No",
+      ];
+    });
+  return toCsv(EXPENSE_HEADER, rows);
+}
+
+const TRIP_HEADER = ["Date", "From", "To", "Purpose", "Odometer Start", "Odometer End", "Miles"];
+
+/** Raw trip data; miles are not money, so no decimal padding — the accountant applies the rate. */
+export function buildTripsCsv(trips: Trip[], start: Date, end: Date): string {
+  const rows = trips
+    .filter((t) => isInRange(t.date, start, end))
+    .sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? -1 : 1))
+    .map((t) => [
+      t.date,
+      t.fromLabel || "",
+      t.toLabel || "",
+      t.purpose || "",
+      String(t.odometerStart),
+      String(t.odometerEnd),
+      String(t.miles),
+    ]);
+  return toCsv(TRIP_HEADER, rows);
 }
