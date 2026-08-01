@@ -1,4 +1,7 @@
-import { buildIncomeCsv, buildExpensesCsv, buildTripsCsv, escapeCsvField, toCsv, exportDateRange, csvFilename, csvRowCount } from "../utils/csvExport";
+import { Alert } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
+import { buildIncomeCsv, buildExpensesCsv, buildTripsCsv, escapeCsvField, toCsv, exportDateRange, csvFilename, csvRowCount, shareCsv } from "../utils/csvExport";
 import { collectedInRange } from "../utils/invoicePayments";
 import type { Invoice, Expense, Trip } from "../types/models";
 
@@ -360,5 +363,45 @@ describe("csvRowCount", () => {
 
   test("counts data rows", () => {
     expect(csvRowCount("A,B\r\n1,2\r\n3,4\r\n")).toBe(2);
+  });
+});
+
+describe("shareCsv", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(Alert, "alert").mockImplementation(() => {});
+  });
+
+  test("writes BOM-prefixed CSV to the cache dir and shares it", async () => {
+    await shareCsv("A,B\r\n1,2\r\n", "tradeready-income_all-time.csv");
+    expect(FileSystem.writeAsStringAsync).toHaveBeenCalledWith(
+      "file:///mock/cache/tradeready-income_all-time.csv",
+      "﻿" + "A,B\r\n1,2\r\n"
+    );
+    expect(Sharing.shareAsync).toHaveBeenCalledWith(
+      "file:///mock/cache/tradeready-income_all-time.csv",
+      expect.objectContaining({ mimeType: "text/csv" })
+    );
+    expect(Alert.alert).not.toHaveBeenCalled();
+  });
+
+  test("alerts and skips the write when sharing is unavailable", async () => {
+    (Sharing.isAvailableAsync as jest.Mock).mockResolvedValueOnce(false);
+    await shareCsv("A\r\n", "x.csv");
+    expect(FileSystem.writeAsStringAsync).not.toHaveBeenCalled();
+    expect(Sharing.shareAsync).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      "Sharing not available",
+      "This device cannot share files."
+    );
+  });
+
+  test("alerts on write failure instead of throwing", async () => {
+    (FileSystem.writeAsStringAsync as jest.Mock).mockRejectedValueOnce(new Error("disk"));
+    await expect(shareCsv("A\r\n", "x.csv")).resolves.toBeUndefined();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      "Export error",
+      "Could not create the CSV file. Please try again."
+    );
   });
 });

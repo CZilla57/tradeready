@@ -3,6 +3,9 @@
 // Builders do NO I/O — everything above shareCsv is unit-testable strings.
 // Spec: docs/superpowers/specs/2026-07-31-csv-export-design.md
 
+import { Alert } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import type { Invoice, Expense, Trip } from "../types/models";
 import { paymentsInRange, toAmount } from "./invoicePayments";
 import type { DateRange } from "./moneyUtils";
@@ -171,4 +174,24 @@ export function csvFilename(
 /** Data rows in a built CSV (excludes the header) — drives the screen's counts. */
 export function csvRowCount(csv: string): number {
   return csv.split("\r\n").filter((line) => line.length > 0).length - 1;
+}
+
+/**
+ * Write the CSV to the cache directory and open the share sheet.
+ * Mirrors utils/pdfExport.ts: owns its alerts, callers never branch.
+ * The ﻿ BOM makes Excel read the file as UTF-8 (accented names).
+ */
+export async function shareCsv(csv: string, filename: string): Promise<void> {
+  try {
+    const available = await Sharing.isAvailableAsync();
+    if (!available) {
+      Alert.alert("Sharing not available", "This device cannot share files.");
+      return;
+    }
+    const uri = `${FileSystem.cacheDirectory}${filename}`;
+    await FileSystem.writeAsStringAsync(uri, "﻿" + csv);
+    await Sharing.shareAsync(uri, { mimeType: "text/csv", dialogTitle: filename });
+  } catch {
+    Alert.alert("Export error", "Could not create the CSV file. Please try again.");
+  }
 }
