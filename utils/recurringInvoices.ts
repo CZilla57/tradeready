@@ -9,7 +9,7 @@
 // invoices with no extra wiring (isJobDunningEligible passes no-jobId
 // invoices through — correct: a maintenance invoice is billable immediately).
 
-import { DateString, Invoice } from '../types/models';
+import { DateString, Invoice, RecurringInvoice } from '../types/models';
 import {
   loadInvoices,
   saveInvoices,
@@ -45,6 +45,31 @@ function nextGeneratedInvoiceId(): string {
   if (ms <= lastIdMs) ms = lastIdMs + 1;
   lastIdMs = ms;
   return `inv${ms}`;
+}
+
+/**
+ * A rule's nextDueDate advanced past `today`, for Resume. Occurrences that
+ * elapsed while a plan was paused are deliberately never billed — pausing
+ * suspends service, and back-billed invoices would arrive already overdue
+ * and enter dunning (owner decision 2026-08-01). occurrenceCount is NOT
+ * advanced: skipped periods don't count against an end-by-count limit.
+ * NOTE: recurring JOBS deliberately keep back-fill on resume (a job card is
+ * a to-do, not a receivable) — do not "unify" the two.
+ *
+ * An already-ended plan (endDate elapsed while paused, or endCount already
+ * met) does NOT get fast-forwarded — nextDueDate is returned unchanged. The
+ * generation engine (checkAndGenerateRecurringInvoices, above) deactivates
+ * an ended plan on its next run regardless, so leaving nextDueDate alone
+ * here just preserves that honest pre-existing feedback (a Resumed card
+ * that shows Active with a Next date already past its own end, or schedules
+ * a rinv_ reminder for an occurrence that will never bill, would otherwise
+ * be self-correcting only after the next engine run).
+ */
+export function fastForwardedNextDueDate(rule: RecurringInvoice, today: DateString): DateString {
+  if (isEndConditionMet(rule)) return rule.nextDueDate;
+  let next = rule.nextDueDate;
+  while (next <= today) next = calculateNextDate(next, rule.cadence);
+  return next;
 }
 
 let generating = false;

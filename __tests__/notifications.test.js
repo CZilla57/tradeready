@@ -147,6 +147,114 @@ describe("threshold date handling", () => {
     // One invoice × two future rules = two notifications
     expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(2);
   });
+
+  // Regression (Fix A, 2026-08-01): the fire date must be parsed in the LOCAL
+  // frame (`due + 'T00:00:00'`), not UTC-midnight (`due` alone) — the old
+  // parse fired 9am local on the day BEFORE the intended date in every US
+  // timezone. Self-consistent + TZ-portable: the expected fire instant is
+  // computed here with the exact same formula the source uses, then bracketed
+  // around the real "now" captured immediately before/after the call so the
+  // assertion can't flake on elapsed test-runner milliseconds.
+  test("inv_: fires 9am LOCAL on due+days, not a day earlier (local-frame parse)", async () => {
+    const due = dateInDays(5);
+    seedStorage(
+      [{ id: "iLF", customer: "Alice", number: "INV-LF", paid: false, amount: 500, due }],
+      { rules: [{ days: 1 }] }
+    );
+
+    const before = Date.now();
+    await syncNotifications();
+    const after = Date.now();
+
+    const expectedFire = new Date(due + "T00:00:00");
+    expectedFire.setDate(expectedFire.getDate() + 1);
+    expectedFire.setHours(9, 0, 0, 0);
+    const minSeconds = Math.floor((expectedFire.getTime() - after) / 1000);
+    const maxSeconds = Math.floor((expectedFire.getTime() - before) / 1000);
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("inv_iLF_1d");
+    expect(call[0].trigger.seconds).toBeGreaterThanOrEqual(minSeconds);
+    expect(call[0].trigger.seconds).toBeLessThanOrEqual(maxSeconds);
+
+    // Frame-independent pin (2026-08-01): the bracket check above only shows
+    // the source and this test's mirror formula AGREE — it can't catch a bug
+    // shared by both. Pin the semantic directly: 9am local, on due+1 day.
+    // due is dateInDays(5), far from a month boundary, so +1 day never rolls
+    // the month/year and this can be checked from due's own string digits
+    // without going through another Date construction.
+    const [, , dueD] = due.split("-").map(Number);
+    expect(expectedFire.getHours()).toBe(9);
+    expect(expectedFire.getDate()).toBe(dueD + 1);
+  });
+});
+
+// ── Malformed / non-strict-ISO due dates (Finding 1, 2026-08-01) ────────────
+//
+// inv.due comes from a free-text Field (AddInvoiceScreen) with no format
+// validation. Before this fix, `new Date(inv.due + 'T00:00:00')` produced
+// Invalid Date for anything but strict "YYYY-MM-DD"; the resulting NaN
+// `secondsUntil` slipped past `if (secondsUntil <= 0) continue` (NaN <= 0 is
+// false) and reached scheduleNotificationAsync as `{ seconds: NaN }`. A
+// native rejection there was swallowed by the sweep's outer catch — which
+// runs AFTER cancelAllScheduledNotificationsAsync(), so one malformed
+// invoice could wipe every reminder in the sweep.
+
+describe("malformed / non-strict-ISO due dates", () => {
+  test("inv_: a non-ISO due date (M/D/YYYY) still fires 9am local via the parseLocalDate fallback", async () => {
+    // Built from dateInDays(5) and reformatted M/D/YYYY (mirrors the
+    // "8/15/2026" example from the review finding) so this stays
+    // deterministic and never rots with the calendar.
+    const isoDue = dateInDays(5);
+    const [y, m, d] = isoDue.split("-").map(Number);
+    const slashDue = `${m}/${d}/${y}`;
+    seedStorage(
+      [{ id: "iSlash", customer: "Alice", number: "INV-SLASH", paid: false, amount: 500, due: slashDue }],
+      { rules: [{ days: 1 }] }
+    );
+
+    const before = Date.now();
+    await syncNotifications();
+    const after = Date.now();
+
+    // parseLocalDate's fallback for a non-strict-ISO string is `new
+    // Date(raw)`, same as here.
+    const expectedFire = new Date(slashDue);
+    expectedFire.setDate(expectedFire.getDate() + 1);
+    expectedFire.setHours(9, 0, 0, 0);
+    const minSeconds = Math.floor((expectedFire.getTime() - after) / 1000);
+    const maxSeconds = Math.floor((expectedFire.getTime() - before) / 1000);
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(1);
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("inv_iSlash_1d");
+    expect(call[0].trigger.seconds).toBeGreaterThanOrEqual(minSeconds);
+    expect(call[0].trigger.seconds).toBeLessThanOrEqual(maxSeconds);
+    expect(expectedFire.getHours()).toBe(9);
+    expect(expectedFire.getDate()).toBe(d + 1);
+  });
+
+  test("inv_: a garbage due date schedules nothing for itself and does not block a valid invoice in the same sweep", async () => {
+    seedStorage(
+      [
+        { id: "iBad", customer: "Bad", number: "INV-BAD", paid: false, amount: 500, due: "notadate" },
+        { id: "iGood", customer: "Good", number: "INV-GOOD", paid: false, amount: 500, due: dateInDays(30) },
+      ],
+      { rules: [{ days: 1 }] }
+    );
+
+    await syncNotifications();
+
+    // The sweep still ran (cancel fired) and the malformed invoice's NaN
+    // fire date didn't throw, didn't reach scheduleNotificationAsync, and
+    // didn't stop the good invoice from getting its reminder — the
+    // wipe-everything scenario is dead.
+    expect(Notifications.cancelAllScheduledNotificationsAsync).toHaveBeenCalledTimes(1);
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(1);
+    const ids = Notifications.scheduleNotificationAsync.mock.calls.map((c) => c[0].identifier);
+    expect(ids).not.toContain("inv_iBad_1d");
+    expect(ids).toContain("inv_iGood_1d");
+  });
 });
 
 // ── Notification identifier format ───────────────────────────────────────────
@@ -346,6 +454,35 @@ describe("syncNotifications — recurring-invoice rules", () => {
     await syncNotifications();
 
     expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  // Regression (Fix A, 2026-08-01): same local-frame parse fix as inv_ above,
+  // applied to rule.nextDueDate. Bracketed against real "now" for the same
+  // flake-proofing reason.
+  test("rinv_: fires 9am LOCAL on nextDueDate, not a day earlier (local-frame parse)", async () => {
+    const nextDueDate = dateInDays(5);
+    seedStorage([], { rules: [] }, [], [], [riRule({ nextDueDate })]);
+
+    const before = Date.now();
+    await syncNotifications();
+    const after = Date.now();
+
+    const expectedFire = new Date(nextDueDate + "T00:00:00");
+    expectedFire.setHours(9, 0, 0, 0);
+    const minSeconds = Math.floor((expectedFire.getTime() - after) / 1000);
+    const maxSeconds = Math.floor((expectedFire.getTime() - before) / 1000);
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("rinv_ri1");
+    expect(call[0].trigger.seconds).toBeGreaterThanOrEqual(minSeconds);
+    expect(call[0].trigger.seconds).toBeLessThanOrEqual(maxSeconds);
+
+    // Frame-independent pin (2026-08-01), same rationale as the inv_ test
+    // above: pin 9am local on nextDueDate itself, checked from the string's
+    // own digits rather than re-deriving it through another Date object.
+    const [, , dueD] = nextDueDate.split("-").map(Number);
+    expect(expectedFire.getHours()).toBe(9);
+    expect(expectedFire.getDate()).toBe(dueD);
   });
 
   test("shares the 60-notification cap with invoice reminders", async () => {

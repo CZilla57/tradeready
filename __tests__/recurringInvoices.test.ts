@@ -1,4 +1,4 @@
-import { checkAndGenerateRecurringInvoices } from '../utils/recurringInvoices';
+import { checkAndGenerateRecurringInvoices, fastForwardedNextDueDate } from '../utils/recurringInvoices';
 import { invoiceIssueDate } from '../utils/pdfTemplates';
 import type { RecurringInvoice, Invoice, Customer } from '../types/models';
 import {
@@ -277,5 +277,86 @@ describe('checkAndGenerateRecurringInvoices', () => {
     await Promise.all([first, second]);
 
     expect(mockLoadRecurringInvoices).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── fastForwardedNextDueDate (Fix B, 2026-08-01: Resume never back-bills) ───
+
+describe('fastForwardedNextDueDate', () => {
+  const today = '2026-07-08'; // matches the fake system time set in beforeEach
+
+  test('an already-future nextDueDate is left unchanged', () => {
+    const rule = makeRule({ nextDueDate: '2026-07-15', cadence: 'weekly' });
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-07-15');
+  });
+
+  test('a past nextDueDate advances to the first strictly-future weekly occurrence', () => {
+    const rule = makeRule({ nextDueDate: '2026-07-01', cadence: 'weekly' });
+    // 07-01 and 07-08 (== today) are both skipped; 07-15 is the first date > today.
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-07-15');
+  });
+
+  test('a past nextDueDate advances to the first strictly-future monthly occurrence', () => {
+    const rule = makeRule({ nextDueDate: '2026-05-08', cadence: 'monthly' });
+    // 05-08, 06-08, and 07-08 (== today) are all skipped; 08-08 is the first date > today.
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-08-08');
+  });
+
+  test('nextDueDate equal to today also advances (<=, not <)', () => {
+    const rule = makeRule({ nextDueDate: today, cadence: 'weekly' });
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-07-15');
+  });
+
+  test('is pure: does not mutate the rule or advance occurrenceCount', () => {
+    const rule = makeRule({ nextDueDate: '2026-07-01', cadence: 'weekly', occurrenceCount: 2 });
+    const snapshot: RecurringInvoice = JSON.parse(JSON.stringify(rule));
+
+    fastForwardedNextDueDate(rule, today);
+
+    expect(rule).toEqual(snapshot);
+  });
+
+  // Finding 2 (2026-08-01): an already-ended plan must NOT be fast-forwarded
+  // into the future on Resume — that would show an Active card with a Next
+  // date past its own end, and schedule a bogus rinv_ reminder for an
+  // occurrence the engine will never bill. Without the isEndConditionMet
+  // guard, both cases below would advance nextDueDate via the while loop
+  // because the stored nextDueDate is <= today.
+
+  test('ended by date: nextDueDate already past endDate is returned unchanged, not fast-forwarded', () => {
+    const rule = makeRule({
+      nextDueDate: '2026-07-08', // == today
+      cadence: 'weekly',
+      endCondition: 'date',
+      endDate: '2026-07-01', // already elapsed
+    });
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-07-08');
+  });
+
+  test('ended by count: occurrenceCount already met is returned unchanged, not fast-forwarded', () => {
+    const rule = makeRule({
+      nextDueDate: '2026-07-01', // in the past — would otherwise fast-forward
+      cadence: 'weekly',
+      endCondition: 'count',
+      endCount: 3,
+      occurrenceCount: 3, // already met
+    });
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-07-01');
+  });
+});
+
+describe('resume fast-forward integration', () => {
+  test('a rule fast-forwarded on resume generates nothing on the next engine run', async () => {
+    // Simulates RecurringInvoicesScreen.setActive's resume path: the rule
+    // missed several weekly occurrences while paused, and Resume advances
+    // nextDueDate past today BEFORE the engine ever sees it again.
+    const resumedRule = makeRule({ nextDueDate: '2026-07-01', cadence: 'weekly' });
+    resumedRule.nextDueDate = fastForwardedNextDueDate(resumedRule, '2026-07-08');
+    mockLoadRecurringInvoices.mockResolvedValue([resumedRule]);
+
+    await checkAndGenerateRecurringInvoices();
+
+    expect(mockSaveInvoices).not.toHaveBeenCalled();
+    expect(mockSaveRecurringInvoices).not.toHaveBeenCalled();
   });
 });

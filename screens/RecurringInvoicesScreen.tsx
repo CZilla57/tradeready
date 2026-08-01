@@ -23,6 +23,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadRecurringInvoices, saveRecurringInvoices } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
+import { fastForwardedNextDueDate } from "../utils/recurringInvoices";
 import { Badge, EmptyState } from "../components/UI";
 import { Fab } from "../components/Fab";
 import { formatMoney } from "../utils/format";
@@ -63,7 +64,19 @@ export default function RecurringInvoicesScreen({ navigation }: InvoiceStackScre
   }
 
   async function setActive(rule: RecurringInvoice, isActive: boolean) {
-    const updated = rules.map((r) => (r.id === rule.id ? { ...r, isActive } : r));
+    // Resume: fast-forward nextDueDate past today first, so the engine never
+    // catch-up-generates (and back-bills) whatever occurrences elapsed while
+    // paused. `today` matches the engine's own frame exactly (see
+    // checkAndGenerateRecurringInvoices) so there's no off-by-one between the
+    // two. Pause changes nothing beyond the isActive flag.
+    const today = new Date().toISOString().split('T')[0];
+    const updated = rules.map((r) =>
+      r.id === rule.id
+        ? isActive
+          ? { ...r, isActive, nextDueDate: fastForwardedNextDueDate(r, today) }
+          : { ...r, isActive }
+        : r
+    );
     await saveRecurringInvoices(updated);
     setRules(updated);
     // Fire-and-forget: rules aren't saved through saveInvoices, so the sweep
