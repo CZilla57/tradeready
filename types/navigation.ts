@@ -52,6 +52,8 @@ export type InvoiceStackParamList = {
   InvoiceList: { openInvoiceId?: string } | undefined;
   AddInvoice: { invoiceId?: string; prefill?: Record<string, unknown> };
   Outreach: { invoiceId: string };
+  RecurringInvoices: undefined;
+  AddRecurringInvoice: { ruleId?: string };
 };
 
 export type CustomerStackParamList = {

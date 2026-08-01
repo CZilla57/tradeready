@@ -51,6 +51,7 @@ import ReviewRequestScreen        from "./screens/ReviewRequestScreen";
 import PricebookScreen            from "./screens/PricebookScreen";
 import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
 import ExportDataScreen           from "./screens/ExportDataScreen";
+import RecurringInvoicesScreen    from "./screens/RecurringInvoicesScreen";
 
 import * as Notifications from "expo-notifications";
 
@@ -167,9 +168,31 @@ function InvoicesTab() {
   };
   return (
     <InvoiceStack.Navigator screenOptions={navOpts}>
-      <InvoiceStack.Screen name="InvoiceList" component={InvoicesScreen}   options={{ title: "Invoices" }} />
+      <InvoiceStack.Screen
+        name="InvoiceList"
+        component={InvoicesScreen}
+        options={({ navigation }) => ({
+          title: "Invoices",
+          headerRight: () => (
+            <TouchableOpacity
+              onPress={() => navigation.navigate("RecurringInvoices")}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ paddingLeft: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Recurring invoices"
+            >
+              <Ionicons name="repeat-outline" size={22} color={colors.accent} />
+            </TouchableOpacity>
+          ),
+        })}
+      />
       <InvoiceStack.Screen name="AddInvoice"  component={AddInvoiceScreen} options={{ presentation: "modal" }} />
       <InvoiceStack.Screen name="Outreach"    component={OutreachScreen}   options={{ title: "Outreach" }} />
+      <InvoiceStack.Screen
+        name="RecurringInvoices"
+        component={RecurringInvoicesScreen}
+        options={{ title: "Recurring Invoices" }}
+      />
     </InvoiceStack.Navigator>
   );
 }
