@@ -28,11 +28,14 @@ import { useRefresh } from "../hooks/useRefresh";
 import type { Job } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
-// Which filter tabs to show across the top
+// Which filter tabs to show across the top. "Active" spans every in-flight
+// status — in_progress included, so a job doesn't vanish from the list the
+// moment the user clocks in. "Declined" only renders when such jobs exist.
 const FILTERS = [
-  { key: "active",    label: "Active",    statuses: ["lead", "estimate_sent", "approved", "scheduled"] },
+  { key: "active",    label: "Active",    statuses: ["lead", "estimate_sent", "approved", "scheduled", "in_progress"] },
   { key: "complete",  label: "Complete",  statuses: ["complete", "invoiced"] },
   { key: "paid",      label: "Paid",      statuses: ["paid"] },
+  { key: "declined",  label: "Declined",  statuses: ["declined"] },
   { key: "all",       label: "All",       statuses: null as string[] | null },
 ];
 
@@ -70,7 +73,12 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 
   const { refreshing, onRefresh } = useRefresh(refreshJobs, 'JobsScreen');
 
-  const activeFilter = FILTERS.find((f) => f.key === filter);
+  // If the Declined chip's last job moves on, the chip hides — fall back to
+  // Active instead of stranding the selection on an invisible tab.
+  const declinedCount = jobs.filter((j) => j.status === "declined").length;
+  const effectiveFilterKey = filter === "declined" && declinedCount === 0 ? "active" : filter;
+
+  const activeFilter = FILTERS.find((f) => f.key === effectiveFilterKey);
   const filtered = jobs.filter((j) => {
     const matchesStatus = !activeFilter?.statuses || activeFilter.statuses.includes(j.status);
     const matchesSearch =
@@ -163,16 +171,19 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
       <View style={styles.filterRow}>
         {FILTERS.map((f) => {
           const count = jobs.filter((j) => !f.statuses || f.statuses.includes(j.status)).length;
+          // Declined is a rare terminal state — only offer the chip when it
+          // has something to show, so the common case keeps four tabs.
+          if (f.key === "declined" && count === 0) return null;
           return (
             <TouchableOpacity
               key={f.key}
-              style={[styles.filterTab, filter === f.key && styles.filterTabActive]}
+              style={[styles.filterTab, effectiveFilterKey === f.key && styles.filterTabActive]}
               onPress={() => setFilter(f.key)}
               accessibilityRole="tab"
               accessibilityLabel={`${f.label}${count > 0 ? `, ${count}` : ''}`}
-              accessibilityState={{ selected: filter === f.key }}
+              accessibilityState={{ selected: effectiveFilterKey === f.key }}
             >
-              <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>
+              <Text style={[styles.filterTabText, effectiveFilterKey === f.key && styles.filterTabTextActive]} maxFontSizeMultiplier={1.4}>
                 {f.label} {count > 0 ? `(${count})` : ""}
               </Text>
             </TouchableOpacity>
@@ -190,7 +201,7 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <EmptyState message={
-            filter === "active"
+            effectiveFilterKey === "active"
               ? "No active jobs.\nTap + to add your first job."
               : "No jobs in this category."
           } />
@@ -217,14 +228,19 @@ function QuickAction({ job, navigation }: { job: Job; navigation: JobStackScreen
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
+  // Labels mirror JobDetail's PrimaryAction ladder step-for-step — the card
+  // must never promise a jump the detail screen won't offer (the pipeline
+  // advances one `.next` at a time: scheduled starts, in_progress completes).
   const actions: Record<string, { label: string; screen: 'PricingCalculator' | 'JobDetail' }> = {
-    lead:          { label: "Build estimate →", screen: "PricingCalculator" },
-    estimate_sent: { label: "Mark approved →",  screen: "JobDetail" },
-    approved:      { label: "Schedule →",        screen: "JobDetail" },
-    scheduled:     { label: "Mark complete →",   screen: "JobDetail" },
-    complete:      { label: "Create invoice →",  screen: "JobDetail" },
-    invoiced:      { label: "View invoice →",    screen: "JobDetail" },
-    paid:          { label: "View details",      screen: "JobDetail" },
+    lead:          { label: "Build estimate →",   screen: "PricingCalculator" },
+    estimate_sent: { label: "Mark approved →",    screen: "JobDetail" },
+    approved:      { label: "Schedule →",          screen: "JobDetail" },
+    scheduled:     { label: "Start job →",         screen: "JobDetail" },
+    in_progress:   { label: "Mark complete →",     screen: "JobDetail" },
+    complete:      { label: "Create invoice →",    screen: "JobDetail" },
+    invoiced:      { label: "View invoice →",      screen: "JobDetail" },
+    paid:          { label: "View details",        screen: "JobDetail" },
+    declined:      { label: "Revise & re-send →",  screen: "JobDetail" },
   };
 
   const action = actions[job.status];

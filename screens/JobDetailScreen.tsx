@@ -80,6 +80,24 @@ function PipelineBar({ currentStatus }: { currentStatus: JobStatus }) {
   const currentStep = PIPELINE_STEPS.indexOf(currentStatus);
   const info = JOB_STATUSES[currentStatus];
 
+  // Declined sits outside the linear pipeline (indexOf = -1 would render an
+  // all-grey bar reading "0 of 8") — show a distinct terminal state instead.
+  if (currentStatus === "declined") {
+    return (
+      <Card style={styles.declinedCard}>
+        <View style={styles.declinedRow}>
+          <Ionicons name="close-circle" size={20} color={colors.danger} />
+          <View style={styles.declinedTextWrap}>
+            <Text style={styles.declinedTitle}>Estimate declined</Text>
+            <Text style={styles.declinedSub}>
+              Revise the estimate and re-send it to restart this job.
+            </Text>
+          </View>
+        </View>
+      </Card>
+    );
+  }
+
   return (
     <Card style={styles.pipelineCard}>
       <View style={styles.pipeline}>
@@ -925,6 +943,25 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
 
     // Pipeline
     pipelineCard: { marginBottom: spacing.sm, paddingVertical: spacing.md },
+    declinedCard: {
+      marginBottom: spacing.sm,
+      backgroundColor: colors.dangerBg,
+      borderWidth: 1,
+      borderColor: colors.danger + "40",
+    },
+    declinedRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+    declinedTextWrap: { flex: 1 },
+    declinedTitle: {
+      fontFamily: fonts.display,
+      fontSize: fontSize.md,
+      color: colors.danger,
+      marginBottom: 2,
+    },
+    declinedSub: {
+      fontFamily: fonts.bodyRegular,
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+    },
     pipeline: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
     pipelineStep: { alignItems: "center" },
     pipelineDot: {
