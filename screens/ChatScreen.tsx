@@ -9,13 +9,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { loadSettings } from "../utils/storage";
 import { sendGroqMessage, sendClaudeMessage, sendBackendGroqMessage } from "../utils/aiService";
 import { getBusinessSnapshot } from "../utils/businessSnapshot";
+import { formatChatText } from "../utils/chatMarkdown";
 import { TRADE_TYPES, getTradeNickname } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -280,11 +283,29 @@ function Bubble({ message }: { message: LocalMessage }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const isUser = message.role === "user";
+  // AI replies get the markdown-lite pass (models emit **bold** and - bullets
+  // that plain <Text> would show literally); the user's own words stay verbatim.
+  const displayText = isUser ? message.text : formatChatText(message.text);
+
+  // Long-press copy — these replies are often follow-up messages the user
+  // pastes straight into a text or email to a customer.
+  async function copyMessage() {
+    await Clipboard.setStringAsync(displayText);
+    Alert.alert("Copied", "Message copied to clipboard.");
+  }
+
   return (
     <View style={[styles.bubbleRow, isUser ? styles.bubbleRowUser : styles.bubbleRowAI]}>
-      <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble, message.isError && styles.errorBubble]}>
-        <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{message.text}</Text>
-      </View>
+      <TouchableOpacity
+        style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble, message.isError && styles.errorBubble]}
+        onLongPress={copyMessage}
+        delayLongPress={300}
+        activeOpacity={0.8}
+        accessibilityLabel={displayText}
+        accessibilityHint="Long press to copy this message"
+      >
+        <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{displayText}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
