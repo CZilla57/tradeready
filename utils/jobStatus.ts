@@ -150,7 +150,7 @@ export function isJobDunningEligible(status: JobStatus | undefined): boolean {
  * saveJobs (`result !== jobs`). Idempotent — safe to run as a read-side
  * sweep, which is also how webhook-paid invoices arriving via sync pull get
  * reflected without touching utils/sync.ts, and how jobs stuck at "invoiced"
- * from before this fix (FA-037) self-heal.
+ * from before this fix (FA-038) self-heal.
  */
 export function advanceJobsForPaidInvoices(jobs: Job[], invoices: Invoice[]): Job[] {
   const paidInvoiceIds = new Set(invoices.filter(isFullyPaid).map((inv) => inv.id));

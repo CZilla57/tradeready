@@ -163,7 +163,7 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
     setRecordingFor(null);
   }
 
-  // Jobs follow invoice truth (FA-037): after any save that can settle an
+  // Jobs follow invoice truth (FA-038): after any save that can settle an
   // invoice, advance its linked job invoiced -> paid. Same-reference return
   // means nothing changed and the save is skipped.
   async function reconcileJobsWith(updatedInvoices: Invoice[]) {

@@ -616,7 +616,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           ]);
           if (!active) return;
 
-          // Read-side sweep (FA-037) — same reconcile as JobsScreen, so a
+          // Read-side sweep (FA-038) — same reconcile as JobsScreen, so a
           // webhook-paid invoice is reflected even when the user deep-links
           // straight here without visiting the Jobs list.
           const advanced = advanceJobsForPaidInvoices(jobs, invoices);

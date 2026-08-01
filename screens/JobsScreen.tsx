@@ -43,7 +43,7 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
   const [filter, setFilter] = useState<string>("active");
   const [search, setSearch] = useState<string>("");
 
-  // Read-side sweep (FA-037): reflects invoices paid outside this device's
+  // Read-side sweep (FA-038): reflects invoices paid outside this device's
   // settle flows (Stripe webhook via sync pull) and heals jobs stuck at
   // "invoiced" from before the fix. Local-only reads; writes only on change.
   const refreshJobs = useCallback(async () => {
