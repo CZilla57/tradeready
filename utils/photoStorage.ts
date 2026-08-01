@@ -1,4 +1,5 @@
 import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import { reportError } from "./analytics";
 
 export async function persistPhoto(tempUri: string, folder = "photos"): Promise<string> {
@@ -92,5 +93,84 @@ export async function readPhotoAsDataUri(uri: string): Promise<string | null> {
     return `data:${mime};base64,${base64}`;
   } catch {
     return null;
+  }
+}
+
+/** Longest side, in pixels, that a logo is allowed to keep. */
+export const LOGO_MAX_DIMENSION = 512;
+
+/**
+ * Save compression for logo re-encodes. PNG is lossless, so this only tunes the
+ * encoder's effort — it is kept at the picker's own 0.8 for parity.
+ */
+export const LOGO_COMPRESS = 0.8;
+
+/**
+ * The manipulator actions that cap a `width`x`height` image at
+ * LOGO_MAX_DIMENSION on its longest side, preserving aspect ratio.
+ *
+ * expo-image-manipulator derives the missing dimension when only one is given,
+ * so the action names whichever side is longer and lets the other follow.
+ *
+ * Returns no actions for an image that already fits, and for dimensions the
+ * platform did not report (ImagePicker documents width/height as "can be 0"):
+ * resizing on a 0 would upscale a small logo instead of shrinking a big one.
+ */
+export function logoResizeActions(
+  width: number,
+  height: number,
+): ImageManipulator.Action[] {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return [];
+  if (width <= 0 || height <= 0) return [];
+  if (Math.max(width, height) <= LOGO_MAX_DIMENSION) return [];
+  return [
+    width >= height
+      ? { resize: { width: LOGO_MAX_DIMENSION } }
+      : { resize: { height: LOGO_MAX_DIMENSION } },
+  ];
+}
+
+/**
+ * A logo read as a PDF-ready data URI, downscaled to at most
+ * LOGO_MAX_DIMENSION on its longest side.
+ *
+ * Why this exists: `Print.printToFileAsync` embeds every byte of the image it is
+ * handed, and the `.logo { max-height: 56px; max-width: 140px }` CSS scales the
+ * *rendering* only. A phone photo used as a logo produced ~40MB invoice PDF
+ * attachments (owner report, 2026-07-31). Logo files stored before the
+ * pick-time cap existed are still full resolution, so the cap has to be applied
+ * here too.
+ *
+ * PNG, not JPEG: a transparent logo re-encoded as JPEG gains a solid box, which
+ * shows on the PDF's white letterhead.
+ *
+ * The stored file is never rewritten — the downscaled copy exists only in the
+ * manipulator's cache and in the returned string. That keeps the Settings
+ * draft-vs-filesystem `deletePhoto` invariant and the logo orphan sweep out of
+ * play entirely.
+ *
+ * Two manipulator calls, not one: the resize action has to name the longer
+ * side, which means the dimensions must be known first. The probe call performs
+ * no transformation and its output file is discarded.
+ *
+ * Any manipulator failure falls back to `readPhotoAsDataUri` — exactly today's
+ * behaviour. A large PDF beats a logo-less one.
+ */
+export async function readLogoForPdf(path: string): Promise<string | null> {
+  // A logo path does not survive a reinstall; a missing file is ordinary, not a
+  // failure, and must not reach reportError.
+  if (!(await photoExists(path))) return null;
+  try {
+    const probe = await ImageManipulator.manipulateAsync(path);
+    const result = await ImageManipulator.manipulateAsync(
+      path,
+      logoResizeActions(probe.width, probe.height),
+      { compress: LOGO_COMPRESS, format: ImageManipulator.SaveFormat.PNG, base64: true },
+    );
+    if (!result.base64) throw new Error("manipulateAsync returned no base64 data");
+    return `data:image/png;base64,${result.base64}`;
+  } catch (err) {
+    reportError(err, { context: "readLogoForPdf" });
+    return readPhotoAsDataUri(path);
   }
 }
