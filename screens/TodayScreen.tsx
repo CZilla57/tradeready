@@ -453,6 +453,15 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     navigation.getParent()?.navigate('Invoices');
   }
 
+  // Deep-link a specific overdue row to its invoice's detail modal — landing
+  // on the generic list would make the user find the invoice a second time.
+  function openOverdueInvoice(invoice: Invoice) {
+    navigation.getParent()?.navigate('Invoices', {
+      screen: 'InvoiceList',
+      params: { openInvoiceId: invoice.id },
+    });
+  }
+
   function goToJobs() {
     navigation.getParent()?.navigate('Jobs');
   }
@@ -564,7 +573,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
                 key={inv.id}
                 invoice={inv}
                 isLast={i === visibleInvoices.length - 1 && extraInvoices <= 0}
-                onPress={goToInvoices}
+                onPress={() => openOverdueInvoice(inv)}
               />
             ))}
             {extraInvoices > 0 && (

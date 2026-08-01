@@ -104,16 +104,42 @@ export function Card({ children, style, onPress }: CardProps) {
   return <View style={cardStyle}>{children}</View>;
 }
 
-export function StatCard({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+interface StatCardProps {
+  label: string;
+  value: string;
+  valueColor?: string;
+  /** When set, the card is tappable (e.g. stat taps drive a list filter). */
+  onPress?: () => void;
+  /** Extra hint appended to the accessibility label when tappable. */
+  accessibilityHint?: string;
+}
+
+export function StatCard({ label, value, valueColor, onPress, accessibilityHint }: StatCardProps) {
   const { colors, shadow } = useTheme();
-  return (
-    <View
-      style={[styles.statCard, { backgroundColor: colors.surface, ...shadow.card }]}
-      accessible={true}
-      accessibilityLabel={`${label}: ${value}`}
-    >
-      <Text style={[styles.statLabel, { color: colors.textMuted }]} maxFontSizeMultiplier={1.4}>{label}</Text>
+  const cardStyle = [styles.statCard, { backgroundColor: colors.surface, ...shadow.card }];
+  const content = (
+    <>
+      <Text style={[styles.statLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.4}>{label}</Text>
       <Text style={[styles.statValue, { color: valueColor || colors.textPrimary }]} maxFontSizeMultiplier={1.4}>{value}</Text>
+    </>
+  );
+  if (onPress) {
+    return (
+      <TouchableOpacity
+        style={cardStyle}
+        onPress={onPress}
+        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value}`}
+        accessibilityHint={accessibilityHint}
+      >
+        {content}
+      </TouchableOpacity>
+    );
+  }
+  return (
+    <View style={cardStyle} accessible={true} accessibilityLabel={`${label}: ${value}`}>
+      {content}
     </View>
   );
 }

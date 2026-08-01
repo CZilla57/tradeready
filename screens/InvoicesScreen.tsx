@@ -1,8 +1,9 @@
 // screens/InvoicesScreen.tsx
-// The main screen — shows all invoices, stats at the top, search bar.
-// Tapping an invoice opens the Outreach screen for that invoice.
+// The main screen — shows all invoices, stats at the top, search bar, and
+// status filter chips. Tapping an invoice opens its detail modal (payment
+// history, outreach, PDF, edit); the top stat cards double as filter taps.
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -21,7 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { loadInvoices, saveInvoices, loadSettings, loadJobs, saveJobs } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { getStatus, formatDate } from "../utils/invoiceHelpers";
-import { summarizeInvoices, filterInvoices } from "../utils/invoiceStats";
+import { summarizeInvoices, filterInvoices, isOverdue } from "../utils/invoiceStats";
 import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
@@ -52,15 +53,49 @@ import { useRefresh } from "../hooks/useRefresh";
 import type { Invoice, Settings, PaymentDraft } from "../types/models";
 import type { InvoiceStackScreenProps } from "../types/navigation";
 
-export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'InvoiceList'>) {
+// Status chips across the top. "Unpaid" is any remaining balance; "Overdue"
+// narrows that to past-due (same isOverdue the stat + row badges use, so the
+// chip counts and the badges always agree).
+const STATUS_FILTERS = [
+  { key: "all",     label: "All" },
+  { key: "unpaid",  label: "Unpaid" },
+  { key: "overdue", label: "Overdue" },
+  { key: "paid",    label: "Paid" },
+] as const;
+type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
+
+function matchesStatusFilter(inv: Invoice, key: StatusFilterKey): boolean {
+  switch (key) {
+    case "unpaid":  return !isFullyPaid(inv);
+    case "overdue": return isOverdue(inv);
+    case "paid":    return isFullyPaid(inv);
+    default:        return true;
+  }
+}
+
+export default function InvoicesScreen({ navigation, route }: InvoiceStackScreenProps<'InvoiceList'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [search, setSearch] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
   const [settings, setSettings] = useState<Partial<Settings>>({});
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
   const [recordingFor, setRecordingFor] = useState<Invoice | null>(null);
+
+  // Deep link from other tabs (Today's overdue rows): open the requested
+  // invoice's detail modal once the list has loaded, then clear the param so
+  // re-focusing the tab doesn't reopen it.
+  const openInvoiceId = route.params?.openInvoiceId;
+  useEffect(() => {
+    if (!openInvoiceId) return;
+    const target = invoices.find((i) => i.id === openInvoiceId);
+    if (target) {
+      setViewingInvoice(target);
+      navigation.setParams({ openInvoiceId: undefined });
+    }
+  }, [openInvoiceId, invoices, navigation]);
 
   // useFocusEffect reloads invoices every time you come back to this screen,
   // so changes made on other screens (like marking paid) show up immediately.
@@ -77,8 +112,15 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
     setSettings(sets);
   }, 'InvoicesScreen');
 
-  const filtered: Invoice[] = filterInvoices(invoices, search);
+  const filtered: Invoice[] = filterInvoices(invoices, search).filter((inv) =>
+    matchesStatusFilter(inv, statusFilter),
+  );
   const { outstanding, overdueCount, collected } = summarizeInvoices(invoices);
+
+  // Stat taps drive the filter; tapping the active one clears back to All.
+  function toggleStatusFilter(key: StatusFilterKey) {
+    setStatusFilter((current) => (current === key ? "all" : key));
+  }
 
   async function handleExportPdf(inv: Invoice) {
     const logoDataUri = settings.logoPhoto
@@ -276,13 +318,31 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
-      {/* Stats row */}
+      {/* Stats row — each stat doubles as a filter tap */}
       <View style={styles.statsRow}>
-        <StatCard label="Outstanding" value={formatMoney(outstanding)} valueColor={colors.danger} />
+        <StatCard
+          label="Outstanding"
+          value={formatMoney(outstanding)}
+          valueColor={colors.danger}
+          onPress={() => toggleStatusFilter("unpaid")}
+          accessibilityHint="Filters the list to unpaid invoices"
+        />
         <View style={{ width: spacing.sm }} />
-        <StatCard label="Overdue" value={String(overdueCount)} valueColor={colors.warning} />
+        <StatCard
+          label="Overdue"
+          value={String(overdueCount)}
+          valueColor={colors.warning}
+          onPress={() => toggleStatusFilter("overdue")}
+          accessibilityHint="Filters the list to overdue invoices"
+        />
         <View style={{ width: spacing.sm }} />
-        <StatCard label="Collected" value={formatMoney(collected)} valueColor={colors.success} />
+        <StatCard
+          label="Collected"
+          value={formatMoney(collected)}
+          valueColor={colors.success}
+          onPress={() => toggleStatusFilter("paid")}
+          accessibilityHint="Filters the list to paid invoices"
+        />
       </View>
 
       {/* Search bar */}
@@ -299,6 +359,29 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
         />
       </View>
 
+      {/* Status filter chips */}
+      <View style={styles.filterRow}>
+        {STATUS_FILTERS.map((f) => {
+          const count = f.key === "all"
+            ? invoices.length
+            : invoices.filter((inv) => matchesStatusFilter(inv, f.key)).length;
+          return (
+            <TouchableOpacity
+              key={f.key}
+              style={[styles.filterTab, statusFilter === f.key && styles.filterTabActive]}
+              onPress={() => setStatusFilter(f.key)}
+              accessibilityRole="tab"
+              accessibilityLabel={`${f.label}${count > 0 ? `, ${count}` : ''}`}
+              accessibilityState={{ selected: statusFilter === f.key }}
+            >
+              <Text style={[styles.filterTabText, statusFilter === f.key && styles.filterTabTextActive]} maxFontSizeMultiplier={1.4}>
+                {f.label} {count > 0 ? `(${count})` : ""}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       {/* Invoice list */}
       <FlatList
         refreshing={refreshing}
@@ -308,7 +391,11 @@ export default function InvoicesScreen({ navigation }: InvoiceStackScreenProps<'
         renderItem={renderInvoice}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
-          <EmptyState message="No invoices yet. Tap + to add your first one." />
+          <EmptyState message={
+            invoices.length === 0
+              ? "No invoices yet. Tap + to add your first one."
+              : "No invoices match this filter."
+          } />
         }
         showsVerticalScrollIndicator={false}
       />
@@ -514,6 +601,26 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingHorizontal: spacing.md,
       paddingBottom: spacing.sm,
     },
+    filterRow: {
+      flexDirection: "row",
+      paddingHorizontal: spacing.md,
+      gap: 6,
+      marginBottom: spacing.sm,
+    },
+    filterTab: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: radius.full,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    filterTabActive: {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+    },
+    filterTabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
+    filterTabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.textOnAccent },
     searchInput: {
       fontFamily: fonts.bodyRegular,
       backgroundColor: colors.surface,
