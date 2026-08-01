@@ -1,11 +1,19 @@
-# App Store listing — TradeReady 1.0 (refreshed 2026-07-16 for build 1.0.0(5))
+# App Store listing — TradeReady (refreshed 2026-08-01 for 1.1.0, build 7)
 
 Everything below respects the claims rule: only device-verified or
-code-verified-and-shipping features are claimed. Route optimization, OCR/
-receipt scanning, tax tools, team accounts, and a web dashboard are NOT
-mentioned anywhere — they don't exist. Auto-SENT overdue emails (server
-cron) are live but the real send path is unexercised, so the copy claims
-only "overdue reminders" (device-verified notifications).
+code-verified-and-shipping features are claimed. Route optimization, team
+accounts, and a web dashboard are NOT mentioned anywhere — they don't
+exist. (Receipt scanning and tax set-aside shipped late July 2026 and ARE
+now claimable — the old note here listing them as nonexistent is retired.)
+Auto-SENT overdue emails (server cron) are live but the real send path is
+unexercised, so the copy claims only "overdue reminders" (device-verified
+notifications).
+
+2026-08-01 refresh: added What's New for 1.1.0 (build 7); legal/support
+URLs moved from czilla57.github.io to gettradereadyapp.com (the apex
+serves the site directly since 2026-07-30; old github.io URLs 301, but
+the listing should carry the canonical host); version quick-answer now
+points at 1.1.0 build 7.
 
 2026-07-16 refresh: 2-week free trial confirmed on the live paywall
 ($19.99/mo, $199.99/yr) so the description now names the trial length; demo
@@ -98,11 +106,50 @@ TradeReady is a subscription with a 2-week free trial, so you can run real
 jobs through it before paying a cent. Cancel anytime in your App Store
 settings.
 
-Privacy policy: https://czilla57.github.io/tradeready-legal/privacy.html
-Terms of use: https://czilla57.github.io/tradeready-legal/terms.html
+Privacy policy: https://gettradereadyapp.com/privacy.html
+Terms of use: https://gettradereadyapp.com/terms.html
 Questions? support@gettradereadyapp.com — a real person reads it.
 
-## What's New (version 1.0)
+## What's New (version 1.1.0, build 7 — paste into ASC as-is)
+
+TradeReady 1.1 is our biggest update yet.
+
+NEW
+• Sign in with Apple or Google — get started in seconds
+• Deposits & partial payments — request money up front and track every
+  payment against the balance
+• Recurring invoices — bill your regulars automatically, on their schedule
+• Customers can now approve estimates online with one tap — you're
+  notified the moment they say yes
+• Appointment reminders and one-tap "On my way" texts
+• Tax set-aside — automatically earmark a slice of every payment so tax
+  time never stings
+• Scan receipts with your camera — the details are filled in for you
+• Email invoices as professional PDF attachments, with your business logo
+  on every document
+• Export invoices, jobs, customers, and expenses to CSV for your accountant
+
+IMPROVED
+• A fresh new look across the whole app — cleaner, bolder, easier to read
+• Simpler navigation — Settings now lives behind the gear on your Today
+  screen
+• Find jobs, customers, and invoices faster with search everywhere
+• Jobs mark themselves paid the moment their invoice is paid
+• Invoice and estimate emails are now far smaller and faster to send
+• Dozens of smaller fixes and polish throughout
+
+Questions? support@gettradereadyapp.com — a real person reads it.
+
+Notes cover everything since the 1.0 STORE release, including features
+delivered by OTA on 2026-07-30 (estimate approval, appointment reminders,
+receipt scanning, PDF attachments) — 1.0's notes were only the welcome
+blurb, so all of it is "new" against the last store notes. Claims rule
+before submitting for review: build 7 is the first binary carrying the new
+native modules, so on TestFlight verify Apple AND Google sign-in complete,
+send one invoice email with a logo end-to-end, and tap through deposits,
+receipt scan, recurring invoices, tax set-aside, and CSV export.
+
+## What's New (version 1.0 — shipped 2026-07-24, kept for the record)
 
 > Welcome to TradeReady 1.0 — price jobs, send estimates and invoices, get
 > paid with payment links, and run your whole trade business from your
@@ -166,13 +213,15 @@ everything.** No ATT prompt exists in the app, correctly.
   2-week free trial; both products "Ready to Submit")
 - Age rating questionnaire: all "No" → **4+**
 - Copyright: **© 2026 Chad Rector**
-- Support URL: https://czilla57.github.io/tradeready-legal/ — serves
-  `index.html`, a support page with support@gettradereadyapp.com and a FAQ.
-  Added 2026-07-24 after App Review rejected this URL as non-functional: the
-  repo had no index.html, so the site root returned 404. Do not delete
-  index.html from tradeready-legal.
-- Privacy Policy URL: https://czilla57.github.io/tradeready-legal/privacy.html
-- Version: 1.0.0 — attach **build 5** (2f33dfff, smoke-passed 2026-07-16)
+- Support URL: https://gettradereadyapp.com/ — the apex serves the
+  tradeready-legal site directly (custom domain since 2026-07-30); the root
+  serves `index.html`, a support page with support@gettradereadyapp.com and
+  a FAQ. Added 2026-07-24 after App Review rejected this URL as
+  non-functional: the repo had no index.html, so the site root returned
+  404. Do not delete index.html from tradeready-legal.
+- Privacy Policy URL: https://gettradereadyapp.com/privacy.html
+- Version: 1.1.0 — attach **build 7** (25c72a3b, EAS-built 2026-08-01 from
+  `c4ec829`; TestFlight smoke pending as of this refresh)
 
 ## Owner pre-submission checklist (state as of 2026-07-16)
 
