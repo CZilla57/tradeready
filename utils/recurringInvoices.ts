@@ -20,6 +20,7 @@ import {
 } from './storage';
 import { calculateNextDate, isEndConditionMet } from './recurrence';
 import { nextInvoiceNumber } from './invoiceNumber';
+import { syncNotifications } from './notifications';
 
 // Occurrence date + net terms. Same Date construction as calculateNextDate,
 // and same local-frame formatting (not toISOString/UTC, which loses a
@@ -113,6 +114,9 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
     if (newInvoices.length > 0 || anyUpdated) {
       await saveInvoices([...invoices, ...newInvoices]);
       await saveRecurringInvoices(rules);
+      // saveInvoices' own sweep raced the rules write above and may have read
+      // pre-advance rules — re-run now that the advanced rules are persisted.
+      syncNotifications();
     }
   } finally {
     generating = false;

@@ -1,7 +1,8 @@
 // __tests__/invoiceNumber.test.ts
-// nextInvoiceNumber was extracted 2026-08-01 from two identical screen-local
-// copies (AddInvoiceScreen.autoInvoiceNumber, CreateInvoiceFromJobScreen.
-// nextInvoiceNumber) so the recurring-invoice generator isn't a third copy.
+// nextInvoiceNumber was extracted 2026-08-01 from two near-identical
+// screen-local copies (AddInvoiceScreen.autoInvoiceNumber,
+// CreateInvoiceFromJobScreen.nextInvoiceNumber) so the recurring-invoice
+// generator isn't a third copy.
 // These tests pin the shared rule: digit-scan max + 1, INV-%04d.
 
 import { nextInvoiceNumber } from '../utils/invoiceNumber';

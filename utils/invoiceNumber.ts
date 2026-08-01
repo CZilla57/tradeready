@@ -1,10 +1,11 @@
 // utils/invoiceNumber.ts
 // Single home for the next-invoice-number rule: scan the digits of every
 // existing invoice.number, take max + 1, render INV-%04d. Extracted
-// 2026-08-01 from the two identical screen-local copies
+// 2026-08-01 from the two near-identical screen-local copies
 // (AddInvoiceScreen.autoInvoiceNumber, CreateInvoiceFromJobScreen.
 // nextInvoiceNumber) so the recurring-invoice generator isn't a third copy
-// (architecture-contract reuse rule).
+// (architecture-contract reuse rule; they differed only in the null guard
+// and parseInt radix — the guarded form was kept).
 
 import type { Invoice } from "../types/models";
 

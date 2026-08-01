@@ -8,6 +8,7 @@ import {
   loadRecurringInvoices,
   saveRecurringInvoices,
 } from '../utils/storage';
+import { syncNotifications } from '../utils/notifications';
 
 jest.mock('../utils/storage', () => ({
   loadInvoices: jest.fn(),
@@ -28,6 +29,10 @@ jest.mock('../utils/storage', () => ({
   ),
 }));
 
+jest.mock('../utils/notifications', () => ({
+  syncNotifications: jest.fn(),
+}));
+
 const mockLoadInvoices = loadInvoices as jest.MockedFunction<typeof loadInvoices>;
 const mockSaveInvoices = saveInvoices as jest.MockedFunction<typeof saveInvoices>;
 const mockLoadCustomers = loadCustomers as jest.MockedFunction<typeof loadCustomers>;
@@ -35,6 +40,7 @@ const mockLoadRecurringInvoices =
   loadRecurringInvoices as jest.MockedFunction<typeof loadRecurringInvoices>;
 const mockSaveRecurringInvoices =
   saveRecurringInvoices as jest.MockedFunction<typeof saveRecurringInvoices>;
+const mockSyncNotifications = syncNotifications as jest.MockedFunction<typeof syncNotifications>;
 
 const alice: Customer = {
   id: 'c1', name: 'Alice', email: 'alice@x.com', phone: '555-0001', address: '', notes: '',
@@ -100,6 +106,19 @@ describe('checkAndGenerateRecurringInvoices', () => {
     expect(rules[0].occurrenceCount).toBe(1);
     expect(rules[0].lastGeneratedDate).toBe('2026-07-08');
     expect(rules[0].nextDueDate).toBe('2026-07-15');
+  });
+
+  test('re-sweeps notifications after both saves complete (not racing the rules write)', async () => {
+    mockLoadRecurringInvoices.mockResolvedValue([makeRule()]);
+
+    await checkAndGenerateRecurringInvoices();
+
+    expect(mockSyncNotifications).toHaveBeenCalledTimes(1);
+    const [saveInvoicesOrder] = mockSaveInvoices.mock.invocationCallOrder;
+    const [saveRulesOrder] = mockSaveRecurringInvoices.mock.invocationCallOrder;
+    const [syncOrder] = mockSyncNotifications.mock.invocationCallOrder;
+    expect(syncOrder).toBeGreaterThan(saveInvoicesOrder);
+    expect(syncOrder).toBeGreaterThan(saveRulesOrder);
   });
 
   test('generated invoices carry NO jobId, payments, or lineItems', async () => {
