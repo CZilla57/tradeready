@@ -6,6 +6,7 @@ import { initialSync, syncIfOnline } from '../utils/sync';
 import { setupNotifications, requestPermissions, syncNotifications } from '../utils/notifications';
 import { configurePurchases, loginPurchases, logoutPurchases } from '../utils/subscription';
 import { checkAndGenerateRecurringJobs } from '../utils/recurringJobs';
+import { checkAndGenerateRecurringInvoices } from '../utils/recurringInvoices';
 import { identifyUser } from '../utils/analytics';
 import { applyEstimateDecisions } from '../utils/storage';
 
@@ -73,12 +74,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (session?.user?.id) {
       checkAndGenerateRecurringJobs();
+      checkAndGenerateRecurringInvoices();
     }
     const sub = AppState.addEventListener('change', state => {
       if (state === 'active' && session?.user?.id) {
         syncIfOnline(session.user.id).then(() => applyEstimateDecisions()).catch(() => {});
         syncNotifications();
         checkAndGenerateRecurringJobs();
+        checkAndGenerateRecurringInvoices();
       }
     });
     return () => sub.remove();
