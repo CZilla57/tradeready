@@ -20,7 +20,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { loadRecurringInvoices, saveRecurringInvoices, loadCustomers, getOrCreateCustomer } from "../utils/storage";
+import { loadRecurringInvoices, saveRecurringInvoices, loadCustomers, getOrCreateCustomer, resolveCustomer } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { Button } from "../components/UI";
 import Field from "../components/Field";
@@ -98,7 +98,7 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
       setEndCondition(rule.endCondition);
       setEndCount(rule.endCount != null ? String(rule.endCount) : "");
       setEndDate(rule.endDate ?? "");
-      const record = customers.find((c) => c.id === rule.customerId);
+      const record = resolveCustomer(customers, { customerId: rule.customerId, customerName: rule.customerName });
       setEmail(record?.email ?? "");
       setPhone(record?.phone ?? "");
     })();
@@ -119,7 +119,8 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
       Alert.alert("Missing info", "Enter payment terms in days (e.g. 30).");
       return;
     }
-    if (endCondition === "count" && (!endCount.trim() || parseInt(endCount, 10) < 1)) {
+    const parsedEndCount = parseInt(endCount, 10);
+    if (endCondition === "count" && (!endCount.trim() || isNaN(parsedEndCount) || parsedEndCount < 1)) {
       Alert.alert("End count required", "Please enter a number of invoices greater than 0.");
       return;
     }
@@ -146,7 +147,7 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
       dueDays: parsedDueDays,
       cadence,
       endCondition,
-      endCount: endCondition === "count" ? (parseInt(endCount, 10) || 1) : undefined,
+      endCount: endCondition === "count" ? parsedEndCount : undefined,
       endDate: endCondition === "date" ? endDate : undefined,
       nextDueDate: startDate,
     };
