@@ -744,7 +744,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     modalInvoiceNum: {
       fontFamily: fonts.mono,
       fontSize: 11,
-      color: colors.textMuted,
+      color: colors.textSecondary,
       letterSpacing: 0.4,
     },
     modalCustomer: {
@@ -770,8 +770,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     modalDetailLabel: {
       fontFamily: fonts.mono,
-      fontSize: 10,
-      color: colors.textMuted,
+      fontSize: 11,
+      color: colors.textSecondary,
       textTransform: "uppercase",
       letterSpacing: 0.4,
     },

@@ -211,7 +211,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontFamily: fonts.mono,
-    fontSize: 10,
+    fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: 0.2,
   },
@@ -236,7 +236,7 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     fontFamily: fonts.mono,
-    fontSize: 10,
+    fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: 0.6,
     marginBottom: 4,

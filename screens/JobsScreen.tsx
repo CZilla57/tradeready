@@ -297,6 +297,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.lg,
       padding: spacing.md,
       marginBottom: spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
       ...shadow.card,
     },
     cardTop: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
@@ -305,7 +307,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     jobAmount: { fontFamily: fonts.display, fontSize: fontSize.md, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
     jobMetaRow: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 4 },
     jobMeta: { fontFamily: fonts.mono, fontSize: 11, color: colors.textSecondary },
-    jobDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 8 },
+    jobDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 8 },
     quickActions: { flexDirection: "row", justifyContent: "flex-end" },
     quickActionBtn: {
       paddingHorizontal: 12,

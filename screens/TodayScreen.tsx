@@ -92,12 +92,12 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
     <View style={styles.statsRow}>
       {/* Today's earnings */}
       <TouchableOpacity style={styles.statCard} onPress={onEarningsTap} activeOpacity={0.75} accessibilityRole="button" accessibilityLabel={`Today's expected earnings: ${formatMoney(earnings)}`}>
-        <Text style={styles.statLabel}>TODAY</Text>
+        <Text style={styles.statLabel} maxFontSizeMultiplier={1.4}>TODAY</Text>
         {loading
           ? <ActivityIndicator color={colors.accent} size="small" style={styles.statSpinner} />
-          : <Text style={[styles.statValue, { color: colors.accent }]}>{formatMoney(earnings)}</Text>
+          : <Text style={[styles.statValue, { color: colors.accent }]} maxFontSizeMultiplier={1.4}>{formatMoney(earnings)}</Text>
         }
-        <Text style={styles.statSub}>Expected</Text>
+        <Text style={styles.statSub} maxFontSizeMultiplier={1.4}>Expected</Text>
       </TouchableOpacity>
 
       {/* Overdue invoices */}
@@ -108,16 +108,16 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
         accessibilityRole="button"
         accessibilityLabel={`Overdue invoices: ${overdueCount > 0 ? `${overdueCount}, ${formatMoney(overdueTotal)}` : 'none'}`}
       >
-        <Text style={[styles.statLabel, !loading && overdueCount > 0 && { color: colors.danger }]}>
+        <Text style={[styles.statLabel, !loading && overdueCount > 0 && { color: colors.danger }]} maxFontSizeMultiplier={1.4}>
           {!loading && overdueCount > 0 ? '⚠ OVERDUE' : 'OVERDUE'}
         </Text>
         {loading
           ? <ActivityIndicator color={colors.textMuted} size="small" style={styles.statSpinner} />
-          : <Text style={[styles.statValue, { color: overdueCount > 0 ? colors.danger : colors.textMuted }]}>
+          : <Text style={[styles.statValue, { color: overdueCount > 0 ? colors.danger : colors.textMuted }]} maxFontSizeMultiplier={1.4}>
               {overdueCount > 0 ? formatMoney(overdueTotal) : '—'}
             </Text>
         }
-        <Text style={[styles.statSub, !loading && overdueCount > 0 && { color: colors.danger }]}>
+        <Text style={[styles.statSub, !loading && overdueCount > 0 && { color: colors.danger }]} maxFontSizeMultiplier={1.4}>
           {loading ? ' ' : overdueCount > 0 ? `${overdueCount} invoice${overdueCount !== 1 ? 's' : ''}` : 'All clear'}
         </Text>
       </TouchableOpacity>
@@ -130,16 +130,16 @@ function StatsRow({ earnings, overdueTotal, overdueCount, leadCount, loading, on
         accessibilityRole="button"
         accessibilityLabel={`Leads: ${leadCount > 0 ? `${leadCount} to follow up` : 'none pending'}`}
       >
-        <Text style={[styles.statLabel, !loading && leadCount > 0 && { color: colors.warning }]}>
+        <Text style={[styles.statLabel, !loading && leadCount > 0 && { color: colors.warning }]} maxFontSizeMultiplier={1.4}>
           LEADS
         </Text>
         {loading
           ? <ActivityIndicator color={colors.textMuted} size="small" style={styles.statSpinner} />
-          : <Text style={[styles.statValue, { color: leadCount > 0 ? colors.warning : colors.textMuted }]}>
+          : <Text style={[styles.statValue, { color: leadCount > 0 ? colors.warning : colors.textMuted }]} maxFontSizeMultiplier={1.4}>
               {leadCount > 0 ? String(leadCount) : '—'}
             </Text>
         }
-        <Text style={[styles.statSub, !loading && leadCount > 0 && { color: colors.warning }]}>
+        <Text style={[styles.statSub, !loading && leadCount > 0 && { color: colors.warning }]} maxFontSizeMultiplier={1.4}>
           {loading ? ' ' : leadCount > 0 ? 'follow up' : 'None pending'}
         </Text>
       </TouchableOpacity>
@@ -173,9 +173,9 @@ function OverdueInvoiceRow({ invoice, isLast, onPress }: OverdueInvoiceRowProps)
         <Text style={styles.listRowSubMono}>{invoice.number}</Text>
       </View>
       <View style={styles.listRowRight}>
-        <Text style={[styles.listRowAmount, { color: tagColor }]}>{formatMoney(invoice.amount)}</Text>
+        <Text style={[styles.listRowAmount, { color: tagColor }]} maxFontSizeMultiplier={1.4}>{formatMoney(invoice.amount)}</Text>
         <View style={[styles.overdueTag, { backgroundColor: tagBg }]}>
-          <Text style={[styles.overdueTagText, { color: tagColor }]}>{days}d overdue</Text>
+          <Text style={[styles.overdueTagText, { color: tagColor }]} maxFontSizeMultiplier={1.2}>{days}d overdue</Text>
         </View>
       </View>
     </TouchableOpacity>
@@ -244,7 +244,7 @@ function JobCard({ job, onPress, onOnMyWay }: JobCardProps) {
       </Text>
       <View style={styles.jobCardFooter}>
         <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
-          <Text style={[styles.statusText, { color }]}>{label}</Text>
+          <Text style={[styles.statusText, { color }]} maxFontSizeMultiplier={1.4}>{label}</Text>
         </View>
         {canSendOnMyWay && (
           <TouchableOpacity
@@ -254,7 +254,7 @@ function JobCard({ job, onPress, onOnMyWay }: JobCardProps) {
             accessibilityRole="button"
             accessibilityLabel={`On my way to ${job.customerName}`}
           >
-            <Text style={styles.onMyWayButtonText}>On my way</Text>
+            <Text style={styles.onMyWayButtonText} maxFontSizeMultiplier={1.4}>On my way</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -279,11 +279,11 @@ function ScheduleStop({ job, isLast, onPress, onOnMyWay }: ScheduleStopProps) {
   return (
     <View style={styles.stopRow}>
       <View style={styles.stopGutter}>
-        <Text style={styles.stopStartTime}>
+        <Text style={styles.stopStartTime} maxFontSizeMultiplier={1.2}>
           {job.scheduledStartTime ? formatTimeRange(job.scheduledStartTime, null) : '—'}
         </Text>
         {job.scheduledEndTime && (
-          <Text style={styles.stopEndTime}>{formatTimeRange(job.scheduledEndTime, null)}</Text>
+          <Text style={styles.stopEndTime} maxFontSizeMultiplier={1.2}>{formatTimeRange(job.scheduledEndTime, null)}</Text>
         )}
         <View style={styles.stopDot} />
         {!isLast && <View style={styles.stopLine} />}
@@ -334,10 +334,10 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
 
   return (
     <View style={styles.weekStripWrapper}>
-      <Text style={styles.weekMonthLabel}>{weekMonthLabel(weekDates)}</Text>
+      <Text style={styles.weekMonthLabel} maxFontSizeMultiplier={1.4}>{weekMonthLabel(weekDates)}</Text>
       <View style={styles.weekStrip}>
         <TouchableOpacity onPress={onPrevWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityRole="button" accessibilityLabel="Previous week">
-          <Text style={styles.weekNavText}>‹</Text>
+          <Text style={styles.weekNavText} maxFontSizeMultiplier={1.4}>‹</Text>
         </TouchableOpacity>
 
         {weekDates.map((dateStr, i) => {
@@ -356,7 +356,7 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
               accessibilityLabel={`${DAY_LETTERS[i]}, ${dayNum}${hasJobs ? ', has jobs' : ''}`}
               accessibilityState={{ selected: isSelected }}
             >
-              <Text style={[styles.dayLetter, isSelected && styles.dayLetterSelected]}>
+              <Text style={[styles.dayLetter, isSelected && styles.dayLetterSelected]} maxFontSizeMultiplier={1.2}>
                 {DAY_LETTERS[i]}
               </Text>
               <View style={[
@@ -364,7 +364,7 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
                 isSelected && styles.dayNumCircleSelected,
                 isToday && !isSelected && styles.dayNumCircleToday,
               ]}>
-                <Text style={[
+                <Text maxFontSizeMultiplier={1.2} style={[
                   styles.dayNum,
                   isSelected && styles.dayNumSelected,
                   isToday && !isSelected && styles.dayNumToday,
@@ -378,7 +378,7 @@ function WeekStrip({ weekDates, selectedDate, today, jobDateSet, onSelectDay, on
         })}
 
         <TouchableOpacity onPress={onNextWeek} style={styles.weekNavBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityRole="button" accessibilityLabel="Next week">
-          <Text style={styles.weekNavText}>›</Text>
+          <Text style={styles.weekNavText} maxFontSizeMultiplier={1.4}>›</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -701,8 +701,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     weekMonthLabel: {
       fontFamily: fonts.mono,
-      fontSize: 10,
-      color: colors.textMuted,
+      fontSize: 11,
+      color: colors.textSecondary,
       letterSpacing: 0.8,
       textAlign: 'center',
       textTransform: 'uppercase',
@@ -729,8 +729,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     dayLetter: {
       fontFamily: fonts.mono,
-      fontSize: 10,
-      color: colors.textMuted,
+      fontSize: 11,
+      color: colors.textSecondary,
       marginBottom: 4,
     },
     dayLetterSelected: {
@@ -799,8 +799,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     statLabel: {
       fontFamily: fonts.mono,
-      fontSize: 10,
-      color: colors.textMuted,
+      fontSize: 11,
+      color: colors.textSecondary,
       letterSpacing: 0.6,
       textTransform: 'uppercase',
     },
@@ -819,7 +819,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     statSub: {
       fontFamily: fonts.bodyRegular,
       fontSize: fontSize.xs,
-      color: colors.textMuted,
+      color: colors.textSecondary,
       marginTop: 2,
     },
 
@@ -885,12 +885,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     listRowSub: {
       fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
-      color: colors.textMuted,
+      color: colors.textSecondary,
     },
     listRowSubMono: {
       fontFamily: fonts.mono,
       fontSize: 11,
-      color: colors.textMuted,
+      color: colors.textSecondary,
     },
     listRowRight: {
       alignItems: 'flex-end',
@@ -915,7 +915,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     overdueTagText: {
       fontFamily: fonts.mono,
-      fontSize: 10,
+      fontSize: 11,
       textTransform: 'uppercase',
       letterSpacing: 0.2,
     },
@@ -954,8 +954,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     stopEndTime: {
       fontFamily: fonts.mono,
-      fontSize: 10,
-      color: colors.textMuted,
+      fontSize: 11,
+      color: colors.textSecondary,
       marginTop: 1,
     },
     stopDot: {
@@ -996,7 +996,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     jobCustomer: {
       fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
-      color: colors.textMuted,
+      color: colors.textSecondary,
       marginBottom: spacing.sm,
     },
     jobCardFooter: {
@@ -1012,7 +1012,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     statusText: {
       fontFamily: fonts.mono,
-      fontSize: 10,
+      fontSize: 11,
       textTransform: 'uppercase',
       letterSpacing: 0.2,
     },
@@ -1043,7 +1043,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     emptySubtitle: {
       fontFamily: fonts.bodyRegular,
       fontSize: fontSize.sm,
-      color: colors.textMuted,
+      color: colors.textSecondary,
       textAlign: 'center',
       marginBottom: spacing.lg,
       paddingHorizontal: spacing.lg,
