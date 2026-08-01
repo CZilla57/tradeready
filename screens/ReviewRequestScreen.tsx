@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
-import { composeEmail, composeSMS } from "../utils/messaging";
+import { composeEmailWithOutcome, composeSMSWithOutcome } from "../utils/messaging";
 import { loadSettings, loadJobs, loadCustomers, resolveCustomer } from "../utils/storage";
 import {
   buildReviewMessage,
@@ -51,22 +51,34 @@ export default function ReviewRequestScreen({
 
   useEffect(() => {
     (async () => {
-      const [s, record] = await Promise.all([
+      const [s, record, jobs, customers] = await Promise.all([
         loadSettings(),
         // This read can throw (raw getItem + JSON.parse); a bad record must
         // not leave the screen on the blank loading frame — degrade to the
-        // no-record fallback below, which rebuilds from the live customer.
+        // live-customer path below.
         getReviewRequestRecord(jobId).catch(() => null),
+        loadJobs(),
+        loadCustomers(),
       ]);
       setSettings(s);
       setMissingLink(reviewMessageMissingLink(s.reviewRequestTemplate, s.googleReviewLink));
+      if (record?.sentAt) setSent(true);
 
-      if (record) {
+      // The LIVE customer drives contact info on every path — a phone or
+      // email corrected after the job completed must be what we send to.
+      // The record is the sent-state truth, and a last-resort contact
+      // snapshot only when the customer record itself is gone.
+      const job = jobs.find((j) => j.id === jobId);
+      const cust = job ? resolveCustomer(customers, job) : null;
+
+      if (!cust) {
+        if (!record) {
+          setNotFound(true);
+          return;
+        }
         setCustomerName(record.customerName);
         setCustomerPhone(record.customerPhone);
         setCustomerEmail(record.customerEmail);
-        if (record.sentAt) setSent(true);
-
         setMessage(
           buildReviewMessage(
             s.reviewRequestTemplate,
@@ -78,24 +90,15 @@ export default function ReviewRequestScreen({
         return;
       }
 
-      // Manual path: no record was ever scheduled (toggle off, no contact
-      // info at completion time, or the job predates the feature). Build the
-      // preview from the job's CURRENT customer so contact edits made since
-      // completion are honored; sending creates the record (Task 1 upsert).
-      const [jobs, customers] = await Promise.all([loadJobs(), loadCustomers()]);
-      const job = jobs.find((j) => j.id === jobId);
-      const cust = job ? resolveCustomer(customers, job) : null;
-      if (!job || !cust) {
-        setNotFound(true);
-        return;
+      if (!record) {
+        // Sending creates the record (upsert) — snapshot the live customer.
+        setFallbackCustomer({
+          customerId: cust.id,
+          customerName: cust.name,
+          customerPhone: cust.phone,
+          customerEmail: cust.email,
+        });
       }
-
-      setFallbackCustomer({
-        customerId: cust.id,
-        customerName: cust.name,
-        customerPhone: cust.phone,
-        customerEmail: cust.email,
-      });
       setCustomerName(cust.name);
       setCustomerPhone(cust.phone);
       setCustomerEmail(cust.email);
@@ -110,30 +113,32 @@ export default function ReviewRequestScreen({
     })();
   }, [jobId]);
 
+  // Cancelling out of a composer must not burn the one-shot or the pending
+  // auto-reminder — only a real (or unreportable-platform) send counts.
   async function handleSendSMS() {
-    const opened = await composeSMS({
+    const { opened, outcome } = await composeSMSWithOutcome({
       recipients: customerPhone ? [customerPhone] : [],
       body: message,
     });
-    if (opened) {
+    if (opened && outcome !== "notSent") {
       await markReviewRequestSent(jobId, fallbackCustomer ?? undefined);
       setSent(true);
       track('review_request_sent', { channel: 'sms', source: source ?? 'notification' });
-      Alert.alert("Review request sent", `SMS composer opened for ${customerName}.`);
+      Alert.alert("Review request sent", `Sent to ${customerName} by text.`);
     }
   }
 
   async function handleSendEmail() {
-    const opened = await composeEmail({
+    const { opened, outcome } = await composeEmailWithOutcome({
       recipients: customerEmail ? [customerEmail] : [],
       subject: `Thanks for choosing ${settings?.businessName ?? "us"}!`,
       body: message,
     });
-    if (opened) {
+    if (opened && outcome !== "notSent") {
       await markReviewRequestSent(jobId, fallbackCustomer ?? undefined);
       setSent(true);
       track('review_request_sent', { channel: 'email', source: source ?? 'notification' });
-      Alert.alert("Review request sent", `Email composer opened for ${customerName}.`);
+      Alert.alert("Review request sent", `Sent to ${customerName} by email.`);
     }
   }
 

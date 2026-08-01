@@ -1,7 +1,12 @@
 import { Alert } from "react-native";
 import * as MailComposer from "expo-mail-composer";
 import * as SMS from "expo-sms";
-import { composeEmail, composeSMS } from "../utils/messaging";
+import {
+  composeEmail,
+  composeSMS,
+  composeEmailWithOutcome,
+  composeSMSWithOutcome,
+} from "../utils/messaging";
 
 // expo-mail-composer / expo-sms are mocked in jest.setup.js (available by default).
 
@@ -53,6 +58,61 @@ describe("composeEmail", () => {
     await composeEmail({ recipients: [], subject: "s", body: "b", attachments: [] });
     const payload = MailComposer.composeAsync.mock.calls[0][0];
     expect(Object.keys(payload)).toEqual(["recipients", "subject", "body"]);
+  });
+});
+
+// Outcome semantics: only an explicit user cancel (or a saved-for-later email
+// draft) counts as notSent — it must NOT burn one-shot flows like the review
+// request. Platforms that can't report (Android) yield unknown, which callers
+// treat like sent to preserve the old composer-opened behavior there.
+describe("composeEmailWithOutcome", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test.each([
+    ["sent", "sent"],
+    ["cancelled", "notSent"],
+    ["saved", "notSent"],
+    ["undetermined", "unknown"],
+  ])("maps composer status %s to outcome %s", async (status, outcome) => {
+    MailComposer.isAvailableAsync.mockResolvedValueOnce(true);
+    MailComposer.composeAsync.mockResolvedValueOnce({ status });
+    const res = await composeEmailWithOutcome({
+      recipients: ["jane@example.com"],
+      subject: "s",
+      body: "b",
+    });
+    expect(res).toEqual({ opened: true, outcome });
+  });
+
+  test("not available → opened false, outcome notSent", async () => {
+    MailComposer.isAvailableAsync.mockResolvedValueOnce(false);
+    jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const res = await composeEmailWithOutcome({ recipients: [], subject: "s", body: "b" });
+    expect(res).toEqual({ opened: false, outcome: "notSent" });
+    expect(MailComposer.composeAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("composeSMSWithOutcome", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test.each([
+    ["sent", "sent"],
+    ["cancelled", "notSent"],
+    ["unknown", "unknown"],
+  ])("maps SMS result %s to outcome %s", async (result, outcome) => {
+    SMS.isAvailableAsync.mockResolvedValueOnce(true);
+    SMS.sendSMSAsync.mockResolvedValueOnce({ result });
+    const res = await composeSMSWithOutcome({ recipients: ["5551234567"], body: "Hi" });
+    expect(res).toEqual({ opened: true, outcome });
+  });
+
+  test("not available → opened false, outcome notSent", async () => {
+    SMS.isAvailableAsync.mockResolvedValueOnce(false);
+    jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const res = await composeSMSWithOutcome({ recipients: [], body: "b" });
+    expect(res).toEqual({ opened: false, outcome: "notSent" });
+    expect(SMS.sendSMSAsync).not.toHaveBeenCalled();
   });
 });
 
