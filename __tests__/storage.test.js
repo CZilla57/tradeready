@@ -114,6 +114,7 @@ describe("clearAllUserData", () => {
       "settings",
       "expenses",
       "customerNotes",
+      "recurringInvoices",
       "__syncQueue",
       "__lastSyncedAt",
       "__dataOwner",
