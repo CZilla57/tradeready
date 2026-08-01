@@ -35,8 +35,11 @@ export const PAID_EPSILON = 0.005;
  * This was applied piecemeal at first and each pass missed a site, producing
  * functions in this same file that disagreed about whether an invoice was
  * settled. If you add a function that touches an amount, coerce it here too.
+ *
+ * Exported for utils/csvExport.ts, whose income rows must coerce amounts
+ * identically or the export's sum-equivalence with collectedInRange breaks.
  */
-function toAmount(value: unknown): number {
+export function toAmount(value: unknown): number {
   const n = typeof value === "number" ? value : parseFloat(String(value));
   return Number.isFinite(n) ? n : 0;
 }

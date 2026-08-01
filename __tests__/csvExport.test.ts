@@ -1,4 +1,6 @@
-import { escapeCsvField, toCsv } from "../utils/csvExport";
+import { buildIncomeCsv, escapeCsvField, toCsv } from "../utils/csvExport";
+import { collectedInRange } from "../utils/invoicePayments";
+import type { Invoice } from "../types/models";
 
 describe("escapeCsvField", () => {
   test("plain value passes through unquoted", () => {
@@ -45,5 +47,145 @@ describe("toCsv", () => {
     expect(toCsv(["Name, full"], [['say "hi"']])).toBe(
       '"Name, full"\r\n"say ""hi"""\r\n'
     );
+  });
+});
+
+// Minimal valid invoice; override what each test needs.
+const inv = (over: Partial<Invoice> = {}): Invoice => ({
+  id: "inv1753900000000",
+  customer: "Jane Smith",
+  number: "INV-0001",
+  amount: 1000,
+  due: "2026-06-01",
+  email: "",
+  phone: "",
+  desc: "Maintenance",
+  paid: false,
+  ...over,
+});
+
+const JAN1 = new Date(2026, 0, 1);
+const DEC31 = new Date(2026, 11, 31, 23, 59, 59);
+
+describe("buildIncomeCsv", () => {
+  const HEADER =
+    "Date,Customer,Invoice #,Invoice Description,Method,Note,Amount";
+
+  test("empty invoice list exports header only", () => {
+    expect(buildIncomeCsv([], JAN1, DEC31)).toBe(HEADER + "\r\n");
+  });
+
+  test("one row per non-voided ledger payment in range", () => {
+    const invoice = inv({
+      payments: [
+        { id: "p1", amount: 400, date: "2026-03-01", method: "cash" },
+        { id: "p2", amount: 600, date: "2026-04-15", method: "stripe" },
+      ],
+    });
+    const csv = buildIncomeCsv([invoice], JAN1, DEC31);
+    const lines = csv.trimEnd().split("\r\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toBe("2026-03-01,Jane Smith,INV-0001,Maintenance,cash,,400.00");
+    expect(lines[2]).toBe("2026-04-15,Jane Smith,INV-0001,Maintenance,stripe,,600.00");
+  });
+
+  test("voided payments are excluded", () => {
+    const invoice = inv({
+      payments: [
+        { id: "p1", amount: 400, date: "2026-03-01", method: "cash" },
+        { id: "p2", amount: 600, date: "2026-04-15", method: "card", voidedAt: "2026-04-16" },
+      ],
+    });
+    const csv = buildIncomeCsv([invoice], JAN1, DEC31);
+    expect(csv).toContain("400.00");
+    expect(csv).not.toContain("600.00");
+  });
+
+  test("payments outside the range are excluded", () => {
+    const invoice = inv({
+      payments: [
+        { id: "p1", amount: 400, date: "2025-12-31", method: "cash" },
+        { id: "p2", amount: 600, date: "2026-04-15", method: "cash" },
+      ],
+    });
+    const lines = buildIncomeCsv([invoice], JAN1, DEC31).trimEnd().split("\r\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("2026-04-15");
+  });
+
+  test("legacy paid invoice emits one implicit row dated paidAt, method blank", () => {
+    const invoice = inv({ paid: true, paidAt: "2026-05-20" });
+    const lines = buildIncomeCsv([invoice], JAN1, DEC31).trimEnd().split("\r\n");
+    expect(lines).toHaveLength(2);
+    // Method column blank; the materialized legacy note is kept.
+    expect(lines[1]).toBe(
+      "2026-05-20,Jane Smith,INV-0001,Maintenance,,Recorded before payment history was itemised,1000.00"
+    );
+  });
+
+  test("legacy paid invoice without paidAt buckets on due", () => {
+    const invoice = inv({ paid: true, due: "2026-02-10" });
+    const csv = buildIncomeCsv([invoice], JAN1, DEC31);
+    expect(csv).toContain("2026-02-10");
+  });
+
+  test("legacy unpaid invoice emits nothing", () => {
+    const invoice = inv({ paid: false });
+    expect(buildIncomeCsv([invoice], JAN1, DEC31)).toBe(HEADER + "\r\n");
+  });
+
+  test("rows across invoices are sorted by date ascending", () => {
+    const a = inv({ id: "invA", number: "INV-0002",
+      payments: [{ id: "p1", amount: 100, date: "2026-06-01", method: "cash" }] });
+    const b = inv({ id: "invB", number: "INV-0003",
+      payments: [{ id: "p2", amount: 200, date: "2026-02-01", method: "cash" }] });
+    const lines = buildIncomeCsv([a, b], JAN1, DEC31).trimEnd().split("\r\n");
+    expect(lines[1]).toContain("2026-02-01");
+    expect(lines[2]).toContain("2026-06-01");
+  });
+
+  test("fields with commas are escaped", () => {
+    const invoice = inv({
+      customer: "Smith, Jones & Co",
+      payments: [{ id: "p1", amount: 100, date: "2026-03-01", method: "check", note: "lobby, phase 1" }],
+    });
+    const csv = buildIncomeCsv([invoice], JAN1, DEC31);
+    expect(csv).toContain('"Smith, Jones & Co"');
+    expect(csv).toContain('"lobby, phase 1"');
+  });
+
+  test("malformed amount contributes 0.00, not NaN", () => {
+    const invoice = inv({
+      payments: [{ id: "p1", amount: "oops" as unknown as number, date: "2026-03-01", method: "cash" }],
+    });
+    const csv = buildIncomeCsv([invoice], JAN1, DEC31);
+    expect(csv).toContain("0.00");
+    expect(csv).not.toContain("NaN");
+  });
+
+  test("SUM-EQUIVALENCE: exported amounts total exactly collectedInRange, over several ranges", () => {
+    const invoices = [
+      inv({ id: "invA", payments: [
+        { id: "p1", amount: 400.10, date: "2026-03-01", method: "cash" },
+        { id: "p2", amount: 599.90, date: "2026-07-15", method: "stripe" },
+        { id: "p3", amount: 50, date: "2026-07-16", method: "card", voidedAt: "2026-07-17" },
+      ]}),
+      inv({ id: "invB", number: "INV-0002", paid: true, paidAt: "2026-04-02", amount: 250 }),
+      inv({ id: "invC", number: "INV-0003", paid: false }),
+    ];
+    const ranges: [Date, Date][] = [
+      [JAN1, DEC31],
+      [new Date(2026, 2, 1), new Date(2026, 3, 30, 23, 59, 59)],
+      [new Date(2026, 6, 1), new Date(2026, 6, 31, 23, 59, 59)],
+      [new Date(2027, 0, 1), new Date(2027, 11, 31)],
+    ];
+    for (const [start, end] of ranges) {
+      const lines = buildIncomeCsv(invoices, start, end).trimEnd().split("\r\n").slice(1);
+      const sum = lines.reduce((acc, line) => {
+        const last = line.split(",").pop() as string;
+        return acc + Number(last);
+      }, 0);
+      expect(sum).toBeCloseTo(collectedInRange(invoices, start, end), 2);
+    }
   });
 });
