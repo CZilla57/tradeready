@@ -620,7 +620,16 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           // webhook-paid invoice is reflected even when the user deep-links
           // straight here without visiting the Jobs list.
           const advanced = advanceJobsForPaidInvoices(jobs, invoices);
-          if (advanced !== jobs) await saveJobs(advanced);
+          if (advanced !== jobs) {
+            // The sweep's write must not fail the load — the reads above all
+            // succeeded. Degrade to the advanced state in memory; the next
+            // focus retries the save.
+            try {
+              await saveJobs(advanced);
+            } catch (error: unknown) {
+              reportError(error, { context: 'jobDetailSweepSave' });
+            }
+          }
 
           const j = advanced.find((x: Job) => x.id === jobId);
           if (!j) {

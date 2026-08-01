@@ -17,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, loadInvoices, saveJobs } from "../utils/storage";
 import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
+import { reportError } from "../utils/analytics";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
@@ -49,8 +50,16 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
   const refreshJobs = useCallback(async () => {
     const [jobs, invoices] = await Promise.all([loadJobs(), loadInvoices()]);
     const advanced = advanceJobsForPaidInvoices(jobs, invoices);
-    if (advanced !== jobs) await saveJobs(advanced);
     setJobs(advanced);
+    if (advanced !== jobs) {
+      // The sweep's write must not blank the list — state is already
+      // rendered above; the next focus retries the save.
+      try {
+        await saveJobs(advanced);
+      } catch (error: unknown) {
+        reportError(error, { context: 'jobsSweepSave' });
+      }
+    }
   }, []);
 
   useFocusEffect(
