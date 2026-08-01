@@ -8,7 +8,6 @@ import {
   View,
   Text,
   FlatList,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
 } from "react-native";
@@ -21,6 +20,8 @@ import { reportError } from "../utils/analytics";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
+import { SearchField } from "../components/SearchField";
+import { Fab } from "../components/Fab";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -155,14 +156,10 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 
       {/* Search */}
       <View style={styles.searchRow}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search jobs or customers..."
-          placeholderTextColor={colors.textMuted}
+        <SearchField
           value={search}
           onChangeText={setSearch}
-          clearButtonMode="while-editing"
-          returnKeyType="search"
+          placeholder="Search jobs or customers..."
           accessibilityLabel="Search jobs or customers"
         />
       </View>
@@ -200,25 +197,22 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
         renderItem={renderJob}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
-          <EmptyState message={
-            effectiveFilterKey === "active"
-              ? "No active jobs.\nTap + to add your first job."
-              : "No jobs in this category."
-          } />
+          jobs.length === 0 ? (
+            <EmptyState
+              icon="briefcase-outline"
+              message="No jobs yet. Track work from lead to paid, starting with your first job."
+              actionLabel="+ Add a job"
+              onAction={() => navigation.navigate("AddJob", {})}
+            />
+          ) : (
+            <EmptyState icon="briefcase-outline" message="No jobs in this category." />
+          )
         }
         showsVerticalScrollIndicator={false}
       />
 
       {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate("AddJob", {})}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Add new job"
-      >
-        <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
+      <Fab onPress={() => navigation.navigate("AddJob", {})} accessibilityLabel="Add new job" />
     </SafeAreaView>
   );
 }
@@ -277,16 +271,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingBottom: spacing.sm,
     },
     searchRow: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
-    searchInput: {
-      fontFamily: fonts.bodyRegular,
-      backgroundColor: colors.surface,
-      borderRadius: radius.md,
-      height: 40,
-      paddingHorizontal: spacing.md,
-      fontSize: fontSize.md,
-      color: colors.textPrimary,
-      ...shadow.card,
-    },
     filterRow: {
       flexDirection: "row",
       paddingHorizontal: spacing.md,
@@ -330,22 +314,5 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.accentBg,
     },
     quickActionText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent },
-    fab: {
-      position: "absolute",
-      right: spacing.lg,
-      bottom: spacing.xl,
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: colors.accent,
-      alignItems: "center",
-      justifyContent: "center",
-      shadowColor: colors.accent,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.35,
-      shadowRadius: 8,
-      elevation: 6,
-    },
-    fabText: { color: colors.textOnAccent, fontSize: 28, lineHeight: 32, fontWeight: "300" },
   });
 }

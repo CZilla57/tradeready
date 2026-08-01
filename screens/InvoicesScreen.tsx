@@ -8,7 +8,6 @@ import {
   View,
   Text,
   FlatList,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   Alert,
@@ -31,6 +30,8 @@ import { readPhotoAsDataUri } from "../utils/photoStorage";
 import { track } from "../utils/analytics";
 import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { Badge, StatCard, EmptyState } from "../components/UI";
+import { SearchField } from "../components/SearchField";
+import { Fab } from "../components/Fab";
 import { RecordPaymentSheet } from "../components/RecordPaymentSheet";
 import { PaymentHistoryList } from "../components/PaymentHistoryList";
 import {
@@ -347,15 +348,11 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
 
       {/* Search bar */}
       <View style={styles.searchRow}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search customer or invoice #"
-          placeholderTextColor={colors.textMuted}
+        <SearchField
           value={search}
           onChangeText={setSearch}
+          placeholder="Search customer or invoice #"
           accessibilityLabel="Search invoices"
-          clearButtonMode="while-editing"
-          returnKeyType="search"
         />
       </View>
 
@@ -391,23 +388,22 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
         renderItem={renderInvoice}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
-          <EmptyState message={
-            invoices.length === 0
-              ? "No invoices yet. Tap + to add your first one."
-              : "No invoices match this filter."
-          } />
+          invoices.length === 0 ? (
+            <EmptyState
+              icon="document-text-outline"
+              message="No invoices yet. Create one to start collecting."
+              actionLabel="+ New invoice"
+              onAction={() => navigation.navigate("AddInvoice", {})}
+            />
+          ) : (
+            <EmptyState icon="document-text-outline" message="No invoices match this filter." />
+          )
         }
         showsVerticalScrollIndicator={false}
       />
 
       {/* Floating add button */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate("AddInvoice", {})}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
+      <Fab onPress={() => navigation.navigate("AddInvoice", {})} accessibilityLabel="Add new invoice" />
 
       {/* Invoice detail modal */}
       <Modal
@@ -621,16 +617,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     filterTabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
     filterTabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.textOnAccent },
-    searchInput: {
-      fontFamily: fonts.bodyRegular,
-      backgroundColor: colors.surface,
-      borderRadius: radius.md,
-      height: 40,
-      paddingHorizontal: spacing.md,
-      fontSize: fontSize.md,
-      color: colors.textPrimary,
-      ...shadow.card,
-    },
     listContent: {
       paddingHorizontal: spacing.md,
       paddingBottom: 100,
@@ -850,27 +836,5 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       color: colors.danger,
     },
 
-    fab: {
-      position: "absolute",
-      right: spacing.lg,
-      bottom: spacing.xl,
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: colors.accent,
-      alignItems: "center",
-      justifyContent: "center",
-      shadowColor: colors.accent,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.35,
-      shadowRadius: 8,
-      elevation: 6,
-    },
-    fabText: {
-      color: colors.textOnAccent,
-      fontSize: 28,
-      lineHeight: 32,
-      fontWeight: "300",
-    },
   });
 }

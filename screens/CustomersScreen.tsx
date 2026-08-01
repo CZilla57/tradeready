@@ -8,13 +8,14 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
 import { buildCustomerList, type CustomerListEntry } from '../utils/customerList';
+import { SearchField } from '../components/SearchField';
+import { Fab } from '../components/Fab';
 import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
@@ -134,27 +135,13 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
             {totalRevenue > 0 ? ` · ${formatMoney(totalRevenue)} collected` : ''}
           </Text>
         </View>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => navigation.navigate('AddCustomer', {})}
-          accessibilityRole="button"
-          accessibilityLabel="Add new customer"
-        >
-          <Text style={styles.addButtonText}>+ Add</Text>
-        </TouchableOpacity>
       </View>
 
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={16} color={colors.textMuted} style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search by name, email, or phone"
-          placeholderTextColor={colors.textMuted}
+      <View style={styles.searchRow}>
+        <SearchField
           value={searchText}
           onChangeText={setSearchText}
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-          returnKeyType="search"
+          placeholder="Search by name, email, or phone"
           accessibilityLabel="Search customers"
         />
       </View>
@@ -183,6 +170,9 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
           </View>
         }
       />
+
+      {/* FAB — matches the add pattern on Jobs and Invoices */}
+      <Fab onPress={() => navigation.navigate('AddCustomer', {})} accessibilityLabel="Add new customer" />
     </SafeAreaView>
   );
 }
@@ -217,39 +207,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     color: colors.textSecondary,
     marginTop: 3,
   },
-  addButton: {
-    backgroundColor: colors.accent,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.full,
-  },
-  addButtonText: {
-    fontFamily: fonts.bodyBold,
-    color: colors.textOnAccent,
-    fontSize: fontSize.sm,
-  },
-
   // Search
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
+  searchRow: {
     marginHorizontal: spacing.md,
     marginBottom: spacing.md,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  searchIcon: {
-    marginRight: spacing.sm,
-  },
-  searchInput: {
-    fontFamily: fonts.bodyRegular,
-    flex: 1,
-    height: 44,
-    color: colors.textPrimary,
-    fontSize: fontSize.md,
   },
 
   // List

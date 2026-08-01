@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   type ViewStyle,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../hooks/useTheme";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 
@@ -156,11 +157,36 @@ export function SectionHeader({ title }: { title: string }) {
   );
 }
 
-export function EmptyState({ message }: { message: string }) {
+interface EmptyStateProps {
+  message: string;
+  /** Ionicons glyph shown above the message. */
+  icon?: keyof typeof Ionicons.glyphMap;
+  /** Optional CTA — prefer offering the action over telling users where to tap. */
+  actionLabel?: string;
+  onAction?: () => void;
+}
+
+export function EmptyState({ message, icon, actionLabel, onAction }: EmptyStateProps) {
   const { colors } = useTheme();
   return (
     <View style={styles.empty}>
-      <Text style={[styles.emptyText, { color: colors.textMuted }]}>{message}</Text>
+      {icon ? (
+        <Ionicons name={icon} size={40} color={colors.textMuted} style={styles.emptyIcon} />
+      ) : null}
+      <Text style={[styles.emptyText, { color: colors.textSecondary }]}>{message}</Text>
+      {actionLabel && onAction ? (
+        <TouchableOpacity
+          style={[styles.emptyAction, { backgroundColor: colors.accent }]}
+          onPress={onAction}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={actionLabel}
+        >
+          <Text style={[styles.emptyActionText, { color: colors.textOnAccent }]} maxFontSizeMultiplier={1.4}>
+            {actionLabel}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -241,6 +267,19 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     textAlign: "center",
     lineHeight: 24,
+  },
+  emptyIcon: {
+    marginBottom: spacing.md,
+  },
+  emptyAction: {
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+  },
+  emptyActionText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: fontSize.md,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
