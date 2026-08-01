@@ -101,6 +101,18 @@ describe("persistPhotoSafe", () => {
     // The caller must not be handed a path to a file that was never created.
     expect(uri).toBeNull();
   });
+
+  test("stores under the requested extension so the file name matches its bytes", async () => {
+    // A resized logo is PNG. readPhotoAsDataUri derives the data-URI mime type
+    // from the extension, so a .jpg name on PNG bytes would mislabel it.
+    const uri = await persistPhotoSafe(TEMP, "logos", "png");
+    expect(uri).toMatch(/^file:\/\/\/mock\/logos\/.+\.png$/);
+  });
+
+  test("defaults to .jpg, so existing callers are unchanged", async () => {
+    const uri = await persistPhotoSafe(TEMP, "job-photos");
+    expect(uri).toMatch(/^file:\/\/\/mock\/job-photos\/.+\.jpg$/);
+  });
 });
 
 describe("logoResizeActions", () => {

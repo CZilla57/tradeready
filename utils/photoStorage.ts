@@ -2,13 +2,21 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { reportError } from "./analytics";
 
-export async function persistPhoto(tempUri: string, folder = "photos"): Promise<string> {
+// `ext` is the stored file's extension, not a conversion request — the caller
+// passes what the bytes actually are. readPhotoAsDataUri derives the data-URI
+// mime type from it, so a resized (PNG) logo saved under `.jpg` would be
+// handed to the PDF renderer mislabelled.
+export async function persistPhoto(
+  tempUri: string,
+  folder = "photos",
+  ext = "jpg",
+): Promise<string> {
   const dir = `${FileSystem.documentDirectory}${folder}/`;
   const info = await FileSystem.getInfoAsync(dir);
   if (!info.exists) {
     await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
   }
-  const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+  const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   const dest = `${dir}${filename}`;
   await FileSystem.copyAsync({ from: tempUri, to: dest });
   return dest;
@@ -30,9 +38,13 @@ export async function persistPhoto(tempUri: string, folder = "photos"): Promise<
  * Callers own the user-facing message, because what was lost differs (a logo, a
  * job photo, a receipt).
  */
-export async function persistPhotoSafe(tempUri: string, folder: string): Promise<string | null> {
+export async function persistPhotoSafe(
+  tempUri: string,
+  folder: string,
+  ext = "jpg",
+): Promise<string | null> {
   try {
-    return await persistPhoto(tempUri, folder);
+    return await persistPhoto(tempUri, folder, ext);
   } catch (err) {
     reportError(err, { context: "persistPhoto", folder });
     return null;
