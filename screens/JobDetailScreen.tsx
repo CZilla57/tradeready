@@ -23,7 +23,7 @@ import { persistPhotoSafe, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer } from "../utils/storage";
-import { scheduleReviewRequest } from "../utils/reviewRequest";
+import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { track, reportError } from '../utils/analytics';
@@ -494,7 +494,7 @@ function TimeTrackingCard({ sessions, estimatedHours, onClockIn, onClockOut }: {
   );
 }
 
-function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: JobStackScreenProps<'JobDetail'>['navigation']; onAdvance: () => void }) {
+function PrimaryAction({ job, reviewSent, navigation, onAdvance }: { job: Job; reviewSent: boolean; navigation: JobStackScreenProps<'JobDetail'>['navigation']; onAdvance: () => void }) {
   const actions: Record<string, { label: string; onPress: () => void; variant: "primary" | "secondary" | "ghost" }> = {
     lead: job.estimateTotal > 0
       ? {
@@ -544,9 +544,10 @@ function PrimaryAction({ job, navigation, onAdvance }: { job: Job; navigation: J
       variant: "primary",
     },
     paid: {
-      label: "Job complete — Paid ✓",
-      onPress: () => {},
-      variant: "ghost",
+      label: reviewSent ? "Review request sent ✓" : "Request a review",
+      onPress: () =>
+        navigation.navigate("ReviewRequest", { jobId: job.id, source: "job_detail" }),
+      variant: reviewSent ? "ghost" : "primary",
     },
   };
 
@@ -588,6 +589,25 @@ function DepositAction({ job, navigation }: { job: Job; navigation: JobStackScre
   );
 }
 
+// Manual review-request path for jobs that finished but aren't paid yet —
+// covers asking before payment and recovering a missed auto-notification.
+// Paid jobs get the PrimaryAction CTA instead; once sent, this hides.
+function ReviewRequestAction({ job, reviewSent, navigation }: { job: Job; reviewSent: boolean; navigation: JobStackScreenProps<'JobDetail'>['navigation'] }) {
+  if (job.status !== "complete" && job.status !== "invoiced") return null;
+  if (reviewSent) return null;
+
+  return (
+    <Button
+      label="Request review →"
+      variant="secondary"
+      onPress={() =>
+        navigation.navigate("ReviewRequest", { jobId: job.id, source: "job_detail" })
+      }
+      style={{ marginBottom: spacing.sm }}
+    />
+  );
+}
+
 // ── Main Screen ────────────────────────────────────────────────────────────
 
 export default function JobDetailScreen({ route, navigation }: JobStackScreenProps<'JobDetail'>) {
@@ -600,6 +620,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<boolean>(false);
+  const [reviewSent, setReviewSent] = useState<boolean>(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -609,10 +630,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
         setLoading(true);
         setLoadError(false);
         try {
-          const [jobs, customers, invoices] = await Promise.all([
+          const [jobs, customers, invoices, reviewRecord] = await Promise.all([
             loadJobs(),
             loadCustomers(),
             loadInvoices(),
+            getReviewRequestRecord(jobId),
           ]);
           if (!active) return;
 
@@ -641,6 +663,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           // Name-join fallback keeps contact links working when the id dangles
           // (e.g. recurring-rule jobs created before a sample-id remap).
           setCustomer(resolveCustomer(customers, j));
+          setReviewSent(!!reviewRecord?.sentAt);
         } catch (error: unknown) {
           console.error("JobDetailScreen: failed to load job", error);
           reportError(error, { context: 'jobDetailLoad' });
@@ -862,11 +885,14 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
 
         <PrimaryAction
           job={job}
+          reviewSent={reviewSent}
           navigation={navigation}
           onAdvance={advanceStatus}
         />
 
         <DepositAction job={job} navigation={navigation} />
+
+        <ReviewRequestAction job={job} reviewSent={reviewSent} navigation={navigation} />
 
         {job.status === "declined" && (
           <Button
