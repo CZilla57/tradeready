@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   FlatList,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,6 +42,7 @@ import { CustomerMixCard }     from '../components/money/CustomerMixCard';
 import { ExpenseTrendsCard }  from '../components/money/ExpenseTrendsCard';
 import { ExpenseRow }        from '../components/money/ExpenseRow';
 import { AddExpenseModal }   from '../components/money/AddExpenseModal';
+import { MoneySection }      from '../components/money/MoneySection';
 import type { Invoice, Expense } from '../types/models';
 import type { MoneyStackScreenProps } from '../types/navigation';
 
@@ -177,6 +179,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
+        <ActivityIndicator size={36} color={colors.accent} />
         <Text style={styles.loadingText}>Loading finances...</Text>
       </View>
     );
@@ -246,7 +249,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
-          {/* ── Money in & out (income + expenses) ──────────────────────── */}
+          {/* ── The daily glance: money in & out, always visible ────────── */}
           <SummaryCard
             income={filteredIncome}
             expenses={filteredExpenseTotal}
@@ -254,40 +257,9 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
             prevExpenses={prevFilteredExpenseTotal}
             label={activeFilterLabel}
           />
-          <MonthlyChart invoices={invoices} expenses={expenses} />
-          <SeasonalTrendsCard invoices={invoices} />
-          <ExpenseCategoryCard
-            expensesByCategory={expensesByCategory}
-            filteredExpenseTotal={filteredExpenseTotal}
-          />
-          <ExpenseTrendsCard expenses={expenses} />
 
-          {/* ── Customers & invoicing (derived from paid invoices) ──────── */}
-          <TopCustomersCard invoices={invoices} start={start} end={end} />
-          <CustomerMixCard invoices={invoices} start={start} end={end} />
-          <InvoiceAgingCard invoices={invoices} />
-
-          {/* ── Job pipeline (needs open jobs / unpaid invoices) ────────── */}
-          <ReceivablesCard invoices={invoices} jobs={jobs} />
-          <ConversionFunnelCard jobs={jobs} />
-          <RevenueForecastCard jobs={jobs} />
-          <AvgJobValueCard
-            jobs={jobs}
-            start={start}
-            end={end}
-            prevStart={prevRange?.start ?? null}
-            prevEnd={prevRange?.end ?? null}
-          />
-          <RevenueByTypeCard jobs={jobs} />
-
-          {/* ── Tools ───────────────────────────────────────────────────── */}
-          <MileageCard start={start} end={end} onPress={handleMileagePress} />
-          {/* Tax card ignores the screen's date filter on purpose: its windows
-              are the IRS payment periods + calendar YTD, not the filter. */}
-          <TaxSetAsideCard invoices={invoices as Invoice[]} expenses={expenses as Expense[]} />
-          <PricebookCard onPress={handlePricebookPress} />
-
-          {filteredIncome === 0 && filteredExpenseTotal === 0 && (
+          {invoices.length === 0 && expenses.length === 0 && jobs.length === 0 ? (
+            /* Nothing recorded anywhere yet — skip the section scaffolding. */
             <View style={styles.emptyState}>
               <Ionicons name="cash-outline" size={40} color={colors.textMuted} style={styles.emptyStateIcon} />
               <Text style={styles.emptyStateTitle}>No financial data yet</Text>
@@ -295,6 +267,49 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
                 Mark invoices as paid and log your expenses to see your P&L here.
               </Text>
             </View>
+          ) : (
+            <>
+              {/* Deeper analytics grouped behind collapsible headers so the
+                  default view stays a short glance, not a 16-card scroll. */}
+              <MoneySection title="Cash flow" defaultExpanded>
+                <MonthlyChart invoices={invoices} expenses={expenses} />
+                <SeasonalTrendsCard invoices={invoices} />
+                <ExpenseCategoryCard
+                  expensesByCategory={expensesByCategory}
+                  filteredExpenseTotal={filteredExpenseTotal}
+                />
+                <ExpenseTrendsCard expenses={expenses} />
+              </MoneySection>
+
+              <MoneySection title="Customers & invoices">
+                <TopCustomersCard invoices={invoices} start={start} end={end} />
+                <CustomerMixCard invoices={invoices} start={start} end={end} />
+                <InvoiceAgingCard invoices={invoices} />
+              </MoneySection>
+
+              <MoneySection title="Job pipeline">
+                <ReceivablesCard invoices={invoices} jobs={jobs} />
+                <ConversionFunnelCard jobs={jobs} />
+                <RevenueForecastCard jobs={jobs} />
+                <AvgJobValueCard
+                  jobs={jobs}
+                  start={start}
+                  end={end}
+                  prevStart={prevRange?.start ?? null}
+                  prevEnd={prevRange?.end ?? null}
+                />
+                <RevenueByTypeCard jobs={jobs} />
+              </MoneySection>
+
+              <MoneySection title="Tools">
+                <MileageCard start={start} end={end} onPress={handleMileagePress} />
+                {/* Tax card ignores the screen's date filter on purpose: its
+                    windows are the IRS payment periods + calendar YTD, not the
+                    filter — and the card body states its own period range. */}
+                <TaxSetAsideCard invoices={invoices as Invoice[]} expenses={expenses as Expense[]} />
+                <PricebookCard onPress={handlePricebookPress} />
+              </MoneySection>
+            </>
           )}
           <View style={styles.bottomPadding} />
         </ScrollView>
@@ -357,8 +372,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: 'center',
     },
     loadingText: {
+      fontFamily: fonts.bodyRegular,
       color: colors.textSecondary,
       fontSize: fontSize.md,
+      marginTop: spacing.md,
     },
 
     // ── Date filter chips

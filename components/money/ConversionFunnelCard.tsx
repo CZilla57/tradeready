@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { computeConversionFunnel } from '../../utils/conversionFunnel';
+import { CardScope } from './CardScope';
 import type { Job, JobStatus } from '../../types/models';
 
 // Floor so a zero-count stage still renders a visible sliver instead of
@@ -43,6 +44,7 @@ export const ConversionFunnelCard = React.memo(function ConversionFunnelCard({ j
           <Text style={styles.winRateBadge}>{Math.round(funnel.winRate * 100)}% win rate</Text>
         )}
       </View>
+      <CardScope label="All jobs" />
 
       {funnel.stages.map((stage, i) => {
         const barWidth = maxCount > 0
