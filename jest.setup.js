@@ -78,6 +78,23 @@ jest.mock("expo-image-picker", () => ({
   MediaTypeOptions: { Images: "Images" },
 }));
 
+// The manipulator is native. Resolve with a small, already-within-cap image by
+// default so suites that merely touch the logo path need no per-test setup;
+// tests that care about resizing override the dimensions with
+// mockResolvedValueOnce. Enum values match the real SaveFormat/FlipType strings.
+jest.mock("expo-image-manipulator", () => ({
+  manipulateAsync: jest.fn(() =>
+    Promise.resolve({
+      uri: "file:///mock/manipulated.png",
+      width: 512,
+      height: 512,
+      base64: "PNGDATA",
+    })
+  ),
+  SaveFormat: { JPEG: "jpeg", PNG: "png", WEBP: "webp" },
+  FlipType: { Vertical: "vertical", Horizontal: "horizontal" },
+}));
+
 jest.mock("expo-image", () => {
   const { View } = require("react-native");
   return { Image: View };
