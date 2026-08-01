@@ -121,7 +121,7 @@ utils/
   notifications.ts               ← Push notification scheduling (overdue reminders)
   pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
   pdfExport.ts                   ← PDF rendering and share sheet
-  photoStorage.ts                ← Device photo management (expo-file-system)
+  photoStorage.ts                ← Device photo management + logo downscale for PDFs
   aiService.ts                   ← Groq AI integration (backend-proxied via Vercel)
   pricebookAI.ts                 ← Pricebook AI Assist (backend-proxied via Vercel)
   receiptOCR.ts                  ← Receipt scan: parse/clamp + routing (user key / backend)

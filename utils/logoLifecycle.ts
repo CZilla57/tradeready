@@ -27,8 +27,10 @@ export function orphanedLogoPaths(
 export const LOGO_SWEEP_MIN_AGE_MS = 5 * 60 * 1000;
 
 /**
- * `persistPhoto` names every file `${Date.now()}_${random}.jpg`, so a file's
- * creation time is recoverable from its name — no stat call per file.
+ * `persistPhoto` names every file `${Date.now()}_${random}.<ext>` (`.png` for a
+ * logo that the pick-time resize re-encoded, `.jpg` otherwise), so a file's
+ * creation time is recoverable from its name — no stat call per file. Only the
+ * timestamp prefix is parsed, so the extension is irrelevant here.
  *
  * A name that does not parse was not produced by that scheme, so it cannot be a
  * recent pick and is not treated as young. A timestamp in the future (clock
