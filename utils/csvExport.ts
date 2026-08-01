@@ -5,6 +5,7 @@
 
 import type { Invoice, Expense, Trip } from "../types/models";
 import { paymentsInRange, toAmount } from "./invoicePayments";
+import type { DateRange } from "./moneyUtils";
 import { EXPENSE_CATEGORIES, isInRange } from "./moneyUtils";
 
 /**
@@ -116,4 +117,58 @@ export function buildTripsCsv(trips: Trip[], start: Date, end: Date): string {
       String(t.miles),
     ]);
   return toCsv(TRIP_HEADER, rows);
+}
+
+export type ExportRangeId =
+  | "this_month"
+  | "this_quarter"
+  | "this_year"
+  | "last_year"
+  | "all_time";
+
+/**
+ * Export presets. Same local-time construction as moneyUtils.getDateRange —
+ * implemented here rather than delegated because the export needs an
+ * injectable `now` for deterministic tests (getDateRange reads the real
+ * clock) and two presets (quarter, last year) getDateRange doesn't have.
+ */
+export function exportDateRange(id: ExportRangeId, now: Date = new Date()): DateRange {
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  switch (id) {
+    case "this_month":
+      return { start: new Date(y, m, 1), end: new Date(y, m + 1, 0, 23, 59, 59) };
+    case "this_quarter": {
+      const q = Math.floor(m / 3) * 3;
+      return { start: new Date(y, q, 1), end: new Date(y, q + 3, 0, 23, 59, 59) };
+    }
+    case "this_year":
+      return { start: new Date(y, 0, 1), end: new Date(y, 11, 31, 23, 59, 59) };
+    case "last_year":
+      return { start: new Date(y - 1, 0, 1), end: new Date(y - 1, 11, 31, 23, 59, 59) };
+    case "all_time":
+      return { start: new Date(0), end: new Date(9999, 11, 31) };
+  }
+}
+
+// LOCAL date for filenames — toISOString would UTC-shift west-of-UTC users
+// onto the previous day (same trap parseLocalDate exists for).
+function ymdLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** No user text in filenames, so no sanitizer needed (unlike invoicePdfFilename). */
+export function csvFilename(
+  dataset: "income" | "expenses" | "mileage",
+  range: DateRange,
+  rangeId: ExportRangeId | "custom"
+): string {
+  if (rangeId === "all_time") return `tradeready-${dataset}_all-time.csv`;
+  return `tradeready-${dataset}_${ymdLocal(range.start)}_${ymdLocal(range.end)}.csv`;
+}
+
+/** Data rows in a built CSV (excludes the header) — drives the screen's counts. */
+export function csvRowCount(csv: string): number {
+  return csv.split("\r\n").filter((line) => line.length > 0).length - 1;
 }

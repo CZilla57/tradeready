@@ -1,4 +1,4 @@
-import { buildIncomeCsv, buildExpensesCsv, buildTripsCsv, escapeCsvField, toCsv } from "../utils/csvExport";
+import { buildIncomeCsv, buildExpensesCsv, buildTripsCsv, escapeCsvField, toCsv, exportDateRange, csvFilename, csvRowCount } from "../utils/csvExport";
 import { collectedInRange } from "../utils/invoicePayments";
 import type { Invoice, Expense, Trip } from "../types/models";
 
@@ -299,5 +299,66 @@ describe("buildTripsCsv", () => {
     expect(rows).toHaveLength(3);
     expect(rows[1]).toContain("Earlier");
     expect(rows[2]).toContain("Later");
+  });
+});
+
+describe("exportDateRange", () => {
+  // Fixed 'now' → deterministic regardless of machine clock/timezone.
+  const NOW = new Date(2026, 7, 15, 12, 0, 0); // Aug 15 2026
+
+  test("this_month spans the calendar month", () => {
+    const r = exportDateRange("this_month", NOW);
+    expect(r.start).toEqual(new Date(2026, 7, 1));
+    expect(r.end).toEqual(new Date(2026, 8, 0, 23, 59, 59));
+  });
+
+  test("this_quarter spans Jul-Sep for an August now", () => {
+    const r = exportDateRange("this_quarter", NOW);
+    expect(r.start).toEqual(new Date(2026, 6, 1));
+    expect(r.end).toEqual(new Date(2026, 9, 0, 23, 59, 59));
+  });
+
+  test("this_quarter first month of a quarter", () => {
+    const r = exportDateRange("this_quarter", new Date(2026, 0, 3));
+    expect(r.start).toEqual(new Date(2026, 0, 1));
+    expect(r.end).toEqual(new Date(2026, 3, 0, 23, 59, 59));
+  });
+
+  test("this_year and last_year", () => {
+    expect(exportDateRange("this_year", NOW).start).toEqual(new Date(2026, 0, 1));
+    expect(exportDateRange("last_year", NOW).start).toEqual(new Date(2025, 0, 1));
+    expect(exportDateRange("last_year", NOW).end).toEqual(new Date(2025, 11, 31, 23, 59, 59));
+  });
+
+  test("all_time is unbounded for practical purposes", () => {
+    const r = exportDateRange("all_time", NOW);
+    expect(r.start.getTime()).toBe(0);
+    expect(r.end.getFullYear()).toBe(9999);
+  });
+});
+
+describe("csvFilename", () => {
+  const range = { start: new Date(2026, 0, 1), end: new Date(2026, 11, 31) };
+
+  test("dated filename from local dates", () => {
+    expect(csvFilename("income", range, "this_year")).toBe(
+      "tradeready-income_2026-01-01_2026-12-31.csv"
+    );
+  });
+
+  test("all_time avoids the epoch date", () => {
+    expect(csvFilename("mileage", range, "all_time")).toBe(
+      "tradeready-mileage_all-time.csv"
+    );
+  });
+});
+
+describe("csvRowCount", () => {
+  test("header-only file has zero rows", () => {
+    expect(csvRowCount("A,B\r\n")).toBe(0);
+  });
+
+  test("counts data rows", () => {
+    expect(csvRowCount("A,B\r\n1,2\r\n3,4\r\n")).toBe(2);
   });
 });
