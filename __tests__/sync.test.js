@@ -157,7 +157,14 @@ describe("initialSync ownership guard", () => {
 
     // multiRemove should have been called to clear the stale collections.
     expect(AsyncStorage.multiRemove).toHaveBeenCalledWith(
-      expect.arrayContaining(["jobs", "invoices", "customers", "expenses", "customerNotes"])
+      expect.arrayContaining([
+        "jobs",
+        "invoices",
+        "customers",
+        "expenses",
+        "customerNotes",
+        "recurringInvoices",
+      ])
     );
   });
 
