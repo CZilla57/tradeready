@@ -178,6 +178,36 @@ describe('checkAndGenerateRecurringInvoices', () => {
     expect(mockSaveRecurringInvoices.mock.calls[0][0][0].isActive).toBe(false);
   });
 
+  test('generates the final occurrence then deactivates when the next generation reaches endCount', async () => {
+    mockLoadRecurringInvoices.mockResolvedValue([
+      makeRule({ endCondition: 'count', endCount: 3, occurrenceCount: 2 }),
+    ]);
+
+    await checkAndGenerateRecurringInvoices();
+
+    const saved: Invoice[] = mockSaveInvoices.mock.calls[0][0];
+    expect(saved).toHaveLength(1);
+    expect(saved[0].occurrenceNumber).toBe(3);
+
+    const rules: RecurringInvoice[] = mockSaveRecurringInvoices.mock.calls[0][0];
+    expect(rules[0].isActive).toBe(false);
+  });
+
+  test('a paused rule is preserved unchanged in the saved rules array beside an active one', async () => {
+    const pausedRule = makeRule({ id: 'ri_paused', isActive: false });
+    const pausedRuleSnapshot: RecurringInvoice = JSON.parse(JSON.stringify(pausedRule));
+    const activeRule = makeRule({ id: 'ri_active' });
+    mockLoadRecurringInvoices.mockResolvedValue([pausedRule, activeRule]);
+
+    await checkAndGenerateRecurringInvoices();
+
+    expect(mockSaveRecurringInvoices).toHaveBeenCalledTimes(1);
+    const rules: RecurringInvoice[] = mockSaveRecurringInvoices.mock.calls[0][0];
+    expect(rules).toHaveLength(2);
+    expect(rules[0]).toEqual(pausedRuleSnapshot); // paused rule: untouched, deep-equal to its input
+    expect(rules[1].id).toBe('ri_active');
+  });
+
   test("end condition never: stays active", async () => {
     mockLoadRecurringInvoices.mockResolvedValue([makeRule()]);
 

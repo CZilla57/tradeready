@@ -21,11 +21,16 @@ import {
 import { calculateNextDate, isEndConditionMet } from './recurrence';
 import { nextInvoiceNumber } from './invoiceNumber';
 
-// Occurrence date + net terms. Same Date construction as calculateNextDate.
+// Occurrence date + net terms. Same Date construction as calculateNextDate,
+// and same local-frame formatting (not toISOString/UTC, which loses a
+// calendar day east of Greenwich for the same parse-vs-format skew).
 function addDays(from: DateString, days: number): DateString {
   const d = new Date(from + 'T00:00:00');
   d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 // Invoice ids must stay ALL-DIGITS after the `inv` prefix so invoiceIssueDate

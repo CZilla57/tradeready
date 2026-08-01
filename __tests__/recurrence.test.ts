@@ -38,7 +38,15 @@ describe('calculateNextDate (shared home)', () => {
   });
 
   test('monthly from Jan 31 overflows into March (JS Date behavior, accepted)', () => {
-    expect(calculateNextDate('2026-01-31', 'monthly')).toMatch(/^2026-03-0[23]$/);
+    // Jan 31 + 1 month = Feb 31, which JS normalizes to Mar 3 in 2026 (2026 is
+    // not a leap year, so Feb has 28 days: Feb 31 -> Mar 3). Local-frame
+    // formatting (formatLocalDate) makes this exact and TZ-independent, unlike
+    // the old toISOString()/UTC formatting this hedge used to guard against.
+    expect(calculateNextDate('2026-01-31', 'monthly')).toBe('2026-03-03');
+  });
+
+  test('daily across a month boundary', () => {
+    expect(calculateNextDate('2026-07-31', 'daily')).toBe('2026-08-01');
   });
 });
 

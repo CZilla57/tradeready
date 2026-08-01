@@ -6,6 +6,18 @@
 
 import type { DateString, RecurrenceCadence, RecurrenceEndCondition } from '../types/models';
 
+// Format in the LOCAL frame — the same frame the 'T00:00:00' parse used.
+// toISOString() formats in UTC, which loses a calendar day east of Greenwich;
+// for a daily rule that made calculateNextDate a fixed point and the engines'
+// catch-up while-loops non-terminating (found 2026-08-01, pre-existing in the
+// jobs engine; fixed at extraction time).
+function formatLocalDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export function calculateNextDate(from: DateString, cadence: RecurrenceCadence): DateString {
   const d = new Date(from + 'T00:00:00');
   if (cadence === 'daily') d.setDate(d.getDate() + 1);
@@ -13,7 +25,7 @@ export function calculateNextDate(from: DateString, cadence: RecurrenceCadence):
   else if (cadence === 'monthly') d.setMonth(d.getMonth() + 1);
   else if (cadence === 'quarterly') d.setMonth(d.getMonth() + 3);
   else if (cadence === 'annually') d.setFullYear(d.getFullYear() + 1);
-  return d.toISOString().split('T')[0];
+  return formatLocalDate(d);
 }
 
 /**
