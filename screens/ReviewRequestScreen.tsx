@@ -10,14 +10,14 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
-import { loadSettings } from "../utils/storage";
+import { loadSettings, loadJobs, loadCustomers, resolveCustomer } from "../utils/storage";
 import {
   buildReviewMessage,
   reviewMessageMissingLink,
   getReviewRequestRecord,
   markReviewRequestSent,
 } from "../utils/reviewRequest";
-import { Button, Card, Divider } from "../components/UI";
+import { Button, Card, Divider, EmptyState } from "../components/UI";
 import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Settings } from "../types/models";
@@ -31,7 +31,7 @@ export default function ReviewRequestScreen({
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
-  const { jobId } = route.params;
+  const { jobId, source } = route.params;
 
   const [settings, setSettings] = useState<Settings | null>(null);
   const [customerName, setCustomerName] = useState("");
@@ -41,6 +41,13 @@ export default function ReviewRequestScreen({
   const [missingLink, setMissingLink] = useState(false);
   const [sent, setSent] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [fallbackCustomer, setFallbackCustomer] = useState<{
+    customerId: string;
+    customerName: string;
+    customerPhone: string;
+    customerEmail: string;
+  } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -65,7 +72,38 @@ export default function ReviewRequestScreen({
             s.googleReviewLink,
           ),
         );
+        return;
       }
+
+      // Manual path: no record was ever scheduled (toggle off, no contact
+      // info at completion time, or the job predates the feature). Build the
+      // preview from the job's CURRENT customer so contact edits made since
+      // completion are honored; sending creates the record (Task 1 upsert).
+      const [jobs, customers] = await Promise.all([loadJobs(), loadCustomers()]);
+      const job = jobs.find((j) => j.id === jobId);
+      const cust = job ? resolveCustomer(customers, job) : null;
+      if (!job || !cust) {
+        setNotFound(true);
+        return;
+      }
+
+      setFallbackCustomer({
+        customerId: cust.id,
+        customerName: cust.name,
+        customerPhone: cust.phone,
+        customerEmail: cust.email,
+      });
+      setCustomerName(cust.name);
+      setCustomerPhone(cust.phone);
+      setCustomerEmail(cust.email);
+      setMessage(
+        buildReviewMessage(
+          s.reviewRequestTemplate,
+          s.businessName,
+          cust.name,
+          s.googleReviewLink,
+        ),
+      );
     })();
   }, [jobId]);
 
@@ -75,9 +113,9 @@ export default function ReviewRequestScreen({
       body: message,
     });
     if (opened) {
-      await markReviewRequestSent(jobId);
+      await markReviewRequestSent(jobId, fallbackCustomer ?? undefined);
       setSent(true);
-      track('review_request_sent', { channel: 'sms' });
+      track('review_request_sent', { channel: 'sms', source: source ?? 'notification' });
       Alert.alert("Review request sent", `SMS composer opened for ${customerName}.`);
     }
   }
@@ -89,9 +127,9 @@ export default function ReviewRequestScreen({
       body: message,
     });
     if (opened) {
-      await markReviewRequestSent(jobId);
+      await markReviewRequestSent(jobId, fallbackCustomer ?? undefined);
       setSent(true);
-      track('review_request_sent', { channel: 'email' });
+      track('review_request_sent', { channel: 'email', source: source ?? 'notification' });
       Alert.alert("Review request sent", `Email composer opened for ${customerName}.`);
     }
   }
@@ -113,6 +151,14 @@ export default function ReviewRequestScreen({
           onPress: () => navigation.goBack(),
         },
       ],
+    );
+  }
+
+  if (notFound) {
+    return (
+      <SafeAreaView style={styles.container} edges={["bottom"]}>
+        <EmptyState message="This job or its customer no longer exists, so there's no one to send a review request to." />
+      </SafeAreaView>
     );
   }
 

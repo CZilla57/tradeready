@@ -43,7 +43,7 @@ export type JobStackParamList = {
   AddCustomer: { customerId?: string; customer?: Customer };
   Outreach: { invoiceId: string };
   RecurringJobs: undefined;
-  ReviewRequest: { jobId: string };
+  ReviewRequest: { jobId: string; source?: "notification" | "job_detail" };
 };
 
 export type InvoiceStackParamList = {
