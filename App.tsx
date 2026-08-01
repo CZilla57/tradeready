@@ -49,6 +49,7 @@ import AddTripScreen              from "./screens/AddTripScreen";
 import ReviewRequestScreen        from "./screens/ReviewRequestScreen";
 import PricebookScreen            from "./screens/PricebookScreen";
 import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
+import ExportDataScreen           from "./screens/ExportDataScreen";
 
 import * as Notifications from "expo-notifications";
 
@@ -201,11 +202,33 @@ function MoneyTab() {
   };
   return (
     <MoneyStack.Navigator screenOptions={navOpts}>
-      <MoneyStack.Screen name="MoneyHome"   component={MoneyScreen}       options={{ title: "Money" }} />
+      <MoneyStack.Screen
+        name="MoneyHome"
+        component={MoneyScreen}
+        options={({ navigation }) => ({
+          title: "Money",
+          headerRight: () => (
+            <TouchableOpacity
+              onPress={() => navigation.navigate("ExportData")}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ paddingLeft: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Export data"
+            >
+              <Ionicons name="download-outline" size={22} color={colors.accent} />
+            </TouchableOpacity>
+          ),
+        })}
+      />
       <MoneyStack.Screen name="MileageLog"  component={MileageLogScreen}  options={{ title: "Mileage" }} />
       <MoneyStack.Screen name="AddTrip"     component={AddTripScreen}     options={{ presentation: "modal" }} />
       <MoneyStack.Screen name="Pricebook"      component={PricebookScreen}      options={{ title: "Pricebook" }} />
       <MoneyStack.Screen name="PricebookEntry" component={PricebookEntryScreen} options={{ title: "Service" }} />
+      <MoneyStack.Screen
+        name="ExportData"
+        component={ExportDataScreen}
+        options={{ presentation: "modal", title: "Export Data" }}
+      />
     </MoneyStack.Navigator>
   );
 }
