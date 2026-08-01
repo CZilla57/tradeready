@@ -376,7 +376,7 @@ describe("shareCsv", () => {
     await shareCsv("A,B\r\n1,2\r\n", "tradeready-income_all-time.csv");
     expect(FileSystem.writeAsStringAsync).toHaveBeenCalledWith(
       "file:///mock/cache/tradeready-income_all-time.csv",
-      "﻿" + "A,B\r\n1,2\r\n"
+      "\uFEFF" + "A,B\r\n1,2\r\n"
     );
     expect(Sharing.shareAsync).toHaveBeenCalledWith(
       "file:///mock/cache/tradeready-income_all-time.csv",

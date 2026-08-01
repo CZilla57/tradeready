@@ -179,7 +179,7 @@ export function csvRowCount(csv: string): number {
 /**
  * Write the CSV to the cache directory and open the share sheet.
  * Mirrors utils/pdfExport.ts: owns its alerts, callers never branch.
- * The ﻿ BOM makes Excel read the file as UTF-8 (accented names).
+ * The \uFEFF BOM makes Excel read the file as UTF-8 (accented names).
  */
 export async function shareCsv(csv: string, filename: string): Promise<void> {
   try {
@@ -189,7 +189,7 @@ export async function shareCsv(csv: string, filename: string): Promise<void> {
       return;
     }
     const uri = `${FileSystem.cacheDirectory}${filename}`;
-    await FileSystem.writeAsStringAsync(uri, "﻿" + csv);
+    await FileSystem.writeAsStringAsync(uri, "\uFEFF" + csv);
     await Sharing.shareAsync(uri, { mimeType: "text/csv", dialogTitle: filename });
   } catch {
     Alert.alert("Export error", "Could not create the CSV file. Please try again.");
