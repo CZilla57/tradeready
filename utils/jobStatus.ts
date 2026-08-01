@@ -6,7 +6,8 @@
 // fire automatically.
 
 import { JOB_STATUSES } from "./pricingEngine";
-import type { Job, JobStatus } from "../types/models";
+import type { Job, JobStatus, Invoice } from "../types/models";
+import { isFullyPaid } from "./invoicePayments";
 
 /**
  * When a job gains a scheduled date, an `approved` job should advance to
@@ -91,11 +92,19 @@ export function invoiceScreenMode(status: JobStatus, hasInvoice: boolean): Invoi
  * The Job patch to apply once CreateInvoiceFromJobScreen saves. The core
  * invariant lives here: requesting a deposit early must never advance the job
  * to "invoiced" — only finishing the job (create at complete, or finalize an
- * existing deposit invoice at complete) does that.
+ * existing deposit invoice at complete) does that. `invoicePaid` covers the
+ * finalize edge where the deposit already settled the whole bill
+ * (reconcilePaidFields marks the invoice paid at save time): the job then
+ * lands straight on "paid" — invoiced's own `.next` — instead of sitting on
+ * an "invoiced" status no code would ever advance.
  */
-export function jobChangesAfterInvoiceSave(mode: InvoiceScreenMode, invoiceId: string): Partial<Job> {
+export function jobChangesAfterInvoiceSave(
+  mode: InvoiceScreenMode,
+  invoiceId: string,
+  invoicePaid: boolean,
+): Partial<Job> {
   if (mode === "requestDeposit") return { invoiceId };
-  return { status: "invoiced", invoiceId };
+  return { status: invoicePaid ? "paid" : "invoiced", invoiceId };
 }
 
 /** Screen title + primary-button copy for each CreateInvoiceFromJobScreen mode. */
@@ -128,4 +137,30 @@ const JOB_DONE_STATUSES: readonly JobStatus[] = ["complete", "invoiced", "paid"]
 export function isJobDunningEligible(status: JobStatus | undefined): boolean {
   if (!status) return true;
   return JOB_DONE_STATUSES.includes(status);
+}
+
+/**
+ * Jobs follow invoice truth: a job is "paid" exactly when the invoice it is
+ * linked to (job.invoiceId) is fully paid. Advances ONLY from exactly
+ * "invoiced" — a mid-pipeline job whose pre-work DEPOSIT invoice got fully
+ * paid must not jump the pipeline (no-skip mirror of
+ * advanceStatusForSchedule's no-regress guarantee).
+ *
+ * Returns the SAME array reference when nothing changed, so callers can skip
+ * saveJobs (`result !== jobs`). Idempotent — safe to run as a read-side
+ * sweep, which is also how webhook-paid invoices arriving via sync pull get
+ * reflected without touching utils/sync.ts, and how jobs stuck at "invoiced"
+ * from before this fix (FA-038) self-heal.
+ */
+export function advanceJobsForPaidInvoices(jobs: Job[], invoices: Invoice[]): Job[] {
+  const paidInvoiceIds = new Set(invoices.filter(isFullyPaid).map((inv) => inv.id));
+  let changed = false;
+  const next = jobs.map((j) => {
+    if (j.status === "invoiced" && j.invoiceId && paidInvoiceIds.has(j.invoiceId)) {
+      changed = true;
+      return { ...j, status: JOB_STATUSES.invoiced.next ?? j.status };
+    }
+    return j;
+  });
+  return changed ? next : jobs;
 }

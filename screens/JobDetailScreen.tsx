@@ -22,13 +22,13 @@ import * as ImagePicker from "expo-image-picker";
 import { persistPhotoSafe, deletePhoto } from "../utils/photoStorage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { loadJobs, saveJobs, loadCustomers, loadSettings, resolveCustomer } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer } from "../utils/storage";
 import { scheduleReviewRequest } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
-import { canSendEstimate, canRequestDeposit } from "../utils/jobStatus";
+import { canSendEstimate, canRequestDeposit, advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
@@ -609,13 +609,29 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
         setLoading(true);
         setLoadError(false);
         try {
-          const [jobs, customers] = await Promise.all([
+          const [jobs, customers, invoices] = await Promise.all([
             loadJobs(),
             loadCustomers(),
+            loadInvoices(),
           ]);
           if (!active) return;
 
-          const j = jobs.find((x: Job) => x.id === jobId);
+          // Read-side sweep (FA-038) — same reconcile as JobsScreen, so a
+          // webhook-paid invoice is reflected even when the user deep-links
+          // straight here without visiting the Jobs list.
+          const advanced = advanceJobsForPaidInvoices(jobs, invoices);
+          if (advanced !== jobs) {
+            // The sweep's write must not fail the load — the reads above all
+            // succeeded. Degrade to the advanced state in memory; the next
+            // focus retries the save.
+            try {
+              await saveJobs(advanced);
+            } catch (error: unknown) {
+              reportError(error, { context: 'jobDetailSweepSave' });
+            }
+          }
+
+          const j = advanced.find((x: Job) => x.id === jobId);
           if (!j) {
             setLoadError(true);
             return;

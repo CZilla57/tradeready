@@ -3,7 +3,7 @@
 // AddJobScreen used to save a scheduledDate without ever advancing the status,
 // so an approved job stayed "approved" while holding a schedule.
 
-import { advanceStatusForSchedule, canSendEstimate } from "../utils/jobStatus";
+import { advanceStatusForSchedule, canSendEstimate, advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 
 describe("advanceStatusForSchedule", () => {
@@ -138,17 +138,74 @@ describe('invoiceScreenMode', () => {
   });
 });
 
+describe('advanceJobsForPaidInvoices', () => {
+  // isFullyPaid semantics (utils/invoicePayments): a legacy `paid: true` invoice
+  // with no ledger synthesizes a full legacy_<id> payment; otherwise the payments
+  // ledger must cover `amount`.
+  const paidInvoice   = { id: 'inv1', amount: 500, paid: true };
+  const ledgerPaid    = { id: 'inv2', amount: 200, paid: false, payments: [{ id: 'p1', amount: 200, date: '2026-07-30', method: 'cash' }] };
+  const partlyPaid    = { id: 'inv3', amount: 300, paid: false, payments: [{ id: 'p2', amount: 100, date: '2026-07-30', method: 'cash' }] };
+
+  it('advances an invoiced job whose linked invoice is fully paid (legacy flag)', () => {
+    const jobs = [{ id: 'j1', status: 'invoiced', invoiceId: 'inv1' }];
+    const out = advanceJobsForPaidInvoices(jobs, [paidInvoice]);
+    expect(out[0].status).toBe('paid');
+    expect(out).not.toBe(jobs); // changed → new array
+  });
+
+  it('advances on a fully-covering payment ledger too', () => {
+    const jobs = [{ id: 'j1', status: 'invoiced', invoiceId: 'inv2' }];
+    expect(advanceJobsForPaidInvoices(jobs, [ledgerPaid])[0].status).toBe('paid');
+  });
+
+  it('ignores a partly-paid invoice', () => {
+    const jobs = [{ id: 'j1', status: 'invoiced', invoiceId: 'inv3' }];
+    expect(advanceJobsForPaidInvoices(jobs, [partlyPaid])).toBe(jobs); // same ref = no-op
+  });
+
+  it('never jumps a mid-pipeline job whose DEPOSIT invoice is fully paid — the core invariant', () => {
+    const jobs = [{ id: 'j1', status: 'scheduled', invoiceId: 'inv1' }];
+    expect(advanceJobsForPaidInvoices(jobs, [paidInvoice])).toBe(jobs);
+  });
+
+  it('ignores jobs with no or dangling invoiceId', () => {
+    const jobs = [
+      { id: 'j1', status: 'invoiced', invoiceId: null },
+      { id: 'j2', status: 'invoiced', invoiceId: 'gone' },
+    ];
+    expect(advanceJobsForPaidInvoices(jobs, [paidInvoice])).toBe(jobs);
+  });
+
+  it('handles a mixed list, advancing only the eligible job', () => {
+    const jobs = [
+      { id: 'j1', status: 'invoiced', invoiceId: 'inv1' },
+      { id: 'j2', status: 'invoiced', invoiceId: 'inv3' },
+      { id: 'j3', status: 'complete', invoiceId: null },
+    ];
+    const out = advanceJobsForPaidInvoices(jobs, [paidInvoice, partlyPaid]);
+    expect(out.map((j) => j.status)).toEqual(['paid', 'invoiced', 'complete']);
+  });
+});
+
 describe('jobChangesAfterInvoiceSave', () => {
   it('requesting a deposit early never advances status — the core invariant', () => {
-    expect(jobChangesAfterInvoiceSave('requestDeposit', 'inv123')).toEqual({ invoiceId: 'inv123' });
+    expect(jobChangesAfterInvoiceSave('requestDeposit', 'inv123', false)).toEqual({ invoiceId: 'inv123' });
   });
 
   it('creating at complete advances to invoiced', () => {
-    expect(jobChangesAfterInvoiceSave('create', 'inv123')).toEqual({ status: 'invoiced', invoiceId: 'inv123' });
+    expect(jobChangesAfterInvoiceSave('create', 'inv123', false)).toEqual({ status: 'invoiced', invoiceId: 'inv123' });
   });
 
-  it('finalizing advances to invoiced', () => {
-    expect(jobChangesAfterInvoiceSave('finalize', 'inv123')).toEqual({ status: 'invoiced', invoiceId: 'inv123' });
+  it('finalizing an unpaid balance advances to invoiced', () => {
+    expect(jobChangesAfterInvoiceSave('finalize', 'inv123', false)).toEqual({ status: 'invoiced', invoiceId: 'inv123' });
+  });
+
+  it('finalizing an invoice the deposit already fully covered advances straight to paid', () => {
+    expect(jobChangesAfterInvoiceSave('finalize', 'inv123', true)).toEqual({ status: 'paid', invoiceId: 'inv123' });
+  });
+
+  it('a fully-paid deposit request still never advances', () => {
+    expect(jobChangesAfterInvoiceSave('requestDeposit', 'inv123', true)).toEqual({ invoiceId: 'inv123' });
   });
 });
 

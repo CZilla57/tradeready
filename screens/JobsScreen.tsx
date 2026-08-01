@@ -15,7 +15,9 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { loadJobs } from "../utils/storage";
+import { loadJobs, loadInvoices, saveJobs } from "../utils/storage";
+import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
+import { reportError } from "../utils/analytics";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
@@ -42,15 +44,31 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
   const [filter, setFilter] = useState<string>("active");
   const [search, setSearch] = useState<string>("");
 
+  // Read-side sweep (FA-038): reflects invoices paid outside this device's
+  // settle flows (Stripe webhook via sync pull) and heals jobs stuck at
+  // "invoiced" from before the fix. Local-only reads; writes only on change.
+  const refreshJobs = useCallback(async () => {
+    const [jobs, invoices] = await Promise.all([loadJobs(), loadInvoices()]);
+    const advanced = advanceJobsForPaidInvoices(jobs, invoices);
+    setJobs(advanced);
+    if (advanced !== jobs) {
+      // The sweep's write must not blank the list — state is already
+      // rendered above; the next focus retries the save.
+      try {
+        await saveJobs(advanced);
+      } catch (error: unknown) {
+        reportError(error, { context: 'jobsSweepSave' });
+      }
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      loadJobs().then(setJobs);
-    }, [])
+      refreshJobs();
+    }, [refreshJobs])
   );
 
-  const { refreshing, onRefresh } = useRefresh(async () => {
-    setJobs(await loadJobs());
-  }, 'JobsScreen');
+  const { refreshing, onRefresh } = useRefresh(refreshJobs, 'JobsScreen');
 
   const activeFilter = FILTERS.find((f) => f.key === filter);
   const filtered = jobs.filter((j) => {
