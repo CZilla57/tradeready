@@ -8,7 +8,6 @@ import {
   View,
   Text,
   FlatList,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
 } from "react-native";
@@ -21,6 +20,8 @@ import { reportError } from "../utils/analytics";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
+import { SearchField } from "../components/SearchField";
+import { Fab } from "../components/Fab";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -28,11 +29,14 @@ import { useRefresh } from "../hooks/useRefresh";
 import type { Job } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
-// Which filter tabs to show across the top
+// Which filter tabs to show across the top. "Active" spans every in-flight
+// status — in_progress included, so a job doesn't vanish from the list the
+// moment the user clocks in. "Declined" only renders when such jobs exist.
 const FILTERS = [
-  { key: "active",    label: "Active",    statuses: ["lead", "estimate_sent", "approved", "scheduled"] },
+  { key: "active",    label: "Active",    statuses: ["lead", "estimate_sent", "approved", "scheduled", "in_progress"] },
   { key: "complete",  label: "Complete",  statuses: ["complete", "invoiced"] },
   { key: "paid",      label: "Paid",      statuses: ["paid"] },
+  { key: "declined",  label: "Declined",  statuses: ["declined"] },
   { key: "all",       label: "All",       statuses: null as string[] | null },
 ];
 
@@ -70,7 +74,12 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 
   const { refreshing, onRefresh } = useRefresh(refreshJobs, 'JobsScreen');
 
-  const activeFilter = FILTERS.find((f) => f.key === filter);
+  // If the Declined chip's last job moves on, the chip hides — fall back to
+  // Active instead of stranding the selection on an invisible tab.
+  const declinedCount = jobs.filter((j) => j.status === "declined").length;
+  const effectiveFilterKey = filter === "declined" && declinedCount === 0 ? "active" : filter;
+
+  const activeFilter = FILTERS.find((f) => f.key === effectiveFilterKey);
   const filtered = jobs.filter((j) => {
     const matchesStatus = !activeFilter?.statuses || activeFilter.statuses.includes(j.status);
     const matchesSearch =
@@ -147,14 +156,10 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 
       {/* Search */}
       <View style={styles.searchRow}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search jobs or customers..."
-          placeholderTextColor={colors.textMuted}
+        <SearchField
           value={search}
           onChangeText={setSearch}
-          clearButtonMode="while-editing"
-          returnKeyType="search"
+          placeholder="Search jobs or customers..."
           accessibilityLabel="Search jobs or customers"
         />
       </View>
@@ -163,16 +168,19 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
       <View style={styles.filterRow}>
         {FILTERS.map((f) => {
           const count = jobs.filter((j) => !f.statuses || f.statuses.includes(j.status)).length;
+          // Declined is a rare terminal state — only offer the chip when it
+          // has something to show, so the common case keeps four tabs.
+          if (f.key === "declined" && count === 0) return null;
           return (
             <TouchableOpacity
               key={f.key}
-              style={[styles.filterTab, filter === f.key && styles.filterTabActive]}
+              style={[styles.filterTab, effectiveFilterKey === f.key && styles.filterTabActive]}
               onPress={() => setFilter(f.key)}
               accessibilityRole="tab"
               accessibilityLabel={`${f.label}${count > 0 ? `, ${count}` : ''}`}
-              accessibilityState={{ selected: filter === f.key }}
+              accessibilityState={{ selected: effectiveFilterKey === f.key }}
             >
-              <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>
+              <Text style={[styles.filterTabText, effectiveFilterKey === f.key && styles.filterTabTextActive]} maxFontSizeMultiplier={1.4}>
                 {f.label} {count > 0 ? `(${count})` : ""}
               </Text>
             </TouchableOpacity>
@@ -189,25 +197,22 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
         renderItem={renderJob}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
-          <EmptyState message={
-            filter === "active"
-              ? "No active jobs.\nTap + to add your first job."
-              : "No jobs in this category."
-          } />
+          jobs.length === 0 ? (
+            <EmptyState
+              icon="briefcase-outline"
+              message="No jobs yet. Track work from lead to paid, starting with your first job."
+              actionLabel="+ Add a job"
+              onAction={() => navigation.navigate("AddJob", {})}
+            />
+          ) : (
+            <EmptyState icon="briefcase-outline" message="No jobs in this category." />
+          )
         }
         showsVerticalScrollIndicator={false}
       />
 
       {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate("AddJob", {})}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Add new job"
-      >
-        <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
+      <Fab onPress={() => navigation.navigate("AddJob", {})} accessibilityLabel="Add new job" />
     </SafeAreaView>
   );
 }
@@ -217,14 +222,19 @@ function QuickAction({ job, navigation }: { job: Job; navigation: JobStackScreen
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
+  // Labels mirror JobDetail's PrimaryAction ladder step-for-step — the card
+  // must never promise a jump the detail screen won't offer (the pipeline
+  // advances one `.next` at a time: scheduled starts, in_progress completes).
   const actions: Record<string, { label: string; screen: 'PricingCalculator' | 'JobDetail' }> = {
-    lead:          { label: "Build estimate →", screen: "PricingCalculator" },
-    estimate_sent: { label: "Mark approved →",  screen: "JobDetail" },
-    approved:      { label: "Schedule →",        screen: "JobDetail" },
-    scheduled:     { label: "Mark complete →",   screen: "JobDetail" },
-    complete:      { label: "Create invoice →",  screen: "JobDetail" },
-    invoiced:      { label: "View invoice →",    screen: "JobDetail" },
-    paid:          { label: "View details",      screen: "JobDetail" },
+    lead:          { label: "Build estimate →",   screen: "PricingCalculator" },
+    estimate_sent: { label: "Mark approved →",    screen: "JobDetail" },
+    approved:      { label: "Schedule →",          screen: "JobDetail" },
+    scheduled:     { label: "Start job →",         screen: "JobDetail" },
+    in_progress:   { label: "Mark complete →",     screen: "JobDetail" },
+    complete:      { label: "Create invoice →",    screen: "JobDetail" },
+    invoiced:      { label: "View invoice →",      screen: "JobDetail" },
+    paid:          { label: "View details",        screen: "JobDetail" },
+    declined:      { label: "Revise & re-send →",  screen: "JobDetail" },
   };
 
   const action = actions[job.status];
@@ -261,16 +271,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingBottom: spacing.sm,
     },
     searchRow: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
-    searchInput: {
-      fontFamily: fonts.bodyRegular,
-      backgroundColor: colors.surface,
-      borderRadius: radius.md,
-      height: 40,
-      paddingHorizontal: spacing.md,
-      fontSize: fontSize.md,
-      color: colors.textPrimary,
-      ...shadow.card,
-    },
     filterRow: {
       flexDirection: "row",
       paddingHorizontal: spacing.md,
@@ -297,6 +297,8 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.lg,
       padding: spacing.md,
       marginBottom: spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
       ...shadow.card,
     },
     cardTop: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
@@ -305,7 +307,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     jobAmount: { fontFamily: fonts.display, fontSize: fontSize.md, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
     jobMetaRow: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 4 },
     jobMeta: { fontFamily: fonts.mono, fontSize: 11, color: colors.textSecondary },
-    jobDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 8 },
+    jobDesc: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 8 },
     quickActions: { flexDirection: "row", justifyContent: "flex-end" },
     quickActionBtn: {
       paddingHorizontal: 12,
@@ -314,22 +316,5 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       backgroundColor: colors.accentBg,
     },
     quickActionText: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent },
-    fab: {
-      position: "absolute",
-      right: spacing.lg,
-      bottom: spacing.xl,
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: colors.accent,
-      alignItems: "center",
-      justifyContent: "center",
-      shadowColor: colors.accent,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.35,
-      shadowRadius: 8,
-      elevation: 6,
-    },
-    fabText: { color: colors.textOnAccent, fontSize: 28, lineHeight: 32, fontWeight: "300" },
   });
 }

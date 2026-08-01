@@ -4,6 +4,7 @@ import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme }
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeRevenueForecast } from '../../utils/revenueForecast';
+import { CardScope } from './CardScope';
 import type { Job } from '../../types/models';
 
 interface RevenueForecastCardProps {
@@ -31,6 +32,7 @@ export const RevenueForecastCard = React.memo(function RevenueForecastCard({ job
           </Text>
         )}
       </View>
+      <CardScope label="Open pipeline" />
 
       <View style={styles.headlineBlock}>
         <Text style={[styles.headlineValue, { color: colors.accent }]}>

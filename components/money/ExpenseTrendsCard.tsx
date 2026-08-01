@@ -4,6 +4,7 @@ import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme }
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeExpenseTrends } from '../../utils/expenseTrends';
+import { CardScope } from './CardScope';
 import type { Expense } from '../../types/models';
 
 const BAR_MAX_HEIGHT = 80;
@@ -32,6 +33,7 @@ export const ExpenseTrendsCard = React.memo(function ExpenseTrendsCard({ expense
           </Text>
         )}
       </View>
+      <CardScope label="Last 12 months" />
 
       <View style={styles.chartArea}>
         {data.months.map((month, i) => {

@@ -47,7 +47,9 @@ export type JobStackParamList = {
 };
 
 export type InvoiceStackParamList = {
-  InvoiceList: undefined;
+  // openInvoiceId lets other tabs (Today's overdue rows) deep-link straight
+  // into a specific invoice's detail modal; the screen clears it after opening.
+  InvoiceList: { openInvoiceId?: string } | undefined;
   AddInvoice: { invoiceId?: string; prefill?: Record<string, unknown> };
   Outreach: { invoiceId: string };
 };

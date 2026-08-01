@@ -4,6 +4,7 @@ import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme }
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { computeInvoiceAging } from '../../utils/invoiceAging';
+import { CardScope } from './CardScope';
 import type { Invoice } from '../../types/models';
 
 const MAX_SLOW_PAYERS = 3;
@@ -38,6 +39,7 @@ export const InvoiceAgingCard = React.memo(function InvoiceAgingCard({ invoices 
   return (
     <View style={styles.card}>
       <Text style={styles.sectionTitle}>Days to Pay</Text>
+      <CardScope label="All paid invoices" />
 
       <View style={styles.heroRow}>
         <Text style={[styles.heroValue, { color: daysColor(aging.avgDays, colors) }]}>

@@ -4,6 +4,7 @@ import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme }
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { balanceDue, isFullyPaid } from '../../utils/invoicePayments';
+import { CardScope } from './CardScope';
 import type { Invoice, Job } from '../../types/models';
 
 const PIPELINE_STATUSES = ['lead','estimate_sent','approved','scheduled','in_progress','complete'];
@@ -38,7 +39,10 @@ export const ReceivablesCard = React.memo(function ReceivablesCard({ invoices, j
 
   return (
     <View style={styles.receivablesCard}>
-      <Text style={styles.receivablesTitle}>Money owed to you</Text>
+      <View style={styles.titleRow}>
+        <Text style={styles.receivablesTitle}>Money owed to you</Text>
+        <CardScope label="All open" inline />
+      </View>
       <View style={styles.summaryRow}>
         <View style={styles.summaryColumn}>
           <Text style={styles.summaryColumnLabel}>Outstanding</Text>
@@ -91,13 +95,18 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderColor: colors.border,
       ...shadow.card,
     },
+    titleRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'baseline',
+      marginBottom: spacing.md,
+    },
     receivablesTitle: {
       fontFamily: fonts.mono,
       color: colors.textSecondary,
       fontSize: 11,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
-      marginBottom: spacing.md,
     },
     receivablesSub: {
       fontFamily: fonts.bodyRegular,

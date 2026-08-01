@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   type ViewStyle,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../hooks/useTheme";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 
@@ -104,16 +105,42 @@ export function Card({ children, style, onPress }: CardProps) {
   return <View style={cardStyle}>{children}</View>;
 }
 
-export function StatCard({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+interface StatCardProps {
+  label: string;
+  value: string;
+  valueColor?: string;
+  /** When set, the card is tappable (e.g. stat taps drive a list filter). */
+  onPress?: () => void;
+  /** Extra hint appended to the accessibility label when tappable. */
+  accessibilityHint?: string;
+}
+
+export function StatCard({ label, value, valueColor, onPress, accessibilityHint }: StatCardProps) {
   const { colors, shadow } = useTheme();
-  return (
-    <View
-      style={[styles.statCard, { backgroundColor: colors.surface, ...shadow.card }]}
-      accessible={true}
-      accessibilityLabel={`${label}: ${value}`}
-    >
-      <Text style={[styles.statLabel, { color: colors.textMuted }]} maxFontSizeMultiplier={1.4}>{label}</Text>
+  const cardStyle = [styles.statCard, { backgroundColor: colors.surface, ...shadow.card }];
+  const content = (
+    <>
+      <Text style={[styles.statLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.4}>{label}</Text>
       <Text style={[styles.statValue, { color: valueColor || colors.textPrimary }]} maxFontSizeMultiplier={1.4}>{value}</Text>
+    </>
+  );
+  if (onPress) {
+    return (
+      <TouchableOpacity
+        style={cardStyle}
+        onPress={onPress}
+        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value}`}
+        accessibilityHint={accessibilityHint}
+      >
+        {content}
+      </TouchableOpacity>
+    );
+  }
+  return (
+    <View style={cardStyle} accessible={true} accessibilityLabel={`${label}: ${value}`}>
+      {content}
     </View>
   );
 }
@@ -130,11 +157,36 @@ export function SectionHeader({ title }: { title: string }) {
   );
 }
 
-export function EmptyState({ message }: { message: string }) {
+interface EmptyStateProps {
+  message: string;
+  /** Ionicons glyph shown above the message. */
+  icon?: keyof typeof Ionicons.glyphMap;
+  /** Optional CTA — prefer offering the action over telling users where to tap. */
+  actionLabel?: string;
+  onAction?: () => void;
+}
+
+export function EmptyState({ message, icon, actionLabel, onAction }: EmptyStateProps) {
   const { colors } = useTheme();
   return (
     <View style={styles.empty}>
-      <Text style={[styles.emptyText, { color: colors.textMuted }]}>{message}</Text>
+      {icon ? (
+        <Ionicons name={icon} size={40} color={colors.textMuted} style={styles.emptyIcon} />
+      ) : null}
+      <Text style={[styles.emptyText, { color: colors.textSecondary }]}>{message}</Text>
+      {actionLabel && onAction ? (
+        <TouchableOpacity
+          style={[styles.emptyAction, { backgroundColor: colors.accent }]}
+          onPress={onAction}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={actionLabel}
+        >
+          <Text style={[styles.emptyActionText, { color: colors.textOnAccent }]} maxFontSizeMultiplier={1.4}>
+            {actionLabel}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -159,7 +211,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontFamily: fonts.mono,
-    fontSize: 10,
+    fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: 0.2,
   },
@@ -184,7 +236,7 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     fontFamily: fonts.mono,
-    fontSize: 10,
+    fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: 0.6,
     marginBottom: 4,
@@ -215,6 +267,19 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     textAlign: "center",
     lineHeight: 24,
+  },
+  emptyIcon: {
+    marginBottom: spacing.md,
+  },
+  emptyAction: {
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+  },
+  emptyActionText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: fontSize.md,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
