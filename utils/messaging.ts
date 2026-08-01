@@ -26,8 +26,9 @@ type EmailOptions = {
  * What actually happened in the composer, as far as the platform reports:
  * "notSent" is an explicit user cancel (or an email saved as a draft) —
  * one-shot flows must not consume their shot on it. "unknown" means the
- * platform can't say (Android mostly); callers treat it like "sent" so those
- * platforms keep the old composer-opened behavior.
+ * platform can't say (Android SMS reports "unknown"; Android mail always
+ * claims "sent"); callers treat unknown like "sent" so those platforms keep
+ * the old composer-opened behavior.
  */
 export type ComposeOutcome = "sent" | "notSent" | "unknown";
 export type ComposeResult = { opened: boolean; outcome: ComposeOutcome };

@@ -125,7 +125,11 @@ export async function markReviewRequestSent(
   const now = new Date().toISOString();
   const exists = records.some((r) => r.jobId === jobId);
   const updated = exists
-    ? records.map((r) => (r.jobId === jobId ? { ...r, sentAt: now } : r))
+    ? // Deliberate: only sentAt is refreshed — the record keeps its
+      // schedule-time contact snapshot even though the send itself uses the
+      // live customer (the screen resolves contact info at send time; the
+      // record is sent-state truth, not a delivery log).
+      records.map((r) => (r.jobId === jobId ? { ...r, sentAt: now } : r))
     : fallback
       ? [...records, { jobId, ...fallback, scheduledAt: now, sentAt: now }]
       : records;
