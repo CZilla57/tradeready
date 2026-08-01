@@ -316,7 +316,7 @@ function RootNavigator() {
       if (data?.type === "review_request" && data?.jobId && navigationRef.isReady()) {
         navigationRef.navigate("Main", {
           screen: "Jobs",
-          params: { screen: "ReviewRequest", params: { jobId: String(data.jobId) } },
+          params: { screen: "ReviewRequest", params: { jobId: String(data.jobId), source: "notification" } },
         });
       }
       if (data?.type === "overdue_outreach" && data?.invoiceId && navigationRef.isReady()) {
