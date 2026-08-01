@@ -100,11 +100,35 @@ export async function scheduleReviewRequest(
   await saveRecords(records);
 }
 
-export async function markReviewRequestSent(jobId: string): Promise<void> {
-  const records = await loadRecords();
-  const updated = records.map((r) =>
-    r.jobId === jobId ? { ...r, sentAt: new Date().toISOString() } : r,
+/**
+ * Mark a job's review request sent. Upserts: when no record exists (manual
+ * send for a job that never had an auto-request scheduled — toggle off, no
+ * contact info at completion time, or completed before the feature existed),
+ * `fallback` supplies the customer snapshot and a sent record is created so
+ * the one-shot block applies to manual sends too. Also cancels the pending
+ * auto-notification for the job, so a manual send inside the delay window
+ * isn't followed by the "Time to ask for a review!" nag; cancelling an
+ * unscheduled or already-fired identifier is a safe no-op.
+ */
+export async function markReviewRequestSent(
+  jobId: string,
+  fallback?: Pick<
+    ReviewRequestRecord,
+    "customerId" | "customerName" | "customerPhone" | "customerEmail"
+  >,
+): Promise<void> {
+  await Notifications.cancelScheduledNotificationAsync(`review_${jobId}`).catch(
+    () => {},
   );
+
+  const records = await loadRecords();
+  const now = new Date().toISOString();
+  const exists = records.some((r) => r.jobId === jobId);
+  const updated = exists
+    ? records.map((r) => (r.jobId === jobId ? { ...r, sentAt: now } : r))
+    : fallback
+      ? [...records, { jobId, ...fallback, scheduledAt: now, sentAt: now }]
+      : records;
   await saveRecords(updated);
 }
 
