@@ -55,8 +55,18 @@ function nextGeneratedInvoiceId(): string {
  * advanced: skipped periods don't count against an end-by-count limit.
  * NOTE: recurring JOBS deliberately keep back-fill on resume (a job card is
  * a to-do, not a receivable) — do not "unify" the two.
+ *
+ * An already-ended plan (endDate elapsed while paused, or endCount already
+ * met) does NOT get fast-forwarded — nextDueDate is returned unchanged. The
+ * generation engine (checkAndGenerateRecurringInvoices, above) deactivates
+ * an ended plan on its next run regardless, so leaving nextDueDate alone
+ * here just preserves that honest pre-existing feedback (a Resumed card
+ * that shows Active with a Next date already past its own end, or schedules
+ * a rinv_ reminder for an occurrence that will never bill, would otherwise
+ * be self-correcting only after the next engine run).
  */
 export function fastForwardedNextDueDate(rule: RecurringInvoice, today: DateString): DateString {
+  if (isEndConditionMet(rule)) return rule.nextDueDate;
   let next = rule.nextDueDate;
   while (next <= today) next = calculateNextDate(next, rule.cadence);
   return next;

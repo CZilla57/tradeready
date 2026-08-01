@@ -315,6 +315,34 @@ describe('fastForwardedNextDueDate', () => {
 
     expect(rule).toEqual(snapshot);
   });
+
+  // Finding 2 (2026-08-01): an already-ended plan must NOT be fast-forwarded
+  // into the future on Resume — that would show an Active card with a Next
+  // date past its own end, and schedule a bogus rinv_ reminder for an
+  // occurrence the engine will never bill. Without the isEndConditionMet
+  // guard, both cases below would advance nextDueDate via the while loop
+  // because the stored nextDueDate is <= today.
+
+  test('ended by date: nextDueDate already past endDate is returned unchanged, not fast-forwarded', () => {
+    const rule = makeRule({
+      nextDueDate: '2026-07-08', // == today
+      cadence: 'weekly',
+      endCondition: 'date',
+      endDate: '2026-07-01', // already elapsed
+    });
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-07-08');
+  });
+
+  test('ended by count: occurrenceCount already met is returned unchanged, not fast-forwarded', () => {
+    const rule = makeRule({
+      nextDueDate: '2026-07-01', // in the past — would otherwise fast-forward
+      cadence: 'weekly',
+      endCondition: 'count',
+      endCount: 3,
+      occurrenceCount: 3, // already met
+    });
+    expect(fastForwardedNextDueDate(rule, today)).toBe('2026-07-01');
+  });
 });
 
 describe('resume fast-forward integration', () => {
