@@ -634,7 +634,10 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
             loadJobs(),
             loadCustomers(),
             loadInvoices(),
-            getReviewRequestRecord(jobId),
+            // Unlike the collection loads, this read can throw (raw
+            // getItem + JSON.parse); a bad review record must not fail
+            // the whole job load — degrade to "not sent yet".
+            getReviewRequestRecord(jobId).catch(() => null),
           ]);
           if (!active) return;
 
