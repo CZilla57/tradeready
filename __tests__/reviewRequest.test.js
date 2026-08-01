@@ -102,6 +102,35 @@ describe("markReviewRequestSent", () => {
     expect(AsyncStorage.setItem.mock.calls.at(-1)[0]).toBe("review_requests");
   });
 
+  test("an existing record wins over a provided fallback — no duplicate", async () => {
+    AsyncStorage.getItem.mockResolvedValueOnce(JSON.stringify([rec("j1")]));
+    await markReviewRequestSent("j1", {
+      customerId: "c9",
+      customerName: "Pat",
+      customerPhone: "555-0199",
+      customerEmail: "pat@example.com",
+    });
+    const out = savedRecords();
+    expect(out).toHaveLength(1);
+    expect(out[0].customerId).toBe("c1");
+    expect(out[0].sentAt).toEqual(expect.any(String));
+  });
+
+  test("fallback-create appends alongside other jobs' records", async () => {
+    AsyncStorage.getItem.mockResolvedValueOnce(JSON.stringify([rec("j1")]));
+    await markReviewRequestSent("j9", {
+      customerId: "c9",
+      customerName: "Pat",
+      customerPhone: "555-0199",
+      customerEmail: "pat@example.com",
+    });
+    const out = savedRecords();
+    expect(out).toHaveLength(2);
+    expect(out[0].jobId).toBe("j1");
+    expect(out[0].sentAt).toBeNull();
+    expect(out[1]).toMatchObject({ jobId: "j9", customerId: "c9" });
+  });
+
   test("creates a sent record from the fallback when none exists (manual send)", async () => {
     AsyncStorage.getItem.mockResolvedValueOnce(null);
     await markReviewRequestSent("j9", {

@@ -53,7 +53,10 @@ export default function ReviewRequestScreen({
     (async () => {
       const [s, record] = await Promise.all([
         loadSettings(),
-        getReviewRequestRecord(jobId),
+        // This read can throw (raw getItem + JSON.parse); a bad record must
+        // not leave the screen on the blank loading frame — degrade to the
+        // no-record fallback below, which rebuilds from the live customer.
+        getReviewRequestRecord(jobId).catch(() => null),
       ]);
       setSettings(s);
       setMissingLink(reviewMessageMissingLink(s.reviewRequestTemplate, s.googleReviewLink));
