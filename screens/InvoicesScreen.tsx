@@ -26,7 +26,7 @@ import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { invoicePdfFilename } from "../utils/invoicePdfFile";
-import { readPhotoAsDataUri } from "../utils/photoStorage";
+import { readLogoForPdf } from "../utils/photoStorage";
 import { track } from "../utils/analytics";
 import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { Badge, StatCard, EmptyState } from "../components/UI";
@@ -125,7 +125,7 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
 
   async function handleExportPdf(inv: Invoice) {
     const logoDataUri = settings.logoPhoto
-      ? await readPhotoAsDataUri(settings.logoPhoto)
+      ? await readLogoForPdf(settings.logoPhoto)
       : null;
     const html = invoiceHtml(inv, settings, logoDataUri ?? undefined);
     const filename = invoicePdfFilename(inv).replace(/\.pdf$/, "");

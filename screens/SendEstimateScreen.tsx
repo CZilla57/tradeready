@@ -20,7 +20,7 @@ import { generateEstimateMessage } from "../utils/invoiceHelpers";
 import { createApprovalLink } from "../utils/estimateApprovalLink";
 import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
-import { readPhotoAsDataUri } from "../utils/photoStorage";
+import { readLogoForPdf } from "../utils/photoStorage";
 import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
@@ -125,7 +125,7 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
     if (!data) return;
     const { job, customer, settings } = data;
     const logoDataUri = settings.logoPhoto
-      ? await readPhotoAsDataUri(settings.logoPhoto)
+      ? await readLogoForPdf(settings.logoPhoto)
       : null;
     const html = estimateHtml(job, customer, settings, logoDataUri ?? undefined);
     const filename = `Estimate-${job.title.replace(/\s+/g, "-")}-${customer.name.replace(/\s+/g, "-")}`;
