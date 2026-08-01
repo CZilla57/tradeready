@@ -87,7 +87,7 @@ Filenames contain no user text (no sanitizer needed):
 
 ### 5. UI — `ExportDataScreen` (new, Money stack)
 
-- Registered as `ExportData` in `MoneyStack` (currently `MoneyHome` only),
+- Registered as `ExportData` in `MoneyStack` (joining MoneyHome, MileageLog, AddTrip, Pricebook, PricebookEntry),
   `presentation: "modal"`. Entry: a `download-outline` Ionicons header-right
   button on `MoneyHome` with `accessibilityLabel="Export data"` — the exact
   pattern JobList uses for Recurring Jobs (App.tsx ~124–134).
