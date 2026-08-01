@@ -22,22 +22,38 @@ type EmailOptions = {
   attachments?: string[];
 };
 
-// Returns true if the mail composer opened, false if Mail isn't set up.
-export async function composeEmail({
+/**
+ * What actually happened in the composer, as far as the platform reports:
+ * "notSent" is an explicit user cancel (or an email saved as a draft) —
+ * one-shot flows must not consume their shot on it. "unknown" means the
+ * platform can't say (Android mostly); callers treat it like "sent" so those
+ * platforms keep the old composer-opened behavior.
+ */
+export type ComposeOutcome = "sent" | "notSent" | "unknown";
+export type ComposeResult = { opened: boolean; outcome: ComposeOutcome };
+
+function mapMailStatus(status: string | undefined): ComposeOutcome {
+  if (status === "sent") return "sent";
+  if (status === "cancelled" || status === "saved") return "notSent";
+  return "unknown";
+}
+
+// Outcome-reporting variant; composeEmail below keeps the boolean contract.
+export async function composeEmailWithOutcome({
   recipients,
   subject,
   body,
   attachments,
-}: EmailOptions): Promise<boolean> {
+}: EmailOptions): Promise<ComposeResult> {
   const available = await MailComposer.isAvailableAsync();
   if (!available) {
     Alert.alert(
       "Mail not available",
       "Please set up the Mail app on this device first."
     );
-    return false;
+    return { opened: false, outcome: "notSent" };
   }
-  await MailComposer.composeAsync({
+  const result = await MailComposer.composeAsync({
     recipients,
     subject,
     body,
@@ -45,7 +61,12 @@ export async function composeEmail({
     // never attach keep their exact previous call shape.
     ...(attachments?.length ? { attachments } : {}),
   });
-  return true;
+  return { opened: true, outcome: mapMailStatus(result?.status) };
+}
+
+// Returns true if the mail composer opened, false if Mail isn't set up.
+export async function composeEmail(options: EmailOptions): Promise<boolean> {
+  return (await composeEmailWithOutcome(options)).opened;
 }
 
 type SMSOptions = {
@@ -53,16 +74,27 @@ type SMSOptions = {
   body: string;
 };
 
-// Returns true if the SMS composer opened, false if the device can't text.
-export async function composeSMS({
+function mapSmsResult(result: string | undefined): ComposeOutcome {
+  if (result === "sent") return "sent";
+  if (result === "cancelled") return "notSent";
+  return "unknown";
+}
+
+// Outcome-reporting variant; composeSMS below keeps the boolean contract.
+export async function composeSMSWithOutcome({
   recipients,
   body,
-}: SMSOptions): Promise<boolean> {
+}: SMSOptions): Promise<ComposeResult> {
   const available = await SMS.isAvailableAsync();
   if (!available) {
     Alert.alert("SMS not available", "This device can't send text messages.");
-    return false;
+    return { opened: false, outcome: "notSent" };
   }
-  await SMS.sendSMSAsync(recipients, body);
-  return true;
+  const result = await SMS.sendSMSAsync(recipients, body);
+  return { opened: true, outcome: mapSmsResult(result?.result) };
+}
+
+// Returns true if the SMS composer opened, false if the device can't text.
+export async function composeSMS(options: SMSOptions): Promise<boolean> {
+  return (await composeSMSWithOutcome(options)).opened;
 }
