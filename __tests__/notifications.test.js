@@ -147,6 +147,36 @@ describe("threshold date handling", () => {
     // One invoice × two future rules = two notifications
     expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(2);
   });
+
+  // Regression (Fix A, 2026-08-01): the fire date must be parsed in the LOCAL
+  // frame (`due + 'T00:00:00'`), not UTC-midnight (`due` alone) — the old
+  // parse fired 9am local on the day BEFORE the intended date in every US
+  // timezone. Self-consistent + TZ-portable: the expected fire instant is
+  // computed here with the exact same formula the source uses, then bracketed
+  // around the real "now" captured immediately before/after the call so the
+  // assertion can't flake on elapsed test-runner milliseconds.
+  test("inv_: fires 9am LOCAL on due+days, not a day earlier (local-frame parse)", async () => {
+    const due = dateInDays(5);
+    seedStorage(
+      [{ id: "iLF", customer: "Alice", number: "INV-LF", paid: false, amount: 500, due }],
+      { rules: [{ days: 1 }] }
+    );
+
+    const before = Date.now();
+    await syncNotifications();
+    const after = Date.now();
+
+    const expectedFire = new Date(due + "T00:00:00");
+    expectedFire.setDate(expectedFire.getDate() + 1);
+    expectedFire.setHours(9, 0, 0, 0);
+    const minSeconds = Math.floor((expectedFire.getTime() - after) / 1000);
+    const maxSeconds = Math.floor((expectedFire.getTime() - before) / 1000);
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("inv_iLF_1d");
+    expect(call[0].trigger.seconds).toBeGreaterThanOrEqual(minSeconds);
+    expect(call[0].trigger.seconds).toBeLessThanOrEqual(maxSeconds);
+  });
 });
 
 // ── Notification identifier format ───────────────────────────────────────────
@@ -346,6 +376,28 @@ describe("syncNotifications — recurring-invoice rules", () => {
     await syncNotifications();
 
     expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  // Regression (Fix A, 2026-08-01): same local-frame parse fix as inv_ above,
+  // applied to rule.nextDueDate. Bracketed against real "now" for the same
+  // flake-proofing reason.
+  test("rinv_: fires 9am LOCAL on nextDueDate, not a day earlier (local-frame parse)", async () => {
+    const nextDueDate = dateInDays(5);
+    seedStorage([], { rules: [] }, [], [], [riRule({ nextDueDate })]);
+
+    const before = Date.now();
+    await syncNotifications();
+    const after = Date.now();
+
+    const expectedFire = new Date(nextDueDate + "T00:00:00");
+    expectedFire.setHours(9, 0, 0, 0);
+    const minSeconds = Math.floor((expectedFire.getTime() - after) / 1000);
+    const maxSeconds = Math.floor((expectedFire.getTime() - before) / 1000);
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("rinv_ri1");
+    expect(call[0].trigger.seconds).toBeGreaterThanOrEqual(minSeconds);
+    expect(call[0].trigger.seconds).toBeLessThanOrEqual(maxSeconds);
   });
 
   test("shares the 60-notification cap with invoice reminders", async () => {

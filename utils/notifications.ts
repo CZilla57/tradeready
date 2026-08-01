@@ -79,7 +79,7 @@ export async function syncNotifications(): Promise<void> {
       for (const rule of rules) {
         if (count >= 60) break outer;
 
-        const fireDate = new Date(inv.due);
+        const fireDate = new Date(inv.due + 'T00:00:00');
         fireDate.setDate(fireDate.getDate() + rule.days);
         fireDate.setHours(9, 0, 0, 0);
 
@@ -134,11 +134,17 @@ export async function syncNotifications(): Promise<void> {
     // no per-notification channelId is passed and setupNotifications creates
     // no new channel. The notification is an invitation to open the app —
     // generation itself happens on next open (AuthContext), not here.
+    // Fire-date construction is deliberately kept identical to the inv_
+    // branch above (local-frame `date + 'T00:00:00'` parse, then local
+    // setHours(9,...)) — both branches were fixed together 2026-08-01 (owner
+    // approved) after the old bare `new Date(dateString)` UTC-midnight parse
+    // was found to fire 9am local on the day BEFORE the intended date in
+    // every US timezone. Do not let the two branches drift independently.
     for (const rule of recurringInvoiceRules) {
       if (count >= 60) break;
       if (!rule.isActive) continue;
 
-      const fireDate = new Date(rule.nextDueDate);
+      const fireDate = new Date(rule.nextDueDate + 'T00:00:00');
       fireDate.setHours(9, 0, 0, 0);
       const secondsUntil = Math.floor((fireDate.getTime() - now.getTime()) / 1000);
       if (secondsUntil <= 0) continue;
