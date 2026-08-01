@@ -342,6 +342,7 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 - **Supabase** — Postgres + Auth; background sync layer (local-first, cloud-backed)
 - **TypeScript** — fully migrated; all modules are `.ts/.tsx` strict
 - **expo-image-picker** — job site and receipt photo capture
+- **expo-image-manipulator** — caps the business logo at 512px when it is picked, and again when it is embedded in a PDF
 - **expo-notifications** — payment reminders, appointment alerts
 - **expo-mail-composer / expo-sms** — native email/SMS composers
 - **expo-document-picker** — import existing customer lists

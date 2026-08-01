@@ -1,15 +1,14 @@
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
-import { readPhotoAsDataUri } from "../utils/photoStorage";
+import { readLogoForPdf } from "../utils/photoStorage";
 import { invoiceHtml } from "../utils/pdfTemplates";
 import { reportError } from "../utils/analytics";
 import { buildInvoicePdfFile, invoicePdfFilename } from "../utils/invoicePdfFile";
 
-// photoStorage's real readPhotoAsDataUri touches FileSystem.EncodingType (absent
-// from the jest mock) and would always return null; mock it so the logo path is
-// actually observable.
+// photoStorage's real readLogoForPdf drives expo-image-manipulator and the
+// filesystem; mock it so the logo path is actually observable.
 jest.mock("../utils/photoStorage", () => ({
-  readPhotoAsDataUri: jest.fn(() => Promise.resolve(null)),
+  readLogoForPdf: jest.fn(() => Promise.resolve(null)),
 }));
 jest.mock("../utils/pdfTemplates", () => ({
   invoiceHtml: jest.fn(() => "<html>invoice</html>"),
@@ -97,10 +96,10 @@ describe("buildInvoicePdfFile", () => {
     );
   });
 
-  test("passes the logo data uri into the template when a logo is set", async () => {
-    readPhotoAsDataUri.mockResolvedValueOnce("data:image/png;base64,AAA");
+  test("passes the capped logo data uri into the template when a logo is set", async () => {
+    readLogoForPdf.mockResolvedValueOnce("data:image/png;base64,AAA");
     await buildInvoicePdfFile(invoice, { logoPhoto: "file:///mock/logo.png" });
-    expect(readPhotoAsDataUri).toHaveBeenCalledWith("file:///mock/logo.png");
+    expect(readLogoForPdf).toHaveBeenCalledWith("file:///mock/logo.png");
     expect(invoiceHtml).toHaveBeenCalledWith(
       invoice,
       { logoPhoto: "file:///mock/logo.png" },
@@ -110,12 +109,12 @@ describe("buildInvoicePdfFile", () => {
 
   test("renders without a logo when none is set", async () => {
     await buildInvoicePdfFile(invoice, {});
-    expect(readPhotoAsDataUri).not.toHaveBeenCalled();
+    expect(readLogoForPdf).not.toHaveBeenCalled();
     expect(invoiceHtml).toHaveBeenCalledWith(invoice, {}, undefined);
   });
 
   test("renders without a logo when the logo file can't be read", async () => {
-    readPhotoAsDataUri.mockResolvedValueOnce(null);
+    readLogoForPdf.mockResolvedValueOnce(null);
     const uri = await buildInvoicePdfFile(invoice, { logoPhoto: "file:///mock/gone.png" });
     expect(invoiceHtml).toHaveBeenCalledWith(
       invoice,

@@ -8,7 +8,7 @@
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
 import { invoiceHtml } from "./pdfTemplates";
-import { readPhotoAsDataUri } from "./photoStorage";
+import { readLogoForPdf } from "./photoStorage";
 import { reportError } from "./analytics";
 import type { Invoice, Settings } from "../types/models";
 
@@ -47,7 +47,7 @@ export async function buildInvoicePdfFile(
 ): Promise<string | null> {
   try {
     const logoDataUri = settings.logoPhoto
-      ? await readPhotoAsDataUri(settings.logoPhoto)
+      ? await readLogoForPdf(settings.logoPhoto)
       : null;
     const html = invoiceHtml(invoice, settings, logoDataUri ?? undefined);
     const { uri } = await Print.printToFileAsync({ html });
