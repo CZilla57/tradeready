@@ -52,6 +52,7 @@ import PricebookScreen            from "./screens/PricebookScreen";
 import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
 import ExportDataScreen           from "./screens/ExportDataScreen";
 import RecurringInvoicesScreen    from "./screens/RecurringInvoicesScreen";
+import AddRecurringInvoiceScreen  from "./screens/AddRecurringInvoiceScreen";
 
 import * as Notifications from "expo-notifications";
 
@@ -192,6 +193,11 @@ function InvoicesTab() {
         name="RecurringInvoices"
         component={RecurringInvoicesScreen}
         options={{ title: "Recurring Invoices" }}
+      />
+      <InvoiceStack.Screen
+        name="AddRecurringInvoice"
+        component={AddRecurringInvoiceScreen}
+        options={{ presentation: "modal" }}
       />
     </InvoiceStack.Navigator>
   );
