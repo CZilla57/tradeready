@@ -32,7 +32,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer } from "../utils/storage";
+import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer, loadSettings } from "../utils/storage";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
 import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
@@ -87,7 +87,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
   useEffect(() => {
     async function prefillFromJob() {
       try {
-        const [jobs, invoices, customers] = await Promise.all([loadJobs(), loadInvoices(), loadCustomers()]);
+        const [jobs, invoices, customers, settings] = await Promise.all([loadJobs(), loadInvoices(), loadCustomers(), loadSettings()]);
         const j: Job | undefined = jobs.find((x: Job) => x.id === jobId);
 
         if (!j) {
@@ -133,7 +133,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           setEmail(matchingCustomer?.email || "");
           setPhone(matchingCustomer?.phone || "");
           setDesc(j.title || "");
-          setNumber(nextInvoiceNumber(invoices));
+          setNumber(nextInvoiceNumber(invoices, settings));
         }
       } catch (err: unknown) {
         console.error("CreateInvoiceFromJobScreen: prefill failed", err);
@@ -164,7 +164,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
 
     setSaving(true);
     try {
-      const [jobs, invoices] = await Promise.all([loadJobs(), loadInvoices()]);
+      const [jobs, invoices, settings] = await Promise.all([loadJobs(), loadInvoices(), loadSettings()]);
 
       // Link to a real customer record (matches the job's customer by name, or
       // creates one); `customer` stays as the denormalized display name (#5).
@@ -235,7 +235,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           id:         `inv${Date.now()}`,
           customer:   customer.trim(),
           customerId: record?.id ?? "",
-          number:   number.trim() || nextInvoiceNumber(invoices),
+          number:   number.trim() || nextInvoiceNumber(invoices, settings),
           amount:   parsedAmount,
           due,
           email:    email.trim(),

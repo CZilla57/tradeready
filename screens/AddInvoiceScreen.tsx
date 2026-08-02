@@ -13,7 +13,7 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { loadInvoices, saveInvoices, getOrCreateCustomer } from "../utils/storage";
+import { loadInvoices, saveInvoices, getOrCreateCustomer, loadSettings } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
 import { nextInvoiceNumber } from "../utils/invoiceNumber";
 import { Button } from "../components/UI";
@@ -74,7 +74,7 @@ export default function AddInvoiceScreen({ route, navigation }: InvoiceStackScre
       return;
     }
     setSaving(true);
-    const invoices: Invoice[] = await loadInvoices();
+    const [invoices, settings] = await Promise.all([loadInvoices(), loadSettings()]);
     // Link to a real customer record (creating one if needed); `customer` stays
     // as the denormalized display name (roadmap #5).
     const record = await getOrCreateCustomer({
@@ -85,7 +85,7 @@ export default function AddInvoiceScreen({ route, navigation }: InvoiceStackScre
     const invoiceFields = {
       customer: customer.trim(),
       customerId: record?.id ?? "",
-      number: number.trim() || nextInvoiceNumber(invoices),
+      number: number.trim() || nextInvoiceNumber(invoices, settings),
       amount: parsedAmount,
       due,
       email: email.trim(),

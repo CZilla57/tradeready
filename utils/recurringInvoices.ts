@@ -16,6 +16,7 @@ import {
   loadCustomers,
   loadRecurringInvoices,
   saveRecurringInvoices,
+  loadSettings,
   resolveCustomer,
 } from './storage';
 import { calculateNextDate, isEndConditionMet } from './recurrence';
@@ -79,10 +80,11 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
   generating = true;
   try {
     const today = new Date().toISOString().split('T')[0];
-    const [rules, invoices, customers] = await Promise.all([
+    const [rules, invoices, customers, settings] = await Promise.all([
       loadRecurringInvoices(),
       loadInvoices(),
       loadCustomers(),
+      loadSettings(),
     ]);
     const newInvoices: Invoice[] = [];
     let anyUpdated = false;
@@ -108,7 +110,7 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
           id: nextGeneratedInvoiceId(),
           customer: rule.customerName,
           customerId: rule.customerId,
-          number: nextInvoiceNumber([...invoices, ...newInvoices]),
+          number: nextInvoiceNumber([...invoices, ...newInvoices], settings),
           amount: rule.amount,
           // due = occurrence date + net terms (NOT generation date): catch-up
           // invoices for missed periods date from when the money was owed and

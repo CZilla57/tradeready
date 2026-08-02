@@ -30,6 +30,7 @@ import { resetUser, reportError } from "../utils/analytics";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import { DELETE_CONFIRM_PHRASE, deleteConfirmMatches } from "../utils/deleteConfirm";
 import { settingsEqual } from "../utils/settingsDirty";
+import { normalizeInvoicePrefix } from "../utils/invoiceNumber";
 import BaseField from "../components/Field";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
@@ -606,6 +607,36 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
 
         <Divider />
 
+        <SectionHeader title="Invoice numbering" />
+        <View style={styles.card}>
+          <Field
+            label="Invoice number prefix"
+            value={s.invoicePrefix ?? ""}
+            onChangeText={(v: string) => update("invoicePrefix", v)}
+            placeholder="INV"
+            autoCapitalize="characters"
+            colors={colors}
+            shadow={shadow}
+          />
+          <Field
+            label="Numbers start at"
+            value={s.invoiceStartNumber != null ? String(s.invoiceStartNumber) : ""}
+            onChangeText={(v: string) => {
+              const parsed = parseInt(v.replace(/[^0-9]/g, ""), 10);
+              update("invoiceStartNumber", Number.isNaN(parsed) ? undefined : parsed);
+            }}
+            placeholder="1"
+            keyboardType="number-pad"
+            colors={colors}
+            shadow={shadow}
+          />
+          <Text style={styles.keyNote}>
+            Auto-numbers look like {normalizeInvoicePrefix(s.invoicePrefix)}-{String(Math.max(1, Math.floor(s.invoiceStartNumber || 1))).padStart(4, "0")}. The starting number only matters until your numbering grows past it — existing invoices keep their numbers.
+          </Text>
+        </View>
+
+        <Divider />
+
         <SectionHeader title="Appearance" />
         <View style={styles.card}>
           <Text style={styles.providerHint}>Choose how TradeReady looks on your device.</Text>
@@ -1097,6 +1128,7 @@ interface FieldProps {
   onChangeText: (v: string) => void;
   keyboardType?: string;
   multiline?: boolean;
+  placeholder?: string;
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
   colors: ColorScheme;
   shadow: ShadowScheme;

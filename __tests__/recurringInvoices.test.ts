@@ -16,6 +16,9 @@ jest.mock('../utils/storage', () => ({
   loadCustomers: jest.fn(),
   loadRecurringInvoices: jest.fn(),
   saveRecurringInvoices: jest.fn(),
+  // Settings feed nextInvoiceNumber (invoicePrefix/invoiceStartNumber);
+  // {} = the legacy INV-from-1 behavior every numbering assertion pins.
+  loadSettings: jest.fn(async () => ({})),
   // resolveCustomer is pure; its real behavior is pinned by
   // __tests__/customerIdentity.test.js. Reimplemented inline so this mock
   // factory doesn't drag the real storage graph (sync/supabase) into the test.

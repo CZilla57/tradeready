@@ -55,3 +55,56 @@ describe('nextInvoiceNumber', () => {
     expect(nextInvoiceNumber([inv('A1B2')])).toBe('INV-0013');
   });
 });
+
+describe('nextInvoiceNumber with settings (prefix + starting number)', () => {
+  test('custom prefix renders and matches case-insensitively when scanning', () => {
+    expect(nextInvoiceNumber([], { invoicePrefix: 'JOB' })).toBe('JOB-0001');
+    expect(nextInvoiceNumber([inv('job-0004')], { invoicePrefix: 'JOB' })).toBe('JOB-0005');
+  });
+
+  test('blank or whitespace prefix falls back to INV', () => {
+    expect(nextInvoiceNumber([], { invoicePrefix: '' })).toBe('INV-0001');
+    expect(nextInvoiceNumber([], { invoicePrefix: '   ' })).toBe('INV-0001');
+  });
+
+  test('trailing dash in the prefix is not doubled', () => {
+    expect(nextInvoiceNumber([], { invoicePrefix: 'JOB-' })).toBe('JOB-0001');
+  });
+
+  test('starting number is a floor on an empty list', () => {
+    expect(nextInvoiceNumber([], { invoiceStartNumber: 500 })).toBe('INV-0500');
+  });
+
+  test('starting number loses once the sequence has grown past it', () => {
+    expect(nextInvoiceNumber([inv('INV-0800')], { invoiceStartNumber: 500 })).toBe('INV-0801');
+  });
+
+  test('starting number wins while the sequence is still below it', () => {
+    expect(nextInvoiceNumber([inv('INV-0003')], { invoiceStartNumber: 500 })).toBe('INV-0500');
+  });
+
+  test('invalid starting numbers are ignored', () => {
+    expect(nextInvoiceNumber([], { invoiceStartNumber: 0 })).toBe('INV-0001');
+    expect(nextInvoiceNumber([], { invoiceStartNumber: -5 })).toBe('INV-0001');
+    expect(nextInvoiceNumber([], { invoiceStartNumber: NaN })).toBe('INV-0001');
+  });
+
+  test('fractional starting number is floored', () => {
+    expect(nextInvoiceNumber([], { invoiceStartNumber: 12.9 })).toBe('INV-0012');
+  });
+
+  test('digit-bearing prefix does not compound its own digits into the counter', () => {
+    // Without the leading-prefix strip, "2026-0005" would scan to 20260005.
+    expect(nextInvoiceNumber([inv('2026-0005')], { invoicePrefix: '2026' })).toBe('2026-0006');
+  });
+
+  test('legacy INV numbers still count under a new digitless scan path', () => {
+    // Old INV invoices have no leading "2026", so the whole string digit-scans.
+    expect(nextInvoiceNumber([inv('INV-0007')], { invoicePrefix: '2026' })).toBe('2026-0008');
+  });
+
+  test('undefined settings object behaves like the legacy call', () => {
+    expect(nextInvoiceNumber([inv('INV-0002')], undefined)).toBe('INV-0003');
+    expect(nextInvoiceNumber([inv('INV-0002')], {})).toBe('INV-0003');
+  });
+});

@@ -486,6 +486,21 @@ export interface Settings {
    */
   vehicleDeductionMethod?: VehicleDeductionMethod;
 
+  // Invoicing
+  /**
+   * Invoice-number prefix, rendered `${prefix}-0001`. OPTIONAL and additive —
+   * absent/blank on pre-existing settings blobs → "INV"
+   * (utils/invoiceNumber.ts owns the rule).
+   */
+  invoicePrefix?: string;
+  /**
+   * Floor for the next auto-generated invoice number:
+   * next = max(maxExisting + 1, this). OPTIONAL and additive — absent → 1.
+   * Lets a user start at e.g. 500 so their first invoice isn't #1; once the
+   * sequence grows past it, it has no effect.
+   */
+  invoiceStartNumber?: number;
+
   // Payment
   paymentNotes: string;
   provider: PaymentProvider;
