@@ -1,7 +1,7 @@
 # Estimate Follow-Up Nudges — Design
 
 **Date:** 2026-08-01
-**Status:** Approved by owner (chat, 2026-08-01); spec pending owner review
+**Status:** Implemented on feat/estimate-follow-up-nudges (2026-08-02); device smoke pending
 **Scope:** new utils/estimateFollowUps.ts, new EstimateFollowUpScreen, syncNotifications est_ branch, Job/Settings shape additions, SendEstimateScreen + estimateApprovalLink + JobDetail stamps, Today row, Settings toggle
 
 ## Problem
