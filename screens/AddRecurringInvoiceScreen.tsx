@@ -359,7 +359,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     pickerBtn: {
       backgroundColor: colors.surface,
       borderRadius: radius.md,
-      height: 44,
+      // minHeight (not height): accessibility text grows the control instead
+      // of clipping — components/Field.tsx pattern.
+      minHeight: 44,
       paddingHorizontal: spacing.md,
       flexDirection: "row",
       alignItems: "center",

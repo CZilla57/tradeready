@@ -826,7 +826,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   customerSelector: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    height: 44,
+    // minHeight throughout this screen (not height) so accessibility text
+    // grows the control instead of clipping — components/Field.tsx pattern.
+    minHeight: 44,
     paddingHorizontal: spacing.md,
     flexDirection: "row",
     alignItems: "center",
@@ -870,7 +872,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     fontFamily: fonts.bodyRegular,
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    height: 44,
+    minHeight: 44,
     paddingHorizontal: spacing.md,
     fontSize: fontSize.md,
     color: colors.textPrimary,
@@ -888,7 +890,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   pickerBtn: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    height: 44,
+    minHeight: 44,
     paddingHorizontal: spacing.md,
     flexDirection: "row",
     alignItems: "center",

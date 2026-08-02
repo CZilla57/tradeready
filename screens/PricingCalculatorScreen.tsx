@@ -790,7 +790,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     smallInputRow: { flexDirection: "row", alignItems: "center" },
     smallInput: {
       fontFamily: fonts.bodyRegular,
-      flex: 1, height: 44, backgroundColor: colors.background, borderRadius: radius.sm,
+      // minHeight (not height): accessibility text grows the inputs instead
+      // of clipping — components/Field.tsx pattern.
+      flex: 1, minHeight: 44, backgroundColor: colors.background, borderRadius: radius.sm,
       paddingHorizontal: spacing.sm, fontSize: fontSize.sm, color: colors.textPrimary,
       borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     },
@@ -802,7 +804,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     materialRow: { flexDirection: "row", gap: 6, marginBottom: 6, alignItems: "center" },
     matInput: {
       fontFamily: fonts.bodyRegular,
-      flex: 1, height: 44, backgroundColor: colors.background, borderRadius: radius.sm,
+      flex: 1, minHeight: 44, backgroundColor: colors.background, borderRadius: radius.sm,
       paddingHorizontal: spacing.sm, fontSize: fontSize.sm, color: colors.textPrimary,
       borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     },

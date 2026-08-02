@@ -1153,16 +1153,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.sm, ...shadow.card },
     fieldGroup: { marginBottom: spacing.sm },
     fieldLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5 },
-    input: { fontFamily: fonts.bodyRegular, backgroundColor: colors.background, borderRadius: radius.md, height: 44, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
-    // `height: undefined` is load-bearing — do NOT delete it as redundant. This
-    // style is applied after `input` above, so it has to cancel that fixed
-    // `height: 44`; otherwise the field is pinned to a definite height, paints
-    // taller than its layout box, and later siblings (the logo block) render on
-    // top of it (device finding, 2026-07-14, see OnboardingScreen).
-    // The 88pt floor comes from BaseField's own `inputMulti` and is deliberately
-    // not overridden here — setting a smaller minHeight would shrink the
-    // pre-existing Payment instructions field.
-    inputMultiline: { height: undefined, paddingTop: spacing.sm, textAlignVertical: "top" },
+    // minHeight (not height) so larger accessibility text grows the field
+    // instead of clipping — components/Field.tsx pattern. This also retires
+    // the old fixed-height paint bug (device finding 2026-07-14): nothing
+    // pins the field anymore, so multiline no longer needs to cancel it.
+    input: { fontFamily: fonts.bodyRegular, backgroundColor: colors.background, borderRadius: radius.md, minHeight: 44, paddingHorizontal: spacing.md, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+    // `minHeight: 88` is load-bearing — do NOT delete it as redundant. This
+    // style is applied after `input` above (whose minHeight: 44 would
+    // otherwise override BaseField's own 88pt `inputMulti` floor, shrinking
+    // the pre-existing Payment instructions field). The old `height:
+    // undefined` cancel is gone with the fixed height it cancelled.
+    inputMultiline: { minHeight: 88, paddingTop: spacing.sm, textAlignVertical: "top" },
     logoHint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm },
     logoPicker: { alignSelf: "flex-start", marginBottom: spacing.xs },
     logoImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.background },

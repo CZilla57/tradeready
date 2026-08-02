@@ -732,13 +732,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     messageText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textPrimary, lineHeight: 22 },
     actionRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
     copyBtn: {
-      flex: 1, height: 44, borderRadius: radius.md,
+      // minHeight (not height): accessibility text grows the buttons instead
+      // of clipping — components/Field.tsx pattern.
+      flex: 1, minHeight: 44, borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.borderStrong,
       alignItems: "center", justifyContent: "center",
     },
     copyBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textPrimary },
     regenBtn: {
-      flex: 1, height: 44, borderRadius: radius.md,
+      flex: 1, minHeight: 44, borderRadius: radius.md,
       borderWidth: 1, borderColor: colors.borderStrong,
       alignItems: "center", justifyContent: "center",
     },

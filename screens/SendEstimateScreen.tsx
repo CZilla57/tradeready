@@ -383,7 +383,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   actionRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
   actionBtn: {
     flex: 1,
-    height: 44,
+    // minHeight (not height): accessibility text grows the buttons instead
+    // of clipping — components/Field.tsx pattern.
+    minHeight: 44,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.borderStrong,

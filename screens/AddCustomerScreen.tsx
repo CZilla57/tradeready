@@ -352,7 +352,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     fontFamily: fonts.bodyRegular,
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    height: 44,
+    // minHeight (not height) so larger accessibility text grows the field
+    // instead of clipping inside it — same pattern as components/Field.tsx.
+    minHeight: 44,
     paddingHorizontal: spacing.md,
     fontSize: fontSize.md,
     color: colors.textPrimary,
