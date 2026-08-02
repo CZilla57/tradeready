@@ -41,6 +41,7 @@ import {
   shiftDate,
 } from '../utils/dateHelpers';
 import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
+import { selectAwaitingFollowUp, awaitingResponseLabel } from '../utils/estimateFollowUps';
 import type { Job, Invoice } from '../types/models';
 import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
@@ -403,6 +404,8 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const [overdueInvoices, setOverdueInvoices] = useState<Invoice[]>([]);
   const [leadJobs, setLeadJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [awaitingEstimates, setAwaitingEstimates] = useState<Job[]>([]);
+  const [followUpsEnabled, setFollowUpsEnabled] = useState(true);
 
   useFocusEffect(
     useCallback(() => {
@@ -411,17 +414,21 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [allJobsList, expectedEarnings, overdue, leads] = await Promise.all([
+          const [allJobsList, expectedEarnings, overdue, leads, settings] = await Promise.all([
             loadJobs(),
             getExpectedEarningsForDate(todayString),
             loadOverdueInvoices(),
             loadLeadJobs(),
+            loadSettings(),
           ]);
           if (active) {
             setAllJobs(allJobsList);
             setEarnings(expectedEarnings);
             setOverdueInvoices(overdue);
             setLeadJobs(leads);
+            setAwaitingEstimates(selectAwaitingFollowUp(allJobsList, new Date()));
+            // ABSENT means ON (see types/models.ts) — never truthiness.
+            setFollowUpsEnabled(settings.estimateFollowUpsEnabled !== false);
           }
         } catch (error: unknown) {
           console.error('TodayScreen: failed to load daily data', error);
@@ -437,16 +444,20 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   );
 
   const { refreshing, onRefresh } = useRefresh(async () => {
-    const [allJobsList, expectedEarnings, overdue, leads] = await Promise.all([
+    const [allJobsList, expectedEarnings, overdue, leads, settings] = await Promise.all([
       loadJobs(),
       getExpectedEarningsForDate(todayString),
       loadOverdueInvoices(),
       loadLeadJobs(),
+      loadSettings(),
     ]);
     setAllJobs(allJobsList);
     setEarnings(expectedEarnings);
     setOverdueInvoices(overdue);
     setLeadJobs(leads);
+    setAwaitingEstimates(selectAwaitingFollowUp(allJobsList, new Date()));
+    // ABSENT means ON (see types/models.ts) — never truthiness.
+    setFollowUpsEnabled(settings.estimateFollowUpsEnabled !== false);
   }, 'TodayScreen');
 
   function goToInvoices() {
@@ -584,6 +595,25 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
             )}
           </View>
         </BriefingSection>
+      )}
+
+      {/* Estimates awaiting response — persistent pointer; the one-shot est_
+          notification is dismissable, this row stays until the customer
+          answers or the job moves on. Same toggle as the notification. */}
+      {!loading && followUpsEnabled && awaitingEstimates.length > 0 && (
+        <TouchableOpacity
+          style={styles.awaitingRow}
+          onPress={goToJobs}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={awaitingResponseLabel(awaitingEstimates.length)}
+        >
+          <Ionicons name="hourglass-outline" size={16} color={colors.warning} />
+          <Text style={styles.awaitingText} maxFontSizeMultiplier={1.4}>
+            {awaitingResponseLabel(awaitingEstimates.length)}
+          </Text>
+          <Text style={styles.listRowChevron}>›</Text>
+        </TouchableOpacity>
       )}
 
       {/* Leads Follow-Up — only show once loaded and there's something to show */}
@@ -934,6 +964,25 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       color: colors.accent,
       textTransform: 'uppercase',
       letterSpacing: 0.4,
+    },
+
+    // Awaiting estimates row
+    awaitingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 12,
+      borderRadius: radius.md,
+      backgroundColor: colors.warningBg,
+    },
+    awaitingText: {
+      flex: 1,
+      fontFamily: fonts.bodyMedium,
+      fontSize: fontSize.sm,
+      color: colors.warning,
     },
 
     // Schedule timeline — the left gutter carries time + a route line that
