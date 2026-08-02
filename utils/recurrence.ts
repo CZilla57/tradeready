@@ -11,7 +11,9 @@ import type { DateString, RecurrenceCadence, RecurrenceEndCondition } from '../t
 // for a daily rule that made calculateNextDate a fixed point and the engines'
 // catch-up while-loops non-terminating (found 2026-08-01, pre-existing in the
 // jobs engine; fixed at extraction time).
-function formatLocalDate(d: Date): string {
+// Exported for utils/estimateFollowUps.ts (stampEstimateSent) — same
+// local-frame formatter, no behavior change.
+export function formatLocalDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
