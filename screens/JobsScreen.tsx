@@ -23,7 +23,7 @@ import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
 import { SearchField } from "../components/SearchField";
 import { Fab } from "../components/Fab";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -282,13 +282,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingHorizontal: spacing.md,
       paddingTop: spacing.md,
       paddingBottom: spacing.sm,
+      ...layout.contentColumn,
     },
-    searchRow: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
+    searchRow: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm, ...layout.contentColumn },
     filterRow: {
       flexDirection: "row",
       paddingHorizontal: spacing.md,
       gap: 6,
       marginBottom: spacing.sm,
+      ...layout.contentColumn,
     },
     filterTab: {
       paddingHorizontal: 12,
@@ -304,7 +306,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     filterTabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
     filterTabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.textOnAccent },
-    listContent: { paddingHorizontal: spacing.md, paddingBottom: 100 },
+    listContent: { paddingHorizontal: spacing.md, paddingBottom: 100, ...layout.contentColumn },
     jobCard: {
       backgroundColor: colors.surface,
       borderRadius: radius.lg,

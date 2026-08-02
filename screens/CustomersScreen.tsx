@@ -24,7 +24,7 @@ import {
 } from '../utils/duplicateCustomers';
 import { SearchField } from '../components/SearchField';
 import { Fab } from '../components/Fab';
-import { spacing, radius, fontSize, fonts } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
@@ -304,6 +304,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     gap: spacing.sm,
+    ...layout.contentColumn,
   },
   dupTextBlock: { flex: 1 },
   dupTitle: {
@@ -342,6 +343,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     minHeight: 40,
+    ...layout.contentColumn,
   },
   archiveToggleText: {
     fontFamily: fonts.bodyMedium,
@@ -357,6 +359,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
     paddingBottom: spacing.md,
+    ...layout.contentColumn,
   },
   headerTitle: {
     fontFamily: fonts.display,
@@ -374,12 +377,14 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   searchRow: {
     marginHorizontal: spacing.md,
     marginBottom: spacing.md,
+    ...layout.contentColumn,
   },
 
   // List
   listContent: {
     paddingHorizontal: spacing.md,
     paddingBottom: 100,
+    ...layout.contentColumn,
   },
   separator: {
     height: 1,

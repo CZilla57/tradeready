@@ -49,7 +49,7 @@ import {
   effectivePayments,
   overpaidAmount,
 } from "../utils/invoicePayments";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useUndo } from "../context/UndoContext";
@@ -797,16 +797,19 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingHorizontal: spacing.md,
       paddingTop: spacing.md,
       paddingBottom: spacing.sm,
+      ...layout.contentColumn,
     },
     searchRow: {
       paddingHorizontal: spacing.md,
       paddingBottom: spacing.sm,
+      ...layout.contentColumn,
     },
     filterRow: {
       flexDirection: "row",
       paddingHorizontal: spacing.md,
       gap: 6,
       marginBottom: spacing.sm,
+      ...layout.contentColumn,
     },
     filterTab: {
       paddingHorizontal: 12,
@@ -825,6 +828,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     listContent: {
       paddingHorizontal: spacing.md,
       paddingBottom: 100,
+      ...layout.contentColumn,
     },
     invoiceCard: {
       backgroundColor: colors.surface,
@@ -914,6 +918,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
       gap: spacing.sm,
+      ...layout.contentColumn,
     },
     bulkCount: {
       flex: 1,

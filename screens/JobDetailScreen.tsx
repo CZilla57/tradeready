@@ -34,7 +34,7 @@ import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
 import { Button, Card, Divider } from "../components/UI";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useUndo } from "../context/UndoContext";
@@ -988,7 +988,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: spacing.md, paddingBottom: 40 },
+    scroll: { padding: spacing.md, paddingBottom: 40, ...layout.contentColumn },
 
     centered: { justifyContent: "center", alignItems: "center", padding: spacing.md },
 

@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { spacing, radius, fontSize, fonts } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
@@ -246,6 +246,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
       {activeTab === 'overview' && (
         <ScrollView
           style={styles.scrollContent}
+          contentContainerStyle={styles.overviewScrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
@@ -387,6 +388,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     filterBar: {
       height: 44,
       marginBottom: spacing.md,
+      ...layout.contentColumn,
     },
     filterScroll: {
       paddingLeft: spacing.lg,
@@ -431,6 +433,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       padding: 3,
       borderWidth: 1,
       borderColor: colors.border,
+      ...layout.contentColumn,
     },
     tabButton: {
       flex: 1,
@@ -453,6 +456,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     scrollContent: {
       flex: 1,
+    },
+    overviewScrollContent: {
+      ...layout.contentColumn,
     },
 
     // ── Expense Category Card (inline breakdown used only in this screen)
@@ -534,6 +540,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     expenseList: {
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.sm,
+      ...layout.contentColumn,
     },
 
     // ── Empty states

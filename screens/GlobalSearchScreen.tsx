@@ -18,7 +18,7 @@ import { getStatus } from "../utils/invoiceHelpers";
 import { formatMoney } from "../utils/format";
 import { Badge, EmptyState } from "../components/UI";
 import { SearchField } from "../components/SearchField";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Customer, Invoice, Job } from "../types/models";
@@ -178,8 +178,8 @@ export default function GlobalSearchScreen({ navigation }: TodayStackScreenProps
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    searchRow: { paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm },
-    scroll: { paddingHorizontal: spacing.md, paddingBottom: 40 },
+    searchRow: { paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm, ...layout.contentColumn },
+    scroll: { paddingHorizontal: spacing.md, paddingBottom: 40, ...layout.contentColumn },
     sectionLabel: {
       fontFamily: fonts.mono, fontSize: fontSize.xs, color: colors.textSecondary,
       textTransform: "uppercase", letterSpacing: 0.8,

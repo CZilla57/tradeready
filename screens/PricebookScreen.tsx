@@ -9,7 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { loadPricebook, savePricebook } from "../utils/storage";
 import { formatQuote } from "../utils/format";
 import { Button } from "../components/UI";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -160,6 +160,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingHorizontal: spacing.md,
       borderWidth: 1,
       borderColor: colors.border,
+      ...layout.contentColumn,
     },
     searchInput: {
       fontFamily: fonts.bodyRegular,
@@ -203,7 +204,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: "center" as const,
       justifyContent: "center" as const,
     },
-    listContent: { paddingBottom: 100 },
+    listContent: { paddingBottom: 100, ...layout.contentColumn },
+    // NOTE (iPad Tier 1, Phase 4): audit §4.6 flags this footer bar as
+    // non-mechanical — its left/right absolute offsets don't compose with
+    // alignSelf:'center'+maxWidth the way a contentContainerStyle swap does.
+    // Left untouched here; a bespoke centering technique is deferred to a
+    // later phase per the audit's own guidance ("Phase 4/5 needs a bespoke
+    // centering approach for this one style").
     fab: {
       position: "absolute",
       bottom: spacing.lg,
