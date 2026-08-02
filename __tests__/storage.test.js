@@ -119,6 +119,7 @@ describe("clearAllUserData", () => {
       "trips",
       "pricebook",
       "review_requests",
+      "dismissed_duplicate_pairs",
       "__syncQueue",
       "__lastSyncedAt",
       "__dataOwner",

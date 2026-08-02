@@ -15,6 +15,13 @@ import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
 import { buildCustomerList, type CustomerListEntry } from '../utils/customerList';
 import { isArchived } from '../utils/archive';
+import {
+  findDuplicateCustomerPairs,
+  filterUndismissed,
+  loadDismissedPairs,
+  dismissPair,
+  type DuplicatePair,
+} from '../utils/duplicateCustomers';
 import { SearchField } from '../components/SearchField';
 import { Fab } from '../components/Fab';
 import { spacing, radius, fontSize, fonts } from '../utils/theme';
@@ -83,6 +90,7 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
   const [manualCustomers, setManualCustomers]  = useState<Customer[]>([]);
   const [searchText, setSearchText]            = useState<string>('');
   const [showArchived, setShowArchived]        = useState<boolean>(false);
+  const [dismissedKeys, setDismissedKeys]      = useState<string[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -96,9 +104,14 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
 
   const loadData = async () => {
     try {
-      const [invs, custs] = await Promise.all([loadInvoices(), loadCustomers()]);
+      const [invs, custs, dismissed] = await Promise.all([
+        loadInvoices(),
+        loadCustomers(),
+        loadDismissedPairs(),
+      ]);
       setInvoices(invs || []);
       setManualCustomers(custs || []);
+      setDismissedKeys(dismissed);
     } catch (err: unknown) {
       console.error('CustomersScreen: failed to load data', err);
       reportError(err, { context: 'customersScreenLoad' });
@@ -137,6 +150,38 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
     navigation.navigate('CustomerDetail', { customer });
   }, [navigation]);
 
+  const duplicatePairs = useMemo(
+    () => filterUndismissed(findDuplicateCustomerPairs(manualCustomers), dismissedKeys),
+    [manualCustomers, dismissedKeys]
+  );
+  const currentPair: DuplicatePair | undefined = duplicatePairs[0];
+
+  // Review opens the presumed LOSER's detail (its merge action absorbs it into
+  // the other record): fewer invoices in the rollup, tie broken by newer
+  // createdAt — the record with less history is the likelier accidental dup.
+  function reviewPair(pair: DuplicatePair) {
+    const entryA = allCustomers.find((e) => e.id === pair.a.id);
+    const entryB = allCustomers.find((e) => e.id === pair.b.id);
+    let loser = entryB ?? entryA;
+    if (entryA && entryB) {
+      if (entryA.invoices.length !== entryB.invoices.length) {
+        loser = entryA.invoices.length < entryB.invoices.length ? entryA : entryB;
+      } else {
+        loser = (pair.a.createdAt || '') > (pair.b.createdAt || '') ? entryA : entryB;
+      }
+    }
+    if (loser) navigation.navigate('CustomerDetail', { customer: loser });
+  }
+
+  async function dismissCurrentPair(pair: DuplicatePair) {
+    setDismissedKeys((prev) => [...prev, pair.key]);
+    try {
+      await dismissPair(pair.key);
+    } catch (err: unknown) {
+      reportError(err, { context: 'duplicateDismiss' });
+    }
+  }
+
   const activeEntries  = allCustomers.filter((c) => !archivedIds.has(c.id));
   const totalCustomers = activeEntries.length;
   const totalRevenue   = activeEntries.reduce((sum, c) => sum + c.totalSpent, 0);
@@ -161,6 +206,35 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
           accessibilityLabel="Search customers"
         />
       </View>
+
+      {currentPair && !showArchived && (
+        <View style={styles.dupBanner} accessibilityRole="alert">
+          <View style={styles.dupTextBlock}>
+            <Text style={styles.dupTitle} maxFontSizeMultiplier={1.4}>
+              Possible duplicate{duplicatePairs.length > 1 ? `s (${duplicatePairs.length})` : ''}
+            </Text>
+            <Text style={styles.dupNames} numberOfLines={2} maxFontSizeMultiplier={1.4}>
+              “{currentPair.a.name}” and “{currentPair.b.name}” share the same {currentPair.reason === 'name' ? 'name' : currentPair.reason === 'phone' ? 'phone number' : 'email'}.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.dupBtn}
+            onPress={() => dismissCurrentPair(currentPair)}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss this duplicate suggestion"
+          >
+            <Text style={styles.dupBtnText}>Dismiss</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.dupBtn, styles.dupBtnPrimary]}
+            onPress={() => reviewPair(currentPair)}
+            accessibilityRole="button"
+            accessibilityLabel={`Review duplicate: ${currentPair.a.name} and ${currentPair.b.name}`}
+          >
+            <Text style={[styles.dupBtnText, styles.dupBtnTextPrimary]}>Review</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {archivedIds.size > 0 && (
         <TouchableOpacity
@@ -220,6 +294,47 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     backgroundColor: colors.background,
   },
 
+  dupBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warningBg,
+    borderRadius: radius.md,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+  },
+  dupTextBlock: { flex: 1 },
+  dupTitle: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: fontSize.sm,
+    color: colors.warning,
+  },
+  dupNames: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    marginTop: 1,
+  },
+  dupBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  dupBtnPrimary: {
+    backgroundColor: colors.warning,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+  },
+  dupBtnText: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+  },
+  dupBtnTextPrimary: {
+    color: colors.textOnAccent,
+  },
   archiveToggle: {
     flexDirection: 'row',
     alignItems: 'center',
