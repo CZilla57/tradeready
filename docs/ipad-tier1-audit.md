@@ -396,11 +396,21 @@ worst ~7–9pt of overlap for a height-limited photo. With a full-height box, an
 photo narrower in aspect than the viewport now fills the height and the button
 lands **on the photo**; a white glyph on `rgba(255,255,255,0.15)` over a bright
 photo is low contrast. Reachability is unaffected (fixed position, `hitSlop`),
-and this is a legibility judgement no static read can settle. **If the owner
-dislikes it the revert is exactly one line** (restore `height: "80%"`, accepting
-the 25% landscape size loss). The better follow-up — out of Phase 6 scope
-because it is viewer chrome redesign — is to give the close button an opaque
-scrim so full-bleed is safe in both directions.
+and this is a legibility judgement no static read can settle.
+
+Two ways out, both cheap, for the owner to weigh in Phase 7:
+
+- **Revert:** restore `height: "80%"` on `viewerImage` — one key, accepting the
+  25% landscape size loss back.
+- **Darken the scrim:** `viewerClose.backgroundColor`
+  (`screens/JobDetailScreen.tsx:1153`, currently `rgba(255,255,255,0.15)`) → a
+  darker value keeps the full-bleed photo *and* makes the button legible over
+  it. This is also **one key, not a viewer redesign** — it was left out of
+  Phase 6 only because it visibly changes the button on the phone viewer too
+  (over the near-black `viewerBg` a light-translucent circle reads as a soft
+  grey disc; a dark one would nearly disappear), so it needs a look on device
+  before being chosen, and probably a border or shadow to work on both
+  backgrounds.
 
 ### 6.2 — §4.2 `components/DateTimePickerSheet.tsx` `[landscape]` — **CHANGED**
 
@@ -463,13 +473,26 @@ passed to `DateTimePicker` changed — the element is merely bound to a `const`
 and then conditionally wrapped. The change is sizing/positioning only, exactly
 as §4.2 required.
 
-Because that contract had **zero test coverage** before this phase (the
-existing suite covered only `roundToMinuteInterval`), four render tests were
-added to `__tests__/dateTimePickerSheet.test.ts`: not-visible renders nothing;
-the calendar branch keeps both the picker and Done reachable (the regression
-guard for the ScrollView wrap); Done commits the displayed value when the
-picker was never touched; Done commits the interval-rounded value in time
-mode. No existing assertion was changed or weakened.
+**The contract was already under test, and still is.**
+`__tests__/UI.test.js:159` — "Done commits the currently displayed value before
+closing (iOS)" — has covered exactly this since 2026-07-16 and cites the same
+owner report; it renders the sheet in `mode:"date"`, presses Done, and asserts
+`onChange(shown)` plus a single `onClose`. **It passes unchanged through the
+ScrollView wrap**, which is the strongest single piece of evidence that the
+commit path survived this phase. (An earlier draft of this section claimed the
+contract had zero coverage before Phase 6. That was wrong and the error was
+avoidable: the check looked at the sheet's own suite and the two modals that
+mount it, but never grepped `__tests__/` for the component name.)
+
+Four render tests were nevertheless added to
+`__tests__/dateTimePickerSheet.test.ts`, co-located with the sheet's own suite
+rather than duplicating the `UI.test.js` case: not-visible renders nothing; the
+calendar branch keeps both the picker and Done reachable (the regression guard
+specific to the ScrollView wrap, which `UI.test.js` does not assert); Done
+commits the displayed value when the picker was never touched; and Done commits
+the interval-rounded value in time mode (the `roundToMinuteInterval` path
+through Done, which nothing covered before). No existing assertion anywhere was
+changed or weakened.
 
 **Note for the record:** Phase 6's brief described the contract as "value
 commits only when Done is tapped, cancel/backdrop discards". That is not the

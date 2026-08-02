@@ -6,9 +6,12 @@
 // Also pins the iOS sheet's commit-on-Done contract (owner requirement,
 // 2026-07-16): Done commits the currently displayed value even when the
 // picker was never touched, so opening with nothing selected and tapping Done
-// picks the parent's fallback. Added in Phase 6 of the iPad work, which
-// re-shaped the sheet's JSX (maxHeight cap + a ScrollView around the inline
-// calendar) — this is the regression guard for that contract.
+// picks the parent's fallback. That contract is NOT first covered here —
+// UI.test.js:159 has asserted it since the requirement landed, and still
+// passes. These cases sit with the sheet's own suite and add what that one
+// does not: the picker-still-reachable guard for the ScrollView that Phase 6
+// of the iPad work wrapped around the inline calendar, and the
+// roundToMinuteInterval path through Done.
 //
 // This file is .ts, not .tsx, so the render cases use React.createElement
 // rather than JSX.
