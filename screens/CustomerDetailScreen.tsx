@@ -11,20 +11,22 @@ import {
   TextInput,
   Linking,
   Alert,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
 import { isArchived, withArchived } from '../utils/archive';
+import { performCustomerMerge } from '../utils/customerMerge';
 import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
 import { KeyboardDoneBar } from '../components/KeyboardDoneBar';
 import { isFullyPaid, isPartlyPaid, amountPaid, balanceDue } from '../utils/invoicePayments';
-import type { Job, Invoice } from '../types/models';
-import { reportError } from '../utils/analytics';
+import type { Job, Invoice, Customer as CustomerRecord } from '../types/models';
+import { reportError, track } from '../utils/analytics';
 import type { CustomerStackScreenProps } from '../types/navigation';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -162,6 +164,10 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
   const [jobs, setJobs]               = useState<Job[]>([]);
   const [notes, setNotes]             = useState<string>('');
   const [notesChanged, setNotesChanged] = useState<boolean>(false);
+  const [mergeVisible, setMergeVisible] = useState<boolean>(false);
+  const [mergeSearch, setMergeSearch]   = useState<string>('');
+  const [mergeCandidates, setMergeCandidates] = useState<CustomerRecord[]>([]);
+  const [merging, setMerging]           = useState<boolean>(false);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -234,6 +240,49 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
         phone:    displayCustomer.phone,
       },
     });
+  };
+
+  const openMerge = async () => {
+    try {
+      const custs = await loadCustomers();
+      setMergeCandidates(custs.filter((c) => c.id !== displayCustomer.id));
+      setMergeSearch('');
+      setMergeVisible(true);
+    } catch (err: unknown) {
+      reportError(err, { context: 'customerMergeOpen' });
+    }
+  };
+
+  const confirmMergeInto = (target: CustomerRecord) => {
+    Alert.alert(
+      `Merge into "${target.name}"?`,
+      `"${displayCustomer.name}"'s jobs, invoices, and recurring plans move to ${target.name}, blank contact details carry over, and "${displayCustomer.name}" is removed. This can't be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Merge',
+          style: 'destructive',
+          onPress: async () => {
+            setMerging(true);
+            try {
+              const result = await performCustomerMerge(target.id, displayCustomer.id);
+              track('customers_merged', {
+                jobs: result.changed.jobs,
+                invoices: result.changed.invoices,
+              });
+              setMergeVisible(false);
+              navigation.goBack();
+            } catch (err: unknown) {
+              console.error('CustomerDetailScreen: merge failed', err);
+              reportError(err, { context: 'customerMerge' });
+              Alert.alert('Merge failed', 'Nothing was changed. Please try again.');
+            } finally {
+              setMerging(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleToggleArchive = async () => {
@@ -437,6 +486,15 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
 
         <TouchableOpacity
           style={styles.archiveBtn}
+          onPress={openMerge}
+          accessibilityRole="button"
+          accessibilityLabel="Merge into another customer"
+        >
+          <Text style={styles.archiveBtnText}>Merge into another customer…</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.archiveBtn}
           onPress={handleToggleArchive}
           accessibilityRole="button"
           accessibilityLabel={isArchived(displayCustomer) ? 'Unarchive customer' : 'Archive customer'}
@@ -452,6 +510,58 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
 
         <View style={{ height: 60 }} />
       </ScrollView>
+
+      {/* Merge target picker */}
+      <Modal
+        visible={mergeVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setMergeVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.mergeBackdrop}
+          activeOpacity={1}
+          onPress={() => setMergeVisible(false)}
+        />
+        <View style={styles.mergeSheet}>
+          <Text style={styles.mergeTitle}>Merge “{displayCustomer.name}” into…</Text>
+          <TextInput
+            style={styles.mergeSearch}
+            value={mergeSearch}
+            onChangeText={setMergeSearch}
+            placeholder="Search customers…"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            accessibilityLabel="Search merge targets"
+          />
+          <ScrollView style={styles.mergeList} keyboardShouldPersistTaps="handled">
+            {mergeCandidates
+              .filter((c) => {
+                const q = mergeSearch.toLowerCase();
+                return c.name.toLowerCase().includes(q) || (c.phone || '').includes(q);
+              })
+              .map((c) => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={styles.mergeOption}
+                  disabled={merging}
+                  onPress={() => confirmMergeInto(c)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Merge into ${c.name}`}
+                >
+                  <Text style={styles.mergeOptionName}>{c.name}</Text>
+                  {(c.phone || c.email) ? (
+                    <Text style={styles.mergeOptionSub}>{c.phone || c.email}</Text>
+                  ) : null}
+                </TouchableOpacity>
+              ))}
+            {mergeCandidates.length === 0 && (
+              <Text style={styles.mergeEmpty}>No other customers to merge into.</Text>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -711,6 +821,65 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingVertical: spacing.md,
     marginHorizontal: spacing.md,
     marginTop: spacing.sm,
+  },
+  mergeBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  mergeSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: spacing.md,
+    maxHeight: '70%',
+    ...shadow.card,
+  },
+  mergeTitle: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: fontSize.md,
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+  },
+  mergeSearch: {
+    fontFamily: fonts.bodyRegular,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    fontSize: fontSize.md,
+    color: colors.textPrimary,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+  },
+  mergeList: {
+    maxHeight: 320,
+  },
+  mergeOption: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  mergeOptionName: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: fontSize.md,
+    color: colors.textPrimary,
+  },
+  mergeOptionSub: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    marginTop: 1,
+  },
+  mergeEmpty: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    paddingVertical: spacing.md,
+    textAlign: 'center',
   },
   archiveBtnText: {
     fontFamily: fonts.bodyMedium,
