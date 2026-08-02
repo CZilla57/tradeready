@@ -25,10 +25,17 @@ import { track } from '../utils/analytics';
 import { Button } from "../components/UI";
 import Field from "../components/Field";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
+import {
+  addLaborToStart,
+  defaultStartTime,
+  defaultEndTime,
+  formatLaborHint,
+  findScheduleConflicts,
+} from "../utils/scheduleSmarts";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
-import type { Customer, RecurrenceCadence, RecurrenceEndCondition, RecurringJob } from "../types/models";
+import type { Customer, Job, RecurrenceCadence, RecurrenceEndCondition, RecurringJob } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
 export default function AddJobScreen({ route, navigation }: JobStackScreenProps<'AddJob'>) {
@@ -49,6 +56,10 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
   const [scheduledDate, setScheduledDate] = useState<string>("");
   const [scheduledStartTime, setScheduledStartTime] = useState<string>("");
   const [scheduledEndTime, setScheduledEndTime] = useState<string>("");
+  // Estimated labor from the pricing calculator (edit path only — new jobs
+  // are unpriced) and the full jobs list for overlap warnings.
+  const [laborHours, setLaborHours] = useState<number>(0);
+  const [allJobs, setAllJobs] = useState<Job[]>([]);
   const [notes, setNotes] = useState<string>("");
   const [saving, setSaving] = useState<boolean>(false);
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
@@ -84,6 +95,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
     async function load() {
       const [jobs, custs] = await Promise.all([loadJobs(), loadCustomers()]);
       setCustomers(custs);
+      setAllJobs(jobs);
       if (isEditing) {
         const j = jobs.find((x: any) => x.id === jobId);
         if (j) {
@@ -95,6 +107,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
           setScheduledDate(j.scheduledDate || "");
           setScheduledStartTime(j.scheduledStartTime || "");
           setScheduledEndTime(j.scheduledEndTime || "");
+          setLaborHours(j.laborHours || 0);
           setNotes(j.notes || "");
           if (j.recurringJobId) {
             const recurringJobs = await loadRecurringJobs();
@@ -156,6 +169,38 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
     return timeObjFromStr(str).toLocaleTimeString("en-US", {
       hour: "numeric", minute: "2-digit", hour12: true,
     });
+  }
+
+  // End-time auto-fill (spec: fill only when End is blank). Runs when the
+  // start picker CLOSES, not per onChange tick — the iOS sheet emits live
+  // changes while the user scrolls, and filling on the first tick would
+  // freeze a stale end time while Start keeps moving.
+  const startPickerWasVisible = useRef(false);
+  useEffect(() => {
+    const justClosed = startPickerWasVisible.current && !showStartTimePicker;
+    startPickerWasVisible.current = showStartTimePicker;
+    if (justClosed && scheduledStartTime && !scheduledEndTime && laborHours > 0) {
+      setScheduledEndTime(addLaborToStart(scheduledStartTime, laborHours));
+    }
+  }, [showStartTimePicker, scheduledStartTime, scheduledEndTime, laborHours]);
+
+  const conflicts = useMemo(
+    () =>
+      findScheduleConflicts(allJobs, {
+        excludeJobId: jobId,
+        date: scheduledDate,
+        start: scheduledStartTime,
+        end: scheduledEndTime,
+        laborHours,
+      }),
+    [allJobs, jobId, scheduledDate, scheduledStartTime, scheduledEndTime, laborHours]
+  );
+
+  function conflictWindowLabel(j: Job): string {
+    if (!j.scheduledStartTime) return "";
+    const start = displayTime(j.scheduledStartTime);
+    const end = j.scheduledEndTime ? displayTime(j.scheduledEndTime) : null;
+    return end ? `, ${start}–${end}` : `, ${start}`;
   }
 
   function selectCustomer(c: Customer) {
@@ -557,6 +602,20 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
             </View>
           </View>
 
+          {laborHours > 0 ? (
+            <Text style={styles.laborHint}>Est. labor: {formatLaborHint(laborHours)}</Text>
+          ) : null}
+          {conflicts.length > 0 ? (
+            <View style={styles.conflictRow} accessibilityRole="alert">
+              <Ionicons name="warning-outline" size={14} color={colors.warning} style={styles.conflictIcon} />
+              <Text style={styles.conflictText}>
+                Overlaps: {conflicts[0].title}
+                {conflictWindowLabel(conflicts[0])}
+                {conflicts.length > 1 ? `  +${conflicts.length - 1} more` : ""}
+              </Text>
+            </View>
+          ) : null}
+
           {/* Notes */}
           <SectionLabel>Notes</SectionLabel>
           <Field
@@ -699,7 +758,10 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
         visible={showStartTimePicker}
         mode="time"
         title="Start Time"
-        value={timeObjFromStr(scheduledStartTime)}
+        minuteInterval={5}
+        value={timeObjFromStr(
+          scheduledStartTime || defaultStartTime(scheduledDate, new Date())
+        )}
         onChange={(date: Date) => setScheduledStartTime(toTimeStr(date))}
         onClose={() => setShowStartTimePicker(false)}
       />
@@ -707,7 +769,11 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
         visible={showEndTimePicker}
         mode="time"
         title="End Time"
-        value={timeObjFromStr(scheduledEndTime)}
+        minuteInterval={5}
+        value={timeObjFromStr(
+          scheduledEndTime ||
+            (scheduledStartTime ? defaultEndTime(scheduledStartTime, laborHours) : "")
+        )}
         onChange={(date: Date) => setScheduledEndTime(toTimeStr(date))}
         onClose={() => setShowEndTimePicker(false)}
       />
@@ -814,6 +880,29 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   pickerBtnText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary, flex: 1 },
   pickerBtnPlaceholder: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textMuted, flex: 1 },
   pickerIcon: { marginLeft: spacing.sm },
+  laborHint: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    marginTop: 2,
+    marginBottom: spacing.sm,
+  },
+  conflictRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.warningBg,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    marginBottom: spacing.sm,
+  },
+  conflictIcon: { marginRight: 6 },
+  conflictText: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: fontSize.sm,
+    color: colors.warning,
+    flex: 1,
+  },
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
