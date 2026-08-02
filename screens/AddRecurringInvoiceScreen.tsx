@@ -25,7 +25,7 @@ import { syncNotifications } from "../utils/notifications";
 import { Button } from "../components/UI";
 import Field from "../components/Field";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { RecurrenceCadence, RecurrenceEndCondition, RecurringInvoice } from "../types/models";
@@ -307,7 +307,7 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160 },
+    scroll: { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160, ...layout.contentColumn },
     row: { flexDirection: "row" },
     fieldGroup: { marginBottom: spacing.sm },
     fieldLabel: {

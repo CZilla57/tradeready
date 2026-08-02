@@ -10,7 +10,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { loadInvoices, loadExpenses, loadTrips } from "../utils/storage";
 import { Button, Card } from "../components/UI";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import {
@@ -182,7 +182,7 @@ export default function ExportDataScreen() {
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: spacing.md, paddingBottom: 120 },
+    scroll: { padding: spacing.md, paddingBottom: 120, ...layout.contentColumn },
     heading: {
       fontFamily: fonts.mono,
       fontSize: fontSize.sm,

@@ -34,7 +34,7 @@ import {
   formatLaborHint,
   findScheduleConflicts,
 } from "../utils/scheduleSmarts";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import type { Customer, Job, RecurrenceCadence, RecurrenceEndCondition, RecurringJob } from "../types/models";
@@ -817,7 +817,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  scroll: { padding: spacing.md, paddingBottom: 160 },
+  scroll: { padding: spacing.md, paddingBottom: 160, ...layout.contentColumn },
   sectionLabel: {
     fontFamily: fonts.mono, fontSize: fontSize.xs, color: colors.textSecondary,
     textTransform: "uppercase", letterSpacing: 0.8,

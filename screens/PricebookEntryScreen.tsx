@@ -10,7 +10,7 @@ import { calculateEstimate, buildEstimateInput } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Button, Card } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { PricebookEntry, Settings, AIPricingSuggestion } from "../types/models";
@@ -453,7 +453,7 @@ export default function PricebookEntryScreen({
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: spacing.lg, paddingBottom: 40 },
+    scroll: { padding: spacing.lg, paddingBottom: 40, ...layout.contentColumn },
     label: { fontFamily: fonts.bodySemiBold, color: colors.textSecondary, fontSize: fontSize.sm, marginBottom: 4 },
     sectionTitle: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.md, marginBottom: spacing.sm },
     input: {

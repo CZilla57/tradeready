@@ -28,7 +28,7 @@ import { formatMoney } from "../utils/format";
 import { supabase } from "../utils/supabase";
 import { Badge, Button, Card, Divider } from "../components/UI";
 import Field from "../components/Field";
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { track, reportError } from '../utils/analytics';
 import {
@@ -622,7 +622,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     loading: { flex: 1, alignItems: "center", justifyContent: "center" },
-    scroll: { padding: spacing.md, paddingBottom: 40 },
+    scroll: { padding: spacing.md, paddingBottom: 40, ...layout.contentColumn },
     summaryCard: { marginBottom: spacing.sm },
     summaryRow: { flexDirection: "row", alignItems: "flex-start" },
     customerName: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.lg, color: colors.textPrimary },

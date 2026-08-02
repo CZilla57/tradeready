@@ -23,7 +23,7 @@ import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { readLogoForPdf } from "../utils/photoStorage";
 import { Button, Card, Divider } from "../components/UI";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import type { Job, Customer, Settings } from "../types/models";
@@ -333,7 +333,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
-  scroll: { padding: spacing.md, paddingBottom: 40 },
+  scroll: { padding: spacing.md, paddingBottom: 40, ...layout.contentColumn },
 
   summaryCard: { marginBottom: spacing.sm },
   jobTitle: { fontFamily: fonts.bodyBold, fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: 2 },
