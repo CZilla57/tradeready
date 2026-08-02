@@ -149,6 +149,14 @@ export interface Job {
   timeSessions?: TimeSession[];
   recurringJobId?: string;
   occurrenceNumber?: number;
+  /**
+   * Local "YYYY-MM-DD" date the estimate was last sent (any send path:
+   * mark-as-sent, approval link, revise-and-resend). Absent on jobs sent
+   * before 2026-08 — those never get a follow-up nudge (estimateSentDate in
+   * utils/estimateFollowUps.ts falls back to approval.sentAt, then gives up).
+   * Re-stamped on every re-send, which deliberately re-arms the one-shot nudge.
+   */
+  estimateSentAt?: DateString;
   approval?: EstimateApproval;
 }
 
@@ -512,6 +520,16 @@ export interface Settings {
   appointmentConfirmTemplate: string;
   /** Editable "on my way" template. Blank/absent → DEFAULT_ON_MY_WAY_TEMPLATE. */
   onMyWayTemplate: string;
+  /**
+   * When false, suppresses estimate follow-up nudges — both the est_ local
+   * notification and Today's "awaiting response" row. ⚠️ ABSENT MEANS ON,
+   * the REVERSE of appointmentRemindersEnabled above: read sites must check
+   * `settings.estimateFollowUpsEnabled !== false`, never truthiness, so users
+   * whose persisted settings predate this field get the feature (default-on
+   * was an explicit owner decision, 2026-08-01 spec). Do not "unify" the two
+   * conventions.
+   */
+  estimateFollowUpsEnabled: boolean;
 
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;

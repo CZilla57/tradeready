@@ -231,6 +231,7 @@ export function defaultSettings(): Settings {
     appointmentRemindersEnabled: false, // opt-in; day-before confirmation reminder
     appointmentConfirmTemplate: DEFAULT_CONFIRM_TEMPLATE,
     onMyWayTemplate: DEFAULT_ON_MY_WAY_TEMPLATE,
+    estimateFollowUpsEnabled: true, // default ON — and ABSENT also means on (see types/models.ts)
 
     // AI
     anthropicKey: "",
