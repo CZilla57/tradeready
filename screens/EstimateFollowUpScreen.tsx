@@ -71,7 +71,11 @@ export default function EstimateFollowUpScreen({
       setJobTitle(job.title);
       setEstimateTotal(job.estimateTotal);
       const sentRaw = job.estimateSentAt ?? job.approval?.sentAt;
-      setSentLabel(sentRaw ? `Sent ${daysAgo(sentRaw)}` : "");
+      // daysAgo parses bare "YYYY-MM-DD" as UTC midnight (fine for its existing
+      // callers, wrong here — the label must agree with the local-frame fire-date
+      // math, FA-039 class). Suffix date-only values into the local frame.
+      const sentLocal = sentRaw && /^\d{4}-\d{2}-\d{2}$/.test(sentRaw) ? sentRaw + "T00:00:00" : sentRaw;
+      setSentLabel(sentLocal ? `Sent ${daysAgo(sentLocal)}` : "");
       const firstName = cust.name.trim().split(/\s+/)[0] || cust.name;
       setMessage(buildFollowUpMessage(job, firstName));
     })();

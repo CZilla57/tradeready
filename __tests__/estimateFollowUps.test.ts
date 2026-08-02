@@ -133,7 +133,7 @@ describe("selectAwaitingFollowUp", () => {
   test("includes estimates silent >= FOLLOW_UP_DAYS, excludes younger ones", () => {
     const now = new Date(2026, 7, 10, 12, 0);
     const old = makeJob({ id: "old", estimateSentAt: "2026-08-01" }); // 9+ days
-    const young = makeJob({ id: "young", estimateSentAt: "2026-08-09" }); // 1 day
+    const young = makeJob({ id: "young", estimateSentAt: "2026-08-09" }); // 1.5 days
     const out = selectAwaitingFollowUp([old, young], now);
     expect(out.map((j) => j.id)).toEqual(["old"]);
   });
