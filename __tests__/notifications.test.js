@@ -498,3 +498,61 @@ describe("syncNotifications — recurring-invoice rules", () => {
     expect(ids.some((id) => id.startsWith("rinv_"))).toBe(false);
   });
 });
+
+// ── Estimate follow-up nudges (est_) ──────────────────────────────────────────
+
+describe("estimate follow-up nudges (est_)", () => {
+  const estJob = (overrides = {}) => ({
+    id: "j1",
+    customerName: "Dave",
+    title: "Water heater swap",
+    status: "estimate_sent",
+    estimateSentAt: dateInDays(-1),
+    ...overrides,
+  });
+
+  test("schedules an est_ nudge for a silent estimate sent yesterday (absent flag means ON)", async () => {
+    seedStorage([], { rules: [] }, [estJob()]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(1);
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("est_j1");
+    expect(call[0].content.title).toContain("Dave");
+    expect(call[0].content.body).toContain("Water heater swap");
+    expect(call[0].content.data).toEqual({ type: "estimate_follow_up", jobId: "j1" });
+  });
+
+  test("estimateFollowUpsEnabled: false schedules nothing", async () => {
+    seedStorage([], { rules: [], estimateFollowUpsEnabled: false }, [estJob()]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("a job that left estimate_sent gets no nudge (sweep auto-cancel)", async () => {
+    seedStorage([], { rules: [] }, [estJob({ status: "approved" })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("an estimate sent long ago is one-shot done — nothing rescheduled", async () => {
+    seedStorage([], { rules: [] }, [estJob({ estimateSentAt: dateInDays(-10) })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("legacy job with no sent date never nudges", async () => {
+    seedStorage([], { rules: [] }, [estJob({ estimateSentAt: undefined })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+});

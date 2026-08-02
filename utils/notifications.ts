@@ -6,6 +6,7 @@ import { isFullyPaid } from './invoicePayments';
 import { selectAppointmentReminders } from './appointmentMessages';
 import { isJobDunningEligible } from './jobStatus';
 import { parseLocalDate } from './moneyUtils';
+import { selectEstimateFollowUps, FOLLOW_UP_DAYS } from './estimateFollowUps';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -168,6 +169,32 @@ export async function syncNotifications(): Promise<void> {
         trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
       });
       count++;
+    }
+
+    // Estimate follow-up nudges — one-shot "no response" reminder per silent
+    // estimate, FOLLOW_UP_DAYS after the send, 9:00am local. Fourth namespace
+    // (est_) beside inv_/appt_/rinv_; shares the 60 cap and runs LAST so
+    // invoice dunning and appointments keep priority. Fire-date math lives in
+    // the pure selector (utils/estimateFollowUps.ts) using the same
+    // local-frame construction as the branches above — do not let them drift.
+    // ABSENT estimateFollowUpsEnabled means ON (default-on; the reverse of
+    // appointmentRemindersEnabled — see types/models.ts).
+    if (settings.estimateFollowUpsEnabled !== false) {
+      for (const nudge of selectEstimateFollowUps(jobs, now)) {
+        if (count >= 60) break;
+        const secondsUntil = Math.floor((nudge.fireDate.getTime() - now.getTime()) / 1000);
+        if (!Number.isFinite(secondsUntil) || secondsUntil <= 0) continue;
+        await Notifications.scheduleNotificationAsync({
+          identifier: `est_${nudge.jobId}`,
+          content: {
+            title: `Estimate follow-up — ${nudge.customerName}`,
+            body: `Estimate for "${nudge.jobTitle}" sent ${FOLLOW_UP_DAYS} days ago with no response. Tap to follow up.`,
+            data: { type: 'estimate_follow_up', jobId: nudge.jobId },
+          },
+          trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
+        });
+        count++;
+      }
     }
   } catch {
     // Not critical — silently skip if notifications are unavailable
