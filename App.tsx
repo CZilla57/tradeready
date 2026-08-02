@@ -48,6 +48,7 @@ import RecurringJobsScreen        from "./screens/RecurringJobsScreen";
 import MileageLogScreen           from "./screens/MileageLogScreen";
 import AddTripScreen              from "./screens/AddTripScreen";
 import ReviewRequestScreen        from "./screens/ReviewRequestScreen";
+import EstimateFollowUpScreen     from "./screens/EstimateFollowUpScreen";
 import PricebookScreen            from "./screens/PricebookScreen";
 import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
 import ExportDataScreen           from "./screens/ExportDataScreen";
@@ -154,6 +155,11 @@ function JobsTab() {
         name="ReviewRequest"
         component={ReviewRequestScreen}
         options={{ title: "Review Request" }}
+      />
+      <JobStack.Screen
+        name="EstimateFollowUp"
+        component={EstimateFollowUpScreen}
+        options={{ title: "Estimate Follow-Up" }}
       />
     </JobStack.Navigator>
   );

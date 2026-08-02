@@ -44,6 +44,7 @@ export type JobStackParamList = {
   Outreach: { invoiceId: string };
   RecurringJobs: undefined;
   ReviewRequest: { jobId: string; source?: "notification" | "job_detail" };
+  EstimateFollowUp: { jobId: string; source?: "notification" | "job_detail" };
 };
 
 export type InvoiceStackParamList = {
