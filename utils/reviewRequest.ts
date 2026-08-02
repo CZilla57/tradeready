@@ -64,6 +64,32 @@ export async function isReviewRequestPending(jobId: string): Promise<boolean> {
   return records.some((r) => r.jobId === jobId);
 }
 
+// Delay between job completion and the nudge. Shared with the notification
+// sweep (utils/notifications.ts), which rebuilds pending review_ one-shots
+// after its cancel-all — both sites must derive the same fire instant from a
+// record's scheduledAt, so the formula lives here once.
+export function reviewRequestDelaySeconds(delayHours: number | undefined): number {
+  return Math.max(1, delayHours || 3) * 3600;
+}
+
+// Identifier + content of the review_ notification — the initial schedule
+// below and the sweep's rebuild branch (utils/notifications.ts) both build
+// from this, so the two can't drift apart.
+export function buildReviewRequestNotification(
+  jobId: string,
+  customerName: string,
+  jobTitle: string,
+) {
+  return {
+    identifier: `review_${jobId}`,
+    content: {
+      title: "Time to ask for a review!",
+      body: `Send ${customerName} a review request for "${jobTitle}".`,
+      data: { type: "review_request", jobId },
+    },
+  };
+}
+
 export async function scheduleReviewRequest(
   job: Job,
   customer: Customer,
@@ -75,15 +101,10 @@ export async function scheduleReviewRequest(
   const already = await isReviewRequestPending(job.id);
   if (already) return;
 
-  const delaySeconds = Math.max(1, (settings.reviewRequestDelayHours || 3)) * 3600;
+  const delaySeconds = reviewRequestDelaySeconds(settings.reviewRequestDelayHours);
 
   await Notifications.scheduleNotificationAsync({
-    identifier: `review_${job.id}`,
-    content: {
-      title: "Time to ask for a review!",
-      body: `Send ${customer.name} a review request for "${job.title}".`,
-      data: { type: "review_request", jobId: job.id },
-    },
+    ...buildReviewRequestNotification(job.id, customer.name, job.title),
     trigger: { seconds: delaySeconds } as Notifications.NotificationTriggerInput,
   });
 

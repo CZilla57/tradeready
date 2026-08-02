@@ -7,6 +7,11 @@ import { selectAppointmentReminders } from './appointmentMessages';
 import { isJobDunningEligible } from './jobStatus';
 import { parseLocalDate } from './moneyUtils';
 import { selectEstimateFollowUps, FOLLOW_UP_DAYS } from './estimateFollowUps';
+import {
+  getPendingReviewRequests,
+  reviewRequestDelaySeconds,
+  buildReviewRequestNotification,
+} from './reviewRequest';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -173,8 +178,8 @@ export async function syncNotifications(): Promise<void> {
 
     // Estimate follow-up nudges — one-shot "no response" reminder per silent
     // estimate, FOLLOW_UP_DAYS after the send, 9:00am local. Fourth namespace
-    // (est_) beside inv_/appt_/rinv_; shares the 60 cap and runs LAST so
-    // invoice dunning and appointments keep priority. Fire-date math lives in
+    // (est_) beside inv_/appt_/rinv_; shares the 60 cap and runs after invoice
+    // dunning and appointments so they keep priority. Fire-date math lives in
     // the pure selector (utils/estimateFollowUps.ts) using the same
     // local-frame construction as the branches above — do not let them drift.
     // ABSENT estimateFollowUpsEnabled means ON (default-on; the reverse of
@@ -191,6 +196,42 @@ export async function syncNotifications(): Promise<void> {
             body: `Estimate for "${nudge.jobTitle}" sent ${FOLLOW_UP_DAYS} days ago with no response. Tap to follow up.`,
             data: { type: 'estimate_follow_up', jobId: nudge.jobId },
           },
+          trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
+        });
+        count++;
+      }
+    }
+
+    // Review-request nudges (review_) — the one namespace NOT derived by this
+    // sweep: scheduleReviewRequest (utils/reviewRequest.ts) arms a one-shot at
+    // job completion, so the cancel-all above just killed any still-pending
+    // one. Rebuild it here from the review_requests records (sentAt null =
+    // still pending) — without this, any sweep inside the delay window
+    // (including the saveJobs sweep fired by the completion itself, or just
+    // reopening the app) ate the nudge forever: the pending record makes
+    // scheduleReviewRequest's one-shot guard refuse to ever re-arm. The fire
+    // instant is re-derived from the record's scheduledAt via the shared
+    // delay formula, so a rebuild never moves it; one already past means the
+    // notification fired (or was missed) — never re-nag late. The job lookup
+    // is load-bearing twice: it supplies the title for the body, and it drops
+    // records whose job is gone — including records left by a previous
+    // account, since review_requests survives sign-out but the jobs
+    // collection does not. Toggle off = not rebuilt = pending nudges stop,
+    // same semantics as the appt_/est_ toggles. Fifth namespace; shares the
+    // 60 cap and runs last.
+    if (settings.reviewRequestEnabled) {
+      const delayMs = reviewRequestDelaySeconds(settings.reviewRequestDelayHours) * 1000;
+      const jobById = new Map(jobs.map((j) => [j.id, j]));
+      for (const record of await getPendingReviewRequests()) {
+        if (count >= 60) break;
+        const job = jobById.get(record.jobId);
+        if (!job) continue;
+        const secondsUntil = Math.floor(
+          (new Date(record.scheduledAt).getTime() + delayMs - now.getTime()) / 1000
+        );
+        if (!Number.isFinite(secondsUntil) || secondsUntil <= 0) continue;
+        await Notifications.scheduleNotificationAsync({
+          ...buildReviewRequestNotification(record.jobId, record.customerName, job.title),
           trigger: { seconds: secondsUntil } as Notifications.NotificationTriggerInput,
         });
         count++;

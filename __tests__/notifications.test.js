@@ -19,14 +19,15 @@ function dateInDays(offsetDays) {
   return d.toISOString().split("T")[0];
 }
 
-// Populates AsyncStorage mock so syncNotifications reads the right invoices/settings/jobs/customers/recurring-invoice rules.
-function seedStorage(invoices, settings = { rules: [{ days: 1 }] }, jobs = [], customers = [], recurringInvoices = []) {
+// Populates AsyncStorage mock so syncNotifications reads the right invoices/settings/jobs/customers/recurring-invoice rules/review-request records.
+function seedStorage(invoices, settings = { rules: [{ days: 1 }] }, jobs = [], customers = [], recurringInvoices = [], reviewRequests = []) {
   AsyncStorage.getItem.mockImplementation((key) => {
     if (key === "invoices") return Promise.resolve(JSON.stringify(invoices));
     if (key === "settings") return Promise.resolve(JSON.stringify(settings));
     if (key === "jobs") return Promise.resolve(JSON.stringify(jobs));
     if (key === "customers") return Promise.resolve(JSON.stringify(customers));
     if (key === "recurringInvoices") return Promise.resolve(JSON.stringify(recurringInvoices));
+    if (key === "review_requests") return Promise.resolve(JSON.stringify(reviewRequests));
     return Promise.resolve(null);
   });
 }
@@ -550,6 +551,111 @@ describe("estimate follow-up nudges (est_)", () => {
 
   test("legacy job with no sent date never nudges", async () => {
     seedStorage([], { rules: [] }, [estJob({ estimateSentAt: undefined })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+});
+
+// ── Review-request rebuild (review_) ─────────────────────────────────────────
+//
+// Regression (2026-08-02): review_ is the one namespace NOT created by the
+// sweep — scheduleReviewRequest (utils/reviewRequest.ts) arms a one-shot at
+// job completion. The sweep's cancelAllScheduledNotificationsAsync() was
+// killing that pending one-shot and never rebuilding it, so ANY sweep run
+// inside the delay window (including the saveJobs sweep fired by the
+// completion itself, or simply reopening the app) silently ate the nudge
+// forever — the review_requests record stayed pending, so the one-shot guard
+// in scheduleReviewRequest blocked a re-arm too. The sweep must rebuild
+// pending review_ notifications from the review_requests records.
+
+describe("review-request rebuild (review_)", () => {
+  const revJob = (overrides = {}) => ({
+    id: "j9", customerId: "c9", customerName: "Eve",
+    title: "Water heater swap", status: "complete",
+    ...overrides,
+  });
+  const revSettings = (overrides = {}) => ({
+    rules: [], reviewRequestEnabled: true, ...overrides,
+  });
+  const pendingRec = (overrides = {}) => ({
+    jobId: "j9", customerId: "c9", customerName: "Eve",
+    customerPhone: "5550001111", customerEmail: "eve@x.com",
+    scheduledAt: new Date(Date.now() - 3600 * 1000).toISOString(), // armed an hour ago
+    sentAt: null,
+    ...overrides,
+  });
+
+  test("a pending review request survives the sweep — rebuilt after cancel-all at the original fire time", async () => {
+    const scheduledAt = new Date(Date.now() - 3600 * 1000).toISOString();
+    seedStorage([], revSettings({ reviewRequestDelayHours: 2 }), [revJob()], [], [], [pendingRec({ scheduledAt })]);
+
+    const before = Date.now();
+    await syncNotifications();
+    const after = Date.now();
+
+    expect(Notifications.cancelAllScheduledNotificationsAsync).toHaveBeenCalledTimes(1);
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(1);
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    expect(call[0].identifier).toBe("review_j9");
+    expect(call[0].content.title).toBe("Time to ask for a review!");
+    expect(call[0].content.body).toBe('Send Eve a review request for "Water heater swap".');
+    expect(call[0].content.data).toEqual({ type: "review_request", jobId: "j9" });
+
+    // Same absolute fire instant the original one-shot had: scheduledAt +
+    // delayHours. Bracketed against real "now" captured around the call, same
+    // flake-proofing as the inv_/rinv_ tests above.
+    const expectedFire = new Date(scheduledAt).getTime() + 2 * 3600 * 1000;
+    expect(call[0].trigger.seconds).toBeGreaterThanOrEqual(Math.floor((expectedFire - after) / 1000));
+    expect(call[0].trigger.seconds).toBeLessThanOrEqual(Math.floor((expectedFire - before) / 1000));
+  });
+
+  test("an absent reviewRequestDelayHours falls back to 3h — the same fallback the original schedule used", async () => {
+    const scheduledAt = new Date(Date.now() - 3600 * 1000).toISOString();
+    seedStorage([], revSettings(), [revJob()], [], [], [pendingRec({ scheduledAt })]);
+
+    const before = Date.now();
+    await syncNotifications();
+    const after = Date.now();
+
+    const [call] = Notifications.scheduleNotificationAsync.mock.calls;
+    const expectedFire = new Date(scheduledAt).getTime() + 3 * 3600 * 1000;
+    expect(call[0].trigger.seconds).toBeGreaterThanOrEqual(Math.floor((expectedFire - after) / 1000));
+    expect(call[0].trigger.seconds).toBeLessThanOrEqual(Math.floor((expectedFire - before) / 1000));
+  });
+
+  test("a sent record is not rescheduled", async () => {
+    seedStorage([], revSettings(), [revJob()], [], [], [pendingRec({ sentAt: new Date().toISOString() })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("a fire time already past is never re-fired late", async () => {
+    // Armed 4h ago with a 3h delay — it fired (or was missed) an hour ago.
+    seedStorage([], revSettings({ reviewRequestDelayHours: 3 }), [revJob()], [], [],
+      [pendingRec({ scheduledAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString() })]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("toggle off stops pending nudges (not rebuilt)", async () => {
+    seedStorage([], revSettings({ reviewRequestEnabled: false }), [revJob()], [], [], [pendingRec()]);
+
+    await syncNotifications();
+
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test("a record whose job no longer exists is skipped — including records left by a previous account", async () => {
+    // review_requests survives sign-out but the jobs collection does not, so
+    // the job lookup is the guard that keeps one account's sweep from
+    // resurrecting another account's nudges.
+    seedStorage([], revSettings(), [], [], [], [pendingRec()]);
 
     await syncNotifications();
 
