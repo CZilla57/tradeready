@@ -3,7 +3,7 @@
 // status filter chips. Tapping an invoice opens its detail modal (payment
 // history, outreach, PDF, edit); the top stat cards double as filter taps.
 
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -20,7 +20,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { loadInvoices, saveInvoices, loadSettings, loadJobs, saveJobs } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
-import { getStatus, formatDate } from "../utils/invoiceHelpers";
+import { getStatus, formatDate, generateOutreachMessage, resolvePaymentLink, getProviderKey } from "../utils/invoiceHelpers";
+import { splitRemindable, bulkSettle, splitEmailSubject } from "../utils/bulkInvoiceActions";
+import { composeEmail, composeSMS } from "../utils/messaging";
 import { summarizeInvoices, filterInvoices, isOverdue } from "../utils/invoiceStats";
 import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
@@ -86,6 +88,11 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
   const [settings, setSettings] = useState<Partial<Settings>>({});
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
   const [recordingFor, setRecordingFor] = useState<Invoice | null>(null);
+  // Multi-select bulk actions (Remind / Mark paid). Only unpaid invoices are
+  // selectable — there's nothing bulk-actionable about a paid one.
+  const [selectMode, setSelectMode] = useState<boolean>(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState<boolean>(false);
 
   // Deep link from other tabs (Today's overdue rows): open the requested
   // invoice's detail modal once the list has loaded, then clear the param so
@@ -99,6 +106,32 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
       navigation.setParams({ openInvoiceId: undefined });
     }
   }, [openInvoiceId, invoices, navigation]);
+
+  // Header "Select" toggles multi-select; "Done" backs out and clears it.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={() => {
+            if (selectMode) {
+              setSelectMode(false);
+              setSelectedIds([]);
+            } else {
+              setSelectMode(true);
+            }
+          }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={{ paddingLeft: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={selectMode ? "Done selecting" : "Select invoices"}
+        >
+          <Text style={{ fontFamily: fonts.bodyMedium, color: colors.accent, fontSize: fontSize.md }}>
+            {selectMode ? "Done" : "Select"}
+          </Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, selectMode, colors.accent]);
 
   // useFocusEffect reloads invoices every time you come back to this screen,
   // so changes made on other screens (like marking paid) show up immediately.
@@ -161,6 +194,107 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
         },
       },
     ]);
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds([]);
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }
+
+  function confirmBulkMarkPaid() {
+    const count = selectedIds.length;
+    Alert.alert(
+      `Mark ${count} invoice${count === 1 ? "" : "s"} paid?`,
+      "Each invoice's remaining balance is recorded as collected today.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Mark paid",
+          onPress: async () => {
+            const today = new Date().toISOString().split("T")[0];
+            const { updated, settled } = bulkSettle(invoices, selectedIds, today);
+            if (settled.length === 0) { exitSelectMode(); return; }
+            setInvoices(updated);
+            await saveInvoices(updated);
+            await reconcileJobsWith(updated);
+            for (const inv of settled) {
+              track("invoice_paid", { amount: inv.amount });
+            }
+            track("bulk_invoices_marked_paid", { count: settled.length });
+            syncNotifications();
+            exitSelectMode();
+          },
+        },
+      ]
+    );
+  }
+
+  function confirmBulkRemind() {
+    Alert.alert(
+      "Send reminders",
+      "The composer opens once per invoice — review and send each.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Email", onPress: () => runBulkReminders("email") },
+        { text: "Text", onPress: () => runBulkReminders("text") },
+      ]
+    );
+  }
+
+  async function runBulkReminders(channel: "email" | "text") {
+    const { eligible, skippedNoContact } = splitRemindable(invoices, selectedIds, channel);
+    if (eligible.length === 0) {
+      Alert.alert(
+        "No reminders to send",
+        channel === "email"
+          ? "None of the selected unpaid invoices have an email address."
+          : "None of the selected unpaid invoices have a phone number."
+      );
+      return;
+    }
+    setBulkBusy(true);
+    let composed = 0;
+    try {
+      for (const inv of eligible) {
+        // Payment link is best-effort: a mint failure (offline, Stripe not
+        // configured) downgrades that one message to "contact me to pay".
+        let link: string | undefined;
+        try {
+          link = await resolvePaymentLink(inv, settings.provider ?? "stripe", getProviderKey(settings), balanceDue(inv));
+        } catch {
+          link = undefined;
+        }
+        // No apiKey → the deterministic template, not the AI generator; a
+        // bulk pass shouldn't burn N model calls or N wait spinners.
+        const raw = await generateOutreachMessage({ invoice: inv, channel, biz: settings, paymentLink: link });
+        let opened: boolean;
+        if (channel === "email") {
+          const { subject, body } = splitEmailSubject(raw, `Payment reminder – ${inv.number}`);
+          opened = await composeEmail({ recipients: [inv.email], subject, body });
+        } else {
+          opened = await composeSMS({ recipients: [inv.phone], body: raw });
+        }
+        if (!opened) break; // composer unavailable — it already alerted; stop the run
+        composed++;
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    track("bulk_invoice_reminders", { channel, count: composed });
+    const skipped = skippedNoContact.length;
+    if (skipped > 0) {
+      Alert.alert(
+        "Some invoices skipped",
+        `${skipped} selected invoice${skipped === 1 ? " has" : "s have"} no ${channel === "email" ? "email address" : "phone number"} on file.`
+      );
+    }
+    exitSelectMode();
   }
 
   async function markPaid(id: string, onSuccess?: () => void) {
@@ -276,56 +410,84 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
       success: colors.success,
       accent:  colors.accent,
     } as Record<string, string>)[status.color];
+    const selectable = !isFullyPaid(inv);
+    const selected = selectedIds.includes(inv.id);
 
     return (
       <TouchableOpacity
-        style={[styles.invoiceCard, { borderLeftColor: accentColor }]}
-        onPress={() => setViewingInvoice(inv)}
-        activeOpacity={0.8}
+        style={[
+          styles.invoiceCard,
+          { borderLeftColor: accentColor },
+          selectMode && !selectable && styles.invoiceCardInert,
+        ]}
+        onPress={() => {
+          if (selectMode) {
+            if (selectable) toggleSelected(inv.id);
+          } else {
+            setViewingInvoice(inv);
+          }
+        }}
+        activeOpacity={selectMode && !selectable ? 1 : 0.8}
+        accessibilityState={selectMode && selectable ? { selected } : undefined}
+        accessibilityHint={selectMode && selectable ? (selected ? "Deselects this invoice" : "Selects this invoice") : undefined}
       >
-        <View style={styles.invoiceTop}>
-          <Text style={styles.customerName} numberOfLines={1}>
-            {inv.customer}
-          </Text>
-          {overpaidAmount(inv) > 0 ? (
-            <Text style={styles.amount}>
-              {formatMoney(inv.amount)} · overpaid by {formatMoney(overpaidAmount(inv))}
-            </Text>
-          ) : isPartlyPaid(inv) ? (
-            <Text style={styles.amount}>
-              {formatMoney(balanceDue(inv))} due · {formatMoney(amountPaid(inv))} paid
-            </Text>
-          ) : (
-            <Text style={styles.amount}>{formatMoney(inv.amount)}</Text>
+        <View style={selectMode ? styles.cardRow : undefined}>
+          {selectMode && (
+            <Ionicons
+              name={selected ? "checkmark-circle" : "ellipse-outline"}
+              size={22}
+              color={selectable ? (selected ? colors.accent : colors.textMuted) : colors.border}
+              style={styles.selectIcon}
+            />
           )}
-        </View>
-        <View style={styles.invoiceMeta}>
-          <Badge label={status.label} color={status.color} />
-          <Text style={styles.metaText}>{inv.number}</Text>
-          <Text style={styles.descText} numberOfLines={1}>
-            {inv.desc}
-          </Text>
-        </View>
-        <View style={styles.invoiceActions}>
-          <TouchableOpacity
-            style={styles.editBtn}
-            onPress={() => navigation.navigate("AddInvoice", { invoiceId: inv.id })}
-          >
-            <Text style={styles.editBtnText}>Edit</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.editBtn} onPress={() => handleExportPdf(inv)}>
-            <Text style={styles.editBtnText}>PDF</Text>
-          </TouchableOpacity>
-          {!isFullyPaid(inv) && (
-            <TouchableOpacity style={styles.editBtn} onPress={() => setRecordingFor(inv)}>
-              <Text style={styles.editBtnText}>Record payment</Text>
-            </TouchableOpacity>
-          )}
-          {!isFullyPaid(inv) && (
-            <TouchableOpacity style={styles.paidBtn} onPress={() => markPaid(inv.id)}>
-              <Text style={styles.paidBtnText}>Mark paid</Text>
-            </TouchableOpacity>
-          )}
+          <View style={selectMode ? styles.cardBody : undefined}>
+            <View style={styles.invoiceTop}>
+              <Text style={styles.customerName} numberOfLines={1}>
+                {inv.customer}
+              </Text>
+              {overpaidAmount(inv) > 0 ? (
+                <Text style={styles.amount}>
+                  {formatMoney(inv.amount)} · overpaid by {formatMoney(overpaidAmount(inv))}
+                </Text>
+              ) : isPartlyPaid(inv) ? (
+                <Text style={styles.amount}>
+                  {formatMoney(balanceDue(inv))} due · {formatMoney(amountPaid(inv))} paid
+                </Text>
+              ) : (
+                <Text style={styles.amount}>{formatMoney(inv.amount)}</Text>
+              )}
+            </View>
+            <View style={styles.invoiceMeta}>
+              <Badge label={status.label} color={status.color} />
+              <Text style={styles.metaText}>{inv.number}</Text>
+              <Text style={styles.descText} numberOfLines={1}>
+                {inv.desc}
+              </Text>
+            </View>
+            {!selectMode && (
+              <View style={styles.invoiceActions}>
+                <TouchableOpacity
+                  style={styles.editBtn}
+                  onPress={() => navigation.navigate("AddInvoice", { invoiceId: inv.id })}
+                >
+                  <Text style={styles.editBtnText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.editBtn} onPress={() => handleExportPdf(inv)}>
+                  <Text style={styles.editBtnText}>PDF</Text>
+                </TouchableOpacity>
+                {!isFullyPaid(inv) && (
+                  <TouchableOpacity style={styles.editBtn} onPress={() => setRecordingFor(inv)}>
+                    <Text style={styles.editBtnText}>Record payment</Text>
+                  </TouchableOpacity>
+                )}
+                {!isFullyPaid(inv) && (
+                  <TouchableOpacity style={styles.paidBtn} onPress={() => markPaid(inv.id)}>
+                    <Text style={styles.paidBtnText}>Mark paid</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
         </View>
       </TouchableOpacity>
     );
@@ -416,8 +578,37 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
         showsVerticalScrollIndicator={false}
       />
 
+      {/* Bulk action bar (select mode) */}
+      {selectMode && (
+        <View style={styles.bulkBar}>
+          <Text style={styles.bulkCount}>
+            {selectedIds.length} selected
+          </Text>
+          <TouchableOpacity
+            style={[styles.bulkBtn, (selectedIds.length === 0 || bulkBusy) && styles.bulkBtnDisabled]}
+            disabled={selectedIds.length === 0 || bulkBusy}
+            onPress={confirmBulkRemind}
+            accessibilityRole="button"
+            accessibilityLabel="Send reminders to selected invoices"
+          >
+            <Text style={styles.bulkBtnText}>Remind</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.bulkBtn, styles.bulkBtnPrimary, (selectedIds.length === 0 || bulkBusy) && styles.bulkBtnDisabled]}
+            disabled={selectedIds.length === 0 || bulkBusy}
+            onPress={confirmBulkMarkPaid}
+            accessibilityRole="button"
+            accessibilityLabel="Mark selected invoices paid"
+          >
+            <Text style={[styles.bulkBtnText, styles.bulkBtnTextPrimary]}>Mark paid</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Floating add button */}
-      <Fab onPress={() => navigation.navigate("AddInvoice", {})} accessibilityLabel="Add new invoice" />
+      {!selectMode && (
+        <Fab onPress={() => navigation.navigate("AddInvoice", {})} accessibilityLabel="Add new invoice" />
+      )}
 
       {/* Invoice detail modal */}
       <Modal
@@ -707,6 +898,48 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paidBtnText: {
       fontFamily: fonts.bodySemiBold,
       fontSize: fontSize.sm,
+      color: colors.textOnAccent,
+    },
+    // Multi-select bulk actions
+    invoiceCardInert: { opacity: 0.45 },
+    cardRow: { flexDirection: "row", alignItems: "center" },
+    cardBody: { flex: 1 },
+    selectIcon: { marginRight: spacing.md },
+    bulkBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      backgroundColor: colors.surface,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+      gap: spacing.sm,
+    },
+    bulkCount: {
+      flex: 1,
+      fontFamily: fonts.mono,
+      fontSize: fontSize.sm,
+      color: colors.textSecondary,
+    },
+    bulkBtn: {
+      minHeight: 44,
+      justifyContent: "center",
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      backgroundColor: colors.surface,
+    },
+    bulkBtnPrimary: {
+      backgroundColor: colors.accent,
+    },
+    bulkBtnDisabled: { opacity: 0.4 },
+    bulkBtnText: {
+      fontFamily: fonts.bodySemiBold,
+      fontSize: fontSize.sm,
+      color: colors.accent,
+    },
+    bulkBtnTextPrimary: {
       color: colors.textOnAccent,
     },
     // Invoice detail modal
