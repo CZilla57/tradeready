@@ -793,6 +793,22 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
             Remind me the evening before a scheduled job to confirm with the customer.
           </Text>
         </View>
+
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Estimate follow-up reminders</Text>
+            <Switch
+              value={s.estimateFollowUpsEnabled !== false}
+              onValueChange={(v) => update("estimateFollowUpsEnabled", v)}
+              trackColor={{ true: colors.accent }}
+              accessibilityLabel="Estimate follow-up reminders"
+            />
+          </View>
+          <Text style={styles.keyNote}>
+            Remind me when an estimate gets no response for 3 days.
+          </Text>
+        </View>
+
         <Text style={[styles.ruleSubtitle, { marginTop: spacing.sm }]}>Message templates</Text>
         <View style={styles.card}>
           <Field
