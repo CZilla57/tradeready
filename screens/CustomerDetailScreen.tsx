@@ -19,6 +19,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
 import { isArchived, withArchived } from '../utils/archive';
 import { performCustomerMerge } from '../utils/customerMerge';
+import { useUndo } from '../context/UndoContext';
 import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
@@ -157,6 +158,7 @@ const JobRow = ({ job, styles }: JobRowProps) => {
 export default function CustomerDetailScreen({ route, navigation }: CustomerStackScreenProps<'CustomerDetail'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const { showUndo } = useUndo();
 
   const { customer } = route.params;
 
@@ -304,7 +306,7 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
   const handleDelete = () => {
     Alert.alert(
       'Delete customer?',
-      `"${displayCustomer.name}" will be permanently removed. Their invoices and jobs will remain but will no longer be linked to a customer record.`,
+      `"${displayCustomer.name}" will be removed. Their invoices and jobs will remain but will no longer be linked to a customer record. You can undo for a few seconds after deleting.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -313,8 +315,17 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
           onPress: async () => {
             try {
               const custs = await loadCustomers();
-              await saveCustomers(custs.filter((c: any) => c.id !== displayCustomer.id));
+              const deleted = custs.find((c) => c.id === displayCustomer.id);
+              await saveCustomers(custs.filter((c) => c.id !== displayCustomer.id));
               navigation.goBack();
+              if (deleted) {
+                showUndo('Customer deleted', async () => {
+                  const current = await loadCustomers();
+                  if (!current.some((c) => c.id === deleted.id)) {
+                    await saveCustomers([...current, deleted]);
+                  }
+                });
+              }
             } catch (err: unknown) {
               console.error('CustomerDetailScreen: delete failed', err);
               reportError(err, { context: 'customerDelete' });
