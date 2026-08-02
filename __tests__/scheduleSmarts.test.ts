@@ -133,6 +133,7 @@ describe('findScheduleConflicts', () => {
     expect(findScheduleConflicts([job({ status: 'complete' })], base)).toHaveLength(0);
     expect(findScheduleConflicts([job({ status: 'invoiced' })], base)).toHaveLength(0);
     expect(findScheduleConflicts([job({ status: 'paid' })], base)).toHaveLength(0);
+    expect(findScheduleConflicts([job({ status: 'declined' })], base)).toHaveLength(0);
   });
 
   test('the job being edited is excluded via excludeJobId', () => {

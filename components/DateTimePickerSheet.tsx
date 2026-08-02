@@ -132,7 +132,7 @@ export function DateTimePickerSheet({
       minuteInterval={minuteInterval}
       onChange={(event: DateTimePickerEvent, d?: Date) => {
         onClose();
-        if (event.type === "set" && d) onChange(d);
+        if (event.type === "set" && d) onChange(roundToMinuteInterval(d, minuteInterval));
       }}
     />
   );

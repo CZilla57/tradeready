@@ -56,7 +56,7 @@ Pure functions, no I/O, born-typed. All times are the app's existing `"HH:MM"`
     `start + max(laborHours, 1h)`.
   - A job conflicts only if: same `scheduledDate`, has a `scheduledStartTime`,
     `id !== excludeJobId`, and its status is **not** terminal
-    (`complete`, `invoiced`, `paid` — those schedules are history).
+    (`complete`, `invoiced`, `paid`, `declined` — those schedules are history).
   - Other job's window: its own start→end; if it has no end time, block out
     `start + max(its laborHours, 1h)`.
   - Jobs with a date but no start time never conflict (no window to test).
@@ -127,7 +127,7 @@ New `__tests__/scheduleSmarts.test.js` (pure-function suite):
 - `formatLaborHint`: 2→"2h", 2.5→"2h 30m", 0.25→"15m".
 - `findScheduleConflicts`: overlap detected; touching windows don't conflict;
   different-date jobs don't conflict; no-start-time jobs don't conflict;
-  terminal statuses (complete/invoiced/paid) excluded; excludeJobId excluded;
+  terminal statuses (complete/invoiced/paid/declined) excluded; excludeJobId excluded;
   missing-end fallback windows (both sides); empty candidate end uses
   `max(laborHours, 1h)`.
 

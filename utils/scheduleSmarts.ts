@@ -7,11 +7,16 @@
 
 import type { Job } from "../types/models";
 
-/** Job statuses whose schedules are history — never flagged as conflicts. */
+/**
+ * Job statuses whose schedules are history — never flagged as conflicts. A
+ * job declined via the estimate-approval loop keeps its schedule fields, but
+ * its slot is dead — warning against it would mislead.
+ */
 const TERMINAL_STATUSES: ReadonlySet<Job["status"]> = new Set([
   "complete",
   "invoiced",
   "paid",
+  "declined",
 ]);
 
 export type ConflictQuery = {

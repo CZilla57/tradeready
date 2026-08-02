@@ -232,11 +232,16 @@ Create `utils/scheduleSmarts.ts`:
 
 import type { Job } from "../types/models";
 
-/** Job statuses whose schedules are history — never flagged as conflicts. */
+/**
+ * Job statuses whose schedules are history — never flagged as conflicts. A
+ * job declined via the estimate-approval loop keeps its schedule fields, but
+ * its slot is dead — warning against it would mislead.
+ */
 const TERMINAL_STATUSES: ReadonlySet<Job["status"]> = new Set([
   "complete",
   "invoiced",
   "paid",
+  "declined",
 ]);
 
 export type ConflictQuery = {
@@ -488,7 +493,7 @@ export function DateTimePickerSheet({
 
 3f. In the Android return: `value={pickerValue}` and `minuteInterval={minuteInterval}` on the `DateTimePicker`.
 
-No other changes — the existing four call sites (AddJob ×4 via Task 3, AddExpenseModal, RecordPaymentSheet, AddRecurringInvoiceScreen) omit the prop and behave exactly as before.
+No other changes — the existing five call sites (AddJob ×4 via Task 3, AddExpenseModal, RecordPaymentSheet, AddRecurringInvoiceScreen, ExportDataScreen) omit the prop and behave exactly as before.
 
 - [ ] **Step 4: Run test to verify it passes**
 

@@ -175,6 +175,8 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
   // start picker CLOSES, not per onChange tick — the iOS sheet emits live
   // changes while the user scrolls, and filling on the first tick would
   // freeze a stale end time while Start keeps moving.
+  // Relies on React 19 batching: the sheet's onChange+onClose land in ONE
+  // render, so the close transition and the final start value arrive together.
   const startPickerWasVisible = useRef(false);
   useEffect(() => {
     const justClosed = startPickerWasVisible.current && !showStartTimePicker;
