@@ -16,6 +16,7 @@ import { loadJobs, saveJobs } from "./storage";
 import { supabase } from "./supabase";
 import { syncIfOnline } from "./sync";
 import { buildEstimateSnapshot } from "./estimateSnapshot";
+import { stampEstimateSent } from "./estimateFollowUps";
 import type { Job, Customer, Settings } from "../types/models";
 
 const BACKEND_URL = (Constants.expoConfig?.extra as { backendUrl?: string } | undefined)?.backendUrl;
@@ -52,7 +53,9 @@ export async function createApprovalLink(
     const snapshot = buildEstimateSnapshot(job, customer, settings);
 
     const jobs = await loadJobs();
-    await saveJobs(jobs.map((j): Job => (j.id === job.id ? { ...j, status: "estimate_sent" } : j)));
+    // Stamped here too: if the fetch below fails, the job is already visibly
+    // estimate_sent — it must carry a sent date or it would never nudge.
+    await saveJobs(jobs.map((j): Job => (j.id === job.id ? stampEstimateSent(j, new Date()) : j)));
     await syncIfOnline(userId);
 
     const res = await fetch(`${BACKEND_URL}/api/estimate/create-link`, {
@@ -68,7 +71,7 @@ export async function createApprovalLink(
     // Mirror the server write locally so JobDetail reflects it immediately.
     const linked = (await loadJobs()).map((j): Job =>
       j.id === job.id
-        ? { ...j, status: "estimate_sent", approval: { token: out.token, sentAt: out.sentAt, snapshot } }
+        ? { ...stampEstimateSent(j, new Date()), approval: { token: out.token, sentAt: out.sentAt, snapshot } }
         : j
     );
     await saveJobs(linked);

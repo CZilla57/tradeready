@@ -18,6 +18,7 @@ import { formatQuote } from "../utils/format";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { generateEstimateMessage } from "../utils/invoiceHelpers";
 import { createApprovalLink } from "../utils/estimateApprovalLink";
+import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { estimateHtml } from "../utils/pdfTemplates";
 import { exportPdf } from "../utils/pdfExport";
 import { readLogoForPdf } from "../utils/photoStorage";
@@ -144,7 +145,7 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
     setMarking(true);
     const jobs = await loadJobs();
     const updated = jobs.map((j): Job =>
-      j.id === jobId ? { ...j, status: "estimate_sent" } : j
+      j.id === jobId ? stampEstimateSent(j, new Date()) : j
     );
     await saveJobs(updated);
     track('estimate_sent');

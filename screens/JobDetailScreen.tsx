@@ -26,6 +26,7 @@ import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveC
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
+import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
 import { canSendEstimate, canRequestDeposit, advanceJobsForPaidInvoices } from "../utils/jobStatus";
@@ -752,7 +753,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     if (!job) return;
     const jobs = await loadJobs();
     const reset = jobs.map((j): Job =>
-      j.id === job.id ? { ...j, status: "estimate_sent", approval: j.approval ? { ...j.approval, decision: undefined, consentAt: undefined, declineReason: undefined, signerName: undefined } : undefined } : j
+      j.id === job.id ? { ...stampEstimateSent(j, new Date()), approval: j.approval ? { ...j.approval, decision: undefined, consentAt: undefined, declineReason: undefined, signerName: undefined } : undefined } : j
     );
     await saveJobs(reset);
     navigation.navigate("SendEstimate", { jobId: job.id });
