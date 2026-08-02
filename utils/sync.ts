@@ -4,6 +4,7 @@ import { supabase } from './supabase';
 import { reportError } from './analytics';
 import { mergeRemoteRecord } from './syncMerge';
 import type { SyncRecord } from './syncMerge';
+import { REVIEW_REQUESTS_STORAGE_KEY } from './reviewRequest';
 import type { Settings, CustomerNotes } from '../types/models';
 
 const QUEUE_KEY       = '__syncQueue';
@@ -258,7 +259,7 @@ export async function initialSync(userId: string): Promise<void> {
       await pushAllLocalToCloud(userId);
     } else {
       if (localDataBelongsToOtherUser) {
-        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', 'recurringJobs', 'recurringInvoices', 'trips']);
+        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', 'recurringJobs', 'recurringInvoices', 'trips', REVIEW_REQUESTS_STORAGE_KEY]);
         await AsyncStorage.removeItem(QUEUE_KEY);
       }
       await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify({}));

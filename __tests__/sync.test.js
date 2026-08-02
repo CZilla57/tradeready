@@ -164,6 +164,10 @@ describe("initialSync ownership guard", () => {
         "expenses",
         "customerNotes",
         "recurringInvoices",
+        "recurringJobs",
+        "trips",
+        "pricebook",
+        "review_requests",
       ])
     );
   });
