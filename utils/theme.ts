@@ -141,3 +141,12 @@ export const darkShadow = {
 };
 
 export type ShadowScheme = typeof shadow;
+
+export const layout = {
+  contentMaxWidth: 700,
+  contentColumn: {
+    width: "100%",
+    maxWidth: 700,
+    alignSelf: "center",
+  } as const,
+} as const;
