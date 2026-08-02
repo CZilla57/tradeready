@@ -17,7 +17,7 @@ import { useSubscription } from "../context/SubscriptionContext";
 import { useSyncStatusContext } from "../context/SyncStatusContext";
 import { getOfferings, purchasePackage, restorePurchases, checkTrialEligibility, ENTITLEMENT_ID } from "../utils/subscription";
 import { trialCopy, NO_TRIAL_COPY, offeringsDisplayState } from "../utils/paywallCopy";
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { clearAllUserData } from "../utils/storage";
 import { syncIfOnline } from "../utils/sync";
@@ -372,7 +372,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     // top is applied inline from the live safe-area inset (hardcoding it put
     // the button under the Dynamic Island on some devices, too low on others).
     closeBtn:     { position: "absolute", right: 20, zIndex: 10, padding: 4 },
-    scroll:       { padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: 48 },
+    scroll:       { padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: 48, ...layout.contentColumn },
     header:       { alignItems: "center", marginBottom: spacing.lg },
     iconWrap: {
       width: 72, height: 72, borderRadius: 20,
