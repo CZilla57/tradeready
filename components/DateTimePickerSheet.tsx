@@ -26,6 +26,7 @@ import {
   View,
   Text,
   Modal,
+  ScrollView,
   TouchableOpacity,
   Platform,
   StyleSheet,
@@ -33,7 +34,7 @@ import {
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 
@@ -86,6 +87,22 @@ export function DateTimePickerSheet({
   const pickerValue = isDate ? value : roundToMinuteInterval(value, minuteInterval);
 
   if (Platform.OS === "ios") {
+    const picker = (
+      <DateTimePicker
+        themeVariant={isDark ? "dark" : "light"}
+        value={pickerValue}
+        mode={mode}
+        display={isDate ? "inline" : "spinner"}
+        is24Hour={false}
+        accentColor={isDate ? colors.accent : undefined}
+        minuteInterval={minuteInterval}
+        onChange={(_, d) => {
+          if (d) onChange(d);
+        }}
+        style={isDate ? styles.iosDate : undefined}
+      />
+    );
+
     return (
       <Modal transparent animationType="slide" accessibilityLabel={title}>
         <View style={styles.overlay}>
@@ -103,19 +120,20 @@ export function DateTimePickerSheet({
                 <Text style={styles.done}>Done</Text>
               </TouchableOpacity>
             </View>
-            <DateTimePicker
-              themeVariant={isDark ? "dark" : "light"}
-              value={pickerValue}
-              mode={mode}
-              display={isDate ? "inline" : "spinner"}
-              is24Hour={false}
-              accentColor={isDate ? colors.accent : undefined}
-              minuteInterval={minuteInterval}
-              onChange={(_, d) => {
-                if (d) onChange(d);
-              }}
-              style={isDate ? styles.iosDate : undefined}
-            />
+            {/* Only the inline calendar can outgrow a short viewport (it is
+                ~350pt tall regardless of screen size); the spinner is a fixed
+                ~216pt and fits everywhere, so it is left unwrapped to keep its
+                wheel gestures untouched. When the sheet's maxHeight does not
+                bind — every iPad orientation and every phone portrait — the
+                ScrollView is unconstrained, sizes to its content and never
+                scrolls, so this is a no-op there. */}
+            {isDate ? (
+              <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
+                {picker}
+              </ScrollView>
+            ) : (
+              picker
+            )}
           </View>
         </View>
       </Modal>
@@ -151,6 +169,15 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderTopRightRadius: radius.lg,
       paddingHorizontal: spacing.md,
       paddingBottom: 40,
+      // The overlay is `justifyContent: "flex-end"`, so a sheet taller than
+      // the viewport is pushed off the TOP — taking the header, and with it
+      // the only Done button, out of reach (the sheet has no cancel path).
+      // Capping at 85% keeps the header on screen no matter how short the
+      // window is. Same constant as TaxSettingsModal's sheet.
+      maxHeight: "85%",
+      // Keeps the sheet from spanning ~1180pt edge-to-edge on iPad; a no-op
+      // below 700pt, so phone widths are untouched.
+      ...layout.contentColumn,
     },
     header: {
       flexDirection: "row",

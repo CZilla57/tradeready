@@ -314,7 +314,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     flex: { flex: 1 },
-    emptyWrap: { flex: 1, padding: spacing.lg, paddingTop: 48, alignItems: "center" },
+    // The empty state is a SIBLING of the FlatList, not a cell inside it, so
+    // it needs its own column or the zero-message screen spans the full iPad
+    // width while the populated one sits at 700pt.
+    emptyWrap: { flex: 1, padding: spacing.lg, paddingTop: 48, alignItems: "center", ...layout.contentColumn },
     emptyTitle: { fontFamily: fonts.display, fontSize: fontSize.xl, color: colors.textPrimary, marginBottom: spacing.sm },
     emptySubtitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
     quickGrid: { width: "100%", gap: spacing.sm },

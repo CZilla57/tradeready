@@ -325,3 +325,254 @@ dedicated fix.
   they should be exact as of this commit; they will drift again the moment
   Phase 3+ starts editing these files, same as the plan's own citations
   drifted over the last 9 days.
+
+---
+
+## Phase 6 outcomes — device-smoke checklist
+
+**Date:** 2026-08-02 · **Branch:** `feat/ipad-tier1`
+
+Same method caveat as the rest of this document: **no simulator or physical
+device exists on this box**, so everything below is code reasoning plus the
+verify gate. Percentage arithmetic against known device point-sizes is exact;
+anything involving the native picker's intrinsic height, keyboard geometry, or
+contrast is a **prediction** and is listed in the Phase 7 checklist at the end.
+
+Phase 6 changed **three** app files: `screens/JobDetailScreen.tsx`,
+`components/DateTimePickerSheet.tsx`, `screens/ChatScreen.tsx` (plus
+`__tests__/dateTimePickerSheet.test.ts`, extended). §4.3 and §4.4 were
+verify-only by design and no code was touched for them.
+
+### 6.1 — §4.1 JobDetailScreen photo viewer `[landscape]` — **CHANGED**
+
+**Correction to §4.1's stated mechanism.** §4.1 predicted the image would
+"distort/overflow… since `contentFit="contain"` inside a fixed-aspect box
+still obeys the box's own width/height ratio". That is not how containment
+works, and re-reading the call site confirms it cannot happen here:
+`screens/JobDetailScreen.tsx:428` renders `Image` from **expo-image** (import
+at line 19) with `contentFit="contain"`, which preserves the source aspect
+ratio and never draws outside the box. **No distortion and no overflow are
+possible in either orientation, before or after this change.**
+
+**The defect that is real.** The box was `{ width: "100%", height: "80%" }` —
+a 20% inset on the height axis and none on the width axis. That is a
+portrait-tuned constant: in portrait, width is the scarce axis so the height
+cap costs nothing; in landscape, **height is the scarce axis** and the cap
+threw away a fifth of it while width stayed edge-to-edge. Worked example on an
+11" iPad landscape (1194×834) with an ordinary 4:3 photo:
+
+| | box | rendered photo |
+|---|---|---|
+| before | 1194 × 667 | 889 × 667 |
+| after | 1194 × 834 | 1112 × 834 |
+
+i.e. the photo was rendering **25% smaller (linear) than the screen allowed**,
+purely because of the portrait-tuned cap.
+
+**Change** — one style key, `viewerImage`:
+`{ width: "100%", height: "80%" }` → `{ width: "100%", height: "100%" }`.
+This is the resizeMode-aware reading of the fix: *because* the mode is
+`contain`, the correct box is the full viewport on both axes and containment
+does the letterboxing. (Had the mode been `cover`, the opposite would be true —
+the box shape would dictate the crop and this change would be wrong.)
+
+**Phone-unchanged argument.** With `contain`, an image whose aspect ratio is
+**wider than the box's** is width-limited, so its rendered size depends on the
+box *width* only and is completely independent of the box height; it is also
+centered either way. Phone portrait 393×852: old box aspect 0.576, new box
+aspect 0.461. Every ordinary camera photo is above both figures — 3:4 = 0.75,
+2:3 = 0.667, 1:1, and all landscape ratios — so those render **pixel-identical,
+same size and same position**. What changes is only the ultra-tall class that
+was previously height-limited: a 9:16 phone screenshot goes 384×682 → 393×699
+(+2.5%), and a 9:19.5 screenshot 315×682 → 393×851. That is the "letterboxing
+difference from correct containment" the phase brief pre-approved, and it is
+the desired direction (a screenshot should fill the viewer).
+
+**Residual risk — the one thing to look at on device.** `viewerClose`
+(`position:absolute, top:56, right:20`, 36pt) occupies y 56…92. Under the old
+80% box the letterbox band above the photo was 10% of the viewport — 85pt in
+phone portrait, 83pt in iPad landscape — so the button sat over black, with at
+worst ~7–9pt of overlap for a height-limited photo. With a full-height box, any
+photo narrower in aspect than the viewport now fills the height and the button
+lands **on the photo**; a white glyph on `rgba(255,255,255,0.15)` over a bright
+photo is low contrast. Reachability is unaffected (fixed position, `hitSlop`),
+and this is a legibility judgement no static read can settle. **If the owner
+dislikes it the revert is exactly one line** (restore `height: "80%"`, accepting
+the 25% landscape size loss). The better follow-up — out of Phase 6 scope
+because it is viewer chrome redesign — is to give the close button an opaque
+scrim so full-bleed is safe in both directions.
+
+### 6.2 — §4.2 `components/DateTimePickerSheet.tsx` `[landscape]` — **CHANGED**
+
+**The defect is sharper than §4.2 stated.** §4.2 said the sheet "can approach
+or exceed available height". What actually happens when it exceeds: `overlay`
+is `justifyContent: "flex-end"` and RN's default `flexShrink` is **0**, so a
+sheet taller than the overlay is laid out at a *negative* top offset — it
+overflows off the **top**, which is precisely where `header` and its **Done**
+button live. The iOS branch has no backdrop-press handler and no reachable
+`onRequestClose` path on iOS, and the component's own header comment says "the
+sheet has no cancel path" — so Done is the **only** dismissal control.
+Overflowing it off-screen is not cosmetic; it is a modal the user cannot leave.
+
+**Height budget** (the calendar figure is the one approximate number):
+`mode:"date"` ≈ header 56 + inline calendar ~350 + `marginBottom` 8 +
+`paddingBottom` 40 ≈ **455pt**; `mode:"time"` ≈ **320pt** (216pt spinner).
+
+**Where the new cap binds — nowhere on iPad, nowhere in phone portrait:**
+
+| Viewport | height | 85% cap | date sheet ≈455 |
+|---|---|---|---|
+| iPad mini landscape (shortest iPad) | 744 | 632 | fits — cap never binds |
+| iPad 11" landscape | 834 | 709 | fits |
+| iPad portrait (any) | ≥1024 | ≥870 | fits |
+| iPhone SE portrait (shortest phone) | 667 | 567 | fits — cap never binds |
+| **iPhone landscape** | **393** | **334** | **binds** |
+
+So the cap is **insurance, not an iPad fix**: the only configuration it changes
+is iPhone landscape, which Phase 7's `orientation: "portrait" → "default"` flip
+newly makes reachable. Stated plainly so nobody later reads it as an iPad
+claim.
+
+**Three changes, all internal to the component, none at a call site:**
+
+1. `sheet` gains `maxHeight: "85%"` — the header can no longer leave the
+   screen. Same constant and same pattern as the already-shipped
+   `components/money/TaxSettingsModal.tsx` sheet.
+2. The **inline-calendar branch only** is wrapped in a plain
+   `<ScrollView bounces={false} showsVerticalScrollIndicator={false}>`, so when
+   the cap binds the bottom weeks stay reachable instead of being pushed below
+   the fold. No explicit flex style is needed (and TaxSettingsModal's inner
+   ScrollView has none either) because RN's ScrollView base style already
+   carries `flexGrow: 1, flexShrink: 1, overflow: "scroll"` — it shrinks inside
+   the capped column and becomes scrollable. When the cap does not bind the
+   ScrollView is unconstrained, sizes to its content and cannot scroll, so it
+   is a layout no-op on every iPad orientation and every phone portrait.
+   The **spinner branch is deliberately left unwrapped** — it fits everywhere
+   at ~320pt, and not wrapping it avoids nesting the wheels' own scroll views.
+3. `sheet` gains `...layout.contentColumn` (§4.2's second suggestion) so the
+   sheet stops spanning ~1180pt edge-to-edge on iPad. No-op below 700pt, so
+   every phone width is untouched.
+
+**Commit-on-Done preservation argument (owner requirement, 2026-07-16).** The
+contract lives entirely in three places, and **all three are byte-identical
+after the change**: the Done `TouchableOpacity`'s `onChange(pickerValue);
+onClose();` body, the picker's own live
+`onChange={(_, d) => { if (d) onChange(d); }}`, and `pickerValue`'s
+`roundToMinuteInterval` pre-rounding. The Android branch is untouched. No prop
+passed to `DateTimePicker` changed — the element is merely bound to a `const`
+and then conditionally wrapped. The change is sizing/positioning only, exactly
+as §4.2 required.
+
+Because that contract had **zero test coverage** before this phase (the
+existing suite covered only `roundToMinuteInterval`), four render tests were
+added to `__tests__/dateTimePickerSheet.test.ts`: not-visible renders nothing;
+the calendar branch keeps both the picker and Done reachable (the regression
+guard for the ScrollView wrap); Done commits the displayed value when the
+picker was never touched; Done commits the interval-rounded value in time
+mode. No existing assertion was changed or weakened.
+
+**Note for the record:** Phase 6's brief described the contract as "value
+commits only when Done is tapped, cancel/backdrop discards". That is not the
+shipped behavior — the picker commits **live** through its own `onChange`, and
+there is no backdrop/cancel path at all. Done's actual job is committing the
+*untouched* fallback. Nothing in Phase 6 changes either half of that.
+
+### 6.3 — §4.5 ChatScreen `[tablet-width]`
+
+**(a) Bubble `maxWidth: "82%"` — VERIFIED, no change.** Phase 5 applied the
+column to `listContent`, which is
+`{ padding: spacing.md, paddingBottom: spacing.sm, ...layout.contentColumn }`.
+Percentages resolve against the parent's **content box**, so the chain is:
+FlatList content container capped at 700pt → minus `spacing.md` (16) padding
+each side → `bubbleRow` = 668pt → bubble `maxWidth` = 0.82 × 668 =
+**≈548pt**, at any iPad width and in either orientation. §4.5's "≈574pt" figure
+took 82% of the outer 700 and omitted the 32pt of padding; **548pt is the
+correct number**. Either way the conclusion stands — that is a normal chat
+bubble width and needs no bubble-specific fix.
+
+**(b) Empty state — CHANGED** (Phase 5 reviewer finding). The empty state is a
+**sibling** of the FlatList (`isEmpty ? <EmptyState/> : <FlatList/>`), not a
+cell inside it, so Phase 5's column on `listContent` never reached it and the
+zero-message screen stretched full-width on iPad while the populated one sat at
+700pt. Fixed by the standard trailing spread on the empty-state container:
+`emptyWrap: { flex: 1, padding: spacing.lg, paddingTop: 48,
+alignItems: "center", ...layout.contentColumn }`. `emptyWrap` — not
+`quickGrid` — is the right container: it caps the title and subtitle too, and
+`quickGrid`'s `width: "100%"` then resolves against the capped parent
+automatically. **Phone unchanged:** `emptyWrap` previously took full width by
+`alignItems: stretch` from its parent; `width: "100%"` reproduces that exactly,
+`maxWidth: 700` cannot bind below 700pt, and `alignSelf: "center"` is a no-op
+at full width. `flex: 1` is a main-axis (vertical) property and does not
+interact with the cross-axis keys the token sets.
+
+### 6.4 — §4.3 KeyboardAvoidingView + §4.4 KeyboardDoneBar — **VERIFY-ONLY, no code changed**
+
+**No concrete defect is provable from code alone**, which is the bar Phase 6's
+brief set for touching these. Both items are runtime-geometry problems: the
+failure modes depend on the keyboard frame iOS reports, which cannot be
+observed on this box, and a wrong offset change regresses phones — where the
+current values are shipped and known-good.
+
+**§4.3 count correction:** 11 *screens* use `KeyboardAvoidingView` but there
+are **12 instances** — `SettingsScreen.tsx` has two (line 528 for the screen,
+line 1078 inside the delete-account modal). Props re-verified:
+`behavior={Platform.OS === "ios" ? "padding" : undefined}` in
+AddCustomer(234) / AddInvoice(119) / AddJob(421) / AddRecurringInvoice(184) /
+CreateInvoiceFromJob(284) / PricebookEntry(185) / PricingCalculator(405) /
+Settings(528, 1078); `"padding" : "height"` in Auth(211), Onboarding(190) and
+Chat(196); only **ChatScreen** passes `keyboardVerticalOffset`, and it passes
+`useHeaderHeight()` (line 197) rather than a constant — the one value that
+adapts to iPad chrome by itself.
+
+What is *predicted* but unverifiable here: RN's `KeyboardAvoidingView` derives
+its inset from the reported keyboard frame, so an iPad **floating** keyboard
+(small, draggable, not docked at the bottom) and a **split** keyboard can make
+it reserve space that does not correspond to what is actually covering the
+input. This is RN-level behavior, not something this codebase configures — no
+screen conditions `behavior` or the offset on screen size today.
+
+**§4.4 KeyboardDoneBar:** the bar renders inside `InputAccessoryView`, whose
+width is set by the **keyboard/window**, not by our content column — so a
+`layout.contentColumn` spread on `bar` would not be honoured the way it is
+elsewhere, and with `justifyContent: "flex-end"` the Done button tracks the
+window's right edge while the input column is centred. Confirmed cosmetic, not
+functional, and **not** orientation-driven. Two device-only unknowns: whether
+the accessory bar appears at all with a floating keyboard, and that with a
+**hardware keyboard attached** iPadOS shows no software keyboard and therefore
+no accessory bar — in that state a `decimal-pad`/multiline field has no in-app
+Done affordance and relies on the hardware keyboard. Worth confirming before
+deciding whether §4.4 needs any Tier-1 work at all.
+
+### Phase 7 physical-iPad smoke checklist (Phase 6 items only)
+
+Photo viewer — `JobDetailScreen`:
+- [ ] Open a **landscape** photo and a **portrait** photo in **iPad portrait**; confirm each is fully visible, correctly proportioned, and centered.
+- [ ] Repeat in **iPad landscape**; confirm the photo now uses the full height (this is the change) and is not cropped.
+- [ ] **Close-button legibility over a bright photo**, both orientations — the single judgement call of this phase. Also confirm it is still easy to hit.
+- [ ] Rotate while the viewer is open, both directions.
+- [ ] iPhone regression: a normal camera photo must look exactly as before.
+
+Date/time picker — all 9 call sites (`AddJobScreen` ×4: date, start, end, recurrence end; `AddRecurringInvoiceScreen` ×2; `ExportDataScreen` ×1; `AddExpenseModal` ×1; `RecordPaymentSheet` ×1):
+- [ ] iPad **landscape**, `mode:"date"`: sheet centered at 700pt (not edge-to-edge), header + Done visible, whole calendar visible without scrolling.
+- [ ] iPad landscape, `mode:"time"`: spinner reads correctly, Done visible.
+- [ ] **Month-swipe and the tap-to-expand year list still work** inside the newly wrapped calendar — the one gesture risk of the ScrollView wrap.
+- [ ] **Commit-on-Done, untouched:** open a picker on a field with no value and tap Done immediately → the parent takes today/now.
+- [ ] **Commit-on-Done, touched:** scroll to a value, tap Done → that value lands.
+- [ ] Confirm there is still no backdrop dismissal (unchanged, but verify Phase 6 introduced none).
+- [ ] Rotate with a picker open.
+- [ ] iPhone regression: one date and one time picker in portrait must look identical to today.
+- [ ] If iPhone **landscape** is exercised after the orientation flip: open `mode:"date"`, confirm Done is reachable and the calendar scrolls.
+
+Chat — `ChatScreen`:
+- [ ] **Empty state** on iPad, both orientations: title, subtitle, and quick-prompt buttons capped at 700pt and centered, matching the populated chat.
+- [ ] **Populated state**: bubbles read at ≈548pt max; the empty→populated transition does not shift the column.
+- [ ] Composer row stays aligned with the column in both states.
+
+Keyboard (11 screens / 12 KAV instances, plus the Done bar):
+- [ ] Docked keyboard on each KAV screen: focused field stays visible, no double gap, no content jump.
+- [ ] **Floating keyboard**: does the layout over-reserve space? Does the Done bar appear?
+- [ ] **Split keyboard**: same two questions.
+- [ ] **Hardware keyboard attached**: confirm `decimal-pad` and multiline fields are still usable with no accessory bar.
+- [ ] `ChatScreen` specifically — the only screen with a `keyboardVerticalOffset`; check the composer in both orientations and after rotating with the keyboard up.
+- [ ] `SettingsScreen`'s delete-account modal (the second KAV instance) with the keyboard up.
+- [ ] Done bar horizontal position at iPad width — cosmetic; decide then whether §4.4 warrants any work.
