@@ -357,7 +357,7 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 - ⚠️ Google Maps Directions API: planned for route optimization; not yet wired up
 
 ### Observability
-- **PostHog** — 15 business events (sign_up, job_created, invoice_paid, etc.)
+- **PostHog** — 33 business events (sign_up, job_created, invoice_paid, etc. — grep `track(` in screens/utils/hooks/components for the full set)
 - **Sentry** — error reporting via `reportError()` in all critical catch blocks
 
 ### Future (multi-user / scale)
