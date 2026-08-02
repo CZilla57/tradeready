@@ -56,7 +56,7 @@ convention.
 | 4 | AddRecurringInvoiceScreen | SafeAreaView(bottom) → KAV | ScrollView `styles.scroll` | — | — | **Yes** (InvoiceStack) | A + B (DateTimePickerSheet ×2) |
 | 5 | AddTripScreen | SafeAreaView(bottom) | ScrollView `styles.content` | — | — | **Yes** (MoneyStack) | A (existing `maxWidth:180` chip at line 212 — small chrome, no change needed) |
 | 6 | AuthScreen | **NOT SafeAreaView** — `KeyboardAvoidingView` + `useSafeAreaInsets()` padding (structural exception #1) | ScrollView `styles.scroll` (`flexGrow:1, justifyContent:'center'`) | — | password-eye toggle (small, in-input, screen-anchored — fine) | No | A — login `card` style has no `maxWidth`; will span edge-to-edge at tablet width |
-| 7 | ChatScreen | SafeAreaView(bottom) → KAV | FlatList (inverted) `styles.listContent`; empty state uses `quickGrid` (`width:'100%'`) | `inputRow` composer footer, outside the FlatList | — | No | A + B (bubble `maxWidth:"82%"` at line 329 becomes very wide at tablet width — plan already flagged this, confirmed still true) |
+| 7 | ChatScreen | SafeAreaView(bottom) → KAV | FlatList (inverted) `styles.listContent`; empty state uses `quickGrid` (`width:'100%'`) | `inputRow` composer footer, outside the FlatList | — | No | A + B `[tablet-width]` (bubble `maxWidth:"82%"` at line 329 becomes wide at tablet width regardless of rotation — plan already flagged this, confirmed still true; see §4.5 — Bucket A's column on `listContent` mitigates to ≈574pt effective) |
 | 8 | CreateInvoiceFromJobScreen | SafeAreaView(bottom) → KAV | ScrollView `styles.scroll` | — | — | No | A |
 | 9 | CustomerDetailScreen | SafeAreaView(bottom) | ScrollView — **NO `contentContainerStyle` prop at all** (line 363: `<ScrollView showsVerticalScrollIndicator={false}>`) | — | — | No | A — **deviation from the mechanical pattern**: there is no existing `contentContainerStyle` to touch; Phase 4 must either add one or wrap the hero/stats/section children in a column View. Also owns an in-screen merge-picker `Modal` (`mergeSheet`, no `maxWidth`) |
 | 10 | CustomersScreen | SafeAreaView(bottom) | FlatList `styles.listContent` | `header` (title+count), `searchRow`, conditional `dupBanner`, conditional `archiveToggle` — all outside the FlatList | `Fab` at line 283 (stays anchored) | No | A |
@@ -149,9 +149,19 @@ PaywallScreen above applies to all seven).
 
 ---
 
-## 4. Bucket B candidates (landscape-specific, Phase 6) — verified in code
+## 4. Bucket B — Phase 6 candidates (landscape-specific OR general tablet-width) — verified in code
 
-### 4.1 JobDetailScreen photo viewer
+Each item below is tagged **[landscape]** (the defect only manifests, or is
+materially worse, in a short/landscape viewport) or **[tablet-width]** (the
+defect is present at iPad width regardless of rotation — a portrait iPad is
+already ~768-834pt wide, well past phone width, so there's nothing
+orientation-specific about it). The plan scoped Phase 6 as "landscape-specific
+fixes"; a **[tablet-width]** item below may already be substantially
+addressed by Phase 4/5's content-column work, so treat those as **verify,
+don't build an orientation-conditional fix** unless testing on the physical
+iPad in Phase 7 shows otherwise.
+
+### 4.1 JobDetailScreen photo viewer `[landscape]`
 `screens/JobDetailScreen.tsx:1136` —
 ```
 viewerImage: { width: "100%", height: "80%" },
@@ -166,7 +176,7 @@ fixed-aspect box still obeys the box's own width/height ratio. Needs
 percentages rather than a fixed width/height pairing). Confirmed unchanged
 from the plan's underlying claim, only the line number moved.
 
-### 4.2 components/DateTimePickerSheet.tsx — iOS bottom-sheet branch
+### 4.2 components/DateTimePickerSheet.tsx — iOS bottom-sheet branch `[landscape]`
 `components/DateTimePickerSheet.tsx:88-123`. The iOS branch renders a
 `Modal` with `overlay` (`justifyContent:"flex-end"`, full-bleed) containing
 `sheet` (`borderTopLeftRadius/borderTopRightRadius`, **no `maxHeight` and no
@@ -193,7 +203,7 @@ only sizing/positioning (e.g. cap `sheet` height in landscape, or add a
 `maxWidth` so it doesn't span edge-to-edge on iPad), not the onChange/onClose
 commit contract.
 
-### 4.3 KeyboardAvoidingView usage — re-verified, 11 screens (not 10)
+### 4.3 KeyboardAvoidingView usage — re-verified, 11 screens (not 10) `[landscape]`
 Grep for `KeyboardAvoidingView` in `screens/`:
 `AddCustomerScreen`, `AddInvoiceScreen`, `AddJobScreen`,
 **`AddRecurringInvoiceScreen`** (new since the plan's count of 10),
@@ -208,7 +218,7 @@ shorter proportional height change the offset math referenced by the plan —
 none of the `behavior`/offset props are conditioned on screen size today, so
 this is confirmed still open for Phase 6.
 
-### 4.4 components/KeyboardDoneBar.tsx — reach re-verified
+### 4.4 components/KeyboardDoneBar.tsx — reach re-verified `[tablet-width]`
 Grep for `<KeyboardDoneBar` (excluding the component's own usage-example
 comment) — **direct screen usage in 7 screens**: `SettingsScreen`,
 `PricingCalculatorScreen`, `PricebookEntryScreen`, `OnboardingScreen`,
@@ -224,13 +234,32 @@ files — every screen using `Field` with a `decimal-pad`/`number-pad`/
 itself (`bar` style, `flexDirection:"row", justifyContent:"flex-end"`) has
 no `maxWidth`, so at tablet width its "Done" button sits far from the input
 column it serves once that column is centered — worth a look in Phase 6,
-though it's a cosmetic misalignment, not a functional break.
+though it's a cosmetic misalignment, not a functional break. **Unlike 4.1-4.3
+above, this is not orientation-driven** — the bar is exactly as
+disconnected from the centered column in iPad portrait as it is in
+landscape, since the mismatch is between the bar's own uncapped width and
+the column's `maxWidth:700`, not anything to do with viewport height or
+rotation.
 
-### 4.5 Other tall-and-narrow assumptions found
+### 4.5 ChatScreen bubble `maxWidth` `[tablet-width]`
+`screens/ChatScreen.tsx:329` — `bubble: { maxWidth: "82%", ... }`. Also
+general tablet-width, not orientation-driven — a portrait iPad is already
+~768-834pt wide, so 82% is a wide bubble regardless of rotation; nothing
+about this gets worse in landscape specifically. Bucket A substantially
+mitigates it without any bubble-specific work: once Phase 5 applies
+`layout.contentColumn` to `listContent` (§2, row 7), the FlatList itself is
+capped at 700pt, so 82% of *that* is **≈574pt** — comparable to the
+narrower-column behavior the 82% figure was presumably tuned against
+originally. Phase 6 should treat this as **verify-only**: confirm bubble
+width reads correctly once the Phase 5 column lands, rather than building a
+dedicated fix.
+
+### 4.6 Other notes (not Bucket B — cross-referenced here)
 - **`screens/PricebookScreen.tsx`** `fab` style (§2, row 23): a full-width
   absolute button bar using `left`/`right` offsets rather than
-  `alignSelf:'center'+maxWidth`. Not landscape-specific, but flagged here
-  because it doesn't fit the mechanical "swap the `contentContainerStyle`
+  `alignSelf:'center'+maxWidth`. This is a **Bucket A** item, not Bucket B —
+  no orientation or [landscape]/[tablet-width] tag applies — but it's noted
+  here because it doesn't fit the mechanical "swap the `contentContainerStyle`
   value" pattern the other 30 screens do — Phase 4/5 needs a bespoke
   centering approach for this one style.
 - No other percentage-HEIGHT patterns, bottom sheets, or portrait-only
