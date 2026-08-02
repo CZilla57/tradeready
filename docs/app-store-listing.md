@@ -148,6 +148,7 @@ before submitting for review: build 7 is the first binary carrying the new
 native modules, so on TestFlight verify Apple AND Google sign-in complete,
 send one invoice email with a logo end-to-end, and tap through deposits,
 receipt scan, recurring invoices, tax set-aside, and CSV export.
+(COMPLETED 2026-08-01 — owner ran the smoke pass and submitted for review.)
 
 ## What's New (version 1.0 — shipped 2026-07-24, kept for the record)
 
@@ -221,7 +222,7 @@ everything.** No ATT prompt exists in the app, correctly.
   404. Do not delete index.html from tradeready-legal.
 - Privacy Policy URL: https://gettradereadyapp.com/privacy.html
 - Version: 1.1.0 — attach **build 7** (25c72a3b, EAS-built 2026-08-01 from
-  `c4ec829`; TestFlight smoke pending as of this refresh)
+  `c4ec829`; TestFlight smoke PASSED and submitted for review 2026-08-01)
 
 ## Owner pre-submission checklist (state as of 2026-07-16)
 
