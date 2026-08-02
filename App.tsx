@@ -55,6 +55,7 @@ import PricebookEntryScreen       from "./screens/PricebookEntryScreen";
 import ExportDataScreen           from "./screens/ExportDataScreen";
 import RecurringInvoicesScreen    from "./screens/RecurringInvoicesScreen";
 import AddRecurringInvoiceScreen  from "./screens/AddRecurringInvoiceScreen";
+import GlobalSearchScreen         from "./screens/GlobalSearchScreen";
 
 import * as Notifications from "expo-notifications";
 
@@ -108,6 +109,7 @@ function TodayTab() {
       <TodayStack.Screen name="TodayHome" component={TodayScreen} options={{ headerShown: false }} />
       <TodayStack.Screen name="Route" component={RouteScreen} options={{ title: "Today's Route" }} />
       <TodayStack.Screen name="Settings" component={SettingsScreen} options={{ title: "Settings" }} />
+      <TodayStack.Screen name="Search" component={GlobalSearchScreen} options={{ title: "Search" }} />
     </TodayStack.Navigator>
   );
 }

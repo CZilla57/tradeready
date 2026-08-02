@@ -31,6 +31,7 @@ export type TodayStackParamList = {
   TodayHome: undefined;
   Route: undefined;
   Settings: undefined;
+  Search: undefined;
 };
 
 export type JobStackParamList = {

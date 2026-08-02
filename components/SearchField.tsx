@@ -15,9 +15,11 @@ interface SearchFieldProps {
   onChangeText: (text: string) => void;
   placeholder: string;
   accessibilityLabel: string;
+  /** Focus on mount — for screens whose whole point is the search box. */
+  autoFocus?: boolean;
 }
 
-export function SearchField({ value, onChangeText, placeholder, accessibilityLabel }: SearchFieldProps) {
+export function SearchField({ value, onChangeText, placeholder, accessibilityLabel, autoFocus }: SearchFieldProps) {
   const { colors } = useTheme();
   return (
     <View style={[styles.wrap, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -31,6 +33,7 @@ export function SearchField({ value, onChangeText, placeholder, accessibilityLab
         autoCorrect={false}
         clearButtonMode="while-editing"
         returnKeyType="search"
+        autoFocus={autoFocus}
         accessibilityLabel={accessibilityLabel}
       />
     </View>

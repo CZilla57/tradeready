@@ -539,6 +539,15 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         </View>
         <TouchableOpacity
           style={styles.settingsBtn}
+          onPress={() => navigation.navigate('Search')}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Search everything"
+        >
+          <Ionicons name="search-outline" size={22} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.settingsBtn}
           onPress={() => navigation.navigate('Settings')}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           accessibilityRole="button"
