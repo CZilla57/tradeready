@@ -35,6 +35,7 @@ export function SearchField({ value, onChangeText, placeholder, accessibilityLab
         returnKeyType="search"
         autoFocus={autoFocus}
         accessibilityLabel={accessibilityLabel}
+        maxFontSizeMultiplier={1.4}
       />
     </View>
   );
@@ -54,7 +55,9 @@ const styles = StyleSheet.create({
   input: {
     fontFamily: fonts.bodyRegular,
     flex: 1,
-    height: 44,
+    // minHeight (not height) so larger accessibility text grows the field
+    // instead of clipping inside it — same pattern as components/Field.tsx.
+    minHeight: 44,
     fontSize: fontSize.md,
   },
 });
