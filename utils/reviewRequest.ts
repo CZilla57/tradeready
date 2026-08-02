@@ -2,7 +2,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import type { Job, Customer, Settings } from "../types/models";
 
-const STORAGE_KEY = "review_requests";
+// Exported for clearAllUserData (utils/storage/lifecycle.ts): records hold
+// customer name/phone/email snapshots, so they must not survive sign-out.
+export const REVIEW_REQUESTS_STORAGE_KEY = "review_requests";
 
 interface ReviewRequestRecord {
   jobId: string;
@@ -15,12 +17,12 @@ interface ReviewRequestRecord {
 }
 
 async function loadRecords(): Promise<ReviewRequestRecord[]> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY);
+  const raw = await AsyncStorage.getItem(REVIEW_REQUESTS_STORAGE_KEY);
   return raw ? JSON.parse(raw) : [];
 }
 
 async function saveRecords(records: ReviewRequestRecord[]): Promise<void> {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  await AsyncStorage.setItem(REVIEW_REQUESTS_STORAGE_KEY, JSON.stringify(records));
 }
 
 // True when the rendered message would be missing its review link: the template

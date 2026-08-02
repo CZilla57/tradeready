@@ -15,6 +15,7 @@ import {
 } from "./collections";
 import { isSampleId } from "../sampleData";
 import { SESSION_STORAGE_KEY } from "../secureStoreAdapter";
+import { REVIEW_REQUESTS_STORAGE_KEY } from "../reviewRequest";
 
 // --- Onboarding ---
 
@@ -69,6 +70,9 @@ export async function clearAllUserData(): Promise<void> {
 
   await AsyncStorage.multiRemove([
     ...Object.values(KEYS),
+    // Feature-local key outside KEYS: review-request records carry customer
+    // name/phone/email snapshots and must not leak to the next account.
+    REVIEW_REQUESTS_STORAGE_KEY,
     "__syncQueue",
     "__lastSyncedAt",
     "__dataOwner",
