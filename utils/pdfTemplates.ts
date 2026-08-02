@@ -1,5 +1,6 @@
 import type { Invoice, Job, Customer, Settings } from '../types/models';
 import { formatMoney, formatQuote } from "./format";
+import { parseLocalDate } from "./moneyUtils";
 import { computeEstimateBreakdown } from "./pricingEngine";
 import { isFullyPaid, isPartlyPaid, amountPaid, balanceDue, effectivePayments } from "./invoicePayments";
 
@@ -25,7 +26,11 @@ function safe(value: string | number | undefined | null): string {
 
 function fmtDate(dateStr: string | undefined): string {
   if (!dateStr) return "";
-  return new Date(dateStr).toLocaleDateString("en-US", {
+  // Date-only strings (due dates, payment dates) are calendar dates — a bare
+  // new Date() would parse them as UTC midnight and render the PREVIOUS day
+  // in any negative-offset timezone. Full ISO timestamps pass through
+  // parseLocalDate unchanged.
+  return parseLocalDate(dateStr).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",

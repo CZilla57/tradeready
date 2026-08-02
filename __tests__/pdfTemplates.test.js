@@ -52,6 +52,10 @@ describe("invoiceHtml — byte-identical to commit fbadd88 (pre-balance-block)",
   // re-render differently than what the customer originally received —
   // exactly the regression Finding 1 found (extra blank lines around the
   // total block, introduced by the template-literal restructuring).
+  // One deliberate departure from fbadd88 output: due dates render the
+  // entered calendar date in every timezone (fmtDate → parseLocalDate,
+  // re-pinned 2026-08-02 — see the fixture header). fbadd88 rendered them
+  // a day early on US machines, which is the bug, not the baseline.
   test("an untouched unpaid invoice renders byte-identically to pre-change output", () => {
     expect(invoiceHtml(inv())).toBe(GOLDEN_UNTOUCHED_UNPAID);
   });
