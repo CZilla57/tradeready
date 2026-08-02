@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
+import { isArchived, withArchived } from '../utils/archive';
 import { spacing, radius, fontSize, fonts } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
@@ -235,6 +236,22 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
     });
   };
 
+  const handleToggleArchive = async () => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const archiving = !isArchived(displayCustomer);
+      const custs = await loadCustomers();
+      await saveCustomers(
+        custs.map((c) => (c.id === displayCustomer.id ? withArchived(c, archiving, today) : c))
+      );
+      setDisplayCustomer((prev: any) => withArchived(prev, archiving, today));
+      if (archiving) navigation.goBack();
+    } catch (err: unknown) {
+      console.error('CustomerDetailScreen: archive toggle failed', err);
+      reportError(err, { context: 'customerArchiveToggle' });
+    }
+  };
+
   const handleDelete = () => {
     Alert.alert(
       'Delete customer?',
@@ -417,6 +434,17 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
             </TouchableOpacity>
           )}
         </View>
+
+        <TouchableOpacity
+          style={styles.archiveBtn}
+          onPress={handleToggleArchive}
+          accessibilityRole="button"
+          accessibilityLabel={isArchived(displayCustomer) ? 'Unarchive customer' : 'Archive customer'}
+        >
+          <Text style={styles.archiveBtnText}>
+            {isArchived(displayCustomer) ? 'Unarchive customer' : 'Archive customer'}
+          </Text>
+        </TouchableOpacity>
 
         <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} accessibilityRole="button" accessibilityLabel="Delete customer">
           <Text style={styles.deleteBtnText}>Delete customer</Text>
@@ -677,6 +705,17 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     fontSize: fontSize.md,
     minHeight: 120,
     lineHeight: 22,
+  },
+  archiveBtn: {
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  archiveBtnText: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
   },
   deleteBtn: {
     alignItems: 'center',

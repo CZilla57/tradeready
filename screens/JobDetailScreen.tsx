@@ -38,6 +38,7 @@ import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useUndo } from "../context/UndoContext";
+import { isArchived, withArchived } from "../utils/archive";
 import type { Job, Customer, JobStatus } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
@@ -749,6 +750,17 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     setJob((prev) => prev ? ({ ...prev, ...changes }) : prev);
   }
 
+  async function handleToggleArchive() {
+    if (!job) return;
+    const today = new Date().toISOString().split("T")[0];
+    const archiving = !isArchived(job);
+    const jobs = await loadJobs();
+    const updated = jobs.map((j) => (j.id === job.id ? withArchived(j, archiving, today) : j));
+    await saveJobs(updated);
+    setJob(withArchived(job, archiving, today));
+    if (archiving) navigation.goBack();
+  }
+
   async function handleDelete() {
     Alert.alert("Delete job?", "You can undo for a few seconds after deleting.", [
       { text: "Cancel", style: "cancel" },
@@ -953,6 +965,13 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           label="Duplicate job"
           variant="secondary"
           onPress={() => navigation.navigate("AddJob", { duplicateFromJobId: job.id })}
+          style={{ marginBottom: spacing.sm }}
+        />
+
+        <Button
+          label={isArchived(job) ? "Unarchive job" : "Archive job"}
+          variant="secondary"
+          onPress={handleToggleArchive}
           style={{ marginBottom: spacing.sm }}
         />
 

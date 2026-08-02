@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, loadInvoices, saveJobs } from "../utils/storage";
 import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
+import { isArchived } from "../utils/archive";
 import { reportError } from "../utils/analytics";
 import { JOB_STATUSES } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
@@ -31,13 +32,15 @@ import type { JobStackScreenProps } from "../types/navigation";
 
 // Which filter tabs to show across the top. "Active" spans every in-flight
 // status — in_progress included, so a job doesn't vanish from the list the
-// moment the user clocks in. "Declined" only renders when such jobs exist.
+// moment the user clocks in. "Declined" and "Archived" only render when such
+// jobs exist. Every status tab excludes archived jobs; Archived shows only them.
 const FILTERS = [
   { key: "active",    label: "Active",    statuses: ["lead", "estimate_sent", "approved", "scheduled", "in_progress"] },
   { key: "complete",  label: "Complete",  statuses: ["complete", "invoiced"] },
   { key: "paid",      label: "Paid",      statuses: ["paid"] },
   { key: "declined",  label: "Declined",  statuses: ["declined"] },
   { key: "all",       label: "All",       statuses: null as string[] | null },
+  { key: "archived",  label: "Archived",  statuses: null as string[] | null },
 ];
 
 export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'>) {
@@ -74,23 +77,31 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 
   const { refreshing, onRefresh } = useRefresh(refreshJobs, 'JobsScreen');
 
-  // If the Declined chip's last job moves on, the chip hides — fall back to
-  // Active instead of stranding the selection on an invisible tab.
-  const declinedCount = jobs.filter((j) => j.status === "declined").length;
-  const effectiveFilterKey = filter === "declined" && declinedCount === 0 ? "active" : filter;
+  // If the Declined chip's last job moves on (or the Archived tab empties),
+  // the chip hides — fall back to Active instead of stranding the selection
+  // on an invisible tab.
+  const declinedCount = jobs.filter((j) => j.status === "declined" && !isArchived(j)).length;
+  const archivedCount = jobs.filter(isArchived).length;
+  const effectiveFilterKey =
+    (filter === "declined" && declinedCount === 0) || (filter === "archived" && archivedCount === 0)
+      ? "active"
+      : filter;
 
   const activeFilter = FILTERS.find((f) => f.key === effectiveFilterKey);
   const filtered = jobs.filter((j) => {
+    const matchesArchive =
+      effectiveFilterKey === "archived" ? isArchived(j) : !isArchived(j);
     const matchesStatus = !activeFilter?.statuses || activeFilter.statuses.includes(j.status);
     const matchesSearch =
       j.customerName.toLowerCase().includes(search.toLowerCase()) ||
       j.title.toLowerCase().includes(search.toLowerCase());
-    return matchesStatus && matchesSearch;
+    return matchesArchive && matchesStatus && matchesSearch;
   });
 
-  // Top stats
-  const activeJobs = jobs.filter((j) => !["paid", "invoiced"].includes(j.status));
-  const pendingEstimates = jobs.filter((j) => ["lead", "estimate_sent"].includes(j.status));
+  // Top stats — archived jobs are out of sight here too.
+  const visibleJobs = jobs.filter((j) => !isArchived(j));
+  const activeJobs = visibleJobs.filter((j) => !["paid", "invoiced"].includes(j.status));
+  const pendingEstimates = visibleJobs.filter((j) => ["lead", "estimate_sent"].includes(j.status));
   const pendingValue = pendingEstimates.reduce((s, j) => s + (j.estimateTotal || 0), 0);
 
   function renderJob({ item: job }: { item: Job }) {
@@ -167,10 +178,12 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
       {/* Filter tabs */}
       <View style={styles.filterRow}>
         {FILTERS.map((f) => {
-          const count = jobs.filter((j) => !f.statuses || f.statuses.includes(j.status)).length;
-          // Declined is a rare terminal state — only offer the chip when it
-          // has something to show, so the common case keeps four tabs.
-          if (f.key === "declined" && count === 0) return null;
+          const count = f.key === "archived"
+            ? archivedCount
+            : jobs.filter((j) => !isArchived(j) && (!f.statuses || f.statuses.includes(j.status))).length;
+          // Declined and Archived are rare states — only offer those chips
+          // when they have something to show, so the common case keeps four tabs.
+          if ((f.key === "declined" || f.key === "archived") && count === 0) return null;
           return (
             <TouchableOpacity
               key={f.key}

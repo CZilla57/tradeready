@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
 import { buildCustomerList, type CustomerListEntry } from '../utils/customerList';
+import { isArchived } from '../utils/archive';
 import { SearchField } from '../components/SearchField';
 import { Fab } from '../components/Fab';
 import { spacing, radius, fontSize, fonts } from '../utils/theme';
@@ -81,6 +82,7 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
   const [invoices, setInvoices]               = useState<Invoice[]>([]);
   const [manualCustomers, setManualCustomers]  = useState<Customer[]>([]);
   const [searchText, setSearchText]            = useState<string>('');
+  const [showArchived, setShowArchived]        = useState<boolean>(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -103,27 +105,41 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
     }
   };
 
+  // Archive filtering happens on the rollup by record id (not by pruning the
+  // buildCustomerList input) so an archived customer's invoices can't re-derive
+  // a ghost entry under the same name.
+  const archivedIds = useMemo(
+    () => new Set(manualCustomers.filter(isArchived).map((c) => c.id)),
+    [manualCustomers]
+  );
+
   const allCustomers = useMemo(
     () => buildCustomerList(invoices, manualCustomers),
     [invoices, manualCustomers]
   );
 
+  const visibleCustomers = useMemo(
+    () => allCustomers.filter((c) => archivedIds.has(c.id) === showArchived),
+    [allCustomers, archivedIds, showArchived]
+  );
+
   const filteredCustomers = useMemo(() => {
-    if (!searchText.trim()) return allCustomers;
+    if (!searchText.trim()) return visibleCustomers;
     const q = searchText.toLowerCase();
-    return allCustomers.filter((c) =>
+    return visibleCustomers.filter((c) =>
       c.name.toLowerCase().includes(q) ||
       c.email.toLowerCase().includes(q) ||
       c.phone.includes(q)
     );
-  }, [allCustomers, searchText]);
+  }, [visibleCustomers, searchText]);
 
   const handlePress = useCallback((customer: CustomerListEntry) => {
     navigation.navigate('CustomerDetail', { customer });
   }, [navigation]);
 
-  const totalCustomers = allCustomers.length;
-  const totalRevenue   = allCustomers.reduce((sum, c) => sum + c.totalSpent, 0);
+  const activeEntries  = allCustomers.filter((c) => !archivedIds.has(c.id));
+  const totalCustomers = activeEntries.length;
+  const totalRevenue   = activeEntries.reduce((sum, c) => sum + c.totalSpent, 0);
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -145,6 +161,24 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
           accessibilityLabel="Search customers"
         />
       </View>
+
+      {archivedIds.size > 0 && (
+        <TouchableOpacity
+          style={styles.archiveToggle}
+          onPress={() => setShowArchived((v) => !v)}
+          accessibilityRole="button"
+          accessibilityLabel={showArchived ? 'Show active customers' : `Show archived customers, ${archivedIds.size}`}
+        >
+          <Ionicons
+            name={showArchived ? 'arrow-back-outline' : 'archive-outline'}
+            size={14}
+            color={colors.textSecondary}
+          />
+          <Text style={styles.archiveToggleText}>
+            {showArchived ? 'Back to active customers' : `View archived (${archivedIds.size})`}
+          </Text>
+        </TouchableOpacity>
+      )}
 
       <FlatList
         refreshing={refreshing}
@@ -184,6 +218,20 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+
+  archiveToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: 40,
+  },
+  archiveToggleText: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
   },
 
   // Header

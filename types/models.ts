@@ -158,6 +158,13 @@ export interface Job {
    */
   estimateSentAt?: DateString;
   approval?: EstimateApproval;
+  /**
+   * Soft archive (utils/archive.ts): local "YYYY-MM-DD" the job was archived.
+   * OPTIONAL and additive — absent means active. Archived jobs hide from the
+   * Jobs list (except its Archived tab) and global search; money/invoice
+   * history still counts them.
+   */
+  archivedAt?: DateString;
 }
 
 export interface PricebookEntry {
@@ -344,6 +351,13 @@ export interface Customer {
    * don't carry it.
    */
   createdAt?: DateString;
+  /**
+   * Soft archive (utils/archive.ts): local "YYYY-MM-DD" the customer was
+   * archived. OPTIONAL and additive — absent means active. Archived customers
+   * hide from the Customers list (except its Archived toggle) and global
+   * search; their invoices/jobs keep working normally.
+   */
+  archivedAt?: DateString;
 }
 
 export interface Expense {

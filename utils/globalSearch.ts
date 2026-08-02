@@ -3,6 +3,7 @@
 // loads the collections and owns navigation; this owns matching and ordering.
 
 import type { Customer, Invoice, Job } from "../types/models";
+import { isArchived } from "./archive";
 
 export interface SectionResult<T> {
   /** Up to `limit` matches, in the section's display order. */
@@ -70,12 +71,13 @@ export function searchAll(
   const q = query.trim().toLowerCase();
   if (!q) return EMPTY;
 
-  // Newest work first; customers read best alphabetically.
+  // Newest work first; customers read best alphabetically. Archived jobs and
+  // customers stay out of results — search finds the working set.
   const jobs = data.jobs
-    .filter((j) => jobMatches(j, q))
+    .filter((j) => !isArchived(j) && jobMatches(j, q))
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const customers = data.customers
-    .filter((c) => customerMatches(c, q))
+    .filter((c) => !isArchived(c) && customerMatches(c, q))
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   const invoices = data.invoices
     .filter((i) => invoiceMatches(i, q))
