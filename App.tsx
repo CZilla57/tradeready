@@ -378,6 +378,13 @@ function RootNavigator() {
           params: { screen: "ReviewRequest", params: { jobId: String(data.jobId), source: "notification" } },
         });
       }
+      if (data?.type === "estimate_follow_up" && data?.jobId && navigationRef.isReady()) {
+        track("estimate_follow_up_opened", { source: "notification" });
+        navigationRef.navigate("Main", {
+          screen: "Jobs",
+          params: { screen: "EstimateFollowUp", params: { jobId: String(data.jobId), source: "notification" } },
+        });
+      }
       if (data?.type === "overdue_outreach" && data?.invoiceId && navigationRef.isReady()) {
         track("overdue_outreach_opened", { daysPastDue: data.daysPastDue });
         navigationRef.navigate("Main", {

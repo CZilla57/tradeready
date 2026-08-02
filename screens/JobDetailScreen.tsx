@@ -574,12 +574,25 @@ function PrimaryAction({ job, reviewSent, navigation, onAdvance }: { job: Job; r
   if (!action) return null;
 
   return (
-    <Button
-      label={action.label}
-      onPress={action.onPress}
-      variant={action.variant}
-      style={{ marginBottom: spacing.sm }}
-    />
+    <>
+      <Button
+        label={action.label}
+        onPress={action.onPress}
+        variant={action.variant}
+        style={{ marginBottom: spacing.sm }}
+      />
+      {job.status === "estimate_sent" && (
+        <Button
+          label="Send follow-up"
+          variant="secondary"
+          onPress={() => {
+            track("estimate_follow_up_opened", { source: "job_detail" });
+            navigation.navigate("EstimateFollowUp", { jobId: job.id, source: "job_detail" });
+          }}
+          style={{ marginBottom: spacing.sm }}
+        />
+      )}
+    </>
   );
 }
 
