@@ -8,6 +8,10 @@ module.exports = {
   // machine, and it failed every CI run once the app's import graph grew past
   // the threshold (2026-08-01). Not a hang: warm it's ~0.8s, later tests ~30ms.
   testTimeout: 15000,
+  // Stable repo-relative cache path so CI can persist it between runs
+  // (actions/cache in .github/workflows/gate.yml). Jest validates entries by
+  // content hash, so restoring a stale cache is always safe.
+  cacheDirectory: "<rootDir>/.jest-cache",
   transformIgnorePatterns: [
     "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|@sentry/.*|native-base|react-native-svg|posthog-react-native)",
   ],

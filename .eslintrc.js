@@ -17,6 +17,7 @@ module.exports = {
     "node_modules/",
     "backend/node_modules/",
     ".expo/",
+    ".jest-cache/",
     "dist/",
     "coverage/",
     "babel.config.js",
