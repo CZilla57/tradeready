@@ -39,7 +39,7 @@ import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
 import Field from "../components/Field";
 import { nextInvoiceNumber } from "../utils/invoiceNumber";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import { track, reportError } from '../utils/analytics';
@@ -407,7 +407,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
   container:        { flex: 1, backgroundColor: colors.background },
   loadingContainer: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background },
-  scroll:           { padding: spacing.md, paddingBottom: 40 },
+  scroll:           { padding: spacing.md, paddingBottom: 40, ...layout.contentColumn },
 
   prefillBanner: {
     backgroundColor: colors.accentBg,

@@ -14,7 +14,7 @@ import {
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import BaseField from "../components/Field";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
@@ -723,11 +723,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     flex: { flex: 1 },
-    dots: { flexDirection: "row", justifyContent: "center", gap: 6, paddingTop: spacing.md, paddingBottom: spacing.sm },
+    dots: { flexDirection: "row", justifyContent: "center", gap: 6, paddingTop: spacing.md, paddingBottom: spacing.sm, ...layout.contentColumn },
     dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
     dotActive: { backgroundColor: colors.accent },
     dotTouchable: { padding: 4 },
-    scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
+    scroll: { padding: spacing.lg, paddingBottom: spacing.xl, ...layout.contentColumn },
     stepContent: {},
     appName: { fontFamily: fonts.display, fontSize: 44, color: colors.accent, letterSpacing: -1, textAlign: "center", marginTop: spacing.xl },
     welcomeTagline: { fontFamily: fonts.mono, fontSize: 12, color: colors.textSecondary, textAlign: "center", textTransform: "uppercase", letterSpacing: 1.2, marginTop: spacing.sm, marginBottom: spacing.xl },
@@ -779,7 +779,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     notifResult: { paddingTop: spacing.xs },
     notifResultText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, textAlign: "center" },
     doneBody: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, paddingHorizontal: spacing.md },
-    footer: { flexDirection: "row", padding: spacing.lg, gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.background },
+    footer: { flexDirection: "row", padding: spacing.lg, gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.background, ...layout.contentColumn },
     backBtn: { height: 50, justifyContent: "center", alignItems: "center", paddingHorizontal: spacing.lg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
     backText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textSecondary },
     nextBtn: { flex: 1, height: 50, justifyContent: "center", alignItems: "center", backgroundColor: colors.accent, borderRadius: radius.md },

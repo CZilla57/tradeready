@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { supabase } from '../utils/supabase';
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
 import { canResend, resendSecondsRemaining } from '../utils/resendCooldown';
@@ -408,6 +408,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: 'center',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.xl,
+      ...layout.contentColumn,
     },
     header: { alignItems: 'center', marginBottom: spacing.xl },
     appName: { fontFamily: fonts.display, fontSize: 40, color: colors.accent, letterSpacing: -1 },

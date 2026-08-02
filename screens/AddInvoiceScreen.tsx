@@ -18,7 +18,7 @@ import { syncNotifications } from "../utils/notifications";
 import { nextInvoiceNumber } from "../utils/invoiceNumber";
 import { Button } from "../components/UI";
 import Field from "../components/Field";
-import { spacing } from "../utils/theme";
+import { spacing, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import { track } from '../utils/analytics';
@@ -157,7 +157,7 @@ function defaultDueDate(): string {
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  scroll: { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160 },
+  scroll: { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160, ...layout.contentColumn },
   actions: { flexDirection: "row", marginTop: spacing.lg },
   });
 }

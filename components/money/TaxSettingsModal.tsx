@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardDoneBar } from '../KeyboardDoneBar';
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { DEFAULT_MILEAGE_RATE } from '../../utils/mileageUtils';
@@ -185,6 +185,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       padding: spacing.lg,
       maxHeight: '85%',
       ...shadow.card,
+      // Keeps the sheet from spanning the full iPad window; a no-op below
+      // 700pt, so phone widths are untouched. Matches DateTimePickerSheet.
+      ...layout.contentColumn,
     },
     title: { fontFamily: fonts.display, color: colors.textPrimary, fontSize: fontSize.xl, marginBottom: spacing.md },
     label: { fontFamily: fonts.bodySemiBold, color: colors.textSecondary, fontSize: fontSize.sm, marginTop: spacing.sm },

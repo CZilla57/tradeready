@@ -34,7 +34,7 @@ import { normalizeInvoicePrefix } from "../utils/invoiceNumber";
 import BaseField from "../components/Field";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useSubscription } from "../context/SubscriptionContext";
 import { openManageSubscriptions } from "../utils/subscription";
 import { useTheme } from "../hooks/useTheme";
@@ -1149,7 +1149,7 @@ function Field({ multiline, colors, shadow, ...props }: FieldProps) {
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: spacing.md, paddingBottom: 60 },
+    scroll: { padding: spacing.md, paddingBottom: 60, ...layout.contentColumn },
     card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.sm, ...shadow.card },
     fieldGroup: { marginBottom: spacing.sm },
     fieldLabel: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: 5 },
@@ -1195,7 +1195,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     deleteAccountBtn: { marginTop: spacing.sm, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, backgroundColor: colors.danger },
     deleteAccountText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.md },
     modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
-    modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, ...shadow.card },
+    // Centred alert-style card (the backdrop insets it with `padding`, not a
+    // margin, so the column token composes safely here). Keeps the card from
+    // spanning the full iPad window; a no-op below 700pt.
+    modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, ...shadow.card, ...layout.contentColumn },
     modalTitle: { fontFamily: fonts.display, fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: spacing.sm },
     modalBody: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
     modalBtnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 12, marginTop: spacing.md },

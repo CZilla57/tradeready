@@ -27,7 +27,7 @@ import { fastForwardedNextDueDate } from "../utils/recurringInvoices";
 import { Badge, EmptyState } from "../components/UI";
 import { Fab } from "../components/Fab";
 import { formatMoney } from "../utils/format";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -177,7 +177,7 @@ export default function RecurringInvoicesScreen({ navigation }: InvoiceStackScre
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    list: { padding: spacing.md, paddingBottom: 120 },
+    list: { padding: spacing.md, paddingBottom: 120, ...layout.contentColumn },
     ruleCard: {
       backgroundColor: colors.surface,
       borderRadius: radius.md,

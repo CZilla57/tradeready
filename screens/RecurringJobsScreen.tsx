@@ -11,7 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
 import { Badge, EmptyState } from "../components/UI";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useRefresh } from "../hooks/useRefresh";
@@ -145,7 +145,7 @@ export default function RecurringJobsScreen({ navigation }: JobStackScreenProps<
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    list: { padding: spacing.md, paddingBottom: 40 },
+    list: { padding: spacing.md, paddingBottom: 40, ...layout.contentColumn },
     ruleCard: {
       backgroundColor: colors.surface,
       borderRadius: radius.md,

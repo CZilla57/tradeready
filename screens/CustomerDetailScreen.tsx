@@ -20,7 +20,7 @@ import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../
 import { isArchived, withArchived } from '../utils/archive';
 import { performCustomerMerge } from '../utils/customerMerge';
 import { useUndo } from '../context/UndoContext';
-import { spacing, radius, fontSize, fonts } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
@@ -360,7 +360,7 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
         {/* Hero: avatar + name + quick actions */}
         <View style={styles.hero}>
@@ -584,6 +584,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  scrollContent: {
+    ...layout.contentColumn,
   },
 
   // Hero
@@ -844,6 +847,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     padding: spacing.md,
     maxHeight: '70%',
     ...shadow.card,
+    // Keeps the sheet from spanning the full iPad window; a no-op below
+    // 700pt, so phone widths are untouched. Matches DateTimePickerSheet.
+    ...layout.contentColumn,
   },
   mergeTitle: {
     fontFamily: fonts.bodySemiBold,

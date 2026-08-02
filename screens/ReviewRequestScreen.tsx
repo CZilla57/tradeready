@@ -18,7 +18,7 @@ import {
   markReviewRequestSent,
 } from "../utils/reviewRequest";
 import { Button, Card, Divider, EmptyState } from "../components/UI";
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Settings } from "../types/models";
 import { track } from '../utils/analytics';
@@ -263,7 +263,7 @@ export default function ReviewRequestScreen({
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: spacing.md, paddingBottom: 40 },
+    scroll: { padding: spacing.md, paddingBottom: 40, ...layout.contentColumn },
     headerCard: { marginBottom: spacing.sm },
     customerName: {
       fontFamily: fonts.bodySemiBold,

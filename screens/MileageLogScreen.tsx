@@ -3,7 +3,7 @@ import { View, Text, FlatList, TouchableOpacity, ScrollView, StyleSheet } from '
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { spacing, radius, fontSize, fonts } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
@@ -61,12 +61,14 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
         ))}
       </ScrollView>
 
-      <View style={styles.summaryCard}>
-        <Text style={styles.summaryLabel}>Estimated deduction</Text>
-        <Text style={styles.summaryAmount}>{formatMoney(summary.deduction)}</Text>
-        <Text style={styles.summarySub}>
-          {formatMiles(summary.totalMiles)} · {summary.tripCount} trip{summary.tripCount === 1 ? '' : 's'} · {formatMoney(rate)}/mi
-        </Text>
+      <View style={styles.summaryCardColumn}>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryLabel}>Estimated deduction</Text>
+          <Text style={styles.summaryAmount}>{formatMoney(summary.deduction)}</Text>
+          <Text style={styles.summarySub}>
+            {formatMiles(summary.totalMiles)} · {summary.tripCount} trip{summary.tripCount === 1 ? '' : 's'} · {formatMoney(rate)}/mi
+          </Text>
+        </View>
       </View>
 
       <FlatList
@@ -116,17 +118,21 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    filterScroll: { paddingLeft: spacing.lg, marginTop: spacing.md, marginBottom: spacing.sm, maxHeight: 44 },
+    filterScroll: { paddingLeft: spacing.lg, marginTop: spacing.md, marginBottom: spacing.sm, maxHeight: 44, ...layout.contentColumn },
     filterScrollContent: { paddingRight: spacing.lg, gap: spacing.sm, alignItems: 'flex-start' as const },
     filterChip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radius.full, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, marginRight: spacing.sm },
     filterChipActive: { backgroundColor: colors.accentBg, borderColor: colors.accent },
     filterChipText: { fontFamily: fonts.bodyMedium, color: colors.textSecondary, fontSize: fontSize.sm },
     filterChipTextActive: { fontFamily: fonts.bodySemiBold, color: colors.accent },
+    // Bordered/filled card: its horizontal inset must stay a margin, so the
+    // column token goes on a plain wrapper. Spreading it onto the card itself
+    // would cancel `marginHorizontal` on phone (see `layout.contentColumn`).
+    summaryCardColumn: { ...layout.contentColumn },
     summaryCard: { marginHorizontal: spacing.lg, marginBottom: spacing.md, backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
     summaryLabel: { fontFamily: fonts.mono, color: colors.textSecondary, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
     summaryAmount: { fontFamily: fonts.display, color: colors.accent, fontSize: fontSize.xxl, marginTop: spacing.xs, fontVariant: ['tabular-nums'] },
     summarySub: { fontFamily: fonts.mono, color: colors.textSecondary, fontSize: 10, marginTop: spacing.xs },
-    list: { paddingHorizontal: spacing.lg },
+    list: { paddingHorizontal: spacing.lg, ...layout.contentColumn },
     row: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginBottom: spacing.sm },
     rowRoute: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md },
     rowMeta: { fontFamily: fonts.mono, color: colors.textSecondary, fontSize: 11, marginTop: 3 },

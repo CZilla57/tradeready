@@ -34,7 +34,7 @@ import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
 import { Button, Card, Divider } from "../components/UI";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useUndo } from "../context/UndoContext";
@@ -988,7 +988,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: spacing.md, paddingBottom: 40 },
+    scroll: { padding: spacing.md, paddingBottom: 40, ...layout.contentColumn },
 
     centered: { justifyContent: "center", alignItems: "center", padding: spacing.md },
 
@@ -1133,7 +1133,16 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       justifyContent: "center",
       alignItems: "center",
     },
-    viewerImage: { width: "100%", height: "80%" },
+    // The viewer Image uses contentFit="contain", so it letterboxes itself
+    // inside whatever box this style gives it — the box should therefore be
+    // the whole viewport on BOTH axes and let containment do the fitting.
+    // The old `height: "80%"` was a portrait-tuned constant: in portrait the
+    // scarce axis is width (so the cap cost nothing), but in landscape height
+    // is the scarce axis and the cap threw away 20% of it while width stayed
+    // at 100%. Phone portrait is unaffected for ordinary photos — anything
+    // with an aspect ratio wider than the viewport's own is width-limited, so
+    // its rendered size never depended on the box height.
+    viewerImage: { width: "100%", height: "100%" },
     viewerClose: {
       position: "absolute",
       top: 56,

@@ -38,7 +38,7 @@ import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { Button, Card, Divider } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Job, Customer, Settings, PricebookEntry } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
@@ -763,12 +763,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       flexDirection: "row", padding: spacing.sm, gap: spacing.sm,
       backgroundColor: colors.surface,
       borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
+      ...layout.contentColumn,
     },
     tab: { flex: 1, paddingVertical: 8, borderRadius: radius.md, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6, backgroundColor: colors.background },
     tabActive: { backgroundColor: colors.accent },
     tabText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.textSecondary },
     tabTextActive: { fontFamily: fonts.bodySemiBold, color: colors.textOnAccent },
-    scroll: { padding: spacing.md, paddingBottom: 60 },
+    scroll: { padding: spacing.md, paddingBottom: 60, ...layout.contentColumn },
     priceCard: { alignItems: "center", paddingVertical: spacing.lg, marginBottom: spacing.sm, backgroundColor: colors.accent },
     priceLabel: { fontFamily: fonts.mono, fontSize: 10, color: "rgba(255,255,255,0.8)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 },
     priceMain: { fontFamily: fonts.display, fontSize: 40, color: colors.textOnAccent, fontVariant: ["tabular-nums"] },

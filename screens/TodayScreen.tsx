@@ -12,7 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { spacing, radius, fontSize, fonts } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useRefresh } from '../hooks/useRefresh';
@@ -689,6 +689,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     scrollContent: {
       flexGrow: 1,
+      ...layout.contentColumn,
     },
 
     // Header

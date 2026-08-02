@@ -24,7 +24,7 @@ import {
 } from '../utils/duplicateCustomers';
 import { SearchField } from '../components/SearchField';
 import { Fab } from '../components/Fab';
-import { spacing, radius, fontSize, fonts } from '../utils/theme';
+import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { formatMoney } from '../utils/format';
 import { useTheme } from '../hooks/useTheme';
@@ -208,31 +208,33 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
       </View>
 
       {currentPair && !showArchived && (
-        <View style={styles.dupBanner} accessibilityRole="alert">
-          <View style={styles.dupTextBlock}>
-            <Text style={styles.dupTitle} maxFontSizeMultiplier={1.4}>
-              Possible duplicate{duplicatePairs.length > 1 ? `s (${duplicatePairs.length})` : ''}
-            </Text>
-            <Text style={styles.dupNames} numberOfLines={2} maxFontSizeMultiplier={1.4}>
-              “{currentPair.a.name}” and “{currentPair.b.name}” share the same {currentPair.reason === 'name' ? 'name' : currentPair.reason === 'phone' ? 'phone number' : 'email'}.
-            </Text>
+        <View style={styles.dupBannerColumn}>
+          <View style={styles.dupBanner} accessibilityRole="alert">
+            <View style={styles.dupTextBlock}>
+              <Text style={styles.dupTitle} maxFontSizeMultiplier={1.4}>
+                Possible duplicate{duplicatePairs.length > 1 ? `s (${duplicatePairs.length})` : ''}
+              </Text>
+              <Text style={styles.dupNames} numberOfLines={2} maxFontSizeMultiplier={1.4}>
+                “{currentPair.a.name}” and “{currentPair.b.name}” share the same {currentPair.reason === 'name' ? 'name' : currentPair.reason === 'phone' ? 'phone number' : 'email'}.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.dupBtn}
+              onPress={() => dismissCurrentPair(currentPair)}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss this duplicate suggestion"
+            >
+              <Text style={styles.dupBtnText}>Dismiss</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dupBtn, styles.dupBtnPrimary]}
+              onPress={() => reviewPair(currentPair)}
+              accessibilityRole="button"
+              accessibilityLabel={`Review duplicate: ${currentPair.a.name} and ${currentPair.b.name}`}
+            >
+              <Text style={[styles.dupBtnText, styles.dupBtnTextPrimary]}>Review</Text>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            style={styles.dupBtn}
-            onPress={() => dismissCurrentPair(currentPair)}
-            accessibilityRole="button"
-            accessibilityLabel="Dismiss this duplicate suggestion"
-          >
-            <Text style={styles.dupBtnText}>Dismiss</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.dupBtn, styles.dupBtnPrimary]}
-            onPress={() => reviewPair(currentPair)}
-            accessibilityRole="button"
-            accessibilityLabel={`Review duplicate: ${currentPair.a.name} and ${currentPair.b.name}`}
-          >
-            <Text style={[styles.dupBtnText, styles.dupBtnTextPrimary]}>Review</Text>
-          </TouchableOpacity>
         </View>
       )}
 
@@ -294,6 +296,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     backgroundColor: colors.background,
   },
 
+  // The banner is a filled, rounded box, so its horizontal inset must stay a
+  // margin (padding would push the fill to the screen edges). The column token
+  // therefore lives on a plain wrapper instead — spreading it here would cancel
+  // `marginHorizontal` on phone (see the note on `layout.contentColumn`).
+  dupBannerColumn: {
+    ...layout.contentColumn,
+  },
   dupBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -342,6 +351,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     minHeight: 40,
+    ...layout.contentColumn,
   },
   archiveToggleText: {
     fontFamily: fonts.bodyMedium,
@@ -357,6 +367,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
     paddingBottom: spacing.md,
+    ...layout.contentColumn,
   },
   headerTitle: {
     fontFamily: fonts.display,
@@ -371,15 +382,20 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginTop: 3,
   },
   // Search
+  // Transparent wrapper (no fill, no border), so the horizontal inset is
+  // padding rather than margin: pixel-identical on phone, and unlike a margin
+  // it composes with the column token's `width: "100%"`.
   searchRow: {
-    marginHorizontal: spacing.md,
+    paddingHorizontal: spacing.md,
     marginBottom: spacing.md,
+    ...layout.contentColumn,
   },
 
   // List
   listContent: {
     paddingHorizontal: spacing.md,
     paddingBottom: 100,
+    ...layout.contentColumn,
   },
   separator: {
     height: 1,

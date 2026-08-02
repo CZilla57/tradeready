@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadCustomers, saveCustomers, loadInvoices, saveInvoices, backfillInvoiceContacts } from "../utils/storage";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
 import Field from "../components/Field";
@@ -339,7 +339,7 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  scroll:    { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160 },
+  scroll:    { padding: spacing.md, paddingTop: spacing.lg, paddingBottom: 160, ...layout.contentColumn },
 
   fieldGroup:  { marginBottom: spacing.md },
   label: {

@@ -20,7 +20,7 @@ import { sendGroqMessage, sendClaudeMessage, sendBackendGroqMessage } from "../u
 import { getBusinessSnapshot } from "../utils/businessSnapshot";
 import { formatChatText } from "../utils/chatMarkdown";
 import { TRADE_TYPES, getTradeNickname } from "../utils/pricingEngine";
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { Ionicons } from "@expo/vector-icons";
@@ -314,7 +314,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     flex: { flex: 1 },
-    emptyWrap: { flex: 1, padding: spacing.lg, paddingTop: 48, alignItems: "center" },
+    // The empty state is a SIBLING of the FlatList, not a cell inside it, so
+    // it needs its own column or the zero-message screen spans the full iPad
+    // width while the populated one sits at 700pt.
+    emptyWrap: { flex: 1, padding: spacing.lg, paddingTop: 48, alignItems: "center", ...layout.contentColumn },
     emptyTitle: { fontFamily: fonts.display, fontSize: fontSize.xl, color: colors.textPrimary, marginBottom: spacing.sm },
     emptySubtitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: spacing.xl },
     quickGrid: { width: "100%", gap: spacing.sm },
@@ -322,7 +325,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     quickBtnInner: { flexDirection: "row", alignItems: "center" },
     quickBtnIcon: { marginRight: spacing.sm },
     quickBtnText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.accent },
-    listContent: { padding: spacing.md, paddingBottom: spacing.sm },
+    listContent: { padding: spacing.md, paddingBottom: spacing.sm, ...layout.contentColumn },
     bubbleRow: { marginBottom: spacing.sm, flexDirection: "row" },
     bubbleRowUser: { justifyContent: "flex-end" },
     bubbleRowAI: { justifyContent: "flex-start" },
@@ -334,7 +337,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     bubbleText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, lineHeight: 22 },
     userText: { color: "#fff" },
     aiText: { color: colors.textPrimary },
-    inputRow: { flexDirection: "row", alignItems: "flex-end", gap: spacing.sm, padding: spacing.sm, paddingBottom: spacing.md, backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+    inputRow: { flexDirection: "row", alignItems: "flex-end", gap: spacing.sm, padding: spacing.sm, paddingBottom: spacing.md, backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, ...layout.contentColumn },
     textInput: { fontFamily: fonts.bodyRegular, flex: 1, backgroundColor: colors.background, borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingTop: 10, paddingBottom: 10, fontSize: fontSize.md, color: colors.textPrimary, maxHeight: 120, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
     sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" },
     sendBtnDisabled: { backgroundColor: colors.border },
