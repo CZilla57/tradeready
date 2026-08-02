@@ -599,3 +599,164 @@ Keyboard (11 screens / 12 KAV instances, plus the Done bar):
 - [ ] `ChatScreen` specifically — the only screen with a `keyboardVerticalOffset`; check the composer in both orientations and after rotating with the keyboard up.
 - [ ] `SettingsScreen`'s delete-account modal (the second KAV instance) with the keyboard up.
 - [ ] Done bar horizontal position at iPad width — cosmetic; decide then whether §4.4 warrants any work.
+
+---
+
+## Phase 7 master device-smoke checklist (consolidated — all phases)
+
+The checklist above covers **Phase 6 items only**. This section is the
+consolidated pass to run on the physical iPad once `app.json` is flipped
+(`orientation: "default"`, `supportsTablet: true`) and an EAS build is
+installed. It supersedes the plan's Phase-7 bullet list, which was written
+against the stale **26-screen** count — the verified inventory is **31
+screens** (§3).
+
+Run every section. Nothing here is provable from code or from the web
+preview (`project_web_preview_not_usable`); device smoke is owner-only.
+
+### A. All 31 screens, both orientations
+
+For each screen: rotate portrait ↔ landscape and confirm (1) content is
+capped at ~700pt and horizontally centred, (2) nothing is clipped, stretched
+edge-to-edge, or left-aligned against one edge, (3) card/list insets still
+read as insets — **not** full-bleed — which is the specific regression the
+`width:"100%"` + `marginHorizontal` cancellation would produce.
+
+Phase 3 — Auth / Onboarding / Paywall (3):
+- [ ] `AuthScreen`
+- [ ] `OnboardingScreen` (also: the pager dots and footer track the column)
+- [ ] `PaywallScreen`
+
+Phase 4 — main read/list screens (13):
+- [ ] `TodayScreen`
+- [ ] `JobsScreen` (stats row, search row, filter row, list column all agree)
+- [ ] `JobDetailScreen` (incl. the photo viewer — see the Phase 6 section)
+- [ ] `InvoicesScreen` (stats/search/filter rows, bulk bar, list)
+- [ ] `CustomersScreen` — **fixed this pass**: duplicate banner and search row
+      must be inset from the column edge, not full-bleed, in **both** phone
+      and iPad widths.
+- [ ] `CustomerDetailScreen`
+- [ ] `MoneyScreen` — **fixed this pass**: the Overview/Expenses segmented
+      control must stay inset and centred, not full-bleed.
+- [ ] `MileageLogScreen` — **fixed this pass**: the "Estimated deduction"
+      summary card must stay inset and centred.
+- [ ] `PricebookScreen` — **fixed this pass**: the search box must stay inset
+      and centred. Also note the `fab` footer bar is **knowingly uncolumned**
+      (§4.6) and still spans the full window on iPad — confirm whether that
+      is acceptable or needs the bespoke fix.
+- [ ] `RecurringJobsScreen`
+- [ ] `RouteScreen`
+- [ ] `GlobalSearchScreen`
+- [ ] `RecurringInvoicesScreen`
+
+Phase 5 — forms and remaining (15):
+- [ ] `AddJobScreen`
+- [ ] `AddInvoiceScreen`
+- [ ] `AddCustomerScreen`
+- [ ] `AddTripScreen`
+- [ ] `CreateInvoiceFromJobScreen`
+- [ ] `PricingCalculatorScreen`
+- [ ] `PricebookEntryScreen`
+- [ ] `SendEstimateScreen`
+- [ ] `OutreachScreen`
+- [ ] `ReviewRequestScreen`
+- [ ] `SettingsScreen`
+- [ ] `ChatScreen`
+- [ ] `EstimateFollowUpScreen`
+- [ ] `AddRecurringInvoiceScreen`
+- [ ] `ExportDataScreen`
+
+### B. The 9 `presentation: "modal"` registrations (7 distinct screens)
+
+On iPad these render as OS form sheets that are **already** width-constrained,
+so §3 flags the column token as possibly **redundant** on this path. Reach
+each screen via its modal route and record, per registration, whether the
+column is redundant, harmless, or actively double-insetting the content:
+
+- [ ] JobStack → `AddJob` (`AddJobScreen`)
+- [ ] JobStack → `AddCustomer` (`AddCustomerScreen`)
+- [ ] InvoiceStack → `AddInvoice` (`AddInvoiceScreen`)
+- [ ] InvoiceStack → `AddRecurringInvoice` (`AddRecurringInvoiceScreen`)
+- [ ] CustomerStack → `AddCustomer` (`AddCustomerScreen`)
+- [ ] CustomerStack → `AddInvoice` (`AddInvoiceScreen`)
+- [ ] MoneyStack → `AddTrip` (`AddTripScreen`)
+- [ ] MoneyStack → `ExportData` (`ExportDataScreen`)
+- [ ] RootStack → `PaywallModal` (`PaywallScreen`)
+- [ ] `PaywallScreen` again via the **non-modal hard-gate** `Paywall` route —
+      same component, no `presentation` option, so the column is *not*
+      redundant there. Both paths must be checked (§2 row 21).
+
+### C. Bottom-sheet / dialog class (columned in the final review pass)
+
+Each of these now spreads `layout.contentColumn` on its sheet container, so on
+iPad it should be a centred ≤700pt sheet with visible rounded top corners
+against the dimmed backdrop, exactly like `DateTimePickerSheet`. On phone each
+must be **unchanged**. Verify open, scroll, dismiss (swipe/backdrop/close as
+applicable), and the primary action for each:
+
+- [ ] `components/DateTimePickerSheet.tsx` (Phase 6 — already covered above)
+- [ ] `components/money/AddExpenseModal.tsx` — incl. the pan-to-dismiss handle
+      and the iOS over-scroll dismiss
+- [ ] `components/PricebookPickerModal.tsx` — incl. the search row and the
+      replace/add confirmation buttons
+- [ ] `components/RecordPaymentSheet.tsx`
+- [ ] `components/money/TaxSettingsModal.tsx`
+- [ ] `InvoicesScreen` invoice-detail sheet (`modalSheet`)
+- [ ] `CustomerDetailScreen` merge-target picker (`mergeSheet`)
+- [ ] `SettingsScreen` delete-account dialog (`modalCard`) — centred alert
+      style, not bottom-anchored; check it with the keyboard up (see the
+      keyboard section above)
+
+### D. iPhone-landscape sanity pass (unaudited surface)
+
+`orientation: "portrait" → "default"` enables landscape on **iPhone**
+app-wide, not just iPad. Nothing in this audit examined iPhone landscape; it
+is an unaudited surface and **the owner's call whether to ship it or pin
+iPhone back to portrait**. Minimum sanity pass on a physical iPhone:
+
+- [ ] Today, Jobs, Invoices, Customers, Money in landscape — headers, stats
+      rows, and lists readable, nothing clipped by the notch/Dynamic Island.
+- [ ] One long form (`AddJobScreen`) in landscape with the keyboard up.
+- [ ] One bottom sheet (`AddExpenseModal`) in landscape — the sheet's
+      `maxHeight` percentages are the risk here.
+- [ ] `DateTimePickerSheet` `mode:"date"` in landscape — Done reachable, the
+      calendar scrolls (already flagged in the Phase 6 list).
+- [ ] `ChatScreen` composer in landscape with the keyboard up.
+- [ ] Decision recorded: keep `default` app-wide, or restrict iPhone to
+      portrait.
+
+### E. App Review trio (from the plan's Phase 7)
+
+These are the three items from the 2026-07-24 rejection and are **not**
+layout items — they must pass on the iPad build before resubmission:
+
+- [ ] Paywall loads RevenueCat offerings (no empty/error state).
+- [ ] **Manage Subscription** opens the system subscription management sheet.
+- [ ] The **expired-subscription demo account** behaves correctly (gate shows,
+      restore path works).
+
+### F. Rotation mid-flow
+
+- [ ] One **form** screen: start filling `AddJobScreen`, rotate mid-entry,
+      confirm no data loss, no scroll jump, and the column re-centres.
+- [ ] One **modal/sheet**: open `AddExpenseModal`, rotate while open, confirm
+      it re-centres, does not exceed its `maxHeight`, and still dismisses.
+
+### G. RevenueCat paths Expo Go could not exercise
+
+Phases 2–6 ran in Expo Go, where the native purchase flows are unavailable
+(`project_expo_go_revenuecat_truth`). On the EAS iPad build:
+
+- [ ] Purchase flow end-to-end (sandbox account).
+- [ ] **Restore purchases**.
+- [ ] Entitlement `TradeReady Pro` grants access and the gate lifts.
+- [ ] Sign out / sign back in with an active entitlement.
+- [ ] Paywall presented on the iPad form-sheet path *and* the hard-gate path
+      (see section B).
+
+### Exit
+
+- [ ] Gate green (`typecheck` 0 / all tests / `lint` 0) before the build.
+- [ ] Smoke results written up here, including the §4.6 `fab` decision and the
+      section-D iPhone-landscape decision.
+- [ ] **STOP** → owner decides on submission as build 7.
