@@ -1,19 +1,12 @@
 import type { Invoice } from "../types/models";
 import { collectedInRange } from "./invoicePayments";
+import { parseLocalDate } from "./moneyUtils";
 
 export interface CustomerMixResult {
   newCount: number;
   newRevenue: number;
   returningCount: number;
   returningRevenue: number;
-}
-
-function parseLocalDate(dateString: string): Date {
-  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
-  if (dateOnly) {
-    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
-  }
-  return new Date(dateString);
 }
 
 export function computeCustomerMix(
