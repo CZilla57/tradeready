@@ -938,6 +938,13 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           />
         )}
 
+        <Button
+          label="Duplicate job"
+          variant="secondary"
+          onPress={() => navigation.navigate("AddJob", { duplicateFromJobId: job.id })}
+          style={{ marginBottom: spacing.sm }}
+        />
+
         <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} accessibilityRole="button" accessibilityLabel="Delete job">
           <Text style={styles.deleteBtnText}>Delete job</Text>
         </TouchableOpacity>

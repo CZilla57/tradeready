@@ -36,7 +36,7 @@ export type TodayStackParamList = {
 export type JobStackParamList = {
   JobList: undefined;
   JobDetail: { jobId: string };
-  AddJob: { jobId?: string; focusSchedule?: boolean };
+  AddJob: { jobId?: string; focusSchedule?: boolean; duplicateFromJobId?: string };
   PricingCalculator: { jobId: string };
   CreateInvoiceFromJob: { jobId: string };
   SendEstimate: { jobId: string };

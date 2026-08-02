@@ -20,6 +20,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, getOrCreateCustomer, loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
 import { advanceStatusForSchedule } from "../utils/jobStatus";
+import { buildDuplicatePrefill, buildDuplicatePricing } from "../utils/duplicateJob";
+import type { DuplicateJobPricing } from "../utils/duplicateJob";
 import { calculateNextDate } from "../utils/recurringJobs";
 import { track } from '../utils/analytics';
 import { Button } from "../components/UI";
@@ -41,8 +43,9 @@ import type { JobStackScreenProps } from "../types/navigation";
 export default function AddJobScreen({ route, navigation }: JobStackScreenProps<'AddJob'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
-  const { jobId, focusSchedule } = route.params || {};
+  const { jobId, focusSchedule, duplicateFromJobId } = route.params || {};
   const isEditing = !!jobId;
+  const isDuplicating = !isEditing && !!duplicateFromJobId;
 
   // Job fields
   const [customerId, setCustomerId] = useState<string>("");
@@ -72,12 +75,15 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
   const [endDate, setEndDate] = useState<string>('');
   const [showEndDatePicker, setShowEndDatePicker] = useState<boolean>(false);
   const [existingRecurringJob, setExistingRecurringJob] = useState<RecurringJob | null>(null);
+  // Pricing carried from the source job when duplicating — AddJob has no
+  // pricing UI, so this rides along invisibly and lands on the new job at save.
+  const [duplicatePricing, setDuplicatePricing] = useState<DuplicateJobPricing | null>(null);
 
   const scrollRef = useRef<any>(null);
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      title: isEditing ? "Edit Job" : "New Job",
+      title: isEditing ? "Edit Job" : isDuplicating ? "Duplicate Job" : "New Job",
       headerLeft: () => (
         <TouchableOpacity
           onPress={() => navigation.goBack()}
@@ -89,7 +95,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
         </TouchableOpacity>
       ),
     });
-  }, [navigation, isEditing, colors.accent]);
+  }, [navigation, isEditing, isDuplicating, colors.accent]);
 
   useEffect(() => {
     async function load() {
@@ -122,6 +128,23 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
             }
           }
         }
+      } else if (duplicateFromJobId) {
+        // Duplicate path: prefill descriptive fields from the source job and
+        // carry its pricing for save. Schedule is deliberately left blank —
+        // the duplicate is new work to be scheduled fresh.
+        const source = jobs.find((x) => x.id === duplicateFromJobId);
+        if (source) {
+          const prefill = buildDuplicatePrefill(source);
+          setCustomerId(prefill.customerId);
+          setCustomerName(prefill.customerName);
+          setTitle(prefill.title);
+          setDescription(prefill.description);
+          setAddress(prefill.address);
+          setNotes(prefill.notes);
+          const pricing = buildDuplicatePricing(source);
+          setDuplicatePricing(pricing);
+          setLaborHours(pricing.laborHours);
+        }
       }
       // If coming from "Schedule this job" shortcut, scroll to schedule section
       if (focusSchedule) {
@@ -129,7 +152,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
       }
     }
     load();
-  }, [jobId, isEditing, focusSchedule]);
+  }, [jobId, isEditing, focusSchedule, duplicateFromJobId]);
 
   function dateObjFromStr(str: string): Date {
     if (!str) return new Date();
@@ -308,6 +331,18 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
         const startDate = jobData.scheduledDate || today;
         const newJobId = `j${Date.now()}`;
 
+        // Duplicates carry the source job's priced estimate; plain new jobs
+        // start unpriced with the business defaults from Settings.
+        const pricing = duplicatePricing ?? {
+          estimateTotal: 0,
+          laborHours: 0,
+          laborRate: settings.laborRate ?? 85,
+          materials: [],
+          materialMarkup: settings.materialMarkup ?? 20,
+          overhead: settings.overheadPercent ?? 15,
+          margin: settings.marginPercent ?? 20,
+        };
+
         if (isRecurring) {
           const newRuleId = `rj_${Date.now()}`;
           const recurringJob: RecurringJob = {
@@ -318,13 +353,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
             description: jobData.description,
             address: jobData.address,
             notes: jobData.notes,
-            estimateTotal: 0,
-            laborHours: 0,
-            laborRate: settings.laborRate ?? 85,
-            materials: [],
-            materialMarkup: settings.materialMarkup ?? 20,
-            overhead: settings.overheadPercent ?? 15,
-            margin: settings.marginPercent ?? 20,
+            ...pricing,
             cadence,
             endCondition,
             endCount: endCondition === 'count' ? (parseInt(endCount) || 1) : undefined,
@@ -341,13 +370,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
           const newJob = {
             id: newJobId,
             status: 'lead',
-            estimateTotal: 0,
-            laborHours: 0,
-            laborRate: settings.laborRate ?? 85,
-            materials: [],
-            materialMarkup: settings.materialMarkup ?? 20,
-            overhead: settings.overheadPercent ?? 15,
-            margin: settings.marginPercent ?? 20,
+            ...pricing,
             invoiceId: null,
             createdAt: today,
             recurringJobId: newRuleId,
@@ -359,13 +382,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
           const newJob = {
             id: newJobId,
             status: 'lead',
-            estimateTotal: 0,
-            laborHours: 0,
-            laborRate: settings.laborRate ?? 85,
-            materials: [],
-            materialMarkup: settings.materialMarkup ?? 20,
-            overhead: settings.overheadPercent ?? 15,
-            margin: settings.marginPercent ?? 20,
+            ...pricing,
             invoiceId: null,
             createdAt: today,
             ...jobData,
@@ -377,7 +394,7 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
       await saveJobs(updatedJobs);
       setSaving(false);
       if (!isEditing) {
-        track('job_created');
+        track('job_created', isDuplicating ? { duplicated: true } : undefined);
       }
       navigation.goBack();
     }
