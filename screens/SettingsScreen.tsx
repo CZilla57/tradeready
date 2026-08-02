@@ -1195,7 +1195,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     deleteAccountBtn: { marginTop: spacing.sm, paddingVertical: 14, alignItems: "center", borderRadius: radius.md, backgroundColor: colors.danger },
     deleteAccountText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.md },
     modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
-    modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, ...shadow.card },
+    // Centred alert-style card (the backdrop insets it with `padding`, not a
+    // margin, so the column token composes safely here). Keeps the card from
+    // spanning the full iPad window; a no-op below 700pt.
+    modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, ...shadow.card, ...layout.contentColumn },
     modalTitle: { fontFamily: fonts.display, fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: spacing.sm },
     modalBody: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
     modalBtnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 12, marginTop: spacing.md },

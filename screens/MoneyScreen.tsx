@@ -217,29 +217,31 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
       </View>
 
       {/* ── Content Tabs ──────────────────────────────────────────────────── */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tabButton, activeTab === 'overview' && styles.tabButtonActive]}
-          onPress={() => setActiveTab('overview')}
-          accessibilityRole="tab"
-          accessibilityLabel="Overview"
-          accessibilityState={{ selected: activeTab === 'overview' }}
-        >
-          <Text style={[styles.tabButtonText, activeTab === 'overview' && styles.tabButtonTextActive]}>
-            Overview
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tabButton, activeTab === 'expenses' && styles.tabButtonActive]}
-          onPress={() => setActiveTab('expenses')}
-          accessibilityRole="tab"
-          accessibilityLabel="Expenses"
-          accessibilityState={{ selected: activeTab === 'expenses' }}
-        >
-          <Text style={[styles.tabButtonText, activeTab === 'expenses' && styles.tabButtonTextActive]}>
-            Expenses
-          </Text>
-        </TouchableOpacity>
+      <View style={styles.tabBarColumn}>
+        <View style={styles.tabBar}>
+          <TouchableOpacity
+            style={[styles.tabButton, activeTab === 'overview' && styles.tabButtonActive]}
+            onPress={() => setActiveTab('overview')}
+            accessibilityRole="tab"
+            accessibilityLabel="Overview"
+            accessibilityState={{ selected: activeTab === 'overview' }}
+          >
+            <Text style={[styles.tabButtonText, activeTab === 'overview' && styles.tabButtonTextActive]}>
+              Overview
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabButton, activeTab === 'expenses' && styles.tabButtonActive]}
+            onPress={() => setActiveTab('expenses')}
+            accessibilityRole="tab"
+            accessibilityLabel="Expenses"
+            accessibilityState={{ selected: activeTab === 'expenses' }}
+          >
+            <Text style={[styles.tabButtonText, activeTab === 'expenses' && styles.tabButtonTextActive]}>
+              Expenses
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ── Overview Tab ──────────────────────────────────────────────────── */}
@@ -424,6 +426,13 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
 
     // ── Content tabs (Overview / Expenses)
+    // Bordered/filled segmented control: its horizontal inset must stay a
+    // margin, so the column token goes on a plain wrapper. Spreading it onto
+    // the bar itself would cancel `marginHorizontal` on phone (see the note on
+    // `layout.contentColumn`).
+    tabBarColumn: {
+      ...layout.contentColumn,
+    },
     tabBar: {
       flexDirection: 'row',
       marginHorizontal: spacing.lg,
@@ -433,7 +442,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       padding: 3,
       borderWidth: 1,
       borderColor: colors.border,
-      ...layout.contentColumn,
     },
     tabButton: {
       flex: 1,

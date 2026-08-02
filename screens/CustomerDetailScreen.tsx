@@ -847,6 +847,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     padding: spacing.md,
     maxHeight: '70%',
     ...shadow.card,
+    // Keeps the sheet from spanning the full iPad window; a no-op below
+    // 700pt, so phone widths are untouched. Matches DateTimePickerSheet.
+    ...layout.contentColumn,
   },
   mergeTitle: {
     fontFamily: fonts.bodySemiBold,

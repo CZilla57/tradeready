@@ -144,6 +144,12 @@ export type ShadowScheme = typeof shadow;
 
 export const layout = {
   contentMaxWidth: 700,
+  // NEVER spread this into a style that also sets a horizontal margin. Yoga resolves
+  // `width: "100%"` against the parent's content box WITHOUT subtracting the child's
+  // own margins, so with `alignSelf: "center"` the symmetric overflow exactly cancels
+  // `marginHorizontal`/`marginLeft`/`marginRight` and the box paints full-bleed on
+  // phone. Convert those margins to padding (transparent wrappers), or move this token
+  // onto a plain wrapper View around the margined element (bordered/filled boxes).
   contentColumn: {
     width: "100%",
     maxWidth: 700,

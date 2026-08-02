@@ -15,7 +15,7 @@ import { DateTimePickerSheet } from "./DateTimePickerSheet";
 import { Button } from "./UI";
 import { balanceDue } from "../utils/invoicePayments";
 import { formatMoney } from "../utils/format";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { Invoice, PaymentDraft, PaymentMethod } from "../types/models";
@@ -170,6 +170,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderTopRightRadius: radius.lg,
       padding: spacing.lg,
       ...shadow.card,
+      // Keeps the sheet from spanning the full iPad window; a no-op below
+      // 700pt, so phone widths are untouched. Matches DateTimePickerSheet.
+      ...layout.contentColumn,
     },
     title: { fontFamily: fonts.display, fontSize: fontSize.lg, color: colors.textPrimary },
     sub: { fontFamily: fonts.mono, fontSize: 11, color: colors.textMuted, marginTop: 2, marginBottom: spacing.md },

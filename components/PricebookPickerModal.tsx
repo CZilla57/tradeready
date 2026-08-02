@@ -6,7 +6,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { loadPricebook } from "../utils/storage";
 import { formatQuote } from "../utils/format";
-import { spacing, radius, fontSize, fonts } from "../utils/theme";
+import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import type { PricebookEntry } from "../types/models";
@@ -209,6 +209,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       maxHeight: "80%",
       paddingBottom: spacing.xl,
       ...shadow.card,
+      // Keeps the sheet from spanning the full iPad window; a no-op below
+      // 700pt, so phone widths are untouched. Matches DateTimePickerSheet.
+      ...layout.contentColumn,
     },
     handleArea: { alignItems: "center", paddingVertical: spacing.sm },
     handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.textMuted },

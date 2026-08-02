@@ -958,6 +958,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderTopRightRadius: radius.xl,
       maxHeight: "80%",
       ...shadow.card,
+      // Keeps the sheet from spanning the full iPad window; a no-op below
+      // 700pt, so phone widths are untouched. Matches DateTimePickerSheet.
+      ...layout.contentColumn,
     },
     modalHeader: {
       alignItems: "center",

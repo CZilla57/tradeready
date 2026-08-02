@@ -21,7 +21,7 @@ import { extractReceipt } from '../../utils/receiptOCR';
 import { track } from '../../utils/analytics';
 import { DateTimePickerSheet } from '../DateTimePickerSheet';
 import { KeyboardDoneBar } from '../KeyboardDoneBar';
-import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme } from '../../utils/theme';
+import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { EXPENSE_CATEGORIES } from '../../utils/moneyUtils';
 import type { ExpenseDraft } from '../../types/models';
@@ -427,6 +427,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderTopRightRadius: radius.lg + 8,
       padding: spacing.lg,
       maxHeight: '90%',
+      // Keeps the sheet from spanning the full iPad window; a no-op below
+      // 700pt, so phone widths are untouched. Matches DateTimePickerSheet.
+      ...layout.contentColumn,
     },
     modalHandleArea: {
       paddingVertical: 14,

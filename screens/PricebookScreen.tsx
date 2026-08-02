@@ -83,21 +83,23 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
-      <View style={styles.searchRow}>
-        <Ionicons name="search" size={18} color={colors.textMuted} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search services..."
-          placeholderTextColor={colors.textMuted}
-          value={search}
-          onChangeText={setSearch}
-          returnKeyType="search"
-        />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch("")}>
-            <Ionicons name="close-circle" size={18} color={colors.textMuted} />
-          </TouchableOpacity>
-        )}
+      <View style={styles.searchRowColumn}>
+        <View style={styles.searchRow}>
+          <Ionicons name="search" size={18} color={colors.textMuted} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search services..."
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            returnKeyType="search"
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch("")}>
+              <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       <SectionList
@@ -149,6 +151,13 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
 function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
+    // Bordered/filled search box: its horizontal inset must stay a margin, so
+    // the column token goes on a plain wrapper. Spreading it onto the box
+    // itself would cancel `marginHorizontal` on phone (see the note on
+    // `layout.contentColumn`).
+    searchRowColumn: {
+      ...layout.contentColumn,
+    },
     searchRow: {
       flexDirection: "row",
       alignItems: "center",
@@ -160,7 +169,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       paddingHorizontal: spacing.md,
       borderWidth: 1,
       borderColor: colors.border,
-      ...layout.contentColumn,
     },
     searchInput: {
       fontFamily: fonts.bodyRegular,
@@ -208,9 +216,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     // NOTE (iPad Tier 1, Phase 4): audit §4.6 flags this footer bar as
     // non-mechanical — its left/right absolute offsets don't compose with
     // alignSelf:'center'+maxWidth the way a contentContainerStyle swap does.
-    // Left untouched here; a bespoke centering technique is deferred to a
-    // later phase per the audit's own guidance ("Phase 4/5 needs a bespoke
-    // centering approach for this one style").
+    // Audit §4.6 asks for a bespoke fix here ("Phase 4/5 needs a bespoke
+    // centering approach for this one style"), not for a deferral; the bespoke
+    // fix has not been designed yet, so the bar is left untouched and the work
+    // is deferred pending that design. On iPad the bar therefore still spans
+    // the full window width instead of tracking the 700pt column.
     fab: {
       position: "absolute",
       bottom: spacing.lg,
