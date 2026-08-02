@@ -16,6 +16,10 @@
 // exactly: date → inline calendar, accent-tinted, centered; time → spinner,
 // 12-hour, system-tinted. The parent owns the string↔Date conversion: it
 // passes a Date in `value` and gets a Date back in `onChange`.
+//
+// `minuteInterval` (optional, time mode) snaps selection to that many minutes
+// on both platforms; the incoming value is pre-rounded via
+// roundToMinuteInterval so stored odd times (9:37) don't confuse the spinner.
 
 import React, { useMemo } from "react";
 import {
@@ -33,6 +37,10 @@ import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 
+/** Mirrors the non-exported MinuteInterval union in
+ * @react-native-community/datetimepicker's index.d.ts. */
+type MinuteInterval = 1 | 2 | 3 | 4 | 5 | 6 | 10 | 12 | 15 | 20 | 30;
+
 type DateTimePickerSheetProps = {
   visible: boolean;
   mode: "date" | "time";
@@ -40,7 +48,25 @@ type DateTimePickerSheetProps = {
   title: string;
   onChange: (date: Date) => void;
   onClose: () => void;
+  /** Snap time selection to this many minutes (time mode only). */
+  minuteInterval?: MinuteInterval;
 };
+
+/**
+ * Round a Date's time-of-day to the nearest interval multiple (hour carry,
+ * clamped so 23:59 never rolls into the next day). Exported for tests and
+ * used to pre-round incoming picker values.
+ */
+export function roundToMinuteInterval(value: Date, minuteInterval?: number): Date {
+  if (!minuteInterval || minuteInterval <= 1) return value;
+  let total =
+    Math.round((value.getHours() * 60 + value.getMinutes()) / minuteInterval) *
+    minuteInterval;
+  if (total >= 24 * 60) total = 24 * 60 - minuteInterval;
+  const rounded = new Date(value);
+  rounded.setHours(Math.floor(total / 60), total % 60, 0, 0);
+  return rounded;
+}
 
 export function DateTimePickerSheet({
   visible,
@@ -49,6 +75,7 @@ export function DateTimePickerSheet({
   title,
   onChange,
   onClose,
+  minuteInterval,
 }: DateTimePickerSheetProps) {
   const { colors, shadow, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
@@ -56,6 +83,7 @@ export function DateTimePickerSheet({
   if (!visible) return null;
 
   const isDate = mode === "date";
+  const pickerValue = isDate ? value : roundToMinuteInterval(value, minuteInterval);
 
   if (Platform.OS === "ios") {
     return (
@@ -66,7 +94,7 @@ export function DateTimePickerSheet({
               <Text style={styles.title}>{title}</Text>
               <TouchableOpacity
                 onPress={() => {
-                  onChange(value);
+                  onChange(pickerValue);
                   onClose();
                 }}
                 accessibilityRole="button"
@@ -77,11 +105,12 @@ export function DateTimePickerSheet({
             </View>
             <DateTimePicker
               themeVariant={isDark ? "dark" : "light"}
-              value={value}
+              value={pickerValue}
               mode={mode}
               display={isDate ? "inline" : "spinner"}
               is24Hour={false}
               accentColor={isDate ? colors.accent : undefined}
+              minuteInterval={minuteInterval}
               onChange={(_, d) => {
                 if (d) onChange(d);
               }}
@@ -96,10 +125,11 @@ export function DateTimePickerSheet({
   return (
     <DateTimePicker
       themeVariant={isDark ? "dark" : "light"}
-      value={value}
+      value={pickerValue}
       mode={mode}
       display="default"
       is24Hour={false}
+      minuteInterval={minuteInterval}
       onChange={(event: DateTimePickerEvent, d?: Date) => {
         onClose();
         if (event.type === "set" && d) onChange(d);
