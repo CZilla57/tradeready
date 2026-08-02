@@ -50,6 +50,7 @@ import {
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { useUndo } from "../context/UndoContext";
 import { useRefresh } from "../hooks/useRefresh";
 import type { Invoice, Settings, PaymentDraft } from "../types/models";
 import type { InvoiceStackScreenProps } from "../types/navigation";
@@ -77,6 +78,7 @@ function matchesStatusFilter(inv: Invoice, key: StatusFilterKey): boolean {
 export default function InvoicesScreen({ navigation, route }: InvoiceStackScreenProps<'InvoiceList'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const { showUndo } = useUndo();
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [search, setSearch] = useState<string>("");
@@ -133,17 +135,29 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
   }
 
   function confirmDeleteInvoice(id: string, onSuccess?: () => void) {
-    Alert.alert("Delete invoice?", "This cannot be undone.", [
+    Alert.alert("Delete invoice?", "You can undo for a few seconds after deleting.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
+          const deleted = invoices.find((i) => i.id === id);
           const updated = invoices.filter((i) => i.id !== id);
           setInvoices(updated);
           await saveInvoices(updated);
           syncNotifications();
           onSuccess?.();
+          if (deleted) {
+            showUndo("Invoice deleted", async () => {
+              const current = await loadInvoices();
+              if (!current.some((i) => i.id === deleted.id)) {
+                const restored = [...current, deleted];
+                setInvoices(restored);
+                await saveInvoices(restored);
+                syncNotifications();
+              }
+            });
+          }
         },
       },
     ]);

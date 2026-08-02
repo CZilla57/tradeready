@@ -37,6 +37,7 @@ import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, fonts } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
+import { useUndo } from "../context/UndoContext";
 import type { Job, Customer, JobStatus } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
@@ -645,6 +646,7 @@ function ReviewRequestAction({ job, reviewSent, navigation }: { job: Job; review
 export default function JobDetailScreen({ route, navigation }: JobStackScreenProps<'JobDetail'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const { showUndo } = useUndo();
 
   const { jobId } = route.params;
 
@@ -748,15 +750,24 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
   }
 
   async function handleDelete() {
-    Alert.alert("Delete job?", "This cannot be undone.", [
+    Alert.alert("Delete job?", "You can undo for a few seconds after deleting.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
           const jobs = await loadJobs();
+          const deleted = jobs.find((j: Job) => j.id === jobId);
           await saveJobs(jobs.filter((j: Job) => j.id !== jobId));
           navigation.goBack();
+          if (deleted) {
+            showUndo("Job deleted", async () => {
+              const current = await loadJobs();
+              if (!current.some((j) => j.id === deleted.id)) {
+                await saveJobs([...current, deleted]);
+              }
+            });
+          }
         },
       },
     ]);

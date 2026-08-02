@@ -4,6 +4,7 @@ import type { Invoice, Expense, Job, ExpenseDraft } from '../types/models';
 import { loadInvoices, loadExpenses, saveExpenses, loadJobs } from '../utils/storage';
 import { generateExpenseId } from '../utils/moneyUtils';
 import { track, reportError } from '../utils/analytics';
+import { useUndo } from '../context/UndoContext';
 
 interface UseMoneyDataReturn {
   invoices: Invoice[];
@@ -16,6 +17,7 @@ interface UseMoneyDataReturn {
 }
 
 export function useMoneyData(): UseMoneyDataReturn {
+  const { showUndo } = useUndo();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [jobs, setJobs]         = useState<Job[]>([]);
@@ -90,12 +92,21 @@ export function useMoneyData(): UseMoneyDataReturn {
   }, [persistExpenses]);
 
   const handleDeleteExpense = useCallback((id: string) => {
-    setExpenses(prev => {
-      const updated = prev.filter(e => e.id !== id);
-      persistExpenses(updated);
-      return updated;
-    });
-  }, [persistExpenses]);
+    const deleted = expenses.find(e => e.id === id);
+    const updated = expenses.filter(e => e.id !== id);
+    setExpenses(updated);
+    persistExpenses(updated);
+    if (deleted) {
+      showUndo('Expense deleted', async () => {
+        const current = await loadExpenses();
+        if (!current.some(e => e.id === deleted.id)) {
+          const restored = [deleted, ...current];
+          setExpenses(restored);
+          await persistExpenses(restored);
+        }
+      });
+    }
+  }, [expenses, persistExpenses, showUndo]);
 
   return {
     invoices,

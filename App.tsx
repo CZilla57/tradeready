@@ -10,6 +10,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { SubscriptionProvider, useSubscription } from "./context/SubscriptionContext";
 import { ThemeProvider, useThemeContext } from "./context/ThemeContext";
 import { SyncStatusProvider } from "./context/SyncStatusContext";
+import { UndoProvider } from "./context/UndoContext";
 import { SyncBanner } from "./components/SyncBanner";
 import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
@@ -649,11 +650,13 @@ function AppRoot() {
         <ThemeProvider>
           <FontGate>
             <SyncStatusProvider>
-              <AuthProvider>
-                <SubscriptionProvider>
-                  <RootNavigator />
-                </SubscriptionProvider>
-              </AuthProvider>
+              <UndoProvider>
+                <AuthProvider>
+                  <SubscriptionProvider>
+                    <RootNavigator />
+                  </SubscriptionProvider>
+                </AuthProvider>
+              </UndoProvider>
               <SyncBanner />
               <FontScaleWatcher />
             </SyncStatusProvider>
