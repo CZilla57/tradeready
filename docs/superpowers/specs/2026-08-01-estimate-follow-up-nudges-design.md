@@ -43,13 +43,16 @@ migration; follow the safe-shape-change recipe in `tradeready-storage-and-sync`
 during planning.
 
 - **`Job.estimateSentAt?: DateString`** — local-frame `"YYYY-MM-DD"` stamp of
-  the most recent estimate send. Written at all THREE send paths:
+  the most recent estimate send. Written at all FOUR send paths:
   1. `SendEstimateScreen.markAsSent()` (manual "Mark as sent" — today writes no
      timestamp at all);
   2. `utils/estimateApprovalLink.ts` (~line 71) where the approval-link send
      sets `status: "estimate_sent"`;
   3. `JobDetailScreen` (~line 755) where the re-send path resets a decided
      approval back to `estimate_sent`.
+  4. `PricingCalculatorScreen.markEstimateSent()` — the calculator's email-send
+     path and its "Mark as sent" button (found in Task-3 review; the original
+     spec under-enumerated the send paths).
   Re-stamping on re-send is deliberate: it re-arms the one-shot nudge.
 - **`Settings.estimateFollowUpsEnabled?: boolean`** — Settings toggle.
   `defaultSettings()` gets `estimateFollowUpsEnabled: true`. **Absent means ON**

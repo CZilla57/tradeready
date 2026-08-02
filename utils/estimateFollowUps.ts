@@ -36,10 +36,11 @@ export function estimateSentDate(job: Job): Date | null {
 }
 
 /**
- * The status flip + local-frame stamp in ONE place so the three send sites
+ * The status flip + local-frame stamp in ONE place so the four send sites
  * (SendEstimateScreen.markAsSent, estimateApprovalLink's two writes,
- * JobDetail's revise-and-resend) can never drift. Callers spread extras
- * (e.g. the approval object) on top of the returned job.
+ * JobDetail's revise-and-resend, PricingCalculator's markEstimateSent) can
+ * never drift. Callers spread extras (e.g. the approval object) on top of
+ * the returned job.
  */
 export function stampEstimateSent(job: Job, now: Date): Job {
   return { ...job, status: "estimate_sent", estimateSentAt: formatLocalDate(now) };

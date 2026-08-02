@@ -34,6 +34,7 @@ import {
 } from "../utils/estimateDocument";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook, resolveCustomer } from "../utils/storage";
 import { createApprovalLink } from "../utils/estimateApprovalLink";
+import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { Button, Card, Divider } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
@@ -277,11 +278,17 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     if (!job || job.status !== "lead") return;
     const next = JOB_STATUSES.lead.next;
     if (!next) return;
+    const now = new Date();
+    // Stamping estimateSentAt only when the transition actually lands in
+    // estimate_sent keeps this in step with the follow-up nudge's other three
+    // send sites (see stampEstimateSent's docstring in utils/estimateFollowUps).
+    const advance = (j: Job): Job =>
+      next === "estimate_sent"
+        ? { ...stampEstimateSent(j, now), estimateTotal: breakdown.total }
+        : { ...j, status: next, estimateTotal: breakdown.total };
     const jobs = await loadJobs();
-    await saveJobs(
-      jobs.map((j) => (j.id === jobId ? { ...j, status: next, estimateTotal: breakdown.total } : j))
-    );
-    setJob({ ...job, status: next, estimateTotal: breakdown.total });
+    await saveJobs(jobs.map((j) => (j.id === jobId ? advance(j) : j)));
+    setJob(advance(job));
     track("estimate_sent");
   }
 
