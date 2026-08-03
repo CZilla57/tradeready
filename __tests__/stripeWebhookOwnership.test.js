@@ -15,6 +15,37 @@
 
 const crypto = require('crypto');
 
+// The real `stripe` package lives in backend/node_modules, which CI never
+// installs (the gate installs root deps only) — resolving it here is
+// local-green/CI-red. Virtual mock with a faithful constructEvent: it
+// verifies the same t=...,v1=HMAC-SHA256("<t>.<payload>") shape signPayload
+// produces, so the handler's signature path stays genuinely exercised.
+jest.mock(
+  'stripe',
+  () => {
+    const mockCrypto = require('crypto');
+    return jest.fn().mockImplementation(() => ({
+      webhooks: {
+        constructEvent(rawBody, sigHeader, secret) {
+          const parts = Object.fromEntries(
+            String(sigHeader || '').split(',').map((p) => p.split('='))
+          );
+          const payload = Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody);
+          const expected = mockCrypto
+            .createHmac('sha256', secret)
+            .update(`${parts.t}.${payload}`)
+            .digest('hex');
+          if (!parts.v1 || parts.v1 !== expected) {
+            throw new Error('Webhook signature verification failed (mock)');
+          }
+          return JSON.parse(payload);
+        },
+      },
+    }));
+  },
+  { virtual: true }
+);
+
 const WEBHOOK_SECRET = 'fake_webhook_secret_a';
 const SUPABASE_URL = 'https://supabase.fake.local';
 
