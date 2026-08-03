@@ -129,8 +129,10 @@ describe("buildPaymentLink — Square", () => {
   });
 
   test("NEVER emits a legacy stored Access Token — falls back to the placeholder", () => {
-    const url = buildPaymentLink(inv, "square", "EAAAEOuLQObqLYA_legacy_token", 400);
-    expect(url).not.toContain("EAAAEOuLQObqLYA_legacy_token");
+    // Fixture is deliberately low-entropy: a realistic random EAAA… string
+    // trips the gitleaks square-access-token rule (CI run 30791264432).
+    const url = buildPaymentLink(inv, "square", "EAAAl_legacy_access_token", 400);
+    expect(url).not.toContain("EAAAl_legacy_access_token");
     expect(url).toMatch(/^https:\/\/square\.link\/u\/yourlink\?/);
   });
 

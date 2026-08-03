@@ -21,3 +21,12 @@
 
 # Supabase publishable anon key in the (pre-TS) Supabase client
 52d89264c9a49595284ccbc26587ce5fe56cc280:utils/supabase.js:generic-api-key:6
+
+# Fake token-SHAPED test fixture from the 2026-08-03 Square-credential fix:
+# the test pins that buildPaymentLink NEVER emits a legacy stored Square
+# Access Token, so the fixture imitated one and its entropy tripped the
+# square-access-token rule (CI run 30791264432). Not, and never was, a real
+# credential. The in-tree fixture was renamed to a low-entropy form in the
+# very next commit, so no new fingerprints can accrue.
+ea1913b6461e2bb20a31a51cb1a05396fbd41a85:__tests__/paymentLink.test.js:square-access-token:132
+ea1913b6461e2bb20a31a51cb1a05396fbd41a85:__tests__/paymentLink.test.js:square-access-token:133
