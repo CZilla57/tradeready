@@ -70,8 +70,10 @@ export const WIDGET_SNAPSHOT_KEY = "widgetSnapshot";
 export const WIDGET_ACTIONS_KEY = "widgetActions";
 
 // Statuses whose work is finished (or never happening) — their schedule slot
-// is history, not the answer to "when is my next job?".
-const DONE_STATUSES: Set<JobStatus> = new Set(["complete", "invoiced", "paid", "declined"]);
+// is history, not the answer to "when is my next job?". Exported so
+// utils/widgetActions.ts can reuse the identical set to drop timer_start
+// replay actions targeting a done job, without a third copy of this list.
+export const DONE_STATUSES: Set<JobStatus> = new Set(["complete", "invoiced", "paid", "declined"]);
 
 /**
  * The next upcoming scheduled job: earliest scheduledDate >= today, ties

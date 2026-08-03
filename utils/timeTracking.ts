@@ -91,20 +91,20 @@ export function computeTimeTracking(
   return { activeSession, isClocked, completedMs, liveMs, timerStr, trackedHours, overUnder, sessionCount };
 }
 
-// Statuses where clocking in makes no sense — the work is already finished
-// (or never happening). Matches widgetBridge's DONE_STATUSES; kept as its own
-// constant here since the two modules must not import each other.
-const CLOCK_IN_BLOCKED_STATUSES: Set<JobStatus> = new Set(["complete", "invoiced", "paid", "declined"]);
-
 /**
  * Pure clock-in: appends a new open session and, for a job still sitting at
  * "scheduled", advances status via the JOB_STATUSES `.next` chain (never a
- * hardcoded "in_progress" — see utils/pricingEngine.ts). Returns null when a
- * session is already running or the job's work is already done/declined.
+ * hardcoded "in_progress" — see utils/pricingEngine.ts). Returns null only
+ * when a session is already running. Deliberately has NO status guard:
+ * TIME_TRACKING_STATUSES (above) already governs which statuses JobDetail's
+ * TimeTrackingCard renders the Clock In button for — including "complete"
+ * and "invoiced" — so a second, stricter guard here would silently break
+ * that in-app control. Done-status filtering for the widget/Siri replay
+ * path lives in utils/widgetActions.ts instead, which is a policy decision
+ * for THAT caller, not a rule of clocking in itself.
  */
 export function applyClockIn(job: Job, atIso: string): Job | null {
   if (getActiveSession(job.timeSessions || [])) return null;
-  if (CLOCK_IN_BLOCKED_STATUSES.has(job.status)) return null;
 
   const timeSessions = [...(job.timeSessions || []), { start: atIso, end: null }];
   const next: Job = { ...job, timeSessions };

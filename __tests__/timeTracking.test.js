@@ -145,10 +145,20 @@ describe("applyClockIn", () => {
     expect(applyClockIn(running, "2026-07-04T09:00:00.000Z")).toBeNull();
   });
 
-  test.each(["complete", "invoiced", "paid", "declined"])(
-    "returns null when status is '%s' (work is already done/declined)",
+  test.each(["complete", "invoiced"])(
+    "succeeds on '%s' — TIME_TRACKING_STATUSES renders the Clock In button for these, so the pure helper must not silently block it",
     (status) => {
-      expect(applyClockIn(job({ status }), "2026-07-04T09:00:00.000Z")).toBeNull();
+      const result = applyClockIn(job({ status }), "2026-07-04T09:00:00.000Z");
+      expect(result).not.toBeNull();
+      expect(result.timeSessions).toEqual([{ start: "2026-07-04T09:00:00.000Z", end: null }]);
+      expect(result.status).toBe(status); // unaffected — only "scheduled" advances
+    }
+  );
+
+  test.each(["paid", "declined"])(
+    "also succeeds on '%s' — applyClockIn has no status guard at all; done-job replay policy lives in utils/widgetActions.ts, not here",
+    (status) => {
+      expect(applyClockIn(job({ status }), "2026-07-04T09:00:00.000Z")).not.toBeNull();
     }
   );
 

@@ -30,11 +30,14 @@ jest.mock("../utils/notifications", () => ({
 // widgetActions.ts talks to the bridge directly, and saveJobs (via the
 // storage barrel) also calls refreshWidgetSnapshot internally — mocking the
 // module covers both call sites with the same jest.fn() instances.
+// DONE_STATUSES is real (not a jest.fn()) — applyTimerActions reads it
+// directly as a Set, mirroring widgetBridge.ts's own export exactly.
 jest.mock("../utils/widgetBridge", () => ({
   getWidgetSharedItem: jest.fn(),
   removeWidgetSharedItem: jest.fn().mockResolvedValue(undefined),
   refreshWidgetSnapshot: jest.fn().mockResolvedValue(undefined),
   WIDGET_ACTIONS_KEY: "widgetActions",
+  DONE_STATUSES: new Set(["complete", "invoiced", "paid", "declined"]),
 }));
 
 const { getWidgetSharedItem, removeWidgetSharedItem, refreshWidgetSnapshot } =
@@ -119,6 +122,17 @@ describe("applyTimerActions", () => {
     expect(changed).toBe(false);
   });
 
+  test.each(["complete", "invoiced", "paid", "declined"])(
+    "timer_start is dropped for a '%s' job — replay-layer policy (applyClockIn itself has no status guard; the in-app button still clocks into complete/invoiced jobs)",
+    (status) => {
+      const jobs = [job({ id: "j1", status })];
+      const actions = [{ id: "a1", type: "timer_start", at: "2026-08-03T09:00:00.000Z", jobId: "j1" }];
+      const { jobs: result, changed } = applyTimerActions(jobs, actions);
+      expect(changed).toBe(false);
+      expect(result).toEqual(jobs);
+    }
+  );
+
   test("timer_stop with jobId closes that job's session", () => {
     const jobs = [
       job({ id: "j1", timeSessions: [{ start: "2026-08-03T08:00:00.000Z", end: null }] }),
@@ -146,6 +160,14 @@ describe("applyTimerActions", () => {
     const actions = [{ id: "a1", type: "timer_stop", at: "2026-08-03T10:00:00.000Z" }];
     const { changed } = applyTimerActions(jobs, actions);
     expect(changed).toBe(false);
+  });
+
+  test("timer_stop with an explicit jobId whose job has no active session is dropped", () => {
+    const jobs = [job({ id: "j1", timeSessions: [] })];
+    const actions = [{ id: "a1", type: "timer_stop", at: "2026-08-03T10:00:00.000Z", jobId: "j1" }];
+    const { jobs: result, changed } = applyTimerActions(jobs, actions);
+    expect(changed).toBe(false);
+    expect(result).toEqual(jobs);
   });
 
   test("applies a start-then-stop pair for the same job in order", () => {

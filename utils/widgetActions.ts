@@ -20,6 +20,7 @@ import {
   removeWidgetSharedItem,
   refreshWidgetSnapshot,
   WIDGET_ACTIONS_KEY,
+  DONE_STATUSES,
 } from "./widgetBridge";
 import { loadJobs, saveJobs, loadTrips, saveTrips } from "./storage";
 import { HOME_LABEL } from "./mileageUtils";
@@ -68,13 +69,18 @@ export function parsePendingActions(raw: string | null): PendingAction[] {
 /**
  * Apply timer_start/timer_stop pending actions against the jobs collection.
  * Pure — the caller saves the result. timer_start looks its job up by jobId;
- * a missing/deleted job silently drops the action. timer_stop uses the
- * action's jobId when present, else falls back to whichever single job has a
- * running session (Siri's "stop my timer" doesn't always know which job —
- * see selectActiveTimer in utils/widgetBridge.ts for the same "one running
- * session" assumption). Guard failures inside applyClockIn/applyClockOut
- * (already clocked in, nothing running, done/declined status) drop silently
- * too, per the shared contract.
+ * a missing/deleted job silently drops the action, and so does a job whose
+ * status is in DONE_STATUSES (utils/widgetBridge.ts) — Siri/widget must not
+ * clock into a job that's already complete/invoiced/paid/declined. This is a
+ * REPLAY-LAYER policy, not a rule of clocking in itself: applyClockIn has no
+ * status guard of its own, since the in-app TimeTrackingCard button still
+ * needs to work on "complete"/"invoiced" jobs (TIME_TRACKING_STATUSES).
+ * timer_stop uses the action's jobId when present, else falls back to
+ * whichever single job has a running session (Siri's "stop my timer"
+ * doesn't always know which job — see selectActiveTimer in
+ * utils/widgetBridge.ts for the same "one running session" assumption).
+ * Guard failures inside applyClockIn/applyClockOut (already clocked in,
+ * nothing running) drop silently too, per the shared contract.
  */
 export function applyTimerActions(
   jobs: Job[],
@@ -88,6 +94,7 @@ export function applyTimerActions(
       if (!action.jobId) continue;
       const idx = current.findIndex((j) => j.id === action.jobId);
       if (idx === -1) continue;
+      if (DONE_STATUSES.has(current[idx].status)) continue;
       const updated = applyClockIn(current[idx], action.at);
       if (!updated) continue;
       current = current.map((j, i) => (i === idx ? updated : j));
