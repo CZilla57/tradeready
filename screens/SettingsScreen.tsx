@@ -177,7 +177,9 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           // Header buttons: paddingLeft/alignSelf are what center the text;
           // alignItems/justifyContent are no-ops in a native-stack header slot.
-          style={{ alignSelf: "center", paddingLeft: 10 }}
+          // marginRight matches CustomerDetail's Edit — without it the label
+          // hugs the screen edge.
+          style={{ alignSelf: "center", marginRight: 8, paddingLeft: 10 }}
           accessibilityRole="button"
           accessibilityLabel="Save settings"
           accessibilityState={{ disabled: !dirty || saving, busy: saving }}
