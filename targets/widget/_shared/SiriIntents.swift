@@ -47,6 +47,7 @@ private let siriAppGroupId = "group.com.gettradereadyapp.tradeready"
 private let siriSnapshotKey = "widgetSnapshot"
 private let siriActionsKey = "widgetActions"
 private let siriActiveTripKey = "activeTrip"
+private let siriPendingOpenUrlKey = "pendingOpenUrl"
 
 // MARK: - Snapshot read
 
@@ -183,6 +184,24 @@ private func siriSaveActiveTrip(startedAt: String, odometerStart: Double) -> Boo
 
 private func siriClearActiveTrip() {
   UserDefaults(suiteName: siriAppGroupId)?.removeObject(forKey: siriActiveTripKey)
+}
+
+// MARK: - Pending open-url stash (cold-launch handoff)
+
+/// Stash the deep link the app should open on its next start. Read-and-cleared
+/// by App.tsx's drainPendingOpenUrl at the two cold-start flush points, which
+/// also ignores anything older than 5 minutes — this is a handoff for a launch
+/// that is happening right now, never a queue.
+/// Best-effort: a failure here must not stop the notification post, which is
+/// what serves the (far more common) warm path.
+private func siriStashPendingOpenUrl(_ url: String) {
+  guard let defaults = UserDefaults(suiteName: siriAppGroupId) else { return }
+  let payload: [String: Any] = ["url": url, "at": siriISONow()]
+  guard
+    let encoded = try? JSONSerialization.data(withJSONObject: payload, options: []),
+    let json = String(data: encoded, encoding: .utf8)
+  else { return }
+  defaults.set(json, forKey: siriPendingOpenUrlKey)
 }
 
 // MARK: - Formatting helpers
@@ -358,9 +377,18 @@ struct OnMyWayIntent: AppIntent {
     // Same link shape as the widget's widgetURL; utils/deepLinks.ts parses one
     // path segment and decodes it. Job ids are alphanumeric with -/_ only.
     if let url = URL(string: "tradeready://onmyway/\(job.id)") {
-      // No observer (cold launch before JS mounts, or the widget target, which
-      // links this file but never runs it) simply means nothing happens — the
-      // user still lands in the app, just not on the composer.
+      // Two paths, because which one fires depends on whether JS is already up:
+      //  * COLD launch — the notification below lands before App.tsx mounts its
+      //    "url" listener and is lost, so stash the link first. App.tsx drains
+      //    `pendingOpenUrl` at its cold-start flush points (onReady and the
+      //    session effect) and navigates from there.
+      //  * WARM — the listener is live, the notification navigates immediately,
+      //    and App.tsx clears the stash on that same navigation so it can never
+      //    replay on a later launch. The 5-minute freshness window in
+      //    parsePendingOpenUrl is the backstop if even that is missed.
+      // The stash is written first and unconditionally: a failed write must not
+      // cost us the warm path, which is the common case.
+      siriStashPendingOpenUrl(url.absoluteString)
       NotificationCenter.default.post(
         name: Notification.Name("RCTOpenURLNotification"),
         object: nil,

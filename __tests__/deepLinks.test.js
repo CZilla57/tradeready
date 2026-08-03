@@ -2,7 +2,7 @@
 // Widget deep-link parsing (utils/deepLinks.ts): strict scheme/path matching —
 // the URL arrives from outside the app and must be treated as untrusted input.
 
-import { parseWidgetDeepLink } from "../utils/deepLinks";
+import { parseWidgetDeepLink, parsePendingOpenUrl } from "../utils/deepLinks";
 
 describe("parseWidgetDeepLink", () => {
   test("parses a widget job link", () => {
@@ -74,5 +74,67 @@ describe("parseWidgetDeepLink — onmyway", () => {
     "tradeready://onmyway/%zz", // malformed percent-encoding
   ])("rejects %s", (url) => {
     expect(parseWidgetDeepLink(url)).toBeNull();
+  });
+});
+
+// The cold-launch stash the Siri on-my-way intent writes into the App Group
+// container. Native-written, so the same "anything that fails a guard is
+// dropped" discipline as the deep-link parser above — plus a freshness window,
+// since the stash exists for the launch happening right now and must never
+// hijack an unrelated one later.
+describe("parsePendingOpenUrl", () => {
+  const NOW = Date.parse("2026-08-03T18:00:00Z");
+  const stash = (url, at) => JSON.stringify({ url, at });
+
+  test("returns the url for a stash written moments ago", () => {
+    const raw = stash("tradeready://onmyway/j1", "2026-08-03T17:59:58Z");
+    expect(parsePendingOpenUrl(raw, NOW)).toBe("tradeready://onmyway/j1");
+  });
+
+  test("accepts a stash written exactly now", () => {
+    const raw = stash("tradeready://onmyway/j1", "2026-08-03T18:00:00Z");
+    expect(parsePendingOpenUrl(raw, NOW)).toBe("tradeready://onmyway/j1");
+  });
+
+  test("accepts fractional-second timestamps (the JS toISOString shape)", () => {
+    const raw = stash("tradeready://onmyway/j1", "2026-08-03T17:59:30.512Z");
+    expect(parsePendingOpenUrl(raw, NOW)).toBe("tradeready://onmyway/j1");
+  });
+
+  test("accepts a stash just inside the five-minute window", () => {
+    const raw = stash("tradeready://onmyway/j1", "2026-08-03T17:55:01Z");
+    expect(parsePendingOpenUrl(raw, NOW)).toBe("tradeready://onmyway/j1");
+  });
+
+  test("drops a stale stash past five minutes", () => {
+    const raw = stash("tradeready://onmyway/j1", "2026-08-03T17:54:00Z");
+    expect(parsePendingOpenUrl(raw, NOW)).toBeNull();
+  });
+
+  test("drops a stash dated in the future", () => {
+    const raw = stash("tradeready://onmyway/j1", "2026-08-03T18:00:05Z");
+    expect(parsePendingOpenUrl(raw, NOW)).toBeNull();
+  });
+
+  test.each([
+    ["null input", null],
+    ["empty string", ""],
+    ["malformed JSON", "{not json"],
+    ["a JSON array", '[{"url":"tradeready://onmyway/j1","at":"2026-08-03T18:00:00Z"}]'],
+    ["a bare JSON string", '"tradeready://onmyway/j1"'],
+    ["missing url", '{"at":"2026-08-03T18:00:00Z"}'],
+    ["empty url", '{"url":"","at":"2026-08-03T18:00:00Z"}'],
+    ["non-string url", '{"url":42,"at":"2026-08-03T18:00:00Z"}'],
+    ["missing at", '{"url":"tradeready://onmyway/j1"}'],
+    ["non-string at", '{"url":"tradeready://onmyway/j1","at":1754251200000}'],
+    ["unparseable at", '{"url":"tradeready://onmyway/j1","at":"whenever"}'],
+  ])("drops %s", (_label, raw) => {
+    expect(parsePendingOpenUrl(raw, NOW)).toBeNull();
+  });
+
+  test("does not vet the url itself — that stays parseWidgetDeepLink's job", () => {
+    const raw = stash("otherapp://evil", "2026-08-03T18:00:00Z");
+    expect(parsePendingOpenUrl(raw, NOW)).toBe("otherapp://evil");
+    expect(parseWidgetDeepLink(parsePendingOpenUrl(raw, NOW))).toBeNull();
   });
 });

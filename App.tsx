@@ -16,7 +16,12 @@ import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import PaywallScreen from "./screens/PaywallScreen";
 import { isOnboardingComplete } from "./utils/storage";
-import { parseWidgetDeepLink } from "./utils/deepLinks";
+import { parseWidgetDeepLink, parsePendingOpenUrl } from "./utils/deepLinks";
+import {
+  getWidgetSharedItem,
+  removeWidgetSharedItem,
+  PENDING_OPEN_URL_KEY,
+} from "./utils/widgetBridge";
 import type {
   RootStackParamList,
   MainTabParamList,
@@ -450,6 +455,12 @@ function RootNavigator() {
     pendingDeepLinkRef.current = null;
     track("widget_deep_link_opened", {});
     if (link.type === "onmyway") {
+      // The Siri intent stashes this same link for the cold-launch path (see
+      // drainPendingOpenUrl). Having navigated from the live url event instead,
+      // drop the stash so a later launch can't replay it. Fire-and-forget: the
+      // helper is a silent no-op when the native bridge is absent, and the
+      // freshness window in parsePendingOpenUrl covers us if this never lands.
+      removeWidgetSharedItem(PENDING_OPEN_URL_KEY).catch(() => {});
       navigationRef.navigate("Main", {
         screen: "Jobs",
         params: { screen: "JobDetail", params: { jobId: link.jobId, autoAction: "onmyway" } },
@@ -462,6 +473,34 @@ function RootNavigator() {
     });
   }, []);
 
+  // Cold-launch companion to the url event. The Siri on-my-way intent posts the
+  // link into RN's linking stack, but on a cold start that fires before the
+  // listener above exists, so the intent also stashes it in the App Group
+  // container. Read-then-immediately-remove (same discipline as the pending
+  // widget-action queue), then let parsePendingOpenUrl decide whether it is
+  // fresh enough to act on. Never throws; a null bridge (Expo Go, Android)
+  // makes the whole thing a silent no-op.
+  // Both flush points can fire within a render of each other, and the read is an
+  // async bridge round-trip — without this latch they can both read the stash
+  // before either removal lands and navigate twice, which would open the SMS
+  // composer twice. Skipping the second call is safe: whichever drain is in
+  // flight either navigates itself (navigation is ready by then) or parks the
+  // link in pendingDeepLinkRef, which onReady and the session effect replay.
+  const drainingRef = React.useRef(false);
+  const drainPendingOpenUrl = React.useCallback(async () => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    try {
+      const raw = await getWidgetSharedItem(PENDING_OPEN_URL_KEY);
+      if (!raw) return;
+      await removeWidgetSharedItem(PENDING_OPEN_URL_KEY);
+      const url = parsePendingOpenUrl(raw, Date.now());
+      if (url) consumeDeepLink(url);
+    } finally {
+      drainingRef.current = false;
+    }
+  }, [consumeDeepLink]);
+
   useEffect(() => {
     Linking.getInitialURL().then(consumeDeepLink).catch(() => {});
     const sub = Linking.addEventListener("url", (e) => consumeDeepLink(e.url));
@@ -470,7 +509,8 @@ function RootNavigator() {
 
   useEffect(() => {
     if (session && pendingDeepLinkRef.current) consumeDeepLink(pendingDeepLinkRef.current);
-  }, [session, consumeDeepLink]);
+    if (session) drainPendingOpenUrl().catch(() => {});
+  }, [session, consumeDeepLink, drainPendingOpenUrl]);
 
   const isLoading = rootGateLoading({
     initializing,
@@ -503,7 +543,10 @@ function RootNavigator() {
     <NavigationContainer
       ref={navigationRef}
       theme={navTheme}
-      onReady={() => consumeDeepLink(pendingDeepLinkRef.current)}
+      onReady={() => {
+        consumeDeepLink(pendingDeepLinkRef.current);
+        drainPendingOpenUrl().catch(() => {});
+      }}
     >
       {/* Must live INSIDE the container — see ScreenTracker. */}
       {POSTHOG_ENABLED && <ScreenTracker />}

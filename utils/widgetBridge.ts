@@ -69,6 +69,18 @@ export const WIDGET_SNAPSHOT_KEY = "widgetSnapshot";
  */
 export const WIDGET_ACTIONS_KEY = "widgetActions";
 
+/**
+ * UserDefaults key holding a deep link a Siri intent wants the app to open on
+ * its next start (docs/widget-plan.md Phase 4). The on-my-way intent posts the
+ * link straight into RN's linking stack for the warm case, but on a cold launch
+ * that notification fires before App.tsx subscribes — so the intent also stashes
+ * it here and App.tsx drains it once navigation is ready. Payload is
+ * `{ url, at }` with an ISO timestamp; see parsePendingOpenUrl in
+ * utils/deepLinks.ts for the freshness rule that stops a stale stash from
+ * hijacking an unrelated launch.
+ */
+export const PENDING_OPEN_URL_KEY = "pendingOpenUrl";
+
 // Statuses whose work is finished (or never happening) — their schedule slot
 // is history, not the answer to "when is my next job?". Exported so
 // utils/widgetActions.ts can reuse the identical set to drop timer_start
