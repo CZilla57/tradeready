@@ -8,9 +8,9 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "image": "./assets/splash-navy.png",
+      "image": "./assets/splash-flat.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0c335e"
+      "backgroundColor": "#071837"
     },
     "ios": {
       "supportsTablet": true,
@@ -28,7 +28,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0c335e"
+        "backgroundColor": "#071837"
       },
       "package": "com.gettradereadyapp.tradeready",
       "versionCode": 2
