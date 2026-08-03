@@ -22,6 +22,10 @@ import {
   removeWidgetSharedItem,
   PENDING_OPEN_URL_KEY,
 } from "./utils/widgetBridge";
+// Side-effect import: registers the background-refresh task definition at
+// module scope (TaskManager.defineTask must run before the OS can invoke it —
+// see utils/backgroundRefresh.ts). AuthContext calls registerBackgroundRefresh().
+import "./utils/backgroundRefresh";
 import type {
   RootStackParamList,
   MainTabParamList,

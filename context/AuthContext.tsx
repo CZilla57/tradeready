@@ -10,6 +10,7 @@ import { checkAndGenerateRecurringInvoices } from '../utils/recurringInvoices';
 import { identifyUser } from '../utils/analytics';
 import { applyEstimateDecisions } from '../utils/storage';
 import { replayWidgetActions } from '../utils/widgetActions';
+import { registerBackgroundRefresh } from '../utils/backgroundRefresh';
 
 interface AuthContextValue {
   session: Session | null;
@@ -80,6 +81,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // seed the widget snapshot at launch/sign-in; save paths keep it fresh
       // from here (no-op until the WidgetBridge native module ships).
       replayWidgetActions();
+      // Register (or confirm) the periodic background wake so remote changes
+      // and queued widget/Siri actions reach the widget even when the app
+      // never opens again for a while. No-op until the EAS build that ships
+      // expo-background-task's native module; sign-out deliberately leaves
+      // this registered (see utils/backgroundRefresh.ts).
+      registerBackgroundRefresh();
     }
     const sub = AppState.addEventListener('change', state => {
       if (state === 'active' && session?.user?.id) {
