@@ -7,7 +7,6 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { loadJobs, loadCustomers, loadInvoices } from "../utils/storage";
@@ -73,7 +72,7 @@ export default function GlobalSearchScreen({ navigation }: TodayStackScreenProps
   const hasQuery = query.trim().length > 0;
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <View style={styles.searchRow}>
         <SearchField
           value={query}
@@ -171,7 +170,7 @@ export default function GlobalSearchScreen({ navigation }: TodayStackScreenProps
           </>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

@@ -20,7 +20,6 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { persistPhotoSafe, deletePhoto } from "../utils/photoStorage";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer } from "../utils/storage";
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
@@ -869,9 +868,9 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.container, styles.centered]}>
+      <View style={[styles.container, styles.centered]}>
         <ActivityIndicator size={36} color={colors.accent} />
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -879,7 +878,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
 
   if (loadError || !job) {
     return (
-      <SafeAreaView style={[styles.container, styles.centered]}>
+      <View style={[styles.container, styles.centered]}>
         <Text style={styles.errorTitle}>Couldn't load this job</Text>
         <Text style={styles.errorSubtext}>
           It may have been deleted or something went wrong.
@@ -892,14 +891,14 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
         >
           <Text style={styles.errorButtonText}>Go back</Text>
         </TouchableOpacity>
-      </SafeAreaView>
+      </View>
     );
   }
 
   // ── Main render ────────────────────────────────────────────────────────
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
@@ -979,7 +978,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           <Text style={styles.deleteBtnText}>Delete job</Text>
         </TouchableOpacity>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

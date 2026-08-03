@@ -31,7 +31,6 @@ import {
   Platform,
   ActivityIndicator,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer, loadSettings } from "../utils/storage";
 import { computeEstimateBreakdown } from "../utils/pricingEngine";
 import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
@@ -279,7 +278,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={{ flex: 1 }}
@@ -399,7 +398,7 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 

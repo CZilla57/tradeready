@@ -19,7 +19,6 @@ import {
   Alert,
   StyleSheet,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadRecurringInvoices, saveRecurringInvoices } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
@@ -154,7 +153,7 @@ export default function RecurringInvoicesScreen({ navigation }: InvoiceStackScre
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <FlatList
         refreshing={refreshing}
         onRefresh={onRefresh}
@@ -170,7 +169,7 @@ export default function RecurringInvoicesScreen({ navigation }: InvoiceStackScre
         onPress={() => navigation.navigate("AddRecurringInvoice", {})}
         accessibilityLabel="Add maintenance plan"
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

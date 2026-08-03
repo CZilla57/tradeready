@@ -12,7 +12,6 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail } from "../utils/messaging";
@@ -365,7 +364,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <View style={styles.tabs}>
         <TouchableOpacity
           style={[styles.tab, tab === "calculator" && styles.tabActive]}
@@ -455,7 +454,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         onDismiss={() => setPickerVisible(false)}
       />
       <KeyboardDoneBar nativeID={CALC_DONE_ID} />
-    </SafeAreaView>
+    </View>
   );
 }
 

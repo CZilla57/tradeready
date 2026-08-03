@@ -3,7 +3,6 @@ import {
   View, Text, SectionList, TextInput, TouchableOpacity,
   Alert, StyleSheet,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { loadPricebook, savePricebook } from "../utils/storage";
@@ -63,7 +62,7 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
 
   if (entries.length === 0) {
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <View style={styles.container}>
         <View style={styles.emptyContainer}>
           <Ionicons name="list-outline" size={44} color={colors.textMuted} style={styles.emptyIcon} />
           <Text style={styles.emptyTitle}>No services yet</Text>
@@ -77,12 +76,12 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
             style={{ marginTop: spacing.lg }}
           />
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <View style={styles.searchRowColumn}>
         <View style={styles.searchRow}>
           <Ionicons name="search" size={18} color={colors.textMuted} />
@@ -144,7 +143,7 @@ export default function PricebookScreen({ navigation }: MoneyStackScreenProps<'P
           onPress={() => navigation.navigate("PricebookEntry", {})}
         />
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

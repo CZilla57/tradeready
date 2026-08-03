@@ -9,7 +9,6 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
@@ -373,7 +372,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
   const configuredProviders = getConfiguredProviders(settings);
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
         <Card style={styles.summaryCard}>
@@ -614,7 +613,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
         )}
 
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

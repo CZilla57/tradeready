@@ -3,7 +3,6 @@ import {
   View, Text, TextInput, ScrollView, TouchableOpacity,
   Alert, StyleSheet, KeyboardAvoidingView, Platform,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { loadPricebook, savePricebook, loadSettings } from "../utils/storage";
 import { calculateEstimate, buildEstimateInput } from "../utils/pricingEngine";
@@ -180,7 +179,7 @@ export default function PricebookEntryScreen({
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={{ flex: 1 }}
@@ -446,7 +445,7 @@ export default function PricebookEntryScreen({
         </ScrollView>
       </KeyboardAvoidingView>
       <KeyboardDoneBar nativeID="pricebookEntryDone" />
-    </SafeAreaView>
+    </View>
   );
 }
 

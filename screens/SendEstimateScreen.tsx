@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
@@ -200,7 +199,7 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
   const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
@@ -325,7 +324,7 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
           track approval, however you delivered the estimate.
         </Text>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

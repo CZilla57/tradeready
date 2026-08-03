@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
@@ -45,7 +44,7 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <View style={styles.container}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll} contentContainerStyle={styles.filterScrollContent}>
         {DATE_FILTERS.map((f) => (
           <TouchableOpacity
@@ -111,7 +110,7 @@ export default function MileageLogScreen({ navigation, route }: MoneyStackScreen
       >
         <Text style={styles.addBtnText}>+ Add trip</Text>
       </TouchableOpacity>
-    </SafeAreaView>
+    </View>
   );
 }
 

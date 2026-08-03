@@ -7,7 +7,6 @@ import {
   StyleSheet,
   Alert,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { composeEmailWithOutcome, composeSMSWithOutcome } from "../utils/messaging";
 import { loadSettings, loadJobs, loadCustomers, resolveCustomer } from "../utils/storage";
@@ -164,16 +163,16 @@ export default function ReviewRequestScreen({
 
   if (notFound) {
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <View style={styles.container}>
         <EmptyState message="This job or its customer no longer exists, so there's no one to send a review request to." />
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!settings || !message) return null;
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
@@ -256,7 +255,7 @@ export default function ReviewRequestScreen({
           </>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

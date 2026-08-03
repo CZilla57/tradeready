@@ -13,7 +13,6 @@ import {
   Alert,
   Modal,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
@@ -359,7 +358,7 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
     .toUpperCase();
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
         {/* Hero: avatar + name + quick actions */}
@@ -573,7 +572,7 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
           </ScrollView>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 

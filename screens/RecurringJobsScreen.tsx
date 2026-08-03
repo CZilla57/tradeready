@@ -7,7 +7,6 @@ import {
   Alert,
   StyleSheet,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
 import { Badge, EmptyState } from "../components/UI";
@@ -126,7 +125,7 @@ export default function RecurringJobsScreen({ navigation }: JobStackScreenProps<
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <FlatList
         refreshing={refreshing}
         onRefresh={onRefresh}
@@ -138,7 +137,7 @@ export default function RecurringJobsScreen({ navigation }: JobStackScreenProps<
           <EmptyState message={"Open any job and enable 'Repeat' to set one up."} />
         }
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

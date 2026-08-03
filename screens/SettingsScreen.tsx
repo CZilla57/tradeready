@@ -17,7 +17,6 @@ import {
   type AppStateStatus,
 } from "react-native";
 import { Image } from "expo-image";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { loadSettings, saveSettings, clearSampleData, clearAllUserData } from "../utils/storage";
@@ -522,7 +521,7 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
   const selectedProvider = PROVIDERS.find((p) => p.id === s.provider);
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       {/* automaticallyAdjustKeyboardInsets accumulated phantom bottom inset on
           device (endless empty scroll space — beta finding); use the same
           KeyboardAvoidingView pattern as the Add/Edit screens instead. */}
@@ -1120,7 +1119,7 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 

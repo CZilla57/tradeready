@@ -10,7 +10,6 @@ import {
   Platform,
   RefreshControl,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobsForDate, loadSettings } from "../utils/storage";
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
@@ -227,14 +226,14 @@ export default function RouteScreen({ navigation }: TodayStackScreenProps<'Route
 
   if (stops.length === 0) {
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <View style={styles.container}>
         <EmptyState onBack={() => navigation.goBack()} />
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
@@ -277,7 +276,7 @@ export default function RouteScreen({ navigation }: TodayStackScreenProps<'Route
 
         <View style={{ height: 32 }} />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
