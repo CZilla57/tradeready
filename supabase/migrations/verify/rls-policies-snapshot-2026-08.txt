@@ -30,18 +30,13 @@ Reading notes:
 - ai_usage_log is absent from section 2 BY DESIGN: RLS enabled with zero
   policies (deny-all for clients; service role bypasses). pg_policies only
   lists tables that have policies.
-- DISCREPANCY (follow-up open as of 2026-08-03): `subscriptions` shows NO
-  policy, but supabase/migrations/20260705_subscriptions.sql declares a
-  SELECT policy "users read own subscription". Either the policy was never
-  applied or was dropped. No client impact today (nothing reads the table;
-  the RevenueCat SDK is the entitlement source of truth) IF the table's RLS
-  is enabled (deny-all). Whether RLS is enabled there is NOT visible in this
-  snapshot — verify with:
-    select relname, relrowsecurity
-      from pg_class c join pg_namespace n on n.oid = c.relnamespace
-     where n.nspname = 'public'
-       and relname in ('subscriptions', 'ai_usage_log');
-  Both must show relrowsecurity = true. If subscriptions shows false, enable
-  RLS and re-apply the migration's policy immediately — with Supabase's
-  default grants, a table without RLS is readable/writable with the
-  publishable key.
+- DISCREPANCY — RESOLVED same day: `subscriptions` showed NO policy because
+  the TABLE did not exist — 20260705_subscriptions.sql had never been
+  applied (a pg_class relrowsecurity probe returned no subscriptions row;
+  stripe_accounts from the same day HAD been applied). Zero security
+  exposure (nothing existed to read), but a latent RevenueCat-activation
+  bug: every subscription-webhook upsert would have failed. Owner applied
+  the migration in the SQL editor on 2026-08-03 and re-probed:
+  subscriptions now reports relrowsecurity = true with the read-own-row
+  policy in place. ai_usage_log also confirmed relrowsecurity = true with
+  zero policies (deny-all by design; service role bypasses).
