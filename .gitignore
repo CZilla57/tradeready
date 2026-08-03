@@ -16,3 +16,7 @@ web-build/
 
 # Jest transform cache (persisted in CI via actions/cache)
 .jest-cache/
+
+# Claude Code session tooling artifacts
+.agents/
+skills-lock.json
