@@ -68,7 +68,7 @@ interface Provider {
 
 const PROVIDERS: Provider[] = [
   { id: "stripe", label: "Stripe" },
-  { id: "square", label: "Square", hint: "Paste your Square Access Token" },
+  { id: "square", label: "Square", hint: "Paste your Square payment link (create one in Square Dashboard → Payment Links, e.g. https://square.link/u/abc123)" },
   { id: "paypal", label: "PayPal.Me", hint: "Enter your PayPal.Me username (e.g. johndoe)" },
   { id: "venmo", label: "Venmo", hint: "Enter your Venmo username" },
   { id: "custom", label: "Custom URL", hint: "Paste your payment page URL" },
@@ -720,15 +720,14 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
               style={styles.input}
               value={s.provider === "stripe" ? s.providerKey : (s.providerKeys?.[s.provider] ?? "")}
               onChangeText={updateProviderKey}
-              placeholder="Paste key or ID here"
+              placeholder="Paste link or username here"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
-              secureTextEntry={s.provider === "square"}
               returnKeyType="done"
-              accessibilityLabel={`${selectedProvider.label} key or ID`}
+              accessibilityLabel={`${selectedProvider.label} link or username`}
             />
-            <Text style={styles.keyNote}>Stored only on your device. Never share it with anyone.</Text>
+            <Text style={styles.keyNote}>This appears in the payment links you send to customers — never paste a password, API key, or access token here.</Text>
           </View>
         ) : null}
 

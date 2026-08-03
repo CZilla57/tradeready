@@ -115,6 +115,31 @@ describe("buildPaymentLink — Custom URL", () => {
   });
 });
 
+describe("buildPaymentLink — Square", () => {
+  const inv = { number: "INV-021", desc: "Gutter cleaning", amount: 400 };
+
+  test("appends amount and invoice params to the user's square.link URL", () => {
+    const url = buildPaymentLink(inv, "square", "https://square.link/u/abc123", 400);
+    expect(url).toBe("https://square.link/u/abc123?amount=400.00&invoice=INV-021");
+  });
+
+  test("prefixes https:// when the link was pasted without its scheme", () => {
+    const url = buildPaymentLink(inv, "square", "square.link/u/abc123", 400);
+    expect(url).toBe("https://square.link/u/abc123?amount=400.00&invoice=INV-021");
+  });
+
+  test("NEVER emits a legacy stored Access Token — falls back to the placeholder", () => {
+    const url = buildPaymentLink(inv, "square", "EAAAEOuLQObqLYA_legacy_token", 400);
+    expect(url).not.toContain("EAAAEOuLQObqLYA_legacy_token");
+    expect(url).toMatch(/^https:\/\/square\.link\/u\/yourlink\?/);
+  });
+
+  test("falls back to the placeholder when no link is stored", () => {
+    const url = buildPaymentLink(inv, "square", "", 400);
+    expect(url).toMatch(/^https:\/\/square\.link\/u\/yourlink\?/);
+  });
+});
+
 describe("buildPaymentLink — PayPal.Me", () => {
   const inv = { number: "INV-010", desc: "Roof repair", amount: 1850 };
 
@@ -259,6 +284,24 @@ describe("cachedLinkMatches — the display-side gate", () => {
       paymentLinkAmount: 350,
     };
     expect(cachedLinkMatches(inv, 350)).toBe(true);
+  });
+});
+
+describe("poisoned pre-2026-08 Square caches (squareup.com/pay/<Access Token>)", () => {
+  const poisoned = {
+    ...INVOICE,
+    paymentLinkUrl: "https://squareup.com/pay/EAAAEsecrettoken?amount=350.00",
+    paymentLinkAmount: 350,
+  };
+
+  test("cachedLinkMatches never matches one, even at the exact amount", () => {
+    expect(cachedLinkMatches(poisoned, 350)).toBe(false);
+  });
+
+  test("resolvePaymentLink does not reuse one — rebuilds a clean link instead", async () => {
+    const result = await resolvePaymentLink(poisoned, "square", "https://square.link/u/abc123", 350);
+    expect(result).not.toContain("EAAAEsecrettoken");
+    expect(result).toContain("square.link/u/abc123");
   });
 });
 

@@ -83,6 +83,23 @@ export function getProviderKey(settings: Partial<Settings>, provider?: PaymentPr
   return settings.providerKeys?.[p as string] || "";
 }
 
+/**
+ * Resolve the stored Square value to a shareable payment-page URL, or the
+ * placeholder when it isn't one. The value must be the user's PUBLIC Square
+ * payment link (square.link/u/…, created in the Square Dashboard) — but
+ * builds before 2026-08 told users to paste their Square ACCESS TOKEN here
+ * and embedded it in every customer-facing link. A token is not URL-shaped,
+ * so refusing anything that doesn't read as a link keeps a legacy stored
+ * credential from ever leaving the device.
+ */
+function squareLinkBase(providerKey: string): string {
+  const v = (providerKey || "").trim();
+  if (/^https?:\/\//i.test(v)) return v;
+  // Tolerate a Square link pasted without its scheme.
+  if (/^(www\.)?(square\.link|checkout\.square\.site)\//i.test(v)) return `https://${v}`;
+  return "https://square.link/u/yourlink";
+}
+
 export function buildPaymentLink(
   invoice: Invoice,
   provider: PaymentProvider,
@@ -91,13 +108,15 @@ export function buildPaymentLink(
 ): string {
   const amt = requestedAmount.toFixed(2);
   const desc = encodeURIComponent(`${invoice.number} - ${invoice.desc}`);
-  const key = providerKey || "YOUR_KEY";
 
   switch (provider) {
     case "stripe":
       throw new Error("Stripe payment links require the backend to be configured. Check your Vercel setup in Settings.");
-    case "square":
-      return `https://squareup.com/pay/${key}?amount=${amt}&note=${desc}`;
+    case "square": {
+      const base = squareLinkBase(providerKey);
+      const sep = base.includes("?") ? "&" : "?";
+      return `${base}${sep}amount=${amt}&invoice=${invoice.number}`;
+    }
     case "paypal":
       return `https://paypal.me/${providerKey || "yourusername"}/${amt}`;
     case "venmo":
@@ -145,6 +164,13 @@ export async function resolvePaymentLink(
  * presented as current.
  */
 export function cachedLinkMatches(invoice: Invoice, requestedAmount: number): boolean {
+  // Pre-2026-08 builds minted Square "links" of the form
+  // squareup.com/pay/<Square Access Token> — a live credential. Never match
+  // one, so it is neither displayed nor reused, and the next link generation
+  // overwrites it with a clean URL.
+  if (/^https?:\/\/(www\.)?squareup\.com\/pay\//i.test(invoice.paymentLinkUrl ?? "")) {
+    return false;
+  }
   return Boolean(
     invoice.paymentLinkUrl &&
     typeof invoice.paymentLinkAmount === "number" &&

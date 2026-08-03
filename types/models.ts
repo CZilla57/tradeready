@@ -520,7 +520,14 @@ export interface Settings {
   provider: PaymentProvider;
   /** BACKEND_API_TOKEN for Stripe Connect. SecureStore. */
   providerKey: string;
-  /** Per-provider credentials keyed by provider id (all non-Stripe providers). AsyncStorage. */
+  /**
+   * Per-provider payment handles keyed by provider id (all non-Stripe
+   * providers): PayPal.Me/Venmo usernames, Square/custom payment-page URLs.
+   * These are PUBLIC values embedded in customer-facing payment links —
+   * never store a credential here (pre-2026-08 builds asked for a Square
+   * Access Token; buildPaymentLink refuses to emit token-shaped values).
+   * AsyncStorage.
+   */
   providerKeys: Record<string, string>;
 
   // Notifications

@@ -106,10 +106,16 @@ describe("buildPaymentLink", () => {
     expect(link).toContain("350.00");
   });
 
-  test("square link includes amount", () => {
-    const link = buildPaymentLink(invoice, "square", "sq_key", 350);
-    expect(link).toContain("squareup.com");
+  test("square uses the stored payment-page link, never squareup.com/pay", () => {
+    const link = buildPaymentLink(invoice, "square", "https://square.link/u/abc123", 350);
+    expect(link).toContain("square.link/u/abc123");
     expect(link).toContain("350.00");
+    expect(link).not.toContain("squareup.com/pay");
+  });
+
+  test("square NEVER emits a legacy stored Access Token", () => {
+    const link = buildPaymentLink(invoice, "square", "EAAAl_legacy_access_token", 350);
+    expect(link).not.toContain("EAAAl_legacy_access_token");
   });
 
   test("unknown provider uses providerKey as base URL", () => {
