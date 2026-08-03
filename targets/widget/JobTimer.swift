@@ -93,6 +93,12 @@ struct StartTimerIntent: AppIntent {
   // stays concurrency-safe if the target ever moves to the Swift 6 mode.
   static let title: LocalizedStringResource = "Start Job Timer"
 
+  // Widget-button-only: this intent takes a raw job id, which is meaningless
+  // to type into a Shortcuts action. Hiding it from Shortcuts/Spotlight does
+  // not affect Button(intent:) invocation. The Siri-facing intents live in
+  // _shared/SiriIntents.swift and stay discoverable.
+  static let isDiscoverable: Bool = false
+
   @Parameter(title: "Job ID")
   var jobId: String
 
@@ -121,6 +127,9 @@ struct StartTimerIntent: AppIntent {
 
 struct StopTimerIntent: AppIntent {
   static let title: LocalizedStringResource = "Stop Job Timer"
+
+  // Widget-button-only, same reasoning as StartTimerIntent above.
+  static let isDiscoverable: Bool = false
 
   @Parameter(title: "Job ID")
   var jobId: String
