@@ -635,12 +635,9 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
 
           return (
             <View style={styles.modalSheet}>
-              {/* Handle + close */}
+              {/* Handle */}
               <View style={styles.modalHeader}>
                 <View style={styles.modalHandle} />
-                <TouchableOpacity onPress={() => setViewingInvoice(null)} style={styles.modalCloseBtn}>
-                  <Ionicons name="close" size={20} color={colors.textMuted} />
-                </TouchableOpacity>
               </View>
 
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalBody}>
@@ -770,6 +767,14 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
                   <Text style={styles.modalDeleteBtnText}>Delete invoice</Text>
                 </TouchableOpacity>
               </ScrollView>
+
+              {/* Must be a direct child of the sheet, rendered after the
+                  ScrollView: RN only hit-tests within a parent's bounds, so
+                  inside the 16pt handle strip the 44pt target was untappable —
+                  taps on the ✕ fell through to the ScrollView. */}
+              <TouchableOpacity onPress={() => setViewingInvoice(null)} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={20} color={colors.textMuted} />
+              </TouchableOpacity>
             </View>
           );
         })()}
