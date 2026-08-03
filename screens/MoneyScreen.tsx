@@ -9,7 +9,6 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
@@ -185,8 +184,10 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
     );
   }
 
+  // Plain View root: the tab bar already covers the bottom safe-area inset —
+  // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <View style={styles.container}>
 
       {/* ── Date Filter Chips ─────────────────────────────────────────────── */}
       <View style={styles.filterBar}>
@@ -356,7 +357,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
         onClose={handleCloseModal}
         onSave={handleSaveExpense}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

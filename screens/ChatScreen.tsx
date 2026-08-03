@@ -12,7 +12,6 @@ import {
   Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { loadSettings } from "../utils/storage";
@@ -189,8 +188,10 @@ export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHom
 
   const isEmpty = messages.length === 0 && !sending;
 
+  // Plain View root: the tab bar already covers the bottom safe-area inset —
+  // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -246,7 +247,7 @@ export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHom
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 

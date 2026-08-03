@@ -16,7 +16,6 @@ import {
   Linking,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { loadInvoices, saveInvoices, loadSettings, loadJobs, saveJobs } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
@@ -493,8 +492,10 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
     );
   }
 
+  // Plain View root: the tab bar already covers the bottom safe-area inset —
+  // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       {/* Stats row — each stat doubles as a filter tap */}
       <View style={styles.statsRow}>
         <StatCard
@@ -782,7 +783,7 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
           onClose={() => setRecordingFor(null)}
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 

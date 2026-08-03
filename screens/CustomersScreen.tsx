@@ -9,7 +9,6 @@ import {
   FlatList,
   TouchableOpacity,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
@@ -186,8 +185,10 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
   const totalCustomers = activeEntries.length;
   const totalRevenue   = activeEntries.reduce((sum, c) => sum + c.totalSpent, 0);
 
+  // Plain View root: the tab bar already covers the bottom safe-area inset —
+  // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <View style={styles.container}>
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Customers</Text>
@@ -283,7 +284,7 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
 
       {/* FAB — matches the add pattern on Jobs and Invoices */}
       <Fab onPress={() => navigation.navigate('AddCustomer', {})} accessibilityLabel="Add new customer" />
-    </SafeAreaView>
+    </View>
   );
 }
 

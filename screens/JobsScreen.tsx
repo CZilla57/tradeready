@@ -12,7 +12,6 @@ import {
   StyleSheet,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, loadInvoices, saveJobs } from "../utils/storage";
 import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
@@ -154,8 +153,10 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
     );
   }
 
+  // Plain View root: the tab bar already covers the bottom safe-area inset —
+  // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <View style={styles.container}>
       {/* Stats */}
       <View style={styles.statsRow}>
         <StatCard label="Active jobs" value={String(activeJobs.length)} />
@@ -226,7 +227,7 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
 
       {/* FAB */}
       <Fab onPress={() => navigation.navigate("AddJob", {})} accessibilityLabel="Add new job" />
-    </SafeAreaView>
+    </View>
   );
 }
 
