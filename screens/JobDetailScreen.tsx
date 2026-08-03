@@ -420,12 +420,15 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
         onRequestClose={() => setViewerUri(null)}
       >
         <View style={styles.viewerBg}>
-          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }} accessibilityRole="button" accessibilityLabel="Close photo viewer">
-            <Ionicons name="close" size={20} color="#fff" />
-          </TouchableOpacity>
           {viewerUri && (
             <Image source={{ uri: viewerUri }} style={styles.viewerImage} contentFit="contain" />
           )}
+          {/* Rendered after the full-viewport Image: a later sibling wins
+              hit-testing, so the other order leaves the ✕ visible through the
+              letterbox but untappable. */}
+          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }} accessibilityRole="button" accessibilityLabel="Close photo viewer">
+            <Ionicons name="close" size={20} color="#fff" />
+          </TouchableOpacity>
         </View>
       </Modal>
     </Card>
