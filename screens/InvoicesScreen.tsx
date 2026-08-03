@@ -989,6 +989,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     modalBody: {
       padding: spacing.md,
+      // Clears the absolutely-positioned close button, whose 44pt a11y hit
+      // target reaches 52pt down from the sheet top (top 8 + 44) — the 16pt
+      // header alone would let the status badge slide under it.
+      paddingTop: 40,
       paddingBottom: 40,
     },
     modalTopRow: {
