@@ -138,12 +138,12 @@ replay silently reverts; `activeTrip` has no expiry — a forgotten Siri trip
 blocks "start a trip" until "stop my trip" or sign-out (v2: staleness overwrite
 in StartTripIntent); a crashed replay loses that batch of pending actions.
 
-**Owner decision pending before store submission:** the app target's iOS floor
-is 15.1 (RN default) while the Siri intents are `@available(iOS 17)` — known
-AppIntents pitfalls below a 16.x floor (registration + an annotation-ignored
-crash class). Recommended: `expo-build-properties` with
-`ios.deploymentTarget: "17.0"` — but that's a new dependency + a minimum-OS
-bump = Rule 3 + product decision.
+**Deployment floor DECIDED 2026-08-03 (owner: drop iOS 15/16):**
+`expo-build-properties@~1.0.10` + `ios.deploymentTarget: "17.0"` landed same
+day. Native-only change — takes effect in the NEXT EAS build (build 10 shipped
+at the 15.1 floor and smoke-passed anyway); harmless over OTA (plugins don't
+apply). Phases 3–4 device smoke PASSED on build 10 (all four shortcuts, timer
+widget round-trip, on-my-way warm + cold, sign-out blanking).
 
 Original whole-effort estimate: **~3 weeks** (2026-07 sketch, iOS + Android; iOS-only
 should come in under that — re-estimate at kickoff).

@@ -19,7 +19,9 @@
       "buildNumber": "1",
       "usesAppleSignIn": true,
       "entitlements": {
-        "com.apple.security.application-groups": ["group.com.gettradereadyapp.tradeready"]
+        "com.apple.security.application-groups": [
+          "group.com.gettradereadyapp.tradeready"
+        ]
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -64,6 +66,14 @@
         "@react-native-google-signin/google-signin",
         {
           "iosUrlScheme": "com.googleusercontent.apps.246232122952-b2trko1uog7593a3sg8n25tklifc85nn"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
         }
       ]
     ],
