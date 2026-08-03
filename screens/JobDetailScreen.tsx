@@ -24,8 +24,6 @@ import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer } from "../utils/storage";
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
-import { composeSMS } from "../utils/messaging";
-import { buildOnMyWayMessage } from "../utils/onMyWay";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { track, reportError } from '../utils/analytics';
@@ -723,28 +721,45 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     }, [jobId])
   );
 
+  // useCallback (not a plain function) because the on-my-way deep-link
+  // effect just below calls this directly and needs a stable-per-job/
+  // customer reference for its dependency array — a plain function would be
+  // a new identity every render and force that effect to re-run constantly.
+  const handleAppointmentSend = useCallback(
+    async (kind: "confirm" | "on_my_way") => {
+      if (!job || !customer) return;
+      const settings = await loadSettings();
+      const opened = await sendAppointmentMessage({ job, customer, settings, kind });
+      if (opened) {
+        track(kind === "confirm" ? "appointment_confirm_sent" : "on_my_way_sent", {});
+      }
+    },
+    [job, customer]
+  );
+
   // "On my way" auto-action — tradeready://onmyway/<jobId> (widget button +
   // Siri intent, consumed in App.tsx's consumeDeepLink) lands here with
-  // autoAction: "onmyway". Fires exactly once per arrival: open the SMS
-  // composer prefilled for this job's customer, then clear the param so a
-  // later focus (tab switch and back) doesn't reopen it — same "consume once"
-  // pattern as openInvoiceId in InvoicesScreen/TodayScreen. No phone on file
-  // still opens the composer (empty recipients, matching ReviewRequestScreen's
-  // handleSendSMS) — composeSMS's own "SMS not available" alert is the only
-  // failure path; we never auto-send.
+  // autoAction: "onmyway". Reuses the SAME handler the "I'm on my way" button
+  // calls (handleAppointmentSend, above) — the existing template-driven,
+  // channel-aware (SMS/email via resolveChannel) composer. This deep link
+  // must NOT re-introduce a second local message composer (that was this
+  // task's original mistake — a job/customer's on-my-way message has exactly
+  // one implementation). Fires exactly once per arrival, gated on `loading`
+  // rather than just `job` so it waits for the SAME focus load that settles
+  // `customer` too (both are set together — see load() above) before
+  // deciding; then clears the param so a later focus (tab switch and back)
+  // doesn't reopen it — same "consume once" pattern as openInvoiceId in
+  // InvoicesScreen/TodayScreen. Unlike the button (which only renders for
+  // ACTIVE_STATUSES + a schedule), the deep link applies to any status —
+  // handleAppointmentSend itself only requires job+customer, and a
+  // tradesperson saying "I'm on my way" to a lead is fine. No linked
+  // customer → handleAppointmentSend's own `!customer` guard no-ops.
   const autoAction = route.params.autoAction;
   useEffect(() => {
-    if (autoAction !== "onmyway" || !job) return;
+    if (autoAction !== "onmyway" || loading || !job) return;
     navigation.setParams({ autoAction: undefined });
-    (async () => {
-      const [customers, settings] = await Promise.all([loadCustomers(), loadSettings()]);
-      const match = customers.find((c) => c.id === job.customerId);
-      await composeSMS({
-        recipients: match?.phone ? [match.phone] : [],
-        body: buildOnMyWayMessage(job, settings.businessName),
-      });
-    })();
-  }, [autoAction, job, navigation]);
+    handleAppointmentSend("on_my_way");
+  }, [autoAction, loading, job, navigation, handleAppointmentSend]);
 
   async function advanceStatus() {
     if (!job) return;
@@ -757,15 +772,6 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
       loadSettings()
         .then((settings) => scheduleReviewRequest(job, customer, settings))
         .catch(() => {});
-    }
-  }
-
-  async function handleAppointmentSend(kind: "confirm" | "on_my_way") {
-    if (!job || !customer) return;
-    const settings = await loadSettings();
-    const opened = await sendAppointmentMessage({ job, customer, settings, kind });
-    if (opened) {
-      track(kind === "confirm" ? "appointment_confirm_sent" : "on_my_way_sent", {});
     }
   }
 
