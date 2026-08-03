@@ -6,16 +6,16 @@
 // "../utils/storage" unchanged.
 //
 // collections / customers / lifecycle / dailyOps export exactly their public
-// surface, so they're re-exported wholesale. settings and defaults each keep an
-// internal member (SECURE_FIELDS, the collection seeds) that isn't part of the
-// public API, so those two are re-exported by name.
+// surface, so they're re-exported wholesale. defaults keeps internal members
+// (the collection seeds), so it's re-exported by name — as is settings, and
+// keys (KEYS + SECURE_FIELDS) is layer-internal and not re-exported at all.
 
 export * from "./collections";
 export * from "./customers";
 export * from "./lifecycle";
 export * from "./dailyOps";
 
-export { loadSettings, saveSettings } from "./settings";
+export { loadSettings, saveSettings, scrubLegacySquareToken } from "./settings";
 export { defaultSettings, defaultInvoices } from "./defaults";
 export { migrateSampleDataIds } from "./sampleMigration";
 export { loadRecurringJobs, saveRecurringJobs } from "./recurringJobs";

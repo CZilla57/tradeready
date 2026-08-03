@@ -84,20 +84,29 @@ export function getProviderKey(settings: Partial<Settings>, provider?: PaymentPr
 }
 
 /**
- * Resolve the stored Square value to a shareable payment-page URL, or the
- * placeholder when it isn't one. The value must be the user's PUBLIC Square
- * payment link (square.link/u/…, created in the Square Dashboard) — but
- * builds before 2026-08 told users to paste their Square ACCESS TOKEN here
- * and embedded it in every customer-facing link. A token is not URL-shaped,
- * so refusing anything that doesn't read as a link keeps a legacy stored
- * credential from ever leaving the device.
+ * True when a stored Square value is a shareable payment-page link —
+ * http(s), or a scheme-less square.link / checkout.square.site path. The
+ * SINGLE definition of "safe to emit" for Square values: squareLinkBase
+ * refuses to build links from anything else, and the settings healing pass
+ * (utils/storage/settings.ts scrubLegacySquareToken) purges anything else
+ * from storage. Builds before 2026-08 told users to paste their Square
+ * ACCESS TOKEN under Settings → Square; a token is not URL-shaped, so both
+ * gates treat it as unusable and the credential never leaves the device.
+ */
+export function isSquarePaymentLink(value: string): boolean {
+  const v = (value || "").trim();
+  return /^https?:\/\//i.test(v) || /^(www\.)?(square\.link|checkout\.square\.site)\//i.test(v);
+}
+
+/**
+ * Resolve the stored Square value to a shareable payment-page URL (adding
+ * the scheme a hand-typed square.link often lacks), or the placeholder when
+ * isSquarePaymentLink refuses it.
  */
 function squareLinkBase(providerKey: string): string {
   const v = (providerKey || "").trim();
-  if (/^https?:\/\//i.test(v)) return v;
-  // Tolerate a Square link pasted without its scheme.
-  if (/^(www\.)?(square\.link|checkout\.square\.site)\//i.test(v)) return `https://${v}`;
-  return "https://square.link/u/yourlink";
+  if (!isSquarePaymentLink(v)) return "https://square.link/u/yourlink";
+  return /^https?:\/\//i.test(v) ? v : `https://${v}`;
 }
 
 export function buildPaymentLink(

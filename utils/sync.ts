@@ -5,6 +5,7 @@ import { reportError } from './analytics';
 import { mergeRemoteRecord } from './syncMerge';
 import type { SyncRecord } from './syncMerge';
 import { REVIEW_REQUESTS_STORAGE_KEY } from './reviewRequest';
+import { SECURE_FIELDS } from './storage/keys';
 import type { Settings, CustomerNotes } from '../types/models';
 
 const QUEUE_KEY       = '__syncQueue';
@@ -300,8 +301,12 @@ async function pushAllLocalToCloud(userId: string): Promise<void> {
   if (raw) {
     const settings: Partial<Settings> = JSON.parse(raw);
     const safe = { ...settings };
-    delete (safe as any).providerKey;
-    delete (safe as any).anthropicKey;
+    // A blob written before the SecureStore split can carry the credential
+    // fields inline. Iterate the shared list — hand-naming fields here is how
+    // groqKey went unstripped (2026-08-02 security audit, item 10a).
+    for (const field of SECURE_FIELDS) {
+      delete (safe as Record<string, unknown>)[field];
+    }
     await supabase.from('settings').upsert({
       user_id: userId,
       data: safe,

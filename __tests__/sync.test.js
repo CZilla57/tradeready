@@ -104,6 +104,45 @@ describe("initialSync ownership guard", () => {
     expect(mockUpsert).toHaveBeenCalled();
   });
 
+  test("first-device settings push strips every SECURE_FIELD from a legacy blob", async () => {
+    // A blob written before the SecureStore split can still carry the
+    // credential fields inline; the initial push must strip ALL of them —
+    // the old hand-picked deletes missed groqKey (2026-08-02 audit, 10a).
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "__initDone_user-legacy") return Promise.resolve(null);
+      if (key === "__dataOwner") return Promise.resolve(null);
+      if (key === "settings")
+        return Promise.resolve(
+          JSON.stringify({
+            // Deliberately NOT realistic key shapes — real-looking prefixes
+            // (sk-ant-…, gsk_…, EAAA…) trip the gitleaks history scan.
+            businessName: "Trades Co",
+            providerKey: "backend-token-value",
+            anthropicKey: "anthropic-key-value",
+            groqKey: "groq-key-value",
+            providerKeys: { paypal: "johndoe", square: "https://square.link/u/abc" },
+          })
+        );
+      return Promise.resolve(null);
+    });
+
+    await initialSync("user-legacy");
+
+    const settingsUpsert = mockUpsert.mock.calls
+      .map(([payload]) => payload)
+      .find((p) => p && !Array.isArray(p) && p.data && p.data.businessName);
+    expect(settingsUpsert).toBeDefined();
+    expect(settingsUpsert.data.providerKey).toBeUndefined();
+    expect(settingsUpsert.data.anthropicKey).toBeUndefined();
+    expect(settingsUpsert.data.groqKey).toBeUndefined();
+    // providerKeys is public by design (usernames / payment-page links,
+    // already embedded in customer-facing links) and must keep syncing.
+    expect(settingsUpsert.data.providerKeys).toEqual({
+      paypal: "johndoe",
+      square: "https://square.link/u/abc",
+    });
+  });
+
   test("skips push (pulls instead) when user already has cloud data", async () => {
     // countResult = 3 → user has records in the cloud → second device / reinstall
     buildFromMock({ countResult: 3 });

@@ -60,7 +60,7 @@ import GlobalSearchScreen         from "./screens/GlobalSearchScreen";
 import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
-import { loadSettings, loadInvoices, migrateCustomerIdentity, migrateSampleDataIds, applyEstimateDecisions } from "./utils/storage";
+import { loadSettings, loadInvoices, migrateCustomerIdentity, migrateSampleDataIds, applyEstimateDecisions, scrubLegacySquareToken } from "./utils/storage";
 import { rootGateLoading } from "./utils/rootGate";
 import { fontScaleChanged } from "./utils/fontScaleRestart";
 import { getTradeNickname } from "./utils/pricingEngine";
@@ -365,6 +365,8 @@ function RootNavigator() {
       .then(() => migrateSampleDataIds())
       .catch(() => {})
       .then(() => applyEstimateDecisions())
+      .catch(() => {})
+      .then(() => scrubLegacySquareToken())
       .catch(() => {});
   }, [session, bootstrapping]);
 

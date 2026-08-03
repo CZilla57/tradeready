@@ -8,14 +8,15 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { enqueue, trySync } from "../sync";
 import { syncNotifications } from "../notifications";
-import { KEYS } from "./keys";
+import { KEYS, SECURE_FIELDS } from "./keys";
 import { defaultSettings } from "./defaults";
+import { isSquarePaymentLink } from "../invoiceHelpers";
 import type { Settings } from "../../types/models";
 
-// Fields that must live in SecureStore rather than plain AsyncStorage. Both
-// load/saveSettings strip these out before hitting AsyncStorage and delegate to
-// SecureStore. Exported so clearAllUserData (lifecycle) can purge them too.
-export const SECURE_FIELDS = ["providerKey", "anthropicKey", "groqKey"] as const;
+// SECURE_FIELDS lives in ./keys (dependency-free) so utils/sync.ts can strip
+// the same list from the legacy blob it pushes without an import cycle. Both
+// load/saveSettings strip these out before hitting AsyncStorage and delegate
+// to SecureStore; clearAllUserData (lifecycle) purges them on sign-out.
 
 type SecureField = (typeof SECURE_FIELDS)[number];
 type SecureFields = Record<SecureField, string>;
@@ -78,4 +79,26 @@ export async function saveSettings(settings: Settings): Promise<void> {
   await enqueue("settings", "upsert", "settings", publicSettings);
   trySync();
   syncNotifications();
+}
+
+/**
+ * Healing pass for the 2026-08 Square credential fix: builds before it told
+ * users to paste their Square ACCESS TOKEN under Settings → Square, leaving a
+ * live credential in plaintext AsyncStorage and in the synced cloud settings
+ * blob. Any Square value isSquarePaymentLink refuses is dead weight
+ * (buildPaymentLink won't emit it), so drop it — and because saveSettings
+ * re-enqueues the cleaned blob, the cloud copy is overwritten too. Flag-free
+ * and idempotent (modeled on migrateCustomerIdentity): a pull can resurrect
+ * an un-scrubbed blob from a second device or an old queue, so this runs on
+ * every sign-in, and a run that finds nothing MUST NOT write (saving
+ * re-enqueues a cloud upsert).
+ */
+export async function scrubLegacySquareToken(): Promise<boolean> {
+  const settings = await loadSettings();
+  const square = settings.providerKeys?.square;
+  if (!square || isSquarePaymentLink(square)) return false;
+  const providerKeys = { ...settings.providerKeys };
+  delete providerKeys.square;
+  await saveSettings({ ...settings, providerKeys });
+  return true;
 }

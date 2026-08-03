@@ -6,8 +6,8 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
-import { KEYS } from "./keys";
-import { SECURE_FIELDS, loadSettings } from "./settings";
+import { KEYS, SECURE_FIELDS } from "./keys";
+import { loadSettings } from "./settings";
 import { defaultSettings, resetSampleSeed } from "./defaults";
 import {
   loadInvoices, loadJobs, loadCustomers, loadExpenses,
