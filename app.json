@@ -75,7 +75,8 @@
             "deploymentTarget": "17.0"
           }
         }
-      ]
+      ],
+      "expo-background-task"
     ],
     "updates": {
       "fallbackToCacheTimeout": 0,
