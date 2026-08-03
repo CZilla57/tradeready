@@ -4,6 +4,8 @@ import SwiftUI
 // TradeReady home-screen widgets (docs/widget-plan.md Phase 2).
 // Reads the snapshot that utils/widgetBridge.ts mirrors into the App Group
 // container — field names here must match the WidgetSnapshot interface there.
+// The interactive Job Timer widget and its App Intents live in JobTimer.swift;
+// this file keeps the shared snapshot types and the one @main WidgetBundle.
 
 private let appGroupId = "group.com.gettradereadyapp.tradeready"
 private let snapshotKey = "widgetSnapshot"
@@ -196,5 +198,6 @@ struct NextJobWidget: Widget {
 struct TradeReadyWidgets: WidgetBundle {
   var body: some Widget {
     NextJobWidget()
+    JobTimerWidget()
   }
 }
