@@ -175,6 +175,10 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 ## Notes
 
+- **Widgets & Siri (added 2026-08-02):** home-screen widgets and Siri/App Intents
+  are planned outside this ten-item list — see `docs/widget-plan.md` (App Group
+  bridge foundation, Next Job + Job Timer widgets, voice Tier 1). ⚠️ backlog,
+  native, ships only via a fresh EAS build.
 - **2026-07-18 status update:** items 1–4 were built in order on their own
   feature branches (see the STATUS blocks). Their kickoff prompts are kept as
   historical record of what was asked for — where the build diverged from the
