@@ -1,13 +1,18 @@
 # Widgets & Siri Plan — Home-Screen Widgets, App Group Bridge, App Intents
 
-**Created:** 2026-08-02 · **Status: Phase 1 JS half BUILT 2026-08-03; everything
-native still backlog.** `utils/widgetBridge.ts` now holds the snapshot selectors and
-the guarded mirror/wipe calls (wired into `saveJobs`/`saveInvoices`, the AuthContext
-foreground+sign-in paths, and `clearAllUserData`); it is a provable no-op until the
-native module exists, so it rides OTA safely. The native half (entitlement, Swift
-module, extension target, URL scheme) cannot run in Expo Go, cannot ship over OTA,
-requires Rule-3 owner approval and a new EAS build. Nothing here may be claimed in
-the store listing until built and device-smoke-tested.
+**Created:** 2026-08-02 · **Status: Phases 1–2 code COMPLETE 2026-08-03 (owner
+approved the native bundle); awaiting EAS build 8 compile validation + device
+smoke.** JS half: `utils/widgetBridge.ts` (snapshot selectors + guarded mirror/wipe,
+wired into `saveJobs`/`saveInvoices`, AuthContext, `clearAllUserData`) — a no-op
+until the native module is present, so it rides OTA safely. Native half:
+`modules/widget-bridge/` (WidgetBridgeModule.swift — setSharedItem/clearShared +
+WidgetCenter reload), `targets/widget/` (Next Job widget, small+medium, iOS 17+,
+deep-links `tradeready://job/<id>`), `@bacons/apple-targets@5.0.0` plugin, App Group
+entitlement, `scheme: "tradeready"`, `ios.appleTeamId: 96J48TJWX3` (recovered from
+build 7's provisioning profile — the plugin errors without it). ⚠️ Swift cannot
+compile on the Windows dev box (prebuild refuses non-macOS): the EAS build is the
+first compiler run. Nothing may be claimed in the store listing until
+device-smoke-tested.
 
 ## What this is
 

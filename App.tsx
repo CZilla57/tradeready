@@ -3,7 +3,7 @@ import { NavigationContainer, createNavigationContainerRef } from "@react-naviga
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Text, View, ActivityIndicator, TouchableOpacity, Alert, Dimensions } from "react-native";
+import { Text, View, ActivityIndicator, TouchableOpacity, Alert, Dimensions, Linking } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFonts } from "expo-font";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -16,6 +16,7 @@ import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import PaywallScreen from "./screens/PaywallScreen";
 import { isOnboardingComplete } from "./utils/storage";
+import { parseWidgetDeepLink } from "./utils/deepLinks";
 import type {
   RootStackParamList,
   MainTabParamList,
@@ -433,6 +434,36 @@ function RootNavigator() {
     return () => sub.remove();
   }, []);
 
+  // Widget deep links (tradeready://job/<id>, produced by targets/widget).
+  // Warm taps navigate immediately; a cold-start tap arrives via
+  // getInitialURL before the container and auth gates are ready, so it parks
+  // in pendingDeepLinkRef and replays from onReady / the session effect.
+  const pendingDeepLinkRef = React.useRef<string | null>(null);
+  const consumeDeepLink = React.useCallback((url: string | null) => {
+    const link = parseWidgetDeepLink(url);
+    if (!link) return;
+    if (!sessionRef.current || !navigationRef.isReady()) {
+      pendingDeepLinkRef.current = url;
+      return;
+    }
+    pendingDeepLinkRef.current = null;
+    track("widget_deep_link_opened", {});
+    navigationRef.navigate("Main", {
+      screen: "Jobs",
+      params: { screen: "JobDetail", params: { jobId: link.jobId } },
+    });
+  }, []);
+
+  useEffect(() => {
+    Linking.getInitialURL().then(consumeDeepLink).catch(() => {});
+    const sub = Linking.addEventListener("url", (e) => consumeDeepLink(e.url));
+    return () => sub.remove();
+  }, [consumeDeepLink]);
+
+  useEffect(() => {
+    if (session && pendingDeepLinkRef.current) consumeDeepLink(pendingDeepLinkRef.current);
+  }, [session, consumeDeepLink]);
+
   const isLoading = rootGateLoading({
     initializing,
     hasSession: !!session,
@@ -461,7 +492,11 @@ function RootNavigator() {
   };
 
   return (
-    <NavigationContainer ref={navigationRef} theme={navTheme}>
+    <NavigationContainer
+      ref={navigationRef}
+      theme={navTheme}
+      onReady={() => consumeDeepLink(pendingDeepLinkRef.current)}
+    >
       {/* Must live INSIDE the container — see ScreenTracker. */}
       {POSTHOG_ENABLED && <ScreenTracker />}
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
