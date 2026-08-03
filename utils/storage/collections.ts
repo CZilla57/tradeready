@@ -7,6 +7,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { enqueueCollectionChanges, trySync } from "../sync";
 import { syncNotifications } from "../notifications";
+import { refreshWidgetSnapshot } from "../widgetBridge";
 import { KEYS } from "./keys";
 import { defaultInvoices, defaultJobs, defaultCustomers } from "./defaults";
 import type { Invoice, Job, Customer, Expense } from "../../types/models";
@@ -29,6 +30,7 @@ export async function saveInvoices(invoices: Invoice[]): Promise<void> {
   await enqueueCollectionChanges("invoices", old, invoices);
   trySync();
   syncNotifications();
+  refreshWidgetSnapshot();
 }
 
 // --- Jobs ---
@@ -49,6 +51,7 @@ export async function saveJobs(jobs: Job[]): Promise<void> {
   await enqueueCollectionChanges("jobs", old, jobs);
   trySync();
   syncNotifications();
+  refreshWidgetSnapshot();
 }
 
 // --- Customers ---

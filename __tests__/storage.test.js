@@ -29,6 +29,13 @@ jest.mock("../utils/notifications", () => ({
   syncNotifications: jest.fn(),
 }));
 
+// The widget mirror is a save-path side effect too; its own behavior is
+// covered in widgetBridge.test.js.
+jest.mock("../utils/widgetBridge", () => ({
+  refreshWidgetSnapshot: jest.fn().mockResolvedValue(undefined),
+  clearWidgetSnapshot: jest.fn().mockResolvedValue(undefined),
+}));
+
 beforeEach(() => {
   jest.clearAllMocks();
   AsyncStorage.getItem.mockResolvedValue(null);
@@ -145,6 +152,14 @@ describe("clearAllUserData", () => {
     expect(deletedKeys).toContain("supabase_session_chunk_10");
     // 4 credential keys + session base key + 10 chunk slots = 15.
     expect(deletedKeys).toHaveLength(15);
+  });
+
+  test("wipes the shared widget container so the next account inherits no widget data", async () => {
+    const { clearWidgetSnapshot } = require("../utils/widgetBridge");
+
+    await clearAllUserData();
+
+    expect(clearWidgetSnapshot).toHaveBeenCalledTimes(1);
   });
 
   test("completes without throwing even if a SecureStore delete fails", async () => {

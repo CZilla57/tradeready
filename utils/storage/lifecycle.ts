@@ -14,6 +14,7 @@ import {
   saveInvoices, saveJobs, saveCustomers, saveExpenses,
 } from "./collections";
 import { isSampleId } from "../sampleData";
+import { clearWidgetSnapshot } from "../widgetBridge";
 import { SESSION_STORAGE_KEY } from "../secureStoreAdapter";
 import { REVIEW_REQUESTS_STORAGE_KEY } from "../reviewRequest";
 import { DISMISSED_DUPLICATES_STORAGE_KEY } from "../duplicateCustomers";
@@ -82,6 +83,12 @@ export async function clearAllUserData(): Promise<void> {
     "onboardingComplete",
     ...initDoneKeys,
   ]);
+  // Widget bridge: wipe the App Group container so the next account on this
+  // device can't see this account's next job/customer in a home-screen widget
+  // (no-op until the native module ships — utils/widgetBridge.ts). Never
+  // throws, so it can't block the rest of the wipe.
+  await clearWidgetSnapshot();
+
   for (const field of SECURE_FIELDS) {
     try { await SecureStore.deleteItemAsync(field); } catch {}
   }

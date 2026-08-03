@@ -1,9 +1,13 @@
 # Widgets & Siri Plan — Home-Screen Widgets, App Group Bridge, App Intents
 
-**Created:** 2026-08-02 · **Status: ⚠️ backlog — nothing in this document is built.**
-All of it is native work (Swift, config plugins, an extension target): it cannot run in
-Expo Go, cannot ship over OTA, and requires a new EAS build. Nothing here may be claimed
-in the store listing until built and device-smoke-tested.
+**Created:** 2026-08-02 · **Status: Phase 1 JS half BUILT 2026-08-03; everything
+native still backlog.** `utils/widgetBridge.ts` now holds the snapshot selectors and
+the guarded mirror/wipe calls (wired into `saveJobs`/`saveInvoices`, the AuthContext
+foreground+sign-in paths, and `clearAllUserData`); it is a provable no-op until the
+native module exists, so it rides OTA safely. The native half (entitlement, Swift
+module, extension target, URL scheme) cannot run in Expo Go, cannot ship over OTA,
+requires Rule-3 owner approval and a new EAS build. Nothing here may be claimed in
+the store listing until built and device-smoke-tested.
 
 ## What this is
 
@@ -127,9 +131,13 @@ should come in under that — re-estimate at kickoff).
 
 ## Constraints & approvals
 
-- **Rule 3 approvals needed before Phase 1:** the extension-target config plugin
-  (`@bacons/apple-targets` or equivalent) and the local Expo module scaffolding are
-  dependency/config changes — explicit owner sign-off first.
+- **Rule 3 approvals needed before the native half of Phase 1:** the
+  extension-target config plugin (`@bacons/apple-targets` or equivalent), the local
+  Expo module scaffolding, the App Group entitlement, and a URL `scheme` key are
+  dependency/`app.json` changes — explicit owner sign-off first. (Discovered at
+  kickoff 2026-08-03: `app.json` has NO `scheme` today — the estimate-approval flow
+  uses the web domain — so widget tap deep-links need one added, which is itself a
+  native config change riding the same build.)
 - **Build vehicle:** ships only in a fresh EAS build (whichever build number is next
   when this starts); the JS mirror-write code is inert without the native side, so
   it must not be OTA'd ahead as if it were a feature.
