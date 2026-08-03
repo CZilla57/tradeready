@@ -737,9 +737,10 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     [job, customer]
   );
 
-  // "On my way" auto-action — tradeready://onmyway/<jobId> (widget button +
-  // Siri intent, consumed in App.tsx's consumeDeepLink) lands here with
-  // autoAction: "onmyway". Reuses the SAME handler the "I'm on my way" button
+  // "On my way" auto-action — tradeready://onmyway/<jobId> (produced by the
+  // Siri OnMyWayIntent only, no widget button for this one; consumed in
+  // App.tsx's consumeDeepLink) lands here with autoAction: "onmyway".
+  // Reuses the SAME handler the in-app "I'm on my way" button
   // calls (handleAppointmentSend, above) — the existing template-driven,
   // channel-aware (SMS/email via resolveChannel) composer. This deep link
   // must NOT re-introduce a second local message composer (that was this

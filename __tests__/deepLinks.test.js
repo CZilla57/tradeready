@@ -42,8 +42,9 @@ describe("parseWidgetDeepLink", () => {
   });
 });
 
-// "On my way" links (widget button + Siri OnMyWayIntent, docs/widget-plan.md
-// Phase 3-4) — same untrusted-input posture as the job link above.
+// "On my way" links (produced by the Siri OnMyWayIntent only — there is no
+// widget button for this one, docs/widget-plan.md Phase 3-4) — same
+// untrusted-input posture as the job link above.
 describe("parseWidgetDeepLink — onmyway", () => {
   test("parses an on-my-way link", () => {
     expect(parseWidgetDeepLink("tradeready://onmyway/j1722_4")).toEqual({

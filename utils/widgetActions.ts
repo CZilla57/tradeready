@@ -161,6 +161,16 @@ export function tripFromAction(action: PendingAction, existingTrips: Trip[]): Tr
  * save paths, and re-mirror the widget snapshot. Never throws — a broken
  * replay must not block app startup or the foreground resync that calls it.
  *
+ * refreshWidgetSnapshot() runs UNCONDITIONALLY, even when there's no queue to
+ * replay — this is what AuthContext now calls in place of its old bare
+ * refreshWidgetSnapshot() at session-start and post-foreground-sync, so an
+ * empty queue (the overwhelmingly common case) must not skip the mirror: a
+ * fresh install's widget would otherwise stay on stale/seed data until the
+ * first local edit, and remote changes pulled by sync — raw writes that
+ * bypass the save-path mirror hooks — would never reach the widget either.
+ * refreshWidgetSnapshot is itself a guarded no-op when the native bridge is
+ * absent, so this costs nothing in Expo Go/Android/pre-widget builds.
+ *
  * The queue is removed right after reading, BEFORE any of the batch is
  * applied — so a mid-replay crash loses at most this one batch rather than
  * replaying it forever on every future launch. Actions appended after this
@@ -170,26 +180,27 @@ export function tripFromAction(action: PendingAction, existingTrips: Trip[]): Tr
 export async function replayWidgetActions(): Promise<void> {
   try {
     const raw = await getWidgetSharedItem(WIDGET_ACTIONS_KEY);
-    if (!raw) return;
-    await removeWidgetSharedItem(WIDGET_ACTIONS_KEY);
+    if (raw) {
+      await removeWidgetSharedItem(WIDGET_ACTIONS_KEY);
 
-    const actions = parsePendingActions(raw);
+      const actions = parsePendingActions(raw);
 
-    const jobs = await loadJobs();
-    const { jobs: nextJobs, changed: jobsChanged } = applyTimerActions(jobs, actions);
-    if (jobsChanged) await saveJobs(nextJobs);
+      const jobs = await loadJobs();
+      const { jobs: nextJobs, changed: jobsChanged } = applyTimerActions(jobs, actions);
+      if (jobsChanged) await saveJobs(nextJobs);
 
-    const trips = await loadTrips();
-    let nextTrips = trips;
-    let tripsChanged = false;
-    for (const action of actions) {
-      if (action.type !== "trip_log") continue;
-      const trip = tripFromAction(action, nextTrips);
-      if (!trip) continue;
-      nextTrips = [...nextTrips, trip];
-      tripsChanged = true;
+      const trips = await loadTrips();
+      let nextTrips = trips;
+      let tripsChanged = false;
+      for (const action of actions) {
+        if (action.type !== "trip_log") continue;
+        const trip = tripFromAction(action, nextTrips);
+        if (!trip) continue;
+        nextTrips = [...nextTrips, trip];
+        tripsChanged = true;
+      }
+      if (tripsChanged) await saveTrips(nextTrips);
     }
-    if (tripsChanged) await saveTrips(nextTrips);
 
     await refreshWidgetSnapshot();
   } catch {

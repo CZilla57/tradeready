@@ -1,7 +1,8 @@
 // utils/deepLinks.ts
 // Parser for the app's custom URL scheme (app.json "scheme": "tradeready").
 // Producers: the home-screen widgets (targets/widget), tradeready://job/<id>;
-// and the widget "on my way" button + Siri intent, tradeready://onmyway/<id>.
+// and the Siri "on my way" intent (there is no widget button for this one),
+// tradeready://onmyway/<id>.
 // Parse strictly — deep-link input is untrusted (any app can open a
 // tradeready:// URL): unknown hosts/paths return null, and the extracted id
 // is only ever used as a local record lookup.

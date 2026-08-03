@@ -251,22 +251,29 @@ describe("tripFromAction", () => {
 // ── replayWidgetActions ───────────────────────────────────────────────────────
 
 describe("replayWidgetActions", () => {
-  test("no-op when the shared item is absent (native module missing or nothing queued)", async () => {
-    getWidgetSharedItem.mockResolvedValue(null);
+  // Empty queue is the overwhelmingly common case (most launches/foregrounds
+  // have nothing pending) — it must still refresh the widget snapshot
+  // exactly once, or a fresh install stays on stale/seed data forever and
+  // sync's raw writes never reach the widget. Only the read/remove/apply
+  // portion is skipped; removeSharedItem must NOT fire for a queue that was
+  // never there to begin with.
+  test.each([
+    ["absent (native module missing or nothing queued)", null],
+    ["an empty string", ""],
+  ])("empty queue (%s): no removeSharedItem call, but exactly one snapshot refresh", async (_label, rawValue) => {
+    getWidgetSharedItem.mockResolvedValue(rawValue);
 
     await expect(replayWidgetActions()).resolves.toBeUndefined();
 
     expect(removeWidgetSharedItem).not.toHaveBeenCalled();
-    expect(refreshWidgetSnapshot).not.toHaveBeenCalled();
+    expect(refreshWidgetSnapshot).toHaveBeenCalledTimes(1);
+    // refreshWidgetSnapshot is mocked out entirely in this file (see the
+    // jest.mock above) — it never touches AsyncStorage here regardless of
+    // how many times it's called. This assertion is about replayWidgetActions
+    // itself skipping loadJobs/loadTrips when there's no queue, not about
+    // what the real refreshWidgetSnapshot does (that's widgetBridge.test.js's
+    // job — the real one DOES read AsyncStorage once the bridge is present).
     expect(AsyncStorage.getItem).not.toHaveBeenCalled();
-  });
-
-  test("no-op when the shared item is an empty string", async () => {
-    getWidgetSharedItem.mockResolvedValue("");
-
-    await replayWidgetActions();
-
-    expect(removeWidgetSharedItem).not.toHaveBeenCalled();
   });
 
   test("reads, removes, replays a timer action, saves jobs, and refreshes", async () => {
