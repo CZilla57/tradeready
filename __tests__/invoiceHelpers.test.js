@@ -35,6 +35,16 @@ describe("daysPastDue", () => {
     const days = daysPastDue("2025-06-20");
     expect(days).toBeLessThan(0);
   });
+
+  test("counts calendar days exactly across a spring-forward DST boundary", () => {
+    // US DST starts 2025-03-09. In a DST-observing zone the interval from
+    // Mar 1 local midnight to Mar 15 local midnight is 14 days minus one
+    // hour — Math.round must still report 14 (floor would say 13). In
+    // non-DST zones (e.g. UTC on CI) this is trivially exact either way.
+    jest.setSystemTime(new Date(2025, 2, 15)); // March 15
+    expect(daysPastDue("2025-03-01")).toBe(14);
+    jest.setSystemTime(MOCK_TODAY); // restore for later tests
+  });
 });
 
 describe("getStatus", () => {

@@ -4,6 +4,7 @@ import { formatMoney, formatQuote } from './format';
 import { computeEstimateBreakdown } from './pricingEngine';
 import { generateOneShot } from './oneShotAI';
 import { PAID_EPSILON, balanceDue, isPartlyPaid } from './invoicePayments';
+import { parseLocalDate } from './moneyUtils';
 import type { Invoice, Job, Customer, Settings, PaymentPlan, PaymentProvider } from '../types/models';
 import type { BadgeColor } from '../components/UI';
 
@@ -23,10 +24,17 @@ function describeAmountOwed(invoice: Invoice): string {
 }
 
 export function daysPastDue(dueDate: string): number {
-  const due = new Date(dueDate);
+  // Both sides in the LOCAL frame: a bare "YYYY-MM-DD" due date parsed as UTC
+  // midnight lags a local-midnight "today" by the UTC offset, which made every
+  // overdue transition land a day late east of UTC (floor happened to absorb
+  // the skew in negative-offset timezones). Local midnight minus local
+  // midnight is an exact day count ± a DST hour — round, not floor, so a
+  // spring-forward interval doesn't lose a day.
+  const due = parseLocalDate(dueDate);
+  due.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  return Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.round((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 export interface InvoiceStatus {
