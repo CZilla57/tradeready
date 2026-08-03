@@ -10,7 +10,7 @@ module.exports = {
   displayName: "TradeReady",
   deploymentTarget: "17.0",
   bundleIdentifier: ".widgets",
-  frameworks: ["SwiftUI", "WidgetKit"],
+  frameworks: ["SwiftUI", "WidgetKit", "AppIntents"],
   entitlements: {
     // Must match app.json ios.entitlements and WidgetBridgeModule.swift.
     "com.apple.security.application-groups": ["group.com.gettradereadyapp.tradeready"],
