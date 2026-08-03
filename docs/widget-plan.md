@@ -124,12 +124,26 @@ money-adjacent errors) and voice mark-paid (too destructive for a misheard comma
 
 ## Phases (owner-gated; stop for go-ahead between each)
 
-| Phase | Contents | Notes |
+| Phase | Contents | Status |
 |---|---|---|
-| 1 | **Shared infra:** App Group entitlement, WidgetBridge module, mirror writes, sign-out wipe, deep-link routes, extension-target config plugin | ~1 day is the bridge itself; the extension-target plugin is the fiddly, iterate-via-EAS-build part |
-| 2 | **Next Job widget** (small + medium, deep link to JobDetail) | Read-only; consumes the snapshot |
-| 3 | **Job Timer widget** (iOS 17 interactive, iOS 16 read-only fallback, pending-action replay) | First App Intent lands here |
-| 4 | **Siri Tier 1** (trip start/stop, next-job query, on-my-way) + polish | Voice phrases over the same intents/bridge |
+| 1 | **Shared infra:** App Group entitlement, WidgetBridge module, mirror writes, sign-out wipe, deep-link routes, extension-target config plugin | ✅ BUILT (fe422c2 + 74b9009), smoke-passed on build 9 |
+| 2 | **Next Job widget** (small + medium, deep link to JobDetail) | ✅ BUILT (74b9009), smoke-passed on build 9 |
+| 3 | **Job Timer widget** (iOS 17 interactive; pending-action replay via `widgetActions` container queue) | ✅ CODE COMPLETE 2026-08-03 (d4ce3c5 + replay layer 79bb704/4b4ac3d/9185c08) — awaiting EAS compile + device smoke. No iOS-16 fallback: the whole widget target floors at 17.0 (2026-08-03 decision) |
+| 4 | **Siri Tier 1** (odometer-based trip start/stop, next-job query, on-my-way) | ✅ CODE COMPLETE 2026-08-03 (62de4a9 + cold-launch fix 5c8e919) — intents live in `targets/widget/_shared/` so they compile into BOTH the app and the widget target (Siri requires main-app registration); on-my-way opens the app via RCTOpenURLNotification (warm) + a `pendingOpenUrl` container stash drained at launch (cold); trips collect odometer readings as Siri parameters and land as one complete `trip_log` pending action |
+
+**Accepted v1 tradeoffs (2026-08-03, final review):** launch-path replay runs
+concurrently with initialSync's pull (same exposure class as the recurring-job
+generators; sync queue re-pushes); a widget Start tap whose job is gone/done at
+replay silently reverts; `activeTrip` has no expiry — a forgotten Siri trip
+blocks "start a trip" until "stop my trip" or sign-out (v2: staleness overwrite
+in StartTripIntent); a crashed replay loses that batch of pending actions.
+
+**Owner decision pending before store submission:** the app target's iOS floor
+is 15.1 (RN default) while the Siri intents are `@available(iOS 17)` — known
+AppIntents pitfalls below a 16.x floor (registration + an annotation-ignored
+crash class). Recommended: `expo-build-properties` with
+`ios.deploymentTarget: "17.0"` — but that's a new dependency + a minimum-OS
+bump = Rule 3 + product decision.
 
 Original whole-effort estimate: **~3 weeks** (2026-07 sketch, iOS + Android; iOS-only
 should come in under that — re-estimate at kickoff).
