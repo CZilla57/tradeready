@@ -402,11 +402,12 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
                     { text: "Delete", style: "destructive", onPress: () => onDelete(uri) },
                   ])
                 }
-                hitSlop={{ top: 11, bottom: 11, left: 11, right: 11 }}
                 accessibilityLabel="Delete photo"
                 accessibilityRole="button"
               >
-                <Ionicons name="close" size={13} color="#fff" />
+                <View style={styles.photoDeleteCircle}>
+                  <Ionicons name="close" size={13} color="#fff" />
+                </View>
               </TouchableOpacity>
             </View>
           ))}
@@ -1117,10 +1118,19 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       borderRadius: radius.md,
       backgroundColor: colors.border,
     },
+    // The 44pt target sits fully inside the 88pt thumb: RN clips hit-testing
+    // to the parent's bounds, so the old corner-overhang badge (top/right -6
+    // plus hitSlop) only ever got a ~27pt effective target.
     photoDeleteBtn: {
       position: 'absolute' as const,
-      top: -6,
-      right: -6,
+      top: 0,
+      right: 0,
+      width: 44,
+      height: 44,
+      alignItems: 'flex-end' as const,
+      padding: 6,
+    },
+    photoDeleteCircle: {
       width: 22,
       height: 22,
       borderRadius: 11,
