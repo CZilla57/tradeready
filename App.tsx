@@ -434,7 +434,8 @@ function RootNavigator() {
     return () => sub.remove();
   }, []);
 
-  // Widget deep links (tradeready://job/<id>, produced by targets/widget).
+  // Widget deep links: tradeready://job/<id> (produced by targets/widget) and
+  // tradeready://onmyway/<id> (widget "on my way" button + Siri intent).
   // Warm taps navigate immediately; a cold-start tap arrives via
   // getInitialURL before the container and auth gates are ready, so it parks
   // in pendingDeepLinkRef and replays from onReady / the session effect.
@@ -448,6 +449,13 @@ function RootNavigator() {
     }
     pendingDeepLinkRef.current = null;
     track("widget_deep_link_opened", {});
+    if (link.type === "onmyway") {
+      navigationRef.navigate("Main", {
+        screen: "Jobs",
+        params: { screen: "JobDetail", params: { jobId: link.jobId, autoAction: "onmyway" } },
+      });
+      return;
+    }
     navigationRef.navigate("Main", {
       screen: "Jobs",
       params: { screen: "JobDetail", params: { jobId: link.jobId } },

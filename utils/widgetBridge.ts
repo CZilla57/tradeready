@@ -62,6 +62,13 @@ export interface WidgetSnapshot {
 /** UserDefaults key inside the shared App Group container. */
 export const WIDGET_SNAPSHOT_KEY = "widgetSnapshot";
 
+/**
+ * UserDefaults key for the pending-action queue (docs/widget-plan.md Phase 3):
+ * widget buttons and Siri intents append PendingAction entries here; the app
+ * reads-then-clears the batch on launch/foreground (utils/widgetActions.ts).
+ */
+export const WIDGET_ACTIONS_KEY = "widgetActions";
+
 // Statuses whose work is finished (or never happening) — their schedule slot
 // is history, not the answer to "when is my next job?".
 const DONE_STATUSES: Set<JobStatus> = new Set(["complete", "invoiced", "paid", "declined"]);
@@ -145,6 +152,10 @@ interface WidgetBridgeNativeModule {
   setSharedItem(key: string, json: string): Promise<void>;
   /** Removes every bridge-owned key from the App Group UserDefaults. */
   clearShared(): Promise<void>;
+  /** Reads a single key from the App Group UserDefaults, or null if unset. */
+  getSharedItem(key: string): Promise<string | null>;
+  /** Removes a single key from the App Group UserDefaults. */
+  removeSharedItem(key: string): Promise<void>;
 }
 
 function getBridge(): WidgetBridgeNativeModule | null {
@@ -187,5 +198,35 @@ export async function clearWidgetSnapshot(): Promise<void> {
     await bridge.clearShared();
   } catch {
     // Best-effort: a failed wipe must not block sign-out.
+  }
+}
+
+/**
+ * Read one key from the shared App Group container (e.g. WIDGET_ACTIONS_KEY).
+ * Null when the module is absent, the key was never written, or the read
+ * fails — callers (utils/widgetActions.ts) treat null/empty the same as
+ * "nothing pending".
+ */
+export async function getWidgetSharedItem(key: string): Promise<string | null> {
+  const bridge = getBridge();
+  if (!bridge) return null;
+  try {
+    return await bridge.getSharedItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove one key from the shared App Group container. Best-effort and silent
+ * — a failed clear must not block the replay that called it.
+ */
+export async function removeWidgetSharedItem(key: string): Promise<void> {
+  const bridge = getBridge();
+  if (!bridge) return;
+  try {
+    await bridge.removeSharedItem(key);
+  } catch {
+    // Best-effort: same discipline as clearWidgetSnapshot above.
   }
 }

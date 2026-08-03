@@ -33,5 +33,19 @@ public class WidgetBridgeModule: Module {
       }
       WidgetCenter.shared.reloadAllTimelines()
     }
+
+    // Reads a value the widget/Siri side wrote (e.g. pending widgetActions).
+    // No WidgetCenter reload — a plain read changes nothing on screen.
+    AsyncFunction("getSharedItem") { (key: String) -> String? in
+      UserDefaults(suiteName: Self.appGroupId)?.string(forKey: key)
+    }
+
+    // Removes one key (the app replaying pending actions clears them after
+    // reading, before the local save even lands — see utils/widgetActions.ts).
+    // No WidgetCenter reload here either; the app's own save path mirrors the
+    // fresh snapshot once the replay finishes.
+    AsyncFunction("removeSharedItem") { (key: String) in
+      UserDefaults(suiteName: Self.appGroupId)?.removeObject(forKey: key)
+    }
   }
 }

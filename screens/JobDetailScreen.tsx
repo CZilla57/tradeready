@@ -24,6 +24,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer } from "../utils/storage";
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
+import { composeSMS } from "../utils/messaging";
+import { buildOnMyWayMessage } from "../utils/onMyWay";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { track, reportError } from '../utils/analytics';
@@ -31,7 +33,7 @@ import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
 import { canSendEstimate, canRequestDeposit, advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
-import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES } from "../utils/timeTracking";
+import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES, applyClockIn, applyClockOut } from "../utils/timeTracking";
 import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
@@ -721,6 +723,29 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     }, [jobId])
   );
 
+  // "On my way" auto-action — tradeready://onmyway/<jobId> (widget button +
+  // Siri intent, consumed in App.tsx's consumeDeepLink) lands here with
+  // autoAction: "onmyway". Fires exactly once per arrival: open the SMS
+  // composer prefilled for this job's customer, then clear the param so a
+  // later focus (tab switch and back) doesn't reopen it — same "consume once"
+  // pattern as openInvoiceId in InvoicesScreen/TodayScreen. No phone on file
+  // still opens the composer (empty recipients, matching ReviewRequestScreen's
+  // handleSendSMS) — composeSMS's own "SMS not available" alert is the only
+  // failure path; we never auto-send.
+  const autoAction = route.params.autoAction;
+  useEffect(() => {
+    if (autoAction !== "onmyway" || !job) return;
+    navigation.setParams({ autoAction: undefined });
+    (async () => {
+      const [customers, settings] = await Promise.all([loadCustomers(), loadSettings()]);
+      const match = customers.find((c) => c.id === job.customerId);
+      await composeSMS({
+        recipients: match?.phone ? [match.phone] : [],
+        body: buildOnMyWayMessage(job, settings.businessName),
+      });
+    })();
+  }, [autoAction, job, navigation]);
+
   async function advanceStatus() {
     if (!job) return;
     const current = JOB_STATUSES[job.status];
@@ -851,21 +876,17 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
 
   async function handleClockIn() {
     if (!job) return;
-    const newSession = { start: new Date().toISOString(), end: null };
-    const sessions = [...(job.timeSessions || []), newSession];
-    const changes: Partial<Job> = { timeSessions: sessions };
-    if (job.status === "scheduled") changes.status = "in_progress";
-    await updateJob(changes);
+    const updated = applyClockIn(job, new Date().toISOString());
+    if (!updated) return;
+    await updateJob({ timeSessions: updated.timeSessions, status: updated.status });
     track('time_tracking_started', { jobId });
   }
 
   async function handleClockOut() {
     if (!job) return;
-    const now = new Date().toISOString();
-    const sessions = (job.timeSessions || []).map((s, i, arr) =>
-      i === arr.length - 1 && !s.end ? { ...s, end: now } : s
-    );
-    await updateJob({ timeSessions: sessions });
+    const updated = applyClockOut(job, new Date().toISOString());
+    if (!updated) return;
+    await updateJob({ timeSessions: updated.timeSessions });
   }
 
   // ── Loading state ──────────────────────────────────────────────────────

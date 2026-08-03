@@ -9,7 +9,7 @@ import { checkAndGenerateRecurringJobs } from '../utils/recurringJobs';
 import { checkAndGenerateRecurringInvoices } from '../utils/recurringInvoices';
 import { identifyUser } from '../utils/analytics';
 import { applyEstimateDecisions } from '../utils/storage';
-import { refreshWidgetSnapshot } from '../utils/widgetBridge';
+import { replayWidgetActions } from '../utils/widgetActions';
 
 interface AuthContextValue {
   session: Session | null;
@@ -76,17 +76,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (session?.user?.id) {
       checkAndGenerateRecurringJobs();
       checkAndGenerateRecurringInvoices();
-      // Seed the widget snapshot at launch/sign-in; save paths keep it fresh
+      // Replay any widget/Siri actions queued while the app was closed, then
+      // seed the widget snapshot at launch/sign-in; save paths keep it fresh
       // from here (no-op until the WidgetBridge native module ships).
-      refreshWidgetSnapshot();
+      replayWidgetActions();
     }
     const sub = AppState.addEventListener('change', state => {
       if (state === 'active' && session?.user?.id) {
         syncIfOnline(session.user.id)
           .then(() => applyEstimateDecisions())
-          // Re-mirror after the pull: remote changes land via raw writes that
-          // never pass through the save-path mirror hooks.
-          .then(() => refreshWidgetSnapshot())
+          // Replay queued widget/Siri actions, then re-mirror: remote changes
+          // land via raw writes that never pass through the save-path mirror
+          // hooks, and replayWidgetActions ends in its own refresh.
+          .then(() => replayWidgetActions())
           .catch(() => {});
         syncNotifications();
         checkAndGenerateRecurringJobs();

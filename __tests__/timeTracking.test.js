@@ -8,6 +8,8 @@ import {
   getActiveSession,
   formatElapsed,
   TIME_TRACKING_STATUSES,
+  applyClockIn,
+  applyClockOut,
 } from "../utils/timeTracking";
 
 const MIN = 60000;
@@ -112,5 +114,87 @@ describe("TIME_TRACKING_STATUSES", () => {
     expect(TIME_TRACKING_STATUSES.has("lead")).toBe(false);
     expect(TIME_TRACKING_STATUSES.has("estimate_sent")).toBe(false);
     expect(TIME_TRACKING_STATUSES.has("paid")).toBe(false);
+  });
+});
+
+// ── applyClockIn / applyClockOut ─────────────────────────────────────────────
+// Pure clock helpers extracted from JobDetailScreen's handleClockIn/
+// handleClockOut (docs/widget-plan.md Phase 3-4) so the widget/Siri replay
+// engine (utils/widgetActions.ts) can drive the same logic outside a screen.
+
+describe("applyClockIn", () => {
+  const job = (over = {}) => ({ id: "j1", status: "scheduled", timeSessions: [], ...over });
+
+  test("appends a new open session", () => {
+    const result = applyClockIn(job(), "2026-07-04T09:00:00.000Z");
+    expect(result.timeSessions).toEqual([{ start: "2026-07-04T09:00:00.000Z", end: null }]);
+  });
+
+  test("advances scheduled -> in_progress via JOB_STATUSES.scheduled.next (never hardcoded)", () => {
+    const result = applyClockIn(job({ status: "scheduled" }), "2026-07-04T09:00:00.000Z");
+    expect(result.status).toBe("in_progress");
+  });
+
+  test("leaves status alone when the job isn't 'scheduled'", () => {
+    const result = applyClockIn(job({ status: "approved" }), "2026-07-04T09:00:00.000Z");
+    expect(result.status).toBe("approved");
+  });
+
+  test("returns null when a session is already running", () => {
+    const running = job({ timeSessions: [{ start: "2026-07-04T08:00:00.000Z", end: null }] });
+    expect(applyClockIn(running, "2026-07-04T09:00:00.000Z")).toBeNull();
+  });
+
+  test.each(["complete", "invoiced", "paid", "declined"])(
+    "returns null when status is '%s' (work is already done/declined)",
+    (status) => {
+      expect(applyClockIn(job({ status }), "2026-07-04T09:00:00.000Z")).toBeNull();
+    }
+  );
+
+  test("does not mutate the original job", () => {
+    const original = job();
+    const result = applyClockIn(original, "2026-07-04T09:00:00.000Z");
+    expect(original.timeSessions).toEqual([]);
+    expect(result).not.toBe(original);
+  });
+});
+
+describe("applyClockOut", () => {
+  const job = (over = {}) => ({ id: "j1", status: "in_progress", timeSessions: [], ...over });
+
+  test("closes the running session with the given end time", () => {
+    const running = job({ timeSessions: [{ start: "2026-07-04T09:00:00.000Z", end: null }] });
+    const result = applyClockOut(running, "2026-07-04T10:00:00.000Z");
+    expect(result.timeSessions).toEqual([
+      { start: "2026-07-04T09:00:00.000Z", end: "2026-07-04T10:00:00.000Z" },
+    ]);
+  });
+
+  test("clamps end to start when atIso is earlier (clock skew / out-of-order replay)", () => {
+    const running = job({ timeSessions: [{ start: "2026-07-04T09:00:00.000Z", end: null }] });
+    const result = applyClockOut(running, "2026-07-04T08:00:00.000Z");
+    expect(result.timeSessions[0].end).toBe("2026-07-04T09:00:00.000Z");
+  });
+
+  test("returns null when nothing is running", () => {
+    expect(applyClockOut(job({ timeSessions: [] }), "2026-07-04T10:00:00.000Z")).toBeNull();
+    expect(
+      applyClockOut(job({ timeSessions: [{ start: "a", end: "b" }] }), "2026-07-04T10:00:00.000Z")
+    ).toBeNull();
+  });
+
+  test("leaves earlier ended sessions untouched", () => {
+    const running = job({
+      timeSessions: [
+        { start: "2026-07-04T07:00:00.000Z", end: "2026-07-04T08:00:00.000Z" },
+        { start: "2026-07-04T09:00:00.000Z", end: null },
+      ],
+    });
+    const result = applyClockOut(running, "2026-07-04T10:00:00.000Z");
+    expect(result.timeSessions[0]).toEqual({
+      start: "2026-07-04T07:00:00.000Z",
+      end: "2026-07-04T08:00:00.000Z",
+    });
   });
 });

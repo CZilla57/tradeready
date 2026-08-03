@@ -41,3 +41,38 @@ describe("parseWidgetDeepLink", () => {
     expect(parseWidgetDeepLink(url)).toBeNull();
   });
 });
+
+// "On my way" links (widget button + Siri OnMyWayIntent, docs/widget-plan.md
+// Phase 3-4) — same untrusted-input posture as the job link above.
+describe("parseWidgetDeepLink — onmyway", () => {
+  test("parses an on-my-way link", () => {
+    expect(parseWidgetDeepLink("tradeready://onmyway/j1722_4")).toEqual({
+      type: "onmyway",
+      jobId: "j1722_4",
+    });
+  });
+
+  test("is case-insensitive on the scheme and trims whitespace", () => {
+    expect(parseWidgetDeepLink(" TradeReady://onmyway/abc ")).toEqual({
+      type: "onmyway",
+      jobId: "abc",
+    });
+  });
+
+  test("decodes percent-encoded ids", () => {
+    expect(parseWidgetDeepLink("tradeready://onmyway/a%2Bb")).toEqual({
+      type: "onmyway",
+      jobId: "a+b",
+    });
+  });
+
+  test.each([
+    "tradeready://onmyway/", // empty id
+    "tradeready://onmyway/a/b", // extra path segment
+    "tradeready://onmyway/a?x=1", // query string
+    "otherapp://onmyway/j1", // wrong scheme
+    "tradeready://onmyway/%zz", // malformed percent-encoding
+  ])("rejects %s", (url) => {
+    expect(parseWidgetDeepLink(url)).toBeNull();
+  });
+});

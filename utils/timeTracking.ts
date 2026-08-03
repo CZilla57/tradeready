@@ -4,7 +4,8 @@
 // instead of recomputed inline every render tick. Pure: the caller passes the
 // current time so the running total is deterministic in tests.
 
-import type { JobStatus } from "../types/models";
+import { JOB_STATUSES } from "./pricingEngine";
+import type { Job, JobStatus } from "../types/models";
 
 export interface WorkSession {
   /** ISO timestamp when the worker clocked in. */
@@ -88,4 +89,45 @@ export function computeTimeTracking(
   const sessionCount = sessions.filter((s) => s.end).length + (isClocked ? 1 : 0);
 
   return { activeSession, isClocked, completedMs, liveMs, timerStr, trackedHours, overUnder, sessionCount };
+}
+
+// Statuses where clocking in makes no sense — the work is already finished
+// (or never happening). Matches widgetBridge's DONE_STATUSES; kept as its own
+// constant here since the two modules must not import each other.
+const CLOCK_IN_BLOCKED_STATUSES: Set<JobStatus> = new Set(["complete", "invoiced", "paid", "declined"]);
+
+/**
+ * Pure clock-in: appends a new open session and, for a job still sitting at
+ * "scheduled", advances status via the JOB_STATUSES `.next` chain (never a
+ * hardcoded "in_progress" — see utils/pricingEngine.ts). Returns null when a
+ * session is already running or the job's work is already done/declined.
+ */
+export function applyClockIn(job: Job, atIso: string): Job | null {
+  if (getActiveSession(job.timeSessions || [])) return null;
+  if (CLOCK_IN_BLOCKED_STATUSES.has(job.status)) return null;
+
+  const timeSessions = [...(job.timeSessions || []), { start: atIso, end: null }];
+  const next: Job = { ...job, timeSessions };
+  if (job.status === "scheduled") {
+    const advanced = JOB_STATUSES.scheduled.next;
+    if (advanced) next.status = advanced;
+  }
+  return next;
+}
+
+/**
+ * Pure clock-out: closes the last open session with `end = atIso`, clamping
+ * to `start` if the given timestamp is somehow earlier (clock skew, replayed
+ * widget/Siri action arriving out of order). Returns null when nothing is
+ * running.
+ */
+export function applyClockOut(job: Job, atIso: string): Job | null {
+  const active = getActiveSession(job.timeSessions || []);
+  if (!active) return null;
+
+  const end = atIso < active.start ? active.start : atIso;
+  const timeSessions = (job.timeSessions || []).map((s, i, arr) =>
+    i === arr.length - 1 && !s.end ? { ...s, end } : s
+  );
+  return { ...job, timeSessions };
 }
