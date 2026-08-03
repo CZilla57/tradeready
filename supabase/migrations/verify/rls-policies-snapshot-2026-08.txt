@@ -1,0 +1,47 @@
+RLS policy snapshot — 2026-08-03
+Produced by supabase/migrations/verify/20260803_rls_policies_verify.sql run by the
+owner in the Supabase SQL editor (DO-block checks passed: run reported Success;
+grid below is the final SELECT's output, pasted verbatim). Closes security
+roadmap item 6: the six dashboard-created core tables are provably RLS-enabled
+and owner-scoped from the repo, not just from a recorded claim.
+
+| section  | tablename         | status                                   | policyname                    | cmd    | roles  | using_expr             | check_expr             |
+| -------- | ----------------- | ---------------------------------------- | ----------------------------- | ------ | ------ | ---------------------- | ---------------------- |
+| 1 CHECK  | customer_notes    | OK: RLS enabled, 1 owner-scoped policies | null                          | null   | null   | null                   | null                   |
+| 1 CHECK  | customers         | OK: RLS enabled, 1 owner-scoped policies | null                          | null   | null   | null                   | null                   |
+| 1 CHECK  | expenses          | OK: RLS enabled, 1 owner-scoped policies | null                          | null   | null   | null                   | null                   |
+| 1 CHECK  | invoices          | OK: RLS enabled, 1 owner-scoped policies | null                          | null   | null   | null                   | null                   |
+| 1 CHECK  | jobs              | OK: RLS enabled, 1 owner-scoped policies | null                          | null   | null   | null                   | null                   |
+| 1 CHECK  | settings          | OK: RLS enabled, 1 owner-scoped policies | null                          | null   | null   | null                   | null                   |
+| 2 POLICY | auto_reminder_log | null                                     | read own reminder log         | SELECT | public | (auth.uid() = user_id) | -                      |
+| 2 POLICY | customer_notes    | null                                     | own_notes                     | ALL    | public | (auth.uid() = user_id) | -                      |
+| 2 POLICY | customers         | null                                     | own_customers                 | ALL    | public | (auth.uid() = user_id) | -                      |
+| 2 POLICY | expenses          | null                                     | own_expenses                  | ALL    | public | (auth.uid() = user_id) | -                      |
+| 2 POLICY | invoices          | null                                     | own_invoices                  | ALL    | public | (auth.uid() = user_id) | -                      |
+| 2 POLICY | jobs              | null                                     | own_jobs                      | ALL    | public | (auth.uid() = user_id) | -                      |
+| 2 POLICY | pricebook         | null                                     | users manage own pricebook    | ALL    | public | (auth.uid() = user_id) | (auth.uid() = user_id) |
+| 2 POLICY | settings          | null                                     | own_settings                  | ALL    | public | (auth.uid() = user_id) | -                      |
+| 2 POLICY | stripe_accounts   | null                                     | users read own stripe account | SELECT | public | (auth.uid() = user_id) | -                      |
+
+Reading notes:
+- "-" in check_expr is fine: when WITH CHECK is omitted on an ALL policy,
+  Postgres reuses the USING expression as the write check — functionally
+  identical to pricebook's explicit form (documented no-op, roadmap item 6).
+- ai_usage_log is absent from section 2 BY DESIGN: RLS enabled with zero
+  policies (deny-all for clients; service role bypasses). pg_policies only
+  lists tables that have policies.
+- DISCREPANCY (follow-up open as of 2026-08-03): `subscriptions` shows NO
+  policy, but supabase/migrations/20260705_subscriptions.sql declares a
+  SELECT policy "users read own subscription". Either the policy was never
+  applied or was dropped. No client impact today (nothing reads the table;
+  the RevenueCat SDK is the entitlement source of truth) IF the table's RLS
+  is enabled (deny-all). Whether RLS is enabled there is NOT visible in this
+  snapshot — verify with:
+    select relname, relrowsecurity
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and relname in ('subscriptions', 'ai_usage_log');
+  Both must show relrowsecurity = true. If subscriptions shows false, enable
+  RLS and re-apply the migration's policy immediately — with Supabase's
+  default grants, a table without RLS is readable/writable with the
+  publishable key.
