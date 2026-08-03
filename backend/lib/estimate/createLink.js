@@ -18,7 +18,10 @@ const PUBLIC_BASE = process.env.ESTIMATE_PUBLIC_BASE || 'https://czilla57.github
 const allow = createRateLimiter({ limit: 10 });
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', 'https://tradeready.app');
+  // CORS never applies to this endpoint (the app calls it with a native
+  // fetch — see ./cors.js), so a single static real host replaces the dead
+  // tradeready.app entry rather than an echo list.
+  res.setHeader('Access-Control-Allow-Origin', 'https://gettradereadyapp.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();

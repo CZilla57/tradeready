@@ -5,7 +5,9 @@
 // Annual wins if an id ever contains both words (e.g. "annual_billed_monthly").
 
 function resolvePlan(productId) {
-  const id = (productId || '').toLowerCase();
+  // String() coercion: product ids arrive from webhook JSON, so a non-string
+  // (e.g. a numeric id) must map to null, not throw from .toLowerCase().
+  const id = String(productId ?? '').toLowerCase();
   if (id.includes('annual')) return 'annual';
   if (id.includes('monthly')) return 'monthly';
   return null;

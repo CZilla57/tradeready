@@ -2,7 +2,7 @@
 // role key (bypasses owner-scoped RLS) exactly like backend/api/stripe/webhook.js.
 // NOT routed by Vercel (lives under lib/, not api/).
 
-const crypto = require('crypto');
+const { constantTimeEqual } = require('./constantTime');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -51,14 +51,8 @@ async function upsertJob(id, userId, data) {
   if (!res.ok) throw new Error(`Supabase upsert ${res.status}: ${await res.text()}`);
 }
 
-// Length-safe constant-time string compare (both must be non-empty strings).
-function constantTimeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length === 0 || b.length === 0) return false;
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ba, bb);
-}
+// constantTimeEqual moved to ./constantTime.js (shared with the RevenueCat
+// subscription webhook); re-exported below so existing importers keep working.
 
 // Decides the approval object to persist when (re)generating an approval link.
 // Consent integrity: once a job is APPROVED, its snapshot is frozen — re-sending

@@ -17,6 +17,15 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const CRON_SECRET = process.env.CRON_SECRET;
 
+// Owner-tunable per-user daily ceiling. Reminders are one-and-done per
+// invoice, so honest volume is bounded by NEW overdue invoices in a day — 25
+// covers any solo operator's worst backlog day while capping the blast radius
+// of a hostile account (unbounded synced invoices → unbounded mail from the
+// verified domain). Counted from auto_reminder_log rows stamped today (UTC):
+// the claim insert defaults sent_at to now(), so pending/failed attempts
+// count too — the conservative direction.
+const MAX_REMINDERS_PER_USER_PER_DAY = 25;
+
 function sbFetch(path, init = {}) {
   return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
@@ -63,6 +72,7 @@ module.exports = async function handler(req, res) {
   let scanned = 0;
   let sent = 0;
   let failed = 0;
+  let capped = 0;
 
   try {
     const [invRows, setRows, logRows, jobRows] = await Promise.all([
@@ -70,7 +80,9 @@ module.exports = async function handler(req, res) {
       // (Avoids fragile JSONB-filter URL encoding; scale is small at launch.)
       sbFetch("invoices?deleted=is.false&select=id,user_id,data").then((r) => r.json()),
       sbFetch("settings?select=user_id,data").then((r) => r.json()),
-      sbFetch("auto_reminder_log?select=user_id,invoice_id").then((r) => r.json()),
+      // sent_at rides along so the daily cap can count today's rows per user
+      // from the fetch we already make — no extra request, no schema change.
+      sbFetch("auto_reminder_log?select=user_id,invoice_id,sent_at").then((r) => r.json()),
       // Needed so selectInvoicesToRemind can exclude a pre-work deposit
       // invoice whose job isn't done yet — "overdue" on that due date doesn't
       // mean the customer is late on a finished bill.
@@ -78,10 +90,19 @@ module.exports = async function handler(req, res) {
     ]);
 
     const settingsByUser = new Map((setRows || []).map((r) => [r.user_id, r.data]));
+    const dayStart = new Date(today);
+    dayStart.setUTCHours(0, 0, 0, 0);
     const sentByUser = new Map();
+    const todayCountByUser = new Map();
     for (const row of logRows || []) {
       if (!sentByUser.has(row.user_id)) sentByUser.set(row.user_id, new Set());
       sentByUser.get(row.user_id).add(row.invoice_id);
+      // An unparseable sent_at simply doesn't count toward the cap — the row
+      // still blocks its invoice via the one-and-done set above.
+      const stamped = Date.parse(row.sent_at);
+      if (Number.isFinite(stamped) && stamped >= dayStart.getTime()) {
+        todayCountByUser.set(row.user_id, (todayCountByUser.get(row.user_id) || 0) + 1);
+      }
     }
 
     const invByUser = new Map();
@@ -103,8 +124,17 @@ module.exports = async function handler(req, res) {
       const alreadySent = [...(sentByUser.get(userId) || [])];
       const jobs = jobsByUser.get(userId) || [];
       const toSend = selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: alreadySent, jobs, today });
+      // Rows this user already claimed today plus claims made in this run.
+      let claimedToday = todayCountByUser.get(userId) || 0;
+      let deferred = 0;
 
       for (const invoice of toSend) {
+        // Daily cap: everything past the ceiling simply waits — no log row is
+        // written for it, so tomorrow's run picks it up via one-and-done.
+        if (claimedToday >= MAX_REMINDERS_PER_USER_PER_DAY) {
+          deferred++;
+          continue;
+        }
         scanned++;
         // Per-invoice isolation: a network throw on the claim below must not
         // abort the whole daily batch.
@@ -126,6 +156,9 @@ module.exports = async function handler(req, res) {
           const claimed = await claimRes.json().catch(() => []);
           if (!Array.isArray(claimed) || claimed.length === 0) continue; // already claimed
           const logId = claimed[0].id;
+          // A fresh row exists — count it against today's cap regardless of
+          // send outcome, matching what the DB count will say next run.
+          claimedToday++;
 
           // SEND, then record the outcome via best-effort markLog (never throws).
           try {
@@ -148,9 +181,16 @@ module.exports = async function handler(req, res) {
           console.error("[send-reminders] invoice error", invoice.id, invErr.message);
         }
       }
+
+      if (deferred > 0) {
+        capped += deferred;
+        // Worth a look when it fires: either a genuine backlog or an account
+        // generating mail volume on purpose.
+        console.error("[send-reminders] daily cap reached", userId, "deferred", deferred);
+      }
     }
 
-    return res.status(200).json({ scanned, sent, failed });
+    return res.status(200).json({ scanned, sent, failed, capped });
   } catch (err) {
     console.error("[send-reminders] fatal", err.message);
     return res.status(500).json({ error: "Reminder run failed" });

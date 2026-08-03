@@ -131,13 +131,15 @@ describe("buildReminderEmail", () => {
 
   test("includes the payment link only when it was minted for the balance being quoted", () => {
     // The base invoice is $1,200 with no payments — a link cached for exactly
-    // that balance is current and goes out.
+    // that balance is current and goes out. (Fixture hosts are on the payment-
+    // link allowlist so these tests keep exercising the AMOUNT match; host
+    // filtering has its own suite in reminderEmailHardening.test.js.)
     const withLink = buildReminderEmail({
-      invoice: inv({ paymentLinkUrl: "https://pay.example/abc", paymentLinkAmount: 1200 }),
+      invoice: inv({ paymentLinkUrl: "https://buy.stripe.com/fake-link-001", paymentLinkAmount: 1200 }),
       settings,
       today: TODAY,
     });
-    expect(withLink.text).toContain("https://pay.example/abc");
+    expect(withLink.text).toContain("https://buy.stripe.com/fake-link-001");
     const without = buildReminderEmail({ invoice: inv(), settings, today: TODAY });
     expect(without.text).not.toContain("pay securely here");
   });
@@ -148,38 +150,38 @@ describe("buildReminderEmail", () => {
     // invite a $400 overcharge.
     const stale = inv({
       amount: 1000,
-      paymentLinkUrl: "https://pay.example/full_1000",
+      paymentLinkUrl: "https://buy.stripe.com/fake-full-1000",
       paymentLinkAmount: 1000,
       payments: [{ id: "p1", amount: 400, date: "2026-07-01" }],
     });
     const email = buildReminderEmail({ invoice: stale, settings, today: TODAY });
     expect(email.text).toContain("$600.00 of $1,000.00 still outstanding");
-    expect(email.text).not.toContain("https://pay.example/full_1000");
+    expect(email.text).not.toContain("https://buy.stripe.com/fake-full-1000");
     expect(email.text).not.toContain("pay securely here");
   });
 
   test("OMITS a deposit link — it charges less than the balance the email asks for", () => {
     const depositLink = inv({
       amount: 1000,
-      paymentLinkUrl: "https://pay.example/deposit_500",
+      paymentLinkUrl: "https://buy.stripe.com/fake-deposit-500",
       paymentLinkAmount: 500,
       depositRequest: { amount: 500, percent: 50, requestedAt: "2026-07-01" },
     });
     const email = buildReminderEmail({ invoice: depositLink, settings, today: TODAY });
-    expect(email.text).not.toContain("https://pay.example/deposit_500");
+    expect(email.text).not.toContain("https://buy.stripe.com/fake-deposit-500");
   });
 
   test("OMITS a link whose minted amount was never recorded — unverifiable", () => {
-    const unknownAmount = inv({ paymentLinkUrl: "https://pay.example/abc" });
+    const unknownAmount = inv({ paymentLinkUrl: "https://buy.stripe.com/fake-link-001" });
     const email = buildReminderEmail({ invoice: unknownAmount, settings, today: TODAY });
-    expect(email.text).not.toContain("https://pay.example/abc");
+    expect(email.text).not.toContain("https://buy.stripe.com/fake-link-001");
   });
 
   test("a link matching a ledger-derived balance within half a cent still goes out", () => {
     // Float sums drift: 1000 - 333.33 - 333.33 = 333.34000000000003.
     const drifted = inv({
       amount: 1000,
-      paymentLinkUrl: "https://pay.example/balance_333_34",
+      paymentLinkUrl: "https://buy.stripe.com/fake-balance-333-34",
       paymentLinkAmount: 333.34,
       payments: [
         { id: "p1", amount: 333.33, date: "2026-07-01" },
@@ -187,7 +189,7 @@ describe("buildReminderEmail", () => {
       ],
     });
     const email = buildReminderEmail({ invoice: drifted, settings, today: TODAY });
-    expect(email.text).toContain("https://pay.example/balance_333_34");
+    expect(email.text).toContain("https://buy.stripe.com/fake-balance-333-34");
   });
 
   test("omits reply_to when the business has no email", () => {

@@ -35,11 +35,19 @@ function isRateLimited(ip) {
 }
 
 module.exports = async function handler(req, res) {
-  const allowedOrigins = ['https://tradeready.app'];
+  // Real hosts this project serves — tradeready.app was never ours (dead
+  // entry from the original scaffold; see backend/lib/estimate/cors.js for
+  // the canonical list rationale).
+  const allowedOrigins = [
+    'https://estimates.gettradereadyapp.com',
+    'https://gettradereadyapp.com',
+    'https://www.gettradereadyapp.com',
+    'https://czilla57.github.io',
+  ];
   const origin = req.headers['origin'];
   res.setHeader(
     'Access-Control-Allow-Origin',
-    origin && allowedOrigins.includes(origin) ? origin : 'https://tradeready.app'
+    origin && allowedOrigins.includes(origin) ? origin : 'https://gettradereadyapp.com'
   );
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -88,7 +96,7 @@ module.exports = async function handler(req, res) {
     // orphaned user record (recoverable) rather than orphaned data (not recoverable).
     const deleteResults = await Promise.all(
       DATA_TABLES.map(table =>
-        fetch(`${SUPABASE_URL}/rest/v1/${table}?user_id=eq.${userId}`, {
+        fetch(`${SUPABASE_URL}/rest/v1/${table}?user_id=eq.${encodeURIComponent(userId)}`, {
           method: 'DELETE',
           headers: {
             Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,

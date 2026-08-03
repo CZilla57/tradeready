@@ -19,6 +19,7 @@
 // model's JSON object.
 
 const { createRateLimiter, validateReceiptPayload } = require("../lib/guards");
+const { enforceDailyCap } = require("../lib/aiUsage");
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -29,7 +30,15 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 // text-only model used elsewhere in this backend, supports images).
 const GROQ_VISION_MODEL = "qwen/qwen3.6-27b";
 
-const ALLOWED_ORIGINS = ["https://tradeready.app"];
+// Real hosts this project serves — tradeready.app was never ours (dead entry
+// from the original scaffold; see backend/lib/estimate/cors.js for the
+// canonical list rationale).
+const ALLOWED_ORIGINS = [
+  "https://estimates.gettradereadyapp.com",
+  "https://gettradereadyapp.com",
+  "https://www.gettradereadyapp.com",
+  "https://czilla57.github.io",
+];
 
 // 5 scans per user per minute — vision calls are the most expensive proxy
 // requests, and even a stack of paper receipts is one scan every ~12 seconds.
@@ -37,7 +46,7 @@ const allowRequest = createRateLimiter({ limit: 5 });
 
 module.exports = async function handler(req, res) {
   const origin = req.headers["origin"];
-  res.setHeader("Access-Control-Allow-Origin", origin && ALLOWED_ORIGINS.includes(origin) ? origin : "https://tradeready.app");
+  res.setHeader("Access-Control-Allow-Origin", origin && ALLOWED_ORIGINS.includes(origin) ? origin : "https://gettradereadyapp.com");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -69,6 +78,16 @@ module.exports = async function handler(req, res) {
   const invalid = validateReceiptPayload(req.body);
   if (invalid) {
     return res.status(400).json({ error: invalid });
+  }
+
+  // Durable per-user daily cap — second layer behind the in-memory limiter
+  // (see backend/lib/aiUsage.js). Runs after validation so malformed requests
+  // never consume quota; fails open on counter-infrastructure errors.
+  if (user && user.id) {
+    const cap = await enforceDailyCap(user.id, "receipt-extract");
+    if (!cap.allowed) {
+      return res.status(429).json({ error: cap.error });
+    }
   }
 
   const { imageBase64, mediaType } = req.body;

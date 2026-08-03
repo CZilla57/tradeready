@@ -30,6 +30,7 @@
 
 const Stripe = require('stripe');
 const { amountPaid, isFullyPaid, materializeLegacyLedger } = require('../../lib/paymentMath');
+const { verifyConnectedAccountOwnership } = require('../../lib/stripe/webhookOwnership');
 
 const STRIPE_SECRET_KEY            = process.env.STRIPE_SECRET_KEY;
 const STRIPE_CONNECT_WEBHOOK_SECRET = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
@@ -75,7 +76,10 @@ const handler = async function (req, res) {
   }
 
   try {
-    await recordStripePayment(invoiceId, session);
+    const outcome = await recordStripePayment(invoiceId, session, event.account);
+    if (outcome && outcome.skipped) {
+      return res.status(200).json({ received: true, skipped: true });
+    }
     return res.status(200).json({ received: true });
   } catch (err) {
     console.error('[stripe/webhook] failed to mark invoice paid:', err.message);
@@ -90,7 +94,7 @@ module.exports = handler;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function recordStripePayment(invoiceId, session) {
+async function recordStripePayment(invoiceId, session, connectedAccountId) {
   const supabaseHeaders = {
     Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
     apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -114,6 +118,30 @@ async function recordStripePayment(invoiceId, session) {
   }
 
   const { user_id, data } = rows[0];
+
+  // Ownership check: metadata.invoiceId is client-supplied at link-creation
+  // time (create-payment-link stamps whatever the app sends), so it may name
+  // an invoice the paying connected account does NOT own. Require the event's
+  // connected account (`event.account` — Connect events carry it there) to be
+  // the account on record for this invoice's owner, or a payment into an
+  // attacker's own account could settle a victim's invoice. A mismatch or
+  // missing stripe_accounts row is deliberate, not transient — skip with a
+  // 200 rather than throw, or Stripe would retry forever. A Supabase error
+  // in the lookup still throws → 500 → retry.
+  const ownership = await verifyConnectedAccountOwnership({
+    supabaseUrl: SUPABASE_URL,
+    headers: supabaseHeaders,
+    userId: user_id,
+    eventAccount: connectedAccountId,
+  });
+  if (!ownership.ok) {
+    console.warn(
+      `[stripe/webhook] invoice ${invoiceId}: event account ${connectedAccountId} does not match ` +
+      `owner's connected account ${ownership.expectedAccountId} (${ownership.reason}) — skipping`
+    );
+    return { skipped: true };
+  }
+
   const paymentId = `stripe_${session.id}`;
 
   // Materialize the legacy implied payment (if any) BEFORE appending the

@@ -17,6 +17,20 @@ function isChaseableAmount(value) {
 }
 
 /**
+ * Conservative single-recipient shape: one local part, one @, one dot-bearing
+ * domain, and none of the characters that split a recipient list or smuggle a
+ * header (whitespace incl. CR/LF, commas, semicolons, angle brackets, quotes).
+ * The invoice email is user-synced data handed straight to Resend's `to:` —
+ * deliberately stricter than RFC 5322, since an exotic-but-valid address is a
+ * skipped reminder while a permissive one is an open relay. Invalid → the
+ * invoice is skipped, never thrown on.
+ */
+const PLAUSIBLE_EMAIL = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+function isPlausibleEmail(value) {
+  return typeof value === "string" && value.length <= 254 && PLAUSIBLE_EMAIL.test(value);
+}
+
+/**
  * Mirrors utils/jobStatus.ts isJobDunningEligible — kept in sync by
  * __tests__/jobDunningParity.test.js (see __tests__/paymentMathParity.test.js
  * for the established pattern this follows). backend/ is a separate
@@ -37,10 +51,13 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, job
   const rules = Array.isArray(settings.rules) ? settings.rules : [];
   if (rules.length === 0) return [];
   // r?.days (not r.days) so a null/malformed rule entry yields NaN and is
-  // rejected by the isFinite guard below, rather than throwing and aborting the
-  // whole cron run for every user.
-  const earliest = Math.min(...rules.map((r) => Number(r?.days)));
-  if (!Number.isFinite(earliest)) return [];
+  // dropped by the filter below, rather than throwing and aborting the whole
+  // cron run for every user. The >= 0 clamp matters: rules are user-synced
+  // data, and a single negative `days` would drag `earliest` below zero and
+  // fire every unpaid invoice — including ones not yet due — on every run.
+  const validDays = rules.map((r) => Number(r?.days)).filter((d) => Number.isFinite(d) && d >= 0);
+  if (validDays.length === 0) return [];
+  const earliest = Math.min(...validDays);
 
   const sent = new Set(alreadySentInvoiceIds || []);
   const jobStatusById = new Map((jobs || []).filter(Boolean).map((j) => [j.id, j.status]));
@@ -59,8 +76,7 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, job
       // Postgres trigger can union in payments the webhook never saw, so
       // `paid` may be stale. A voided payment correctly re-opens the invoice.
       !isFullyPaid(invoice) &&
-      typeof invoice.email === "string" &&
-      invoice.email.trim() !== "" &&
+      isPlausibleEmail(invoice.email) &&
       invoice.due &&
       daysPastDue(invoice.due, today) >= earliest &&
       !sent.has(invoice.id) &&
@@ -68,4 +84,4 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, job
   );
 }
 
-module.exports = { selectInvoicesToRemind, isJobDunningEligible };
+module.exports = { selectInvoicesToRemind, isJobDunningEligible, isPlausibleEmail };

@@ -14,9 +14,17 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 module.exports = async function handler(req, res) {
-  const allowedOrigins = ['https://tradeready.app'];
+  // Real hosts this project serves — tradeready.app was never ours (dead
+  // entry from the original scaffold; see backend/lib/estimate/cors.js for
+  // the canonical list rationale).
+  const allowedOrigins = [
+    'https://estimates.gettradereadyapp.com',
+    'https://gettradereadyapp.com',
+    'https://www.gettradereadyapp.com',
+    'https://czilla57.github.io',
+  ];
   const origin = req.headers['origin'];
-  res.setHeader('Access-Control-Allow-Origin', origin && allowedOrigins.includes(origin) ? origin : 'https://tradeready.app');
+  res.setHeader('Access-Control-Allow-Origin', origin && allowedOrigins.includes(origin) ? origin : 'https://gettradereadyapp.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -75,7 +83,7 @@ module.exports = async function handler(req, res) {
 
 async function getStripeAccountId(userId) {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/stripe_accounts?user_id=eq.${userId}&select=stripe_account_id`,
+    `${SUPABASE_URL}/rest/v1/stripe_accounts?user_id=eq.${encodeURIComponent(userId)}&select=stripe_account_id`,
     {
       headers: {
         Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,

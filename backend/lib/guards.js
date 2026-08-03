@@ -1,11 +1,17 @@
-// Shared request guards for the AI proxy endpoints (ai-chat, pricebook-suggest).
+// Shared request guards for the AI proxy endpoints (ai-chat,
+// pricebook-suggest, receipt-extract).
 //
-// Rate limiting is an in-memory sliding window — per serverless instance.
+// Rate limiting here is an in-memory sliding window — per serverless instance.
 // Vercel may run several instances (each with its own window) and cold starts
 // reset counts, so these limits are a cost ceiling per instance, not a hard
-// global quota. That is enough to stop runaway client loops and casual
-// scripted abuse of the owner's vendor API keys without adding a datastore
-// dependency. If real abuse shows up in the logs, upgrade to a shared store.
+// global quota. They are kept as the FIRST, cheap layer (no network
+// round-trip) to stop runaway client loops. The durable, cross-instance layer
+// is the per-user cumulative DAILY cap in backend/lib/aiUsage.js (Supabase
+// ai_usage_log table, service-role writes), which each AI endpoint enforces
+// after JWT verification and payload validation. That cap fails open on
+// counter-infrastructure errors, so it is a hard quota only while Supabase is
+// reachable. Neither layer checks subscription state — entitlement
+// enforcement is a separate, deliberately deferred roadmap decision.
 
 const DEFAULT_WINDOW_MS = 60 * 1000;
 const MAX_TRACKED_KEYS = 1000;

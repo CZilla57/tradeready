@@ -22,7 +22,10 @@ const ROUTES = {
 };
 
 module.exports = async function handler(req, res) {
-  const route = ROUTES[req.query.action];
+  const action = req.query.action;
+  // Own keys only — inherited names like ?action=constructor would otherwise resolve
+  // via Object.prototype, slip past the not-found check and hang the invocation.
+  const route = Object.prototype.hasOwnProperty.call(ROUTES, action) ? ROUTES[action] : null;
   if (!route) return res.status(404).json({ error: 'Not found' });
   return route(req, res);
 };
