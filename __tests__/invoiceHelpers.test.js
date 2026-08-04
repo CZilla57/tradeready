@@ -283,3 +283,19 @@ describe("buildGenericEstimateMessage", () => {
     expect(msg).toContain('https://example.test/e?j=1&t=2');
   });
 });
+
+describe("daysPastDue with an injected clock", () => {
+  test("computes against the given now, not the wall clock", () => {
+    const now = new Date(2026, 7, 4, 10, 0); // Aug 4 2026, 10:00 local
+    expect(daysPastDue("2026-08-04", now)).toBe(0);
+    expect(daysPastDue("2026-08-05", now)).toBe(-1);
+    expect(daysPastDue("2026-08-01", now)).toBe(3);
+  });
+
+  test("does not mutate the caller's Date", () => {
+    const now = new Date(2026, 7, 4, 10, 30);
+    daysPastDue("2026-08-04", now);
+    expect(now.getHours()).toBe(10);
+    expect(now.getMinutes()).toBe(30);
+  });
+});

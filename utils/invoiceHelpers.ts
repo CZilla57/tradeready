@@ -23,7 +23,7 @@ function describeAmountOwed(invoice: Invoice): string {
   return formatMoney(balance);
 }
 
-export function daysPastDue(dueDate: string): number {
+export function daysPastDue(dueDate: string, now: Date = new Date()): number {
   // Both sides in the LOCAL frame: a bare "YYYY-MM-DD" due date parsed as UTC
   // midnight lags a local-midnight "today" by the UTC offset, which made every
   // overdue transition land a day late east of UTC (floor happened to absorb
@@ -32,7 +32,7 @@ export function daysPastDue(dueDate: string): number {
   // spring-forward interval doesn't lose a day.
   const due = parseLocalDate(dueDate);
   due.setHours(0, 0, 0, 0);
-  const today = new Date();
+  const today = new Date(now.getTime());
   today.setHours(0, 0, 0, 0);
   return Math.round((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24));
 }
