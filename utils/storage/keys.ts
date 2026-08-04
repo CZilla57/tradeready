@@ -25,3 +25,10 @@ export const KEYS = {
 // hand-stripped providerKey/anthropicKey and silently missed groqKey
 // (2026-08-02 security audit, item 10a).
 export const SECURE_FIELDS = ["providerKey", "anthropicKey", "groqKey"] as const;
+
+// One-shot flag for the contextual invoice-reminder permission prompt
+// (utils/notifications.ts). Defined here — not in notifications.ts — so
+// lifecycle.ts can put it on the sign-out wipe list without depending on the
+// notifications module (which tests routinely partial-mock; importing the
+// constant from there would silently turn the wiped key into undefined).
+export const REMINDER_PROMPT_KEY = "invoiceReminderPromptShown";

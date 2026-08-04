@@ -6,9 +6,9 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
-import { KEYS, SECURE_FIELDS } from "./keys";
+import { KEYS, SECURE_FIELDS, REMINDER_PROMPT_KEY } from "./keys";
 import { loadSettings } from "./settings";
-import { defaultSettings, resetSampleSeed } from "./defaults";
+import { defaultSettings, defaultInvoices, resetSampleSeed } from "./defaults";
 import {
   loadInvoices, loadJobs, loadCustomers, loadExpenses,
   saveInvoices, saveJobs, saveCustomers, saveExpenses,
@@ -18,6 +18,9 @@ import { clearWidgetSnapshot } from "../widgetBridge";
 import { SESSION_STORAGE_KEY } from "../secureStoreAdapter";
 import { REVIEW_REQUESTS_STORAGE_KEY } from "../reviewRequest";
 import { DISMISSED_DUPLICATES_STORAGE_KEY } from "../duplicateCustomers";
+import { ONBOARDING_DRAFT_KEY } from "../onboardingDraft";
+import { SETUP_CHECKLIST_STATE_KEY } from "../setupChecklist";
+import type { TradeId } from "../../types/models";
 
 // --- Onboarding ---
 
@@ -35,6 +38,44 @@ export async function isOnboardingComplete(): Promise<boolean> {
 
 export async function markOnboardingComplete(): Promise<void> {
   await AsyncStorage.setItem("onboardingComplete", "true");
+}
+
+// --- Starting-point choice (post-paywall, 2026-08-03 flow restructure) ---
+//
+// The wizard now stops after personalization; the sample-vs-fresh choice moved
+// BEHIND the subscription decision. The stage key tracks only the gap between
+// the two: "personalized" means the wizard finished but no starting point was
+// chosen yet. An ABSENT key means the choice is not owed — that covers users
+// who onboarded under the old flow (they already chose during onboarding) and
+// returning users whose local state was wiped and restored from the cloud, so
+// neither group can be re-prompted into re-seeding sample data.
+
+const ONBOARDING_STAGE_KEY = "onboardingStage";
+
+export async function markOnboardingPersonalized(): Promise<void> {
+  await AsyncStorage.setItem(ONBOARDING_STAGE_KEY, "personalized");
+}
+
+export async function isStartChoiceComplete(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(ONBOARDING_STAGE_KEY)) !== "personalized";
+  } catch {
+    return true;
+  }
+}
+
+export async function completeStartChoice(
+  choice: "sample" | "fresh",
+  trade: TradeId
+): Promise<void> {
+  if (choice === "fresh") {
+    await clearSampleData();
+  } else {
+    // Re-save the invoice seeds so their descriptions match the chosen trade
+    // and the sample set syncs like the pre-restructure onboarding did.
+    await saveInvoices(defaultInvoices(trade));
+  }
+  await AsyncStorage.setItem(ONBOARDING_STAGE_KEY, "done");
 }
 
 export async function clearSampleData(): Promise<void> {
@@ -81,6 +122,10 @@ export async function clearAllUserData(): Promise<void> {
     "__lastSyncedAt",
     "__dataOwner",
     "onboardingComplete",
+    ONBOARDING_STAGE_KEY,
+    ONBOARDING_DRAFT_KEY,
+    SETUP_CHECKLIST_STATE_KEY,
+    REMINDER_PROMPT_KEY,
     ...initDoneKeys,
   ]);
   // Widget bridge: wipe the App Group container so the next account on this

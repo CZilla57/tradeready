@@ -10,6 +10,7 @@ export type RootStackParamList = {
   Auth: undefined;
   Onboarding: undefined;
   Paywall: undefined;
+  StartingPoint: undefined;
   Main: NavigatorScreenParams<MainTabParamList>;
   PaywallModal: { canDismiss?: boolean };
 };

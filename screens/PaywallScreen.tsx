@@ -52,7 +52,12 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
   const [loadError, setLoadError]   = useState<string | null>(null);
   const [eligibility, setEligibility] = useState<Record<string, boolean>>({});
 
-  useEffect(() => { track('subscription_paywall_shown'); }, []);
+  // context distinguishes the first-run hard gate from the Settings upsell
+  // so the funnel can measure onboarding→paywall conversion cleanly.
+  // canDismiss is fixed for the lifetime of the mount, so this fires once.
+  useEffect(() => {
+    track('subscription_paywall_shown', { context: canDismiss ? 'settings' : 'onboarding_gate' });
+  }, [canDismiss]);
 
   useEffect(() => { loadOfferings(); }, []);
 

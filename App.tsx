@@ -15,7 +15,8 @@ import { SyncBanner } from "./components/SyncBanner";
 import AuthScreen from "./screens/AuthScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import PaywallScreen from "./screens/PaywallScreen";
-import { isOnboardingComplete } from "./utils/storage";
+import StartingPointScreen from "./screens/StartingPointScreen";
+import { isOnboardingComplete, isStartChoiceComplete } from "./utils/storage";
 import { parseWidgetDeepLink, parsePendingOpenUrl } from "./utils/deepLinks";
 import {
   getWidgetSharedItem,
@@ -353,13 +354,16 @@ function RootNavigator() {
   const { isSubscribed, isLoading: subLoading } = useSubscription();
   const { colors, isDark }                      = useThemeContext();
   const [onboardingDone, setOnboardingDone]     = useState<boolean | null>(null);
+  // Post-paywall sample-vs-fresh gate (2026-08-03 flow restructure). Same
+  // null-until-evaluated contract as onboardingDone.
+  const [startChoiceDone, setStartChoiceDone]   = useState<boolean | null>(null);
   // Mirrors `session` for the notification listener, which registers once and
   // would otherwise close over the value from the first render.
   const sessionRef = React.useRef(session);
 
   useEffect(() => {
     sessionRef.current = session;
-    if (!session) { setOnboardingDone(null); return; }
+    if (!session) { setOnboardingDone(null); setStartChoiceDone(null); return; }
     // Wait for initialSync: after a sign-out wipe, local state says "new
     // user" until the cloud pull lands — evaluating early re-onboarded
     // returning users, and their onboarding save clobbered the pulled
@@ -368,6 +372,7 @@ function RootNavigator() {
     // keep their previous value, so no flash.
     if (bootstrapping) return;
     isOnboardingComplete().then(setOnboardingDone);
+    isStartChoiceComplete().then(setStartChoiceDone);
     // Identity first (may backfill invoice.customerId with a legacy sample
     // id), then the sample-id migration remaps those to namespaced ids.
     migrateCustomerIdentity()
@@ -522,6 +527,7 @@ function RootNavigator() {
     initializing,
     hasSession: !!session,
     onboardingDone,
+    startChoiceDone,
     subLoading,
   });
 
@@ -561,10 +567,23 @@ function RootNavigator() {
           <RootStack.Screen name="Auth" component={AuthScreen} />
         ) : !onboardingDone ? (
           <RootStack.Screen name="Onboarding">
-            {() => <OnboardingScreen onComplete={() => setOnboardingDone(true)} />}
+            {() => (
+              <OnboardingScreen
+                onComplete={() => {
+                  // The wizard just stamped stage "personalized": onboarding is
+                  // done but the starting-point choice (post-paywall) is now owed.
+                  setOnboardingDone(true);
+                  setStartChoiceDone(false);
+                }}
+              />
+            )}
           </RootStack.Screen>
         ) : !isSubscribed ? (
           <RootStack.Screen name="Paywall" component={PaywallScreen} />
+        ) : !startChoiceDone ? (
+          <RootStack.Screen name="StartingPoint">
+            {() => <StartingPointScreen onComplete={() => setStartChoiceDone(true)} />}
+          </RootStack.Screen>
         ) : (
           <>
             <RootStack.Screen name="Main" component={MainTabs} />

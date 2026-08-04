@@ -131,6 +131,13 @@ describe("clearAllUserData", () => {
       "__lastSyncedAt",
       "__dataOwner",
       "onboardingComplete",
+      // 2026-08-03 flow restructure: stage marker, wizard draft, setup
+      // checklist and the one-shot reminder-prompt flag are all per-account
+      // state and must not leak to the next sign-in.
+      "onboardingStage",
+      "onboardingDraft",
+      "setupChecklistState",
+      "invoiceReminderPromptShown",
     ];
     for (const key of mustBeRemoved) {
       expect(removedKeys).toContain(key);
