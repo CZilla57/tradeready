@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadCustomers, saveCustomers, loadInvoices, saveInvoices, backfillInvoiceContacts } from "../utils/storage";
+import { isSampleId } from "../utils/sampleData";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
@@ -216,7 +217,11 @@ export default function AddCustomerScreen({ route, navigation }: JobStackScreenP
       }
 
       if (!isEditing || !hasRecord) {
-        track('customer_created');
+        // `first` marks the funnel milestone: the account's first REAL
+        // customer (sample seeds don't count).
+        track('customer_created', {
+          first: existing.filter((c: { id: string }) => !isSampleId(c.id)).length === 0,
+        });
       }
       navigation.goBack();
     } catch (err: unknown) {

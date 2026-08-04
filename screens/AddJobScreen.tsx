@@ -19,6 +19,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, getOrCreateCustomer, loadRecurringJobs, saveRecurringJobs } from "../utils/storage";
+import { isSampleId } from "../utils/sampleData";
 import { advanceStatusForSchedule } from "../utils/jobStatus";
 import { buildDuplicatePrefill, buildDuplicatePricing } from "../utils/duplicateJob";
 import type { DuplicateJobPricing } from "../utils/duplicateJob";
@@ -394,7 +395,12 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
       await saveJobs(updatedJobs);
       setSaving(false);
       if (!isEditing) {
-        track('job_created', isDuplicating ? { duplicated: true } : undefined);
+        // `first` marks the funnel milestone: the account's first REAL job
+        // (sample seeds don't count).
+        track('job_created', {
+          ...(isDuplicating ? { duplicated: true } : {}),
+          first: jobs.filter((j: { id: string }) => !isSampleId(j.id)).length === 0,
+        });
       }
       navigation.goBack();
     }
