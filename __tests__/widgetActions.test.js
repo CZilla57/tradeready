@@ -5,13 +5,15 @@
 //      structural defect.
 //   2. applyTimerActions — timer_start/timer_stop replayed against jobs.
 //   3. tripFromAction — trip_log replayed into a Trip, with dedupe.
-//   4. replayWidgetActions — the read-clear-apply-refresh orchestrator.
+//   4. expenseFromAction — expense_log replayed into an Expense, with dedupe.
+//   5. replayWidgetActions — the read-clear-apply-refresh orchestrator.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   parsePendingActions,
   applyTimerActions,
   tripFromAction,
+  expenseFromAction,
   replayWidgetActions,
 } from "../utils/widgetActions";
 import { KEYS } from "../utils/storage/keys";
@@ -248,6 +250,82 @@ describe("tripFromAction", () => {
   });
 });
 
+// ── expenseFromAction ─────────────────────────────────────────────────────────
+
+describe("expenseFromAction", () => {
+  const expenseAction = (over = {}) => ({
+    id: "ea1",
+    type: "expense_log",
+    at: "2026-08-03T09:30:00.000Z",
+    date: "2026-08-03",
+    amount: 42.5,
+    category: "materials",
+    description: "Lumber",
+    ...over,
+  });
+
+  test("builds an Expense with the e_siri_<id> prefix and the exact field mapping", () => {
+    const expense = expenseFromAction(expenseAction(), []);
+    expect(expense).toEqual({
+      id: "e_siri_ea1",
+      createdAt: "2026-08-03T09:30:00.000Z",
+      description: "Lumber",
+      amount: 42.5,
+      category: "materials",
+      date: "2026-08-03",
+      notes: "",
+      receiptUri: null,
+    });
+  });
+
+  test("dedupes: null when an expense with this id already exists", () => {
+    const existing = [{ id: "e_siri_ea1" }];
+    expect(expenseFromAction(expenseAction(), existing)).toBeNull();
+  });
+
+  test.each([
+    ["NaN", NaN],
+    ["zero", 0],
+    ["negative", -5],
+    ["over the 1,000,000 cap", 1_000_001],
+    ["not a number", "42.50"],
+    ["Infinity", Infinity],
+  ])("drops the action when amount is %s", (_label, amount) => {
+    expect(expenseFromAction(expenseAction({ amount }), [])).toBeNull();
+  });
+
+  test("amount exactly at the 1,000,000 cap is kept", () => {
+    const expense = expenseFromAction(expenseAction({ amount: 1_000_000 }), []);
+    expect(expense.amount).toBe(1_000_000);
+  });
+
+  test("an unrecognized category falls back to 'other' rather than dropping", () => {
+    const expense = expenseFromAction(expenseAction({ category: "bogus" }), []);
+    expect(expense.category).toBe("other");
+  });
+
+  test.each(["materials", "tools", "fuel", "labor", "insurance", "software", "marketing", "other"])(
+    "keeps a valid category '%s' as-is",
+    (category) => {
+      const expense = expenseFromAction(expenseAction({ category }), []);
+      expect(expense.category).toBe(category);
+    }
+  );
+
+  test("an empty/missing description falls back to 'Logged via Siri'", () => {
+    expect(expenseFromAction(expenseAction({ description: "" }), []).description).toBe(
+      "Logged via Siri"
+    );
+    expect(expenseFromAction(expenseAction({ description: undefined }), []).description).toBe(
+      "Logged via Siri"
+    );
+  });
+
+  test("drops the action when date is missing", () => {
+    expect(expenseFromAction(expenseAction({ date: undefined }), [])).toBeNull();
+  });
+});
+
 // ── replayWidgetActions ───────────────────────────────────────────────────────
 
 describe("replayWidgetActions", () => {
@@ -316,6 +394,92 @@ describe("replayWidgetActions", () => {
     expect(refreshWidgetSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  test("reads, removes, replays an expense_log action, saves expenses, and refreshes", async () => {
+    const actions = [
+      {
+        id: "ea1",
+        type: "expense_log",
+        at: "2026-08-03T09:00:00.000Z",
+        date: "2026-08-03",
+        amount: 19.99,
+        category: "fuel",
+        description: "Gas",
+      },
+    ];
+    getWidgetSharedItem.mockResolvedValue(JSON.stringify(actions));
+    AsyncStorage.getItem.mockResolvedValue(null);
+
+    await replayWidgetActions();
+
+    const savedExpensesCall = AsyncStorage.setItem.mock.calls.find(
+      ([key]) => key === KEYS.expenses
+    );
+    expect(savedExpensesCall).toBeDefined();
+    const savedExpenses = JSON.parse(savedExpensesCall[1]);
+    expect(savedExpenses).toHaveLength(1);
+    expect(savedExpenses[0]).toMatchObject({
+      id: "e_siri_ea1",
+      description: "Gas",
+      amount: 19.99,
+      category: "fuel",
+      date: "2026-08-03",
+      notes: "",
+      receiptUri: null,
+    });
+    // saveExpenses (utils/storage/collections.ts) does NOT self-mirror the
+    // widget snapshot (unlike saveJobs/saveInvoices) — same reason as
+    // saveTrips, so only replayWidgetActions' own final refresh fires.
+    expect(refreshWidgetSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  test("a mixed batch (timer + trip + expense) applies all three kinds in one replay", async () => {
+    const actions = [
+      { id: "a1", type: "timer_start", at: "2026-08-03T09:00:00.000Z", jobId: "j1" },
+      {
+        id: "a2",
+        type: "trip_log",
+        at: "2026-08-03T09:15:00.000Z",
+        date: "2026-08-03",
+        odometerStart: 10,
+        odometerEnd: 25,
+      },
+      {
+        id: "a3",
+        type: "expense_log",
+        at: "2026-08-03T09:30:00.000Z",
+        date: "2026-08-03",
+        amount: 12,
+        category: "tools",
+        description: "Drill bit",
+      },
+    ];
+    getWidgetSharedItem.mockResolvedValue(JSON.stringify(actions));
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === KEYS.jobs) return Promise.resolve(JSON.stringify([job({ id: "j1", status: "scheduled" })]));
+      return Promise.resolve(null);
+    });
+
+    await replayWidgetActions();
+
+    const savedJobsCall = AsyncStorage.setItem.mock.calls.find(([key]) => key === KEYS.jobs);
+    const savedTripsCall = AsyncStorage.setItem.mock.calls.find(([key]) => key === KEYS.trips);
+    const savedExpensesCall = AsyncStorage.setItem.mock.calls.find(([key]) => key === KEYS.expenses);
+    expect(savedJobsCall).toBeDefined();
+    expect(savedTripsCall).toBeDefined();
+    expect(savedExpensesCall).toBeDefined();
+
+    const savedJobs = JSON.parse(savedJobsCall[1]);
+    expect(savedJobs[0].status).toBe("in_progress");
+
+    const savedTrips = JSON.parse(savedTripsCall[1]);
+    expect(savedTrips).toHaveLength(1);
+    expect(savedTrips[0].id).toBe("t_siri_a2");
+
+    const savedExpenses = JSON.parse(savedExpensesCall[1]);
+    expect(savedExpenses).toHaveLength(1);
+    expect(savedExpenses[0].id).toBe("e_siri_a3");
+  });
+
   test("a batch that fails every guard still removes the key and refreshes, without saving", async () => {
     getWidgetSharedItem.mockResolvedValue("not valid json");
     AsyncStorage.getItem.mockResolvedValue(null);
@@ -326,6 +490,7 @@ describe("replayWidgetActions", () => {
     expect(refreshWidgetSnapshot).toHaveBeenCalledTimes(1);
     expect(AsyncStorage.setItem).not.toHaveBeenCalledWith(KEYS.jobs, expect.anything());
     expect(AsyncStorage.setItem).not.toHaveBeenCalledWith(KEYS.trips, expect.anything());
+    expect(AsyncStorage.setItem).not.toHaveBeenCalledWith(KEYS.expenses, expect.anything());
   });
 
   test("never throws, even when reading the shared item rejects outright", async () => {

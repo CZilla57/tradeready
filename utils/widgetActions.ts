@@ -6,9 +6,10 @@
 // container (utils/widgetBridge.ts WIDGET_ACTIONS_KEY, native side in
 // modules/widget-bridge/ios/WidgetBridgeModule.swift). This module is the
 // JS-side consumer: read the batch, replay it through the app's NORMAL save
-// paths (loadJobs/saveJobs, loadTrips/saveTrips) so sync/notifications/widget-
-// mirror side effects fire exactly as if the user had tapped the buttons
-// in-app, then clear the container so the batch never replays twice.
+// paths (loadJobs/saveJobs, loadTrips/saveTrips, loadExpenses/saveExpenses) so
+// sync/notifications/widget-mirror side effects fire exactly as if the user
+// had tapped the buttons in-app, then clear the container so the batch never
+// replays twice.
 //
 // The queue is native-written input the app doesn't fully control — parse it
 // the same way utils/deepLinks.ts treats deep links: strict, and anything
@@ -22,11 +23,23 @@ import {
   WIDGET_ACTIONS_KEY,
   DONE_STATUSES,
 } from "./widgetBridge";
-import { loadJobs, saveJobs, loadTrips, saveTrips } from "./storage";
+import { loadJobs, saveJobs, loadTrips, saveTrips, loadExpenses, saveExpenses } from "./storage";
 import { HOME_LABEL } from "./mileageUtils";
-import type { Job, Trip } from "../types/models";
+import type { Job, Trip, Expense, ExpenseCategoryId } from "../types/models";
 
-export type PendingActionType = "timer_start" | "timer_stop" | "trip_log";
+export type PendingActionType = "timer_start" | "timer_stop" | "trip_log" | "expense_log";
+
+/** The 8 EXPENSE_CATEGORIES ids (utils/moneyUtils.js) — see types/models.ts:44-45. */
+const EXPENSE_CATEGORY_IDS: readonly ExpenseCategoryId[] = [
+  "materials",
+  "tools",
+  "fuel",
+  "labor",
+  "insurance",
+  "software",
+  "marketing",
+  "other",
+];
 
 /** One entry in the widgetActions queue — see docs/widget-plan.md Phase 3-4 contract. */
 export interface PendingAction {
@@ -36,10 +49,14 @@ export interface PendingAction {
   at: string;
   /** timer_start always carries one; timer_stop carries one when the widget/Siri side knows it. */
   jobId?: string;
-  /** Local "YYYY-MM-DD" — trip_log only. */
+  /** Local "YYYY-MM-DD" — trip_log and expense_log. */
   date?: string;
   odometerStart?: number;
   odometerEnd?: number;
+  /** expense_log only. */
+  amount?: number;
+  category?: string;
+  description?: string;
 }
 
 /**
@@ -157,6 +174,65 @@ export function tripFromAction(action: PendingAction, existingTrips: Trip[]): Tr
 }
 
 /**
+ * Build an Expense from an expense_log pending action. Pure. Returns null
+ * when:
+ *   - an expense with this action's id already exists (dedupe — a replay
+ *     must never double-log the same spend);
+ *   - `amount` isn't a finite number > 0 and <= 1_000_000 (guards against
+ *     NaN/zero/negative entries and an obviously-wrong voice-transcription
+ *     amount);
+ *   - `date` is missing/falsy (expense_log always carries a local
+ *     "YYYY-MM-DD" per the contract; can't date the expense safely without it).
+ * `category` is coerced to "other" rather than dropped when it isn't one of
+ * the 8 known ExpenseCategoryId values — Siri's category parameter is a
+ * closed AppEnum on the Swift side, so this only guards a future contract
+ * drift, and losing the whole expense over an unrecognized category would be
+ * worse than filing it under "other". `description` falls back to "Logged
+ * via Siri" for the same reason: an empty voice transcription shouldn't sink
+ * an otherwise-valid expense.
+ */
+export function expenseFromAction(
+  action: PendingAction,
+  existingExpenses: Expense[],
+): Expense | null {
+  const id = `e_siri_${action.id}`;
+  if (existingExpenses.some((e) => e.id === id)) return null;
+  if (!action.date) return null;
+
+  const { amount } = action;
+  if (
+    typeof amount !== "number" ||
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    amount > 1_000_000
+  ) {
+    return null;
+  }
+
+  const category: ExpenseCategoryId = EXPENSE_CATEGORY_IDS.includes(
+    action.category as ExpenseCategoryId,
+  )
+    ? (action.category as ExpenseCategoryId)
+    : "other";
+
+  const description =
+    typeof action.description === "string" && action.description.length > 0
+      ? action.description
+      : "Logged via Siri";
+
+  return {
+    id,
+    createdAt: action.at,
+    description,
+    amount,
+    category,
+    date: action.date,
+    notes: "",
+    receiptUri: null,
+  };
+}
+
+/**
  * Read+clear the widgetActions queue, replay it through the app's normal
  * save paths, and re-mirror the widget snapshot. Never throws — a broken
  * replay must not block app startup or the foreground resync that calls it.
@@ -200,6 +276,18 @@ export async function replayWidgetActions(): Promise<void> {
         tripsChanged = true;
       }
       if (tripsChanged) await saveTrips(nextTrips);
+
+      const expenses = await loadExpenses();
+      let nextExpenses = expenses;
+      let expensesChanged = false;
+      for (const action of actions) {
+        if (action.type !== "expense_log") continue;
+        const expense = expenseFromAction(action, nextExpenses);
+        if (!expense) continue;
+        nextExpenses = [...nextExpenses, expense];
+        expensesChanged = true;
+      }
+      if (expensesChanged) await saveExpenses(nextExpenses);
     }
 
     await refreshWidgetSnapshot();
