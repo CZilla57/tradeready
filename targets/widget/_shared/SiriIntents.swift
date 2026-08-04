@@ -2,7 +2,9 @@ import AppIntents
 import Foundation
 import WidgetKit
 
-// Siri App Intents — Tier 1 (docs/widget-plan.md Phase 4).
+// Siri App Intents — Tier 1 (docs/widget-plan.md Phase 4) plus the Tier 2 wave
+// (.superpowers/sdd/plan-widgets-tier2.md): clock in/out, log an expense, and
+// "how much am I owed".
 //
 // WHY THIS FILE LIVES IN `_shared/` AND NOT NEXT TO THE WIDGETS
 // ------------------------------------------------------------
@@ -66,7 +68,21 @@ private struct SiriSnapshot: Decodable {
     var address: String?
   }
 
+  /// Present ONLY while a clock-in session is running — selectActiveTimer in
+  /// utils/widgetBridge.ts writes null otherwise — so `timer != nil` is the
+  /// snapshot's answer to "is the user on the clock". Every field is optional
+  /// for the same reason NextJob.address is: a partial timer object must
+  /// degrade to "no job id", not fail the decode and make Siri claim the user
+  /// is off the clock when they aren't.
+  struct TimerState: Decodable {
+    var jobId: String?
+  }
+
   var nextJob: NextJob?
+  var timer: TimerState?
+  /// Sum of unpaid invoice balances in dollars, already rounded to cents by the
+  /// app (summarizeInvoices semantics). Absent key -> nil -> spoken as zero.
+  var outstandingTotal: Double?
 }
 
 private func siriLoadSnapshot() -> SiriSnapshot? {
@@ -128,8 +144,12 @@ private func siriWhenLabel(_ job: SiriSnapshot.NextJob) -> String {
 /// read-append-write as appendPendingAction(_:) in JobTimer.swift — duplicated
 /// rather than shared because that one is widget-target-only (see header).
 /// A malformed/absent queue is treated as empty, exactly like the JS parser.
-private func siriAppendPendingAction(_ action: [String: Any]) {
-  guard let defaults = UserDefaults(suiteName: siriAppGroupId) else { return }
+/// Returns false when the container is unavailable or the payload won't encode
+/// — StopTripIntent gates on that, because a failed write there also strands
+/// the trip's starting odometer with no way for the user to get it back. The
+/// other callers ignore the result on purpose; each says why at the call site.
+private func siriAppendPendingAction(_ action: [String: Any]) -> Bool {
+  guard let defaults = UserDefaults(suiteName: siriAppGroupId) else { return false }
 
   var queue: [[String: Any]] = []
   if let raw = defaults.string(forKey: siriActionsKey),
@@ -143,10 +163,49 @@ private func siriAppendPendingAction(_ action: [String: Any]) {
   guard
     let encoded = try? JSONSerialization.data(withJSONObject: queue, options: []),
     let json = String(data: encoded, encoding: .utf8)
-  else { return }
+  else { return false }
 
   defaults.set(json, forKey: siriActionsKey)
   WidgetCenter.shared.reloadAllTimelines()
+  return true
+}
+
+/// The type of the most recent queued timer action, or nil when none is
+/// waiting. Last one wins: a start followed by a stop reads as a stop, which is
+/// what the user last asked for.
+///
+/// A deliberate private reimplementation of lastPendingTimerType() in
+/// JobTimer.swift rather than a call into it: that file is widget-target-only,
+/// and this one also compiles into the main app target where it doesn't exist.
+/// The two bodies must stay in step — if the optimistic rule changes in one,
+/// Siri and the widget start telling the user different things.
+private func siriLastPendingTimerType() -> String? {
+  guard
+    let defaults = UserDefaults(suiteName: siriAppGroupId),
+    let raw = defaults.string(forKey: siriActionsKey),
+    let data = raw.data(using: .utf8),
+    let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+    let entries = parsed as? [[String: Any]]
+  else { return nil }
+
+  var last: String?
+  for entry in entries {
+    guard let type = entry["type"] as? String else { continue }
+    if type == "timer_start" || type == "timer_stop" {
+      last = type
+    }
+  }
+  return last
+}
+
+/// Is the user on the clock right now? Exactly the reading the Job Timer widget
+/// renders (JobTimerProvider.currentEntry), so Siri and the widget can never
+/// disagree: a queued action outranks the snapshot because the app hasn't
+/// replayed it yet, and the snapshot decides only when nothing is queued.
+private func siriIsOnTheClock(snapshot: SiriSnapshot?, pending: String?) -> Bool {
+  if pending == "timer_start" { return true }
+  if pending == "timer_stop" { return false }
+  return snapshot?.timer != nil
 }
 
 // MARK: - Active trip (Siri's private session state)
@@ -186,6 +245,19 @@ private func siriClearActiveTrip() {
   UserDefaults(suiteName: siriAppGroupId)?.removeObject(forKey: siriActiveTripKey)
 }
 
+/// How long an unfinished trip may sit before StartTripIntent is allowed to
+/// throw it away. A day is well past any plausible drive, and `activeTrip` is
+/// Siri's own private state — no app screen can clear it — so without this
+/// escape a trip the user never said "stop" to would wedge the intent forever.
+private let siriStaleActiveTripInterval: TimeInterval = 24 * 60 * 60
+
+/// An unparseable `startedAt` counts as stale: an active trip we can't date is
+/// one we can never age out, which is the exact wedge this guards against.
+private func siriIsStaleActiveTrip(_ trip: SiriActiveTrip) -> Bool {
+  guard let started = siriParseISODate(trip.startedAt) else { return true }
+  return Date().timeIntervalSince(started) > siriStaleActiveTripInterval
+}
+
 // MARK: - Pending open-url stash (cold-launch handoff)
 
 /// Stash the deep link the app should open on its next start. Read-and-cleared
@@ -210,16 +282,27 @@ private func siriISONow() -> String {
   ISO8601DateFormatter().string(from: Date())
 }
 
+/// Parse an ISO 8601 instant, fractional seconds first: a plain
+/// ISO8601DateFormatter rejects them outright, and JS toISOString() always
+/// emits them (this file writes the plain form, but a value in the container
+/// may have been written by another producer). Same two-step as
+/// parseISODate(_:) in JobTimer.swift, which is widget-target-only.
+private func siriParseISODate(_ value: String) -> Date? {
+  let fractional = ISO8601DateFormatter()
+  fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  if let date = fractional.date(from: value) {
+    return date
+  }
+  return ISO8601DateFormatter().date(from: value)
+}
+
 /// The LOCAL "yyyy-MM-dd" the trip started on — the frame AddTripScreen and
 /// utils/widgetActions.ts both use for Trip.date. A trip that starts at 11pm
 /// and ends after midnight is logged on the day it began.
 private func siriLocalDateString(fromISO iso: String) -> String {
-  // Try fractional seconds first: a plain ISO8601DateFormatter rejects them,
-  // and JS toISOString() always emits them (this file writes the plain form,
-  // but the value may have been written by a future/other producer).
-  let fractional = ISO8601DateFormatter()
-  fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-  let parsed = fractional.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) ?? Date()
+  // An unparseable stamp falls back to now: a date is required by the contract,
+  // and today is the only defensible guess for an action taken right now.
+  let parsed = siriParseISODate(iso) ?? Date()
 
   let formatter = DateFormatter()
   formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -230,11 +313,31 @@ private func siriLocalDateString(fromISO iso: String) -> String {
 
 /// "12" for whole miles, "12.4" otherwise — spoken numbers shouldn't carry
 /// trailing zeros.
+///
+/// ROUND FIRST, then decide whole-vs-decimal. Testing the raw value instead
+/// (the v1 bug) mis-sorts everything that rounds to a whole number without
+/// being one: 12.96 is not whole, took the "%.1f" branch, and Siri said
+/// "twelve point nine six miles" as "13.0". siriFormatDollars has the same
+/// shape one decimal place down.
 private func siriFormatMiles(_ miles: Double) -> String {
-  if miles.rounded() == miles {
-    return String(format: "%.0f", miles)
+  let rounded = (miles * 10).rounded() / 10
+  if rounded == rounded.rounded() {
+    return String(format: "%.0f", rounded)
   }
-  return String(format: "%.1f", miles)
+  return String(format: "%.1f", rounded)
+}
+
+/// "12" for a whole number of dollars, "12.50" otherwise. Rounds to cents
+/// first, for the reason spelled out on siriFormatMiles. Deliberately not a
+/// NumberFormatter: the "$" is written by the caller's dialog string, and a
+/// currency formatter would add a grouped, locale-specific symbol that Siri
+/// reads back oddly when it disagrees with the app's own USD formatting.
+private func siriFormatDollars(_ amount: Double) -> String {
+  let rounded = (amount * 100).rounded() / 100
+  if rounded == rounded.rounded() {
+    return String(format: "%.0f", rounded)
+  }
+  return String(format: "%.2f", rounded)
 }
 
 // A reading the JS side would only drop: tripFromAction requires finite
@@ -249,9 +352,11 @@ private let siriBadOdometerDialog = "That odometer reading doesn't look right. T
 
 // `static let` (not `var`) satisfies AppIntent's get-only requirements and
 // stays concurrency-safe if these targets ever move to the Swift 6 mode, same
-// as the timer intents in JobTimer.swift. `description` is deliberately NOT
-// declared on any of these: it is an optional requirement whose exact witness
-// type (IntentDescription vs IntentDescription?) differs between the sources
+// as the timer intents in JobTimer.swift. (SiriExpenseCategory below is the one
+// exception, for a reason spelled out on the type.) `description` is
+// deliberately NOT declared on any of these: it is an optional requirement
+// whose exact witness type (IntentDescription vs IntentDescription?) differs
+// between the sources
 // this was checked against, and a wrong guess costs a full cloud build for a
 // subtitle in the Shortcuts app. Every intent below also declares an explicit
 // empty `init()` rather than relying on Swift synthesising one — the
@@ -289,14 +394,27 @@ struct StartTripIntent: AppIntent {
 
   func perform() async throws -> some IntentResult & ProvidesDialog {
     // One trip at a time: overwriting would silently lose the first drive.
-    if siriLoadActiveTrip() != nil {
-      return .result(dialog: "A trip is already running. Say 'stop my trip' to finish it.")
+    // The exception is a session nobody ever stopped — see
+    // siriIsStaleActiveTrip. Its odometer reading is discarded with it; a drive
+    // that was never finished has no end reading to log, and holding it any
+    // longer only blocks the trip the user is asking for now.
+    var replacedStaleTrip = false
+    if let existing = siriLoadActiveTrip() {
+      if !siriIsStaleActiveTrip(existing) {
+        return .result(dialog: "A trip is already running. Say 'stop my trip' to finish it.")
+      }
+      replacedStaleTrip = true
     }
     guard siriIsValidOdometer(odometerStart) else {
       return .result(dialog: "\(siriBadOdometerDialog)")
     }
+    // Overwrites a stale session in place, so there is nothing to clear first
+    // and no window where the user has neither trip.
     guard siriSaveActiveTrip(startedAt: siriISONow(), odometerStart: odometerStart) else {
       return .result(dialog: "I couldn't start the trip. Open TradeReady and try again.")
+    }
+    if replacedStaleTrip {
+      return .result(dialog: "Your previous trip was never finished \u{2014} starting a new one.")
     }
     return .result(dialog: "Trip started at \(siriFormatMiles(odometerStart)) miles.")
   }
@@ -332,7 +450,14 @@ struct StopTripIntent: AppIntent {
       "odometerStart": trip.odometerStart,
       "odometerEnd": odometerEnd,
     ]
-    siriAppendPendingAction(action)
+    // The one caller that gates on the write: this intent is the ONLY moment
+    // the trip becomes real, and clearing the session after a failed append
+    // would take the starting odometer with it — unrecoverable, since the user
+    // has long since driven past it.
+    guard siriAppendPendingAction(action) else {
+      return .result(dialog: "Something went wrong saving the trip \u{2014} try again.")
+    }
+    // Only now: the trip is queued, so the session state has done its job.
     siriClearActiveTrip()
 
     let miles = max(0, odometerEnd - trip.odometerStart)
@@ -399,6 +524,200 @@ struct OnMyWayIntent: AppIntent {
   }
 }
 
+@available(iOS 17.0, *)
+struct ClockInIntent: AppIntent {
+  static let title: LocalizedStringResource = "Clock In"
+
+  init() {}
+
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let snapshot = siriLoadSnapshot()
+    if siriIsOnTheClock(snapshot: snapshot, pending: siriLastPendingTimerType()) {
+      return .result(dialog: "You're already clocked in.")
+    }
+    // The snapshot's nextJob is the same job the Job Timer widget puts its
+    // Start button on. Siri has no way to name a job here, so there is nothing
+    // else to choose; a job that shouldn't be clocked into (already complete,
+    // invoiced, paid, declined) is dropped by the replay layer's DONE_STATUSES
+    // guard in utils/widgetActions.ts, which is where that policy lives.
+    guard let job = snapshot?.nextJob else {
+      return .result(dialog: "No upcoming job to clock into.")
+    }
+
+    // Best-effort write: the snapshot read above already proved the App Group
+    // container is reachable (without it this would have said "no upcoming
+    // job"), and an all-strings payload is one JSONSerialization cannot refuse.
+    // Contrast StopTripIntent, which gates because a lost write there also
+    // strands state the user can't reconstruct.
+    _ = siriAppendPendingAction([
+      "id": UUID().uuidString,
+      "type": "timer_start",
+      "jobId": job.id,
+      "at": siriISONow(),
+    ])
+    return .result(dialog: "Clocked in to \(job.title).")
+  }
+}
+
+@available(iOS 17.0, *)
+struct ClockOutIntent: AppIntent {
+  static let title: LocalizedStringResource = "Clock Out"
+
+  init() {}
+
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let snapshot = siriLoadSnapshot()
+    guard siriIsOnTheClock(snapshot: snapshot, pending: siriLastPendingTimerType()) else {
+      return .result(dialog: "You're not clocked in.")
+    }
+
+    var action: [String: Any] = [
+      "id": UUID().uuidString,
+      "type": "timer_stop",
+      "at": siriISONow(),
+    ]
+    // Omitted when the snapshot doesn't know it — which is exactly the case
+    // where a clock-in is still sitting in the queue, so no timer has reached
+    // the snapshot yet. applyTimerActions then stops whichever single job is
+    // running, the same fallback the widget's Stop button leans on.
+    if let jobId = snapshot?.timer?.jobId, !jobId.isEmpty {
+      action["jobId"] = jobId
+    }
+    // Best-effort for the same reason as ClockInIntent above.
+    _ = siriAppendPendingAction(action)
+    return .result(dialog: "Clocked out.")
+  }
+}
+
+// MARK: - Expense category
+
+/// The 8 EXPENSE_CATEGORIES ids from utils/moneyUtils.ts. The raw values must
+/// stay exactly these strings: they cross the bridge as the action's
+/// `category`, and expenseFromAction (utils/widgetActions.ts) files anything it
+/// doesn't recognise under "other" rather than dropping the expense.
+///
+/// INTERNAL, not `private` like the helpers above, for two reasons:
+///  * a top-level `private` type has fileprivate scope, and an internal
+///    property may not expose one — `@Parameter var category:
+///    SiriExpenseCategory` inside the internal LogExpenseIntent would fail to
+///    compile ("must be declared fileprivate because its type uses a
+///    fileprivate type"), and the intents themselves cannot go fileprivate
+///    because AppShortcutsProvider must name them;
+///  * Xcode's "Extract app intents metadata" build step recovers these types
+///    from the binary's reflection metadata, where reduced visibility is a
+///    known source of extraction failures.
+/// The `Siri` prefix is what keeps the symbol from colliding with the widget
+/// target's own declarations, same job the `siri` prefixes do elsewhere.
+///
+/// The declaration is deliberately the shape Apple's own sample code uses,
+/// down to details that look like they could be tightened:
+///  * CaseIterable is NOT restated even though AppEnum refines it — every
+///    shipping AppEnum omits it, which is the evidence that `allCases` is
+///    synthesised through the inherited conformance, and restating a refined
+///    protocol is the kind of thing that draws a redundant-conformance
+///    diagnostic. No reason to find out on a cloud build.
+///  * Both static properties are STORED `static var`s rather than this file's
+///    usual `static let`: a stored var witnesses the requirement whether
+///    AppEnum declares it `{ get }` or `{ get set }`, and this file gets
+///    exactly one compile attempt per build.
+@available(iOS 17.0, *)
+enum SiriExpenseCategory: String, AppEnum {
+  case materials
+  case tools
+  case fuel
+  case labor
+  case insurance
+  case software
+  case marketing
+  case other
+
+  static var typeDisplayRepresentation: TypeDisplayRepresentation =
+    TypeDisplayRepresentation(name: "Expense Category")
+
+  static var caseDisplayRepresentations: [SiriExpenseCategory: DisplayRepresentation] = [
+    .materials: DisplayRepresentation(title: "Materials"),
+    .tools: DisplayRepresentation(title: "Tools"),
+    .fuel: DisplayRepresentation(title: "Fuel"),
+    .labor: DisplayRepresentation(title: "Labor"),
+    .insurance: DisplayRepresentation(title: "Insurance"),
+    .software: DisplayRepresentation(title: "Software"),
+    .marketing: DisplayRepresentation(title: "Marketing"),
+    .other: DisplayRepresentation(title: "Other"),
+  ]
+}
+
+@available(iOS 17.0, *)
+struct LogExpenseIntent: AppIntent {
+  static let title: LocalizedStringResource = "Log Expense"
+
+  @Parameter(title: "Amount in dollars")
+  var amount: Double
+
+  @Parameter(title: "Category")
+  var category: SiriExpenseCategory
+
+  // Named expenseDescription rather than `description`: an instance property
+  // called that on a type the AppIntents machinery reflects over is a needless
+  // collision risk (CustomStringConvertible, and AppIntent's own static
+  // `description`). Only the @Parameter title is user-facing.
+  @Parameter(title: "What was it for?")
+  var expenseDescription: String
+
+  init() {}
+
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    // Mirrors expenseFromAction's amount guards (utils/widgetActions.ts),
+    // including its 1,000,000 ceiling, so anything the replay would silently
+    // drop is refused HERE, out loud. Confirming an expense that JS then throws
+    // away is the one outcome worse than refusing it. The finite check also
+    // makes the payload below safe for JSONSerialization, which refuses
+    // NaN/infinity outright.
+    guard amount.isFinite, amount > 0, amount <= 1_000_000 else {
+      return .result(dialog: "That amount doesn't look right.")
+    }
+
+    let at = siriISONow()
+    let action: [String: Any] = [
+      "id": UUID().uuidString,
+      "type": "expense_log",
+      "at": at,
+      // Local frame, like the trip contract: an expense logged at 11pm belongs
+      // to the day the user said it, not to tomorrow in UTC.
+      "date": siriLocalDateString(fromISO: at),
+      "amount": amount,
+      "category": category.rawValue,
+      "description": expenseDescription,
+    ]
+    // Best-effort, unlike StopTripIntent: nothing here holds session state that
+    // a failed write would strand, and the guard above rules out the only
+    // payload JSONSerialization would reject.
+    _ = siriAppendPendingAction(action)
+
+    // rawValue, not the display representation: the raw ids are already the
+    // plain lowercase words a person would say ("materials", "fuel").
+    return .result(dialog: "Logged $\(siriFormatDollars(amount)) for \(category.rawValue).")
+  }
+}
+
+@available(iOS 17.0, *)
+struct OutstandingIntent: AppIntent {
+  static let title: LocalizedStringResource = "Outstanding Invoices"
+
+  init() {}
+
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    // A missing snapshot and a missing key both mean "nothing to report"
+    // rather than an error: an install whose mirror hasn't run yet genuinely
+    // has nothing owed to announce. Non-finite is impossible over JSON but
+    // costs one word to rule out of the spoken number.
+    let outstanding = siriLoadSnapshot()?.outstandingTotal ?? 0
+    guard outstanding.isFinite, outstanding > 0 else {
+      return .result(dialog: "Nothing outstanding \u{2014} you're fully collected.")
+    }
+    return .result(dialog: "You're owed $\(siriFormatDollars(outstanding)) in outstanding invoices.")
+  }
+}
+
 // MARK: - Siri phrases
 
 // Every phrase must contain \(.applicationName) — Siri matches on the app name
@@ -442,6 +761,42 @@ struct TradeReadyShortcuts: AppShortcutsProvider {
       ],
       shortTitle: "On My Way",
       systemImageName: "message"
+    )
+    AppShortcut(
+      intent: ClockInIntent(),
+      phrases: [
+        "Clock in in \(.applicationName)",
+        "Start the clock in \(.applicationName)",
+      ],
+      shortTitle: "Clock In",
+      systemImageName: "play.circle"
+    )
+    AppShortcut(
+      intent: ClockOutIntent(),
+      phrases: [
+        "Clock out in \(.applicationName)",
+        "Stop the clock in \(.applicationName)",
+      ],
+      shortTitle: "Clock Out",
+      systemImageName: "stop.circle"
+    )
+    AppShortcut(
+      intent: LogExpenseIntent(),
+      phrases: [
+        "Log an expense in \(.applicationName)",
+        "Add an expense in \(.applicationName)",
+      ],
+      shortTitle: "Log Expense",
+      systemImageName: "dollarsign.circle"
+    )
+    AppShortcut(
+      intent: OutstandingIntent(),
+      phrases: [
+        "How much am I owed in \(.applicationName)",
+        "What's outstanding in \(.applicationName)",
+      ],
+      shortTitle: "Outstanding",
+      systemImageName: "banknote"
     )
   }
 }

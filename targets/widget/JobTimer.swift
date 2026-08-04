@@ -29,10 +29,11 @@ private let widgetActionsKey = "widgetActions"
 /// `{ id, type, at, jobId? }` — JS drops anything missing id/type/at.
 /// A malformed/absent queue is treated as empty, exactly like the JS parser.
 /// Internal on purpose: only this widget target's own timer Buttons/Intents
-/// call it. The Phase-4 Siri intents (targets/widget/_shared/SiriIntents.swift)
-/// do NOT share this function — that file compiles into the main app target,
-/// not this widget extension, so it keeps its own private
-/// siriAppendPendingAction with an identical read-append-write body instead.
+/// call it. The Siri intents (targets/widget/_shared/SiriIntents.swift) do NOT
+/// share this function — that file compiles into BOTH the main app target and
+/// this widget extension, and in the app target this file does not exist, so
+/// it keeps its own private siriAppendPendingAction (and its own private copy
+/// of lastPendingTimerType/parseISODate below) with identical bodies instead.
 func appendPendingAction(_ action: [String: Any]) {
   guard let defaults = UserDefaults(suiteName: timerAppGroupId) else { return }
 
