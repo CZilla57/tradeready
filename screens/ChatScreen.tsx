@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useLayoutEffect, useMemo } from "react";
+import React, { useState, useCallback, useLayoutEffect, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -118,7 +118,7 @@ function buildSystemPrompt(s: Partial<Settings>, snapshot: any): string {
   return prompt;
 }
 
-export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHome'>) {
+export default function ChatScreen({ navigation, route }: ChatStackScreenProps<'ChatHome'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
@@ -146,6 +146,17 @@ export default function ChatScreen({ navigation }: ChatStackScreenProps<'ChatHom
       getBusinessSnapshot().then(setSnapshot).catch(() => {});
     }, [])
   );
+
+  // A Today-insight "Ask coach" tap arrives as initialPrompt: fill the input
+  // once and clear the param so it can never re-fire. NEVER auto-send — the
+  // user reviews and edits before anything leaves the device.
+  const initialPrompt = route.params?.initialPrompt;
+  useEffect(() => {
+    if (initialPrompt) {
+      setInput(initialPrompt);
+      navigation.setParams({ initialPrompt: undefined });
+    }
+  }, [initialPrompt, navigation]);
 
   async function send(overrideText?: string) {
     const text = (overrideText ?? input).trim();

@@ -81,7 +81,7 @@ export type MoneyStackParamList = {
 };
 
 export type ChatStackParamList = {
-  ChatHome: undefined;
+  ChatHome: { initialPrompt?: string } | undefined;
 };
 
 // ── Global augmentation (enables useNavigation() without type param) ────────
