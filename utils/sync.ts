@@ -13,7 +13,7 @@ const LAST_SYNCED_KEY = '__lastSyncedAt';
 const INIT_DONE_KEY   = '__initDone_';
 const DATA_OWNER_KEY  = '__dataOwner';
 
-const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses', 'pricebook', 'recurringJobs', 'recurringInvoices', 'trips'] as const;
+const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses', 'pricebook', 'recurringJobs', 'recurringInvoices', 'trips', 'bookingRequests'] as const;
 
 // Tables added to COLLECTION_TABLES after their collections already existed
 // on devices (2026-08-03 durability work). Existing installs hold local

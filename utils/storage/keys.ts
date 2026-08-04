@@ -17,6 +17,7 @@ export const KEYS = {
   recurringInvoices: "recurringInvoices",
   trips: "trips",
   pricebook: "pricebook",
+  bookingRequests: "bookingRequests",
 } as const;
 
 // Fields that must live in SecureStore rather than plain AsyncStorage — and

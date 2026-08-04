@@ -396,6 +396,26 @@ export interface Trip {
   createdAt: DateString;
 }
 
+/**
+ * A public request-a-quote submission (booking link, 2026-08-04 spec).
+ * Rows are INSERTED server-side only (backend/lib/booking/); the device's
+ * applyBookingRequests converts status "new" → Customer + lead Job and flips
+ * status to "converted". Synced like any collection.
+ */
+export interface BookingRequest {
+  id: string;            // server-minted: bk<epoch-ms>_<6 hex>
+  status: "new" | "converted";
+  name: string;
+  phone: string;
+  email: string;
+  address: string;
+  details: string;
+  preferredTiming: string;
+  createdAt: string;     // ISO timestamp, server clock
+  convertedJobId?: string;
+  convertedCustomerId?: string;
+}
+
 /** A reminder rule: notify N days after an invoice's due date. */
 export interface ReminderRule {
   days: number;
@@ -499,6 +519,19 @@ export interface Settings {
    * explicitly chooses; the app never auto-picks a tax election.
    */
   vehicleDeductionMethod?: VehicleDeductionMethod;
+  /**
+   * Public booking link (request-a-quote). OPTIONAL and additive — absent
+   * means no link minted. Device-written ONLY (Settings screen); the backend
+   * resolves token → user by READING the settings blob, never writing it.
+   * Public-by-design (the token is in the shared URL) — not a SECURE_FIELD.
+   */
+  bookingLink?: { token: string; enabled: boolean };
+  /**
+   * Expo push token for owner alerts. OPTIONAL and additive. Device-written
+   * by utils/pushToken.ts (only-on-change); read server-side to send booking
+   * alerts. Not a secret credential — not a SECURE_FIELD.
+   */
+  pushToken?: { token: string; platform: "ios" | "android"; updatedAt: string };
 
   // Invoicing
   /**

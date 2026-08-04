@@ -21,5 +21,6 @@ export { migrateSampleDataIds } from "./sampleMigration";
 export { loadRecurringJobs, saveRecurringJobs } from "./recurringJobs";
 export { loadRecurringInvoices, saveRecurringInvoices } from "./recurringInvoices";
 export { loadTrips, saveTrips } from "./trips";
+export { loadBookingRequests, saveBookingRequests } from "./bookingRequests";
 export { loadPricebook, savePricebook } from "./pricebook";
 export { applyEstimateDecisions } from "./estimateApprovals";
