@@ -2,9 +2,9 @@ import AppIntents
 import Foundation
 import WidgetKit
 
-// Siri App Intents — Tier 1 (docs/widget-plan.md Phase 4) plus the Tier 2 wave
-// (.superpowers/sdd/plan-widgets-tier2.md): clock in/out, log an expense, and
-// "how much am I owed".
+// Siri App Intents — Tier 1 (docs/widget-plan.md Phase 4) plus that doc's
+// Tier 2 list, items 4-6: log an expense, clock in/out by voice, and "how much
+// am I owed".
 //
 // WHY THIS FILE LIVES IN `_shared/` AND NOT NEXT TO THE WIDGETS
 // ------------------------------------------------------------
@@ -601,8 +601,7 @@ struct ClockOutIntent: AppIntent {
 ///    property may not expose one — `@Parameter var category:
 ///    SiriExpenseCategory` inside the internal LogExpenseIntent would fail to
 ///    compile ("must be declared fileprivate because its type uses a
-///    fileprivate type"), and the intents themselves cannot go fileprivate
-///    because AppShortcutsProvider must name them;
+///    fileprivate type");
 ///  * Xcode's "Extract app intents metadata" build step recovers these types
 ///    from the binary's reflection metadata, where reduced visibility is a
 ///    known source of extraction failures.
@@ -636,14 +635,34 @@ enum SiriExpenseCategory: String, AppEnum {
 
   static var caseDisplayRepresentations: [SiriExpenseCategory: DisplayRepresentation] = [
     .materials: DisplayRepresentation(title: "Materials"),
-    .tools: DisplayRepresentation(title: "Tools"),
-    .fuel: DisplayRepresentation(title: "Fuel"),
-    .labor: DisplayRepresentation(title: "Labor"),
+    .tools: DisplayRepresentation(title: "Tools & Equipment"),
+    .fuel: DisplayRepresentation(title: "Fuel & Transport"),
+    .labor: DisplayRepresentation(title: "Subcontractors"),
     .insurance: DisplayRepresentation(title: "Insurance"),
-    .software: DisplayRepresentation(title: "Software"),
+    .software: DisplayRepresentation(title: "Software & Apps"),
     .marketing: DisplayRepresentation(title: "Marketing"),
     .other: DisplayRepresentation(title: "Other"),
   ]
+
+  /// The same label as a plain String, for the confirmation dialog. A third
+  /// copy of the wording is not ideal, but the alternatives are worse: reading
+  /// it back out of caseDisplayRepresentations means interpolating a
+  /// LocalizedStringResource into an IntentDialog, and speaking the rawValue
+  /// (what v1 did) tells the user "labor" for an expense the app files under
+  /// Subcontractors. All three lists — this one, caseDisplayRepresentations,
+  /// and EXPENSE_CATEGORIES in utils/moneyUtils.ts — must be changed together.
+  var siriSpokenLabel: String {
+    switch self {
+    case .materials: return "Materials"
+    case .tools: return "Tools & Equipment"
+    case .fuel: return "Fuel & Transport"
+    case .labor: return "Subcontractors"
+    case .insurance: return "Insurance"
+    case .software: return "Software & Apps"
+    case .marketing: return "Marketing"
+    case .other: return "Other"
+    }
+  }
 }
 
 @available(iOS 17.0, *)
@@ -693,9 +712,12 @@ struct LogExpenseIntent: AppIntent {
     // payload JSONSerialization would reject.
     _ = siriAppendPendingAction(action)
 
-    // rawValue, not the display representation: the raw ids are already the
-    // plain lowercase words a person would say ("materials", "fuel").
-    return .result(dialog: "Logged $\(siriFormatDollars(amount)) for \(category.rawValue).")
+    // The DISPLAY label, not the rawValue: the ids diverge from what the app
+    // shows for half the categories ("labor" is filed under Subcontractors,
+    // "tools" under Tools & Equipment), and Siri confirming a different word
+    // than the user will find in the app is how they conclude it filed the
+    // expense wrong.
+    return .result(dialog: "Logged $\(siriFormatDollars(amount)) for \(category.siriSpokenLabel).")
   }
 }
 
