@@ -42,7 +42,14 @@ import {
 } from '../utils/dateHelpers';
 import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
 import { selectAwaitingFollowUp, awaitingResponseLabel } from '../utils/estimateFollowUps';
-import type { Job, Invoice } from '../types/models';
+import { isSampleId } from '../utils/sampleData';
+import { SetupChecklistCard } from '../components/SetupChecklistCard';
+import {
+  loadSetupChecklistState,
+  markSampleTourDone,
+  type SetupChecklistState,
+} from '../utils/setupChecklist';
+import type { Job, Invoice, Customer, Settings } from '../types/models';
 import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
 
@@ -399,6 +406,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const todayString = getTodayDateString();
 
   const [allJobs, setAllJobs] = useState<Job[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>(todayString);
   const [earnings, setEarnings] = useState<number>(0);
   const [overdueInvoices, setOverdueInvoices] = useState<Invoice[]>([]);
@@ -406,6 +414,8 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const [loading, setLoading] = useState<boolean>(true);
   const [awaitingEstimates, setAwaitingEstimates] = useState<Job[]>([]);
   const [followUpsEnabled, setFollowUpsEnabled] = useState(true);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [checklistState, setChecklistState] = useState<SetupChecklistState | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -414,21 +424,26 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [allJobsList, expectedEarnings, overdue, leads, settings] = await Promise.all([
+          const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist] = await Promise.all([
             loadJobs(),
             getExpectedEarningsForDate(todayString),
             loadOverdueInvoices(),
             loadLeadJobs(),
             loadSettings(),
+            loadCustomers(),
+            loadSetupChecklistState(),
           ]);
           if (active) {
             setAllJobs(allJobsList);
             setEarnings(expectedEarnings);
             setOverdueInvoices(overdue);
             setLeadJobs(leads);
+            setCustomers(customerList);
+            setSettings(loadedSettings);
+            setChecklistState(checklist);
             setAwaitingEstimates(selectAwaitingFollowUp(allJobsList, new Date()));
             // ABSENT means ON (see types/models.ts) — never truthiness.
-            setFollowUpsEnabled(settings.estimateFollowUpsEnabled !== false);
+            setFollowUpsEnabled(loadedSettings.estimateFollowUpsEnabled !== false);
           }
         } catch (error: unknown) {
           console.error('TodayScreen: failed to load daily data', error);
@@ -444,20 +459,25 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   );
 
   const { refreshing, onRefresh } = useRefresh(async () => {
-    const [allJobsList, expectedEarnings, overdue, leads, settings] = await Promise.all([
+    const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist] = await Promise.all([
       loadJobs(),
       getExpectedEarningsForDate(todayString),
       loadOverdueInvoices(),
       loadLeadJobs(),
       loadSettings(),
+      loadCustomers(),
+      loadSetupChecklistState(),
     ]);
     setAllJobs(allJobsList);
     setEarnings(expectedEarnings);
     setOverdueInvoices(overdue);
     setLeadJobs(leads);
+    setCustomers(customerList);
+    setSettings(loadedSettings);
+    setChecklistState(checklist);
     setAwaitingEstimates(selectAwaitingFollowUp(allJobsList, new Date()));
     // ABSENT means ON (see types/models.ts) — never truthiness.
-    setFollowUpsEnabled(settings.estimateFollowUpsEnabled !== false);
+    setFollowUpsEnabled(loadedSettings.estimateFollowUpsEnabled !== false);
   }, 'TodayScreen');
 
   function goToInvoices() {
@@ -525,6 +545,62 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const extraInvoices = overdueInvoices.length - INVOICE_LIMIT;
   const extraLeads = leadJobs.length - LEAD_LIMIT;
 
+  // ── First-action hero (2026-08-03 onboarding restructure) ─────────────────
+  // One prominent next step for brand-new accounts: sample-data users get a
+  // guided "explore a sample job" (until tapped once), fresh users get "add
+  // your first customer" then "create your first job". Derived, so it
+  // disappears on its own the moment real work exists.
+  const sampleJobs = allJobs.filter(j => isSampleId(j.id));
+  const realJobs = allJobs.filter(j => !isSampleId(j.id));
+  const realCustomers = customers.filter(c => !isSampleId(c.id));
+
+  function handleExploreSampleJob() {
+    const target = sampleJobs.find(j => j.scheduledDate) ?? sampleJobs[0];
+    if (!target) return;
+    track('sample_job_opened');
+    markSampleTourDone();
+    setChecklistState(prev => (prev ? { ...prev, sampleTourDone: true } : prev));
+    navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId: target.id } });
+  }
+
+  function handleAddFirstCustomer() {
+    track('first_action_tapped', { action: 'add_customer' });
+    navigation.getParent()?.navigate('Customers', { screen: 'AddCustomer' });
+  }
+
+  function handleCreateFirstJob() {
+    track('first_action_tapped', { action: 'create_job' });
+    navigation.getParent()?.navigate('Jobs', { screen: 'AddJob' });
+  }
+
+  let hero: { icon: keyof typeof Ionicons.glyphMap; title: string; subtitle: string; onPress: () => void } | null = null;
+  if (!loading && checklistState && realJobs.length === 0) {
+    if (sampleJobs.length > 0) {
+      if (realCustomers.length === 0 && !checklistState.sampleTourDone) {
+        hero = {
+          icon: 'compass-outline',
+          title: 'Explore a Sample Job',
+          subtitle: 'See how a job flows from lead to paid.',
+          onPress: handleExploreSampleJob,
+        };
+      }
+    } else if (realCustomers.length === 0) {
+      hero = {
+        icon: 'person-add-outline',
+        title: 'Add Your First Customer',
+        subtitle: 'Jobs, estimates, and invoices all start here.',
+        onPress: handleAddFirstCustomer,
+      };
+    } else {
+      hero = {
+        icon: 'hammer-outline',
+        title: 'Create Your First Job',
+        subtitle: 'Track it from lead to paid.',
+        onPress: handleCreateFirstJob,
+      };
+    }
+  }
+
   return (
     <ScrollView
       style={[styles.container, { paddingTop: insets.top }]}
@@ -579,6 +655,29 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         onOverdueTap={goToInvoices}
         onLeadsTap={goToJobs}
       />
+
+      {/* First-action hero for brand-new accounts */}
+      {hero && (
+        <TouchableOpacity
+          style={styles.heroCard}
+          onPress={hero.onPress}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={hero.title}
+        >
+          <View style={styles.heroIconWrap}>
+            <Ionicons name={hero.icon} size={22} color="#fff" />
+          </View>
+          <View style={styles.heroText}>
+            <Text style={styles.heroTitle} maxFontSizeMultiplier={1.4}>{hero.title}</Text>
+            <Text style={styles.heroSubtitle} maxFontSizeMultiplier={1.4}>{hero.subtitle}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#fff" />
+        </TouchableOpacity>
+      )}
+
+      {/* Post-onboarding setup checklist (hides itself when done/dismissed) */}
+      <SetupChecklistCard settings={settings} onOpenSettings={() => navigation.navigate('Settings')} />
 
       {/* Overdue Invoices — only show once loaded and there's something to show */}
       {!loading && overdueInvoices.length > 0 && (
@@ -691,6 +790,31 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       flexGrow: 1,
       ...layout.contentColumn,
     },
+
+    // First-action hero
+    heroCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      backgroundColor: colors.accent,
+      borderRadius: radius.lg,
+      padding: spacing.md,
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.md,
+      minHeight: 64,
+      ...shadow.card,
+    },
+    heroIconWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: 'rgba(255,255,255,0.18)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    heroText: { flex: 1 },
+    heroTitle: { fontFamily: fonts.bodyBold, fontSize: fontSize.md, color: '#fff' },
+    heroSubtitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
 
     // Header
     header: {
