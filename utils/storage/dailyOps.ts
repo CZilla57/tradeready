@@ -6,6 +6,7 @@
 import { loadJobs, loadInvoices } from "./collections";
 import { reportError } from "../analytics";
 import { isFullyPaid } from "../invoicePayments";
+import { daysPastDue } from "../invoiceHelpers";
 import type { Job, Invoice } from "../../types/models";
 
 export async function loadJobsForDate(dateString: string): Promise<Job[]> {
@@ -48,10 +49,13 @@ export async function getExpectedEarningsForDate(dateString: string): Promise<nu
 export async function loadOverdueInvoices(): Promise<Invoice[]> {
   try {
     const invoices = await loadInvoices();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Local-frame day math (FA-039): daysPastDue compares local midnights, so
+    // a bare "YYYY-MM-DD" due date never gets parsed as UTC midnight (which
+    // put due-today invoices in this list west of UTC). Due-today belongs to
+    // the due_soon insight (utils/todayInsights.ts), not Overdue — >= 1 day
+    // past due is the line.
     return invoices
-      .filter((inv) => !isFullyPaid(inv) && new Date(inv.due) < today)
+      .filter((inv) => !isFullyPaid(inv) && daysPastDue(inv.due) >= 1)
       .sort((a, b) => new Date(a.due).getTime() - new Date(b.due).getTime());
   } catch {
     return [];

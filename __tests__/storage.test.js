@@ -13,9 +13,11 @@ import {
   loadCustomers, saveCustomers,
   saveExpenses,
   clearAllUserData,
+  loadOverdueInvoices,
 } from "../utils/storage";
 import { defaultCustomers, defaultJobs, defaultInvoices, resetSampleSeed } from "../utils/storage/defaults";
 import { isSampleId } from "../utils/sampleData";
+import { getTodayDateString, shiftDate } from "../utils/dateHelpers";
 
 // Isolate storage from sync and notification side-effects so these tests
 // only assert on AsyncStorage / SecureStore calls.
@@ -230,6 +232,46 @@ describe("storage key contracts", () => {
     await clearAllUserData();
     const [removedKeys] = AsyncStorage.multiRemove.mock.calls[0];
     expect(removedKeys).toContain("__dataOwner");
+  });
+});
+
+// ── loadOverdueInvoices local-frame day math (FA-039) ─────────────────────────
+// Pre-fix, this compared `new Date(inv.due) < today` — a bare "YYYY-MM-DD"
+// parses as UTC midnight, so in any negative-offset timezone (all of the US)
+// an invoice due TODAY landed in this list a day early. The fix routes
+// through daysPastDue (local-midnight math) so due-today belongs to the
+// due_soon insight (utils/todayInsights.ts), never to Overdue.
+
+describe("loadOverdueInvoices (local-frame day math, FA-039)", () => {
+  const today = getTodayDateString();
+  const yesterday = shiftDate(today, -1);
+
+  test("an invoice due today is NOT overdue", async () => {
+    const invoice = { id: "1", customer: "Alice", number: "INV-001", amount: 500, paid: false, due: today };
+    AsyncStorage.getItem.mockResolvedValue(JSON.stringify([invoice]));
+
+    const overdue = await loadOverdueInvoices();
+
+    expect(overdue).toHaveLength(0);
+  });
+
+  test("an invoice due yesterday is overdue", async () => {
+    const invoice = { id: "2", customer: "Bob", number: "INV-002", amount: 500, paid: false, due: yesterday };
+    AsyncStorage.getItem.mockResolvedValue(JSON.stringify([invoice]));
+
+    const overdue = await loadOverdueInvoices();
+
+    expect(overdue).toHaveLength(1);
+    expect(overdue[0].id).toBe("2");
+  });
+
+  test("a fully paid invoice past due is excluded", async () => {
+    const invoice = { id: "3", customer: "Carol", number: "INV-003", amount: 500, paid: true, due: yesterday };
+    AsyncStorage.getItem.mockResolvedValue(JSON.stringify([invoice]));
+
+    const overdue = await loadOverdueInvoices();
+
+    expect(overdue).toHaveLength(0);
   });
 });
 

@@ -223,8 +223,12 @@ visible kinds, once per focus load while visible), `insight_tapped`
 - **Clocked-in jobs:** `overUnder` uses live elapsed time at render; the card
   does not tick — the number refreshes on next focus. Accepted.
 - **due_soon → overdue handoff:** daysPastDue 0 → due_soon; ≥1 → Overdue
-  section. (`loadOverdueInvoices` has a pre-existing UTC-parse quirk in its
-  own comparison; out of scope here.)
+  section. (Owner decision, 2026-08-04: the pre-existing UTC-parse quirk in
+  `loadOverdueInvoices`'s own comparison — `new Date(inv.due) < today` parsed
+  the bare date as UTC midnight, misclassifying due-today invoices as overdue
+  in negative-offset timezones — was fixed on this branch. The Overdue loader
+  now filters on local-frame `daysPastDue(inv.due) >= 1`, so the handoff is
+  clean in every timezone.)
 - **Terminal/declined/archived** records are excluded from every rule
   (shared `TERMINAL_STATUSES` + `isArchived`).
 - **Performance:** pure O(n) passes over already-loaded arrays; zero network,
