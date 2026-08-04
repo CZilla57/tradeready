@@ -74,6 +74,21 @@ export function deriveSetupTasks(
   ];
 }
 
+/**
+ * The single shared definition of "the Finish-setting-up card is off the
+ * screen": the user dismissed it, or every derived task is done. The Today
+ * InsightsCard gates on this so it can never disagree with
+ * SetupChecklistCard's own hide condition.
+ */
+export function isSetupComplete(
+  settings: Settings,
+  state: SetupChecklistState,
+  notifGranted: boolean
+): boolean {
+  if (state.dismissed) return true;
+  return deriveSetupTasks(settings, state, notifGranted).every((t) => t.done);
+}
+
 export async function loadSetupChecklistState(): Promise<SetupChecklistState> {
   try {
     const raw = await AsyncStorage.getItem(SETUP_CHECKLIST_STATE_KEY);

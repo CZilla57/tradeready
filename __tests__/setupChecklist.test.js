@@ -7,6 +7,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   deriveSetupTasks,
+  isSetupComplete,
   loadSetupChecklistState,
   markSetupTaskDone,
   dismissSetupChecklist,
@@ -112,5 +113,29 @@ describe("checklist state persistence", () => {
     AsyncStorage.setItem.mockClear();
     await markSampleTourDone();
     expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+  });
+});
+
+const doneSettings = {
+  phone: "555-0100",
+  address: "1 Main St",
+  logoPhoto: "file:///logo.png",
+  provider: "stripe",
+};
+
+describe("isSetupComplete", () => {
+  test("dismissed → complete regardless of task state", () => {
+    expect(isSetupComplete(doneSettings, { dismissed: true }, false)).toBe(true);
+  });
+
+  test("all five tasks done → complete", () => {
+    const state = { done: { rate: true, stripe: true } };
+    expect(isSetupComplete(doneSettings, state, true)).toBe(true);
+  });
+
+  test("any open task → not complete", () => {
+    const state = { done: { rate: true, stripe: true } };
+    expect(isSetupComplete(doneSettings, state, false)).toBe(false); // notifications open
+    expect(isSetupComplete({ ...doneSettings, logoPhoto: undefined }, state, true)).toBe(false);
   });
 });
