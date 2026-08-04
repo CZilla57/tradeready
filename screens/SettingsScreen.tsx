@@ -29,6 +29,8 @@ import { resetUser, reportError } from "../utils/analytics";
 import { Button, SectionHeader, Divider } from "../components/UI";
 import { DELETE_CONFIRM_PHRASE, deleteConfirmMatches } from "../utils/deleteConfirm";
 import { settingsEqual } from "../utils/settingsDirty";
+import { validateSettingsInput } from "../utils/settingsValidation";
+import { markSetupTaskDone } from "../utils/setupChecklist";
 import { normalizeInvoicePrefix } from "../utils/invoiceNumber";
 import BaseField from "../components/Field";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
@@ -352,6 +354,8 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
       const data = await res.json();
       if (res.ok) {
         setStripeStatus(data);
+        // Completion signal for the setup checklist's payment-processor task.
+        if (data?.connected) markSetupTaskDone("stripe");
       } else {
         setStripeStatus({ connected: false, _error: data?.error });
       }
@@ -479,9 +483,23 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
   async function handleSave() {
     if (!s) return;
     const flushed = applyRuleDrafts(s, ruleDrafts);
+    // Hard-block malformed values — the old warn-but-save let bad emails,
+    // partial phone numbers and a $0 labor rate reach invoices and estimates.
+    const problems = validateSettingsInput({
+      email: flushed.email,
+      phone: flushed.phone,
+      laborRate: flushed.laborRate,
+    });
+    if (problems.length > 0) {
+      Alert.alert("Fix before saving", problems.join("\n\n"));
+      return;
+    }
     setSaving(true);
     await saveSettings(flushed);
     syncNotifications();
+    // Saving Settings is the completion signal for the checklist's
+    // "review your pricing defaults" task (utils/setupChecklist.ts).
+    markSetupTaskDone("rate");
     setS(flushed);
     setRuleDrafts({});
     setSavedSnapshot(flushed);
