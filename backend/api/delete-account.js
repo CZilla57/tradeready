@@ -15,7 +15,23 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const DATA_TABLES = ['invoices', 'jobs', 'customers', 'expenses', 'settings', 'customer_notes'];
+// Keep in step with the client's synced tables (COLLECTION_TABLES in
+// utils/sync.ts + settings/customer_notes). Belt-and-braces: every table
+// added since launch also carries an auth.users ON DELETE CASCADE FK, so the
+// auth-user delete below covers a miss here — but the explicit list keeps the
+// data-before-user ordering meaningful. Missing tables 404 and are tolerated.
+const DATA_TABLES = [
+  'invoices',
+  'jobs',
+  'customers',
+  'expenses',
+  'settings',
+  'customer_notes',
+  'pricebook',
+  'recurringJobs',
+  'recurringInvoices',
+  'trips',
+];
 
 // Tight rate limit for a destructive action: 5 requests per IP per 5 minutes.
 const rateLimitMap = new Map();

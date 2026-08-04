@@ -106,26 +106,38 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
           break;
         }
 
-        const newInvoice: Invoice = {
-          id: nextGeneratedInvoiceId(),
-          customer: rule.customerName,
-          customerId: rule.customerId,
-          number: nextInvoiceNumber([...invoices, ...newInvoices], settings),
-          amount: rule.amount,
-          // due = occurrence date + net terms (NOT generation date): catch-up
-          // invoices for missed periods date from when the money was owed and
-          // may appear already overdue — correct, mirrors catch-up jobs
-          // appearing in the past.
-          due: addDays(rule.nextDueDate, rule.dueDays),
-          email: customer?.email ?? '',
-          phone: customer?.phone ?? '',
-          desc: rule.description,
-          paid: false,
-          recurringInvoiceId: rule.id,
-          occurrenceNumber: rule.occurrenceCount + 1,
-        };
+        // Rules sync across devices (2026-08-03): another device may have
+        // generated this occurrence and pushed the invoice while our copy of
+        // the rule was still stale. If the invoice is already here, creating
+        // it again would double-bill — skip creation but still advance the
+        // rule so both devices' rule state converges.
+        const occurrence = rule.occurrenceCount + 1;
+        const alreadyGenerated = invoices.some(
+          inv => inv.recurringInvoiceId === rule.id && inv.occurrenceNumber === occurrence
+        );
 
-        newInvoices.push(newInvoice);
+        if (!alreadyGenerated) {
+          const newInvoice: Invoice = {
+            id: nextGeneratedInvoiceId(),
+            customer: rule.customerName,
+            customerId: rule.customerId,
+            number: nextInvoiceNumber([...invoices, ...newInvoices], settings),
+            amount: rule.amount,
+            // due = occurrence date + net terms (NOT generation date): catch-up
+            // invoices for missed periods date from when the money was owed and
+            // may appear already overdue — correct, mirrors catch-up jobs
+            // appearing in the past.
+            due: addDays(rule.nextDueDate, rule.dueDays),
+            email: customer?.email ?? '',
+            phone: customer?.phone ?? '',
+            desc: rule.description,
+            paid: false,
+            recurringInvoiceId: rule.id,
+            occurrenceNumber: occurrence,
+          };
+
+          newInvoices.push(newInvoice);
+        }
         rule.occurrenceCount++;
         rule.lastGeneratedDate = rule.nextDueDate;
         rule.nextDueDate = calculateNextDate(rule.nextDueDate, rule.cadence);

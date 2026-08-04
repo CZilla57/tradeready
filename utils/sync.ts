@@ -13,7 +13,17 @@ const LAST_SYNCED_KEY = '__lastSyncedAt';
 const INIT_DONE_KEY   = '__initDone_';
 const DATA_OWNER_KEY  = '__dataOwner';
 
-const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses', 'pricebook'] as const;
+const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses', 'pricebook', 'recurringJobs', 'recurringInvoices', 'trips'] as const;
+
+// Tables added to COLLECTION_TABLES after their collections already existed
+// on devices (2026-08-03 durability work). Existing installs hold local
+// records that predate sync for these — nothing re-enqueues a collection
+// until its next save, so a one-time backfill enqueues every local record on
+// the first sign-in after this code ships. Per-user flag: the queue itself is
+// persistent and failed pushes are retained for retry, so stamping right
+// after enqueue is safe even offline.
+const BACKFILLED_TABLES = ['recurringJobs', 'recurringInvoices', 'trips'] as const;
+const BACKFILL_KEY = '__collBackfill_v1_';
 
 type SyncOp = 'upsert' | 'delete';
 
@@ -236,10 +246,32 @@ export async function trySyncAwait(): Promise<void> {
   } catch { /* not logged in or offline */ }
 }
 
+// One-time enqueue of every local record in the BACKFILLED_TABLES. Runs
+// before the sign-in sync so the very next push carries the records. Safe to
+// call repeatedly (flag-gated); safe offline (enqueue is local-only).
+async function backfillLocalOnlyCollections(userId: string): Promise<void> {
+  try {
+    const done = await AsyncStorage.getItem(BACKFILL_KEY + userId);
+    if (done) return;
+    for (const table of BACKFILLED_TABLES) {
+      const raw = await AsyncStorage.getItem(table);
+      const records: { id?: string }[] = raw ? JSON.parse(raw) : [];
+      for (const record of records) {
+        if (record.id) await enqueue(table, 'upsert', record.id, record);
+      }
+    }
+    await AsyncStorage.setItem(BACKFILL_KEY + userId, 'true');
+  } catch (e: unknown) {
+    console.warn('Collection backfill failed:', (e as Error).message);
+    reportError(e, { context: 'backfillLocalOnlyCollections' });
+  }
+}
+
 export async function initialSync(userId: string): Promise<void> {
   try {
     const done = await AsyncStorage.getItem(INIT_DONE_KEY + userId);
     if (done) {
+      await backfillLocalOnlyCollections(userId);
       syncIfOnline(userId);
       return;
     }
@@ -258,13 +290,24 @@ export async function initialSync(userId: string): Promise<void> {
 
     if (count === 0 && !localDataBelongsToOtherUser) {
       await pushAllLocalToCloud(userId);
+      // pushAllLocalToCloud iterates COLLECTION_TABLES, which now includes
+      // the backfilled tables — their records just went up directly, so the
+      // one-time backfill would only re-enqueue what was pushed. Skip it.
+      await AsyncStorage.setItem(BACKFILL_KEY + userId, 'true');
     } else {
       if (localDataBelongsToOtherUser) {
-        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', 'recurringJobs', 'recurringInvoices', 'trips', REVIEW_REQUESTS_STORAGE_KEY]);
+        // recurringJobs / recurringInvoices / trips joined COLLECTION_TABLES
+        // 2026-08-03, so the spread now covers them.
+        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', REVIEW_REQUESTS_STORAGE_KEY]);
         await AsyncStorage.removeItem(QUEUE_KEY);
       }
       await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify({}));
       await pullRemote(userId);
+      // Same-user reinstall / pre-sync device: local-only records in the
+      // backfilled tables aren't in the cloud yet — enqueue them once. (After
+      // a cross-user wipe the collections are empty, so this is a no-op that
+      // just stamps the flag.)
+      await backfillLocalOnlyCollections(userId);
     }
 
     await AsyncStorage.setItem(DATA_OWNER_KEY, JSON.stringify(userId));

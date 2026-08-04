@@ -164,6 +164,44 @@ describe('checkAndGenerateRecurringInvoices', () => {
     expect(rules[0].nextDueDate).toBe('2026-07-29');
   });
 
+  test('skips occurrences another device already generated, but still advances the rule', async () => {
+    // Rules sync across devices (2026-08-03): device B holds a stale rule
+    // (occurrenceCount 0) but has already pulled device A's invoice for
+    // occurrence 1. Regenerating occurrence 1 would double-bill Alice — the
+    // engine must skip it, generate only the genuinely missing occurrences,
+    // and still advance the rule to the converged state.
+    jest.setSystemTime(new Date('2026-07-22T12:00:00'));
+    const pulled: Invoice = {
+      id: 'inv1751000000000',
+      customer: 'Alice',
+      customerId: 'c1',
+      number: 'INV-0001',
+      amount: 150,
+      due: '2026-07-31',
+      email: 'alice@x.com',
+      phone: '555-0001',
+      desc: 'Monthly maintenance',
+      paid: false,
+      recurringInvoiceId: 'ri_test',
+      occurrenceNumber: 1,
+    };
+    mockLoadInvoices.mockResolvedValue([pulled]);
+    mockLoadRecurringInvoices.mockResolvedValue([makeRule({ nextDueDate: '2026-07-01' })]);
+
+    await checkAndGenerateRecurringInvoices();
+
+    const saved: Invoice[] = mockSaveInvoices.mock.calls[0][0];
+    // pulled occurrence 1 + generated 2, 3, 4 — no duplicate of occurrence 1.
+    expect(saved).toHaveLength(4);
+    expect(saved[0].id).toBe('inv1751000000000');
+    expect(saved.slice(1).map((i) => i.occurrenceNumber)).toEqual([2, 3, 4]);
+    expect(saved.slice(1).map((i) => i.number)).toEqual(['INV-0002', 'INV-0003', 'INV-0004']);
+
+    const rules: RecurringInvoice[] = mockSaveRecurringInvoices.mock.calls[0][0];
+    expect(rules[0].occurrenceCount).toBe(4);
+    expect(rules[0].nextDueDate).toBe('2026-07-29');
+  });
+
   test('invoice numbering continues from existing invoices', async () => {
     mockLoadInvoices.mockResolvedValue([
       { id: 'old', customer: 'B', number: 'INV-0007', amount: 1, due: '2026-01-01', email: '', phone: '', desc: '', paid: true },

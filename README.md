@@ -371,21 +371,17 @@ be present.
 `anthropicKey`, `groqKey`) live in the iOS Keychain / Android Keystore and
 are never written to Supabase. You must re-enter them on each device.
 
-**Mileage trips are device-local only.** The mileage deduction log (`Trip`
-records, under Money → Mileage deduction) is stored in AsyncStorage only,
-the same as recurring jobs — it is not in the sync engine's `COLLECTION_TABLES`
-list (`utils/sync.ts:11`) and is cleared on sign-out. If you reinstall the app
-or sign in on a different device, logged trips will not be present. The tax
-set-aside card's standard-mileage deduction reads this same local log, so its
-estimate can differ across devices; the card discloses this with a trip count. Adding
-cloud sync later means adding a `trips` Supabase table plus one entry in
-`COLLECTION_TABLES`.
-
-**Recurring-invoice rules are device-local only.** Maintenance-plan rules
-(`RecurringInvoice` records, behind the repeat icon on the Invoices tab) are
-stored in AsyncStorage only, the same as recurring jobs and mileage trips —
-not synced, cleared on sign-out. The invoices they generate are normal
-records and sync like any other invoice.
+**Recurring rules and mileage trips sync since 2026-08-03.** Recurring-job
+rules, recurring-invoice (maintenance plan) rules, and mileage `Trip` records
+are full members of `COLLECTION_TABLES` (`utils/sync.ts`) — they push, pull,
+and survive reinstalls like every other collection. Devices that predate the
+change enqueue their existing local records once, on the first sign-in after
+updating (per-user `__collBackfill_v1_` flag). Residual limitation: the
+recurring generation engines skip an occurrence whose job/invoice already
+arrived from another device (matched on `recurringJobId`/`recurringInvoiceId`
++ `occurrenceNumber`), but two devices that both generate the same occurrence
+*before either has synced* will still each create one — the same
+concurrent-edit envelope as last-write-wins above.
 
 **Estimate approvals are the one server-authoritative write path.** When a
 customer approves or declines an estimate via the hosted link, the Vercel
@@ -397,20 +393,26 @@ locally; the server never writes `job.status`. This write inherits the same
 last-write-wins envelope as everything else: an un-pushed local edit to that
 job can still clobber the pulled `approval.*` fields on its next push.
 
-**First-device detection uses job count only.** `initialSync` decides whether
-to push or pull based on whether the `jobs` table has any cloud rows for the
-user. A user with customers and invoices but no jobs would be treated as a new
-device and have their local data pushed up.
+**First-device detection counts settings rows.** `initialSync` decides
+push-vs-pull by counting the user's rows in the cloud `settings` table
+(`utils/sync.ts`) — a settings row is created by the first successful push, so
+count 0 ≈ this user has never synced. Edge case: a user whose cloud holds data
+but whose settings push never completed would be misclassified as a first
+device and have local data pushed up.
 
-**Stale-data window on token expiry.** If a Supabase session expires while the
-app is backgrounded and the device is offline, the `SIGNED_OUT` event fires the
-next time the app is opened but before it can reach the network. Local data is
-cleared at that point. Any unsent items in `__syncQueue` at the time of expiry
-are lost.
+**Token-expiry sign-outs do not wipe local data.** Supabase fires `SIGNED_OUT`
+on token expiry as well as on real sign-outs, so the auth handler deliberately
+clears nothing (`context/AuthContext.tsx`) — an offline user whose session
+lapsed keeps their local data and unsent queue, and syncing resumes on the
+next sign-in. Cross-user isolation is enforced by the `__dataOwner` guard in
+`initialSync` instead. (A wipe-on-SIGNED_OUT version shipped briefly in July
+2026 and destroyed offline changes on token expiry; do not reintroduce it.)
 
-**Pending queue items are dropped on sign-out.** `clearAllUserData()` removes
-`__syncQueue`, so any writes that hadn't been flushed to Supabase are
-permanently lost when the user signs out.
+**Explicit sign-out prompts before dropping unsynced changes.** The Settings
+sign-out button checks `__syncQueue` first: with items pending it offers
+"Sync & sign out" (flush, then clear) or "Sign out anyway" (destructive).
+Only the destructive choice discards the queue — but it does so permanently:
+`clearAllUserData()` removes `__syncQueue` along with the collections.
 
 ---
 

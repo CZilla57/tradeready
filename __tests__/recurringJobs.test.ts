@@ -118,6 +118,51 @@ describe('checkAndGenerateRecurringJobs', () => {
     expect(savedRules[0].nextDueDate).toBe('2026-07-15'); // advanced by 1 week
   });
 
+  test('skips an occurrence another device already generated, but still advances the rule', async () => {
+    // Rules sync across devices (2026-08-03): device B holds a stale rule
+    // (occurrenceCount 1) but has already pulled device A's generated job for
+    // occurrence 2. Regenerating would duplicate the visit — the engine must
+    // skip creation yet still advance the rule so both devices converge.
+    const rule = makeRule({ nextDueDate: '2026-07-08', occurrenceCount: 1 });
+    const pulledJob: Job = {
+      id: 'j1751000000000_rj_test_2',
+      customerId: 'c1',
+      customerName: 'Alice',
+      title: 'Lawn service',
+      description: '',
+      address: '1 Main St',
+      notes: '',
+      estimateTotal: 100,
+      laborHours: 1,
+      laborRate: 85,
+      materials: [],
+      materialMarkup: 20,
+      overhead: 15,
+      margin: 20,
+      status: 'scheduled',
+      scheduledDate: '2026-07-08',
+      scheduledStartTime: null,
+      scheduledEndTime: null,
+      invoiceId: null,
+      createdAt: '2026-07-08',
+      recurringJobId: 'rj_test',
+      occurrenceNumber: 2,
+    };
+    mockLoadRecurringJobs.mockResolvedValue([rule]);
+    mockLoadJobs.mockResolvedValue([pulledJob]);
+
+    await checkAndGenerateRecurringJobs();
+
+    // No duplicate — the pulled job already covers occurrence 2…
+    const savedJobs: Job[] = mockSaveJobs.mock.calls[0][0];
+    expect(savedJobs).toHaveLength(1);
+    expect(savedJobs[0].id).toBe('j1751000000000_rj_test_2');
+    // …but the rule still advances to the same state device A reached.
+    const savedRules: RecurringJob[] = mockSaveRecurringJobs.mock.calls[0][0];
+    expect(savedRules[0].occurrenceCount).toBe(2);
+    expect(savedRules[0].nextDueDate).toBe('2026-07-15');
+  });
+
   test('generates 4 jobs for 4 weekly occurrences spanning today', async () => {
     // Today = 2026-07-22, rule next due = 2026-07-01.
     // Loop: 07-01, 07-08, 07-15, 07-22 all satisfy nextDueDate <= today (07-22 <= 07-22).

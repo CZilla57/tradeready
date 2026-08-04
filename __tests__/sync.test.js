@@ -442,3 +442,100 @@ describe("pushQueue stamps updated_at with push time, not the queued item's ts",
     expect(invoicesCall.payload.updated_at).toBe(PUSH_TIME.toISOString());
   });
 });
+
+// ── One-time backfill for tables that joined COLLECTION_TABLES post-launch ────
+//
+// recurringJobs / recurringInvoices / trips became synced on 2026-08-03.
+// Existing installs hold local records that predate sync — nothing re-enqueues
+// a collection until its next save, so initialSync runs a one-time,
+// flag-gated enqueue of every local record in those tables.
+
+describe("backfill of newly-synced collections", () => {
+  test("fast path (initDone set) enqueues local rules and trips once and stamps the flag", async () => {
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "__initDone_user-z") return Promise.resolve("true");
+      if (key === "recurringJobs")
+        return Promise.resolve(JSON.stringify([{ id: "rj1" }]));
+      if (key === "recurringInvoices")
+        return Promise.resolve(JSON.stringify([{ id: "ri1" }]));
+      if (key === "trips") return Promise.resolve(JSON.stringify([{ id: "t1" }]));
+      return Promise.resolve(null);
+    });
+
+    await initialSync("user-z");
+
+    // Every local record of the three tables was enqueued…
+    const queueWrites = AsyncStorage.setItem.mock.calls
+      .filter(([key]) => key === "__syncQueue")
+      .map(([, value]) => value)
+      .join("|");
+    expect(queueWrites).toContain("rj1");
+    expect(queueWrites).toContain("ri1");
+    expect(queueWrites).toContain("t1");
+    // …and the one-time flag was stamped so it never runs again.
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+      "__collBackfill_v1_user-z",
+      "true"
+    );
+  });
+
+  test("does not re-enqueue when the backfill flag is already set", async () => {
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "__initDone_user-z") return Promise.resolve("true");
+      if (key === "__collBackfill_v1_user-z") return Promise.resolve("true");
+      if (key === "recurringJobs")
+        return Promise.resolve(JSON.stringify([{ id: "rj1" }]));
+      return Promise.resolve(null);
+    });
+
+    await initialSync("user-z");
+
+    const queueWrites = AsyncStorage.setItem.mock.calls.filter(
+      ([key]) => key === "__syncQueue"
+    );
+    expect(queueWrites).toHaveLength(0);
+  });
+
+  test("first-device push covers the new tables directly and stamps the flag without enqueueing", async () => {
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "trips") return Promise.resolve(JSON.stringify([{ id: "t1" }]));
+      return Promise.resolve(null);
+    });
+
+    await initialSync("user-new");
+
+    // trips went up via the bulk first-device push (array upsert)…
+    const tripsUpsert = mockUpsert.mock.calls
+      .map(([payload]) => payload)
+      .find((p) => Array.isArray(p) && p.some((row) => row.id === "t1"));
+    expect(tripsUpsert).toBeDefined();
+    // …so the backfill stamps its flag without enqueueing anything.
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+      "__collBackfill_v1_user-new",
+      "true"
+    );
+    expect(
+      AsyncStorage.setItem.mock.calls.filter(([key]) => key === "__syncQueue")
+    ).toHaveLength(0);
+  });
+
+  test("second-device pull branch still backfills local-only records", async () => {
+    buildFromMock({ countResult: 3 });
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "trips") return Promise.resolve(JSON.stringify([{ id: "t1" }]));
+      return Promise.resolve(null);
+    });
+
+    await initialSync("user-y");
+
+    const queueWrites = AsyncStorage.setItem.mock.calls
+      .filter(([key]) => key === "__syncQueue")
+      .map(([, value]) => value)
+      .join("|");
+    expect(queueWrites).toContain("t1");
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+      "__collBackfill_v1_user-y",
+      "true"
+    );
+  });
+});

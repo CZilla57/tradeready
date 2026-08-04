@@ -1,8 +1,10 @@
 // __tests__/recurringInvoicesStorage.test.ts
-// The recurringInvoices collection is LOCAL-ONLY (mirror of recurringJobs):
-// plain AsyncStorage under KEYS.recurringInvoices, never enqueued to sync.
+// The recurringInvoices collection (mirror of recurringJobs): AsyncStorage
+// under KEYS.recurringInvoices. Synced since 2026-08-03 — every save diffs
+// into the sync queue like the other collections (durability work).
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { enqueueCollectionChanges, trySync } from '../utils/sync';
 import { loadRecurringInvoices, saveRecurringInvoices } from '../utils/storage';
 import type { RecurringInvoice } from '../types/models';
 
@@ -49,6 +51,14 @@ describe('recurringInvoices storage', () => {
       'recurringInvoices',
       JSON.stringify([rule])
     );
+  });
+
+  test('saveRecurringInvoices diffs into the sync queue and kicks a background sync', async () => {
+    // Synced since 2026-08-03 — a save that skipped the queue would silently
+    // never reach the cloud (the pre-durability behavior this pins against).
+    await saveRecurringInvoices([rule]);
+    expect(enqueueCollectionChanges).toHaveBeenCalledWith('recurringInvoices', [], [rule]);
+    expect(trySync).toHaveBeenCalled();
   });
 
   test('loadRecurringInvoices round-trips a saved rule', async () => {

@@ -104,8 +104,8 @@ Everything financial in one place.
 - Expense log (add expense with category)
 - Mileage deduction card → full trip log → add/edit trip screen (odometer
   start/end, from/to endpoint — a linked job or "Home / Shop"; total business
-  miles × `settings.mileageRate` shown by period). Local-only, not synced —
-  see Data Models below.
+  miles × `settings.mileageRate` shown by period). Cloud-synced since
+  2026-08-03 — see Data Models below.
 - Analytics cards: conversion funnel, avg job value, invoice aging, revenue by type,
   seasonal trends, customer mix, expense trends, revenue forecast
 - Tax set-aside card (`components/money/TaxSetAsideCard.tsx`): current IRS
@@ -206,19 +206,18 @@ Everything financial in one place.
 - description, receiptPhoto (device-local path)
 - jobId (optional)
 
-### Trip ⚠️ local-only, not synced
+### Trip
 - id, date, odometerStart, odometerEnd, miles (derived: `max(0, end - start)`)
 - fromJobId / toJobId (either may be `null` = "Home / Shop"), fromLabel / toLabel (denormalized)
 - purpose, createdAt
 - Mileage tax deduction log, modeled on `RecurringJob`: stored in AsyncStorage
-  (`utils/storage/trips.ts`) and cleared on sign-out, deliberately **not** in
-  `COLLECTION_TABLES` (`utils/sync.ts`) — no cloud sync yet. Deliberately
-  separate from `Job.travelFeePerMile`/`travelMiles` (the customer-facing
-  travel fee on estimates) and the `fuel` expense category — the deduction
-  does not auto-post to expenses, to avoid double-counting under IRS rules.
+  (`utils/storage/trips.ts`) and cloud-synced since 2026-08-03 (`trips` entry
+  in `COLLECTION_TABLES`, `utils/sync.ts`; blob-shape table + owner-scoped RLS
+  like every other collection). Deliberately separate from
+  `Job.travelFeePerMile`/`travelMiles` (the customer-facing travel fee on
+  estimates) and the `fuel` expense category — the deduction does not
+  auto-post to expenses, to avoid double-counting under IRS rules.
   Deduction total = business miles × `settings.mileageRate` (default 0.70).
-  **Future:** add a `trips` Supabase table + RLS + one `COLLECTION_TABLES`
-  entry to sync this collection like the others.
 
 ### Settings / Business Profile
 - businessName, ownerName, trade
@@ -387,7 +386,7 @@ Build in this sequence so you always have something shippable:
 **Phase 3 — Money**
 ✅ Expense tracking
 ⬜ Receipt scanning (OCR)
-✅ Mileage tracking (odometer-based log + deduction estimate; ⚠️ GPS auto-tracking not built; local-only, not synced)
+✅ Mileage tracking (odometer-based log + deduction estimate, cloud-synced; ⚠️ GPS auto-tracking not built)
 ✅ Quarterly tax estimates (set-aside card: SE tax + user rate, IRS payment periods, mileage-vs-fuel election; estimate only, not filing support)
 ⚠️ Revenue reports (monthly chart + top customers built; detailed reports not built)
 
