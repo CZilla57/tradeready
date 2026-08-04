@@ -140,3 +140,90 @@ describe('due_soon', () => {
     expect(insight.target).toEqual({ type: 'invoices' });
   });
 });
+
+describe('open_slot', () => {
+  const tomorrowJob = job({
+    id: 'sched', status: 'scheduled', scheduledDate: '2026-08-05',
+    scheduledStartTime: '09:00', scheduledEndTime: '11:00',
+  });
+
+  test('fires with the largest gap when tomorrow has a scheduled job', () => {
+    const [insight] = selectTodayInsights([tomorrowJob], [], NOW);
+    expect(insight.kind).toBe('open_slot');
+    expect(insight.title).toBe('Tomorrow has a 6h open slot'); // 11:00–17:00
+    expect(insight.target).toEqual({ type: 'selectDate', date: '2026-08-05' });
+  });
+
+  test('names the largest fitting approved unscheduled job and targets its schedule editor', () => {
+    const jobs = [
+      tomorrowJob,
+      job({ id: 'fitS', status: 'approved', title: 'Small fix', laborHours: 1 }),
+      job({ id: 'fitL', status: 'approved', title: 'Fence gate', laborHours: 4 }),
+      job({ id: 'huge', status: 'approved', title: 'Full remodel', laborHours: 9 }),
+    ];
+    const insights = selectTodayInsights(jobs, [], NOW);
+    expect(insights[0].title).toBe("Tomorrow has a 6h open slot — 'Fence gate' (4h) would fit");
+    expect(insights[0].target).toEqual({ type: 'schedule', jobId: 'fitL' });
+  });
+
+  test('empty tomorrow and sub-2h gaps are silent', () => {
+    expect(selectTodayInsights([job({ status: 'approved' })], [], NOW)
+      .filter(i => i.kind === 'open_slot')).toHaveLength(0);
+    const packed = [
+      job({ id: 'a', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '08:00', scheduledEndTime: '12:01' }),
+      job({ id: 'b', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '14:00', scheduledEndTime: '17:00' }),
+    ];
+    expect(selectTodayInsights(packed, [], NOW).filter(i => i.kind === 'open_slot')).toHaveLength(0); // 119 min
+  });
+
+  test('exactly 120 minutes fires', () => {
+    const jobs = [
+      job({ id: 'a', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '08:00', scheduledEndTime: '12:00' }),
+      job({ id: 'b', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '14:00', scheduledEndTime: '17:00' }),
+    ];
+    const [insight] = selectTodayInsights(jobs, [], NOW);
+    expect(insight.title).toBe('Tomorrow has a 2h open slot');
+  });
+});
+
+describe('unscheduled_approved', () => {
+  test('single job targets its schedule editor; several aggregate to Jobs', () => {
+    const [single] = selectTodayInsights([job({ id: 'u1', status: 'approved', title: 'Fence gate' })], [], NOW);
+    expect(single.kind).toBe('unscheduled_approved');
+    expect(single.title).toBe("'Fence gate' is approved but not scheduled");
+    expect(single.target).toEqual({ type: 'schedule', jobId: 'u1' });
+
+    const [multi] = selectTodayInsights([
+      job({ id: 'u1', status: 'approved' }),
+      job({ id: 'u2', status: 'approved' }),
+    ], [], NOW);
+    expect(multi.title).toBe("2 approved jobs aren't on the schedule yet");
+    expect(multi.target).toEqual({ type: 'jobs' });
+  });
+
+  test('the job consumed by open_slot never double-counts', () => {
+    const jobs = [
+      job({ id: 'sched', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00' }),
+      job({ id: 'fit', status: 'approved', title: 'Fence gate', laborHours: 4 }),
+      job({ id: 'left', status: 'approved', title: 'Gutter clean', laborHours: 9 }),
+    ];
+    const insights = selectTodayInsights(jobs, [], NOW);
+    const kinds = insights.map(i => i.kind);
+    expect(kinds).toEqual(['open_slot', 'unscheduled_approved']);
+    expect(insights[1].title).toBe("'Gutter clean' is approved but not scheduled");
+  });
+});
+
+describe('priority order', () => {
+  test('all five kinds arrive in spec order', () => {
+    const jobs = [
+      job({ id: 'over', timeSessions: [session(5)] }),
+      job({ id: 'done', status: 'complete' }),
+      job({ id: 'sched', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00' }),
+      job({ id: 'fit', status: 'approved', laborHours: 2 }),
+      job({ id: 'left', status: 'approved', laborHours: 9 }),
+    ];
+    const kinds = selectTodayInsights(jobs, [invoice({})], NOW).map(i => i.kind);
+    expect(kinds).toEqual(['labor_overrun', 'uninvoiced_complete', 'due_soon', 'open_slot', 'unscheduled_approved']);
+  });
+});

@@ -7,11 +7,13 @@
 
 import type { Job, Invoice } from "../types/models";
 import { computeTimeTracking, formatElapsed } from "./timeTracking";
-import { formatLaborHint } from "./scheduleSmarts";
+import { formatLaborHint, largestFreeGap } from "./scheduleSmarts";
 import { isArchived } from "./archive";
 import { isFullyPaid, balanceDue } from "./invoicePayments";
 import { daysPastDue } from "./invoiceHelpers";
 import { formatMoney, formatQuote } from "./format";
+import { formatLocalDate } from "./recurrence";
+import { shiftDate } from "./dateHelpers";
 
 export type InsightKind =
   | "labor_overrun"
@@ -46,6 +48,8 @@ export const WORK_DAY_END = "17:00";
 /** How many days ahead (inclusive) "due soon" looks; day +1 belongs to the
  * Overdue section (due-today is NOT overdue — existing semantics). */
 const DUE_SOON_DAYS = 2;
+/** Minimum free gap worth surfacing, in minutes. */
+const MIN_GAP_MINUTES = 120;
 
 /**
  * Statuses where "running over the labor estimate" is a live, present-tense
@@ -127,6 +131,55 @@ function selectDueSoon(invoices: Invoice[], now: Date): TodayInsight[] {
   }];
 }
 
+function selectScheduleInsights(jobs: Job[], now: Date): TodayInsight[] {
+  const out: TodayInsight[] = [];
+  const tomorrow = shiftDate(formatLocalDate(now), 1); // local-frame (FA-039)
+
+  const unscheduled = jobs.filter(
+    (j) => j.status === "approved" && !j.scheduledDate && !isArchived(j)
+  );
+
+  let fittedJobId: string | null = null;
+  const gap = largestFreeGap(jobs, tomorrow, WORK_DAY_START, WORK_DAY_END);
+  if (gap && gap.minutes >= MIN_GAP_MINUTES) {
+    const gapLabel = formatLaborHint(gap.minutes / 60);
+    // Best fill: the largest approved unscheduled job that still fits.
+    const fit = unscheduled
+      .filter((j) => j.laborHours > 0 && j.laborHours * 60 <= gap.minutes)
+      .sort((a, b) => b.laborHours - a.laborHours)[0];
+    if (fit) {
+      fittedJobId = fit.id;
+      out.push({
+        kind: "open_slot",
+        title: `Tomorrow has a ${gapLabel} open slot — '${fit.title}' (${formatLaborHint(fit.laborHours)}) would fit`,
+        target: { type: "schedule", jobId: fit.id },
+      });
+    } else {
+      out.push({
+        kind: "open_slot",
+        title: `Tomorrow has a ${gapLabel} open slot`,
+        target: { type: "selectDate", date: tomorrow },
+      });
+    }
+  }
+
+  const remaining = unscheduled.filter((j) => j.id !== fittedJobId);
+  if (remaining.length === 1) {
+    out.push({
+      kind: "unscheduled_approved",
+      title: `'${remaining[0].title}' is approved but not scheduled`,
+      target: { type: "schedule", jobId: remaining[0].id },
+    });
+  } else if (remaining.length > 1) {
+    out.push({
+      kind: "unscheduled_approved",
+      title: `${remaining.length} approved jobs aren't on the schedule yet`,
+      target: { type: "jobs" },
+    });
+  }
+  return out;
+}
+
 export function selectTodayInsights(jobs: Job[], invoices: Invoice[], now: Date): TodayInsight[] {
   const safeJobs = jobs || [];
   const safeInvoices = invoices || [];
@@ -134,5 +187,6 @@ export function selectTodayInsights(jobs: Job[], invoices: Invoice[], now: Date)
     ...selectLaborOverruns(safeJobs, now),
     ...selectUninvoicedComplete(safeJobs),
     ...selectDueSoon(safeInvoices, now),
+    ...selectScheduleInsights(safeJobs, now),
   ];
 }
