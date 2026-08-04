@@ -15,6 +15,12 @@ bump changes `runtimeVersion` (policy `appVersion`), so bumping before the
    estimate nudges, smart pickers, iPad Tier-1 JS, security fixes, widget JS —
    all designed as guarded no-ops where build 7 lacks native support):
    - Confirm master gate + CI green, tree clean.
+   - Confirm master includes the `utils/backgroundRefresh.ts` guarded-require
+     fix (fix commit, not the original Task 1 feat commit) — the pre-fix
+     version statically imports `expo-task-manager`/`expo-background-task`,
+     and both packages throw at module scope when their native module is
+     absent, which is true of every build-7/9/10 binary; OTA-ing the pre-fix
+     version crashes the app at launch for every build-7/9/10 user.
    - `npx eas-cli update --channel production --message "<summary>"`
      (reaches ONLY runtime 1.1.0: build 7 + TestFlight builds 9/10).
    - Owner smoke on the production app after the update lands.

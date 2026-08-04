@@ -196,3 +196,44 @@ describe("registerBackgroundRefresh", () => {
     expect(BackgroundTask.registerTaskAsync).not.toHaveBeenCalled();
   });
 });
+
+// ── OTA safety: real module-scope behavior of the underlying packages ────────
+//
+// Regression pin for a whole-branch-review Critical: expo-task-manager's
+// ExpoTaskManager.js and expo-background-task's ExpoBackgroundTaskModule.js
+// each resolve their native module via expo-modules-core's
+// `requireNativeModule` AT MODULE SCOPE — which throws (not returns null)
+// when the native module is absent. Every mock above replaces the packages
+// wholesale, so it can't catch a static `import * as X from "expo-task-manager"`
+// in the source ever actually reaching that throwing call — this block
+// simulates the real failure mode directly: a require() that throws
+// synchronously, exactly like the unmocked packages do on any binary without
+// their native module (Expo Go, builds 7/9/10). utils/backgroundRefresh.ts
+// must survive that via lazy/guarded requires, not static imports.
+describe("OTA safety: native module absent at require time", () => {
+  test("requiring the module never throws even when both packages throw synchronously on require, and every export still no-ops safely", async () => {
+    let requiredModule;
+
+    jest.isolateModules(() => {
+      jest.doMock("expo-task-manager", () => {
+        throw new Error("Cannot find native module 'ExpoTaskManager'");
+      });
+      jest.doMock("expo-background-task", () => {
+        throw new Error("Cannot find native module 'ExpoBackgroundTask'");
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- isolateModules requires a synchronous require, not an import, to land in the sandboxed registry
+      requiredModule = require("../utils/backgroundRefresh");
+    });
+
+    // The require() above must not have thrown (isolateModules would have
+    // let that propagate straight out of this test otherwise) — this is the
+    // exact scenario that crashed every build-7/9/10 user when the module
+    // used static imports.
+    expect(requiredModule.BACKGROUND_REFRESH_TASK).toBe("tradeready-background-refresh");
+
+    // registerBackgroundRefresh must resolve without throwing even though
+    // TaskManager/BackgroundTask are both null inside this module instance.
+    await expect(requiredModule.registerBackgroundRefresh()).resolves.toBeUndefined();
+  });
+});
