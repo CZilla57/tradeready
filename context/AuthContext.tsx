@@ -49,7 +49,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         requestPermissions().then(granted => { if (granted) syncNotifications(); });
         identifyUser(session.user.id);
       }
+    }).catch(() => {
+      // The session lives in the iOS Keychain; on a background cold launch
+      // with the device locked (BGTask wake, prewarming) the read can fail
+      // with errSecInteractionNotAllowed (Sentry REACT-NATIVE-9). Settle the
+      // root gate rather than hanging on the spinner — the auth listener
+      // below picks the session up once it becomes readable.
+      setInitializing(false);
     });
+
+    // supabase-js starts its token auto-refresh ticker unconditionally in
+    // React Native. Stop it while backgrounded: with the device locked, the
+    // Keychain-backed session read fails (errSecInteractionNotAllowed) and
+    // surfaces as an unhandled rejection (Sentry REACT-NATIVE-9). Nothing is
+    // lost — getSession() still refreshes an expired token on demand during
+    // background wakes (utils/backgroundRefresh.ts), and the 'active' branch
+    // restarts the ticker on foreground.
+    const appStateSub = AppState.addEventListener('change', state => {
+      if (state === 'active') supabase.auth.startAutoRefresh();
+      else supabase.auth.stopAutoRefresh();
+    });
+    if (AppState.currentState !== 'active') supabase.auth.stopAutoRefresh();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
@@ -70,7 +90,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      appStateSub.remove();
+    };
   }, []);
 
   useEffect(() => {

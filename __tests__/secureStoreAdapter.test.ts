@@ -1,7 +1,12 @@
 import { SecureStoreAdapter } from '../utils/secureStoreAdapter';
 import * as SecureStore from 'expo-secure-store';
 
-jest.mock('expo-secure-store');
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: jest.fn(() => Promise.resolve(null)),
+  setItemAsync: jest.fn(() => Promise.resolve()),
+  deleteItemAsync: jest.fn(() => Promise.resolve()),
+  AFTER_FIRST_UNLOCK: 0,
+}));
 
 const adapter = new SecureStoreAdapter();
 const encoder = new TextEncoder();
@@ -20,7 +25,9 @@ describe('SecureStoreAdapter', () => {
     });
 
     await adapter.setItem('supabase_session', value);
-    expect(SecureStore.setItemAsync).toHaveBeenCalledWith('supabase_session', value);
+    expect(SecureStore.setItemAsync).toHaveBeenCalledWith('supabase_session', value, {
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+    });
     expect(encoder.encode(value).byteLength).toBeLessThanOrEqual(2048);
 
     const result = await adapter.getItem('supabase_session');
@@ -105,5 +112,45 @@ describe('SecureStoreAdapter', () => {
     expect(encoder.encode(setCalls[0][1]).byteLength).toBeLessThanOrEqual(2048);
     expect(encoder.encode(setCalls[1][1]).byteLength).toBeLessThanOrEqual(2048);
     expect(setCalls[0][1] + setCalls[1][1]).toBe(value);
+  });
+
+  it('writes every item (base and chunks) with AFTER_FIRST_UNLOCK accessibility', async () => {
+    // The background refresh task and supabase's token auto-refresh read the
+    // session while the device is locked; the default WHEN_UNLOCKED
+    // accessibility makes those reads fail with errSecInteractionNotAllowed
+    // (Sentry REACT-NATIVE-9).
+    const longValue = 'x'.repeat(3000);
+    (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(null);
+
+    await adapter.setItem('supabase_session', longValue);
+
+    const calls = (SecureStore.setItemAsync as jest.Mock).mock.calls;
+    expect(calls.length).toBe(2);
+    for (const call of calls) {
+      expect(call[2]).toEqual({ keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK });
+    }
+  });
+
+  it('deletes the base key before writing so an accessibility change reaches existing items', async () => {
+    // The native module updates an existing item's value in place WITHOUT
+    // rewriting kSecAttrAccessible — only delete + re-add migrates items
+    // stored under the old WHEN_UNLOCKED default.
+    const order: string[] = [];
+    (SecureStore.deleteItemAsync as jest.Mock).mockImplementation((key: string) => {
+      order.push(`delete:${key}`);
+      return Promise.resolve();
+    });
+    (SecureStore.setItemAsync as jest.Mock).mockImplementation((key: string) => {
+      order.push(`set:${key}`);
+      return Promise.resolve();
+    });
+    (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(null);
+
+    await adapter.setItem('supabase_session', 'v');
+
+    const deleteIndex = order.indexOf('delete:supabase_session');
+    const setIndex = order.indexOf('set:supabase_session');
+    expect(deleteIndex).toBeGreaterThanOrEqual(0);
+    expect(setIndex).toBeGreaterThan(deleteIndex);
   });
 });

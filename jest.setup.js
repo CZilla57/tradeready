@@ -35,6 +35,7 @@ jest.mock("expo-secure-store", () => ({
   getItemAsync: jest.fn(() => Promise.resolve(null)),
   setItemAsync: jest.fn(() => Promise.resolve()),
   deleteItemAsync: jest.fn(() => Promise.resolve()),
+  AFTER_FIRST_UNLOCK: 0,
 }));
 
 jest.mock("expo-file-system/legacy", () => ({
@@ -160,6 +161,8 @@ jest.mock("@supabase/supabase-js", () => ({
       signInWithPassword: jest.fn(),
       signInWithIdToken: jest.fn(() => Promise.resolve({ data: {}, error: null })),
       signOut: jest.fn(),
+      startAutoRefresh: jest.fn(() => Promise.resolve()),
+      stopAutoRefresh: jest.fn(() => Promise.resolve()),
     },
     from: jest.fn(() => ({
       select: jest.fn().mockReturnThis(),

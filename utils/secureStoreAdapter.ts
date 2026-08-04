@@ -17,6 +17,18 @@ const utf8Decoder = new TextDecoder();
 // three stay in sync rather than risking three independent literals drifting.
 export const SESSION_STORAGE_KEY = 'supabase_session';
 
+// Every write uses AFTER_FIRST_UNLOCK instead of expo-secure-store's default
+// (WHEN_UNLOCKED), which makes Keychain items unreadable the moment the device
+// locks. The background refresh task (utils/backgroundRefresh.ts, build 11+)
+// and supabase-js's token auto-refresh both read the session exactly then, and
+// iOS rejects the read with errSecInteractionNotAllowed ("User interaction is
+// not allowed" — Sentry REACT-NATIVE-9). AFTER_FIRST_UNLOCK is the
+// accessibility class designed for background access: readable any time after
+// the first unlock since boot.
+const WRITE_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+};
+
 export class SecureStoreAdapter {
   async getItem(key: string): Promise<string | null> {
     const base = await SecureStore.getItemAsync(key);
@@ -34,18 +46,24 @@ export class SecureStoreAdapter {
   }
 
   async setItem(key: string, value: string): Promise<void> {
+    // Delete the base key rather than overwriting it: the native module
+    // updates an existing item's value in place WITHOUT rewriting
+    // kSecAttrAccessible, so items stored before the AFTER_FIRST_UNLOCK
+    // switch would keep the old WHEN_UNLOCKED accessibility forever. Delete +
+    // re-add stamps the current accessibility on every write.
+    await SecureStore.deleteItemAsync(key);
     await this._removeChunks(key);
 
     const bytes = utf8Encoder.encode(value);
     if (bytes.byteLength <= CHUNK_SIZE) {
-      await SecureStore.setItemAsync(key, value);
+      await SecureStore.setItemAsync(key, value, WRITE_OPTIONS);
       return;
     }
 
     const chunks = this._chunkByBytes(bytes);
-    await SecureStore.setItemAsync(key, chunks[0]);
+    await SecureStore.setItemAsync(key, chunks[0], WRITE_OPTIONS);
     for (let i = 1; i < chunks.length; i++) {
-      await SecureStore.setItemAsync(`${key}_chunk_${i}`, chunks[i]);
+      await SecureStore.setItemAsync(`${key}_chunk_${i}`, chunks[i], WRITE_OPTIONS);
     }
   }
 
