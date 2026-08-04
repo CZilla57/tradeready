@@ -25,21 +25,13 @@ import {
 } from "./widgetBridge";
 import { loadJobs, saveJobs, loadTrips, saveTrips, loadExpenses, saveExpenses } from "./storage";
 import { HOME_LABEL } from "./mileageUtils";
+import { EXPENSE_CATEGORIES } from "./moneyUtils";
 import type { Job, Trip, Expense, ExpenseCategoryId } from "../types/models";
 
 export type PendingActionType = "timer_start" | "timer_stop" | "trip_log" | "expense_log";
 
-/** The 8 EXPENSE_CATEGORIES ids (utils/moneyUtils.js) — see types/models.ts:44-45. */
-const EXPENSE_CATEGORY_IDS: readonly ExpenseCategoryId[] = [
-  "materials",
-  "tools",
-  "fuel",
-  "labor",
-  "insurance",
-  "software",
-  "marketing",
-  "other",
-];
+/** The 8 EXPENSE_CATEGORIES ids (utils/moneyUtils.ts) — same derivation as utils/receiptOCR.ts's CATEGORY_IDS, so both stay in sync with the single canonical list instead of hand-maintained duplicates. */
+const EXPENSE_CATEGORY_IDS = new Set<string>(EXPENSE_CATEGORIES.map((c) => c.id));
 
 /** One entry in the widgetActions queue — see docs/widget-plan.md Phase 3-4 contract. */
 export interface PendingAction {
@@ -209,11 +201,10 @@ export function expenseFromAction(
     return null;
   }
 
-  const category: ExpenseCategoryId = EXPENSE_CATEGORY_IDS.includes(
-    action.category as ExpenseCategoryId,
-  )
-    ? (action.category as ExpenseCategoryId)
-    : "other";
+  const category: ExpenseCategoryId =
+    typeof action.category === "string" && EXPENSE_CATEGORY_IDS.has(action.category)
+      ? (action.category as ExpenseCategoryId)
+      : "other";
 
   const description =
     typeof action.description === "string" && action.description.length > 0

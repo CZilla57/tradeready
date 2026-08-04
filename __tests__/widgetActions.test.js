@@ -17,6 +17,7 @@ import {
   replayWidgetActions,
 } from "../utils/widgetActions";
 import { KEYS } from "../utils/storage/keys";
+import { EXPENSE_CATEGORIES } from "../utils/moneyUtils";
 
 // Isolate storage from sync/notification side effects, same as storage.test.js.
 jest.mock("../utils/sync", () => ({
@@ -304,7 +305,7 @@ describe("expenseFromAction", () => {
     expect(expense.category).toBe("other");
   });
 
-  test.each(["materials", "tools", "fuel", "labor", "insurance", "software", "marketing", "other"])(
+  test.each(EXPENSE_CATEGORIES.map((c) => c.id))(
     "keeps a valid category '%s' as-is",
     (category) => {
       const expense = expenseFromAction(expenseAction({ category }), []);
