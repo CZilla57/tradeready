@@ -10,6 +10,7 @@ import {
   defaultEndTime,
   formatLaborHint,
   findScheduleConflicts,
+  largestFreeGap,
 } from '../utils/scheduleSmarts';
 import type { Job } from '../types/models';
 
@@ -166,5 +167,47 @@ describe('findScheduleConflicts', () => {
   test('missing date or start returns no conflicts', () => {
     expect(findScheduleConflicts([job({})], { ...base, date: '' })).toHaveLength(0);
     expect(findScheduleConflicts([job({})], { ...base, start: '' })).toHaveLength(0);
+  });
+});
+
+describe('largestFreeGap', () => {
+  test('no scheduled jobs that day → null (empty day is silent by design)', () => {
+    expect(largestFreeGap([job({ scheduledDate: '2026-08-04' })], '2026-08-05')).toBeNull();
+    expect(largestFreeGap([], '2026-08-05')).toBeNull();
+  });
+
+  test('single morning job leaves the afternoon as the largest gap', () => {
+    const jobs = [job({ scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00' })];
+    expect(largestFreeGap(jobs, '2026-08-05')).toEqual({ start: '11:00', minutes: 360 });
+  });
+
+  test('overlapping windows merge before gap computation', () => {
+    const jobs = [
+      job({ id: 'a', scheduledDate: '2026-08-05', scheduledStartTime: '08:00', scheduledEndTime: '10:00' }),
+      job({ id: 'b', scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '12:00' }),
+    ];
+    expect(largestFreeGap(jobs, '2026-08-05')).toEqual({ start: '12:00', minutes: 300 });
+  });
+
+  test('windows clamp to the work day; a fully-booked day has no gap', () => {
+    const jobs = [job({ scheduledDate: '2026-08-05', scheduledStartTime: '07:00', scheduledEndTime: '18:00' })];
+    expect(largestFreeGap(jobs, '2026-08-05')).toBeNull();
+  });
+
+  test('terminal-status jobs do not count as scheduled work', () => {
+    const jobs = [job({ scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00', status: 'paid' })];
+    expect(largestFreeGap(jobs, '2026-08-05')).toBeNull(); // no live job → null
+  });
+
+  test('missing end time blocks max(labor, 1h), matching findScheduleConflicts', () => {
+    const jobs = [job({ scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: null, laborHours: 3 })];
+    // busy 09:00–12:00 → largest gap 12:00–17:00 = 300
+    expect(largestFreeGap(jobs, '2026-08-05')).toEqual({ start: '12:00', minutes: 300 });
+  });
+
+  test('exact-tie gaps: the earlier gap wins (strict >)', () => {
+    const jobs = [job({ scheduledDate: '2026-08-05', scheduledStartTime: '11:15', scheduledEndTime: '13:45' })];
+    // gaps 08:00–11:15 (195) and 13:45–17:00 (195) → earlier one reported
+    expect(largestFreeGap(jobs, '2026-08-05')).toEqual({ start: '08:00', minutes: 195 });
   });
 });

@@ -12,7 +12,7 @@ import type { Job } from "../types/models";
  * job declined via the estimate-approval loop keeps its schedule fields, but
  * its slot is dead — warning against it would mislead.
  */
-const TERMINAL_STATUSES: ReadonlySet<Job["status"]> = new Set([
+export const TERMINAL_STATUSES: ReadonlySet<Job["status"]> = new Set([
   "complete",
   "invoiced",
   "paid",
@@ -102,4 +102,53 @@ export function findScheduleConflicts(jobs: Job[], query: ConflictQuery): Job[] 
     const [s, e] = window(j.scheduledStartTime, j.scheduledEndTime, j.laborHours ?? 0);
     return qStart < e && s < qEnd;
   });
+}
+
+export type FreeGap = { start: string; minutes: number };
+
+/**
+ * Largest free gap inside [dayStart, dayEnd) on `date`, from the same busy
+ * windows findScheduleConflicts uses (missing end → max(labor, 1h)). Returns
+ * null when the date has no live scheduled job — an empty day is not an
+ * "open slot" (the Today empty-schedule state owns that message) — or when
+ * every minute is booked. Ties go to the earlier gap (strict >).
+ */
+export function largestFreeGap(
+  jobs: Job[],
+  date: string,
+  dayStart = "08:00",
+  dayEnd = "17:00"
+): FreeGap | null {
+  const dayJobs = jobs.filter(
+    (j) =>
+      j.scheduledDate === date &&
+      !!j.scheduledStartTime &&
+      !TERMINAL_STATUSES.has(j.status)
+  );
+  if (dayJobs.length === 0) return null;
+
+  const startMin = toMinutes(dayStart);
+  const endMin = toMinutes(dayEnd);
+
+  const busy = dayJobs
+    .map((j) => window(j.scheduledStartTime as string, j.scheduledEndTime, j.laborHours ?? 0))
+    .map(([s, e]): [number, number] => [Math.max(s, startMin), Math.min(e, endMin)])
+    .filter(([s, e]) => s < e)
+    .sort((a, b) => a[0] - b[0]);
+
+  const merged: [number, number][] = [];
+  for (const [s, e] of busy) {
+    const last = merged[merged.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else merged.push([s, e]);
+  }
+
+  let best: FreeGap | null = null;
+  let cursor = startMin;
+  for (const [s, e] of merged) {
+    if (s - cursor > (best?.minutes ?? 0)) best = { start: toTimeString(cursor), minutes: s - cursor };
+    cursor = Math.max(cursor, e);
+  }
+  if (endMin - cursor > (best?.minutes ?? 0)) best = { start: toTimeString(cursor), minutes: endMin - cursor };
+  return best;
 }
