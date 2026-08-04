@@ -24,6 +24,7 @@ import {
   loadCustomers,
   loadSettings,
   resolveCustomer,
+  loadInvoices,
 } from '../utils/storage';
 import { sendAppointmentMessage } from '../utils/appointmentSend';
 import { ACTIVE_STATUSES } from '../utils/appointmentMessages';
@@ -44,6 +45,8 @@ import { getJobStatusDisplay } from '../utils/jobStatusDisplay';
 import { selectAwaitingFollowUp, awaitingResponseLabel } from '../utils/estimateFollowUps';
 import { isSampleId } from '../utils/sampleData';
 import { SetupChecklistCard } from '../components/SetupChecklistCard';
+import { InsightsCard } from '../components/InsightsCard';
+import type { InsightTarget } from '../utils/todayInsights';
 import {
   loadSetupChecklistState,
   markSampleTourDone,
@@ -416,6 +419,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const [followUpsEnabled, setFollowUpsEnabled] = useState(true);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [checklistState, setChecklistState] = useState<SetupChecklistState | null>(null);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -424,7 +428,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist] = await Promise.all([
+          const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
             loadJobs(),
             getExpectedEarningsForDate(todayString),
             loadOverdueInvoices(),
@@ -432,6 +436,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
             loadSettings(),
             loadCustomers(),
             loadSetupChecklistState(),
+            loadInvoices(),
           ]);
           if (active) {
             setAllJobs(allJobsList);
@@ -441,6 +446,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
             setCustomers(customerList);
             setSettings(loadedSettings);
             setChecklistState(checklist);
+            setInvoices(allInvoices);
             setAwaitingEstimates(selectAwaitingFollowUp(allJobsList, new Date()));
             // ABSENT means ON (see types/models.ts) — never truthiness.
             setFollowUpsEnabled(loadedSettings.estimateFollowUpsEnabled !== false);
@@ -459,7 +465,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   );
 
   const { refreshing, onRefresh } = useRefresh(async () => {
-    const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist] = await Promise.all([
+    const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
       loadJobs(),
       getExpectedEarningsForDate(todayString),
       loadOverdueInvoices(),
@@ -467,6 +473,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       loadSettings(),
       loadCustomers(),
       loadSetupChecklistState(),
+      loadInvoices(),
     ]);
     setAllJobs(allJobsList);
     setEarnings(expectedEarnings);
@@ -475,6 +482,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     setCustomers(customerList);
     setSettings(loadedSettings);
     setChecklistState(checklist);
+    setInvoices(allInvoices);
     setAwaitingEstimates(selectAwaitingFollowUp(allJobsList, new Date()));
     // ABSENT means ON (see types/models.ts) — never truthiness.
     setFollowUpsEnabled(loadedSettings.estimateFollowUpsEnabled !== false);
@@ -518,6 +526,36 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
 
   function handlePlanRoute() {
     navigation.navigate('Route');
+  }
+
+  function handleInsightNavigate(target: InsightTarget) {
+    switch (target.type) {
+      case 'job':
+        navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId: target.jobId } });
+        break;
+      case 'createInvoice':
+        navigation.getParent()?.navigate('Jobs', { screen: 'CreateInvoiceFromJob', params: { jobId: target.jobId } });
+        break;
+      case 'invoice':
+        navigation.getParent()?.navigate('Invoices', { screen: 'InvoiceList', params: { openInvoiceId: target.invoiceId } });
+        break;
+      case 'invoices':
+        navigation.getParent()?.navigate('Invoices');
+        break;
+      case 'jobs':
+        navigation.getParent()?.navigate('Jobs');
+        break;
+      case 'schedule':
+        navigation.getParent()?.navigate('Jobs', { screen: 'AddJob', params: { jobId: target.jobId, focusSchedule: true } });
+        break;
+      case 'selectDate':
+        setSelectedDate(target.date);
+        break;
+    }
+  }
+
+  function handleAskCoach(prompt: string) {
+    navigation.getParent()?.navigate('AI', { screen: 'ChatHome', params: { initialPrompt: prompt } });
   }
 
   // ── Week strip derived values ──────────────────────────────────────────────
@@ -678,6 +716,19 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
 
       {/* Post-onboarding setup checklist (hides itself when done/dismissed) */}
       <SetupChecklistCard settings={settings} onOpenSettings={() => navigation.navigate('Settings')} />
+
+      {/* Proactive insights — takes the checklist's slot once setup is done
+          (gating lives inside the card); hidden for brand-new accounts while
+          the first-action hero is up. */}
+      {!loading && !hero && (
+        <InsightsCard
+          jobs={allJobs}
+          invoices={invoices}
+          settings={settings}
+          onNavigate={handleInsightNavigate}
+          onAskCoach={handleAskCoach}
+        />
+      )}
 
       {/* Overdue Invoices — only show once loaded and there's something to show */}
       {!loading && overdueInvoices.length > 0 && (
