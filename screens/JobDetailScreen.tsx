@@ -28,7 +28,8 @@ import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
 import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { track, reportError } from '../utils/analytics';
 import { JOB_STATUSES, computeEstimateBreakdown } from "../utils/pricingEngine";
-import { canSendEstimate, canRequestDeposit, advanceJobsForPaidInvoices } from "../utils/jobStatus";
+import { canSendEstimate, canRequestDeposit, advanceJobsForPaidInvoices, jobChangesAfterInvoiceSave } from "../utils/jobStatus";
+import { createAutoInvoiceForJob } from "../utils/autoInvoice";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES, applyClockIn, applyClockOut } from "../utils/timeTracking";
@@ -769,10 +770,28 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     await updateJob({ status: current.next });
     track('job_status_changed', { from: job.status, to: current.next });
 
-    if (current.next === "complete" && customer) {
-      loadSettings()
-        .then((settings) => scheduleReviewRequest(job, customer, settings))
-        .catch(() => {});
+    if (current.next === "complete") {
+      if (customer) {
+        loadSettings()
+          .then((settings) => scheduleReviewRequest(job, customer, settings))
+          .catch(() => {});
+      }
+
+      // Opt-in auto-invoice (utils/autoInvoice): create the final bill and
+      // jump straight to the send screen. Any unmet gate — toggle off, deposit
+      // invoice pending, no estimate — returns null, and any failure degrades
+      // to the manual flow (the "Create invoice →" primary action below).
+      try {
+        const invoiceId = await createAutoInvoiceForJob(job.id);
+        if (invoiceId) {
+          setJob((prev) =>
+            prev ? { ...prev, ...jobChangesAfterInvoiceSave("create", invoiceId, false) } : prev
+          );
+          navigation.navigate("Outreach", { invoiceId });
+        }
+      } catch (error: unknown) {
+        reportError(error, { context: "autoInvoiceOnComplete" });
+      }
     }
   }
 

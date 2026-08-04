@@ -566,6 +566,13 @@ export interface Settings {
    * conventions.
    */
   estimateFollowUpsEnabled: boolean;
+  /**
+   * When true, marking a job complete auto-creates its invoice (billing
+   * tracked timer hours when the timer was used) and opens the send screen.
+   * Opt-in; absent on settings persisted before this field shipped → false
+   * (same truthy-read convention as appointmentRemindersEnabled).
+   */
+  autoInvoiceOnComplete: boolean;
 
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;

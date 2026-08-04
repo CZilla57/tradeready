@@ -32,7 +32,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer, loadSettings } from "../utils/storage";
-import { computeEstimateBreakdown } from "../utils/pricingEngine";
+import { prefillInvoiceDraftFromJob, buildInvoiceLineItems, defaultDueDate } from "../utils/autoInvoice";
 import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
 import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
@@ -55,13 +55,6 @@ function trackedDisplay(sessions: any[] = []): string | null {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-// Default payment terms: 30 days from today
-function defaultDueDate(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 30);
-  return d.toISOString().split("T")[0];
-}
-
 export default function CreateInvoiceFromJobScreen({ route, navigation }: JobStackScreenProps<'CreateInvoiceFromJob'>) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
@@ -82,6 +75,9 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
   const [email, setEmail]       = useState<string>("");
   const [phone, setPhone]       = useState<string>("");
   const [desc, setDesc]         = useState<string>("");
+  // True when the prefilled amount bills tracked timer hours instead of the
+  // estimate's hours (create mode only) — switches the ⏱ banner copy.
+  const [billedFromTracked, setBilledFromTracked] = useState<boolean>(false);
 
   useEffect(() => {
     async function prefillFromJob() {
@@ -127,12 +123,17 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           setPhone(existing.phone);
           setDesc(existing.desc);
         } else {
-          setCustomer(j.customerName || "");
-          setAmount(j.estimateTotal > 0 ? String(j.estimateTotal) : "");
-          setEmail(matchingCustomer?.email || "");
-          setPhone(matchingCustomer?.phone || "");
-          setDesc(j.title || "");
-          setNumber(nextInvoiceNumber(invoices, settings));
+          // Shared derivation with the auto-invoice flow (utils/autoInvoice) —
+          // bills tracked timer hours in create mode; requestDeposit stays on
+          // the estimate (the util gates tracked billing on done statuses).
+          const draft = prefillInvoiceDraftFromJob(j, invoices, settings, matchingCustomer);
+          setCustomer(draft.customer);
+          setAmount(draft.amount > 0 ? String(draft.amount) : "");
+          setEmail(draft.email);
+          setPhone(draft.phone);
+          setDesc(draft.desc);
+          setNumber(draft.number);
+          setBilledFromTracked(draft.usedTrackedTime);
         }
       } catch (err: unknown) {
         console.error("CreateInvoiceFromJobScreen: prefill failed", err);
@@ -175,28 +176,9 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
 
       // Derive line items from the job's current estimate breakdown — recomputed
       // fresh even in "finalize" mode, so estimate edits made after the deposit
-      // was requested (extra materials, a change order) are picked up.
-      const lineItems: InvoiceLineItem[] = [];
-      if (job) {
-        const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
-        if (laborCost > 0) {
-          lineItems.push({
-            description: `Labor — ${job.laborHours || 0} hrs @ ${formatQuote(job.laborRate || 0)}/hr`,
-            amount: laborCost,
-            category: "labor",
-          });
-        }
-        if (hasMaterials) {
-          const materials = job.materials || [];
-          const label = materials.length === 1
-            ? materials[0].name || "Materials"
-            : `Materials (${materials.length} items)`;
-          lineItems.push({ description: label, amount: materialCost, category: "materials" });
-        }
-        if (overheadLine > 1) {
-          lineItems.push({ description: "Overhead & operating costs", amount: overheadLine, category: "overhead" });
-        }
-      }
+      // was requested (extra materials, a change order) are picked up. Shared
+      // with the auto-invoice flow; bills tracked timer hours on done jobs.
+      const lineItems: InvoiceLineItem[] = job ? buildInvoiceLineItems(job) : [];
 
       let savedInvoiceId: string;
       let savedInvoicePaid = false;
@@ -319,8 +301,9 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
             return (
               <View style={styles.trackBanner}>
                 <Text style={styles.trackBannerText}>
-                  ⏱ Time tracked: {tracked}
-                  {estH > 0 ? ` (estimated ${estH}h)` : ""}. Adjust the amount above if needed.
+                  {billedFromTracked
+                    ? `⏱ Billed from tracked time: ${tracked}${estH > 0 ? ` (estimated ${estH}h)` : ""}. Amount updated to match hours worked.`
+                    : `⏱ Time tracked: ${tracked}${estH > 0 ? ` (estimated ${estH}h)` : ""}. Adjust the amount above if needed.`}
                 </Text>
               </View>
             );

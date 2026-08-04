@@ -1,0 +1,361 @@
+// __tests__/autoInvoice.test.ts
+// The auto-invoice-on-complete flow and its shared invoice-from-job derivation
+// (utils/autoInvoice.ts — 2026-08-03 spec). Pins:
+//   1. Tracked-time billing gates: hourly-priced labor only, done statuses
+//      only, completed sessions only, 2-decimal rounding.
+//   2. The billable breakdown keeps the residual invariant — line items sum
+//      to the invoice total — in both directions of the hour delta.
+//   3. shouldAutoInvoice's opt-in + clean-create gates.
+//   4. createAutoInvoiceForJob end-to-end: invoice saved, job advanced
+//      complete → invoiced, running timer clocked out, null on unmet gates.
+
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  defaultDueDate,
+  billableLaborHours,
+  computeBillableBreakdown,
+  buildInvoiceLineItems,
+  prefillInvoiceDraftFromJob,
+  shouldAutoInvoice,
+  createAutoInvoiceForJob,
+} from "../utils/autoInvoice";
+import type { Job, Invoice, Settings, Customer } from "../types/models";
+
+// Isolate storage from sync/notification/widget side-effects, same as
+// storage.test.js — these tests assert on AsyncStorage state only.
+jest.mock("../utils/sync", () => ({
+  enqueue: jest.fn(),
+  enqueueCollectionChanges: jest.fn(),
+  trySync: jest.fn(),
+}));
+
+jest.mock("../utils/notifications", () => ({
+  syncNotifications: jest.fn(),
+}));
+
+jest.mock("../utils/widgetBridge", () => ({
+  refreshWidgetSnapshot: jest.fn().mockResolvedValue(undefined),
+  clearWidgetSnapshot: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock("../utils/analytics", () => ({
+  track: jest.fn(),
+  reportError: jest.fn(),
+}));
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+// The worked example from the trade-business docs: 4h @ $85 labor ($340),
+// $300 materials +20% markup ($360), estimateTotal $966 → residual $266.
+function makeJob(overrides: Partial<Job> = {}): Job {
+  return {
+    id: "j1",
+    title: "Water heater swap",
+    customerName: "Jane Smith",
+    customerId: "c1",
+    status: "complete",
+    laborHours: 4,
+    laborRate: 85,
+    materials: [
+      { name: "Heater", quantity: 1, unitCost: 200 },
+      { name: "Fittings", quantity: 2, unitCost: 50 },
+    ],
+    materialMarkup: 20,
+    estimateTotal: 966,
+    ...overrides,
+  } as Job;
+}
+
+/** hours → a closed session of exactly that length. */
+function closedSession(hours: number, startIso = "2026-08-01T08:00:00.000Z") {
+  const start = new Date(startIso);
+  const end = new Date(start.getTime() + hours * 3600000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function makeSettings(overrides: Partial<Settings> = {}): Settings {
+  return { autoInvoiceOnComplete: true, ...overrides } as Settings;
+}
+
+// ── defaultDueDate ────────────────────────────────────────────────────────────
+
+describe("defaultDueDate", () => {
+  test("is 30 days after the given date, YYYY-MM-DD", () => {
+    expect(defaultDueDate(new Date("2026-08-03T12:00:00Z"))).toBe("2026-09-02");
+  });
+});
+
+// ── billableLaborHours ────────────────────────────────────────────────────────
+
+describe("billableLaborHours", () => {
+  test("no sessions → estimated hours, not tracked", () => {
+    expect(billableLaborHours(makeJob())).toEqual({ hours: 4, usedTrackedTime: false });
+  });
+
+  test("completed sessions on a done, hourly-priced job → tracked hours", () => {
+    const job = makeJob({ timeSessions: [closedSession(5.5)] });
+    expect(billableLaborHours(job)).toEqual({ hours: 5.5, usedTrackedTime: true });
+  });
+
+  test("multiple sessions accumulate; a still-open session is excluded", () => {
+    const job = makeJob({
+      timeSessions: [
+        closedSession(2),
+        closedSession(1.5, "2026-08-01T13:00:00.000Z"),
+        { start: "2026-08-01T16:00:00.000Z", end: null },
+      ],
+    });
+    expect(billableLaborHours(job)).toEqual({ hours: 3.5, usedTrackedTime: true });
+  });
+
+  test("flat-priced job (laborHours 0) never bills tracked time", () => {
+    const job = makeJob({ laborHours: 0, timeSessions: [closedSession(3)] });
+    expect(billableLaborHours(job)).toEqual({ hours: 0, usedTrackedTime: false });
+  });
+
+  test("laborRate 0 never bills tracked time", () => {
+    const job = makeJob({ laborRate: 0, timeSessions: [closedSession(3)] });
+    expect(billableLaborHours(job)).toEqual({ hours: 4, usedTrackedTime: false });
+  });
+
+  test("pre-complete status (deposit territory) bills the estimate", () => {
+    const job = makeJob({ status: "in_progress", timeSessions: [closedSession(3)] });
+    expect(billableLaborHours(job)).toEqual({ hours: 4, usedTrackedTime: false });
+  });
+
+  test("tracked hours round to 2 decimals", () => {
+    // 1h 10m 30s = 1.175h → 1.18
+    const job = makeJob({ timeSessions: [closedSession(1.175)] });
+    expect(billableLaborHours(job)).toEqual({ hours: 1.18, usedTrackedTime: true });
+  });
+
+  test("tracked time rounding to 0.00 falls back to the estimate", () => {
+    // 10 seconds tracked rounds to 0 hours — not a billable replacement.
+    const job = makeJob({ timeSessions: [closedSession(10 / 3600)] });
+    expect(billableLaborHours(job)).toEqual({ hours: 4, usedTrackedTime: false });
+  });
+});
+
+// ── computeBillableBreakdown ──────────────────────────────────────────────────
+
+describe("computeBillableBreakdown", () => {
+  test("without tracked time, mirrors the quoted breakdown", () => {
+    const b = computeBillableBreakdown(makeJob());
+    expect(b).toMatchObject({
+      laborHours: 4,
+      laborCost: 340,
+      materialCost: 360,
+      overheadLine: 266,
+      usedTrackedTime: false,
+      total: 966,
+    });
+  });
+
+  test("tracked over estimate: total rises by the hour delta at the labor rate", () => {
+    const b = computeBillableBreakdown(makeJob({ timeSessions: [closedSession(5.5)] }));
+    expect(b.laborHours).toBe(5.5);
+    expect(b.laborCost).toBe(467.5);
+    expect(b.total).toBe(1093.5); // 966 + 1.5h × $85
+    // Residual invariant: lines still sum to the total.
+    expect(b.laborCost + b.materialCost + b.overheadLine).toBeCloseTo(b.total, 2);
+  });
+
+  test("tracked under estimate: total drops by the hour delta", () => {
+    const b = computeBillableBreakdown(makeJob({ timeSessions: [closedSession(2)] }));
+    expect(b.laborCost).toBe(170);
+    expect(b.total).toBe(796); // 966 − 2h × $85
+    expect(b.laborCost + b.materialCost + b.overheadLine).toBeCloseTo(b.total, 2);
+  });
+});
+
+// ── buildInvoiceLineItems ─────────────────────────────────────────────────────
+
+describe("buildInvoiceLineItems", () => {
+  test("labor line bills tracked hours and lines sum to the billable total", () => {
+    const job = makeJob({ timeSessions: [closedSession(5.5)] });
+    const items = buildInvoiceLineItems(job);
+    expect(items).toHaveLength(3);
+    expect(items[0]).toEqual({
+      description: "Labor — 5.5 hrs @ $85/hr",
+      amount: 467.5,
+      category: "labor",
+    });
+    expect(items[1]).toMatchObject({ amount: 360, category: "materials" });
+    expect(items[2]).toMatchObject({ amount: 266, category: "overhead" });
+    const sum = items.reduce((s, i) => s + i.amount, 0);
+    expect(sum).toBeCloseTo(computeBillableBreakdown(job).total, 2);
+  });
+
+  test("without tracked time, matches the historical estimated-hours line", () => {
+    const items = buildInvoiceLineItems(makeJob());
+    expect(items[0]).toEqual({
+      description: "Labor — 4 hrs @ $85/hr",
+      amount: 340,
+      category: "labor",
+    });
+  });
+});
+
+// ── shouldAutoInvoice ─────────────────────────────────────────────────────────
+
+describe("shouldAutoInvoice", () => {
+  test("all gates met → true", () => {
+    expect(shouldAutoInvoice(makeJob(), makeSettings())).toBe(true);
+  });
+
+  test("toggle off (or absent) → false", () => {
+    expect(shouldAutoInvoice(makeJob(), makeSettings({ autoInvoiceOnComplete: false }))).toBe(false);
+    expect(shouldAutoInvoice(makeJob(), {} as Settings)).toBe(false);
+  });
+
+  test("existing invoice (deposit awaiting finalize) → false", () => {
+    expect(shouldAutoInvoice(makeJob({ invoiceId: "inv9" }), makeSettings())).toBe(false);
+  });
+
+  test("no estimate total → false", () => {
+    expect(shouldAutoInvoice(makeJob({ estimateTotal: 0 }), makeSettings())).toBe(false);
+  });
+
+  test("blank customer name → false", () => {
+    expect(shouldAutoInvoice(makeJob({ customerName: "  " }), makeSettings())).toBe(false);
+  });
+});
+
+// ── createAutoInvoiceForJob (end-to-end against mocked AsyncStorage) ──────────
+
+describe("createAutoInvoiceForJob", () => {
+  let store: Record<string, string>;
+
+  function seed(jobs: Job[], invoices: Invoice[], customers: Customer[], settings: Partial<Settings>) {
+    store = {
+      jobs: JSON.stringify(jobs),
+      invoices: JSON.stringify(invoices),
+      customers: JSON.stringify(customers),
+      expenses: JSON.stringify([]),
+      settings: JSON.stringify(settings),
+    };
+  }
+
+  const janeRecord = { id: "c1", name: "Jane Smith", email: "jane@example.com", phone: "555-0100" } as Customer;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    store = {};
+    (AsyncStorage.getItem as jest.Mock).mockImplementation((k: string) =>
+      Promise.resolve(store[k] ?? null)
+    );
+    (AsyncStorage.setItem as jest.Mock).mockImplementation((k: string, v: string) => {
+      store[k] = v;
+      return Promise.resolve();
+    });
+  });
+
+  function storedJobs(): Job[] {
+    return JSON.parse(store.jobs);
+  }
+  function storedInvoices(): Invoice[] {
+    return JSON.parse(store.invoices);
+  }
+
+  test("happy path: saves the invoice and advances the job to invoiced", async () => {
+    const job = makeJob({ timeSessions: [closedSession(5.5)] });
+    seed([job], [], [janeRecord], { autoInvoiceOnComplete: true });
+
+    const invoiceId = await createAutoInvoiceForJob("j1");
+
+    expect(invoiceId).toBeTruthy();
+    const invoices = storedInvoices();
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0]).toMatchObject({
+      id: invoiceId,
+      customer: "Jane Smith",
+      customerId: "c1",
+      number: "INV-0001",
+      amount: 1093.5,
+      email: "jane@example.com",
+      phone: "555-0100",
+      desc: "Water heater swap",
+      paid: false,
+      jobId: "j1",
+    });
+    expect(invoices[0].lineItems).toHaveLength(3);
+
+    const savedJob = storedJobs().find((j) => j.id === "j1");
+    expect(savedJob?.status).toBe("invoiced");
+    expect(savedJob?.invoiceId).toBe(invoiceId);
+  });
+
+  test("a still-running timer is clocked out and billed", async () => {
+    // Open session started exactly 2h ago; clock-out happens at "now", so the
+    // billed hours land at 2.0 (rounding absorbs test-execution drift).
+    const job = makeJob({
+      timeSessions: [{ start: new Date(Date.now() - 2 * 3600000).toISOString(), end: null }],
+    });
+    seed([job], [], [janeRecord], { autoInvoiceOnComplete: true });
+
+    const invoiceId = await createAutoInvoiceForJob("j1");
+
+    expect(invoiceId).toBeTruthy();
+    const savedJob = storedJobs().find((j) => j.id === "j1");
+    expect(savedJob?.timeSessions?.[0]?.end).toBeTruthy();
+    expect(storedInvoices()[0].amount).toBe(796); // 966 − 2h × $85
+  });
+
+  test("toggle off → null and nothing written", async () => {
+    seed([makeJob()], [], [janeRecord], { autoInvoiceOnComplete: false });
+
+    expect(await createAutoInvoiceForJob("j1")).toBeNull();
+    expect(storedInvoices()).toHaveLength(0);
+    expect(storedJobs()[0].status).toBe("complete");
+  });
+
+  test("job not at complete → null (deposit territory stays manual)", async () => {
+    seed([makeJob({ status: "in_progress" })], [], [janeRecord], { autoInvoiceOnComplete: true });
+    expect(await createAutoInvoiceForJob("j1")).toBeNull();
+    expect(storedInvoices()).toHaveLength(0);
+  });
+
+  test("existing deposit invoice → null (finalize keeps the manual screen)", async () => {
+    const deposit = { id: "inv9", customer: "Jane Smith", number: "INV-0009", amount: 100, due: "2026-08-10", email: "", phone: "", desc: "", paid: false } as Invoice;
+    seed([makeJob({ invoiceId: "inv9" })], [deposit], [janeRecord], { autoInvoiceOnComplete: true });
+
+    expect(await createAutoInvoiceForJob("j1")).toBeNull();
+    expect(storedInvoices()).toHaveLength(1);
+  });
+
+  test("no matching customer record → one is created and linked", async () => {
+    seed([makeJob({ customerId: undefined })], [], [], { autoInvoiceOnComplete: true });
+
+    const invoiceId = await createAutoInvoiceForJob("j1");
+
+    expect(invoiceId).toBeTruthy();
+    const customers: Customer[] = JSON.parse(store.customers);
+    expect(customers).toHaveLength(1);
+    expect(customers[0].name).toBe("Jane Smith");
+    expect(storedInvoices()[0].customerId).toBe(customers[0].id);
+  });
+});
+
+// ── prefillInvoiceDraftFromJob ────────────────────────────────────────────────
+
+describe("prefillInvoiceDraftFromJob", () => {
+  test("derives the same values the manual screen prefills", () => {
+    const job = makeJob({ timeSessions: [closedSession(5.5)] });
+    const draft = prefillInvoiceDraftFromJob(job, [], makeSettings(), janeLike());
+    expect(draft).toMatchObject({
+      customer: "Jane Smith",
+      number: "INV-0001",
+      amount: 1093.5,
+      email: "jane@example.com",
+      phone: "555-0100",
+      desc: "Water heater swap",
+      usedTrackedTime: true,
+      billedHours: 5.5,
+    });
+    expect(draft.due).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  function janeLike(): Customer {
+    return { id: "c1", name: "Jane Smith", email: "jane@example.com", phone: "555-0100" } as Customer;
+  }
+});

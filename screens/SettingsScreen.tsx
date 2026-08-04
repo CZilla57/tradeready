@@ -840,6 +840,21 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
           </Text>
         </View>
 
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Auto-invoice completed jobs</Text>
+            <Switch
+              value={!!s.autoInvoiceOnComplete}
+              onValueChange={(v) => update("autoInvoiceOnComplete", v)}
+              trackColor={{ true: colors.accent }}
+              accessibilityLabel="Auto-invoice completed jobs"
+            />
+          </View>
+          <Text style={styles.keyNote}>
+            When you mark a job complete, create the invoice automatically — billing tracked time when the timer was used — and open the send screen.
+          </Text>
+        </View>
+
         <Text style={[styles.ruleSubtitle, { marginTop: spacing.sm }]}>Message templates</Text>
         <View style={styles.card}>
           <Field
