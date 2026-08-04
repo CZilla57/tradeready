@@ -1,12 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import type { Invoice, Settings, ReminderRule, Job, Customer, RecurringInvoice } from '../types/models';
 import { isFullyPaid } from './invoicePayments';
 import { selectAppointmentReminders } from './appointmentMessages';
 import { isJobDunningEligible } from './jobStatus';
 import { parseLocalDate } from './moneyUtils';
 import { selectEstimateFollowUps, FOLLOW_UP_DAYS } from './estimateFollowUps';
+import { REMINDER_PROMPT_KEY } from './storage/keys';
 import {
   getPendingReviewRequests,
   reviewRequestDelaySeconds,
@@ -46,6 +47,41 @@ export async function requestPermissions(): Promise<boolean> {
   if (existing === 'denied') return false;
   const { status } = await Notifications.requestPermissionsAsync();
   return status === 'granted';
+}
+
+// One-shot contextual permission ask, replacing the generic onboarding prompt
+// (2026-08-03 flow restructure): fires the first time the user creates an
+// invoice — the moment reminders become concretely useful. Asks at most once;
+// silent when the OS permission is already settled either way. The flag key
+// lives in storage/keys.ts so the sign-out wipe can list it without importing
+// this module.
+export async function promptForInvoiceReminders(): Promise<void> {
+  try {
+    const shown = await AsyncStorage.getItem(REMINDER_PROMPT_KEY);
+    if (shown) return;
+    const { status } = await Notifications.getPermissionsAsync();
+    // Stamp before showing: settled permissions need no prompt, and a shown
+    // prompt must not repeat even if the user dismisses it without choosing.
+    await AsyncStorage.setItem(REMINDER_PROMPT_KEY, 'true');
+    if (status !== 'undetermined') return;
+    Alert.alert(
+      'Invoice reminders',
+      'Want a heads-up before invoices go overdue? TradeReady can notify you so nothing slips through the cracks.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Turn on',
+          onPress: () => {
+            requestPermissions()
+              .then((granted) => { if (granted) syncNotifications(); })
+              .catch(() => {});
+          },
+        },
+      ]
+    );
+  } catch {
+    // Never let a permission prompt failure interfere with saving an invoice.
+  }
 }
 
 export async function syncNotifications(): Promise<void> {

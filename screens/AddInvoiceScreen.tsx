@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loadInvoices, saveInvoices, getOrCreateCustomer, loadSettings } from "../utils/storage";
-import { syncNotifications } from "../utils/notifications";
+import { syncNotifications, promptForInvoiceReminders } from "../utils/notifications";
 import { nextInvoiceNumber } from "../utils/invoiceNumber";
 import { Button } from "../components/UI";
 import Field from "../components/Field";
@@ -107,6 +107,9 @@ export default function AddInvoiceScreen({ route, navigation }: InvoiceStackScre
     await saveInvoices(updated);
     if (!isEditing) {
       track('invoice_created', { source: 'manual' });
+      // Contextual permission ask (once): the user just created an invoice,
+      // so overdue reminders are concretely useful right now.
+      promptForInvoiceReminders();
     }
     syncNotifications(); // fire-and-forget — reschedules all reminders
     setSaving(false);

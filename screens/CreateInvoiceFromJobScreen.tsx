@@ -32,6 +32,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer, loadSettings } from "../utils/storage";
+import { promptForInvoiceReminders } from "../utils/notifications";
 import { prefillInvoiceDraftFromJob, buildInvoiceLineItems, defaultDueDate } from "../utils/autoInvoice";
 import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
 import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
@@ -228,6 +229,9 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
         };
         await saveInvoices([...invoices, newInvoice]);
         track('invoice_created', { source: 'from_job', mode });
+        // Contextual permission ask (once): the user just created an invoice,
+        // so overdue reminders are concretely useful right now.
+        promptForInvoiceReminders();
         savedInvoiceId = newInvoice.id;
       }
 
