@@ -122,6 +122,13 @@ same id and the pull/save merge-by-id absorbs it. No duplicate leads, no flags
 (same idempotence philosophy as the recurring engines' ruleId+occurrenceNumber
 dedupe guard).
 
+**Residual risk (final review 2026-08-04):** the deterministic `jbk_<request.id>`
+job id protects JOBS from cross-device double-conversion, but customer ids are
+time-based, not deterministic — two devices converting the same request
+concurrently can each create a Customer record for the same person. The
+existing duplicate-customer detection/merge flow surfaces the pair for the
+owner to resolve. Accepted for a solo-operator app.
+
 ## 4. Backend
 
 One new Vercel function — `api/booking/[action].js`, a dispatcher identical in

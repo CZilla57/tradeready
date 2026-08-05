@@ -114,7 +114,9 @@ utils/
     collections.ts               ← Load/save for invoices, jobs, customers, expenses
     settings.ts                  ← Settings (public + SecureStore-backed fields)
     customers.ts                 ← Customer registry (upsert, notes, migration)
-    trips.ts                     ← loadTrips/saveTrips — mileage log, local-only (not synced)
+    trips.ts                     ← loadTrips/saveTrips — mileage log (synced since 2026-08-03)
+    bookingRequests.ts           ← loadBookingRequests/saveBookingRequests — synced request queue
+    bookingConversion.ts         ← convertBookingRequests — new requests into Customer + lead Job
     lifecycle.ts                 ← Onboarding, clearSampleData, clearAllUserData
     dailyOps.ts                  ← Today-tab derived reads (today's jobs, overdue, leads)
   format.ts                      ← formatMoney (2 dp, invoices/totals) / formatQuote (estimates)
@@ -134,6 +136,8 @@ utils/
   sync.ts                        ← Supabase sync queue (push/pull, enqueue, trySync)
   supabase.ts                    ← Supabase client (auth + database)
   notifications.ts               ← Push notification scheduling (overdue reminders)
+  bookingLink.ts                 ← Booking-link URL builder + mint-endpoint client
+  pushToken.ts                   ← Expo push-token registration into the settings blob
   pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
   pdfExport.ts                   ← PDF rendering and share sheet
   photoStorage.ts                ← Device photo management + logo downscale for PDFs
@@ -230,7 +234,11 @@ context/
 backend/                         ← Vercel serverless functions (deployed separately)
   api/                           ← Stripe Connect, payment links, AI proxies,
                                    account deletion, subscription webhook
+  api/booking/[action].js        ← Booking link dispatcher — mint (JWT-authed),
+                                   config, submit (public, token-gated)
   lib/guards.js                  ← Rate limiter + input caps shared by the AI endpoints
+  lib/booking/                   ← store/validate/submit/config/mint/notifyOwner —
+                                   booking link backend logic
 ```
 
 ---
@@ -421,7 +429,11 @@ the cloud row is the one that resolves, so a link you already shared under a
 token that just got clobbered away will 404 until you tap "Get new link" to
 rotate it and re-share. A clobbered push token just falls back to email-only
 alerts until a device re-registers, which happens automatically on the next
-app foreground or sign-in (`utils/pushToken.ts`, only-on-change).
+app foreground or sign-in (`utils/pushToken.ts`, only-on-change). Separately,
+because request conversion (`utils/storage/bookingConversion.ts`) assigns
+customers a time-based rather than deterministic id, two devices converting
+the same request concurrently can each create a duplicate customer record for
+the same person, which the existing duplicate-customer merge prompt recovers.
 
 **First-device detection counts settings rows.** `initialSync` decides
 push-vs-pull by counting the user's rows in the cloud `settings` table
