@@ -549,6 +549,12 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       case 'selectDate':
         setSelectedDate(target.date);
         break;
+      default: {
+        // Compile-time exhaustiveness: a new InsightTarget variant fails
+        // typecheck here instead of silently no-oping at runtime.
+        const unhandled: never = target;
+        reportError(new Error(`Unhandled insight target: ${JSON.stringify(unhandled)}`), { context: 'insightNavigate' });
+      }
     }
   }
 

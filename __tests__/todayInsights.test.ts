@@ -184,6 +184,17 @@ describe('open_slot', () => {
     const [insight] = selectTodayInsights(jobs, [], NOW);
     expect(insight.title).toBe('Tomorrow has a 2h open slot');
   });
+
+  test('ties on laborHours keep array order (Array.prototype.sort is stable)', () => {
+    const jobs = [
+      tomorrowJob,
+      job({ id: 'first', status: 'approved', title: 'First fix', laborHours: 3 }),
+      job({ id: 'second', status: 'approved', title: 'Second fix', laborHours: 3 }),
+    ];
+    const [insight] = selectTodayInsights(jobs, [], NOW);
+    expect(insight.title).toBe("Tomorrow has a 6h open slot — 'First fix' (3h) would fit");
+    expect(insight.target).toEqual({ type: 'schedule', jobId: 'first' });
+  });
 });
 
 describe('unscheduled_approved', () => {

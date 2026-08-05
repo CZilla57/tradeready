@@ -51,6 +51,7 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [state, setState] = useState<SetupChecklistState | null>(null);
   const [notifGranted, setNotifGranted] = useState(false);
+  const lastShownKey = useRef("");
 
   useFocusEffect(
     useCallback(() => {
@@ -59,7 +60,13 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
       Notifications.getPermissionsAsync()
         .then(({ status }) => { if (active) setNotifGranted(status === "granted"); })
         .catch(() => {});
-      return () => { active = false; };
+      return () => {
+        active = false;
+        // Reset so insight_shown re-fires per focus even if TodayScreen ever
+        // stops remounting this card on refocus (it currently does, via the
+        // loading toggle — do not rely on that accident).
+        lastShownKey.current = "";
+      };
     }, [])
   );
 
@@ -74,7 +81,6 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
 
   // insight_shown once per distinct visible-kinds set, not per render.
   const shownKey = visible ? insights.map(i => i.kind).join(",") : "";
-  const lastShownKey = useRef("");
   useEffect(() => {
     if (shownKey && shownKey !== lastShownKey.current) {
       lastShownKey.current = shownKey;
@@ -108,6 +114,8 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
           activeOpacity={0.7}
           accessibilityRole="button"
           accessibilityLabel={insight.title}
+          accessibilityActions={insight.coachPrompt ? [{ name: 'askCoach', label: 'Ask coach' }] : undefined}
+          onAccessibilityAction={insight.coachPrompt ? (e) => { if (e.nativeEvent.actionName === 'askCoach') handleCoach(insight); } : undefined}
         >
           <Ionicons name={KIND_ICONS[insight.kind]} size={22} color={colors.accent} />
           <View style={styles.rowText}>
@@ -119,7 +127,7 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
                 onPress={() => handleCoach(insight)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
-                accessibilityLabel="Ask coach about this overrun"
+                accessibilityLabel={`Ask coach about ${insight.title}`}
               >
                 <Ionicons name="chatbubble-ellipses-outline" size={13} color={colors.accent} />
                 <Text style={styles.coachButtonText} maxFontSizeMultiplier={1.4}>Ask coach</Text>
