@@ -43,11 +43,16 @@ beforeEach(() => {
   ]);
   store.fetchCustomerInvoices.mockResolvedValue([
     { id: 'i1', data: { number: 'INV-0001', amount: 500, due: '2026-08-20', paid: false,
-      paymentLinkUrl: 'https://buy.stripe.com/pay123' } },
+      paymentLinkUrl: 'https://buy.stripe.com/pay123', paymentLinkAmount: 500 } }, // minted for the current (full) balance
     { id: 'i2', data: { number: 'INV-0002', amount: 300, due: '2026-07-01', paid: true, paidAt: '2026-07-03',
       paymentLinkUrl: 'https://buy.stripe.com/old' } },
     { id: 'i3', data: { number: 'INV-0003', amount: 250, due: '2026-08-25', paid: false,
       paymentLinkUrl: 'https://squareup.com/pay/SECRET-TOKEN' } }, // disallowed host
+    { id: 'i4', data: { number: 'INV-0004', amount: 500, due: '2026-08-22', paid: false,
+      payments: [{ id: 'p1', amount: 200, date: '2026-08-01', method: 'card' }],
+      paymentLinkUrl: 'https://buy.stripe.com/stale', paymentLinkAmount: 500 } }, // stale: minted before the $200 partial payment, balance is now $300
+    { id: 'i5', data: { number: 'INV-0005', amount: 400, due: '2026-08-28', paid: false,
+      paymentLinkUrl: 'https://buy.stripe.com/noamount' } }, // allowlisted host, no paymentLinkAmount to verify against
   ]);
 });
 
@@ -90,6 +95,21 @@ describe('portal-view', () => {
     expect(paid.paymentLinkUrl).toBeNull();       // paid → never a link
     expect(badHost.paymentLinkUrl).toBeNull();    // squareup.com is not allowlisted
     expect(JSON.stringify(res.body)).not.toContain('SECRET-TOKEN');
+  });
+
+  it('gates the Pay link on paymentLinkAmount matching the current balance, mirroring the dunning email', async () => {
+    const res = mockRes();
+    await portalView(req({ p: 'T' }), res);
+
+    const current = res.body.invoices.find((i) => i.number === 'INV-0001');
+    expect(current.paymentLinkUrl).toBe('https://buy.stripe.com/pay123'); // paymentLinkAmount (500) matches the balance (500)
+
+    const stalePartial = res.body.invoices.find((i) => i.number === 'INV-0004');
+    expect(stalePartial.balanceDue).toBe(300); // $500 amount minus a $200 partial payment
+    expect(stalePartial.paymentLinkUrl).toBeNull(); // link was minted for the full $500, not the $300 balance now due
+
+    const noAmount = res.body.invoices.find((i) => i.number === 'INV-0005');
+    expect(noAmount.paymentLinkUrl).toBeNull(); // allowlisted host, but no paymentLinkAmount to verify against — fails closed
   });
 
   it('404s unknown/disabled tokens oracle-free and 400s a missing token', async () => {

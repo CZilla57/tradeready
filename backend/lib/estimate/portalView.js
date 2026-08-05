@@ -14,7 +14,7 @@ const {
   fetchCustomerJobs,
   fetchCustomerInvoices,
 } = require('./portalStore');
-const { balanceDue } = require('../paymentMath');
+const { balanceDue, PAID_EPSILON } = require('../paymentMath');
 const { isAllowedPaymentLink } = require('../reminderEmail');
 
 const ESTIMATE_PAGE = 'https://gettradereadyapp.com/estimate.html';
@@ -67,17 +67,31 @@ module.exports = async function portalView(req, res) {
   const invoices = invoiceRows.map((r) => {
     const inv = r.data || {};
     const link = inv.paymentLinkUrl;
+    const due = balanceDue(inv);
+    // Mirrors linkCurrent in reminderEmail.js: a cached link is only shown
+    // when it was minted for the CURRENT balance. A link cached before a
+    // partial payment (or for a deposit) charges a different amount than the
+    // portal displays, and there's no owner in the loop here to catch the
+    // customer being overcharged. An absent/unparseable paymentLinkAmount
+    // fails the match and drops the link — fail closed, same as the email.
+    const linkAmount = Number(inv.paymentLinkAmount);
+    const linkCurrent =
+      !inv.paid &&
+      isAllowedPaymentLink(link) &&
+      Number.isFinite(linkAmount) &&
+      Math.abs(linkAmount - due) <= PAID_EPSILON;
     return {
       number: String(inv.number || ''),
       amount: Number(inv.amount || 0),
-      balanceDue: balanceDue(inv),
+      balanceDue: due,
       due: inv.due || null,
       paid: !!inv.paid,
       paidAt: inv.paidAt || null,
       // Same host allowlist as the dunning email — a tampered or legacy link
       // can never turn the portal into a phishing surface. Paid invoices get
-      // no link at all.
-      paymentLinkUrl: !inv.paid && isAllowedPaymentLink(link) ? link : null,
+      // no link at all. Same current-balance gate as the dunning email — see
+      // linkCurrent above.
+      paymentLinkUrl: linkCurrent ? link : null,
     };
   });
 

@@ -237,15 +237,37 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
   // pattern (not the screen's draft state) — same map-by-id shape as
   // handleToggleArchive/handleDelete above, so a portal action never touches
   // any other customer's record.
+  //
+  // loadCustomers happens FIRST, before minting anything, for two reasons:
+  //  - displayCustomer can be a derived/name-keyed entry (from the invoice
+  //    list) or a dangling id (deleted-elsewhere) that has no real record to
+  //    save onto — minting a token in that case would display a link that
+  //    the next saveCustomers-by-id map silently drops on the floor.
+  //  - the route-param customer can predate this record's portal (the
+  //    initial-paint window, before the focus-effect refresh lands) — tapping
+  //    "Create" then would mint and save a SECOND token, orphaning whatever
+  //    was already shared. Surface the real one instead of rotating it.
   const handleCreatePortalLink = async () => {
-    const out = await mintPortalToken();
-    if (!out.ok) {
-      Alert.alert("Couldn't create portal link", out.message);
-      return;
-    }
     try {
-      const next = { token: out.token, enabled: true };
       const custs = await loadCustomers();
+      const record = custs.find((c) => c.id === displayCustomer.id);
+      if (!record) {
+        Alert.alert(
+          "Save this customer first",
+          "This customer doesn't have a full record yet. Add or edit one of their details, then create the portal link."
+        );
+        return;
+      }
+      if (record.portal && !displayCustomer.portal) {
+        setDisplayCustomer((prev: any) => ({ ...prev, portal: record.portal }));
+        return;
+      }
+      const out = await mintPortalToken();
+      if (!out.ok) {
+        Alert.alert("Couldn't create portal link", out.message);
+        return;
+      }
+      const next = { token: out.token, enabled: true };
       await saveCustomers(custs.map((c) => (c.id === displayCustomer.id ? { ...c, portal: next } : c)));
       setDisplayCustomer((prev: any) => ({ ...prev, portal: next }));
     } catch (err: unknown) {

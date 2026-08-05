@@ -126,6 +126,43 @@ describe("CustomerDetail customer portal section", () => {
     ]);
   });
 
+  it("shows an alert and saves nothing when the customer has no full record yet (derived/dangling entry)", async () => {
+    // The record list this customer's id doesn't appear in — a derived
+    // (name-keyed) or dangling-id entry reachable from the customer list.
+    (loadCustomers as jest.Mock).mockResolvedValue([otherCust]);
+    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+
+    const { findByText } = await renderScreen(cust);
+    const createBtn = await findByText("Create portal link");
+    await fireEvent.press(createBtn);
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    expect(alertSpy).toHaveBeenCalledWith(
+      "Save this customer first",
+      "This customer doesn't have a full record yet. Add or edit one of their details, then create the portal link."
+    );
+    expect(saveCustomers).not.toHaveBeenCalled();
+    expect(mintPortalToken).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the existing portal instead of minting a new one during the stale-paint window", async () => {
+    const custWithPortal = { ...cust, portal: { token: TOKEN, enabled: true } };
+    // The route-param customer (no portal yet) is stale; loadCustomers already
+    // has the real record. First call is the mount-time focus-effect refresh
+    // (still the stale shape, matching route params); the second is the tap.
+    (loadCustomers as jest.Mock)
+      .mockResolvedValueOnce([cust, otherCust])
+      .mockResolvedValueOnce([custWithPortal, otherCust]);
+
+    const { findByText } = await renderScreen(cust);
+    const createBtn = await findByText("Create portal link");
+    await fireEvent.press(createBtn);
+
+    expect(await findByText(buildPortalUrl(TOKEN))).toBeTruthy();
+    expect(saveCustomers).not.toHaveBeenCalled();
+    expect(mintPortalToken).not.toHaveBeenCalled();
+  });
+
   it("a mint failure shows an Alert and saves nothing", async () => {
     (mintPortalToken as jest.Mock).mockResolvedValue({
       ok: false,
