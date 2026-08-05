@@ -471,7 +471,11 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
   };
 
   const handleShareBookingLink = async (token: string) => {
-    await Share.share({ message: buildBookingUrl(token) });
+    try {
+      await Share.share({ message: buildBookingUrl(token) });
+    } catch (err: unknown) {
+      reportError(err, { context: 'bookingLinkShare' });
+    }
   };
 
   const handleNewBookingLink = () => {

@@ -9,6 +9,12 @@
 // saveJobs but before the request is marked, the rerun regenerates the same
 // id and merge-by-id absorbs it — no duplicate leads, same philosophy as the
 // recurring engines' ruleId+occurrenceNumber dedupe guard.
+//
+// Residual (final review 2026-08-04): that same guard doesn't cover
+// customers — customer ids are time-based, not deterministic, so two devices
+// converting the same request concurrently can each create a Customer record
+// for the same person. The existing duplicate-customer detection/merge flow
+// surfaces the pair; accepted as-is for a solo-operator app.
 
 import { loadJobs, saveJobs, loadCustomers, saveCustomers } from "./collections";
 import { loadSettings } from "./settings";

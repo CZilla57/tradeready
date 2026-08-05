@@ -26,6 +26,7 @@ module.exports = async function submit(req, res) {
 
   const body = req.body || {};
   if (typeof body.website === 'string' && body.website.trim() !== '') {
+    console.warn('[booking/submit] honeypot hit — submission dropped');
     return res.status(200).json({ ok: true }); // honeypot — silent drop
   }
 
