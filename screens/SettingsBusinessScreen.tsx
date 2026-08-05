@@ -84,11 +84,23 @@ export default function SettingsBusinessScreen({ navigation }: TodayStackScreenP
     // including the raw-path-before-sanitization comment. The provider-key
     // half (lines 307–316) belongs to SettingsPaymentsScreen.
     prepare: async (loaded) => {
+      // Captured BEFORE the sanitization below, and swept against, deliberately.
+      // photoExists fails closed, so a transient filesystem error blanks
+      // logoPhoto — and sweeping against a blank keeper would delete the user's
+      // real logo, turning a one-session display glitch into permanent loss.
+      // The raw path still matches the real file, so it survives.
       const persistedLogoPath = loaded.logoPhoto;
       let next = loaded;
+      // A logoPhoto path can outlive the file it points at (reinstall, or a path
+      // synced from another device). Treat a dangling path as unset so the "Add
+      // logo" placeholder shows instead of an invisible circle, and so the next
+      // save clears the stale reference.
       if (next.logoPhoto && !(await photoExists(next.logoPhoto))) {
         next = { ...next, logoPhoto: "" };
       }
+      // Skipping a sweep costs only disk; sweeping against non-authoritative
+      // settings costs the user's logo. When in doubt, skip — the next launch
+      // sweeps instead.
       if (!bootstrappingRef.current) {
         await sweepOrphanedLogos(persistedLogoPath);
       }
