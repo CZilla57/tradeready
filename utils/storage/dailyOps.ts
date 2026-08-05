@@ -46,17 +46,22 @@ export async function getExpectedEarningsForDate(dateString: string): Promise<nu
   }
 }
 
+/** Pure overdue selector — local-frame day math (FA-039): daysPastDue
+ * compares local midnights, so a bare "YYYY-MM-DD" due date never gets
+ * parsed as UTC midnight (which put due-today invoices in this list west of
+ * UTC). Due-today is NOT overdue — it belongs to the Today due-soon insight
+ * (utils/todayInsights.ts), not this list. Extracted so TodayScreen can
+ * derive the overdue subset from its already-loaded invoice list instead of
+ * parsing the blob twice per focus. */
+export function filterOverdueInvoices(invoices: Invoice[]): Invoice[] {
+  return invoices
+    .filter((inv) => !isFullyPaid(inv) && daysPastDue(inv.due) >= 1)
+    .sort((a, b) => new Date(a.due).getTime() - new Date(b.due).getTime());
+}
+
 export async function loadOverdueInvoices(): Promise<Invoice[]> {
   try {
-    const invoices = await loadInvoices();
-    // Local-frame day math (FA-039): daysPastDue compares local midnights, so
-    // a bare "YYYY-MM-DD" due date never gets parsed as UTC midnight (which
-    // put due-today invoices in this list west of UTC). Due-today belongs to
-    // the due_soon insight (utils/todayInsights.ts), not Overdue — >= 1 day
-    // past due is the line.
-    return invoices
-      .filter((inv) => !isFullyPaid(inv) && daysPastDue(inv.due) >= 1)
-      .sort((a, b) => new Date(a.due).getTime() - new Date(b.due).getTime());
+    return filterOverdueInvoices(await loadInvoices());
   } catch {
     return [];
   }

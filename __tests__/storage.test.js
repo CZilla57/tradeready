@@ -14,6 +14,7 @@ import {
   saveExpenses,
   clearAllUserData,
   loadOverdueInvoices,
+  filterOverdueInvoices,
 } from "../utils/storage";
 import { defaultCustomers, defaultJobs, defaultInvoices, resetSampleSeed } from "../utils/storage/defaults";
 import { isSampleId } from "../utils/sampleData";
@@ -272,6 +273,40 @@ describe("loadOverdueInvoices (local-frame day math, FA-039)", () => {
     const overdue = await loadOverdueInvoices();
 
     expect(overdue).toHaveLength(0);
+  });
+});
+
+// ── filterOverdueInvoices (pure selector, extracted so TodayScreen can derive
+// the overdue subset from its already-loaded invoice list instead of parsing
+// the invoices blob twice per focus) ──────────────────────────────────────────
+
+describe("filterOverdueInvoices (pure, local-frame day math)", () => {
+  const today = getTodayDateString();
+  const yesterday = shiftDate(today, -1);
+
+  test("an invoice due today is NOT overdue", () => {
+    const invoice = { id: "1", customer: "Alice", number: "INV-001", amount: 500, paid: false, due: today };
+    expect(filterOverdueInvoices([invoice])).toHaveLength(0);
+  });
+
+  test("an invoice due yesterday is overdue", () => {
+    const invoice = { id: "2", customer: "Bob", number: "INV-002", amount: 500, paid: false, due: yesterday };
+    const overdue = filterOverdueInvoices([invoice]);
+    expect(overdue).toHaveLength(1);
+    expect(overdue[0].id).toBe("2");
+  });
+
+  test("a fully paid invoice past due is excluded", () => {
+    const invoice = { id: "3", customer: "Carol", number: "INV-003", amount: 500, paid: true, due: yesterday };
+    expect(filterOverdueInvoices([invoice])).toHaveLength(0);
+  });
+
+  test("results are sorted by due date ascending", () => {
+    const twoDaysAgo = shiftDate(today, -2);
+    const invA = { id: "a", customer: "Alice", number: "INV-A", amount: 100, paid: false, due: yesterday };
+    const invB = { id: "b", customer: "Bob", number: "INV-B", amount: 200, paid: false, due: twoDaysAgo };
+    const overdue = filterOverdueInvoices([invA, invB]);
+    expect(overdue.map((inv) => inv.id)).toEqual(["b", "a"]);
   });
 });
 

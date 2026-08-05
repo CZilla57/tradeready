@@ -19,7 +19,7 @@ import { useRefresh } from '../hooks/useRefresh';
 import {
   loadJobs,
   getExpectedEarningsForDate,
-  loadOverdueInvoices,
+  filterOverdueInvoices,
   loadLeadJobs,
   loadCustomers,
   loadSettings,
@@ -428,10 +428,9 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
+          const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
             loadJobs(),
             getExpectedEarningsForDate(todayString),
-            loadOverdueInvoices(),
             loadLeadJobs(),
             loadSettings(),
             loadCustomers(),
@@ -441,7 +440,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
           if (active) {
             setAllJobs(allJobsList);
             setEarnings(expectedEarnings);
-            setOverdueInvoices(overdue);
+            setOverdueInvoices(filterOverdueInvoices(allInvoices));
             setLeadJobs(leads);
             setCustomers(customerList);
             setSettings(loadedSettings);
@@ -465,10 +464,9 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   );
 
   const { refreshing, onRefresh } = useRefresh(async () => {
-    const [allJobsList, expectedEarnings, overdue, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
+    const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
       loadJobs(),
       getExpectedEarningsForDate(todayString),
-      loadOverdueInvoices(),
       loadLeadJobs(),
       loadSettings(),
       loadCustomers(),
@@ -477,7 +475,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     ]);
     setAllJobs(allJobsList);
     setEarnings(expectedEarnings);
-    setOverdueInvoices(overdue);
+    setOverdueInvoices(filterOverdueInvoices(allInvoices));
     setLeadJobs(leads);
     setCustomers(customerList);
     setSettings(loadedSettings);
