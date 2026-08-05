@@ -16,6 +16,11 @@ module.exports = {
   ignorePatterns: [
     "node_modules/",
     "backend/node_modules/",
+    // Separate package with its own deps + toolchain: the repo-root CI never
+    // installs backend-workers/node_modules, so its ESM imports (hono, stripe)
+    // can't resolve here (import/no-unresolved). Its gate is the wrangler
+    // build + the parallel-run request diffs, not the app's eslint config.
+    "backend-workers/",
     ".expo/",
     ".jest-cache/",
     "dist/",

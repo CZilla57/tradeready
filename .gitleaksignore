@@ -30,3 +30,8 @@
 # very next commit, so no new fingerprints can accrue.
 ea1913b6461e2bb20a31a51cb1a05396fbd41a85:__tests__/paymentLink.test.js:square-access-token:132
 ea1913b6461e2bb20a31a51cb1a05396fbd41a85:__tests__/paymentLink.test.js:square-access-token:133
+
+# Supabase publishable anon key in the Workers backend's .dev.vars.example
+# (same public-by-design client key as the utils/supabase.js entry above;
+# kept as a real value so local `wrangler dev` works out of the box)
+277522467d1510ab8ebef4fd6a75f148241c3095:backend-workers/.dev.vars.example:generic-api-key:6
