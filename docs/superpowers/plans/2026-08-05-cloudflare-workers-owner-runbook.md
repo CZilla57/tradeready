@@ -38,25 +38,32 @@ The 40-case diff covered every path reachable without secrets (CORS, methods, va
 auth rejection via real Supabase). The happy paths (real JWT → Groq call, estimate
 view/respond round-trip, cron batch against real tables) need real values locally.
 
-1. Pull the production env values from Vercel into a file (backend/ is the linked
-   Vercel project; the file lands there — it's gitignored by Vercel's convention, and
-   you can delete it after copying):
+1. ⚠️ **`vercel env pull` will NOT work for most of these** (confirmed 2026-08-05: the
+   pulled file had one value, rest blank). The variables were stored as **Sensitive** in
+   Vercel, and sensitive values are write-only — neither the CLI nor the dashboard can
+   ever display them again. Get each value from its original source instead. Where a
+   provider doesn't allow re-viewing, create an **additional** key — the old key stays
+   valid, so the Vercel backend keeps running untouched. **Never "roll"/revoke an
+   existing key** (that would break production).
 
-```bash
-cd C:\dev\tradeready\tradeready\backend; npx vercel env pull .env.production.local --environment=production
-```
-
-   (If the CLI isn't logged in: `npx vercel login` first. Alternative: read each value in
-   the dashboard — vercel.com → backend-tradeready1 → Settings → Environment Variables.)
+   | Secret | Where to get it | Re-viewable? |
+   |---|---|---|
+   | `SUPABASE_SERVICE_ROLE_KEY` | supabase.com → project → Project Settings → API keys → `service_role` → Reveal | ✅ yes |
+   | `SUPABASE_ANON_KEY` | Already known — it ships in the app: `sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF` | ✅ (public) |
+   | `STRIPE_SECRET_KEY` | dashboard.stripe.com → Developers → API keys → **Create secret key** (name it e.g. "workers-backend"). Stripe never re-shows the existing live key; a second key coexists fine. | ➕ create new |
+   | `STRIPE_CONNECT_WEBHOOK_SECRET` | dashboard.stripe.com → Developers → Webhooks → the backend-tradeready1 endpoint → Signing secret → **Reveal** | ✅ yes |
+   | `REVENUECAT_WEBHOOK_SECRET` | app.revenuecat.com → project → Integrations → Webhooks → the Authorization header value shown on the config page | ✅ yes |
+   | `CRON_SECRET` | Self-chosen string; nothing else shares it (only guards the manual-run URL, and only for the Worker). Mint a fresh one: `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"` | ➕ mint fresh |
+   | `RESEND_API_KEY` | resend.com → API Keys → **Create API key** (values are shown once; a second key coexists fine) | ➕ create new |
+   | `GROQ_API_KEY` | console.groq.com → API Keys → **Create API key** (same: shown once, second key coexists) | ➕ create new |
 
 2. Open `C:\dev\tradeready\tradeready\backend-workers\.dev.vars` (already created,
-   gitignored) and replace each `placeholder` with the real value for:
-   `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_CONNECT_WEBHOOK_SECRET`,
-   `REVENUECAT_WEBHOOK_SECRET`, `CRON_SECRET`, `RESEND_API_KEY`, `GROQ_API_KEY`.
-   If Vercel also has `ESTIMATE_PUBLIC_ORIGIN` / `ESTIMATE_PUBLIC_BASE` /
-   `CHANGE_PUBLIC_BASE` set, add those lines too (if unset there, leave them out here).
-   Also note whether those three are set — the same answer configures `wrangler.toml`
-   `[vars]` in Part 3.
+   gitignored) and replace each `placeholder` with the value from the table.
+   For `ESTIMATE_PUBLIC_ORIGIN` / `ESTIMATE_PUBLIC_BASE` / `CHANGE_PUBLIC_BASE`: these
+   are NOT sensitive, so the dashboard shows whether they exist and what they hold
+   (vercel.com → backend-tradeready1 → Settings → Environment Variables) — add the
+   lines only if Vercel has them set; if unset there, leave them out here. Note the
+   answer — the same three configure `wrangler.toml` `[vars]` in Part 3.
 
 3. Tell Claude ".dev.vars is filled" — the next session runs the full happy-path
    parallel diff (`wrangler dev` vs live Vercel, identical requests, including a real
@@ -141,6 +148,15 @@ cutover. Needs the Stripe CLI (winget: `winget install stripe.stripe-cli`, then
 ```bash
 stripe listen --forward-to https://<your-worker-url>/api/stripe/webhook
 ```
+
+   ⚠️ `stripe listen` re-signs forwarded events with its **own** signing secret, which it
+   prints at startup (`Your webhook signing secret is whsec_...`). For the duration of
+   this test, put THAT value into the Worker (`npx wrangler secret put
+   STRIPE_CONNECT_WEBHOOK_SECRET` from backend-workers, paste the CLI's whsec) —
+   otherwise every forwarded event correctly fails signature verification with a 400.
+   **After the test, set it back to the real endpoint signing secret** (the dashboard
+   Reveal value from Part 2's table) — cutover reuses the existing endpoint, and editing
+   its URL does not change its signing secret.
 
 2. In a second terminal, fire a synthetic completed checkout:
 
