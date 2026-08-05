@@ -10,6 +10,8 @@
 // change-view context totals — kept in sync by __tests__/changeOrderParity.test.js.
 
 import { roundToCents } from "./invoicePayments";
+import { formatQuote } from "./format";
+import { escapeHtml } from "./pdfTemplates";
 import type {
   ChangeOrder,
   Customer,
@@ -145,4 +147,40 @@ export function buildChangeOrderSnapshot(
     total: co.amount,
     currency: "USD",
   };
+}
+
+export interface ChangeOrderMessages {
+  /** Plain text — SMS has no markup, so the raw link stays (auto-linkified). */
+  sms: string;
+  emailSubject: string;
+  /** HTML — pass to composeEmail with `isHtml: true`. The approval URL lives
+      in an anchor labeled "Review & approve this change" instead of appearing
+      as a giant character string (owner feedback 2026-08-05). */
+  emailHtml: string;
+}
+
+/**
+ * The customer-facing send bodies for one change order. Pure and escaped —
+ * every user-entered value (names, titles) passes through escapeHtml before
+ * landing in the HTML body, matching the pdfTemplates discipline.
+ */
+export function buildChangeOrderMessages(
+  co: ChangeOrder,
+  job: Pick<Job, "title" | "customerName">,
+  customerName: string,
+  url: string,
+): ChangeOrderMessages {
+  const name = customerName || job.customerName;
+  const amountText = `${co.amount >= 0 ? "+" : ""}${formatQuote(co.amount)}`;
+  const sms =
+    `Hi ${name}, while working on "${job.title}" we found something that changes the scope: ` +
+    `${co.title} (${amountText}). ` +
+    `Please review and approve before we do this extra work: ${url}`;
+  const emailHtml =
+    `<p>Hi ${escapeHtml(name)},</p>` +
+    `<p>While working on &quot;${escapeHtml(job.title)}&quot; we found something that changes the scope:</p>` +
+    `<p><strong>${escapeHtml(co.title)}</strong> (${escapeHtml(amountText)})</p>` +
+    `<p><a href="${escapeHtml(url)}">Review &amp; approve this change</a></p>` +
+    `<p>Please approve before we do the extra work — thanks!</p>`;
+  return { sms, emailSubject: `Change to your ${job.title} job`, emailHtml };
 }

@@ -20,6 +20,8 @@ type EmailOptions = {
   body: string;
   /** File URIs to attach (e.g. an invoice PDF from utils/invoicePdfFile.ts). */
   attachments?: string[];
+  /** Treat `body` as HTML (anchor tags render as tappable links). */
+  isHtml?: boolean;
 };
 
 /**
@@ -45,6 +47,7 @@ export async function composeEmailWithOutcome({
   subject,
   body,
   attachments,
+  isHtml,
 }: EmailOptions): Promise<ComposeResult> {
   const available = await MailComposer.isAvailableAsync();
   if (!available) {
@@ -61,6 +64,8 @@ export async function composeEmailWithOutcome({
     // Omit the key entirely when there's nothing to attach, so callers that
     // never attach keep their exact previous call shape.
     ...(attachments?.length ? { attachments } : {}),
+    // Same omit-when-falsy convention: plain-text callers keep their shape.
+    ...(isHtml ? { isHtml } : {}),
   });
   return { opened: true, outcome: mapMailStatus(result?.status) };
 }

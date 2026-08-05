@@ -53,6 +53,20 @@ describe("composeEmail", () => {
     });
   });
 
+  test("forwards isHtml when set; plain-text callers keep their exact shape", async () => {
+    MailComposer.isAvailableAsync.mockResolvedValueOnce(true);
+    await composeEmail({ recipients: ["jane@example.com"], subject: "s", body: "<p>hi</p>", isHtml: true });
+    expect(MailComposer.composeAsync).toHaveBeenCalledWith({
+      recipients: ["jane@example.com"],
+      subject: "s",
+      body: "<p>hi</p>",
+      isHtml: true,
+    });
+    MailComposer.isAvailableAsync.mockResolvedValueOnce(true);
+    await composeEmail({ recipients: [], subject: "s", body: "b" });
+    expect(Object.keys(MailComposer.composeAsync.mock.calls[1][0])).toEqual(["recipients", "subject", "body"]);
+  });
+
   test("sends no attachments key when none are given or the list is empty", async () => {
     MailComposer.isAvailableAsync.mockResolvedValueOnce(true);
     await composeEmail({ recipients: [], subject: "s", body: "b", attachments: [] });

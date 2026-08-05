@@ -147,6 +147,48 @@ describe("buildChangeOrderSnapshot", () => {
   });
 });
 
+describe("buildChangeOrderMessages", () => {
+  const { buildChangeOrderMessages } = require("../utils/changeOrders");
+  const url = "https://gettradereadyapp.com/change.html?j=j1&co=coB&t=abc123";
+
+  it("sms stays plain text with the raw link (auto-linkified by messaging apps)", () => {
+    const m = buildChangeOrderMessages(co(), job(), "Dana R", url);
+    expect(m.sms).toContain(url);
+    expect(m.sms).toContain('Rotted subfloor (+$850)');
+    expect(m.sms).not.toContain("<");
+  });
+
+  it("email hides the raw URL behind a friendly anchor and escapes user text", () => {
+    const m = buildChangeOrderMessages(
+      co({ title: "Subfloor & joists" }),
+      job({ title: 'Bath "remodel"' }),
+      "Dana R",
+      url,
+    );
+    expect(m.emailHtml).toContain(
+      '<a href="https://gettradereadyapp.com/change.html?j=j1&amp;co=coB&amp;t=abc123">Review &amp; approve this change</a>',
+    );
+    // The raw unescaped URL never appears as visible text.
+    expect(m.emailHtml).not.toContain(url);
+    // User-entered values are escaped, not interpolated verbatim.
+    expect(m.emailHtml).toContain("Subfloor &amp; joists");
+    expect(m.emailHtml).not.toContain('Bath "remodel"');
+    expect(m.emailSubject).toBe('Change to your Bath "remodel" job');
+  });
+
+  it("a descope credit renders with its minus sign and no plus", () => {
+    const m = buildChangeOrderMessages(co({ amount: -100 }), job(), "Dana", url);
+    expect(m.sms).toContain("(-$100)");
+    expect(m.sms).not.toContain("+-");
+    expect(m.emailHtml).toContain("(-$100)");
+  });
+
+  it("falls back to the job's denormalized customer name when none is passed", () => {
+    const m = buildChangeOrderMessages(co(), job(), "", url);
+    expect(m.sms).toMatch(/^Hi Dana,/);
+  });
+});
+
 describe("newChangeOrderId", () => {
   it("mints co<ts>_<counter> ids that never collide in a burst", () => {
     const a = newChangeOrderId();

@@ -10,7 +10,9 @@ const METHOD_LABELS: Record<string, string> = {
   cash: "Cash", check: "Cheque", card: "Card", stripe: "Card", other: "Payment",
 };
 
-function escapeHtml(str: string): string {
+// Exported: also the escape for the change-order HTML email body
+// (utils/changeOrders.buildChangeOrderMessages) — one copy, not two.
+export function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

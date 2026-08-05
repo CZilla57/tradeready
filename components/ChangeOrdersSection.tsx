@@ -16,6 +16,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { formatQuote } from "../utils/format";
 import {
   applyManualDecision,
+  buildChangeOrderMessages,
   cancelChangeOrder,
   canAddChangeOrder,
   changeOrderStatus,
@@ -106,16 +107,21 @@ export default function ChangeOrdersSection({ job, onChanged, onAdd, onEdit }: P
       // The link is minted — the row is Awaiting from here regardless of
       // which composer (if any) the user picks below, so reflect it now.
       onChanged();
-      const body =
-        `Hi ${customer.name || job.customerName}, while working on "${job.title}" we found something that changes the scope: ` +
-        `${co.title} (${co.amount >= 0 ? "+" : ""}${formatQuote(co.amount)}). ` +
-        `Please review and approve before we do this extra work: ${result.url}`;
+      // SMS stays plain text (no markup exists there); the email is HTML so
+      // the approval URL rides behind a "Review & approve" link instead of a
+      // giant character string (owner feedback 2026-08-05).
+      const messages = buildChangeOrderMessages(co, job, customer.name, result.url);
       const phone = customer.phone?.trim();
       const email = customer.email?.trim();
       const sendVia = async (channel: "text" | "email") => {
         const sent = channel === "text"
-          ? await composeSMS({ recipients: [phone as string], body })
-          : await composeEmail({ recipients: [email as string], subject: `Change to your ${job.title} job`, body });
+          ? await composeSMS({ recipients: [phone as string], body: messages.sms })
+          : await composeEmail({
+              recipients: [email as string],
+              subject: messages.emailSubject,
+              body: messages.emailHtml,
+              isHtml: true,
+            });
         if (sent) track("change_order_sent", { amount: co.amount, channel });
       };
       if (phone && email) {
