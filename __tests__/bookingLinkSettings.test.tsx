@@ -1,14 +1,15 @@
 // __tests__/bookingLinkSettings.test.tsx
 // Settings → Booking link: mint saves {token, enabled:true} through
 // saveSettings; the toggle flips enabled in place; "new link" replaces the
-// token. The section follows the Stripe-Connect immediate-action precedent —
-// loadSettings/saveSettings at action time, local section state — so none of
-// this should ever touch the screen's draft/dirty save path.
+// token. This page is IMMEDIATE-action, following the Stripe-Connect
+// precedent — loadSettings/saveSettings at action time, local page state —
+// so none of this should ever touch a draft/dirty save path (this page has
+// no draft at all).
 
 import React from "react";
 import { render, fireEvent, waitFor } from "@testing-library/react-native";
 import { Alert } from "react-native";
-import SettingsScreen from "../screens/SettingsScreen";
+import SettingsBookingScreen from "../screens/SettingsBookingScreen";
 import { loadSettings, saveSettings } from "../utils/storage";
 import { defaultSettings } from "../utils/storage/defaults";
 import { mintBookingToken, buildBookingUrl } from "../utils/bookingLink";
@@ -16,8 +17,6 @@ import { mintBookingToken, buildBookingUrl } from "../utils/bookingLink";
 jest.mock("../utils/storage", () => ({
   loadSettings: jest.fn(),
   saveSettings: jest.fn(() => Promise.resolve()),
-  clearSampleData: jest.fn(() => Promise.resolve()),
-  clearAllUserData: jest.fn(() => Promise.resolve()),
 }));
 
 // Only mintBookingToken is faked — buildBookingUrl stays real so the test
@@ -25,21 +24,6 @@ jest.mock("../utils/storage", () => ({
 jest.mock("../utils/bookingLink", () => ({
   ...jest.requireActual("../utils/bookingLink"),
   mintBookingToken: jest.fn(),
-}));
-
-jest.mock("../context/AuthContext", () => ({
-  useAuth: () => ({ session: null, initializing: false, bootstrapping: false }),
-}));
-
-jest.mock("../context/SubscriptionContext", () => ({
-  useSubscription: () => ({
-    isSubscribed: false,
-    isTrialing: false,
-    isLoading: false,
-    customerInfo: null,
-    refresh: jest.fn(),
-    updateFromPurchase: jest.fn(),
-  }),
 }));
 
 const navigation = {
@@ -65,7 +49,7 @@ describe("Settings booking link section", () => {
 
   it("renders 'Create my booking link' when settings.bookingLink is absent", async () => {
     const { findByText } = await render(
-      <SettingsScreen navigation={navigation} route={{} as any} />
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
     );
     expect(await findByText("Create my booking link")).toBeTruthy();
   });
@@ -74,7 +58,7 @@ describe("Settings booking link section", () => {
     (mintBookingToken as jest.Mock).mockResolvedValue({ ok: true, token: TOKEN });
 
     const { findByText } = await render(
-      <SettingsScreen navigation={navigation} route={{} as any} />
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
     );
     const createBtn = await findByText("Create my booking link");
     await fireEvent.press(createBtn);
@@ -90,7 +74,7 @@ describe("Settings booking link section", () => {
     (loadSettings as jest.Mock).mockResolvedValue(settingsWithBooking(true));
 
     const { findByText, getByLabelText } = await render(
-      <SettingsScreen navigation={navigation} route={{} as any} />
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
     );
 
     expect(await findByText(buildBookingUrl(TOKEN))).toBeTruthy();
@@ -101,7 +85,7 @@ describe("Settings booking link section", () => {
     (loadSettings as jest.Mock).mockResolvedValue(settingsWithBooking(true));
 
     const { findByLabelText } = await render(
-      <SettingsScreen navigation={navigation} route={{} as any} />
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
     );
     const toggle = await findByLabelText("Accepting requests");
     await fireEvent(toggle, "valueChange", false);
@@ -121,7 +105,7 @@ describe("Settings booking link section", () => {
     const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
 
     const { findByText } = await render(
-      <SettingsScreen navigation={navigation} route={{} as any} />
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
     );
     const createBtn = await findByText("Create my booking link");
     await fireEvent.press(createBtn);
@@ -134,42 +118,16 @@ describe("Settings booking link section", () => {
     expect(saveSettings).not.toHaveBeenCalled();
   });
 
-  // Regression (review finding): bookingLink lives in the Settings blob, but
-  // the section keeps it in its own local state, outside the screen's `s`
-  // draft. If a successful create/toggle only updated that local state and
-  // never patched `s`/`savedSnapshot`, then an UNRELATED edit + the screen's
-  // normal "Save settings" would write out `s` with its stale (pre-booking)
-  // bookingLink — silently deleting the link (or reverting the toggle) the
-  // user had just persisted. Pins that a later handleSave carries the new
-  // bookingLink forward instead of clobbering it.
-  it("a later 'Save settings' does not revert a just-created booking link", async () => {
-    jest.spyOn(Alert, "alert").mockImplementation(() => {});
+  // The old monolith had to patch a fresh booking link into its draft so a
+  // later "Save settings" wouldn't clobber it. This page's guarantee is
+  // simpler: it has NO draft — it never registers a header Save at all.
+  it("the booking page registers no header Save (no draft to clobber)", async () => {
     (mintBookingToken as jest.Mock).mockResolvedValue({ ok: true, token: TOKEN });
-
-    const { findByText, findByLabelText } = await render(
-      <SettingsScreen navigation={navigation} route={{} as any} />
+    const { findByText } = await render(
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
     );
-
-    // Create the booking link.
-    const createBtn = await findByText("Create my booking link");
-    await fireEvent.press(createBtn);
+    await fireEvent.press(await findByText("Create my booking link"));
     await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
-
-    // An unrelated edit elsewhere on the screen — this is what makes the
-    // header/inline "Save settings" path live.
-    const businessNameField = await findByLabelText("Business name");
-    await fireEvent.changeText(businessNameField, "New Business Name");
-
-    // The screen's normal save path (not the booking section).
-    const saveBtn = await findByLabelText("Save settings");
-    await fireEvent.press(saveBtn);
-
-    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
-    expect(saveSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        businessName: "New Business Name",
-        bookingLink: { token: TOKEN, enabled: true },
-      })
-    );
+    expect(navigation.setOptions).not.toHaveBeenCalled();
   });
 });
