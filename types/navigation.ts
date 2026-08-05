@@ -32,6 +32,17 @@ export type TodayStackParamList = {
   TodayHome: undefined;
   Route: undefined;
   Settings: undefined;
+  SettingsBusiness: undefined;
+  SettingsPricing: undefined;
+  SettingsInvoiceNumbering: undefined;
+  SettingsAppearance: undefined;
+  SettingsPayments: undefined;
+  SettingsBooking: undefined;
+  SettingsAI: undefined;
+  SettingsNotifications: undefined;
+  SettingsReviews: undefined;
+  SettingsSubscription: undefined;
+  SettingsAccount: undefined;
   Search: undefined;
 };
 
