@@ -1,10 +1,11 @@
 import React from "react";
 import { Alert } from "react-native";
-import { render, fireEvent, waitFor, render as rtlRender } from "@testing-library/react-native";
+import { render, fireEvent, waitFor, act, render as rtlRender } from "@testing-library/react-native";
 import SettingsBusinessScreen from "../screens/SettingsBusinessScreen";
 import { loadSettings, saveSettings } from "../utils/storage";
 import { defaultSettings } from "../utils/storage/defaults";
-import { listPhotos, photoExists } from "../utils/photoStorage";
+import { listPhotos, photoExists, deletePhoto } from "../utils/photoStorage";
+import { promptForLogo } from "../utils/logoPicker";
 
 jest.mock("../utils/storage", () => ({
   loadSettings: jest.fn(),
@@ -17,8 +18,9 @@ jest.mock("../utils/photoStorage", () => ({
   listPhotos: jest.fn(() => Promise.resolve([])),
 }));
 jest.mock("../utils/logoPicker", () => ({ promptForLogo: jest.fn() }));
+const mockAuth = { session: null, initializing: false, bootstrapping: false };
 jest.mock("../context/AuthContext", () => ({
-  useAuth: () => ({ session: null, initializing: false, bootstrapping: false }),
+  useAuth: () => mockAuth,
 }));
 
 const navigation = {
@@ -44,7 +46,11 @@ describe("SettingsBusinessScreen", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (loadSettings as jest.Mock).mockResolvedValue(defaultSettings());
+    (photoExists as jest.Mock).mockResolvedValue(true);
     jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    mockAuth.session = null;
+    mockAuth.initializing = false;
+    mockAuth.bootstrapping = false;
   });
 
   it("renders the business fields and sweeps the logo folder on open", async () => {
@@ -88,5 +94,31 @@ describe("SettingsBusinessScreen", () => {
         expect.objectContaining({ phone: "(555) 123-4567" })
       )
     );
+  });
+
+  it("bootstrapping skips the orphan sweep", async () => {
+    mockAuth.bootstrapping = true;
+    const { findByLabelText } = await render(
+      <SettingsBusinessScreen navigation={navigation} route={{} as any} />
+    );
+    expect(await findByLabelText("Business name")).toBeTruthy();
+    expect(listPhotos).not.toHaveBeenCalled();
+  });
+
+  it("saving after picking a new logo deletes the old file", async () => {
+    (loadSettings as jest.Mock).mockResolvedValue({
+      ...defaultSettings(),
+      logoPhoto: "logos/current.jpg",
+    });
+    const { findByLabelText } = await render(
+      <SettingsBusinessScreen navigation={navigation} route={{} as any} />
+    );
+    await fireEvent.press(await findByLabelText("Change your business logo"));
+    const pick = (promptForLogo as jest.Mock).mock.calls.at(-1)[0];
+    await act(async () => {
+      pick("logos/new.jpg");
+    });
+    await pressHeaderSave(navigation);
+    await waitFor(() => expect(deletePhoto).toHaveBeenCalledWith("logos/current.jpg"));
   });
 });

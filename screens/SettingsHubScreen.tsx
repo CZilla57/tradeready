@@ -28,6 +28,7 @@ interface HubRow {
   subtitle?: string;
   onPress: () => void;
   role?: "button" | "link";
+  accessibilityLabel?: string;
 }
 
 export default function SettingsHubScreen({ navigation }: TodayStackScreenProps<'Settings'>) {
@@ -86,6 +87,7 @@ export default function SettingsHubScreen({ navigation }: TodayStackScreenProps<
         {
           icon: "mail-outline",
           label: "Contact Support",
+          accessibilityLabel: "Contact support by email",
           subtitle: SUPPORT_EMAIL,
           onPress: () => {
             void composeEmail({
@@ -122,7 +124,7 @@ export default function SettingsHubScreen({ navigation }: TodayStackScreenProps<
                     onPress={row.onPress}
                     activeOpacity={0.7}
                     accessibilityRole={row.role ?? "button"}
-                    accessibilityLabel={row.label}
+                    accessibilityLabel={row.accessibilityLabel ?? row.label}
                   >
                     <Ionicons name={row.icon} size={20} color={colors.textSecondary} style={styles.listRowIcon} />
                     <View style={{ flex: 1 }}>

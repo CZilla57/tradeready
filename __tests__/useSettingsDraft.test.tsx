@@ -118,9 +118,9 @@ describe("useSettingsDraft", () => {
   it("flush folds page-local drafts into dirty checks and saves", async () => {
     const { nav } = makeNavigation();
     const options: SettingsDraftOptions = {
-      flush: (s) => ({ ...s, businessName: s.businessName + "!" }),
+      flush: (s) => (s.businessName.endsWith("!") ? s : { ...s, businessName: s.businessName + "!" }),
     };
-    const { findByTestId, getByLabelText } = await render(
+    const { findByTestId, getByTestId, getByLabelText } = await render(
       <Harness navigation={nav} options={options} />
     );
     // flush alone makes the flushed draft differ from the snapshot.
@@ -131,11 +131,13 @@ describe("useSettingsDraft", () => {
         expect.objectContaining({ businessName: expect.stringMatching(/!$/) })
       )
     );
+    await waitFor(() => expect(getByTestId("dirty").props.children).toBe("clean"));
   });
 
   it("beforeRemove passes a clean draft through untouched", async () => {
     const { nav, listeners } = makeNavigation();
-    await render(<Harness navigation={nav} />);
+    const { findByTestId } = await render(<Harness navigation={nav} />);
+    expect((await findByTestId("dirty")).props.children).toBe("clean");
     const e = removalEvent();
     listeners["beforeRemove"][0](e);
     expect(e.preventDefault).not.toHaveBeenCalled();

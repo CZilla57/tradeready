@@ -65,7 +65,7 @@ describe("SettingsHubScreen", () => {
     const { findByLabelText } = await render(
       <SettingsHubScreen navigation={navigation} route={{} as any} />
     );
-    fireEvent.press(await findByLabelText("Contact Support"));
+    fireEvent.press(await findByLabelText("Contact support by email"));
     expect(composeEmail).toHaveBeenCalledWith(
       expect.objectContaining({ recipients: ["support@gettradereadyapp.com"] })
     );
