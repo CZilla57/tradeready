@@ -50,8 +50,8 @@ view/respond round-trip, cron batch against real tables) need real values locall
    |---|---|---|
    | `SUPABASE_SERVICE_ROLE_KEY` | supabase.com → project → Project Settings → API keys → `service_role` → Reveal | ✅ yes |
    | `SUPABASE_ANON_KEY` | Already known — it ships in the app: `sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF` | ✅ (public) |
-   | `STRIPE_SECRET_KEY` | dashboard.stripe.com → Developers → API keys → **Create secret key** (name it e.g. "workers-backend"). Stripe never re-shows the existing live key; a second key coexists fine. | ➕ create new |
-   | `STRIPE_CONNECT_WEBHOOK_SECRET` | dashboard.stripe.com → Developers → Webhooks → the backend-tradeready1 endpoint → Signing secret → **Reveal** | ✅ yes |
+   | `STRIPE_SECRET_KEY` | dashboard.stripe.com → Developers → API keys → **Create secret key** (name it e.g. "workers-backend"). Stripe never re-shows the existing live key; a second key coexists fine. **LIVE mode — Test mode toggle OFF** (the Worker replaces the production backend; expect `sk_live_...`). | ➕ create new |
+   | `STRIPE_CONNECT_WEBHOOK_SECRET` | dashboard.stripe.com → Developers → Webhooks → the backend-tradeready1 endpoint → Signing secret → **Reveal**. **LIVE mode — Test mode toggle OFF** (it's a live-mode endpoint; won't be listed with Test mode on). Part 4's CLI test temporarily swaps this for the CLI's own `whsec_` — that's the only place test mode appears, and it needs no test-mode API key. | ✅ yes |
    | `REVENUECAT_WEBHOOK_SECRET` | app.revenuecat.com → project → Integrations → Webhooks → the Authorization header value shown on the config page | ✅ yes |
    | `CRON_SECRET` | Self-chosen string; nothing else shares it (only guards the manual-run URL, and only for the Worker). Mint a fresh one: `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"` | ➕ mint fresh |
    | `RESEND_API_KEY` | resend.com → API Keys → **Create API key** (values are shown once; a second key coexists fine) | ➕ create new |
