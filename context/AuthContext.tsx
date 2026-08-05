@@ -79,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Do NOT wipe local data here. The __dataOwner guard in initialSync
         // prevents a new user from inheriting stale data, and wiping here would
         // destroy offline changes made before a token-expiry sign-out.
-        // Explicit sign-outs go through SettingsScreen, which calls
+        // Explicit sign-outs go through SettingsAccountScreen, which calls
         // clearAllUserData() before supabase.auth.signOut().
         return;
       }

@@ -5,7 +5,7 @@
 // notifications live here as post-signup tasks surfaced on the Today tab.
 //
 // Completion is DERIVED from settings wherever possible (contact, logo) and
-// stored only where no honest derivation exists (rate = "user saved Settings",
+// stored only where no honest derivation exists (rate = "user saved the Pricing settings page",
 // stripe = "connect-status came back connected"). The stored state is
 // device-local and deliberately NOT synced: on a new device the checklist
 // re-derives what it can and the user can dismiss the rest.

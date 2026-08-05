@@ -5,6 +5,14 @@
 // full-Settings draft vs saved snapshot, sticky header Save, tab-switch
 // pop, and THE beforeRemove unsaved-edits prompt — one prompt path for
 // back, swipe-back, and the tab-switch pop alike.
+//
+// Form-page conventions: form subpages wrap their scrollable content in
+// KeyboardAvoidingView using the iOS-padding pattern
+// (behavior={Platform.OS === "ios" ? "padding" : undefined}), never
+// automaticallyAdjustKeyboardInsets — that prop accumulated a phantom
+// bottom inset on device (endless empty scroll space; beta finding,
+// 2026-07-14). Seven form pages share this pattern; subpage authors must
+// not "simplify" it back to automaticallyAdjustKeyboardInsets.
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, Text, TouchableOpacity } from "react-native";
 import { loadSettings, saveSettings } from "../utils/storage";

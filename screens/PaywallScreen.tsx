@@ -123,7 +123,7 @@ export default function PaywallScreen({ route, navigation }: RootStackScreenProp
   // unsubscribed user — a lapsed subscriber, or the wrong account signed in on
   // this device — is trapped on the paywall with no way back to sign-in.
   // Deliberately NOT a "skip into the app" bypass: that would hand free access
-  // to unsubscribed users and defeat the gate. Mirrors SettingsScreen's
+  // to unsubscribed users and defeat the gate. Mirrors SettingsAccountScreen's
   // sign-out exactly (clearAllUserData → supabase.auth.signOut); the resulting
   // SIGNED_OUT event returns the app to the Auth screen.
   function handleSignOut() {

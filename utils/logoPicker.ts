@@ -71,7 +71,7 @@ async function persistPicked(
  * Prompts for a business logo (camera or photo library), copies the chosen image
  * into app storage, and hands the caller the persisted path.
  *
- * Shared by OnboardingScreen and SettingsScreen. The interaction, permission
+ * Shared by OnboardingScreen and SettingsBusinessScreen. The interaction, permission
  * handling and storage folder are identical in both; only what each screen does
  * with the resulting path differs, which is why that is the callback.
  *
