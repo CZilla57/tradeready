@@ -107,7 +107,7 @@ types/
 utils/
   theme.ts                       ← All colors, font sizes, spacing (light + dark mode tokens)
   analytics.ts                   ← PostHog + Sentry wrapper (track, identifyUser, reportError)
-  storage/                       ← Local persistence (9 typed modules, see below)
+  storage/                       ← Local persistence (typed modules, see below)
     index.ts                     ← Barrel: re-exports public API
     keys.ts                      ← AsyncStorage key constants
     defaults.ts                  ← Default/seed values for each collection
