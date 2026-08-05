@@ -14,6 +14,7 @@ import {
   Platform,
   Modal,
   KeyboardAvoidingView,
+  Share,
   type AppStateStatus,
 } from "react-native";
 import { Image } from "expo-image";
@@ -32,6 +33,7 @@ import { settingsEqual } from "../utils/settingsDirty";
 import { validateSettingsInput } from "../utils/settingsValidation";
 import { markSetupTaskDone } from "../utils/setupChecklist";
 import { normalizeInvoicePrefix } from "../utils/invoiceNumber";
+import { mintBookingToken, buildBookingUrl } from "../utils/bookingLink";
 import BaseField from "../components/Field";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { TRADE_TYPES } from "../utils/pricingEngine";
@@ -155,6 +157,12 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
   const [stripeConnecting, setStripeConnecting] = useState(false);
   const [stripeDisconnecting, setStripeDisconnecting] = useState(false);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+
+  // Booking link: an IMMEDIATE-action section, like Stripe Connect above —
+  // loadSettings/saveSettings at action time, its own local state, never
+  // folded into `s`. Keeping it out of `s` means it can never make the
+  // unsaved-edits guard (dirty) fire, and never waits on "Save settings".
+  const [bookingLink, setBookingLink] = useState<Settings["bookingLink"] | null>(null);
 
   // Unsaved-edits guard: edits live only in `s` until "Save settings", so
   // leaving the tab with a dirty copy silently loses work. Track the
@@ -328,6 +336,7 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
       }
       setS(loaded);
       setSavedSnapshot(loaded);
+      setBookingLink(loaded.bookingLink ?? null);
       touchedLogoPathsRef.current = loaded.logoPhoto ? [loaded.logoPhoto] : [];
     });
   }, []);
@@ -411,6 +420,40 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
       },
     ]);
   }
+
+  // Booking link handlers — immediate-action, mirroring handleStripeConnect/
+  // handleStripeDisconnect above: each reads/writes storage directly rather
+  // than going through the screen's `s` draft, so none of this needs "Save
+  // settings" and none of it can trip the unsaved-edits guard.
+  const handleCreateBookingLink = async () => {
+    const out = await mintBookingToken();
+    if (!out.ok) { Alert.alert("Couldn't create link", out.message); return; }
+    const current = await loadSettings();
+    await saveSettings({ ...current, bookingLink: { token: out.token, enabled: true } });
+    setBookingLink({ token: out.token, enabled: true });
+  };
+
+  const handleToggleBooking = async (enabled: boolean) => {
+    const current = await loadSettings();
+    if (!current.bookingLink) return;
+    await saveSettings({ ...current, bookingLink: { ...current.bookingLink, enabled } });
+    setBookingLink({ ...current.bookingLink, enabled });
+  };
+
+  const handleShareBookingLink = async (token: string) => {
+    await Share.share({ message: buildBookingUrl(token) });
+  };
+
+  const handleNewBookingLink = () => {
+    Alert.alert(
+      "Get a new link?",
+      "Your current booking link will stop working immediately. Anywhere you've shared it will show an invalid-link message.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Get new link", style: "destructive", onPress: () => { void handleCreateBookingLink(); } },
+      ]
+    );
+  };
 
   function update(field: string, value: unknown) {
     setS(prev => prev ? { ...prev, [field]: value } as Settings : prev);
@@ -748,6 +791,50 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
             <Text style={styles.keyNote}>This appears in the payment links you send to customers — never paste a password, API key, or access token here.</Text>
           </View>
         ) : null}
+
+        <Divider />
+
+        <SectionHeader title="Booking link" />
+        <View style={styles.card}>
+          {bookingLink ? (
+            <>
+              <Text style={styles.bookingUrlText} selectable accessibilityLabel="Your booking link">
+                {buildBookingUrl(bookingLink.token)}
+              </Text>
+              <TouchableOpacity
+                style={styles.stripeBtn}
+                onPress={() => handleShareBookingLink(bookingLink.token)}
+                accessibilityRole="button"
+                accessibilityLabel="Share link"
+              >
+                <Text style={styles.stripeBtnText}>Share link</Text>
+              </TouchableOpacity>
+              <View style={[styles.toggleRow, { marginTop: spacing.md }]}>
+                <Text style={styles.toggleLabel}>Accepting requests</Text>
+                <Switch
+                  value={bookingLink.enabled}
+                  onValueChange={(v) => { void handleToggleBooking(v); }}
+                  trackColor={{ false: colors.border, true: colors.accent }}
+                  accessibilityLabel="Accepting requests"
+                />
+              </View>
+              <TouchableOpacity
+                style={styles.listRow}
+                onPress={handleNewBookingLink}
+                accessibilityRole="button"
+                accessibilityLabel="Get a new link"
+              >
+                <Text style={styles.listRowText}>Get a new link</Text>
+                <Text style={styles.listRowChevron}>›</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={styles.providerHint}>Share one link; new job requests land in Jobs as leads.</Text>
+              <Button label="Create my booking link" onPress={() => { void handleCreateBookingLink(); }} />
+            </>
+          )}
+        </View>
 
         <Divider />
 
@@ -1263,5 +1350,6 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     stripeBtnDangerText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.danger },
     stripeConnectBtn: { marginTop: spacing.sm, paddingVertical: 12, borderRadius: radius.md, backgroundColor: colors.accent, alignItems: "center" },
     stripeConnectBtnText: { fontFamily: fonts.bodyBold, fontSize: fontSize.sm, color: "#fff" },
+    bookingUrlText: { fontFamily: fonts.mono, fontSize: fontSize.sm, color: colors.textPrimary, marginBottom: spacing.sm },
   });
 }
