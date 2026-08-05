@@ -133,4 +133,43 @@ describe("Settings booking link section", () => {
     );
     expect(saveSettings).not.toHaveBeenCalled();
   });
+
+  // Regression (review finding): bookingLink lives in the Settings blob, but
+  // the section keeps it in its own local state, outside the screen's `s`
+  // draft. If a successful create/toggle only updated that local state and
+  // never patched `s`/`savedSnapshot`, then an UNRELATED edit + the screen's
+  // normal "Save settings" would write out `s` with its stale (pre-booking)
+  // bookingLink — silently deleting the link (or reverting the toggle) the
+  // user had just persisted. Pins that a later handleSave carries the new
+  // bookingLink forward instead of clobbering it.
+  it("a later 'Save settings' does not revert a just-created booking link", async () => {
+    jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    (mintBookingToken as jest.Mock).mockResolvedValue({ ok: true, token: TOKEN });
+
+    const { findByText, findByLabelText } = await render(
+      <SettingsScreen navigation={navigation} route={{} as any} />
+    );
+
+    // Create the booking link.
+    const createBtn = await findByText("Create my booking link");
+    await fireEvent.press(createBtn);
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+
+    // An unrelated edit elsewhere on the screen — this is what makes the
+    // header/inline "Save settings" path live.
+    const businessNameField = await findByLabelText("Business name");
+    await fireEvent.changeText(businessNameField, "New Business Name");
+
+    // The screen's normal save path (not the booking section).
+    const saveBtn = await findByLabelText("Save settings");
+    await fireEvent.press(saveBtn);
+
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    expect(saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        businessName: "New Business Name",
+        bookingLink: { token: TOKEN, enabled: true },
+      })
+    );
+  });
 });

@@ -425,19 +425,49 @@ export default function SettingsScreen({ navigation }: TodayStackScreenProps<'Se
   // handleStripeDisconnect above: each reads/writes storage directly rather
   // than going through the screen's `s` draft, so none of this needs "Save
   // settings" and none of it can trip the unsaved-edits guard.
+  //
+  // bookingLink also has to be patched into `s` AND `savedSnapshot` (not just
+  // the local `bookingLink` state) once the write lands on disk. Both are
+  // built from whatever `loadSettings()` returned here, which may be stale
+  // relative to `s` (an in-progress, unsaved edit elsewhere on the screen) —
+  // patching only the `bookingLink` key on the EXISTING `s`/`savedSnapshot`
+  // (not replacing them with `current`) preserves any such in-flight edit and
+  // leaves settingsEqual(s, savedSnapshot) exactly as it was before the tap.
+  // Skipping this step was Task 10's data-loss bug: a later "Save settings"
+  // would write `s.bookingLink` — still the stale mount-time value — silently
+  // deleting the link (or reverting the toggle) it had just persisted.
+  // Async failures (a rejected loadSettings/saveSettings) are guarded exactly
+  // like handleStripeConnect/handleStripeDisconnect: report + alert, no throw
+  // out of a void-called handler.
   const handleCreateBookingLink = async () => {
-    const out = await mintBookingToken();
-    if (!out.ok) { Alert.alert("Couldn't create link", out.message); return; }
-    const current = await loadSettings();
-    await saveSettings({ ...current, bookingLink: { token: out.token, enabled: true } });
-    setBookingLink({ token: out.token, enabled: true });
+    try {
+      const out = await mintBookingToken();
+      if (!out.ok) { Alert.alert("Couldn't create link", out.message); return; }
+      const current = await loadSettings();
+      const next = { token: out.token, enabled: true };
+      await saveSettings({ ...current, bookingLink: next });
+      setBookingLink(next);
+      setS(prev => prev ? { ...prev, bookingLink: next } : prev);
+      setSavedSnapshot(prev => prev ? { ...prev, bookingLink: next } : prev);
+    } catch (err: unknown) {
+      reportError(err, { context: 'bookingLinkCreate' });
+      Alert.alert("Couldn't create link", (err as Error).message || "Please try again.");
+    }
   };
 
   const handleToggleBooking = async (enabled: boolean) => {
-    const current = await loadSettings();
-    if (!current.bookingLink) return;
-    await saveSettings({ ...current, bookingLink: { ...current.bookingLink, enabled } });
-    setBookingLink({ ...current.bookingLink, enabled });
+    try {
+      const current = await loadSettings();
+      if (!current.bookingLink) return;
+      const next = { ...current.bookingLink, enabled };
+      await saveSettings({ ...current, bookingLink: next });
+      setBookingLink(next);
+      setS(prev => prev ? { ...prev, bookingLink: next } : prev);
+      setSavedSnapshot(prev => prev ? { ...prev, bookingLink: next } : prev);
+    } catch (err: unknown) {
+      reportError(err, { context: 'bookingLinkToggle' });
+      Alert.alert("Couldn't update", (err as Error).message || "Please try again.");
+    }
   };
 
   const handleShareBookingLink = async (token: string) => {
