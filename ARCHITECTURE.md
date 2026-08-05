@@ -152,6 +152,11 @@ Everything financial in one place.
 - name, email, phone, address
 - notes
 - createdAt
+- portal (optional — `{token, enabled}`; the per-customer portal link's share
+  token, shared from CustomerDetail. Device-written only, same pattern as
+  `Settings.bookingLink`: the backend's `portal-view` action resolves it to a
+  whitelisted read-only bundle but never writes it. Public by design — the
+  token travels in the shared URL — so not a SecureStore field)
 
 ### Job
 - id, customerId, customerName (denormalized display)
@@ -324,6 +329,17 @@ payment-link/webhook flow (`backend/api/stripe/webhook.js`), applied to a
   a device that pulls before pushing preserves them; a device that pushes a
   stale blob after the server write can still clobber `approval.*` — the
   same accepted risk as the Stripe invoice-paid case.
+- **Customer portal shares this dispatcher (2026-08-05).** `GET
+  /api/estimate/portal-view` joins `create-link` / `respond` / `view` in
+  `api/estimate/[action].js`'s route list — still one Vercel function (11 of
+  12). It is read-only and token-gated: given a customer's `Customer.portal`
+  token, it resolves a whitelisted bundle (business name, customer name,
+  approval-carrying estimates linking back to this same hosted approval
+  page, and invoices with `balanceDue` plus allowlist-filtered
+  `paymentLinkUrl`) for the public `portal.html` page. It adds no write path
+  of its own — approve/decline still goes through `respond` above, and Pay
+  still goes through a payment link minted elsewhere; `portal-view` only
+  reads and sanitizes.
 
 ---
 

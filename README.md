@@ -96,6 +96,21 @@ Nothing to set up here — it's built in and ready whenever you want it.
 
 ---
 
+## Step 6 — Customer portal (optional)
+
+Nothing to set up here — it's built in and ready whenever you want it.
+
+- **Customer portal** — Customers → pick a customer → "Customer Portal" gives
+  that customer their own persistent link showing their estimates (approve or
+  decline through the same hosted approval page the estimate-send flow
+  already uses) and invoices (a Pay button when a payment link is already
+  cached on the invoice — the portal can't mint new ones). Create, share,
+  toggle off, or rotate for a fresh link, all from that customer's detail
+  screen. The backend side is read-only: it resolves the link to a sanitized,
+  whitelisted view and writes nothing.
+
+---
+
 ## File map — what does what
 
 ```
@@ -137,6 +152,7 @@ utils/
   supabase.ts                    ← Supabase client (auth + database)
   notifications.ts               ← Push notification scheduling (overdue reminders)
   bookingLink.ts                 ← Booking-link URL builder + mint-endpoint client
+  portalLink.ts                  ← Customer-portal URL builder; reuses the booking mint endpoint
   pushToken.ts                   ← Expo push-token registration into the settings blob
   pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
   pdfExport.ts                   ← PDF rendering and share sheet
@@ -239,6 +255,10 @@ backend/                         ← Vercel serverless functions (deployed separ
   lib/guards.js                  ← Rate limiter + input caps shared by the AI endpoints
   lib/booking/                   ← store/validate/submit/config/mint/notifyOwner —
                                    booking link backend logic
+  lib/estimate/portalView.js     ← portal-view handler — whitelisted, read-only
+                                   customer-portal bundle (estimates + invoices)
+  lib/estimate/portalStore.js    ← Read-only, tenant-scoped Supabase reads for
+                                   portal-view (token→customer, jobs, invoices)
 ```
 
 ---
@@ -434,6 +454,23 @@ because request conversion (`utils/storage/bookingConversion.ts`) assigns
 customers a time-based rather than deterministic id, two devices converting
 the same request concurrently can each create a duplicate customer record for
 the same person, which the existing duplicate-customer merge prompt recovers.
+
+**Customer portal token lives on the customer record.** `Customer.portal`
+(the minted share token + its enabled flag) is a plain field on the same
+synced customer blob as name, notes, and everything else — the same
+cross-device last-write-wins class as the booking link above, not a special
+case. A second device that saves that customer before pulling the latest
+portal token can clobber it; the fix is the same one-tap recovery as booking:
+tap "Get a new link" to rotate, then re-share.
+
+**Invoices are invisible on the portal until customerId is stamped.** The
+portal-view backend matches a customer's invoices by `customerId`, but older
+invoices that predate that field only carry a typed customer name. Those
+invoices stay invisible on the customer's portal page until
+`migrateCustomerIdentity` backfills `customerId` onto them, which runs
+automatically on the owner's next sign-in — so the gap is transient, not
+permanent, but a portal link shared and opened before that backfill runs
+will show fewer invoices than exist.
 
 **First-device detection counts settings rows.** `initialSync` decides
 push-vs-pull by counting the user's rows in the cloud `settings` table
