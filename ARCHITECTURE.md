@@ -219,6 +219,23 @@ Everything financial in one place.
   auto-post to expenses, to avoid double-counting under IRS rules.
   Deduction total = business miles × `settings.mileageRate` (default 0.70).
 
+### BookingRequest
+- id (`bk<epoch-ms>_<6 hex>`, server-minted), status: `new | converted`
+- name, phone, email, address, details, preferredTiming
+- createdAt (ISO, server clock); convertedJobId / convertedCustomerId (set on conversion)
+- A public request-a-quote submission (booking link, 2026-08-04). Rows are
+  INSERTED server-side only — the token-gated `/api/booking/submit` endpoint
+  writes them with the service role (`backend/lib/booking/store.js`) — and are
+  synced like every other collection (`bookingRequests` entry in
+  `COLLECTION_TABLES`, `utils/sync.ts`; blob-shape table + owner-scoped RLS,
+  migration `supabase/migrations/20260804_booking_requests.sql`). **Device
+  converts:** on every sign-in and app foreground, `applyBookingRequests`
+  (`utils/storage/bookingConversion.ts`) turns each `status: "new"` row into a
+  `Customer` (via the same `upsertCustomerInList` upsert every other
+  customer-creation path uses) plus a lead `Job` with a deterministic id
+  `jbk_<requestId>`, then flips the row to `status: "converted"` — idempotent
+  and flag-free, mirroring `applyEstimateDecisions`.
+
 ### Settings / Business Profile
 - businessName, ownerName, trade
 - phone, email, address, logoPhoto
@@ -228,6 +245,14 @@ Everything financial in one place.
   unset = SE tax only)
 - vehicleDeductionMethod (optional — 'mileage' | 'actual'; the IRS either/or
   election for the tax estimate; unset deducts neither)
+- bookingLink (optional — `{token, enabled}`; the public booking link's share
+  token. Device-written only, from the Settings screen; the backend reads it
+  to resolve a public link but never writes it. Public by design — the token
+  travels in the shared URL — so it is not a SecureStore field)
+- pushToken (optional — `{token, platform, updatedAt}`; the device's Expo push
+  token, written by `utils/pushToken.ts` only when it changes; read
+  server-side to send booking-request push alerts. Not a secret, so not a
+  SecureStore field)
 - paymentProcessor + providerKey (SecureStore)
 - anthropicKey, groqKey (SecureStore)
 - notificationRules, autoOutreachEnabled, autoSendEmailEnabled
@@ -351,6 +376,7 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 - **Stripe Connect** — Express account onboarding, payment link generation, webhook-driven invoice marking
 - AI proxy — Groq chat completions (`ai-chat.js`) + Anthropic pricebook suggestions (`pricebook-suggest.js`) + Anthropic vision receipt extraction (`receipt-extract.js`)
 - RevenueCat subscription webhook (`subscription/webhook.js`)
+- Booking link — public request-a-quote intake, one dispatcher function `api/booking/[action].js` routing `mint` (JWT-authed token mint), `config` (public, token-gated form bootstrap) and `submit` (public, token-gated insert) — the 11th of 12 Vercel Hobby-plan functions
 - Push notification scheduling
 - PDF generation for proposals and invoices
 - ⚠️ Google Maps Directions API: planned for route optimization; not yet wired up

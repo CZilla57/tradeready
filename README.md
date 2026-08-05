@@ -81,6 +81,21 @@ Required Vercel env vars: `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_URL`,
 
 ---
 
+## Step 5 — Booking link (optional)
+
+Nothing to set up here — it's built in and ready whenever you want it.
+
+- **Booking link** — Settings → "Booking link" creates a public request-a-quote
+  page you can share with customers (create, share, toggle off, or rotate for
+  a fresh link, all from Settings). A submission is turned into a customer
+  record and a new lead job automatically — no manual entry. You get an email
+  alert for every new request; once your device has registered for push
+  notifications you'll also get a push alert (this needs a build with the push
+  entitlement — it's a silent no-op in Expo Go, so on Expo Go you'll only see
+  the email).
+
+---
+
 ## File map — what does what
 
 ```
@@ -392,6 +407,21 @@ next `pullRemote` (sign-in or app-foreground) and advances the job's status
 locally; the server never writes `job.status`. This write inherits the same
 last-write-wins envelope as everything else: an un-pushed local edit to that
 job can still clobber the pulled `approval.*` fields on its next push.
+
+**Booking link and push token live in the settings blob.** `settings.bookingLink`
+(the minted share token) and `settings.pushToken` (the device's Expo push
+token) are plain fields on the same synced `Settings` row as everything else,
+so a stale device's settings save can clobber them — the same last-write-wins
+class as the rest of Settings, not a special case. On a single device this
+can't happen day-to-day: the Settings screen keeps both fields pinned to their
+on-disk value across a "Save settings" tap. The exposure is cross-device only —
+a second device that saves settings before pulling the latest booking link or
+push token overwrites it with its own stale copy: whichever token ends up in
+the cloud row is the one that resolves, so a link you already shared under a
+token that just got clobbered away will 404 until you tap "Get new link" to
+rotate it and re-share. A clobbered push token just falls back to email-only
+alerts until a device re-registers, which happens automatically on the next
+app foreground or sign-in (`utils/pushToken.ts`, only-on-change).
 
 **First-device detection counts settings rows.** `initialSync` decides
 push-vs-pull by counting the user's rows in the cloud `settings` table
