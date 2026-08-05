@@ -126,16 +126,31 @@ export default function ChangeOrdersSection({ job, onChanged, onAdd, onEdit }: P
     }
   }
 
-  async function confirmDecision() {
-    if (!decisionTarget) return;
-    const today = new Date().toISOString().split("T")[0];
-    const changed = await mutateCo(decisionTarget.id, (c) =>
-      applyManualDecision(c, decisionTarget.decision, decisionNote, today),
-    );
-    if (changed) track("change_order_decided", { decision: decisionTarget.decision, channel: "manual" });
+  // Clears BOTH the target and the note — the only correct way to leave the
+  // decision modal. A note-less clear (e.g. the old onRequestClose) lets a
+  // note typed for one CO survive to pre-fill the next one opened.
+  function closeDecisionModal() {
     setDecisionTarget(null);
     setDecisionNote("");
-    onChanged();
+  }
+
+  async function confirmDecision() {
+    // `busy` doubles as this modal's in-flight guard (shared with
+    // handleSend) — a fast double-tap on Confirm must not fire two
+    // overlapping mutateCo calls / duplicate analytics.
+    if (!decisionTarget || busy) return;
+    setBusy(true);
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const changed = await mutateCo(decisionTarget.id, (c) =>
+        applyManualDecision(c, decisionTarget.decision, decisionNote, today),
+      );
+      if (changed) track("change_order_decided", { decision: decisionTarget.decision, channel: "manual" });
+      onChanged();
+    } finally {
+      setBusy(false);
+      closeDecisionModal();
+    }
   }
 
   function handleCancel(co: ChangeOrder) {
@@ -178,8 +193,23 @@ export default function ChangeOrdersSection({ job, onChanged, onAdd, onEdit }: P
     const actions: { text: string; onPress: () => void; style?: "destructive" | "cancel" }[] = [];
     if (status === "pending" || status === "awaiting") {
       actions.push({ text: status === "pending" ? "Send for approval" : "Re-send link", onPress: () => handleSend(co) });
-      actions.push({ text: "Mark approved (on site)", onPress: () => setDecisionTarget({ id: co.id, decision: "approved" }) });
-      actions.push({ text: "Mark declined", onPress: () => setDecisionTarget({ id: co.id, decision: "declined" }) });
+      // Defense in depth: the note always starts blank for a newly-opened
+      // target, even though closeDecisionModal already resets it on every
+      // close path.
+      actions.push({
+        text: "Mark approved (on site)",
+        onPress: () => {
+          setDecisionTarget({ id: co.id, decision: "approved" });
+          setDecisionNote("");
+        },
+      });
+      actions.push({
+        text: "Mark declined",
+        onPress: () => {
+          setDecisionTarget({ id: co.id, decision: "declined" });
+          setDecisionNote("");
+        },
+      });
       actions.push({ text: "Cancel change order", style: "destructive", onPress: () => handleCancel(co) });
     }
     if (status === "pending") {
@@ -214,7 +244,7 @@ export default function ChangeOrdersSection({ job, onChanged, onAdd, onEdit }: P
         </View>
       )}
 
-      <Modal visible={decisionTarget !== null} transparent animationType="fade" onRequestClose={() => setDecisionTarget(null)}>
+      <Modal visible={decisionTarget !== null} transparent animationType="fade" onRequestClose={closeDecisionModal}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
@@ -223,15 +253,8 @@ export default function ChangeOrdersSection({ job, onChanged, onAdd, onEdit }: P
             <Text style={styles.modalHint}>Record how the customer decided — e.g. &quot;verbal OK on site&quot;.</Text>
             <Field label="Note (optional)" value={decisionNote} onChangeText={setDecisionNote} placeholder="verbal OK on site" />
             <View style={styles.modalButtons}>
-              <Button
-                label="Cancel"
-                variant="secondary"
-                onPress={() => {
-                  setDecisionTarget(null);
-                  setDecisionNote("");
-                }}
-              />
-              <Button label="Confirm" onPress={confirmDecision} />
+              <Button label="Cancel" variant="secondary" onPress={closeDecisionModal} />
+              <Button label="Confirm" onPress={confirmDecision} loading={busy} />
             </View>
           </View>
         </View>
