@@ -151,6 +151,14 @@ cd C:\dev\tradeready\tradeready\backend-workers; npx wrangler deploy
 
 ## Part 4 — Stripe webhook live-fire test (test mode, still no production impact)
 
+> **✅ COVERED another way, 2026-08-05:** synthetic `checkout.session.completed` events
+> hand-signed with the REAL endpoint signing secret (the one Stripe uses at cutover)
+> were fired at the deployed Worker against a disposable invoice: signature verified,
+> ledger entry written (`method: 'stripe'`, paid flipped), redelivery idempotent,
+> ownership-mismatch skipped with 200 — all identical to Vercel given the same events.
+> The CLI exercise below is therefore OPTIONAL — keep it only if you want to see
+> Stripe's own delivery UI in the loop before cutover.
+
 This is the money-critical endpoint; verify it against real signed Stripe events before
 cutover. Needs the Stripe CLI (winget: `winget install stripe.stripe-cli`, then
 `stripe login` — it opens the browser and pairs with your Stripe account).
@@ -248,13 +256,13 @@ or keep it dormant as a rollback target.
 |---|---|---|
 | Port all endpoints + cron (Phases 1–3) | Claude | ✅ done, committed |
 | Negative-path diff vs live Vercel (40 cases) | Claude | ✅ done, 40/40 identical |
-| `wrangler login` | **You** (Part 1) | ⬜ |
-| Fill `.dev.vars` with real values | **You** (Part 2) | ⬜ recommended |
-| Happy-path local diff | Claude (after Part 2) | ⬜ |
-| `wrangler secret put` ×8 + `[vars]` + `wrangler deploy` | **You** (Part 3) | ⬜ |
-| Deployed-Worker diff suite + Phase 4 gate table | Claude (give it the URL) | ⬜ |
-| Stripe CLI test-mode webhook fire | **You** (Part 4, Claude assists) | ⬜ |
-| Approve cutover | **You** | ⬜ |
+| `wrangler login` | **You** (Part 1) | ✅ 2026-08-05 |
+| Fill `.dev.vars` with real values | **You** (Part 2) | ✅ 2026-08-05 |
+| Happy-path local diff | Claude (after Part 2) | ✅ 2026-08-05 — all suites pass |
+| `wrangler secret put` ×8 + `[vars]` + `wrangler deploy` | **You** (Part 3) | ✅ 2026-08-05 → tradeready-backend.tradeready.workers.dev |
+| Deployed-Worker diff suite + Phase 4 gate table | Claude (give it the URL) | ✅ 2026-08-05 — gate table delivered |
+| Stripe CLI test-mode webhook fire | **You** (Part 4, Claude assists) | ✅ covered via signed events (CLI optional) |
+| Approve cutover | **You** | ⬜ **← YOU ARE HERE** |
 | Stripe + RC dashboard URL flips, domain choice | **You** (5.1–5.3) | ⬜ |
 | tradeready-legal page edits + push | Claude (on your go) | ⬜ |
 | app.json backendUrl + OTA | Claude (on your go, post-1.1.0) | ⬜ |
