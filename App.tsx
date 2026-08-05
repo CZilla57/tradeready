@@ -72,6 +72,7 @@ import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, loadInvoices, migrateCustomerIdentity, migrateSampleDataIds, applyEstimateDecisions, applyBookingRequests, scrubLegacySquareToken } from "./utils/storage";
+import { registerPushToken } from "./utils/pushToken";
 import { rootGateLoading } from "./utils/rootGate";
 import { fontScaleChanged } from "./utils/fontScaleRestart";
 import { getTradeNickname } from "./utils/pricingEngine";
@@ -384,6 +385,8 @@ function RootNavigator() {
       .then(() => applyBookingRequests())
       .catch(() => {})
       .then(() => scrubLegacySquareToken())
+      .catch(() => {})
+      .then(() => registerPushToken())
       .catch(() => {});
   }, [session, bootstrapping]);
 
@@ -445,6 +448,13 @@ function RootNavigator() {
             });
           })
           .catch(() => {});
+      }
+      if (data?.type === "booking_request" && navigationRef.isReady()) {
+        track("booking_request_opened", {});
+        navigationRef.navigate("Main", {
+          screen: "Jobs",
+          params: { screen: "JobList" },
+        });
       }
     });
     return () => sub.remove();

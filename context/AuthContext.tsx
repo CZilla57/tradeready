@@ -9,6 +9,7 @@ import { checkAndGenerateRecurringJobs } from '../utils/recurringJobs';
 import { checkAndGenerateRecurringInvoices } from '../utils/recurringInvoices';
 import { identifyUser } from '../utils/analytics';
 import { applyEstimateDecisions, applyBookingRequests } from '../utils/storage';
+import { registerPushToken } from '../utils/pushToken';
 import { replayWidgetActions } from '../utils/widgetActions';
 import { registerBackgroundRefresh } from '../utils/backgroundRefresh';
 
@@ -116,6 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         syncIfOnline(session.user.id)
           .then(() => applyEstimateDecisions())
           .then(() => applyBookingRequests())
+          .then(() => registerPushToken())
           // Replay queued widget/Siri actions, then re-mirror: remote changes
           // land via raw writes that never pass through the save-path mirror
           // hooks, and replayWidgetActions ends in its own refresh.
