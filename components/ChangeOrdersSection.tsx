@@ -103,25 +103,46 @@ export default function ChangeOrdersSection({ job, onChanged, onAdd, onEdit }: P
         Alert.alert("Couldn't create the link", result.message);
         return;
       }
+      // The link is minted — the row is Awaiting from here regardless of
+      // which composer (if any) the user picks below, so reflect it now.
+      onChanged();
       const body =
         `Hi ${customer.name || job.customerName}, while working on "${job.title}" we found something that changes the scope: ` +
         `${co.title} (${co.amount >= 0 ? "+" : ""}${formatQuote(co.amount)}). ` +
         `Please review and approve before we do this extra work: ${result.url}`;
       const phone = customer.phone?.trim();
       const email = customer.email?.trim();
-      let sent = false;
-      if (phone) {
-        sent = await composeSMS({ recipients: [phone], body });
+      const sendVia = async (channel: "text" | "email") => {
+        const sent = channel === "text"
+          ? await composeSMS({ recipients: [phone as string], body })
+          : await composeEmail({ recipients: [email as string], subject: `Change to your ${job.title} job`, body });
+        if (sent) track("change_order_sent", { amount: co.amount, channel });
+      };
+      if (phone && email) {
+        // Both on file: the user picks, matching SendEstimateScreen's
+        // email/text channel choice for the estimate approval link. Alert
+        // callbacks run after this function returns (and after `finally`
+        // clears `busy`) — sendVia only opens a native composer, so that's
+        // safe.
+        Alert.alert(
+          "Send for approval",
+          `How should this go to ${customer.name || job.customerName}?`,
+          [
+            { text: "Text message", onPress: () => void sendVia("text") },
+            { text: "Email", onPress: () => void sendVia("email") },
+            { text: "Cancel", style: "cancel" },
+          ],
+        );
+      } else if (phone) {
+        await sendVia("text");
       } else if (email) {
-        sent = await composeEmail({ recipients: [email], subject: `Change to your ${job.title} job`, body });
+        await sendVia("email");
       } else {
         Alert.alert(
           "No contact info",
           `${customer.name || "This customer"} has no phone or email on file. Add one to send this change order.`,
         );
       }
-      if (sent) track("change_order_sent", { amount: co.amount });
-      onChanged();
     } finally {
       setBusy(false);
     }
