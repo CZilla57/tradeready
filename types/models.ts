@@ -352,6 +352,13 @@ export interface Customer {
    */
   createdAt?: DateString;
   /**
+   * Customer-portal capability link (2026-08-04 portal spec). OPTIONAL and
+   * additive. Device-written ONLY (CustomerDetail); the backend resolves
+   * token → customer by READING the customers table, never writing it.
+   * Public-by-design token (it's in the shared URL) — not secret data.
+   */
+  portal?: { token: string; enabled: boolean };
+  /**
    * Soft archive (utils/archive.ts): local "YYYY-MM-DD" the customer was
    * archived. OPTIONAL and additive — absent means active. Archived customers
    * hide from the Customers list (except its Archived toggle) and global
