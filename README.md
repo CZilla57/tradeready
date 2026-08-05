@@ -463,14 +463,21 @@ case. A second device that saves that customer before pulling the latest
 portal token can clobber it; the fix is the same one-tap recovery as booking:
 tap "Get a new link" to rotate, then re-share.
 
-**Invoices are invisible on the portal until customerId is stamped.** The
-portal-view backend matches a customer's invoices by `customerId`, but older
-invoices that predate that field only carry a typed customer name. Those
-invoices stay invisible on the customer's portal page until
-`migrateCustomerIdentity` backfills `customerId` onto them, which runs
-automatically on the owner's next sign-in — so the gap is transient, not
-permanent, but a portal link shared and opened before that backfill runs
-will show fewer invoices than exist.
+**Estimates and invoices are invisible on the portal until customerId is
+stamped.** The portal-view backend matches a customer's jobs (for estimates)
+and invoices by `customerId`, but older records that predate that field only
+carry a typed customer name. Those estimates and invoices stay invisible on
+the customer's portal page until `migrateCustomerIdentity` backfills
+`customerId` onto them, which runs automatically on the owner's next sign-in
+— so the gap is transient, not permanent, but a portal link shared and opened
+before that backfill runs will show fewer estimates and invoices than exist.
+
+**Archiving a customer does not disable their portal link.** Archiving only
+hides the customer from list views (Customers, Jobs, search) — it deliberately
+does not touch `Customer.portal`, so the customer-facing portal keeps working
+after archive, the same way archived customers' invoices and notifications
+keep working. Disable or rotate the link from CustomerDetail if you need to
+cut it off.
 
 **First-device detection counts settings rows.** `initialSync` decides
 push-vs-pull by counting the user's rows in the cloud `settings` table

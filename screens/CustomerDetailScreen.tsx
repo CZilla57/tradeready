@@ -335,9 +335,10 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
   };
 
   const confirmMergeInto = (target: CustomerRecord) => {
+    const portalWarning = displayCustomer.portal ? ' Their portal link will stop working.' : '';
     Alert.alert(
       `Merge into "${target.name}"?`,
-      `"${displayCustomer.name}"'s jobs, invoices, and recurring plans move to ${target.name}, blank contact details carry over, and "${displayCustomer.name}" is removed. This can't be undone.`,
+      `"${displayCustomer.name}"'s jobs, invoices, and recurring plans move to ${target.name}, blank contact details carry over, and "${displayCustomer.name}" is removed. This can't be undone.${portalWarning}`,
       [
         { text: 'Cancel', style: 'cancel' },
         {

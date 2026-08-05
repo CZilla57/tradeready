@@ -93,6 +93,11 @@ at 11). The booking dispatcher is untouched.
 }
 ```
 
+Amendment (final review 2026-08-05): the link is additionally gated on
+`paymentLinkAmount` matching the current `balanceDue` within `PAID_EPSILON` —
+the same stale-amount rule the dunning email enforces; absent amount fails
+closed.
+
 Nothing else crosses the wire: no ids beyond what approvalUrl needs, no
 contact info, no notes, no pricing internals (labor rates etc.), no other
 customers, no settings fields. `paymentLinkUrl` is filtered through the same
