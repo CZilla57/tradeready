@@ -84,10 +84,13 @@ view/respond round-trip, cron batch against real tables) need real values locall
 Nothing points at the deployed Worker after this — it's a parallel deployment for
 verification only.
 
-1. First, mirror the optional `[vars]`: open `backend-workers\wrangler.toml` — if (and
-   only if) Vercel has `ESTIMATE_PUBLIC_ORIGIN` / `ESTIMATE_PUBLIC_BASE` /
-   `CHANGE_PUBLIC_BASE` set, uncomment those lines and paste the same values.
-   `SUPABASE_URL` is already filled in.
+1. `[vars]` are already wired: `SUPABASE_URL` plus `ESTIMATE_PUBLIC_BASE =
+   https://gettradereadyapp.com/estimate.html` (confirmed empirically 2026-08-05 —
+   live Vercel mints links on that base, and the local Worker now produces identical
+   estimate AND change-order link bases). One optional check in the Vercel dashboard
+   (these are non-sensitive, so values are visible): if `ESTIMATE_PUBLIC_ORIGIN` or
+   `CHANGE_PUBLIC_BASE` are ALSO set there, mirror them in `wrangler.toml` — the
+   verified behavior says they're not needed.
 
 2. Store the 8 secrets. Each command prompts you to paste the value (same values as
    `.dev.vars` / the Vercel dashboard), then uploads it encrypted:
