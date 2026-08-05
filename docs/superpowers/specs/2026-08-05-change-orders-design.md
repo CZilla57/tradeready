@@ -163,6 +163,10 @@ dispatcher** (function count stays 11 of 12), handlers in
 - `change-respond` additionally refuses with **HTTP 409** ("This change was
   already decided.") when the CO carries a `manualDecision` — the customer
   can't override an on-site decision from a stale link.
+- `change-respond` also refuses (same 409) once the CO is link-**declined** —
+  declined is FINAL for change orders (owner decision 2026-08-05, deliberate
+  divergence from the estimate flow's declined→approved allowance; the
+  tradesperson issues a new CO instead).
 - Snapshot is frozen at send (device-built, `EstimateApprovalSnapshot` reused
   verbatim: `lineItems: [{ label: co.title, amount }]`, `total: co.amount`,
   business/customer names) so the customer approves exactly what they saw.
@@ -279,3 +283,10 @@ follow-up, out of scope here).
   next JobDetail view. Today-insight follow-up is backlog.
 - Portal does not show COs in v1.
 - No calculator-assisted CO pricing in v1 (owner chose fast entry).
+- Concurrent `change-respond` calls for different COs on the same job — and
+  the estimate `respond` racing `change-respond` — share the blob-level LWW
+  envelope: an overlapping write can drop one consent record (it can only
+  LOSE a decision, never forge one); the CO reverts to awaiting and
+  re-approving via the same link heals it. Accepted 2026-08-05; a
+  conditional-upsert hardening of estimateStore is possible post-launch if
+  ever needed.

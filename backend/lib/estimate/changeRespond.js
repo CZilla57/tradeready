@@ -40,7 +40,11 @@ module.exports = async function handler(req, res) {
   if (!row || !co || !existing || !constantTimeEqual(existing.token, String(token))) {
     return res.status(404).json({ error: 'This link is invalid or has expired.' });
   }
-  if (co.manualDecision) {
+  // Declined is FINAL for change orders (owner decision 2026-08-05) — unlike
+  // the estimate flow, a declined CO cannot be flipped to approved from a
+  // stale link; the tradesperson issues a new CO instead. nextApproval's
+  // declined→approved allowance therefore never fires here.
+  if (co.manualDecision || existing.decision === 'declined') {
     return res.status(409).json({ error: 'This change was already decided.' });
   }
 

@@ -88,4 +88,15 @@ describe('change-respond', () => {
     await changeRespond(req({ jobId: 'j1', changeOrderId: 'coB', token: 'TOK', decision: 'approved', signerName: '  ' }), res);
     expect(res.statusCode).toBe(400);
   });
+
+  it('refuses 409 once link-declined — declined is final for change orders', async () => {
+    const declined = freshJob();
+    declined.data.changeOrders[0].approval.decision = 'declined';
+    store.fetchJob.mockResolvedValue(declined);
+    const res = mockRes();
+    await changeRespond(req({ jobId: 'j1', changeOrderId: 'coB', token: 'TOK', decision: 'approved', signerName: 'Dana' }), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe('This change was already decided.');
+    expect(store.upsertJob).not.toHaveBeenCalled();
+  });
 });
