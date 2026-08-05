@@ -229,8 +229,15 @@ visible kinds, once per focus load while visible), `insight_tapped`
   in negative-offset timezones — was fixed on this branch. The Overdue loader
   now filters on local-frame `daysPastDue(inv.due) >= 1`, so the handoff is
   clean in every timezone.)
-- **Terminal/declined/archived** records are excluded from every rule
-  (shared `TERMINAL_STATUSES` + `isArchived`).
+- **Terminal/declined/archived** records are excluded from every rule's
+  *candidate* set (overrun jobs, uninvoiced jobs, fit/unscheduled
+  candidates) via the shared `TERMINAL_STATUSES` + `isArchived`. Rule 4's
+  gap math is the deliberate exception: `largestFreeGap` counts archived
+  (non-terminal) scheduled jobs when computing tomorrow's busy windows —
+  matching both `findScheduleConflicts` and Today's own day view (which
+  still shows archived jobs; `utils/archive.ts` — archiving tidies lists,
+  it does not rewrite history), so the gap the card reports never
+  contradicts the schedule the user sees.
 - **Performance:** pure O(n) passes over already-loaded arrays; zero network,
   zero storage reads beyond the one added `loadInvoices()` — the render path
   stays local-first.
