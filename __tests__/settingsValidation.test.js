@@ -2,7 +2,7 @@
 // The Settings save path must hard-block malformed values (the old behavior
 // warned but saved anyway, letting bad emails/phones/rates reach invoices).
 
-import { validateSettingsInput } from "../utils/settingsValidation";
+import { validateSettingsInput, validateEmailPhone, validateLaborRate } from "../utils/settingsValidation";
 
 const valid = { email: "jo@example.com", phone: "(555) 123-4567", laborRate: 85 };
 
@@ -37,5 +37,31 @@ describe("validateSettingsInput", () => {
   test("multiple problems are all reported", () => {
     const errors = validateSettingsInput({ email: "bad", phone: "12", laborRate: 0 });
     expect(errors).toHaveLength(3);
+  });
+});
+
+describe("validateEmailPhone", () => {
+  it("passes empty fields (optional)", () => {
+    expect(validateEmailPhone({ email: "", phone: "" })).toEqual([]);
+  });
+  it("flags a malformed non-empty email", () => {
+    expect(validateEmailPhone({ email: "nope", phone: "" })).toEqual([
+      "Email doesn't look like a valid address.",
+    ]);
+  });
+  it("flags a short phone", () => {
+    expect(validateEmailPhone({ email: "", phone: "(555) 123" })).toEqual([
+      "Phone number looks incomplete — it needs 10 digits.",
+    ]);
+  });
+});
+
+describe("validateLaborRate", () => {
+  it("flags zero and NaN", () => {
+    expect(validateLaborRate(0)).toEqual(["Hourly labor rate must be greater than $0."]);
+    expect(validateLaborRate(NaN)).toEqual(["Hourly labor rate must be greater than $0."]);
+  });
+  it("passes a positive rate", () => {
+    expect(validateLaborRate(85)).toEqual([]);
   });
 });

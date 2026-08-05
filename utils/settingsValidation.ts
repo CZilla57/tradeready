@@ -10,9 +10,14 @@ export interface SettingsValidationInput {
   laborRate: number;
 }
 
+export interface ContactValidationInput {
+  email: string;
+  phone: string;
+}
+
 export const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
-export function validateSettingsInput({ email, phone, laborRate }: SettingsValidationInput): string[] {
+export function validateEmailPhone({ email, phone }: ContactValidationInput): string[] {
   const errors: string[] = [];
   if (email.trim() && !EMAIL_RE.test(email.trim())) {
     errors.push("Email doesn't look like a valid address.");
@@ -20,8 +25,16 @@ export function validateSettingsInput({ email, phone, laborRate }: SettingsValid
   if (phone.trim() && phone.replace(/\D/g, "").length < 10) {
     errors.push("Phone number looks incomplete — it needs 10 digits.");
   }
-  if (!Number.isFinite(laborRate) || laborRate <= 0) {
-    errors.push("Hourly labor rate must be greater than $0.");
-  }
   return errors;
+}
+
+export function validateLaborRate(laborRate: number): string[] {
+  if (!Number.isFinite(laborRate) || laborRate <= 0) {
+    return ["Hourly labor rate must be greater than $0."];
+  }
+  return [];
+}
+
+export function validateSettingsInput({ email, phone, laborRate }: SettingsValidationInput): string[] {
+  return [...validateEmailPhone({ email, phone }), ...validateLaborRate(laborRate)];
 }
