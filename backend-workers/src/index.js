@@ -38,6 +38,7 @@ import { connectStatusHandler } from './routes/stripe/connectStatus.js';
 import { createConnectAccountHandler } from './routes/stripe/createConnectAccount.js';
 import { disconnectHandler } from './routes/stripe/disconnect.js';
 import { connectReturnHandler } from './routes/stripe/connectReturn.js';
+import { stripeWebhookHandler } from './routes/stripe/webhook.js';
 
 const app = new Hono();
 
@@ -65,6 +66,9 @@ app.all('/api/stripe/connect-status', connectStatusHandler);
 app.all('/api/stripe/create-connect-account', createConnectAccountHandler);
 app.all('/api/stripe/disconnect', disconnectHandler);
 app.all('/api/stripe/connect-return', connectReturnHandler);
+// Reads its own raw body via c.req.text() — keep this app middleware-free so
+// nothing consumes the body before signature verification (see file header).
+app.all('/api/stripe/webhook', stripeWebhookHandler);
 
 // Anything else under this Worker: JSON 404 (Vercel served its own 404 page).
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
