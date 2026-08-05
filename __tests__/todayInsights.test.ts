@@ -95,6 +95,18 @@ describe('uninvoiced_complete', () => {
     expect(insight.target).toEqual({ type: 'createInvoice', jobId: 'j1' });
   });
 
+  test('detail reflects the billable total (estimate + approved change orders)', () => {
+    const jobs = [job({
+      status: 'complete', timeSessions: undefined,
+      changeOrders: [{
+        id: 'co1', title: 'Extra work', amount: 300, createdAt: '2026-08-01',
+        manualDecision: { decision: 'approved', decidedAt: '2026-08-02' },
+      }],
+    })];
+    const [insight] = selectTodayInsights(jobs, [], NOW);
+    expect(insight.detail).toBe('$1,500 to bill'); // 1200 + 300, not $1,200
+  });
+
   test('several jobs aggregate to one row targeting the Jobs tab', () => {
     const jobs = [
       job({ id: 'a', status: 'complete' }),

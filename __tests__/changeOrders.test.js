@@ -155,3 +155,15 @@ describe("newChangeOrderId", () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe("duplicateJob does not copy change orders", () => {
+  // No single `duplicateJob` export exists — AddJobScreen assembles the new
+  // job from these two explicit-field builders. Neither whitelists
+  // changeOrders, so the combined duplicate never carries them. Pin.
+  const { buildDuplicatePrefill, buildDuplicatePricing } = require("../utils/duplicateJob");
+  it("a duplicated job starts with no changeOrders", () => {
+    const src = job({ changeOrders: [co({ manualDecision: { decision: "approved", decidedAt: "d" } })] });
+    const dup = { ...buildDuplicatePrefill(src), ...buildDuplicatePricing(src) };
+    expect(dup.changeOrders).toBeUndefined();
+  });
+});

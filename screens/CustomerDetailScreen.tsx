@@ -21,6 +21,7 @@ import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../
 import { isArchived, withArchived } from '../utils/archive';
 import { performCustomerMerge } from '../utils/customerMerge';
 import { mintPortalToken, buildPortalUrl } from '../utils/portalLink';
+import { jobBillableTotal } from '../utils/changeOrders';
 import { useUndo } from '../context/UndoContext';
 import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
@@ -148,8 +149,8 @@ const JobRow = ({ job, styles }: JobRowProps) => {
         <Text style={styles.jobTitle} numberOfLines={1}>{job.title || 'Untitled Job'}</Text>
         <Text style={styles.jobMeta}>{stageLabel} · {formatDate(job.scheduledDate || '')}</Text>
       </View>
-      {job.estimateTotal > 0 && (
-        <Text style={styles.jobValue}>{formatMoney(job.estimateTotal)}</Text>
+      {jobBillableTotal(job) > 0 && (
+        <Text style={styles.jobValue}>{formatMoney(jobBillableTotal(job))}</Text>
       )}
     </View>
   );

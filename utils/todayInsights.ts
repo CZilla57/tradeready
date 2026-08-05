@@ -14,6 +14,7 @@ import { daysPastDue } from "./invoiceHelpers";
 import { formatMoney, formatQuote } from "./format";
 import { formatLocalDate } from "./recurrence";
 import { shiftDate } from "./dateHelpers";
+import { jobBillableTotal } from "./changeOrders";
 
 export type InsightKind =
   | "labor_overrun"
@@ -93,7 +94,7 @@ function selectUninvoicedComplete(jobs: Job[]): TodayInsight[] {
     return [{
       kind: "uninvoiced_complete",
       title: `'${job.title}' is complete but not invoiced`,
-      detail: job.estimateTotal > 0 ? `${formatQuote(job.estimateTotal)} to bill` : undefined,
+      detail: jobBillableTotal(job) > 0 ? `${formatQuote(jobBillableTotal(job))} to bill` : undefined,
       target: { type: "createInvoice", jobId: job.id },
     }];
   }

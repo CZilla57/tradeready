@@ -7,6 +7,7 @@ import { isOverdue } from "./invoiceStats";
 import { buildCustomerList } from "./customerList";
 import { collectedByPeriod, balanceDue } from "./invoicePayments";
 import { summarizeTaxWindow, formatPeriodRange, formatDeadline } from "./taxEstimate";
+import { jobBillableTotal } from "./changeOrders";
 import type { Invoice, Job, Customer, JobStatus, Expense, Trip, Settings } from "../types/models";
 
 export interface TopCustomerEntry {
@@ -102,8 +103,8 @@ export function aggregateSnapshot(
     if (ACTIVE_STATUSES.has(job.status)) {
       activeJobsByStatus[job.status] = (activeJobsByStatus[job.status] ?? 0) + 1;
     }
-    if (DONE_STATUSES.has(job.status) && job.estimateTotal > 0) {
-      completedJobTotal += job.estimateTotal;
+    if (DONE_STATUSES.has(job.status) && jobBillableTotal(job) > 0) {
+      completedJobTotal += jobBillableTotal(job);
       completedJobCount++;
     }
   }

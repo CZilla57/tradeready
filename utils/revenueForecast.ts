@@ -1,4 +1,5 @@
 import { computeConversionFunnel } from './conversionFunnel';
+import { jobBillableTotal } from './changeOrders';
 import type { Job, JobStatus } from '../types/models';
 
 const CERTAIN_STATUSES: JobStatus[] = ['approved', 'scheduled', 'in_progress'];
@@ -24,13 +25,14 @@ export function computeRevenueForecast(jobs: Job[]): RevenueForecastResult {
   let speculativeCount = 0;
 
   for (const job of jobs) {
-    if (job.estimateTotal <= 0) continue;
+    const billable = jobBillableTotal(job);
+    if (billable <= 0) continue;
 
     if (CERTAIN_STATUSES.includes(job.status)) {
-      certainValue += job.estimateTotal;
+      certainValue += billable;
       certainCount++;
     } else if (SPECULATIVE_STATUSES.includes(job.status)) {
-      speculativeValue += job.estimateTotal;
+      speculativeValue += billable;
       speculativeCount++;
     }
   }

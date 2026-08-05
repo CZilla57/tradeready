@@ -1,4 +1,5 @@
 import { computeEstimateBreakdown } from "./pricingEngine";
+import { jobBillableTotal } from "./changeOrders";
 import type { Job, JobStatus } from "../types/models";
 
 const DONE_STATUSES: Set<JobStatus> = new Set(["complete", "invoiced", "paid"]);
@@ -24,9 +25,14 @@ export function computeRevenueByType(jobs: Job[]): RevenueByTypeResult {
 
   for (const job of jobs) {
     if (!DONE_STATUSES.has(job.status)) continue;
-    if (job.estimateTotal <= 0) continue;
+    const billable = jobBillableTotal(job);
+    if (billable <= 0) continue;
     jobCount++;
-    const bd = computeEstimateBreakdown(job);
+    // pricingEngine's residual math (overheadLine = estimateTotal − labor −
+    // material) stays untouched — pass a billable-total job snapshot instead
+    // of mutating the engine, so approved-CO dollars land in the
+    // overhead/profit line rather than vanishing from the chart.
+    const bd = computeEstimateBreakdown({ ...job, estimateTotal: billable });
     laborTotal += bd.laborCost;
     materialTotal += bd.materialCost;
     overheadTotal += Math.max(0, bd.overheadLine);

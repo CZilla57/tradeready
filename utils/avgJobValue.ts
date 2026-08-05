@@ -1,5 +1,6 @@
 import type { Job, JobStatus } from "../types/models";
 import { isInRange } from "./moneyUtils";
+import { jobBillableTotal } from "./changeOrders";
 
 const DONE_STATUSES: Set<JobStatus> = new Set(["complete", "invoiced", "paid"]);
 
@@ -19,9 +20,9 @@ export function computeAvgJobValue(
 
   for (const job of jobs) {
     if (!DONE_STATUSES.has(job.status)) continue;
-    if (job.estimateTotal <= 0) continue;
+    if (jobBillableTotal(job) <= 0) continue;
     if (start && end && job.createdAt && !isInRange(job.createdAt, start, end)) continue;
-    totalValue += job.estimateTotal;
+    totalValue += jobBillableTotal(job);
     count++;
   }
 

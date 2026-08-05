@@ -18,6 +18,7 @@ import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { isArchived } from "../utils/archive";
 import { reportError } from "../utils/analytics";
 import { JOB_STATUSES } from "../utils/pricingEngine";
+import { jobBillableTotal } from "../utils/changeOrders";
 import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
 import { SearchField } from "../components/SearchField";
@@ -105,7 +106,7 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
   const visibleJobs = jobs.filter((j) => !isArchived(j));
   const activeJobs = visibleJobs.filter((j) => !["paid", "invoiced"].includes(j.status));
   const pendingEstimates = visibleJobs.filter((j) => ["lead", "estimate_sent"].includes(j.status));
-  const pendingValue = pendingEstimates.reduce((s, j) => s + (j.estimateTotal || 0), 0);
+  const pendingValue = pendingEstimates.reduce((s, j) => s + jobBillableTotal(j), 0);
 
   function renderJob({ item: job }: { item: Job }) {
     const status = JOB_STATUSES[job.status] || JOB_STATUSES.lead;
@@ -126,8 +127,8 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
             <Text style={styles.jobCustomer}>{job.customerName}</Text>
           </View>
           <View style={{ alignItems: "flex-end", gap: 5 }}>
-            {job.estimateTotal > 0 && (
-              <Text style={styles.jobAmount}>{formatQuote(job.estimateTotal)}</Text>
+            {jobBillableTotal(job) > 0 && (
+              <Text style={styles.jobAmount}>{formatQuote(jobBillableTotal(job))}</Text>
             )}
             <Badge label={status.label} color={status.color} />
           </View>

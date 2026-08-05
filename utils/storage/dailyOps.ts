@@ -7,6 +7,7 @@ import { loadJobs, loadInvoices } from "./collections";
 import { reportError } from "../analytics";
 import { isFullyPaid } from "../invoicePayments";
 import { daysPastDue } from "../invoiceHelpers";
+import { jobBillableTotal } from "../changeOrders";
 import type { Job, Invoice } from "../../types/models";
 
 export async function loadJobsForDate(dateString: string): Promise<Job[]> {
@@ -35,7 +36,7 @@ export async function getExpectedEarningsForDate(dateString: string): Promise<nu
 
     // Sum the estimated totals to calculate expected daily revenue
     const total = todaysJobs.reduce((sum, job) => {
-      return sum + (Number(job.estimateTotal) || 0);
+      return sum + jobBillableTotal(job);
     }, 0);
 
     return total;

@@ -100,6 +100,23 @@ describe("aggregateSnapshot", () => {
     expect(aggregateSnapshot([], [], [], NOW).avgCompletedJobValue).toBe(0);
   });
 
+  test("completed-job average uses billable total (estimate + approved COs)", () => {
+    const snap = aggregateSnapshot(
+      [],
+      [
+        job({
+          id: "j1", status: "complete", estimateTotal: 2400,
+          changeOrders: [{
+            id: "coA", title: "X", amount: 850, createdAt: "2026-07-01",
+            manualDecision: { decision: "approved", decidedAt: "2026-07-02" },
+          }],
+        }),
+      ],
+      [], NOW,
+    );
+    expect(snap.avgCompletedJobValue).toBe(3250); // 2400 + 850, not 2400
+  });
+
   test("topCustomers reflects lifetime spend and amounts owed", () => {
     const snap = aggregateSnapshot(
       [

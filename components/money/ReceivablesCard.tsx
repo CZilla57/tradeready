@@ -4,6 +4,7 @@ import { spacing, radius, fontSize, fonts, type ColorScheme, type ShadowScheme }
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney } from '../../utils/format';
 import { balanceDue, isFullyPaid } from '../../utils/invoicePayments';
+import { jobBillableTotal } from '../../utils/changeOrders';
 import { CardScope } from './CardScope';
 import type { Invoice, Job } from '../../types/models';
 
@@ -29,8 +30,8 @@ export const ReceivablesCard = React.memo(function ReceivablesCard({ invoices, j
     const overdue          = unpaid.filter(inv => inv.due && new Date(inv.due) < today);
     const totalOverdue     = overdue.reduce((s, inv) => s + balanceDue(inv), 0);
 
-    const pipelineJobs  = jobs.filter(j => PIPELINE_STATUSES.includes(j.status) && j.estimateTotal > 0);
-    const pipelineValue = pipelineJobs.reduce((s, j) => s + j.estimateTotal, 0);
+    const pipelineJobs  = jobs.filter(j => PIPELINE_STATUSES.includes(j.status) && jobBillableTotal(j) > 0);
+    const pipelineValue = pipelineJobs.reduce((s, j) => s + jobBillableTotal(j), 0);
 
     return { unpaid, totalOutstanding, overdue, totalOverdue, pipelineJobs, pipelineValue };
   }, [invoices, jobs]);
