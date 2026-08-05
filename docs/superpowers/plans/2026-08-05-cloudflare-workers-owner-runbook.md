@@ -50,8 +50,17 @@ view/respond round-trip, cron batch against real tables) need real values locall
    |---|---|---|
    | `SUPABASE_SERVICE_ROLE_KEY` | supabase.com → project → Project Settings → API keys → `service_role` → Reveal | ✅ yes |
    | `SUPABASE_ANON_KEY` | Already known — it ships in the app: `sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF` | ✅ (public) |
-   | `STRIPE_SECRET_KEY` | dashboard.stripe.com → Developers → API keys → **Create secret key** (name it e.g. "workers-backend"). Stripe never re-shows the existing live key; a second key coexists fine. **LIVE mode — Test mode toggle OFF** (the Worker replaces the production backend; expect `sk_live_...`). | ➕ create new |
-   | `STRIPE_CONNECT_WEBHOOK_SECRET` | dashboard.stripe.com → Developers → Webhooks → the backend-tradeready1 endpoint → Signing secret → **Reveal**. **LIVE mode — Test mode toggle OFF** (it's a live-mode endpoint; won't be listed with Test mode on). Part 4's CLI test temporarily swaps this for the CLI's own `whsec_` — that's the only place test mode appears, and it needs no test-mode API key. | ✅ yes |
+   | `STRIPE_SECRET_KEY` | dashboard.stripe.com → **inside the same sandbox the current backend uses** → Developers → API keys → **Create secret key** (name it e.g. "workers-backend"; expect `sk_test_...`). A second key coexists fine with the one Vercel holds. | ➕ create new |
+   | `STRIPE_CONNECT_WEBHOOK_SECRET` | Same sandbox → Developers → Webhooks → the endpoint pointing at `backend-tradeready1.vercel.app/api/stripe/webhook` → Signing secret → **Reveal**. Part 4's CLI test temporarily swaps this for the CLI's own `whsec_`. | ✅ yes |
+
+   **Stripe mode rule:** the Worker must run in the SAME Stripe mode as the Vercel
+   backend it replaces. As of 2026-08-05 this account has never activated live
+   payments, so the current backend runs sandbox keys — the Worker therefore gets
+   sandbox keys too. Do NOT go through Stripe's live-activation flow as part of this
+   migration. Activating live payments (business details / identity / bank account)
+   is a separate future workstream, and when it happens it's config-only on the
+   backend: `wrangler secret put` the live `sk_live_` key, create a live-mode webhook
+   endpoint at the Worker URL, and `secret put` its signing secret — no code changes.
    | `REVENUECAT_WEBHOOK_SECRET` | app.revenuecat.com → project → Integrations → Webhooks → the Authorization header value shown on the config page | ✅ yes |
    | `CRON_SECRET` | Self-chosen string; nothing else shares it (only guards the manual-run URL, and only for the Worker). Mint a fresh one: `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"` | ➕ mint fresh |
    | `RESEND_API_KEY` | resend.com → API Keys → **Create API key** (values are shown once; a second key coexists fine) | ➕ create new |
