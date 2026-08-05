@@ -45,6 +45,7 @@ import OutreachScreen             from "./screens/OutreachScreen";
 import JobsScreen                 from "./screens/JobsScreen";
 import JobDetailScreen            from "./screens/JobDetailScreen";
 import AddJobScreen               from "./screens/AddJobScreen";
+import AddChangeOrderScreen       from "./screens/AddChangeOrderScreen";
 import PricingCalculatorScreen    from "./screens/PricingCalculatorScreen";
 import CreateInvoiceFromJobScreen from "./screens/CreateInvoiceFromJobScreen";
 import SendEstimateScreen         from "./screens/SendEstimateScreen";
@@ -156,6 +157,7 @@ function JobsTab() {
       />
       <JobStack.Screen name="JobDetail"           component={JobDetailScreen}           options={{ title: "Job" }} />
       <JobStack.Screen name="AddJob"              component={AddJobScreen}              options={{ presentation: "modal" }} />
+      <JobStack.Screen name="AddChangeOrder"      component={AddChangeOrderScreen}      options={{ presentation: "modal", title: "Add Change Order" }} />
       <JobStack.Screen name="PricingCalculator"   component={PricingCalculatorScreen}   options={{ title: "Price this job" }} />
       <JobStack.Screen name="CreateInvoiceFromJob" component={CreateInvoiceFromJobScreen} options={{ title: "Create Invoice" }} />
       <JobStack.Screen name="SendEstimate"        component={SendEstimateScreen}        options={{ title: "Send Estimate" }} />

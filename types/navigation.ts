@@ -40,6 +40,7 @@ export type JobStackParamList = {
   JobDetail: { jobId: string; autoAction?: "onmyway" };
   AddJob: { jobId?: string; focusSchedule?: boolean; duplicateFromJobId?: string };
   PricingCalculator: { jobId: string };
+  AddChangeOrder: { jobId: string; changeOrderId?: string };
   CreateInvoiceFromJob: { jobId: string };
   SendEstimate: { jobId: string };
   AddCustomer: { customerId?: string; customer?: Customer };
