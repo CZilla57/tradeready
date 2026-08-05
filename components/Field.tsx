@@ -14,6 +14,11 @@
 // Every Word there was a reported annoyance, 2026-07-16), everything else
 // "words" (good for names, titles, addresses). Pass the prop to override.
 //
+// autoCorrect + spellCheck ride the same prose signal (owner request,
+// 2026-08-04): fields that resolve to sentence capitalization get iOS-style
+// autocorrect; names/titles/addresses/emails stay literal so the keyboard
+// doesn't "fix" proper nouns. Pass autoCorrect to override.
+//
 // Every Field's keyboard can be dismissed (owner requirement, 2026-07-16):
 // single-line inputs default to returnKeyType="done"; multiline and iOS pad
 // keyboards (no return key) get a per-instance KeyboardDoneBar accessory.
@@ -43,6 +48,7 @@ type FieldProps = {
   placeholder?: string;
   keyboardType?: TextInputProps["keyboardType"];
   autoCapitalize?: TextInputProps["autoCapitalize"];
+  autoCorrect?: boolean;
   multiline?: boolean;
   autoFocus?: boolean;
   returnKeyType?: TextInputProps["returnKeyType"];
@@ -60,6 +66,7 @@ export default function Field({
   placeholder,
   keyboardType,
   autoCapitalize,
+  autoCorrect,
   multiline,
   autoFocus,
   returnKeyType,
@@ -75,6 +82,9 @@ export default function Field({
   const cap =
     autoCapitalize ??
     (keyboardType === "email-address" ? "none" : multiline ? "sentences" : "words");
+
+  // Prose fields autocorrect; everything else is literal (names, keys, emails).
+  const correct = autoCorrect ?? cap === "sentences";
 
   // Multiline keeps return = newline; the Done bar handles dismissal there.
   const returnKey = returnKeyType ?? (multiline ? undefined : "done");
@@ -94,7 +104,8 @@ export default function Field({
         placeholderTextColor={colors.textMuted}
         keyboardType={keyboardType || "default"}
         autoCapitalize={cap}
-        autoCorrect={false}
+        autoCorrect={correct}
+        spellCheck={correct}
         multiline={multiline}
         numberOfLines={multiline ? 3 : 1}
         autoFocus={autoFocus}

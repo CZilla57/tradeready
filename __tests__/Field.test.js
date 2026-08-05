@@ -4,6 +4,11 @@
 // was a reported annoyance (2026-07-16); single-line fields keep "words"
 // (names, titles, addresses) and email keyboards keep "none".
 //
+// autoCorrect/spellCheck ride the same prose signal (owner request,
+// 2026-08-04): fields that resolve to sentence capitalization get iOS-style
+// autocorrect + spell-check; names, titles, addresses, and emails stay
+// literal so iOS doesn't "fix" proper nouns.
+//
 // Also: every Field keyboard must be dismissible (owner requirement,
 // 2026-07-16) — single-line inputs get returnKeyType "done", and multiline /
 // iOS pad keyboards (no return key) get a KeyboardDoneBar accessory.
@@ -38,6 +43,65 @@ describe("Field autoCapitalize default", () => {
   test("an explicit prop always wins", async () => {
     expect(await capFor({ multiline: true, autoCapitalize: "characters" })).toBe("characters");
     expect(await capFor({ autoCapitalize: "none" })).toBe("none");
+  });
+});
+
+describe("Field autoCorrect/spellCheck default", () => {
+  async function correctionFor(props) {
+    const { getByLabelText } = await render(
+      <Field label="Test field" value="" onChangeText={noop} {...props} />
+    );
+    const { autoCorrect, spellCheck } = getByLabelText("Test field").props;
+    return { autoCorrect, spellCheck };
+  }
+
+  test("multiline (prose) fields autocorrect and spell-check", async () => {
+    expect(await correctionFor({ multiline: true })).toEqual({
+      autoCorrect: true,
+      spellCheck: true,
+    });
+  });
+
+  test("single-line fields (names, titles, addresses) stay literal", async () => {
+    expect(await correctionFor({})).toEqual({
+      autoCorrect: false,
+      spellCheck: false,
+    });
+  });
+
+  test("email keyboards stay literal", async () => {
+    expect(await correctionFor({ keyboardType: "email-address" })).toEqual({
+      autoCorrect: false,
+      spellCheck: false,
+    });
+  });
+
+  test("sentence-capitalized single-line fields count as prose", async () => {
+    expect(await correctionFor({ autoCapitalize: "sentences" })).toEqual({
+      autoCorrect: true,
+      spellCheck: true,
+    });
+  });
+
+  test("multiline overridden to words (Settings address) stays literal", async () => {
+    expect(await correctionFor({ multiline: true, autoCapitalize: "words" })).toEqual({
+      autoCorrect: false,
+      spellCheck: false,
+    });
+  });
+
+  test("an explicit autoCorrect prop always wins", async () => {
+    expect(await correctionFor({ multiline: true, autoCorrect: false })).toEqual({
+      autoCorrect: false,
+      spellCheck: false,
+    });
+  });
+
+  test("an explicit autoCorrect prop can opt a literal field in", async () => {
+    expect(await correctionFor({ autoCorrect: true })).toEqual({
+      autoCorrect: true,
+      spellCheck: true,
+    });
   });
 });
 
