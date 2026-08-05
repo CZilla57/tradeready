@@ -63,6 +63,7 @@ import SettingsNotificationsScreen from "./screens/SettingsNotificationsScreen";
 import SettingsPaymentsScreen      from "./screens/SettingsPaymentsScreen";
 import SettingsBookingScreen       from "./screens/SettingsBookingScreen";
 import SettingsSubscriptionScreen  from "./screens/SettingsSubscriptionScreen";
+import SettingsAccountScreen       from "./screens/SettingsAccountScreen";
 import TodayScreen                from "./screens/TodayScreen";
 import MoneyScreen                from "./screens/MoneyScreen";
 import ChatScreen                 from "./screens/ChatScreen";
@@ -142,6 +143,7 @@ function TodayTab() {
       <TodayStack.Screen name="SettingsPayments" component={SettingsPaymentsScreen} options={{ title: "Payments" }} />
       <TodayStack.Screen name="SettingsBooking" component={SettingsBookingScreen} options={{ title: "Booking link" }} />
       <TodayStack.Screen name="SettingsSubscription" component={SettingsSubscriptionScreen} options={{ title: "Subscription" }} />
+      <TodayStack.Screen name="SettingsAccount" component={SettingsAccountScreen} options={{ title: "Account" }} />
       <TodayStack.Screen name="Search" component={GlobalSearchScreen} options={{ title: "Search" }} />
     </TodayStack.Navigator>
   );
