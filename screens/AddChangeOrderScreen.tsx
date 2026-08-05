@@ -70,15 +70,36 @@ export default function AddChangeOrderScreen({ route, navigation }: Props) {
     setSaving(true);
     try {
       const jobs = await loadJobs();
+      const freshJob = jobs.find((x) => x.id === jobId);
+      if (!freshJob) {
+        Alert.alert("Error", "Could not save this change order. Please try again.");
+        return;
+      }
+      const existing = freshJob.changeOrders ?? [];
+
+      // Re-check against freshly-loaded data (not the stale `job` from mount)
+      // in case a sync pulled in a decision while this screen was open.
+      if (changeOrderId) {
+        const freshCo = existing.find((c) => c.id === changeOrderId);
+        if (!freshCo || changeOrderStatus(freshCo) !== "pending") {
+          Alert.alert("Can't edit", "This change order was decided while you were editing. Your changes were not saved.");
+          navigation.goBack();
+          return;
+        }
+      } else if (!canAddChangeOrder(freshJob.status)) {
+        Alert.alert("Error", "This job can no longer take change orders.");
+        navigation.goBack();
+        return;
+      }
+
       const today = new Date().toISOString().split("T")[0];
       const updated = jobs.map((j): Job => {
         if (j.id !== jobId) return j;
-        const existing = j.changeOrders ?? [];
         if (changeOrderId) {
           return {
             ...j,
             changeOrders: existing.map((c) =>
-              c.id === changeOrderId && changeOrderStatus(c) === "pending"
+              c.id === changeOrderId
                 ? { ...c, title: result.title, description: description.trim() || undefined, amount: result.amount }
                 : c,
             ),
