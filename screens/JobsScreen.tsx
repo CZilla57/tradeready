@@ -31,10 +31,14 @@ import type { JobStackScreenProps } from "../types/navigation";
 
 // Which filter tabs to show across the top. "Active" spans every in-flight
 // status — in_progress included, so a job doesn't vanish from the list the
-// moment the user clocks in. "Declined" and "Archived" only render when such
-// jobs exist. Every status tab excludes archived jobs; Archived shows only them.
+// moment the user clocks in. "Quotes" is the awaiting-a-customer-decision
+// subset of Active (the same pair the pending-estimates stat counts) and is
+// always visible so incoming booking requests have a permanent, predictable
+// home. "Declined" and "Archived" only render when such jobs exist. Every
+// status tab excludes archived jobs; Archived shows only them.
 const FILTERS = [
   { key: "active",    label: "Active",    statuses: ["lead", "estimate_sent", "approved", "scheduled", "in_progress"] },
+  { key: "quotes",    label: "Quotes",    statuses: ["lead", "estimate_sent"] },
   { key: "complete",  label: "Complete",  statuses: ["complete", "invoiced"] },
   { key: "paid",      label: "Paid",      statuses: ["paid"] },
   { key: "declined",  label: "Declined",  statuses: ["declined"] },
