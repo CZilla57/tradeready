@@ -1,7 +1,7 @@
 # Proactive Today-Screen Insights — Design
 
 **Date:** 2026-08-04
-**Status:** Approved (owner design conversation 2026-08-04); not yet implemented
+**Status:** Implemented and merged to master `135aaab` (2026-08-04); owner device smoke PASSED; CI green
 **Scope:** new utils/todayInsights.ts + components/InsightsCard.tsx, largest-gap helper in scheduleSmarts.ts, isSetupComplete in setupChecklist.ts, TodayScreen wiring, ChatHome initialPrompt param + ChatScreen consumption, optional-clock param on daysPastDue
 
 ## Problem
