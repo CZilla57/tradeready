@@ -20,5 +20,11 @@ crons = ["0 15 * * *"]
 
 [vars]
 # Non-secret only — everything else via `wrangler secret put`.
-# SUPABASE_URL / ESTIMATE_PUBLIC_ORIGIN / ESTIMATE_PUBLIC_BASE /
-# CHANGE_PUBLIC_BASE are wired in Phase 4 to mirror the live Vercel values.
+# SUPABASE_URL is public (shipped in the app bundle).
+SUPABASE_URL = "https://ncbqswfdvckmdocbawaa.supabase.co"
+# Phase 4 owner step: mirror the LIVE Vercel values for the optional
+# overrides below — set them here only if the Vercel dashboard has them set
+# (an unset var must stay unset so the code's fallbacks keep matching).
+# ESTIMATE_PUBLIC_ORIGIN = ""
+# ESTIMATE_PUBLIC_BASE = ""
+# CHANGE_PUBLIC_BASE = ""
