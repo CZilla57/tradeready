@@ -494,9 +494,9 @@ keep working. Disable or rotate the link from CustomerDetail if you need to
 cut it off.
 
 **Change orders don't appear on the customer portal yet.** The portal
-(`utils/portalLink.ts`) surfaces estimates and invoices only — a change
-order's e-sign link (change.html) or the on-site manual-decision record are
-the only ways a customer sees or responds to one today.
+(`backend/lib/estimate/portalView.js`) surfaces estimates and invoices only —
+a change order's e-sign link (change.html) or the on-site manual-decision
+record are the only ways a customer sees or responds to one today.
 
 **First-device detection counts settings rows.** `initialSync` decides
 push-vs-pull by counting the user's rows in the cloud `settings` table

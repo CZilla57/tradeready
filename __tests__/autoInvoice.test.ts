@@ -19,6 +19,7 @@ import {
   shouldAutoInvoice,
   createAutoInvoiceForJob,
 } from "../utils/autoInvoice";
+import { roundToCents } from "../utils/invoicePayments";
 import type { Job, Invoice, Settings, Customer, ChangeOrder } from "../types/models";
 
 // Isolate storage from sync/notification/widget side-effects, same as
@@ -410,5 +411,31 @@ describe("change orders in billing", () => {
     expect(computeBillableBreakdown(job).changeOrderTotal).toBe(0);
     expect(computeBillableBreakdown(job).total).toBe(2400);
     expect(buildInvoiceLineItems(job).some((i) => i.category === "other")).toBe(false);
+  });
+
+  test("tracked time and an approved CO compose in the same total", () => {
+    // Quoted: 4h @ $85 ($340 labor) baked into estimateTotal 966. Tracked
+    // time replaces those 4h with 5.5h ($467.50), and an approved $500 CO
+    // adds on top — both deltas must land in the same total.
+    const estimateTotal = 966;
+    const originalLaborCost = 340; // 4h × $85, quoted
+    const trackedLaborCost = 467.5; // 5.5h × $85, tracked
+    const coAmount = 500;
+    const job = makeJob({
+      estimateTotal,
+      timeSessions: [closedSession(5.5)],
+      changeOrders: [approvedCo("coA", coAmount)],
+    });
+
+    const b = computeBillableBreakdown(job);
+
+    expect(b.usedTrackedTime).toBe(true);
+    expect(b.laborHours).toBe(5.5);
+    expect(b.laborCost).toBe(trackedLaborCost);
+    expect(b.changeOrderTotal).toBe(coAmount);
+    expect(b.total).toBe(
+      roundToCents(estimateTotal + trackedLaborCost - originalLaborCost + coAmount)
+    );
+    expect(b.total).toBe(1593.5);
   });
 });

@@ -16,6 +16,8 @@ const FIXTURES = [
   co({ approval: { token: "T", sentAt: "s", snapshot: {}, decision: "declined" },
        manualDecision: { decision: "approved", decidedAt: "d" } }),
   co({ cancelledAt: "d", approval: { token: "T", sentAt: "s", snapshot: {}, decision: "approved" } }),
+  co({ approval: { token: "T", sentAt: "s", snapshot: {} },
+       manualDecision: { decision: "approved", decidedAt: "d" } }),
 ];
 
 it("changeOrderStatus agrees on every fixture", () => {

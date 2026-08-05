@@ -46,7 +46,7 @@ export interface BusinessSnapshot {
   totalCustomers: number;
   /** Top 5 customers by lifetime spend. */
   topCustomers: TopCustomerEntry[];
-  /** Mean estimateTotal for complete/invoiced/paid jobs (0 when no done jobs). */
+  /** Mean billable total (estimate + approved change orders) for complete/invoiced/paid jobs (0 when no done jobs). */
   avgCompletedJobValue: number;
   /** Tax set-aside figures; absent when the tax inputs failed to load. */
   tax?: TaxSnapshotBlock;
