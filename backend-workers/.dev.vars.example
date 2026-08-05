@@ -1,0 +1,22 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev`. Values live in the
+# Vercel dashboard (backend-tradeready1 → Settings → Environment Variables);
+# the two SUPABASE_* below are public (shipped in the app bundle) and safe to
+# keep as-is for local testing.
+SUPABASE_URL=https://ncbqswfdvckmdocbawaa.supabase.co
+SUPABASE_ANON_KEY=sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF
+
+# Secrets — copy real values from Vercel only when you need to exercise the
+# happy paths locally; placeholders keep the env-presence checks green for
+# negative-path testing.
+SUPABASE_SERVICE_ROLE_KEY=placeholder
+STRIPE_SECRET_KEY=placeholder
+STRIPE_CONNECT_WEBHOOK_SECRET=placeholder
+REVENUECAT_WEBHOOK_SECRET=placeholder
+CRON_SECRET=placeholder
+RESEND_API_KEY=placeholder
+GROQ_API_KEY=placeholder
+
+# Optional overrides (unset on Vercel today unless the dashboard says otherwise)
+# ESTIMATE_PUBLIC_ORIGIN=
+# ESTIMATE_PUBLIC_BASE=
+# CHANGE_PUBLIC_BASE=

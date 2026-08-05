@@ -1,0 +1,32 @@
+# TradeReady backend — Cloudflare Workers.
+# Secrets are NEVER set here — use `wrangler secret put <NAME>` (Phase 4):
+#   STRIPE_SECRET_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY,
+#   STRIPE_CONNECT_WEBHOOK_SECRET, REVENUECAT_WEBHOOK_SECRET, CRON_SECRET,
+#   RESEND_API_KEY, GROQ_API_KEY
+# Local dev reads .dev.vars (gitignored) — see .dev.vars.example.
+
+name = "tradeready-backend"
+main = "src/index.js"
+# Latest date supported by the pinned workerd (1.20260801.1); the plan's
+# 2026-08-05 is ahead of what wrangler ships and is rejected at startup.
+compatibility_date = "2026-08-01"
+# node:crypto (timingSafeEqual, randomBytes) + Buffer for lib/constantTime.js
+# and the ported token-minting endpoints; also keeps the stripe SDK happy.
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+# Same schedule vercel.json's crons ran: daily 15:00 UTC.
+crons = ["0 15 * * *"]
+
+[vars]
+# Non-secret only — everything else via `wrangler secret put`.
+# SUPABASE_URL is public (shipped in the app bundle).
+SUPABASE_URL = "https://ncbqswfdvckmdocbawaa.supabase.co"
+# Discovered empirically 2026-08-05: live Vercel create-link returns URLs on
+# this base (not the github.io code fallback), so the var IS set there.
+ESTIMATE_PUBLIC_BASE = "https://gettradereadyapp.com/estimate.html"
+# CHANGE_PUBLIC_BASE derives from ESTIMATE_PUBLIC_BASE in code when unset
+# (→ https://gettradereadyapp.com/change.html) — leave unset unless the
+# Vercel dashboard shows an explicit value. Same for the CORS escape hatch:
+# ESTIMATE_PUBLIC_ORIGIN = ""
+# CHANGE_PUBLIC_BASE = ""
