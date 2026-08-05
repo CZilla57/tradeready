@@ -7,6 +7,8 @@ jest.mock('../backend/lib/estimate/createLink', () => jest.fn((q, r) => r.status
 jest.mock('../backend/lib/estimate/respond', () => jest.fn((q, r) => r.status(200).json({ route: 'respond' })));
 jest.mock('../backend/lib/estimate/view', () => jest.fn((q, r) => r.status(200).json({ route: 'view' })));
 jest.mock('../backend/lib/estimate/portalView', () => jest.fn((q, r) => r.status(200).json({ route: 'portal-view' })));
+jest.mock('../backend/lib/estimate/changeView', () => jest.fn((q, r) => r.status(200).json({ route: 'change-view' })));
+jest.mock('../backend/lib/estimate/changeRespond', () => jest.fn((q, r) => r.status(200).json({ route: 'change-respond' })));
 
 const handler = require('../backend/api/estimate/[action]');
 
@@ -18,7 +20,7 @@ function mockRes() {
 }
 
 describe('estimate dispatcher with portal-view', () => {
-  it.each(['create-link', 'respond', 'view', 'portal-view'])('routes %s', async (action) => {
+  it.each(['create-link', 'respond', 'view', 'portal-view', 'change-view', 'change-respond'])('routes %s', async (action) => {
     const res = mockRes();
     await handler({ query: { action } }, res);
     expect(res.body).toEqual({ route: action });
