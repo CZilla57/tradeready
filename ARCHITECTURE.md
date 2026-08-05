@@ -169,6 +169,10 @@ Everything financial in one place.
 - timeSessions: `[{ start, end? }]`
 - address, photos, notes
 - invoiceId, createdAt
+- changeOrders?: ChangeOrder[] — documented scope changes with per-CO approval
+  (server-written `approval` / device-written `manualDecision`); status
+  derived, billable total = `estimateTotal` + approved COs
+  (`utils/changeOrders.ts`)
 
 ### Invoice
 - id, customerId (FK), customer (display name)

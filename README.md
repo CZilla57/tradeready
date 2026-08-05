@@ -111,6 +111,20 @@ Nothing to set up here — it's built in and ready whenever you want it.
 
 ---
 
+## Step 7 — Change orders (optional)
+
+Nothing to set up here — it's built in and ready whenever you want it.
+
+- **Change orders** — document a mid-job scope change (title, details, amount;
+  negative = descope credit), get the customer's sign-off before the extra
+  work starts (e-sign link on change.html, or an on-site "verbal OK" record),
+  and the approved amount flows into the job's billable total, invoice line
+  items, and PDF automatically. Cancelled/declined change orders stay in the
+  history. Change-order decisions arriving via link are picked up on the next
+  sync pull (no push notification — same as webhook payments).
+
+---
+
 ## File map — what does what
 
 ```
@@ -478,6 +492,11 @@ does not touch `Customer.portal`, so the customer-facing portal keeps working
 after archive, the same way archived customers' invoices and notifications
 keep working. Disable or rotate the link from CustomerDetail if you need to
 cut it off.
+
+**Change orders don't appear on the customer portal yet.** The portal
+(`utils/portalLink.ts`) surfaces estimates and invoices only — a change
+order's e-sign link (change.html) or the on-site manual-decision record are
+the only ways a customer sees or responds to one today.
 
 **First-device detection counts settings rows.** `initialSync` decides
 push-vs-pull by counting the user's rows in the cloud `settings` table
