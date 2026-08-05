@@ -9,6 +9,7 @@ import { render, fireEvent, waitFor, act } from "@testing-library/react-native";
 import { useSettingsDraft, type SettingsDraftOptions } from "../hooks/useSettingsDraft";
 import { loadSettings, saveSettings } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
+import { reportError } from "../utils/analytics";
 import { defaultSettings } from "../utils/storage/defaults";
 
 jest.mock("../utils/storage", () => ({
@@ -16,6 +17,7 @@ jest.mock("../utils/storage", () => ({
   saveSettings: jest.fn(() => Promise.resolve()),
 }));
 jest.mock("../utils/notifications", () => ({ syncNotifications: jest.fn() }));
+jest.mock("../utils/analytics", () => ({ reportError: jest.fn() }));
 
 function makeNavigation() {
   const listeners: Record<string, ((e?: any) => void)[]> = {};
@@ -35,11 +37,12 @@ function makeNavigation() {
 }
 
 function Harness({ navigation, options }: { navigation: any; options?: SettingsDraftOptions }) {
-  const { s, update, dirty, handleSave } = useSettingsDraft(navigation, options);
+  const { s, update, dirty, saving, handleSave } = useSettingsDraft(navigation, options);
   if (!s) return null;
   return (
     <View>
       <Text testID="dirty">{dirty ? "dirty" : "clean"}</Text>
+      <Text testID="saving">{saving ? "saving" : "idle"}</Text>
       <TextInput
         accessibilityLabel="Business name"
         value={s.businessName}
@@ -99,6 +102,39 @@ describe("useSettingsDraft", () => {
       expect.objectContaining({ businessName: "Acme Plumbing" })
     );
     await waitFor(() => expect(getByTestId("dirty").props.children).toBe("clean"));
+  });
+
+  it("a failed save alerts, keeps the draft dirty, and re-enables Save for a retry", async () => {
+    const { nav } = makeNavigation();
+    const onSaved = jest.fn();
+    (saveSettings as jest.Mock).mockRejectedValueOnce(new Error("disk full"));
+    const { findByLabelText, getByTestId, getByLabelText } = await render(
+      <Harness navigation={nav} options={{ onSaved }} />
+    );
+    await fireEvent.changeText(await findByLabelText("Business name"), "Acme Plumbing");
+
+    await fireEvent.press(getByLabelText("Save now"));
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        "Couldn't save",
+        "Your changes weren't saved. Please try again."
+      )
+    );
+    // Nothing downstream of the failed write may run, the draft must stay
+    // dirty, and `saving` must reset — a stuck true left the header Save
+    // permanently disabled (the pre-fix behavior).
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), { context: "settingsSave" });
+    expect(syncNotifications).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(getByTestId("dirty").props.children).toBe("dirty");
+    await waitFor(() => expect(getByTestId("saving").props.children).toBe("idle"));
+
+    // The retry goes through and completes the normal success path.
+    await fireEvent.press(getByLabelText("Save now"));
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getByTestId("dirty").props.children).toBe("clean"));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(Alert.alert).toHaveBeenCalledWith("Saved", "Your settings have been saved.");
   });
 
   it("validate problems block the header save with an alert", async () => {

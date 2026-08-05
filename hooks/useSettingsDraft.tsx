@@ -17,6 +17,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, Text, TouchableOpacity } from "react-native";
 import { loadSettings, saveSettings } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
+import { reportError } from "../utils/analytics";
 import { settingsEqual } from "../utils/settingsDirty";
 import { fonts, fontSize } from "../utils/theme";
 import { useTheme } from "./useTheme";
@@ -137,12 +138,26 @@ export function useSettingsDraft<R extends keyof TodayStackParamList>(
       return;
     }
     setSaving(true);
-    await saveSettings(flushed);
-    syncNotifications();
-    setS(flushed);
-    setSavedSnapshot(flushed);
-    await optsRef.current.onSaved?.(flushed);
-    setSaving(false);
+    try {
+      await saveSettings(flushed);
+      syncNotifications();
+      setS(flushed);
+      setSavedSnapshot(flushed);
+      await optsRef.current.onSaved?.(flushed);
+    } catch (err: unknown) {
+      // A rejected write used to leave `saving` stuck true — header Save
+      // permanently disabled — and surfaced nothing. Keep the draft dirty
+      // (no snapshot reset happened on the saveSettings path), tell the
+      // user, and let them retry. A failure thrown by onSaved AFTER the
+      // write landed also arrives here; the alert is conservative in that
+      // rare case, but the snapshot was already reset so a retry is a
+      // harmless no-op save.
+      reportError(err, { context: "settingsSave" });
+      Alert.alert("Couldn't save", "Your changes weren't saved. Please try again.");
+      return;
+    } finally {
+      setSaving(false);
+    }
     Alert.alert("Saved", "Your settings have been saved.");
   }
 
