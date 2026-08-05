@@ -7,6 +7,7 @@
 
 import React, { useMemo, useState } from "react";
 import { Alert, Modal, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import Field from "./Field";
 import { Badge, Button, Card, SectionHeader } from "./UI";
 import { useTheme } from "../hooks/useTheme";
@@ -225,16 +226,37 @@ export default function ChangeOrdersSection({ job, onChanged, onAdd, onEdit }: P
       <SectionHeader title="Change orders" />
       {cos.map((co) => {
         const status = changeOrderStatus(co);
+        // Only pending/awaiting rows have actions; decided/cancelled rows are
+        // history and must not LOOK tappable (owner smoke feedback 2026-08-05:
+        // a bare text row hid the send step entirely). Pending rows carry the
+        // primary next step as an explicit inline link; actionable rows get a
+        // chevron; history rows are disabled.
+        const hasActions = status === "pending" || status === "awaiting";
         return (
-          <TouchableOpacity key={co.id} style={styles.row} onPress={() => rowActions(co)} disabled={busy}>
+          <TouchableOpacity
+            key={co.id}
+            style={styles.row}
+            onPress={() => rowActions(co)}
+            disabled={busy || !hasActions}
+          >
             <View style={styles.rowText}>
               <Text style={styles.rowTitle} numberOfLines={1}>{co.title}</Text>
               {co.manualDecision?.note ? (
                 <Text style={styles.rowNote} numberOfLines={1}>{co.manualDecision.note}</Text>
               ) : null}
+              {status === "pending" && (
+                <TouchableOpacity
+                  onPress={() => handleSend(co)}
+                  disabled={busy}
+                  hitSlop={{ top: 6, bottom: 6, left: 0, right: 12 }}
+                >
+                  <Text style={styles.sendLink}>Send for approval →</Text>
+                </TouchableOpacity>
+              )}
             </View>
             <Text style={styles.rowAmount}>{formatQuote(co.amount)}</Text>
             <Badge label={STATUS_LABEL[status]} color={STATUS_BADGE[status]} />
+            {hasActions && <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />}
           </TouchableOpacity>
         );
       })}
@@ -270,6 +292,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     rowText: { flex: 1 },
     rowTitle: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary },
     rowNote: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted },
+    sendLink: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.sm, color: colors.accent, marginTop: spacing.xs },
     rowAmount: { fontFamily: fonts.mono, fontSize: 12, color: colors.textPrimary, fontVariant: ["tabular-nums"] },
     addRow: { marginTop: spacing.sm },
     modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },

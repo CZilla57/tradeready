@@ -72,6 +72,21 @@ describe("ChangeOrdersSection", () => {
     expect(getByText("-$100")).toBeTruthy();
   });
 
+  // Owner smoke feedback 2026-08-05: rows read as static text, hiding the
+  // send step. Pending rows must carry the primary action as an explicit
+  // visible link — exactly one here, since only "Descope tile" is pending —
+  // and decided/cancelled history rows must not respond to presses at all.
+  it("shows an explicit Send-for-approval link on pending rows only, and dead history rows don't open the action menu", async () => {
+    const { getAllByText, getByText } = await renderSection(job);
+    expect(getAllByText("Send for approval →")).toHaveLength(1);
+
+    await fireEvent.press(getByText("Rotted subfloor")); // approved — history row
+    expect(Alert.alert).not.toHaveBeenCalled();
+
+    await fireEvent.press(getByText("Extra outlet")); // awaiting — still actionable
+    expect(Alert.alert).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the add button only when the job status allows it", async () => {
     const { findByText, queryByText, rerender } = await renderSection(job);
     await findByText("Add change order");
