@@ -12,12 +12,15 @@ import {
   Linking,
   Alert,
   Modal,
+  Switch,
+  Share,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
 import { isArchived, withArchived } from '../utils/archive';
 import { performCustomerMerge } from '../utils/customerMerge';
+import { mintPortalToken, buildPortalUrl } from '../utils/portalLink';
 import { useUndo } from '../context/UndoContext';
 import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
@@ -228,6 +231,61 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
       reportError(err, { context: 'customerNotesSave' });
     }
   }, [notes, notesChanged, displayCustomer]);
+
+  // --- Customer portal (2026-08-04 portal spec) ---
+  // Mirrors the Settings booking-link section's immediate load→map→saveCustomers
+  // pattern (not the screen's draft state) — same map-by-id shape as
+  // handleToggleArchive/handleDelete above, so a portal action never touches
+  // any other customer's record.
+  const handleCreatePortalLink = async () => {
+    const out = await mintPortalToken();
+    if (!out.ok) {
+      Alert.alert("Couldn't create portal link", out.message);
+      return;
+    }
+    try {
+      const next = { token: out.token, enabled: true };
+      const custs = await loadCustomers();
+      await saveCustomers(custs.map((c) => (c.id === displayCustomer.id ? { ...c, portal: next } : c)));
+      setDisplayCustomer((prev: any) => ({ ...prev, portal: next }));
+    } catch (err: unknown) {
+      reportError(err, { context: 'portalLinkCreate' });
+      Alert.alert("Couldn't save the portal link", 'Please try again.');
+    }
+  };
+
+  const handleTogglePortal = async (enabled: boolean) => {
+    try {
+      const custs = await loadCustomers();
+      const current = custs.find((c) => c.id === displayCustomer.id)?.portal;
+      if (!current) return;
+      const next = { ...current, enabled };
+      await saveCustomers(custs.map((c) => (c.id === displayCustomer.id ? { ...c, portal: next } : c)));
+      setDisplayCustomer((prev: any) => ({ ...prev, portal: next }));
+    } catch (err: unknown) {
+      reportError(err, { context: 'portalLinkToggle' });
+      Alert.alert("Couldn't update the portal", 'Please try again.');
+    }
+  };
+
+  const handleSharePortalLink = async (token: string) => {
+    try {
+      await Share.share({ message: buildPortalUrl(token) });
+    } catch (err: unknown) {
+      reportError(err, { context: 'portalLinkShare' });
+    }
+  };
+
+  const handleNewPortalLink = () => {
+    Alert.alert(
+      'Get a new link?',
+      "This customer's current portal link will stop working immediately.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Get new link', style: 'destructive', onPress: () => { void handleCreatePortalLink(); } },
+      ]
+    );
+  };
 
   const handleInvoicePress = (invoice: Invoice) => {
     navigation.navigate('AddInvoice', { invoiceId: invoice.id });
@@ -492,6 +550,61 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
               <Text style={styles.saveNotesButtonText}>Save notes</Text>
             </TouchableOpacity>
           )}
+        </View>
+
+        {/* Customer portal */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Customer Portal</Text>
+          <View style={styles.card}>
+            {displayCustomer.portal ? (
+              <>
+                <View style={styles.portalUrlRow}>
+                  <Text style={styles.portalUrlText} selectable numberOfLines={1}>
+                    {buildPortalUrl(displayCustomer.portal.token)}
+                  </Text>
+                </View>
+                <View style={styles.cardSeparator} />
+                <TouchableOpacity
+                  style={styles.portalActionRow}
+                  onPress={() => handleSharePortalLink(displayCustomer.portal.token)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Share portal link"
+                >
+                  <Text style={styles.portalActionText}>Share link</Text>
+                </TouchableOpacity>
+                <View style={styles.cardSeparator} />
+                <View style={styles.portalToggleRow}>
+                  <Text style={styles.portalToggleLabel}>Portal enabled</Text>
+                  <Switch
+                    value={displayCustomer.portal.enabled}
+                    onValueChange={handleTogglePortal}
+                    accessibilityLabel="Portal enabled"
+                  />
+                </View>
+                <View style={styles.cardSeparator} />
+                <TouchableOpacity
+                  style={styles.portalActionRow}
+                  onPress={handleNewPortalLink}
+                  accessibilityRole="button"
+                  accessibilityLabel="Get a new portal link"
+                >
+                  <Text style={[styles.portalActionText, { color: colors.danger }]}>Get a new link</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View style={styles.portalEmpty}>
+                <Text style={styles.portalEmptyText}>Their own page for estimates and invoices.</Text>
+                <TouchableOpacity
+                  style={styles.portalCreateButton}
+                  onPress={handleCreatePortalLink}
+                  accessibilityRole="button"
+                  accessibilityLabel="Create portal link"
+                >
+                  <Text style={styles.portalCreateButtonText}>Create portal link</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
         </View>
 
         <TouchableOpacity
@@ -835,6 +948,57 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     marginHorizontal: spacing.md,
     marginTop: spacing.sm,
   },
+
+  // Customer portal
+  portalEmpty: {
+    padding: spacing.md,
+  },
+  portalEmptyText: {
+    fontFamily: fonts.bodyRegular,
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    marginBottom: spacing.md,
+  },
+  portalCreateButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.full,
+  },
+  portalCreateButtonText: {
+    fontFamily: fonts.bodyBold,
+    color: colors.textOnAccent,
+    fontSize: fontSize.sm,
+  },
+  portalUrlRow: {
+    padding: spacing.md,
+  },
+  portalUrlText: {
+    fontFamily: fonts.mono,
+    color: colors.accent,
+    fontSize: fontSize.sm,
+  },
+  portalActionRow: {
+    padding: spacing.md,
+  },
+  portalActionText: {
+    fontFamily: fonts.bodyMedium,
+    color: colors.textPrimary,
+    fontSize: fontSize.md,
+  },
+  portalToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: spacing.md,
+  },
+  portalToggleLabel: {
+    fontFamily: fonts.bodyMedium,
+    color: colors.textPrimary,
+    fontSize: fontSize.md,
+  },
+
   mergeBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',
