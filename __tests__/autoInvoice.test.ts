@@ -19,7 +19,7 @@ import {
   shouldAutoInvoice,
   createAutoInvoiceForJob,
 } from "../utils/autoInvoice";
-import type { Job, Invoice, Settings, Customer } from "../types/models";
+import type { Job, Invoice, Settings, Customer, ChangeOrder } from "../types/models";
 
 // Isolate storage from sync/notification/widget side-effects, same as
 // storage.test.js — these tests assert on AsyncStorage state only.
@@ -358,4 +358,57 @@ describe("prefillInvoiceDraftFromJob", () => {
   function janeLike(): Customer {
     return { id: "c1", name: "Jane Smith", email: "jane@example.com", phone: "555-0100" } as Customer;
   }
+});
+
+// ── change orders in billing ──────────────────────────────────────────────────
+// 2026-08-05 spec: approved change orders flow into computeBillableBreakdown's
+// total and get appended as `other`-category invoice lines, after
+// labor/materials/overhead — so all three invoice paths pick them up from
+// this single home.
+
+function approvedCo(id: string, amount: number): ChangeOrder {
+  return {
+    id,
+    title: `CO ${id}`,
+    amount,
+    createdAt: "2026-08-01",
+    manualDecision: { decision: "approved", decidedAt: "2026-08-01" },
+  };
+}
+
+describe("change orders in billing", () => {
+  test("computeBillableBreakdown adds approved COs to the total (and reports them)", () => {
+    const job = makeJob({
+      estimateTotal: 2400,
+      changeOrders: [
+        approvedCo("coA", 850),
+        { id: "coP", title: "p", amount: 999, createdAt: "2026-08-01" },
+      ],
+    });
+    const b = computeBillableBreakdown(job);
+    expect(b.changeOrderTotal).toBe(850);
+    expect(b.total).toBe(3250);
+  });
+
+  test("buildInvoiceLineItems appends one line per approved CO and lines sum to total", () => {
+    const job = makeJob({
+      estimateTotal: 2400,
+      changeOrders: [approvedCo("coA", 850), approvedCo("coB", -100)],
+    });
+    const items = buildInvoiceLineItems(job);
+    const coLines = items.filter((i) => i.category === "other");
+    expect(coLines).toEqual([
+      { description: "Change order — CO coA", amount: 850, category: "other" },
+      { description: "Change order — CO coB", amount: -100, category: "other" },
+    ]);
+    const sum = items.reduce((s, i) => s + i.amount, 0);
+    expect(sum).toBeCloseTo(computeBillableBreakdown(job).total, 2);
+  });
+
+  test("legacy job without changeOrders is byte-identical to before", () => {
+    const job = makeJob({ estimateTotal: 2400 });
+    expect(computeBillableBreakdown(job).changeOrderTotal).toBe(0);
+    expect(computeBillableBreakdown(job).total).toBe(2400);
+    expect(buildInvoiceLineItems(job).some((i) => i.category === "other")).toBe(false);
+  });
 });

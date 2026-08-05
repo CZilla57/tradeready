@@ -15,8 +15,13 @@
 // estimateTotal must be trusted — so the quoted materials and residual
 // overhead lines stay exactly as quoted and only labor moves. Lines therefore
 // still sum to the total (the §2.5 residual invariant).
+//
+// Approved change orders are included in the total and appended as
+// `other`-category lines (2026-08-05 spec), so all three invoice paths pick
+// them up from this single home.
 
 import { computeEstimateBreakdown } from "./pricingEngine";
+import { approvedChangeOrderTotal, changeOrderStatus } from "./changeOrders";
 import { computeTimeTracking, applyClockOut } from "./timeTracking";
 import { nextInvoiceNumber } from "./invoiceNumber";
 import { roundToCents } from "./invoicePayments";
@@ -87,6 +92,8 @@ export interface BillableBreakdown {
   overheadLine: number;
   hasMaterials: boolean;
   usedTrackedTime: boolean;
+  /** Σ approved change-order amounts included in `total` (0 when none). */
+  changeOrderTotal: number;
   /** The invoice amount: estimateTotal ± (hour delta × labor rate), in cents-rounded dollars. */
   total: number;
 }
@@ -100,6 +107,7 @@ export interface BillableBreakdown {
 export function computeBillableBreakdown(job: Job): BillableBreakdown {
   const base = computeEstimateBreakdown(job);
   const { hours, usedTrackedTime } = billableLaborHours(job);
+  const changeOrderTotal = approvedChangeOrderTotal(job);
 
   if (!usedTrackedTime) {
     return {
@@ -109,7 +117,8 @@ export function computeBillableBreakdown(job: Job): BillableBreakdown {
       overheadLine: base.overheadLine,
       hasMaterials: base.hasMaterials,
       usedTrackedTime,
-      total: base.estimateTotal,
+      changeOrderTotal,
+      total: roundToCents(base.estimateTotal + changeOrderTotal),
     };
   }
 
@@ -121,7 +130,8 @@ export function computeBillableBreakdown(job: Job): BillableBreakdown {
     overheadLine: base.overheadLine,
     hasMaterials: base.hasMaterials,
     usedTrackedTime,
-    total: roundToCents(base.estimateTotal + laborCost - base.laborCost),
+    changeOrderTotal,
+    total: roundToCents(base.estimateTotal + laborCost - base.laborCost + changeOrderTotal),
   };
 }
 
@@ -148,6 +158,10 @@ export function buildInvoiceLineItems(job: Job): InvoiceLineItem[] {
   }
   if (b.overheadLine > 1) {
     items.push({ description: "Overhead & operating costs", amount: b.overheadLine, category: "overhead" });
+  }
+  for (const co of job.changeOrders ?? []) {
+    if (changeOrderStatus(co) !== "approved") continue;
+    items.push({ description: `Change order — ${co.title}`, amount: co.amount, category: "other" });
   }
   return items;
 }

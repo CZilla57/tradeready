@@ -33,7 +33,8 @@ import {
 } from "react-native";
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer, loadSettings } from "../utils/storage";
 import { promptForInvoiceReminders } from "../utils/notifications";
-import { prefillInvoiceDraftFromJob, buildInvoiceLineItems, defaultDueDate } from "../utils/autoInvoice";
+import { prefillInvoiceDraftFromJob, buildInvoiceLineItems, computeBillableBreakdown, defaultDueDate } from "../utils/autoInvoice";
+import { approvedChangeOrderTotal } from "../utils/changeOrders";
 import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
 import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
@@ -79,6 +80,9 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
   // True when the prefilled amount bills tracked timer hours instead of the
   // estimate's hours (create mode only) — switches the ⏱ banner copy.
   const [billedFromTracked, setBilledFromTracked] = useState<boolean>(false);
+  // Non-zero when finalize re-derived the amount because approved change
+  // orders exist — switches on the explanatory banner.
+  const [finalizeCoTotal, setFinalizeCoTotal] = useState<number>(0);
 
   useEffect(() => {
     async function prefillFromJob() {
@@ -115,7 +119,17 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
           setExistingInvoice(existing);
           setCustomer(existing.customer);
           setNumber(existing.number);
-          setAmount(String(existing.amount));
+          // The deposit invoice's amount was fixed at request time. When
+          // approved change orders exist, re-derive the amount fresh (the
+          // same recomputation the line items below already do) — otherwise
+          // keep the existing amount so a manual adjustment survives.
+          const coTotal = approvedChangeOrderTotal(j);
+          if (coTotal !== 0) {
+            setAmount(String(computeBillableBreakdown(j).total));
+            setFinalizeCoTotal(coTotal);
+          } else {
+            setAmount(String(existing.amount));
+          }
           // Deliberately NOT existing.due: that was computed as "30 days from
           // deposit-request time," which can already be in the past by the
           // time the job finishes. Payment terms restart when the real bill
@@ -293,6 +307,15 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
             <View style={styles.prefillBanner}>
               <Text style={styles.prefillBannerText}>
                 Pre-filled from job estimate ({formatQuote(job.estimateTotal)}). Review and adjust if needed.
+              </Text>
+            </View>
+          )}
+
+          {/* Finalize re-derivation notice (approved change orders only) */}
+          {mode === "finalize" && finalizeCoTotal !== 0 && (
+            <View style={styles.trackBanner}>
+              <Text style={styles.trackBannerText}>
+                Amount updated to include approved change orders ({finalizeCoTotal > 0 ? "+" : ""}{formatQuote(finalizeCoTotal)}). Review and adjust if needed.
               </Text>
             </View>
           )}

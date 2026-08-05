@@ -151,6 +151,18 @@ describe("invoiceHtml — partly paid", () => {
   });
 });
 
+describe("invoiceHtml — change order line items", () => {
+  test("renders change-order line items on the invoice", () => {
+    const html = invoiceHtml(inv({
+      lineItems: [
+        { description: "Labor — 4 hrs @ $85/hr", amount: 340, category: "labor" },
+        { description: "Change order — Rotted subfloor", amount: 850, category: "other" },
+      ],
+    }));
+    expect(html).toContain("Change order — Rotted subfloor");
+  });
+});
+
 describe("invoiceHtml — history exclusions", () => {
   test("a voided payment does not appear on the customer's copy", () => {
     const html = invoiceHtml(inv({
