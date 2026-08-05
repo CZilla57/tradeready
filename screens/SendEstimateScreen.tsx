@@ -11,6 +11,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
+import { emailHtmlFromText } from "../utils/emailHtml";
 import { loadJobs, loadCustomers, loadSettings, saveJobs, resolveCustomer } from "../utils/storage";
 import { track } from '../utils/analytics';
 import { formatQuote } from "../utils/format";
@@ -109,7 +110,10 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
     await composeEmail({
       recipients: (data.customer as any).email ? [(data.customer as any).email] : [],
       subject: subject || `Estimate for ${data.job.title}`,
-      body: message,
+      // The editor keeps plain text; at send time the body is escaped and any
+      // approval/payment URL becomes a labeled anchor (utils/emailHtml).
+      body: emailHtmlFromText(message),
+      isHtml: true,
     });
   }
 
@@ -181,7 +185,7 @@ export default function SendEstimateScreen({ route, navigation }: JobStackScreen
     const body = channel === "email" && raw.startsWith("Subject:") ? raw.split("\n").slice(2).join("\n").trim() : raw;
     setMessage(body);
     if (channel === "email") {
-      await composeEmail({ recipients: (data.customer as any).email ? [(data.customer as any).email] : [], subject: subject || `Estimate for ${data.job.title}`, body });
+      await composeEmail({ recipients: (data.customer as any).email ? [(data.customer as any).email] : [], subject: subject || `Estimate for ${data.job.title}`, body: emailHtmlFromText(body), isHtml: true });
     } else {
       await composeSMS({ recipients: (data.customer as any).phone ? [(data.customer as any).phone] : [], body });
     }

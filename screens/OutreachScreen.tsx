@@ -12,6 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail, composeSMS } from "../utils/messaging";
+import { emailHtmlFromText } from "../utils/emailHtml";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import {
   getStatus,
@@ -322,7 +323,10 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
       const opened = await composeEmail({
         recipients: [invoice.email],
         subject: subject || `Payment reminder: ${invoice.number}`,
-        body: message,
+        // The editor keeps plain text; at send time the body is escaped and
+        // any payment URL becomes a labeled anchor (utils/emailHtml).
+        body: emailHtmlFromText(message),
+        isHtml: true,
         attachments: pdfUri ? [pdfUri] : undefined,
       });
       // Warned only after the composer closes: alerting first leaves a UIAlertController

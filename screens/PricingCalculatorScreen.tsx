@@ -15,6 +15,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { composeEmail } from "../utils/messaging";
+import { emailHtmlFromText } from "../utils/emailHtml";
 import {
   calculatePriceRange,
   getSanityWarnings,
@@ -351,7 +352,10 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     const sent = await composeEmail({
       recipients: [customer.email],
       subject: `Estimate: ${job?.title || "Your job"} — ${formatQuote(breakdown.total)}`,
-      body,
+      // Escaped + linkified at send time: the approval URL renders as a
+      // labeled anchor instead of a raw token string (utils/emailHtml).
+      body: emailHtmlFromText(body),
+      isHtml: true,
     });
     if (!sent) return;
     await markEstimateSent();

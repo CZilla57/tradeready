@@ -21,6 +21,8 @@ import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../
 import { isArchived, withArchived } from '../utils/archive';
 import { performCustomerMerge } from '../utils/customerMerge';
 import { mintPortalToken, buildPortalUrl } from '../utils/portalLink';
+import { composeEmail } from '../utils/messaging';
+import { emailHtmlFromText } from '../utils/emailHtml';
 import { jobBillableTotal } from '../utils/changeOrders';
 import { useUndo } from '../context/UndoContext';
 import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
@@ -292,11 +294,31 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
   };
 
   const handleSharePortalLink = async (token: string) => {
-    try {
-      await Share.share({ message: buildPortalUrl(token) });
-    } catch (err: unknown) {
-      reportError(err, { context: 'portalLinkShare' });
-    }
+    const url = buildPortalUrl(token);
+    const shareToSheet = async () => {
+      try {
+        await Share.share({ message: url });
+      } catch (err: unknown) {
+        reportError(err, { context: 'portalLinkShare' });
+      }
+    };
+    const sendEmail = () =>
+      composeEmail({
+        recipients: (displayCustomer.email || '').trim() ? [displayCustomer.email.trim()] : [],
+        subject: 'Your customer portal',
+        // Escaped + linkified: the portal URL rides behind a labeled anchor
+        // ("View your jobs & invoices") instead of a raw token string.
+        body: emailHtmlFromText(
+          `Hi ${displayCustomer.name || 'there'},\n\n` +
+            `You can see your estimates and invoices with us any time here:\n${url}\n\nThanks!`,
+        ),
+        isHtml: true,
+      });
+    Alert.alert('Share portal link', 'How do you want to send it?', [
+      { text: 'Email', onPress: () => void sendEmail() },
+      { text: 'Other…', onPress: () => void shareToSheet() },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   const handleNewPortalLink = () => {

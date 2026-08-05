@@ -22,6 +22,7 @@ import { syncNotifications } from "../utils/notifications";
 import { getStatus, formatDate, generateOutreachMessage, resolvePaymentLink, getProviderKey } from "../utils/invoiceHelpers";
 import { splitRemindable, bulkSettle, splitEmailSubject } from "../utils/bulkInvoiceActions";
 import { composeEmail, composeSMS } from "../utils/messaging";
+import { emailHtmlFromText } from "../utils/emailHtml";
 import { summarizeInvoices, filterInvoices, isOverdue } from "../utils/invoiceStats";
 import { formatMoney } from "../utils/format";
 import { invoiceHtml } from "../utils/pdfTemplates";
@@ -275,7 +276,9 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
         let opened: boolean;
         if (channel === "email") {
           const { subject, body } = splitEmailSubject(raw, `Payment reminder – ${inv.number}`);
-          opened = await composeEmail({ recipients: [inv.email], subject, body });
+          // Escaped + linkified at send: the payment URL rides behind a
+          // labeled anchor (utils/emailHtml).
+          opened = await composeEmail({ recipients: [inv.email], subject, body: emailHtmlFromText(body), isHtml: true });
         } else {
           opened = await composeSMS({ recipients: [inv.phone], body: raw });
         }
