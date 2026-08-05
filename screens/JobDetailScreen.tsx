@@ -33,6 +33,8 @@ import { createAutoInvoiceForJob } from "../utils/autoInvoice";
 import { formatQuote } from "../utils/format";
 import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES, applyClockIn, applyClockOut } from "../utils/timeTracking";
+import { approvedChangeOrderTotal, jobBillableTotal } from "../utils/changeOrders";
+import ChangeOrdersSection from "../components/ChangeOrdersSection";
 import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
@@ -358,6 +360,23 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
           {formatQuote(job.estimateTotal)}
         </Text>
       </View>
+
+      {approvedChangeOrderTotal(job) !== 0 && (
+        <>
+          <View style={styles.estimateRow}>
+            <Text style={styles.estimateLabel}>Approved changes</Text>
+            <Text style={styles.estimateValue}>
+              {approvedChangeOrderTotal(job) > 0 ? "+" : ""}{formatQuote(approvedChangeOrderTotal(job))}
+            </Text>
+          </View>
+          <View style={styles.estimateRow}>
+            <Text style={[styles.estimateLabel, styles.estimateTotalLabel]}>Total incl. changes</Text>
+            <Text style={[styles.estimateValue, styles.estimateTotalValue]}>
+              {formatQuote(jobBillableTotal(job))}
+            </Text>
+          </View>
+        </>
+      )}
     </Card>
   );
 }
@@ -804,6 +823,25 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     setJob((prev) => prev ? ({ ...prev, ...changes }) : prev);
   }
 
+  // ChangeOrdersSection owns its own storage writes (send/decide/cancel/
+  // delete all go straight through loadJobs/saveJobs, not updateJob above),
+  // so it needs a plain re-read afterward rather than a `changes` patch.
+  // Deliberately narrower than the useFocusEffect load() above (no invoice
+  // sweep / review-record refetch) — this only needs to reflect what a CO
+  // action can actually change: the job's changeOrders and, in principle,
+  // its linked customer.
+  const reloadJob = useCallback(async () => {
+    try {
+      const [jobs, customers] = await Promise.all([loadJobs(), loadCustomers()]);
+      const j = jobs.find((x: Job) => x.id === jobId);
+      if (!j) return;
+      setJob(j);
+      setCustomer(resolveCustomer(customers, j));
+    } catch (error: unknown) {
+      reportError(error, { context: "jobDetailChangeOrderReload" });
+    }
+  }, [jobId]);
+
   async function handleToggleArchive() {
     if (!job) return;
     const today = new Date().toISOString().split("T")[0];
@@ -975,6 +1013,12 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
         />
         {customer && <CustomerCard customer={customer} />}
         <EstimateCard job={job} navigation={navigation} />
+        <ChangeOrdersSection
+          job={job}
+          onChanged={reloadJob}
+          onAdd={() => navigation.navigate("AddChangeOrder", { jobId: job.id })}
+          onEdit={(changeOrderId) => navigation.navigate("AddChangeOrder", { jobId: job.id, changeOrderId })}
+        />
         {TIME_TRACKING_STATUSES.has(job.status) && (
           <TimeTrackingCard
             sessions={job.timeSessions || []}

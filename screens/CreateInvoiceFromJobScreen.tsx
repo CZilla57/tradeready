@@ -34,7 +34,7 @@ import {
 import { loadJobs, saveJobs, loadInvoices, saveInvoices, loadCustomers, getOrCreateCustomer, loadSettings } from "../utils/storage";
 import { promptForInvoiceReminders } from "../utils/notifications";
 import { prefillInvoiceDraftFromJob, buildInvoiceLineItems, computeBillableBreakdown, defaultDueDate } from "../utils/autoInvoice";
-import { approvedChangeOrderTotal } from "../utils/changeOrders";
+import { approvedChangeOrderTotal, jobBillableTotal } from "../utils/changeOrders";
 import { invoiceScreenMode, jobChangesAfterInvoiceSave, invoiceScreenCopy, type InvoiceScreenMode } from "../utils/jobStatus";
 import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
@@ -303,10 +303,10 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
 
           {/* Pre-fill notice (create / requestDeposit modes only — finalize
               prefills from the existing invoice, not the raw estimate) */}
-          {mode !== "finalize" && job && job.estimateTotal > 0 && (
+          {mode !== "finalize" && job && jobBillableTotal(job) > 0 && (
             <View style={styles.prefillBanner}>
               <Text style={styles.prefillBannerText}>
-                Pre-filled from job estimate ({formatQuote(job.estimateTotal)}). Review and adjust if needed.
+                Pre-filled from job estimate ({formatQuote(jobBillableTotal(job))}). Review and adjust if needed.
               </Text>
             </View>
           )}
