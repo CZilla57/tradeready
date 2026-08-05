@@ -14,6 +14,10 @@ compatibility_date = "2026-08-01"
 # and the ported token-minting endpoints; also keeps the stripe SDK happy.
 compatibility_flags = ["nodejs_compat"]
 
+[triggers]
+# Same schedule vercel.json's crons ran: daily 15:00 UTC.
+crons = ["0 15 * * *"]
+
 [vars]
 # Non-secret only — everything else via `wrangler secret put`.
 # SUPABASE_URL / ESTIMATE_PUBLIC_ORIGIN / ESTIMATE_PUBLIC_BASE /

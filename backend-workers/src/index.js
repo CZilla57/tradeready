@@ -18,6 +18,7 @@
 //   own raw body — nothing here may touch a request body before the handler.
 
 import { Hono } from 'hono';
+import { runReminders } from '../lib/sendReminders.js';
 
 import { aiChatHandler } from './routes/aiChat.js';
 import { pricebookSuggestHandler } from './routes/pricebookSuggest.js';
@@ -39,6 +40,7 @@ import { createConnectAccountHandler } from './routes/stripe/createConnectAccoun
 import { disconnectHandler } from './routes/stripe/disconnect.js';
 import { connectReturnHandler } from './routes/stripe/connectReturn.js';
 import { stripeWebhookHandler } from './routes/stripe/webhook.js';
+import { cronSendRemindersHandler } from './routes/cron.js';
 
 const app = new Hono();
 
@@ -70,7 +72,22 @@ app.all('/api/stripe/connect-return', connectReturnHandler);
 // nothing consumes the body before signature verification (see file header).
 app.all('/api/stripe/webhook', stripeWebhookHandler);
 
+// Manual-run fallback; the production trigger is scheduled() below.
+app.all('/api/cron/send-reminders', cronSendRemindersHandler);
+
 // Anything else under this Worker: JSON 404 (Vercel served its own 404 page).
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Workers Cron Trigger (wrangler.toml [triggers], 0 15 * * * — same
+  // schedule vercel.json ran). Only Cloudflare's scheduler can invoke this,
+  // so the CRON_SECRET bearer check lives solely on the manual HTTP fallback.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      runReminders(env).catch((err) =>
+        console.error('[send-reminders] scheduled run failed:', err.message)
+      )
+    );
+  },
+};
