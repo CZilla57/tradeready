@@ -114,6 +114,43 @@ export interface EstimateApproval {
   userAgent?: string;
 }
 
+/** Device-written record of an on-site (verbal) change-order decision. */
+export interface ChangeOrderDecision {
+  decision: "approved" | "declined";
+  decidedAt: DateString;   // local "YYYY-MM-DD", device clock
+  note?: string;           // e.g. "verbal OK on site"
+}
+
+/**
+ * A documented scope change on a job (2026-08-05 spec). Approved change
+ * orders raise the job's billable total (utils/changeOrders.ts
+ * jobBillableTotal); job.estimateTotal is NEVER mutated — it stays the
+ * as-approved baseline that computeEstimateBreakdown's residual math
+ * depends on. Status is DERIVED by changeOrderStatus(), never stored.
+ */
+export interface ChangeOrder {
+  id: string;              // co<timestamp>_<counter>
+  title: string;
+  description?: string;
+  /** Dollars. Negative = descope credit. */
+  amount: number;
+  createdAt: DateString;
+  /**
+   * Link-based approval — reuses EstimateApproval verbatim. decision/
+   * consentAt/signer fields are written SERVER-SIDE only (change-respond),
+   * exactly like Job.approval.
+   */
+  approval?: EstimateApproval;
+  /** On-site decision — device-written. Separate field from `approval` so
+      the device never writes into the server-owned object. */
+  manualDecision?: ChangeOrderDecision;
+  /**
+   * One-way cancel stamp (mirrors Payment.voidedAt): cancelled COs stay in
+   * the list as data, excluded from billable totals. Nothing may clear it.
+   */
+  cancelledAt?: DateString;
+}
+
 export interface Job {
   id: string;
   /**
@@ -158,6 +195,11 @@ export interface Job {
    */
   estimateSentAt?: DateString;
   approval?: EstimateApproval;
+  /**
+   * Scope changes (2026-08-05 spec). OPTIONAL and additive — ABSENT on every
+   * pre-feature job, deliberate; utils/changeOrders.ts treats absent as [].
+   */
+  changeOrders?: ChangeOrder[];
   /**
    * Soft archive (utils/archive.ts): local "YYYY-MM-DD" the job was archived.
    * OPTIONAL and additive — absent means active. Archived jobs hide from the
