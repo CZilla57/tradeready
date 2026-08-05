@@ -61,7 +61,7 @@ view/respond round-trip, cron batch against real tables) need real values locall
    is a separate future workstream, and when it happens it's config-only on the
    backend: `wrangler secret put` the live `sk_live_` key, create a live-mode webhook
    endpoint at the Worker URL, and `secret put` its signing secret — no code changes.
-   | `REVENUECAT_WEBHOOK_SECRET` | app.revenuecat.com → project → Integrations → Webhooks → the Authorization header value shown on the config page | ✅ yes |
+   | `REVENUECAT_WEBHOOK_SECRET` | Not retrievable and not needed (confirmed 2026-08-05: RC masks the saved Authorization header value). It's just a bearer string RC echoes back verbatim — **mint a fresh one** (same command as CRON_SECRET below), keep it pasteable, and at cutover step 5.2 overwrite RC's Authorization header field with it in the SAME dashboard save that changes the URL — atomic, no mismatch window; the old Vercel-era value is never needed again. | ➕ mint fresh |
    | `CRON_SECRET` | Self-chosen string; nothing else shares it (only guards the manual-run URL, and only for the Worker). Mint a fresh one: `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"` | ➕ mint fresh |
    | `RESEND_API_KEY` | resend.com → API Keys → **Create API key** (values are shown once; a second key coexists fine) | ➕ create new |
    | `GROQ_API_KEY` | console.groq.com → API Keys → **Create API key** (same: shown once, second key coexists) | ➕ create new |
@@ -200,9 +200,12 @@ The Vercel backend stays deployed and working throughout — traffic just stops 
 replace the URL with `https://<worker-url>/api/stripe/webhook` → Save. Live events flow
 to the Worker immediately. Watch the endpoint's Events log for green 200s.
 
-**5.2 RevenueCat webhook URL** — app.revenuecat.com → your project → Integrations →
-Webhooks → replace the URL with `https://<worker-url>/api/subscription/webhook` → save.
-(The Authorization header value stays the same secret.)
+**5.2 RevenueCat webhook URL + secret** — app.revenuecat.com → your project →
+Integrations → Webhooks → in ONE edit/save: replace the URL with
+`https://<worker-url>/api/subscription/webhook` AND overwrite the Authorization header
+value with the fresh `REVENUECAT_WEBHOOK_SECRET` you minted in Part 2 (the Worker
+already holds it via `wrangler secret put`). One save = URL and secret flip together,
+so there is no mismatch window; queued retries follow the new config.
 
 **5.3 Domain decision (yours to make, either works):**
 - Stay on `*.workers.dev` — zero extra steps, the URL just isn't branded.
