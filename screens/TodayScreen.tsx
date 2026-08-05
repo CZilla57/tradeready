@@ -51,10 +51,22 @@ import {
   loadSetupChecklistState,
   markSampleTourDone,
   type SetupChecklistState,
+  type SetupTaskId,
 } from '../utils/setupChecklist';
 import type { Job, Invoice, Customer, Settings } from '../types/models';
 import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
+
+// Checklist tasks deep-link to their owning settings subpage. The
+// notifications task never reaches this map (handled in-card), but the
+// Record is total so tsc keeps it in sync with SetupTaskId.
+const SETTINGS_ROUTE_FOR_TASK: Record<SetupTaskId, "Settings" | "SettingsBusiness" | "SettingsPricing" | "SettingsPayments"> = {
+  contact: "SettingsBusiness",
+  logo: "SettingsBusiness",
+  rate: "SettingsPricing",
+  stripe: "SettingsPayments",
+  notifications: "Settings",
+};
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
@@ -719,7 +731,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       )}
 
       {/* Post-onboarding setup checklist (hides itself when done/dismissed) */}
-      <SetupChecklistCard settings={settings} onOpenSettings={() => navigation.navigate('Settings')} />
+      <SetupChecklistCard settings={settings} onOpenSettings={(task) => navigation.navigate(SETTINGS_ROUTE_FOR_TASK[task])} />
 
       {/* Proactive insights — takes the checklist's slot once setup is done
           (gating lives inside the card); hidden for brand-new accounts while

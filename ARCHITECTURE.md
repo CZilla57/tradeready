@@ -134,12 +134,20 @@ Everything financial in one place.
 - ⚠️ Proactive insights feed: not built
 
 ### Settings (opened via the gear icon in Today's header — not a tab)
-- Business profile (name, trade, contact, logo)
-- Appearance (dark / light mode toggle)
-- Stripe Connect onboarding and status
-- Subscription management (RevenueCat)
-- Notification rules (+ auto-outreach toggle: tap an overdue reminder to open a ready-to-send message; + auto-email toggle: backend emails a one-and-done reminder once overdue)
-- Labor rate, material markup, overhead, margin defaults
+A hub screen (`SettingsHubScreen`) whose rows each push a focused subpage;
+Support and Legal are single-tap actions that live on the hub itself
+(2026-08-05 hub/subpages split, replacing a single 1,390-line screen):
+- Business profile — name, trade, contact, logo (`SettingsBusinessScreen`)
+- Appearance — dark / light mode toggle (`SettingsAppearanceScreen`)
+- Pricing defaults — labor rate, material markup, overhead, margin (`SettingsPricingScreen`)
+- Invoice numbering (`SettingsInvoiceNumberingScreen`)
+- AI Assistant — Groq / Anthropic API keys (`SettingsAIScreen`)
+- Review requests (`SettingsReviewsScreen`)
+- Notifications — reminder rules, auto-outreach toggle (tap an overdue reminder to open a ready-to-send message), auto-email toggle (backend emails a one-and-done reminder once overdue) (`SettingsNotificationsScreen`)
+- Payments — Stripe Connect onboarding and status, PayPal.Me, Venmo (`SettingsPaymentsScreen`)
+- Booking link (`SettingsBookingScreen`)
+- Subscription management — RevenueCat (`SettingsSubscriptionScreen`)
+- Account — sign out, clear sample data, delete account (`SettingsAccountScreen`)
 
 ---
 
@@ -255,9 +263,10 @@ Everything financial in one place.
 - vehicleDeductionMethod (optional — 'mileage' | 'actual'; the IRS either/or
   election for the tax estimate; unset deducts neither)
 - bookingLink (optional — `{token, enabled}`; the public booking link's share
-  token. Device-written only, from the Settings screen; the backend reads it
-  to resolve a public link but never writes it. Public by design — the token
-  travels in the shared URL — so it is not a SecureStore field)
+  token. Device-written only, from the Settings hub's Booking link subpage
+  (`SettingsBookingScreen`); the backend reads it to resolve a public link but
+  never writes it. Public by design — the token travels in the shared URL —
+  so it is not a SecureStore field)
 - pushToken (optional — `{token, platform, updatedAt}`; the device's Expo push
   token, written by `utils/pushToken.ts` only when it changes; read
   server-side to send booking-request push alerts. Not a secret, so not a

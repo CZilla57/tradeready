@@ -25,7 +25,7 @@ import { track } from "../utils/analytics";
 
 interface SetupChecklistCardProps {
   settings: Settings | null;
-  onOpenSettings: () => void;
+  onOpenSettings: (task: SetupTaskId) => void;
 }
 
 export function SetupChecklistCard({ settings, onOpenSettings }: SetupChecklistCardProps) {
@@ -76,7 +76,7 @@ export function SetupChecklistCard({ settings, onOpenSettings }: SetupChecklistC
       return;
     }
     track("setup_checklist_task_opened", { task: id });
-    onOpenSettings();
+    onOpenSettings(id);
   }
 
   function handleDismiss() {

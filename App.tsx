@@ -52,7 +52,7 @@ import SendEstimateScreen         from "./screens/SendEstimateScreen";
 import CustomersScreen            from "./screens/CustomersScreen";
 import CustomerDetailScreen       from "./screens/CustomerDetailScreen";
 import AddCustomerScreen          from "./screens/AddCustomerScreen";
-import SettingsScreen             from "./screens/SettingsScreen";
+import SettingsHubScreen from "./screens/SettingsHubScreen";
 import SettingsBusinessScreen     from "./screens/SettingsBusinessScreen";
 import SettingsAppearanceScreen   from "./screens/SettingsAppearanceScreen";
 import SettingsPricingScreen      from "./screens/SettingsPricingScreen";
@@ -132,7 +132,7 @@ function TodayTab() {
     <TodayStack.Navigator screenOptions={navOpts}>
       <TodayStack.Screen name="TodayHome" component={TodayScreen} options={{ headerShown: false }} />
       <TodayStack.Screen name="Route" component={RouteScreen} options={{ title: "Today's Route" }} />
-      <TodayStack.Screen name="Settings" component={SettingsScreen} options={{ title: "Settings" }} />
+      <TodayStack.Screen name="Settings" component={SettingsHubScreen} options={{ title: "Settings" }} />
       <TodayStack.Screen name="SettingsBusiness" component={SettingsBusinessScreen} options={{ title: "Business profile" }} />
       <TodayStack.Screen name="SettingsAppearance" component={SettingsAppearanceScreen} options={{ title: "Appearance" }} />
       <TodayStack.Screen name="SettingsPricing" component={SettingsPricingScreen} options={{ title: "Pricing defaults" }} />

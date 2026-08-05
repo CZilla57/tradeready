@@ -243,7 +243,18 @@ screens/
   CustomersScreen.tsx            ← Customer list with search
   CustomerDetailScreen.tsx       ← Customer history, notes, contact actions
   AddCustomerScreen.tsx          ← Add / edit customer
-  SettingsScreen.tsx             ← Business profile, appearance, Stripe Connect, payments
+  SettingsHubScreen.tsx           ← Settings menu: rows push focused subpages; Support/Legal live here
+  SettingsBusinessScreen.tsx      ← Business profile: contact info, logo, address
+  SettingsAppearanceScreen.tsx    ← Dark/light theme toggle
+  SettingsPricingScreen.tsx       ← Pricing defaults: hourly rate, materials markup, overhead
+  SettingsInvoiceNumberingScreen.tsx ← Invoice numbering scheme (prefix, next number)
+  SettingsAIScreen.tsx            ← AI Assistant: Groq/Anthropic API keys
+  SettingsReviewsScreen.tsx       ← Review-request toggle, delay, and Google review link
+  SettingsNotificationsScreen.tsx ← Overdue-invoice reminder rules and notification prefs
+  SettingsPaymentsScreen.tsx      ← Payment processor setup: Stripe Connect, PayPal.Me, Venmo
+  SettingsBookingScreen.tsx       ← Public booking link: enable/share, mint/rotate token
+  SettingsSubscriptionScreen.tsx  ← Subscription status + manage/subscribe entry point
+  SettingsAccountScreen.tsx       ← Clear sample data, sign out, delete account
   ChatScreen.tsx                 ← AI Coach chat (Groq via backend proxy)
   AuthScreen.tsx                 ← Sign in / sign up
   OnboardingScreen.tsx           ← First-run wizard
