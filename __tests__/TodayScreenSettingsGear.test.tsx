@@ -26,6 +26,7 @@ jest.mock("@react-navigation/native", () => ({
 
 jest.mock("../utils/storage", () => ({
   loadJobs: jest.fn(() => Promise.resolve([])),
+  loadInvoices: jest.fn(() => Promise.resolve([])),
   getExpectedEarningsForDate: jest.fn(() => Promise.resolve(0)),
   filterOverdueInvoices: jest.fn(() => []),
   loadLeadJobs: jest.fn(() => Promise.resolve([])),
