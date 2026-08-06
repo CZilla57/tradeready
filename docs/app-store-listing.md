@@ -176,13 +176,16 @@ receipt scan, recurring invoices, tax set-aside, and CSV export.
 
 ## Privacy nutrition label — full ASC questionnaire (App Privacy section)
 
-Ground truth (verified 2026-07-16): Supabase (database/auth), Anthropic &
-Groq via our proxy (AI requests incl. business snapshot), RevenueCat
-(subscription receipts), Stripe (payment links on the user's own Connect
-account), PostHog (analytics, identified by user id), Sentry (crashes,
-identified by user id), OpenStreetMap/Nominatim (typed address queries).
-Photos and mileage trips never leave the device. No ads, no data brokers,
-no cross-app tracking. `identifyUser()` ties PostHog + Sentry to the
+Ground truth (verified 2026-07-16; amended 2026-08-06 — receipt OCR shipped
+in 1.1.0 and trip cloud-sync rides the post-1.1.0 OTA, label republished in
+ASC accordingly): Supabase (database/auth), Anthropic & Groq via our proxy
+(AI requests incl. business snapshot; receipt photos relayed to Groq for
+OCR, not stored on our servers), RevenueCat (subscription receipts), Stripe
+(payment links on the user's own Connect account), PostHog (analytics,
+identified by user id), Sentry (crashes, identified by user id),
+OpenStreetMap/Nominatim (typed address queries). Mileage trips sync to
+Supabase like other collections; job photos remain device-local. No ads,
+no data brokers, no cross-app tracking. `identifyUser()` ties PostHog + Sentry to the
 Supabase user id, so usage/diagnostics are LINKED to identity — answer
 honestly, it costs nothing.
 
@@ -198,8 +201,8 @@ tracking = No**; **linked to the user's identity = Yes** unless noted):
 | Contact Info → Phone Number | Yes | App Functionality | business profile, synced |
 | Financial Info → Other Financial Info | Yes | App Functionality | invoice/job amounts in the user's records (no card data — Stripe hosts payment pages) |
 | Purchases → Purchase History | Yes | App Functionality | RevenueCat subscription receipts |
-| User Content → Other User Content | Yes | App Functionality | customer records, jobs, notes (synced to Supabase; snapshots sent to AI providers) |
-| User Content → Photos or Videos | **No — do not declare** | — | job photos are device-local only, never transmitted |
+| User Content → Other User Content | Yes | App Functionality | customer records, jobs, notes, mileage trips (synced to Supabase; snapshots sent to AI providers) |
+| User Content → Photos or Videos | Yes (declared 2026-08-06) | App Functionality | receipt scans sent via the authenticated backend to Groq for OCR, not stored server-side; job photos stay device-local |
 | Identifiers → User ID | Yes | App Functionality, Analytics | Supabase uid; also identifies PostHog/Sentry |
 | Usage Data → Product Interaction | Yes | Analytics | PostHog screen/feature events |
 | Diagnostics → Crash Data | Yes | App Functionality | Sentry crash reports |

@@ -48,16 +48,18 @@ This is called "hot reload" and it makes development very fast.
 ## Step 3 — Connect Stripe for payments
 
 Stripe Connect is built in. Users connect their Stripe account from
-**Settings → Connect Stripe** — no API keys needed. The backend (Vercel
-serverless at `backend/api/stripe/`) handles account creation, onboarding,
+**Settings → Connect Stripe** — no API keys needed. The backend (a Cloudflare
+Worker, source in `backend-workers/src/`) handles account creation, onboarding,
 payment link generation, and webhooks.
 
-The backend is deployed at `backend-tradeready1.vercel.app`. The app reads
-`backendUrl` from `app.json` at runtime:
+The backend is deployed at `tradeready-backend.tradeready.workers.dev`
+(cut over from Vercel 2026-08-06; the old `backend-tradeready1.vercel.app`
+deployment stays dormant as a rollback target until decommission). The app
+reads `backendUrl` from `app.json` at runtime:
 
 ```json
 "extra": {
-  "backendUrl": "https://backend-tradeready1.vercel.app",
+  "backendUrl": "https://tradeready-backend.tradeready.workers.dev",
   "backendUrlIsPlaceholder": false
 }
 ```
@@ -67,7 +69,7 @@ The backend is deployed at `backend-tradeready1.vercel.app`. The app reads
 ## Step 4 — AI setup
 
 AI features (business chat, pricebook suggestions, receipt scanning) are proxied
-through the Vercel backend using server-side API keys — no user-supplied keys
+through the backend Worker using server-side API keys — no user-supplied keys
 required.
 
 - **AI Coach chat** — Groq (Llama 3.1) via `backend/api/ai-chat.js`
