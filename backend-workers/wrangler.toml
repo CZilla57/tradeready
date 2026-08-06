@@ -15,8 +15,10 @@ compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 
 [triggers]
-# Same schedule vercel.json's crons ran: daily 15:00 UTC.
-crons = ["0 15 * * *"]
+# Daily 15:00 UTC: payment reminders (same schedule vercel.json's crons ran).
+# Every 15 min: the invoice auto-email sweep (2026-08-06 spec) — dispatched
+# by pattern in src/index.js scheduled().
+crons = ["0 15 * * *", "*/15 * * * *"]
 
 [vars]
 # Non-secret only — everything else via `wrangler secret put`.
