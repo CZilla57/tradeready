@@ -806,7 +806,24 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           setJob((prev) =>
             prev ? { ...prev, ...jobChangesAfterInvoiceSave("create", result.invoiceId, false) } : prev
           );
-          navigation.navigate("Outreach", { invoiceId: result.invoiceId });
+          if (result.autoEmailQueued) {
+            // Fully-automatic mode (2026-08-06 spec): no send screen. The
+            // backend sweep emails the stamped invoice within ~15 minutes;
+            // deleting the invoice before then cancels the send.
+            Alert.alert(
+              "Invoice on its way",
+              `Invoice ${result.number} created — it'll be emailed to ${result.email} within about 15 minutes.`,
+              [
+                {
+                  text: "View invoice",
+                  onPress: () => navigation.navigate("Outreach", { invoiceId: result.invoiceId }),
+                },
+                { text: "OK" },
+              ]
+            );
+          } else {
+            navigation.navigate("Outreach", { invoiceId: result.invoiceId });
+          }
         }
       } catch (error: unknown) {
         reportError(error, { context: "autoInvoiceOnComplete" });
