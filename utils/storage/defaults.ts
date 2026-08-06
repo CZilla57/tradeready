@@ -233,6 +233,7 @@ export function defaultSettings(): Settings {
     onMyWayTemplate: DEFAULT_ON_MY_WAY_TEMPLATE,
     estimateFollowUpsEnabled: true, // default ON — and ABSENT also means on (see types/models.ts)
     autoInvoiceOnComplete: false, // opt-in; auto-create invoice + open send screen on job completion
+    autoEmailInvoiceOnComplete: false, // opt-in; backend emails the auto-created invoice (2026-08-06 spec)
 
     // AI
     anthropicKey: "",

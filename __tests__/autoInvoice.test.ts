@@ -224,47 +224,49 @@ describe("shouldAutoInvoice", () => {
 
 // ── createAutoInvoiceForJob (end-to-end against mocked AsyncStorage) ──────────
 
-describe("createAutoInvoiceForJob", () => {
-  let store: Record<string, string>;
+let store: Record<string, string>;
 
-  function seed(jobs: Job[], invoices: Invoice[], customers: Customer[], settings: Partial<Settings>) {
-    store = {
-      jobs: JSON.stringify(jobs),
-      invoices: JSON.stringify(invoices),
-      customers: JSON.stringify(customers),
-      expenses: JSON.stringify([]),
-      settings: JSON.stringify(settings),
-    };
-  }
+function seed(jobs: Job[], invoices: Invoice[], customers: Customer[], settings: Partial<Settings>) {
+  store = {
+    jobs: JSON.stringify(jobs),
+    invoices: JSON.stringify(invoices),
+    customers: JSON.stringify(customers),
+    expenses: JSON.stringify([]),
+    settings: JSON.stringify(settings),
+  };
+}
 
-  const janeRecord = { id: "c1", name: "Jane Smith", email: "jane@example.com", phone: "555-0100" } as Customer;
+const janeRecord = { id: "c1", name: "Jane Smith", email: "jane@example.com", phone: "555-0100" } as Customer;
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    store = {};
-    (AsyncStorage.getItem as jest.Mock).mockImplementation((k: string) =>
-      Promise.resolve(store[k] ?? null)
-    );
-    (AsyncStorage.setItem as jest.Mock).mockImplementation((k: string, v: string) => {
-      store[k] = v;
-      return Promise.resolve();
-    });
+beforeEach(() => {
+  jest.clearAllMocks();
+  store = {};
+  (AsyncStorage.getItem as jest.Mock).mockImplementation((k: string) =>
+    Promise.resolve(store[k] ?? null)
+  );
+  (AsyncStorage.setItem as jest.Mock).mockImplementation((k: string, v: string) => {
+    store[k] = v;
+    return Promise.resolve();
   });
+});
 
-  function storedJobs(): Job[] {
-    return JSON.parse(store.jobs);
-  }
-  function storedInvoices(): Invoice[] {
-    return JSON.parse(store.invoices);
-  }
+function storedJobs(): Job[] {
+  return JSON.parse(store.jobs);
+}
+function storedInvoices(): Invoice[] {
+  return JSON.parse(store.invoices);
+}
 
+describe("createAutoInvoiceForJob", () => {
   test("happy path: saves the invoice and advances the job to invoiced", async () => {
     const job = makeJob({ timeSessions: [closedSession(5.5)] });
     seed([job], [], [janeRecord], { autoInvoiceOnComplete: true });
 
-    const invoiceId = await createAutoInvoiceForJob("j1");
+    const result = await createAutoInvoiceForJob("j1");
 
-    expect(invoiceId).toBeTruthy();
+    expect(result).toBeTruthy();
+    const invoiceId = result!.invoiceId;
+    expect(result!.number).toBe("INV-0001");
     const invoices = storedInvoices();
     expect(invoices).toHaveLength(1);
     expect(invoices[0]).toMatchObject({
@@ -294,9 +296,9 @@ describe("createAutoInvoiceForJob", () => {
     });
     seed([job], [], [janeRecord], { autoInvoiceOnComplete: true });
 
-    const invoiceId = await createAutoInvoiceForJob("j1");
+    const result = await createAutoInvoiceForJob("j1");
 
-    expect(invoiceId).toBeTruthy();
+    expect(result).toBeTruthy();
     const savedJob = storedJobs().find((j) => j.id === "j1");
     expect(savedJob?.timeSessions?.[0]?.end).toBeTruthy();
     expect(storedInvoices()[0].amount).toBe(796); // 966 − 2h × $85
@@ -327,13 +329,56 @@ describe("createAutoInvoiceForJob", () => {
   test("no matching customer record → one is created and linked", async () => {
     seed([makeJob({ customerId: undefined })], [], [], { autoInvoiceOnComplete: true });
 
-    const invoiceId = await createAutoInvoiceForJob("j1");
+    const result = await createAutoInvoiceForJob("j1");
 
-    expect(invoiceId).toBeTruthy();
+    expect(result).toBeTruthy();
     const customers: Customer[] = JSON.parse(store.customers);
     expect(customers).toHaveLength(1);
     expect(customers[0].name).toBe("Jane Smith");
     expect(storedInvoices()[0].customerId).toBe(customers[0].id);
+  });
+});
+
+// ── auto-email stamping (2026-08-06 spec) ─────────────────────────────────────
+// Fully-automatic emailing: when BOTH toggles are on and the resolved customer
+// record has an email, the saved invoice carries autoEmailRequestedAt and the
+// result reports autoEmailQueued so JobDetail can skip the send screen.
+
+describe("createAutoInvoiceForJob auto-email stamping", () => {
+  test("both toggles on + customer email → stamped and queued", async () => {
+    seed([makeJob()], [], [janeRecord], {
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+    });
+
+    const result = await createAutoInvoiceForJob("j1");
+
+    expect(result).toMatchObject({ autoEmailQueued: true, email: "jane@example.com" });
+    const stamped = storedInvoices()[0].autoEmailRequestedAt;
+    expect(stamped).toBeTruthy();
+    expect(Number.isFinite(Date.parse(stamped as string))).toBe(true);
+  });
+
+  test("email toggle off (or absent) → no stamp, not queued", async () => {
+    seed([makeJob()], [], [janeRecord], { autoInvoiceOnComplete: true });
+
+    const result = await createAutoInvoiceForJob("j1");
+
+    expect(result).toMatchObject({ autoEmailQueued: false, email: "" });
+    expect(storedInvoices()[0].autoEmailRequestedAt).toBeUndefined();
+  });
+
+  test("customer without an email → no stamp (manual send screen path)", async () => {
+    const noEmail = { id: "c1", name: "Jane Smith", email: "", phone: "555-0100" } as Customer;
+    seed([makeJob()], [], [noEmail], {
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+    });
+
+    const result = await createAutoInvoiceForJob("j1");
+
+    expect(result).toMatchObject({ autoEmailQueued: false, email: "" });
+    expect(storedInvoices()[0].autoEmailRequestedAt).toBeUndefined();
   });
 });
 

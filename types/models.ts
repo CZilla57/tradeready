@@ -355,6 +355,15 @@ export interface Invoice {
   /** Cached payment link + the amount it was generated for (invoiceHelpers). */
   paymentLinkUrl?: string;
   paymentLinkAmount?: number;
+  /**
+   * ISO timestamp stamped by createAutoInvoiceForJob when the owner opted in
+   * to fully-automatic emailing (Settings.autoEmailInvoiceOnComplete) and the
+   * customer had an email at creation. The backend's 15-minute sweep emails
+   * stamped invoices once (auto_invoice_email_log one-and-done) while the
+   * stamp is ≤7 days old; a manual send from Outreach clears it. Absent =
+   * never requested. 2026-08-06 spec.
+   */
+  autoEmailRequestedAt?: string;
   /** Itemised breakdown from the job estimate; absent on manually-created invoices. */
   lineItems?: InvoiceLineItem[];
   /**
@@ -655,6 +664,14 @@ export interface Settings {
    * (same truthy-read convention as appointmentRemindersEnabled).
    */
   autoInvoiceOnComplete: boolean;
+  /**
+   * When true (and autoInvoiceOnComplete is on), the auto-created invoice is
+   * emailed to the customer by the backend sweep within ~15 minutes instead
+   * of opening the send screen; with no customer email on file the send
+   * screen opens as before. Opt-in; absent → false (same truthy-read
+   * convention as autoInvoiceOnComplete). 2026-08-06 spec.
+   */
+  autoEmailInvoiceOnComplete: boolean;
 
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;

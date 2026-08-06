@@ -216,10 +216,19 @@ export function shouldAutoInvoice(job: Job, settings: Settings): boolean {
   return true;
 }
 
+export interface AutoInvoiceResult {
+  invoiceId: string;
+  number: string;
+  /** True when the invoice was stamped for the backend email sweep. */
+  autoEmailQueued: boolean;
+  /** The address the auto-email will go to ("" when not queued). */
+  email: string;
+}
+
 /**
  * The auto-invoice-on-complete flow. Call AFTER the job's status was written
- * to "complete". Returns the new invoice id, or null when any gate fails —
- * callers degrade silently to the manual flow.
+ * to "complete". Returns the result (invoice id + auto-email disposition), or
+ * null when any gate fails — callers degrade silently to the manual flow.
  *
  * Side effects, mirroring CreateInvoiceFromJobScreen's create mode:
  *  - clocks out a still-running timer session (marking complete is the
@@ -228,7 +237,7 @@ export function shouldAutoInvoice(job: Job, settings: Settings): boolean {
  *  - saves the invoice, then advances the job complete → invoiced via
  *    jobChangesAfterInvoiceSave.
  */
-export async function createAutoInvoiceForJob(jobId: string): Promise<string | null> {
+export async function createAutoInvoiceForJob(jobId: string): Promise<AutoInvoiceResult | null> {
   const [jobs, invoices, customers, settings] = await Promise.all([
     loadJobs(),
     loadInvoices(),
@@ -253,6 +262,11 @@ export async function createAutoInvoiceForJob(jobId: string): Promise<string | n
   const draft = prefillInvoiceDraftFromJob(job, invoices, settings, record);
   if (!(draft.amount > 0)) return null;
 
+  // Fully-automatic emailing (2026-08-06 spec): stamp the invoice for the
+  // backend's 15-min sweep only when the owner opted in AND we actually have
+  // an address. No email on file → the caller keeps today's send-screen path.
+  const autoEmailQueued = !!settings.autoEmailInvoiceOnComplete && !!draft.email.trim();
+
   const lineItems = buildInvoiceLineItems(job);
   const invoice: Invoice = {
     id: `inv${Date.now()}`,
@@ -267,6 +281,7 @@ export async function createAutoInvoiceForJob(jobId: string): Promise<string | n
     paid: false,
     jobId,
     ...(lineItems.length > 0 ? { lineItems } : {}),
+    ...(autoEmailQueued ? { autoEmailRequestedAt: new Date().toISOString() } : {}),
   };
   await saveInvoices([...invoices, invoice]);
 
@@ -274,6 +289,15 @@ export async function createAutoInvoiceForJob(jobId: string): Promise<string | n
   const finalJob = { ...job, ...jobChanges };
   await saveJobs(jobs.map((j) => (j.id === jobId ? finalJob : j)));
 
-  track("invoice_created", { source: "auto_on_complete", usedTrackedTime: draft.usedTrackedTime });
-  return invoice.id;
+  track("invoice_created", {
+    source: "auto_on_complete",
+    usedTrackedTime: draft.usedTrackedTime,
+    autoEmailQueued,
+  });
+  return {
+    invoiceId: invoice.id,
+    number: invoice.number,
+    autoEmailQueued,
+    email: autoEmailQueued ? draft.email : "",
+  };
 }

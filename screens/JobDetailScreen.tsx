@@ -801,12 +801,12 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
       // invoice pending, no estimate — returns null, and any failure degrades
       // to the manual flow (the "Create invoice →" primary action below).
       try {
-        const invoiceId = await createAutoInvoiceForJob(job.id);
-        if (invoiceId) {
+        const result = await createAutoInvoiceForJob(job.id);
+        if (result) {
           setJob((prev) =>
-            prev ? { ...prev, ...jobChangesAfterInvoiceSave("create", invoiceId, false) } : prev
+            prev ? { ...prev, ...jobChangesAfterInvoiceSave("create", result.invoiceId, false) } : prev
           );
-          navigation.navigate("Outreach", { invoiceId });
+          navigation.navigate("Outreach", { invoiceId: result.invoiceId });
         }
       } catch (error: unknown) {
         reportError(error, { context: "autoInvoiceOnComplete" });
