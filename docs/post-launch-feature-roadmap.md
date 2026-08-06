@@ -1,7 +1,7 @@
 # Post-Launch Feature Roadmap — Solo-Operator Features
 
-**Created:** 2026-07-17 · **Statuses updated:** 2026-07-18
-**Status:** Items **1–4 are BUILT** on unmerged feature branches (owner-gated; see the per-phase STATUS blocks below — merges, deploys, and device smoke tests remain). Items 5–10 are still backlog. **None of this blocks the iOS App Store submission**, and nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
+**Created:** 2026-07-17 · **Statuses updated:** 2026-08-06
+**Status:** Items **1–7 and 9 are SHIPPED** (merged to master; 1–2 OTA'd 2026-07-30, 5 OTA'd earlier, the rest live or riding the post-1.1.0 OTA). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). For what comes next, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
 
 ## What this is
 
@@ -20,18 +20,18 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 ## Rule of the road: ship order
 
-| # | Feature | Impact | Effort | Reuses | Status (2026-07-18) |
+| # | Feature | Impact | Effort | Reuses | Status (2026-08-06) |
 |---|---------|--------|--------|--------|---------------------|
-| 1 | Estimate approval loop (+ e-sign) | 🔥🔥🔥 | Med | SendEstimateScreen, status pipeline, hosted legal site | **BUILT** — PR #4 open |
-| 2 | Appointment & "on my way" reminders | 🔥🔥🔥 | Low–Med | Notifications + composers (as built — cron/Resend rejected in design) | **BUILT** — PR #3 open |
-| 3 | Deposits / partial payments | 🔥🔥 | Med | Stripe Connect, invoice model | **BUILT** — ship-gated (migration + backend) |
-| 4 | Tax set-aside / quarterly estimate | 🔥🔥🔥 (differentiator) | Med | P&L data, mileage, AI coach | **BUILT** — stacked on #3's branch |
-| 5 | Receipt OCR | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **BUILT** — on this branch (`feat/receipt-ocr`) |
-| 6 | Recurring invoices (maintenance plans) | 🔥 | Med | RecurringJobs engine, invoice model | **BUILT** — on feat/recurring-invoices |
-| 7 | Accounting / CSV export | 🔥 | Low | Existing money/expense data | **BUILT** — on feat/csv-export |
-| 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog |
-| 9 | Online booking / request-a-quote link | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | backlog |
-| 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | backlog (evaluate first) |
+| 1 | Estimate approval loop (+ e-sign) | 🔥🔥🔥 | Med | SendEstimateScreen, status pipeline, hosted legal site | **SHIPPED** — merged, OTA'd 2026-07-30 |
+| 2 | Appointment & "on my way" reminders | 🔥🔥🔥 | Low–Med | Notifications + composers (as built — cron/Resend rejected in design) | **SHIPPED** — merged, OTA'd 2026-07-30 |
+| 3 | Deposits / partial payments | 🔥🔥 | Med | Stripe Connect, invoice model | **SHIPPED** — merged; migration + backend live |
+| 4 | Tax set-aside / quarterly estimate | 🔥🔥🔥 (differentiator) | Med | P&L data, mileage, AI coach | **SHIPPED** — merged `acbeff1` |
+| 5 | Receipt OCR | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **SHIPPED** — merged `8144eca`, OTA'd |
+| 6 | Recurring invoices (maintenance plans) | 🔥 | Med | RecurringJobs engine, invoice model | **SHIPPED** — merged 2026-08-01 |
+| 7 | Accounting / CSV export | 🔥 | Low | Existing money/expense data | **SHIPPED** — merged 2026-08-01 |
+| 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog — approval-gated (dep + privacy label) |
+| 9 | Online booking / request-a-quote link | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | **SHIPPED** — merged `cec034f` 2026-08-04 |
+| 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | deferred (reaffirmed 2026-08-06) |
 
 ---
 
@@ -132,7 +132,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 **Why:** You have recurring *jobs* but not recurring *billing*. Maintenance plans (monthly/quarterly service) are steady solo revenue and a natural extension of the recurring-jobs engine.
 
-**Kickoff prompt:**
+**Kickoff prompt (historical — already executed):**
 > Load `superpowers:brainstorming` and `tradeready-architecture-contract`, and read the recurring-jobs engine (`utils/recurringJobs.ts`, `RecurringJobsScreen`). I want recurring invoices for maintenance plans: generate an invoice on a schedule for a customer, optionally with a payment link. Mirror the recurring-jobs pattern rather than inventing a new one. Cover pause/skip/end and how generated invoices appear in the Invoices list. Phase-gated plan, stop for go-ahead.
 
 ## Phase 7 — Accounting / CSV export
@@ -147,7 +147,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 **Why:** Low effort, high value once a year at tax time. Export income and expenses to CSV (and optionally a QuickBooks-friendly format) so the numbers can leave the app.
 
-**Kickoff prompt:**
+**Kickoff prompt (historical — already executed):**
 > Load `superpowers:brainstorming`. I want a CSV export of income and expenses (date range selectable) from the Money tab, using the data already in storage — no schema changes expected. Consider a column layout that imports cleanly into QuickBooks/spreadsheets. Use the platform share sheet to hand off the file. Phase-gated plan, stop for go-ahead.
 
 ## Phase 8 — Automatic (GPS) mileage tracking
@@ -170,6 +170,64 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 **Kickoff prompt:**
 > Load `superpowers:brainstorming`. Before any build, I want an honest evaluation: does a two-way SMS inbox add enough over a solo operator's native Messages app to justify the cost (a messaging provider dependency, phone-number provisioning, inbound webhooks, and ongoing per-message fees)? Give me a recommendation with the tradeoffs. Only if it's a go, produce a phase-gated plan. Stop for go-ahead either way.
+
+---
+
+## 2026-08-06 update — external audit & next queue
+
+A second external audit (Codex; the first was ChatGPT's, reviewed 2026-08-03) was
+assessed against the codebase and adopted into this roadmap. It largely converged
+with existing plans — corroboration, not redirection. Several of its "missing"
+items were already built: overlap detection and smart schedule pickers shipped;
+below-break-even sanity warnings live in the pricing calculator; and the Today
+Insights card already covers unscheduled approved jobs, open slots, and labor
+overrun. The genuinely new material and the resulting queue:
+
+### ⚠️ Release-gate checks (OWNER — before/at the next release steps)
+
+1. **Verify the ASC privacy nutrition label for the in-review 1.1.0 build
+   declares photo collection** — receipt OCR ships in it, and this may not be
+   deferrable to the next submission. (ASC privacy labels are generally editable
+   without a new binary — verify in App Store Connect.)
+2. **The trip-sync OTA must not ship ahead of the mileage privacy-label
+   correction.** The durability work (`0288972`, riding the post-1.1.0 OTA)
+   starts syncing mileage trips to the cloud; the privacy label must reflect
+   that before the OTA goes out.
+
+### Next queue (rough order)
+
+1. **Claims accuracy** — already sequenced: listing overclaims fix at the next
+   store submission (see the 2026-08-03 review notes in the session records).
+2. **Durability** — trip/rule cloud-sync built (`0288972`); job-photo R2 sync is
+   fully planned but **hard-blocked on Cloudflare-migration Phase 6** (Vercel
+   decommission) per its own plan doc.
+3. **CSV data import** (added 2026-08-06, owner-initiated) — migrate customers,
+   jobs + schedule, and full money history from Jobber / Housecall Pro /
+   QuickBooks CSV exports. Design approved and spec committed:
+   `docs/superpowers/specs/2026-08-06-data-import-design.md`. JS-only, zero new
+   dependencies, OTA-eligible. Sequencing vs calendar/availability is an owner
+   call at kickoff.
+4. **Calendar / availability view** — agreed as the **next big feature**. The
+   scheduling guardrails (overlap warnings, smart pickers, week strip) already
+   exist; the missing surface is the calendar itself — a month view is the known
+   delta.
+5. **Estimated-vs-actual job profitability** — agreed. The Today Insights
+   labor-overrun rule is the first step. The genuinely missing insight pieces:
+   an **invoice-level payer-behavior hint** and **materials-vs-estimate on job
+   completion**.
+6. **Activation instrumentation before any paywall change** — pre-paywall sample
+   exploration is a legitimate conversion experiment but *not* obviously right:
+   the hard-paywall-after-onboarding flow was a deliberate owner decision in the
+   2026-08-03 onboarding restructure, and the 2-week trial already provides
+   try-before-pay. First add **trial-start** and **activation** ("created a real
+   customer and estimate") telemetry events; revisit the flow only with data.
+7. **Accountant package** — low urgency: bundle the existing CSV exports with
+   control totals. Never infer missing historical fields.
+
+### Deferrals reaffirmed
+
+Teams/dispatch, two-way SMS inbox (#10), and a web app stay deferred — the
+depth-not-breadth, solo-operator thesis holds.
 
 ---
 
