@@ -217,6 +217,20 @@ export function shouldAutoInvoice(job: Job, settings: Settings): boolean {
   return true;
 }
 
+/**
+ * Mirrors the backend sweep's recipient gate (isPlausibleEmail in
+ * backend-workers/lib/selectInvoicesToRemind.js — one local part, one @, a
+ * dot-bearing domain, none of the characters that split a recipient list or
+ * smuggle a header). The sweep refuses implausible addresses, so stamping one
+ * would make the completion alert promise an email that never sends — fall
+ * back to the manual send screen instead. Kept in lockstep by
+ * __tests__/autoEmailPlausibilityParity.test.js.
+ */
+const PLAUSIBLE_EMAIL = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+export function isPlausiblyEmailable(value: string): boolean {
+  return value.length <= 254 && PLAUSIBLE_EMAIL.test(value);
+}
+
 export interface AutoInvoiceResult {
   invoiceId: string;
   number: string;
@@ -265,8 +279,10 @@ export async function createAutoInvoiceForJob(jobId: string): Promise<AutoInvoic
 
   // Fully-automatic emailing (2026-08-06 spec): stamp the invoice for the
   // backend's 15-min sweep only when the owner opted in AND we actually have
-  // an address. No email on file → the caller keeps today's send-screen path.
-  const autoEmailQueued = !!settings.autoEmailInvoiceOnComplete && !!draft.email.trim();
+  // a plausible address. No email on file, or an implausible one the sweep
+  // would refuse anyway → the caller keeps today's send-screen path.
+  const autoEmailQueued =
+    !!settings.autoEmailInvoiceOnComplete && isPlausiblyEmailable(draft.email.trim());
 
   const lineItems = buildInvoiceLineItems(job);
   const invoice: Invoice = {
@@ -326,10 +342,18 @@ export async function mintAutoInvoicePaymentLink(invoiceId: string): Promise<voi
     const [invoices, settings] = await Promise.all([loadInvoices(), loadSettings()]);
     const invoice = invoices.find((i) => i.id === invoiceId);
     if (!invoice || !settings.provider) return;
+    // A non-Stripe provider with no key configured would "mint" a live
+    // placeholder URL (buildPaymentLink's paypal.me/yourusername-style
+    // fallback) — allowlisted host, amount matches by construction, so the
+    // unattended email would send a money-misdirecting link. No human
+    // previews this mint; refuse instead. Stripe is exempt: its mint calls
+    // the backend, which throws without a connected account.
+    const providerKey = getProviderKey(settings, settings.provider);
+    if (settings.provider !== "stripe" && !providerKey.trim()) return;
     const link = await resolvePaymentLink(
       invoice,
       settings.provider,
-      getProviderKey(settings, settings.provider),
+      providerKey,
       invoice.amount,
     );
     if (!link) return;

@@ -391,6 +391,19 @@ describe("createAutoInvoiceForJob auto-email stamping", () => {
     expect(result).toMatchObject({ autoEmailQueued: false, email: "" });
     expect(storedInvoices()[0].autoEmailRequestedAt).toBeUndefined();
   });
+
+  test("implausible email (no TLD) → not queued, no stamp (send-screen fallback)", async () => {
+    const badEmail = { id: "c1", name: "Jane Smith", email: "jane@example", phone: "555-0100" } as Customer;
+    seed([makeJob()], [], [badEmail], {
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+    });
+
+    const result = await createAutoInvoiceForJob("j1");
+
+    expect(result).toMatchObject({ autoEmailQueued: false, email: "" });
+    expect(storedInvoices()[0].autoEmailRequestedAt).toBeUndefined();
+  });
 });
 
 // ── prefillInvoiceDraftFromJob ────────────────────────────────────────────────
@@ -519,6 +532,44 @@ describe("auto-invoice payment-link mint", () => {
     const inv = storedInvoices()[0];
     expect(inv.paymentLinkUrl).toBe("https://buy.stripe.com/test_abc");
     expect(inv.paymentLinkAmount).toBe(inv.amount);
+    expect(resolvePaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ id: result!.invoiceId }),
+      "stripe",
+      "",
+      966,
+    );
+  });
+
+  test("non-Stripe provider with no key configured → no mint attempted (placeholder-link guard)", async () => {
+    const { getProviderKey } = jest.requireMock("../utils/invoiceHelpers");
+    (getProviderKey as jest.Mock).mockReturnValueOnce("");
+    seed([makeJob()], [], [janeRecord], {
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+      provider: "paypal",
+    });
+
+    await createAutoInvoiceForJob("j1");
+    await flushAsync();
+
+    expect(resolvePaymentLink).not.toHaveBeenCalled();
+    expect(storedInvoices()[0].paymentLinkUrl).toBeUndefined();
+  });
+
+  test("non-Stripe provider WITH a key still mints", async () => {
+    const { getProviderKey } = jest.requireMock("../utils/invoiceHelpers");
+    (getProviderKey as jest.Mock).mockReturnValueOnce("myhandle");
+    (resolvePaymentLink as jest.Mock).mockResolvedValue("https://paypal.me/myhandle/966");
+    seed([makeJob()], [], [janeRecord], {
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+      provider: "paypal",
+    });
+
+    await createAutoInvoiceForJob("j1");
+    await flushAsync();
+
+    expect(storedInvoices()[0].paymentLinkUrl).toBe("https://paypal.me/myhandle/966");
   });
 
   test("not queued → no mint attempted", async () => {
