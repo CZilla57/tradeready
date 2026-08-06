@@ -18,6 +18,7 @@ import {
   prefillInvoiceDraftFromJob,
   shouldAutoInvoice,
   createAutoInvoiceForJob,
+  clearAutoEmailRequest,
 } from "../utils/autoInvoice";
 import { roundToCents } from "../utils/invoicePayments";
 import { resolvePaymentLink } from "../utils/invoiceHelpers";
@@ -546,5 +547,51 @@ describe("auto-invoice payment-link mint", () => {
     expect(storedInvoices()[0].paymentLinkUrl).toBeUndefined();
     const { reportError } = jest.requireMock("../utils/analytics");
     expect(reportError).toHaveBeenCalled();
+  });
+});
+
+// ── clearAutoEmailRequest (manual-send double-send guard) ────────────────────
+
+describe("clearAutoEmailRequest", () => {
+  const stamped = {
+    id: "invA",
+    customer: "Jane Smith",
+    number: "INV-0001",
+    amount: 100,
+    due: "2026-08-20",
+    email: "jane@example.com",
+    phone: "",
+    desc: "",
+    paid: false,
+    autoEmailRequestedAt: "2026-08-06T10:00:00.000Z",
+  } as Invoice;
+
+  test("clears the stamp on a stamped invoice", async () => {
+    seed([], [stamped], [], {});
+
+    await clearAutoEmailRequest("invA");
+
+    expect(storedInvoices()[0].autoEmailRequestedAt).toBeUndefined();
+    expect(storedInvoices()[0].number).toBe("INV-0001");
+  });
+
+  test("no-op (no save) when the invoice has no stamp", async () => {
+    const plain = { ...stamped, id: "invB" } as Invoice;
+    delete plain.autoEmailRequestedAt;
+    seed([], [plain], [], {});
+    (AsyncStorage.setItem as jest.Mock).mockClear();
+
+    await clearAutoEmailRequest("invB");
+
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  test("no-op when the invoice does not exist", async () => {
+    seed([], [], [], {});
+    (AsyncStorage.setItem as jest.Mock).mockClear();
+
+    await clearAutoEmailRequest("ghost");
+
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
   });
 });

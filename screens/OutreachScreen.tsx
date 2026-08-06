@@ -11,9 +11,10 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
-import { composeEmail, composeSMS } from "../utils/messaging";
+import { composeEmailWithOutcome, composeSMSWithOutcome } from "../utils/messaging";
 import { emailHtmlFromText } from "../utils/emailHtml";
 import { loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
+import { clearAutoEmailRequest } from "../utils/autoInvoice";
 import {
   getStatus,
   generateOutreachMessage,
@@ -320,7 +321,7 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
       // buildInvoicePdfFile reports its own errors and resolves null on failure;
       // the catch is belt-and-braces so a PDF problem can never block the send.
       const pdfUri = await buildInvoicePdfFile(invoice, settings ?? {}).catch(() => null);
-      const opened = await composeEmail({
+      const { opened, outcome } = await composeEmailWithOutcome({
         recipients: [invoice.email],
         subject: subject || `Payment reminder: ${invoice.number}`,
         // The editor keeps plain text; at send time the body is escaped and
@@ -329,6 +330,12 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
         isHtml: true,
         attachments: pdfUri ? [pdfUri] : undefined,
       });
+      if (outcome !== "notSent") {
+        // A manual send supersedes a pending auto-email (2026-08-06 spec).
+        // "unknown" counts as sent — same conservative read as the one-shot
+        // flows; an explicit cancel keeps the auto-email alive.
+        clearAutoEmailRequest(invoice.id).catch(() => {});
+      }
       // Warned only after the composer closes: alerting first leaves a UIAlertController
       // on top, and iOS presents the mail sheet from the topmost controller, which can
       // stop it appearing at all. Skipped when composeEmail already alerted itself.
@@ -354,7 +361,11 @@ export default function OutreachScreen({ route, navigation }: JobStackScreenProp
 
   async function sendSMS() {
     if (!invoice) return;
-    await composeSMS({ recipients: [invoice.phone], body: message });
+    const { outcome } = await composeSMSWithOutcome({ recipients: [invoice.phone], body: message });
+    if (outcome !== "notSent") {
+      // Texting the invoice manually also supersedes the pending auto-email.
+      clearAutoEmailRequest(invoice.id).catch(() => {});
+    }
   }
 
   async function copyToClipboard() {

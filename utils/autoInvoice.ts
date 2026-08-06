@@ -345,3 +345,24 @@ export async function mintAutoInvoicePaymentLink(invoiceId: string): Promise<voi
     reportError(err, { context: "autoInvoiceMintLink" });
   }
 }
+
+/**
+ * Clears a pending auto-email request — called after a successful MANUAL
+ * send from Outreach so the backend sweep doesn't email a second copy
+ * (2026-08-06 spec). No-op when the invoice is gone or unstamped; a
+ * post-sweep manual send needs no guard (the one-and-done log row already
+ * blocks a second backend send).
+ */
+export async function clearAutoEmailRequest(invoiceId: string): Promise<void> {
+  const invoices = await loadInvoices();
+  const invoice = invoices.find((i) => i.id === invoiceId);
+  if (!invoice?.autoEmailRequestedAt) return;
+  await saveInvoices(
+    invoices.map((i) => {
+      if (i.id !== invoiceId) return i;
+      const next = { ...i };
+      delete next.autoEmailRequestedAt;
+      return next;
+    }),
+  );
+}
