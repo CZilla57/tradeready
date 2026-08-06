@@ -37,7 +37,8 @@ import {
   getOrCreateCustomer,
   resolveCustomer,
 } from "./storage";
-import { track } from "./analytics";
+import { resolvePaymentLink, getProviderKey } from "./invoiceHelpers";
+import { track, reportError } from "./analytics";
 import type { Job, JobStatus, Invoice, InvoiceLineItem, Settings, Customer } from "../types/models";
 
 /**
@@ -289,6 +290,12 @@ export async function createAutoInvoiceForJob(jobId: string): Promise<AutoInvoic
   const finalJob = { ...job, ...jobChanges };
   await saveJobs(jobs.map((j) => (j.id === jobId ? finalJob : j)));
 
+  if (autoEmailQueued) {
+    // Fire-and-forget (local-first: completion never waits on the network).
+    // mintAutoInvoicePaymentLink catches internally and never rejects.
+    void mintAutoInvoicePaymentLink(invoice.id);
+  }
+
   track("invoice_created", {
     source: "auto_on_complete",
     usedTrackedTime: draft.usedTrackedTime,
@@ -300,4 +307,41 @@ export async function createAutoInvoiceForJob(jobId: string): Promise<AutoInvoic
     autoEmailQueued,
     email: autoEmailQueued ? draft.email : "",
   };
+}
+
+/**
+ * Best-effort payment-link mint for a freshly auto-created invoice, so the
+ * backend auto-email can include a pay link (the email only ever includes a
+ * cached link whose minted amount matches the balance — minting at creation
+ * makes that true by construction). Fire-and-forget: never awaited on the
+ * completion path, never throws. Offline / unconfigured / mint error → the
+ * email goes out link-less (honest degradation, 2026-08-06 spec).
+ *
+ * Deliberately NOT shared with OutreachScreen's handleGenerateLink: that
+ * screen's persist step is entangled with deposit-request UI state; the
+ * shared primitive is resolvePaymentLink itself (architecture contract §9).
+ */
+export async function mintAutoInvoicePaymentLink(invoiceId: string): Promise<void> {
+  try {
+    const [invoices, settings] = await Promise.all([loadInvoices(), loadSettings()]);
+    const invoice = invoices.find((i) => i.id === invoiceId);
+    if (!invoice || !settings.provider) return;
+    const link = await resolvePaymentLink(
+      invoice,
+      settings.provider,
+      getProviderKey(settings, settings.provider),
+      invoice.amount,
+    );
+    if (!link) return;
+    // Re-read before writing: the mint awaited the network, and another save
+    // may have landed meanwhile.
+    const fresh = await loadInvoices();
+    await saveInvoices(
+      fresh.map((i) =>
+        i.id === invoiceId ? { ...i, paymentLinkUrl: link, paymentLinkAmount: invoice.amount } : i,
+      ),
+    );
+  } catch (err: unknown) {
+    reportError(err, { context: "autoInvoiceMintLink" });
+  }
 }

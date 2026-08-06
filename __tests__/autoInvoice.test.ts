@@ -20,6 +20,7 @@ import {
   createAutoInvoiceForJob,
 } from "../utils/autoInvoice";
 import { roundToCents } from "../utils/invoicePayments";
+import { resolvePaymentLink } from "../utils/invoiceHelpers";
 import type { Job, Invoice, Settings, Customer, ChangeOrder } from "../types/models";
 
 // Isolate storage from sync/notification/widget side-effects, same as
@@ -42,6 +43,15 @@ jest.mock("../utils/widgetBridge", () => ({
 jest.mock("../utils/analytics", () => ({
   track: jest.fn(),
   reportError: jest.fn(),
+}));
+
+// requireActual is load-bearing: utils/storage/settings.ts imports
+// isSquarePaymentLink from this same module — a bare factory would replace
+// it with undefined and break every loadSettings call in this suite.
+jest.mock("../utils/invoiceHelpers", () => ({
+  ...jest.requireActual("../utils/invoiceHelpers"),
+  resolvePaymentLink: jest.fn(),
+  getProviderKey: jest.fn().mockReturnValue(""),
 }));
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -482,5 +492,59 @@ describe("change orders in billing", () => {
       roundToCents(estimateTotal + trackedLaborCost - originalLaborCost + coAmount)
     );
     expect(b.total).toBe(1593.5);
+  });
+});
+
+// ── payment-link mint at creation (2026-08-06 spec) ──────────────────────────
+// Queued auto-invoices get a best-effort link mint so the backend email can
+// include a pay link (it only ever includes a cached link matching the
+// balance). Fire-and-forget: failures degrade to a link-less email.
+
+describe("auto-invoice payment-link mint", () => {
+  const flushAsync = () => new Promise((r) => setTimeout(r, 0));
+
+  test("queued invoice gets paymentLinkUrl/Amount cached for the full amount", async () => {
+    (resolvePaymentLink as jest.Mock).mockResolvedValue("https://buy.stripe.com/test_abc");
+    seed([makeJob()], [], [janeRecord], {
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+      provider: "stripe",
+    });
+
+    const result = await createAutoInvoiceForJob("j1");
+    await flushAsync();
+
+    expect(result?.autoEmailQueued).toBe(true);
+    const inv = storedInvoices()[0];
+    expect(inv.paymentLinkUrl).toBe("https://buy.stripe.com/test_abc");
+    expect(inv.paymentLinkAmount).toBe(inv.amount);
+  });
+
+  test("not queued → no mint attempted", async () => {
+    (resolvePaymentLink as jest.Mock).mockResolvedValue("https://buy.stripe.com/test_abc");
+    seed([makeJob()], [], [janeRecord], { autoInvoiceOnComplete: true, provider: "stripe" });
+
+    await createAutoInvoiceForJob("j1");
+    await flushAsync();
+
+    expect(resolvePaymentLink).not.toHaveBeenCalled();
+    expect(storedInvoices()[0].paymentLinkUrl).toBeUndefined();
+  });
+
+  test("mint failure degrades silently: invoice saved, no link, error reported", async () => {
+    (resolvePaymentLink as jest.Mock).mockRejectedValue(new Error("offline"));
+    seed([makeJob()], [], [janeRecord], {
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+      provider: "stripe",
+    });
+
+    const result = await createAutoInvoiceForJob("j1");
+    await flushAsync();
+
+    expect(result?.autoEmailQueued).toBe(true);
+    expect(storedInvoices()[0].paymentLinkUrl).toBeUndefined();
+    const { reportError } = jest.requireMock("../utils/analytics");
+    expect(reportError).toHaveBeenCalled();
   });
 });
