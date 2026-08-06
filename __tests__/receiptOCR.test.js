@@ -168,7 +168,7 @@ describe("extractReceipt routing", () => {
 
     expect(out).toEqual({ extraction: VALID, route: "backend" });
     const [url, init] = global.fetch.mock.calls[0];
-    expect(url).toBe("https://backend-tradeready1.vercel.app/api/receipt-extract");
+    expect(url).toBe("https://tradeready-backend.tradeready.workers.dev/api/receipt-extract");
     expect(init.headers.Authorization).toBe("Bearer jwt-123");
     expect(JSON.parse(init.body)).toEqual({
       imageBase64: "IMGDATA",

@@ -86,7 +86,7 @@
       "policy": "appVersion"
     },
     "extra": {
-      "backendUrl": "https://backend-tradeready1.vercel.app",
+      "backendUrl": "https://tradeready-backend.tradeready.workers.dev",
       "backendUrlIsPlaceholder": false,
       "privacyPolicyUrl": "https://gettradereadyapp.com/privacy.html",
       "termsUrl": "https://gettradereadyapp.com/terms.html",

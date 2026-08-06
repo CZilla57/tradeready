@@ -6,7 +6,7 @@ import React from "react";
 jest.mock("expo-constants", () => ({
   expoConfig: {
     extra: {
-      backendUrl: "https://backend-tradeready1.vercel.app",
+      backendUrl: "https://tradeready-backend.tradeready.workers.dev",
       backendUrlIsPlaceholder: false,
       googleWebClientId: "test-web.apps.googleusercontent.com",
       googleIosClientId: "test-ios.apps.googleusercontent.com",
