@@ -1,7 +1,7 @@
 # Post-Launch Feature Roadmap — Solo-Operator Features
 
 **Created:** 2026-07-17 · **Statuses updated:** 2026-08-06
-**Status:** Items **1–7 and 9 are SHIPPED** (merged to master; 1–2 OTA'd 2026-07-30, 5 OTA'd earlier, the rest live or riding the post-1.1.0 OTA). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). For what comes next, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
+**Status:** Items **1–7 and 9 are SHIPPED** (merged to master; 1–2 OTA'd 2026-07-30, 5 OTA'd earlier, the rest live or riding the post-1.1.0 OTA). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). **Phases 11–15** (added 2026-08-06) stage the next generation with owner-curated kickoff prompts. For priorities, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
 
 ## What this is
 
@@ -32,6 +32,11 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog — approval-gated (dep + privacy label) |
 | 9 | Online booking / request-a-quote link | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | **SHIPPED** — merged `cec034f` 2026-08-04 |
 | 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | deferred (reaffirmed 2026-08-06) |
+| 11 | Calendar, availability & real online booking | 🔥🔥🔥 | High | Booking link (#9), smart pickers, reminders | staged 2026-08-06 — prompt ready |
+| 12 | Customer portal completion | 🔥🔥 | Med–High | Held portal branch, approval/change-order endpoints | staged — precondition: merge `feat/customer-portal` |
+| 13 | Estimated-vs-actual job profitability | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | staged 2026-08-06 — prompt ready |
+| 14 | Accountant package / bookkeeping handoff | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | staged — low urgency stands |
+| 15 | Contextual AI & proactive operations | 🔥🔥 | Med–High | todayInsights, follow-ups, dunning, AI layer | staged — sequenced after #13 |
 
 ---
 
@@ -173,6 +178,321 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 ---
 
+## Phase 11 — Calendar, availability & real online booking
+
+> **Added 2026-08-06** (Codex-audit adoption; deepens next-queue item 4 and
+> extends shipped Phase 9). Context verified: the booking link (`cec034f`)
+> already provides the request model, hosted page, and conversion flow;
+> overlap detection and smart schedule pickers shipped and are Phase A's
+> foundation; `RouteScreen` is a Maps deep-link stub, not route optimization
+> (architecture contract) — the prompt's exclusion stands. Slot math
+> (Phase B) is FA-039 territory: local-frame dates, explicit TZ/DST tests.
+
+**Kickoff prompt (owner-curated, 2026-08-06):**
+
+```text
+Work in C:\dev\tradeready\tradeready.
+
+Deepen TradeReady scheduling from dated jobs and preferred-time requests into a solo-operator calendar and real bookable availability.
+
+Read:
+- Job scheduling fields in types/models.ts
+- TodayScreen.tsx
+- JobsScreen.tsx
+- AddJobScreen.tsx
+- RouteScreen.tsx
+- date/time helpers
+- appointment reminder code
+- booking request model, backend, hosted page, conversion flow and tests
+- deep-link handling and notification routing
+
+Build in phases:
+
+Phase A — owner calendar:
+- Day and week views
+- Unscheduled approved-work queue
+- Overlap/conflict warnings
+- Working hours
+- Appointment duration
+- Travel/buffer time
+- Fast reschedule
+- Preserve Today as the daily action surface
+
+Phase B — availability engine:
+- Calculate candidate slots deterministically from working hours, existing jobs, buffers and blackout periods
+- Handle timezone and daylight-saving changes explicitly
+- Do not infer travel time unless real data exists
+- Unit-test all slot calculations independently of UI
+
+Phase C — public booking:
+- Allow the customer to choose only valid offered slots
+- Make final reservation server-authoritative and atomic
+- Prevent two customers from taking the same slot
+- Support request-only services that still need owner approval
+- Notify the owner and customer with accurate status wording
+
+Phase D — customer changes:
+- Confirm appointment
+- Add to calendar
+- Request reschedule or cancellation
+- Record an auditable status history
+- Never let a public token expose other customers or private job notes
+
+Do not begin with Google Calendar APIs or route optimization. First establish TradeReady's internal schedule and conflict model. Treat external calendar sync as a later opt-in phase.
+
+Produce the domain model, concurrency design, timezone rules, UI flow, API/RLS plan, migration compatibility and phased test plan. Stop before schema or backend changes.
+
+After approval, ship behind a feature flag until migration, backend, hosted page and device smoke tests are complete. Run TypeScript, all tests and lint at every phase.
+```
+
+## Phase 12 — Customer portal completion
+
+> **Added 2026-08-06.** PRECONDITIONS: the built, review-approved portal
+> branch `feat/customer-portal` (`4339848`) is still UNMERGED — merging it is
+> an owner decision that comes before this phase; capability 6 (customer-
+> visible photos/documents) depends on the job-photos R2 plan, itself blocked
+> on Cloudflare-migration Phase 6. ⚠️ The portal's pay-link amount gate is
+> load-bearing — preserve it.
+
+**Kickoff prompt (owner-curated, 2026-08-06):**
+
+```text
+Work in C:\dev\tradeready\tradeready.
+
+Expand the existing customer portal into a focused self-service journey without building a full messaging platform.
+
+Read:
+- Customer.portal model and token flow
+- CustomerDetailScreen.tsx
+- backend portal-view/store handlers
+- portal.html in the legal-site repository if available
+- estimate approval and change-order endpoints
+- payment-link and partial-payment behavior
+- appointment and booking models
+- job-photo storage design if already implemented
+
+Add capabilities in this order:
+1. Upcoming appointment details
+2. Add-to-calendar action
+3. Estimate status and approval
+4. Change-order viewing and approval
+5. Invoice total, paid-to-date, balance and payment action
+6. Selected customer-visible documents/photos
+7. Request follow-up work
+8. Request reschedule or cancellation
+
+Security and privacy:
+- Move portal capability tokens into a server-owned table if not already completed.
+- Tokens must be high entropy, rotatable, revocable and tenant-scoped.
+- Public responses must be explicit allowlists, not sanitized copies of full records.
+- Never expose internal notes, costs, margins, AI discussions, local paths or unrelated customers.
+- Customer-visible photos require explicit per-photo visibility.
+- Use short-lived signed URLs for private photos and documents.
+- Do not persist signed URLs in database records.
+- Add rate limiting and security logging without logging raw portal tokens.
+- Archive behavior and portal revocation must be deliberate and documented.
+
+First produce a current-versus-proposed response schema, threat model, authorization design, customer flow and deployment plan. Stop for approval.
+
+After approval, implement read-only additions before new write paths. Each public write must be idempotent, server-timestamped and protected against stale device overwrite. Verify backend, hosted portal and real-device flows before updating marketing claims.
+```
+
+## Phase 13 — Estimated-versus-actual job profitability
+
+> **Added 2026-08-06** (deepens next-queue item 5; the Today Insights
+> labor-overrun rule is the first step). Inventory note, verified 2026-08-06:
+> `Expense` (types/models.ts:412) has NO `jobId` today — "actual job-linked
+> material expense" requires a new additive-optional field (persisted-shape
+> change → owner approval at that phase). `Job.timeSessions`, the invoice
+> `payments` ledger, and change-order math all exist.
+
+**Kickoff prompt (owner-curated, 2026-08-06):**
+
+```text
+Work in C:\dev\tradeready\tradeready.
+
+Build trustworthy job profitability that compares the original estimate with actual labor, materials, expenses, change orders, invoicing and cash collection.
+
+Read:
+- types/models.ts
+- utils/pricingEngine.ts
+- time-tracking implementation
+- expense model and jobId linkage
+- pricebook/material models
+- change-order math
+- invoice payment ledger
+- Money analytics
+- businessSnapshot and AI context generation
+- existing financial test fixtures
+
+Define these figures separately:
+- estimated revenue
+- approved change-order revenue
+- final billable amount
+- invoiced amount
+- cash collected
+- estimated labor hours
+- actual tracked labor hours
+- billable labor rate
+- optional owner labor-cost rate
+- estimated material cost
+- actual job-linked material expense
+- other direct job expenses
+- payment-processing fees when known
+- estimated gross profit
+- actual gross profit
+- outstanding receivable
+
+Accounting constraints:
+- Do not treat invoiced revenue as cash collected.
+- Do not invent processing fees, costs, dates or payment methods.
+- Unknown legacy values must remain unknown and carry a warning.
+- Keep labor billing rate separate from labor cost.
+- Avoid double-counting materials that appear both on an estimate and in expenses.
+- Change orders affect contracted revenue only when approved.
+- Voided payments must remain in history but not collected totals.
+- Overpayments and refunds must be represented explicitly.
+
+UX:
+- Estimate versus actual comparison on Job Detail
+- Variance explanations
+- "What changed?" drill-down
+- Completion-time review
+- Aggregate profitability by job type
+- Contextual warning when future pricing is below observed cost or target margin
+
+First inventory which inputs already exist and which require backward-compatible optional fields. Produce formula definitions, worked examples, migration requirements and test vectors. Stop for approval.
+
+After approval, implement the pure calculation layer and exhaustive tests before adding UI or AI. AI may explain deterministic results but must never calculate or silently rewrite financial records.
+```
+
+## Phase 14 — Accountant package & bookkeeping handoff
+
+> **Added 2026-08-06** (deepens next-queue item 7; its low-urgency ranking
+> stands). All referenced files verified present 2026-08-06
+> (`utils/csvExport.ts`, `screens/ExportDataScreen.tsx`,
+> `__tests__/csvExport.test.ts`, the 2026-07-31 export spec). No vehicle
+> identity exists in the models today — vehicles.csv stays conditional as
+> written.
+
+**Kickoff prompt (owner-curated, 2026-08-06):**
+
+```text
+Work in C:\dev\tradeready\tradeready.
+
+Deepen the current individual CSV exports into an accountant-ready package while preserving all existing exports.
+
+Read:
+- utils/csvExport.ts
+- screens/ExportDataScreen.tsx
+- __tests__/csvExport.test.ts
+- invoice payment-ledger utilities
+- expense, mileage, customer, settings and invoice models
+- docs/superpowers/specs/2026-07-31-csv-export-design.md
+- current receipt-photo/cloud-storage implementation
+- docs/release-checklist.md
+
+The package should be named:
+TradeReady-Accounting-<start>-<end>.zip
+
+Include, as supported by real data:
+- invoices.csv
+- invoice-line-items.csv
+- active-payments.csv
+- payment-activity.csv including void/refund history
+- expenses.csv
+- mileage.csv
+- vehicles.csv if vehicle identity is implemented
+- customers.csv
+- category-mapping.csv
+- export-warnings.csv
+- summary.csv or summary.json
+- README.txt
+- receipt attachments when available and explicitly selected
+
+Rules:
+- Maintain payment-level cash-basis income.
+- Preserve partial payments and their actual dates.
+- Exclude voided payments from active cash totals while retaining activity history.
+- Never infer missing issue dates, vendors, payment accounts, taxes, fees, vehicle details or legacy receipt identity.
+- Use blank/unknown values and explicit warnings.
+- Keep import-oriented CSVs free of totals rows.
+- Put control totals, monthly summaries and coverage metrics in separate control files.
+- Make output deterministic for identical data and settings.
+- Use RFC-4180 escaping, CRLF, UTF-8 BOM and stable ordering.
+- Exclude API keys, tokens, local paths and other secrets.
+- Warn when receipts are unavailable locally or in cloud storage.
+- Avoid claiming direct QuickBooks compatibility until an actual import profile is tested.
+
+Before implementation, compare every proposed column to the current data models and label it:
+A. available now
+B. derivable without guessing
+C. requires a new optional field
+D. unavailable for legacy records
+
+Produce the final schemas, control equations, warning taxonomy, ZIP strategy, memory/battery safeguards and ten-phase implementation plan. Stop for approval.
+
+After approval, implement pure export builders first, then controls, packaging, UI and documentation. Test financial equivalence, escaping, deterministic output, missing fields, receipt failures, large exports, secret exclusion, legacy records and sync retention. Finish with TypeScript, all Jest tests and lint.
+```
+
+## Phase 15 — Contextual AI & proactive operations
+
+> **Added 2026-08-06.** Sequenced AFTER Phase 13 — several listed conditions
+> need profitability figures. Builds on shipped deterministic surfaces
+> (`utils/todayInsights.ts` + `components/InsightsCard.tsx` 5-rule card,
+> estimate follow-ups, overdue dunning) — inventory these first; several
+> prompt conditions are already live rules, so extend rather than duplicate.
+> Load `tradeready-ai-layer` before touching model ids or prompts (mandatory
+> verification rule).
+
+**Kickoff prompt (owner-curated, 2026-08-06):**
+
+```text
+Work in C:\dev\tradeready\tradeready.
+
+Turn TradeReady's AI from a destination tab into a contextual action layer while keeping deterministic business rules authoritative.
+
+Read:
+- ChatScreen.tsx
+- utils/aiService.ts
+- utils/businessSnapshot.ts
+- utils/todayInsights.ts
+- components/InsightsCard.tsx
+- pricing calculator and pricebook AI
+- estimate follow-ups
+- invoice outreach
+- job profitability once implemented
+- AI usage caps, analytics and backend guards
+
+Design contextual assistance for:
+- estimates below target margin
+- actual job cost above estimate
+- approved jobs that still need dates
+- schedule gaps that can fit unscheduled work
+- estimates awaiting customer action
+- overdue invoice follow-up
+- repeat customers due for maintenance
+- customers eligible for a review request
+- unusual expense or cash-flow changes
+
+Rules:
+- Deterministic code identifies the condition and computes every number.
+- AI may explain, summarize or draft language.
+- AI must not invent business facts.
+- No autonomous price changes, customer messages, invoices, schedule changes or financial writes.
+- Every mutation requires an explicit user confirmation.
+- Avoid sending more customer or financial data to AI providers than the task requires.
+- Respect usage caps and degrade to deterministic copy when AI is unavailable.
+- Each insight must have a useful action, dismiss/snooze behavior, stable deduplication and an explanation of why it appeared.
+- Do not remove the AI tab until analytics demonstrate that contextual entry points replace it.
+
+First create an insight inventory ranked by expected revenue/time impact, define deterministic eligibility rules and show the exact data sent to AI for each. Include privacy, cost, fallback, analytics and evaluation plans. Stop for approval.
+
+After approval, implement two or three highest-value insights first and compare engagement against the standalone AI tab before expanding.
+```
+
+---
+
 ## 2026-08-06 update — external audit & next queue
 
 A second external audit (Codex; the first was ChatGPT's, reviewed 2026-08-03) was
@@ -210,11 +530,11 @@ overrun. The genuinely new material and the resulting queue:
 4. **Calendar / availability view** — agreed as the **next big feature**. The
    scheduling guardrails (overlap warnings, smart pickers, week strip) already
    exist; the missing surface is the calendar itself — a month view is the known
-   delta.
+   delta. **Full kickoff prompt: Phase 11.**
 5. **Estimated-vs-actual job profitability** — agreed. The Today Insights
    labor-overrun rule is the first step. The genuinely missing insight pieces:
    an **invoice-level payer-behavior hint** and **materials-vs-estimate on job
-   completion**.
+   completion**. **Full kickoff prompt: Phase 13.**
 6. **Activation instrumentation before any paywall change** — pre-paywall sample
    exploration is a legitimate conversion experiment but *not* obviously right:
    the hard-paywall-after-onboarding flow was a deliberate owner decision in the
@@ -222,7 +542,12 @@ overrun. The genuinely new material and the resulting queue:
    try-before-pay. First add **trial-start** and **activation** ("created a real
    customer and estimate") telemetry events; revisit the flow only with data.
 7. **Accountant package** — low urgency: bundle the existing CSV exports with
-   control totals. Never infer missing historical fields.
+   control totals. Never infer missing historical fields. **Full kickoff
+   prompt: Phase 14.**
+
+Also staged with full kickoff prompts, outside this priority list:
+**customer-portal completion (Phase 12)** and the **contextual-AI action
+layer (Phase 15)** — the latter sequenced after Phase 13.
 
 ### Deferrals reaffirmed
 
@@ -233,6 +558,11 @@ depth-not-breadth, solo-operator thesis holds.
 
 ## Notes
 
+- **Phases 11–15 (added 2026-08-06):** owner-curated kickoff prompts from the
+  Codex-audit adoption — deeper successors to the original ten-item list, not
+  part of its 2026-07-17 leverage ranking. Their context blockquotes carry
+  repo-verified preconditions (portal branch merge, `Expense.jobId` absence,
+  R2-photos dependency) — re-verify at kickoff, the tree will drift.
 - **Widgets & Siri (added 2026-08-02):** home-screen widgets and Siri/App Intents
   are planned outside this ten-item list — see `docs/widget-plan.md` (App Group
   bridge foundation, Next Job + Job Timer widgets, voice Tier 1). ⚠️ backlog,
