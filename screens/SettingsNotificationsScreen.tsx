@@ -177,8 +177,24 @@ export default function SettingsNotificationsScreen({ navigation }: TodayStackSc
               />
             </View>
             <Text style={styles.keyNote}>
-              When you mark a job complete, create the invoice automatically — billing tracked time when the timer was used — and open the send screen.
+              When you mark a job complete, create the invoice automatically, billing tracked time when the timer was used.
             </Text>
+            {!!s.autoInvoiceOnComplete && (
+              <>
+                <View style={[styles.toggleRow, { marginTop: spacing.sm }]}>
+                  <Text style={styles.toggleLabel}>Email it automatically</Text>
+                  <Switch
+                    value={!!s.autoEmailInvoiceOnComplete}
+                    onValueChange={(v) => update("autoEmailInvoiceOnComplete", v)}
+                    trackColor={{ true: colors.accent }}
+                    accessibilityLabel="Email the auto-created invoice automatically"
+                  />
+                </View>
+                <Text style={styles.keyNote}>
+                  Skip the send screen — the invoice is emailed to the customer within about 15 minutes, with a payment link when one can be made. If the customer has no email on file, the send screen opens instead.
+                </Text>
+              </>
+            )}
           </View>
 
           <Text style={[styles.ruleSubtitle, { marginTop: spacing.sm }]}>Message templates</Text>
