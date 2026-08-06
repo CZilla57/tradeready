@@ -13,6 +13,9 @@ const {
   selectInvoicesToRemind,
   isPlausibleEmail,
 } = require("../backend/lib/selectInvoicesToRemind");
+// backend-workers/lib/reminderEmail.js is the byte-identical mirror the live
+// cron actually runs — header-safety assertions pin both copies.
+const workers = require("../backend-workers/lib/reminderEmail");
 
 // Fixed "today" so daysPastDue is deterministic (matches reminderLogic.test.js).
 const TODAY = new Date(2026, 6, 15); // 2026-07-15
@@ -183,6 +186,22 @@ describe("From-phrase sanitization", () => {
 
   test("caps the phrase length", () => {
     expect(sanitizeFromPhrase("A".repeat(500))).toHaveLength(80);
+  });
+});
+
+describe("subject header safety", () => {
+  // Mirrors the invoiceEmailHardening.test.js subject test: invoice.number is
+  // user-synced data landing in a mail header.
+  test.each([
+    ["backend (Vercel)", buildReminderEmail],
+    ["backend-workers (live cron)", workers.buildReminderEmail],
+  ])("subject is header-safe: CR/LF in synced data cannot smuggle a header (%s)", (_label, build) => {
+    const email = build({
+      invoice: inv({ number: "INV-1\r\nBcc: a@b.c" }),
+      settings,
+      today: TODAY,
+    });
+    expect(email.subject).not.toMatch(/[\r\n]/);
   });
 });
 

@@ -49,6 +49,16 @@ function sanitizeFromPhrase(name) {
     .slice(0, 80);
 }
 
+// The subject is a mail header built from user-synced data — strip CR/LF
+// (header smuggling), collapse whitespace, cap the length.
+function sanitizeSubject(value) {
+  return String(value || "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
 function buildReminderEmail({ invoice, settings, today = new Date() }) {
   // Mirrors describeAmountOwed in utils/invoiceHelpers.ts. A partly-paid
   // invoice names both numbers so the customer sees their deposit credited.
@@ -100,11 +110,11 @@ ${settings.phone || ""}`.replace(/\n{3,}/g, "\n\n");
   const email = {
     from: fromPhrase ? `${fromPhrase} via TradeReady <${SENDER}>` : `TradeReady <${SENDER}>`,
     to: [invoice.email],
-    subject: `Payment reminder – ${invoice.number}`,
+    subject: sanitizeSubject(`Payment reminder – ${invoice.number}`),
     text,
   };
   if (settings.email) email.reply_to = settings.email;
   return email;
 }
 
-module.exports = { buildReminderEmail, isAllowedPaymentLink, sanitizeFromPhrase };
+module.exports = { buildReminderEmail, isAllowedPaymentLink, sanitizeFromPhrase, sanitizeSubject };

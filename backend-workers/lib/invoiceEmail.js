@@ -2,26 +2,17 @@
 // Pure. Builds the Resend payload for one auto-emailed invoice (2026-08-06
 // spec). Template-only — deterministic, no AI (unattended mail the user never
 // previews). No I/O. Sibling of reminderEmail.js, reusing its hardened
-// pieces: sanitizeFromPhrase for the From header, and the pay-link rule
+// pieces: sanitizeFromPhrase for the From header, sanitizeSubject for the
+// subject header, and the pay-link rule
 // (amount matches the balance this email quotes + allowlisted https host —
 // see reminderEmail.js for the phishing rationale). A failing link check
 // drops the LINE, never the email.
 
 const { formatMoney } = require("./overdue");
 const { balanceDue, amountPaid, PAID_EPSILON } = require("./paymentMath");
-const { isAllowedPaymentLink, sanitizeFromPhrase } = require("./reminderEmail");
+const { isAllowedPaymentLink, sanitizeFromPhrase, sanitizeSubject } = require("./reminderEmail");
 
 const SENDER = "invoices@gettradereadyapp.com";
-
-// The subject is a mail header built from user-synced data — strip CR/LF
-// (header smuggling), collapse whitespace, cap the length.
-function sanitizeSubject(value) {
-  return String(value || "")
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
 
 function buildInvoiceEmail({ invoice, settings }) {
   const paid = amountPaid(invoice);
