@@ -92,6 +92,7 @@ Full job lifecycle from lead to paid.
 - Add / edit invoice form
 - Collection message generator (email + SMS via Expo Mail Composer / SMS)
 - Payment link generation (Stripe, Square, PayPal)
+- Opt-in second tier (`autoEmailInvoiceOnComplete`, 2026-08-06): the auto-created invoice is emailed to the customer by a 15-minute Workers cron (Resend, `invoices@gettradereadyapp.com`, one-and-done via `auto_invoice_email_log`) — including approved change-order lines and a payment link when one was minted at creation; with no customer email on file the send screen opens as before.
 
 ### Tab 4 — Money
 Everything financial in one place.

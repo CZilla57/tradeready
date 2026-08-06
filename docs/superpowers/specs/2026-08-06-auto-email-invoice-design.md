@@ -1,6 +1,6 @@
 # Fully Automatic Invoice Emailing (opt-in) — Design
 
-**Date:** 2026-08-06 · **Status:** owner-approved (this session), not started
+**Date:** 2026-08-06 · **Status:** owner-approved; built per docs/superpowers/plans/2026-08-06-auto-email-invoice.md (pending owner smoke + Worker deploy + migration + OTA)
 **Depends on:** auto-invoice-on-complete (2026-08-03 spec, merged `1a88540`),
 change orders (2026-08-05 spec, merged `c38a3f9`), overdue auto-outreach Phase 2
 (2026-07-14 spec — the Resend + log-table pattern this design mirrors),
