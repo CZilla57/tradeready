@@ -12,6 +12,8 @@ import {
   ensurePhotoLocal,
   backfillMissingPhotos,
   deleteJobPhoto,
+  detachJobPhotos,
+  restoreJobPhotos,
   migrateLegacyJobPhotos,
 } from "../utils/photoSync";
 import { loadJobs, saveJobs, loadJobPhotos, saveJobPhotos } from "../utils/storage";
@@ -216,6 +218,42 @@ describe("deleteJobPhoto", () => {
       `https://tradeready-backend.tradeready.workers.dev/api/photos/${REC.id}`,
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+});
+
+describe("detachJobPhotos / restoreJobPhotos (job-delete cascade)", () => {
+  test("detach removes and returns only the job's records, keeping bytes", async () => {
+    const mine1 = { ...REC, id: "p_a", jobId: "j1" };
+    const mine2 = { ...REC, id: "p_b", jobId: "j1" };
+    const other = { ...REC, id: "p_c", jobId: "j2" };
+    (loadJobPhotos as jest.Mock).mockResolvedValue([mine1, mine2, other]);
+
+    const removed = await detachJobPhotos("j1");
+
+    expect(removed).toEqual([mine1, mine2]);
+    expect(saveJobPhotos).toHaveBeenCalledWith([other]);
+    // No byte deletion on a job-delete cascade (orphans reclaimed at account deletion).
+    expect(deletePhoto).not.toHaveBeenCalled();
+  });
+
+  test("detach is a no-op when the job has no photos", async () => {
+    (loadJobPhotos as jest.Mock).mockResolvedValue([{ ...REC, jobId: "j2" }]);
+    const removed = await detachJobPhotos("j1");
+    expect(removed).toEqual([]);
+    expect(saveJobPhotos).not.toHaveBeenCalled();
+  });
+
+  test("restore re-adds only records not already present (undo)", async () => {
+    const a = { ...REC, id: "p_a", jobId: "j1" };
+    const b = { ...REC, id: "p_b", jobId: "j1" };
+    (loadJobPhotos as jest.Mock).mockResolvedValue([a]); // 'a' already back
+    await restoreJobPhotos([a, b]);
+    expect(saveJobPhotos).toHaveBeenCalledWith([a, b]);
+  });
+
+  test("restore of an empty list writes nothing", async () => {
+    await restoreJobPhotos([]);
+    expect(saveJobPhotos).not.toHaveBeenCalled();
   });
 });
 

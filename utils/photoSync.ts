@@ -194,6 +194,31 @@ export async function deleteJobPhoto(photoId: string): Promise<void> {
 }
 
 /**
+ * Cascade for a job deletion: soft-delete every photo record belonging to the
+ * job (the record delete syncs to other devices) and return the removed records
+ * so a job-delete UNDO can restore them. The image bytes (local file + R2
+ * object) are intentionally LEFT as orphans — matching how deleting a job always
+ * left its Job.photos files on disk — and are reclaimed by the account-deletion
+ * R2 purge. This keeps the undo instant and offline-safe: restoring the records
+ * makes the photos reappear without any re-download.
+ */
+export async function detachJobPhotos(jobId: string): Promise<JobPhoto[]> {
+  const photos = await loadJobPhotos();
+  const removed = photos.filter((p) => p.jobId === jobId);
+  if (removed.length) await saveJobPhotos(photos.filter((p) => p.jobId !== jobId));
+  return removed;
+}
+
+/** Re-save photo records removed by detachJobPhotos (job-delete undo). Adds only
+ * the ones not already present, so a double-undo can't duplicate them. */
+export async function restoreJobPhotos(records: JobPhoto[]): Promise<void> {
+  if (records.length === 0) return;
+  const current = await loadJobPhotos();
+  const missing = records.filter((r) => !current.some((p) => p.id === r.id));
+  if (missing.length) await saveJobPhotos([...current, ...missing]);
+}
+
+/**
  * One-time adoption migration draining legacy `Job.photos` URI arrays into the
  * synced `jobPhotos` collection. Flag-free + idempotent (storage-and-sync §7):
  * once every Job.photos is empty a second run is a zero-write fast return.

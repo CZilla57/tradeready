@@ -20,7 +20,7 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { jobPhotoUri } from "../utils/photoStorage";
-import { attachJobPhoto, deleteJobPhoto, ensurePhotoLocal } from "../utils/photoSync";
+import { attachJobPhoto, deleteJobPhoto, ensurePhotoLocal, detachJobPhotos, restoreJobPhotos } from "../utils/photoSync";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer, loadJobPhotos } from "../utils/storage";
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
@@ -915,6 +915,10 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           const jobs = await loadJobs();
           const deleted = jobs.find((j: Job) => j.id === jobId);
           await saveJobs(jobs.filter((j: Job) => j.id !== jobId));
+          // Cascade: soft-delete this job's photo records (bytes left as
+          // orphans, reclaimed at account deletion). Capture them so undo can
+          // restore them alongside the job.
+          const removedPhotos = await detachJobPhotos(jobId);
           navigation.goBack();
           if (deleted) {
             showUndo("Job deleted", async () => {
@@ -922,6 +926,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
               if (!current.some((j) => j.id === deleted.id)) {
                 await saveJobs([...current, deleted]);
               }
+              await restoreJobPhotos(removedPhotos);
             });
           }
         },
