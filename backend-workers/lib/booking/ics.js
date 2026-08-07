@@ -37,4 +37,58 @@ function buildIcs({ businessName, slot, uid }) {
   return lines.join('\r\n') + '\r\n';
 }
 
-module.exports = { buildIcs };
+// Floating-local-time single event for an owner-scheduled job appointment
+// (Phase 12A). Owner-naive date/time strings carry no zone, so the event is
+// emitted WITHOUT Z/TZID and calendar apps render it at face value in the
+// viewer's zone — correct for a local-trades appointment. Booked-slot
+// appointments keep using buildIcs above (real UTC instants). No start time
+// → all-day event (DTEND exclusive per RFC 5545 §3.6.1).
+
+function icsDate(ymd) {
+  return String(ymd).replace(/-/g, '');
+}
+
+function icsFloating(ymd, hm) {
+  return `${icsDate(ymd)}T${String(hm).replace(':', '')}00`;
+}
+
+function addMinutesClamped(hm, minutes) {
+  const [h, m] = String(hm).split(':').map(Number);
+  const total = Math.min(h * 60 + m + minutes, 23 * 60 + 59);
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function nextDate(ymd) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d) + 86_400_000).toISOString().slice(0, 10);
+}
+
+function buildJobIcs({ businessName, title, date, start, end, uid, stampUtc }) {
+  const summary = icsEscape(title ? `${title} — ${businessName}` : `Appointment — ${businessName}`);
+  const timing = start
+    ? [
+        `DTSTART:${icsFloating(date, start)}`,
+        `DTEND:${icsFloating(date, end && end > start ? end : addMinutesClamped(start, 60))}`,
+      ]
+    : [
+        `DTSTART;VALUE=DATE:${icsDate(date)}`,
+        `DTEND;VALUE=DATE:${icsDate(nextDate(date))}`,
+      ];
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//TradeReady//Portal//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${icsEscape(uid)}`,
+    `DTSTAMP:${icsTime(stampUtc)}`,
+    ...timing,
+    `SUMMARY:${summary}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+  return lines.join('\r\n') + '\r\n';
+}
+
+module.exports = { buildIcs, buildJobIcs };
