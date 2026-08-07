@@ -34,6 +34,7 @@ export type TodayStackParamList = {
   Route: undefined;
   Settings: undefined;
   SettingsBusiness: undefined;
+  SettingsSchedule: undefined;
   SettingsPricing: undefined;
   SettingsInvoiceNumbering: undefined;
   SettingsAppearance: undefined;

@@ -4,7 +4,8 @@
 // throughout: Tue Aug 4 2026, 10:00 local → "tomorrow" is 2026-08-05.
 
 import { selectTodayInsights } from '../utils/todayInsights';
-import type { Job, Invoice } from '../types/models';
+import { resolveSchedule } from '../utils/scheduleConfig';
+import type { Job, Invoice, Settings } from '../types/models';
 
 const NOW = new Date(2026, 7, 4, 10, 0);
 
@@ -186,6 +187,31 @@ describe('open_slot', () => {
       job({ id: 'b', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '14:00', scheduledEndTime: '17:00' }),
     ];
     expect(selectTodayInsights(packed, [], NOW).filter(i => i.kind === 'open_slot')).toHaveLength(0); // 119 min
+  });
+
+  test('a custom work window from Settings.schedule changes the gap math (Phase 11 A5)', () => {
+    // Window ends 11:00 → only the 08:00–09:00 gap remains (60 min < 120) → silent
+    const short = resolveSchedule({ schedule: { workDayEnd: '11:00' } } as unknown as Settings);
+    expect(
+      selectTodayInsights([tomorrowJob], [], NOW, short).filter(i => i.kind === 'open_slot')
+    ).toHaveLength(0);
+  });
+
+  test('a blackout on tomorrow suppresses open_slot (Phase 11 A5)', () => {
+    const off = resolveSchedule({
+      schedule: { blackouts: [{ id: 'b1', start: '2026-08-05', end: '2026-08-05' }] },
+    } as unknown as Settings);
+    expect(
+      selectTodayInsights([tomorrowJob], [], NOW, off).filter(i => i.kind === 'open_slot')
+    ).toHaveLength(0);
+  });
+
+  test('a non-workday tomorrow suppresses open_slot (Phase 11 A5)', () => {
+    // 2026-08-05 is a Wednesday; Monday-only workDays exclude it
+    const monOnly = resolveSchedule({ schedule: { workDays: [1] } } as unknown as Settings);
+    expect(
+      selectTodayInsights([tomorrowJob], [], NOW, monOnly).filter(i => i.kind === 'open_slot')
+    ).toHaveLength(0);
   });
 
   test('exactly 120 minutes fires', () => {

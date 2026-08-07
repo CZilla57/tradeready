@@ -54,6 +54,7 @@ import CustomerDetailScreen       from "./screens/CustomerDetailScreen";
 import AddCustomerScreen          from "./screens/AddCustomerScreen";
 import SettingsHubScreen from "./screens/SettingsHubScreen";
 import SettingsBusinessScreen     from "./screens/SettingsBusinessScreen";
+import SettingsScheduleScreen     from "./screens/SettingsScheduleScreen";
 import SettingsAppearanceScreen   from "./screens/SettingsAppearanceScreen";
 import SettingsPricingScreen      from "./screens/SettingsPricingScreen";
 import SettingsInvoiceNumberingScreen from "./screens/SettingsInvoiceNumberingScreen";
@@ -138,6 +139,7 @@ function TodayTab() {
       <TodayStack.Screen name="Route" component={RouteScreen} options={{ title: "Today's Route" }} />
       <TodayStack.Screen name="Settings" component={SettingsHubScreen} options={{ title: "Settings" }} />
       <TodayStack.Screen name="SettingsBusiness" component={SettingsBusinessScreen} options={{ title: "Business profile" }} />
+      <TodayStack.Screen name="SettingsSchedule" component={SettingsScheduleScreen} options={{ title: "Schedule" }} />
       <TodayStack.Screen name="SettingsAppearance" component={SettingsAppearanceScreen} options={{ title: "Appearance" }} />
       <TodayStack.Screen name="SettingsPricing" component={SettingsPricingScreen} options={{ title: "Pricing defaults" }} />
       <TodayStack.Screen name="SettingsInvoiceNumbering" component={SettingsInvoiceNumberingScreen} options={{ title: "Invoice numbering" }} />
