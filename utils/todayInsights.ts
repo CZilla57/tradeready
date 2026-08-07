@@ -9,6 +9,13 @@ import type { Job, Invoice } from "../types/models";
 import { computeTimeTracking, formatElapsed } from "./timeTracking";
 import { formatLaborHint, largestFreeGap } from "./scheduleSmarts";
 import { isArchived } from "./archive";
+import { selectUnscheduledApproved } from "./calendar";
+import {
+  isBlackoutDate,
+  isWorkDay,
+  SCHEDULE_DEFAULTS,
+  type ResolvedSchedule,
+} from "./scheduleConfig";
 import { isFullyPaid, balanceDue } from "./invoicePayments";
 import { daysPastDue } from "./invoiceHelpers";
 import { formatMoney, formatQuote } from "./format";
@@ -43,9 +50,10 @@ export type TodayInsight = {
 
 /** Quarter-hour floor — sub-15-minute overruns are noise to a trade. */
 const OVERRUN_MIN_HOURS = 0.25;
-/** Fixed work window for the open-slot rule (no setting in v1, per spec). */
-export const WORK_DAY_START = "08:00";
-export const WORK_DAY_END = "17:00";
+// The open-slot work window comes from Settings.schedule via resolveSchedule
+// since Phase 11 A5 (absent schedule = the old fixed 08:00–17:00; the
+// original "no setting in v1" spec note is superseded by the 2026-08-07
+// calendar spec). Non-workday and blacked-out tomorrows are silent.
 /** How many days ahead (inclusive) "due soon" looks; day +1 belongs to the
  * Overdue section (due-today is NOT overdue — existing semantics). */
 const DUE_SOON_DAYS = 2;
@@ -132,16 +140,21 @@ function selectDueSoon(invoices: Invoice[], now: Date): TodayInsight[] {
   }];
 }
 
-function selectScheduleInsights(jobs: Job[], now: Date): TodayInsight[] {
+function selectScheduleInsights(
+  jobs: Job[],
+  now: Date,
+  schedule: ResolvedSchedule
+): TodayInsight[] {
   const out: TodayInsight[] = [];
   const tomorrow = shiftDate(formatLocalDate(now), 1); // local-frame (FA-039)
 
-  const unscheduled = jobs.filter(
-    (j) => j.status === "approved" && !j.scheduledDate && !isArchived(j)
-  );
+  const unscheduled = selectUnscheduledApproved(jobs);
 
   let fittedJobId: string | null = null;
-  const gap = largestFreeGap(jobs, tomorrow, WORK_DAY_START, WORK_DAY_END);
+  const tomorrowIsOpen = isWorkDay(schedule, tomorrow) && !isBlackoutDate(schedule, tomorrow);
+  const gap = tomorrowIsOpen
+    ? largestFreeGap(jobs, tomorrow, schedule.workDayStart, schedule.workDayEnd)
+    : null;
   if (gap && gap.minutes >= MIN_GAP_MINUTES) {
     const gapLabel = formatLaborHint(gap.minutes / 60);
     // Best fill: the largest approved unscheduled job that still fits.
@@ -181,13 +194,18 @@ function selectScheduleInsights(jobs: Job[], now: Date): TodayInsight[] {
   return out;
 }
 
-export function selectTodayInsights(jobs: Job[], invoices: Invoice[], now: Date): TodayInsight[] {
+export function selectTodayInsights(
+  jobs: Job[],
+  invoices: Invoice[],
+  now: Date,
+  schedule: ResolvedSchedule = SCHEDULE_DEFAULTS
+): TodayInsight[] {
   const safeJobs = jobs || [];
   const safeInvoices = invoices || [];
   return [
     ...selectLaborOverruns(safeJobs, now),
     ...selectUninvoicedComplete(safeJobs),
     ...selectDueSoon(safeInvoices, now),
-    ...selectScheduleInsights(safeJobs, now),
+    ...selectScheduleInsights(safeJobs, now, schedule),
   ];
 }

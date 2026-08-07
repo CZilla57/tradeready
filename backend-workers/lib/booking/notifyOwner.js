@@ -19,24 +19,42 @@ function sanitizeSubjectPart(name) {
 }
 
 function buildBookingEmail({ to, request }) {
-  const lines = [
-    `New quote request via your booking link:`,
-    ``,
-    `Name: ${request.name}`,
-    `Phone: ${request.phone || '-'}`,
-    `Email: ${request.email || '-'}`,
-    `Address: ${request.address || '-'}`,
-    `Preferred timing: ${request.preferredTiming || '-'}`,
-    ``,
-    `What they need:`,
-    request.details,
-    ``,
-    `Open TradeReady to see the new lead in Jobs.`,
-  ];
+  // Accurate status wording (Phase 11 spec §2 Phase C): a slot booking is a
+  // confirmed appointment on the calendar, not a quote request.
+  const booked = request.kind === 'booked' && request.slot;
+  const lines = booked
+    ? [
+        `New booked appointment via your booking link:`,
+        ``,
+        `When: ${request.slot.date} at ${request.slot.start} (${request.slot.timeZone})`,
+        `Name: ${request.name}`,
+        `Phone: ${request.phone || '-'}`,
+        `Email: ${request.email || '-'}`,
+        `Address: ${request.address || '-'}`,
+        ``,
+        `What they need:`,
+        request.details,
+        ``,
+        `The slot is held for them. Open TradeReady to see it on your calendar.`,
+      ]
+    : [
+        `New quote request via your booking link:`,
+        ``,
+        `Name: ${request.name}`,
+        `Phone: ${request.phone || '-'}`,
+        `Email: ${request.email || '-'}`,
+        `Address: ${request.address || '-'}`,
+        `Preferred timing: ${request.preferredTiming || '-'}`,
+        ``,
+        `What they need:`,
+        request.details,
+        ``,
+        `Open TradeReady to see the new lead in Jobs.`,
+      ];
   return {
     from: SENDER,
     to,
-    subject: `New quote request from ${sanitizeSubjectPart(request.name)}`.slice(0, 120),
+    subject: `${booked ? 'New booked appointment' : 'New quote request'} from ${sanitizeSubjectPart(request.name)}`.slice(0, 120),
     text: lines.join('\n'),
   };
 }
@@ -73,8 +91,11 @@ async function notifyOwner(env, { userId, settingsData, request }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: token,
-          title: 'New quote request',
-          body: `${request.name} — ${String(request.details || '').slice(0, 120)}`,
+          title: request.kind === 'booked' ? 'New booked appointment' : 'New quote request',
+          body:
+            request.kind === 'booked' && request.slot
+              ? `${request.name} — ${request.slot.date} at ${request.slot.start}`
+              : `${request.name} — ${String(request.details || '').slice(0, 120)}`,
           data: { type: 'booking_request' },
         }),
       });
@@ -85,4 +106,64 @@ async function notifyOwner(env, { userId, settingsData, request }) {
   }
 }
 
-module.exports = { buildBookingEmail, notifyOwner };
+const UPDATE_TITLES = {
+  request_reschedule: 'Reschedule requested',
+  cancel: 'Booking cancelled',
+};
+
+/**
+ * Owner alert for a CUSTOMER action on an existing booking (Phase 11 D1).
+ * Same fire-and-forget contract as notifyOwner. Push carries
+ * type "booking_update" + the converted job id so a tap can land on the
+ * exact job instead of the coarse Jobs list.
+ */
+async function notifyOwnerUpdate(env, { userId, settingsData, request, event, note }) {
+  const title = UPDATE_TITLES[event] || 'Booking update';
+  const when = request.slot ? `${request.slot.date} at ${request.slot.start}` : '';
+
+  try {
+    const to = await fetchOwnerEmail(env, userId);
+    if (to && env.RESEND_API_KEY) {
+      const lines = [
+        `${title} — ${request.name}${when ? ` (${when})` : ''}.`,
+        ...(note ? [``, `Their note:`, note] : []),
+        ``,
+        `Open TradeReady to respond.`,
+      ];
+      const r = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: SENDER,
+          to,
+          subject: `${title}: ${sanitizeSubjectPart(request.name)}`.slice(0, 120),
+          text: lines.join('\n'),
+        }),
+      });
+      if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
+    }
+  } catch (err) {
+    console.error('[booking/notify-update] email failed:', err.message);
+  }
+
+  try {
+    const token = settingsData && settingsData.pushToken && settingsData.pushToken.token;
+    if (token) {
+      const r = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: token,
+          title,
+          body: `${request.name}${when ? ` — ${when}` : ''}`,
+          data: { type: 'booking_update', jobId: request.convertedJobId },
+        }),
+      });
+      if (!r.ok) throw new Error(`Expo push ${r.status}: ${await r.text()}`);
+    }
+  } catch (err) {
+    console.error('[booking/notify-update] push failed:', err.message);
+  }
+}
+
+module.exports = { buildBookingEmail, notifyOwner, notifyOwnerUpdate };

@@ -64,6 +64,11 @@ is a simplified overview.
 ### Tab 1 — Today
 The home screen. Shows what matters right now.
 - Today's job schedule in time order
+- Calendar icon in the header → `CalendarScreen` (2026-08-07): day + week
+  views, out-of-hours/blackout shading, buffer-aware conflict badges,
+  "Needs scheduling" queue, tap-to-reschedule sheet
+- Booking rows: customer reschedule requests + cancellations needing action
+  (`utils/bookingAttention.ts`; rows self-dismiss as resolved)
 - Route map launch (opens Apple/Google Maps — ⚠️ not optimized)
 - Quick actions: Start job, Mark complete, Call customer
 - Earnings summary for today
@@ -148,7 +153,9 @@ Support and Legal are single-tap actions that live on the hub itself
 - Review requests (`SettingsReviewsScreen`)
 - Notifications — reminder rules, auto-outreach toggle (tap an overdue reminder to open a ready-to-send message), auto-email toggle (backend emails a one-and-done reminder once overdue) (`SettingsNotificationsScreen`)
 - Payments — Stripe Connect onboarding and status, PayPal.Me, Venmo (`SettingsPaymentsScreen`)
-- Booking link (`SettingsBookingScreen`)
+- Booking link (`SettingsBookingScreen` — incl. the bookable-slots toggle, 2026-08-07)
+- Schedule (`SettingsScheduleScreen`, 2026-08-07 — working hours, work days,
+  appointment duration, buffer, time off; read everywhere via `resolveSchedule`)
 - Subscription management — RevenueCat (`SettingsSubscriptionScreen`)
 - Account — sign out, clear sample data, delete account (`SettingsAccountScreen`)
 
@@ -258,9 +265,16 @@ Support and Legal are single-tap actions that live on the hub itself
   Deduction total = business miles × `settings.mileageRate` (default 0.70).
 
 ### BookingRequest
-- id (`bk<epoch-ms>_<6 hex>`, server-minted), status: `new | converted`
+- id (`bk<epoch-ms>_<6 hex>`, server-minted), status:
+  `new | converted | booked | confirmed | reschedule_requested | cancelled | declined`
 - name, phone, email, address, details, preferredTiming
 - createdAt (ISO, server clock); convertedJobId / convertedCustomerId (set on conversion)
+- Phase 11 additive fields (2026-08-07): `kind` (`request | booked`), `slot`
+  (owner-naive date/start/end + IANA timeZone + UTC instants), `manageToken`
+  (per-booking capability for the customer manage page — public-by-design,
+  like the portal token), `history` (append-only audit trail, SERVER-written;
+  unioned on pull by `utils/syncMerge.ts` so a device push racing a server
+  append can't drop an entry)
 - A public request-a-quote submission (booking link, 2026-08-04). Rows are
   INSERTED server-side only — the token-gated `/api/booking/submit` endpoint
   writes them with the service role (`backend/lib/booking/store.js`) — and are
@@ -272,7 +286,24 @@ Support and Legal are single-tap actions that live on the hub itself
   `Customer` (via the same `upsertCustomerInList` upsert every other
   customer-creation path uses) plus a lead `Job` with a deterministic id
   `jbk_<requestId>`, then flips the row to `status: "converted"` — idempotent
-  and flag-free, mirroring `applyEstimateDecisions`.
+  and flag-free, mirroring `applyEstimateDecisions`. A `kind: "booked"` row
+  (slot booking) converts the same way but the lead Job carries the slot's
+  schedule fields and the row KEEPS `status: "booked"` (the customer manage
+  page reads it; `convertedJobId` is the done-marker).
+- **Bookable slots (2026-08-07, behind `Settings.schedule.bookableSlotsEnabled`):**
+  `/api/booking/slots` computes open times server-side (the availability
+  engine twin, `backend-workers/lib/booking/availability.js`, mirroring
+  `utils/availability.ts` — pinned by a parity suite) and
+  `/api/booking/reserve` claims a slot ATOMICALLY via the
+  `booking_reservations` table's partial unique index
+  (`user_id, slot_start_utc WHERE status='booked'` — migration
+  `supabase/migrations/20260807_booking_reservations.sql`); a racing customer
+  gets 409 slot_taken. Customers self-serve on `booking.html`
+  (`/api/booking/manage`: confirm / ICS download / request reschedule /
+  cancel — strict state machine, history append); the owner responds from
+  Today's booking rows (`/api/booking/respond`: resolve_reschedule /
+  decline — both free the reservation). All times are owner-naive strings;
+  UTC exists only at the public boundary via the owner's stored IANA zone.
 
 ### Settings / Business Profile
 - businessName, ownerName, trade

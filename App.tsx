@@ -54,6 +54,7 @@ import CustomerDetailScreen       from "./screens/CustomerDetailScreen";
 import AddCustomerScreen          from "./screens/AddCustomerScreen";
 import SettingsHubScreen from "./screens/SettingsHubScreen";
 import SettingsBusinessScreen     from "./screens/SettingsBusinessScreen";
+import SettingsScheduleScreen     from "./screens/SettingsScheduleScreen";
 import SettingsAppearanceScreen   from "./screens/SettingsAppearanceScreen";
 import SettingsPricingScreen      from "./screens/SettingsPricingScreen";
 import SettingsInvoiceNumberingScreen from "./screens/SettingsInvoiceNumberingScreen";
@@ -68,6 +69,7 @@ import SettingsImportScreen        from "./screens/SettingsImportScreen";
 import TodayScreen                from "./screens/TodayScreen";
 import MoneyScreen                from "./screens/MoneyScreen";
 import ChatScreen                 from "./screens/ChatScreen";
+import CalendarScreen             from "./screens/CalendarScreen";
 import RouteScreen                from "./screens/RouteScreen";
 import RecurringJobsScreen        from "./screens/RecurringJobsScreen";
 import MileageLogScreen           from "./screens/MileageLogScreen";
@@ -133,9 +135,11 @@ function TodayTab() {
   return (
     <TodayStack.Navigator screenOptions={navOpts}>
       <TodayStack.Screen name="TodayHome" component={TodayScreen} options={{ headerShown: false }} />
+      <TodayStack.Screen name="Calendar" component={CalendarScreen} options={{ title: "Calendar" }} />
       <TodayStack.Screen name="Route" component={RouteScreen} options={{ title: "Today's Route" }} />
       <TodayStack.Screen name="Settings" component={SettingsHubScreen} options={{ title: "Settings" }} />
       <TodayStack.Screen name="SettingsBusiness" component={SettingsBusinessScreen} options={{ title: "Business profile" }} />
+      <TodayStack.Screen name="SettingsSchedule" component={SettingsScheduleScreen} options={{ title: "Schedule" }} />
       <TodayStack.Screen name="SettingsAppearance" component={SettingsAppearanceScreen} options={{ title: "Appearance" }} />
       <TodayStack.Screen name="SettingsPricing" component={SettingsPricingScreen} options={{ title: "Pricing defaults" }} />
       <TodayStack.Screen name="SettingsInvoiceNumbering" component={SettingsInvoiceNumberingScreen} options={{ title: "Invoice numbering" }} />
@@ -483,6 +487,17 @@ function RootNavigator() {
         navigationRef.navigate("Main", {
           screen: "Jobs",
           params: { screen: "JobList" },
+        });
+      }
+      // Customer acted on an existing booking (reschedule/cancel — Phase 11
+      // D4): land on the exact job when the push carries its id, else the
+      // coarse Jobs list like booking_request.
+      if (data?.type === "booking_update" && navigationRef.isReady()) {
+        track("booking_update_opened", {});
+        const jobId = typeof data.jobId === "string" ? data.jobId : undefined;
+        navigationRef.navigate("Main", {
+          screen: "Jobs",
+          params: jobId ? { screen: "JobDetail", params: { jobId } } : { screen: "JobList" },
         });
       }
     });

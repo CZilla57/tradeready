@@ -25,7 +25,10 @@ import {
   loadSettings,
   resolveCustomer,
   loadInvoices,
+  loadBookingRequests,
 } from '../utils/storage';
+import { selectBookingAttention, type BookingAttention } from '../utils/bookingAttention';
+import { respondToBooking } from '../utils/bookingRespond';
 import { sendAppointmentMessage } from '../utils/appointmentSend';
 import { ACTIVE_STATUSES } from '../utils/appointmentMessages';
 import { daysPastDue } from '../utils/invoiceHelpers';
@@ -53,7 +56,7 @@ import {
   type SetupChecklistState,
   type SetupTaskId,
 } from '../utils/setupChecklist';
-import type { Job, Invoice, Customer, Settings } from '../types/models';
+import type { Job, Invoice, Customer, Settings, BookingRequest } from '../types/models';
 import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
 
@@ -432,6 +435,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const [settings, setSettings] = useState<Settings | null>(null);
   const [checklistState, setChecklistState] = useState<SetupChecklistState | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [bookingRequests, setBookingRequests] = useState<BookingRequest[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -440,7 +444,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
+          const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings] = await Promise.all([
             loadJobs(),
             getExpectedEarningsForDate(todayString),
             loadLeadJobs(),
@@ -448,8 +452,10 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
             loadCustomers(),
             loadSetupChecklistState(),
             loadInvoices(),
+            loadBookingRequests(),
           ]);
           if (active) {
+            setBookingRequests(bookings);
             setAllJobs(allJobsList);
             setEarnings(expectedEarnings);
             setOverdueInvoices(filterOverdueInvoices(allInvoices));
@@ -476,7 +482,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   );
 
   const { refreshing, onRefresh } = useRefresh(async () => {
-    const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices] = await Promise.all([
+    const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings] = await Promise.all([
       loadJobs(),
       getExpectedEarningsForDate(todayString),
       loadLeadJobs(),
@@ -484,7 +490,9 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       loadCustomers(),
       loadSetupChecklistState(),
       loadInvoices(),
+      loadBookingRequests(),
     ]);
+    setBookingRequests(bookings);
     setAllJobs(allJobsList);
     setEarnings(expectedEarnings);
     setOverdueInvoices(filterOverdueInvoices(allInvoices));
@@ -513,6 +521,74 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
 
   function goToJobs() {
     navigation.getParent()?.navigate('Jobs');
+  }
+
+  // ── Booking attention (Phase 11 D4) ──────────────────────────────────────
+  const bookingAttention = useMemo(
+    () => selectBookingAttention(bookingRequests, allJobs),
+    [bookingRequests, allJobs]
+  );
+
+  function openJobFromBooking(jobId?: string) {
+    if (jobId) {
+      navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId } });
+    } else {
+      goToJobs();
+    }
+  }
+
+  async function handleBookingRespond(requestId: string, action: 'resolve_reschedule' | 'decline') {
+    const out = await respondToBooking(requestId, action);
+    if (!out.ok) {
+      Alert.alert("Couldn't update booking", out.message);
+      return;
+    }
+    // In-memory clear only — the server already wrote status + history and
+    // moved updated_at; the next pull converges every device. Saving here
+    // would push a whole-blob copy for no reason.
+    setBookingRequests((prev) =>
+      prev.map((r) => (r.id === requestId ? { ...r, status: out.status as BookingRequest['status'] } : r))
+    );
+  }
+
+  function bookingRowLabel(row: BookingAttention): string {
+    const when = row.request.slot ? formatDisplayDate(row.request.slot.date) : '';
+    return row.kind === 'reschedule_requested'
+      ? `${row.request.name} asked to reschedule ${when}`
+      : `Booking cancelled — ${row.request.name}, ${when}`;
+  }
+
+  function handleBookingRowPress(row: BookingAttention) {
+    const slot = row.request.slot;
+    const when = slot ? `${formatDisplayDate(slot.date)}, ${formatTimeRange(slot.start, slot.end)}` : '';
+    if (row.kind === 'reschedule_requested') {
+      Alert.alert(
+        `${row.request.name} asked to reschedule`,
+        `${when}${row.note ? `\n\n“${row.note}”` : ''}`,
+        [
+          { text: 'View job', onPress: () => openJobFromBooking(row.jobId) },
+          {
+            text: "I've rescheduled it",
+            onPress: () => { void handleBookingRespond(row.request.id, 'resolve_reschedule'); },
+          },
+          {
+            text: 'Decline booking',
+            style: 'destructive',
+            onPress: () => { void handleBookingRespond(row.request.id, 'decline'); },
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+    } else {
+      Alert.alert(
+        `${row.request.name} cancelled their booking`,
+        `${when} is free again. Clear or reuse the time on the job.`,
+        [
+          { text: 'View job', onPress: () => openJobFromBooking(row.jobId) },
+          { text: 'OK', style: 'cancel' },
+        ]
+      );
+    }
   }
 
   function handleJobPress(job: Job) {
@@ -669,6 +745,15 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         </View>
         <TouchableOpacity
           style={styles.settingsBtn}
+          onPress={() => navigation.navigate('Calendar')}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Open calendar"
+        >
+          <Ionicons name="calendar-outline" size={22} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.settingsBtn}
           onPress={() => navigation.navigate('Search')}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           accessibilityRole="button"
@@ -745,6 +830,30 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
           onAskCoach={handleAskCoach}
         />
       )}
+
+      {/* Booking updates — customer reschedule/cancel actions needing eyes.
+          Rows self-dismiss as the underlying condition resolves (selector). */}
+      {!loading &&
+        bookingAttention.map((row) => (
+          <TouchableOpacity
+            key={row.request.id}
+            style={styles.awaitingRow}
+            onPress={() => handleBookingRowPress(row)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={bookingRowLabel(row)}
+          >
+            <Ionicons
+              name={row.kind === 'reschedule_requested' ? 'swap-horizontal-outline' : 'close-circle-outline'}
+              size={16}
+              color={colors.warning}
+            />
+            <Text style={styles.awaitingText} maxFontSizeMultiplier={1.4}>
+              {bookingRowLabel(row)}
+            </Text>
+            <Text style={styles.listRowChevron}>›</Text>
+          </TouchableOpacity>
+        ))}
 
       {/* Overdue Invoices — only show once loaded and there's something to show */}
       {!loading && overdueInvoices.length > 0 && (

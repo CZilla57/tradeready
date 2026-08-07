@@ -36,6 +36,45 @@ const navigation = {
 
 const TOKEN = "f".repeat(48);
 
+describe("Bookable time slots toggle (Phase 11 C3)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (saveSettings as jest.Mock).mockResolvedValue(undefined);
+  });
+
+  it("enabling stamps the device timezone and the flag in one save", async () => {
+    (loadSettings as jest.Mock).mockResolvedValue({
+      ...defaultSettings(),
+      bookingLink: { token: TOKEN, enabled: true },
+    });
+    const { findByLabelText } = await render(
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
+    );
+    await fireEvent(await findByLabelText("Bookable time slots"), "valueChange", true);
+    await waitFor(() => expect(saveSettings).toHaveBeenCalled());
+    const saved = (saveSettings as jest.Mock).mock.calls[0][0];
+    expect(saved.schedule?.bookableSlotsEnabled).toBe(true);
+    expect(typeof saved.schedule?.timeZone).toBe("string");
+    expect(saved.schedule?.timeZone?.length).toBeGreaterThan(0);
+  });
+
+  it("disabling flips the flag but keeps the stored timezone", async () => {
+    (loadSettings as jest.Mock).mockResolvedValue({
+      ...defaultSettings(),
+      bookingLink: { token: TOKEN, enabled: true },
+      schedule: { bookableSlotsEnabled: true, timeZone: "America/Chicago" },
+    });
+    const { findByLabelText } = await render(
+      <SettingsBookingScreen navigation={navigation} route={{} as any} />
+    );
+    await fireEvent(await findByLabelText("Bookable time slots"), "valueChange", false);
+    await waitFor(() => expect(saveSettings).toHaveBeenCalled());
+    const saved = (saveSettings as jest.Mock).mock.calls[0][0];
+    expect(saved.schedule?.bookableSlotsEnabled).toBe(false);
+    expect(saved.schedule?.timeZone).toBe("America/Chicago");
+  });
+});
+
 function settingsWithBooking(enabled: boolean) {
   return { ...defaultSettings(), bookingLink: { token: TOKEN, enabled } };
 }

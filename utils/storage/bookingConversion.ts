@@ -35,7 +35,14 @@ export function convertBookingRequests(
   let requestsChanged = false;
 
   const nextRequests = requests.map((r) => {
-    if (r.status !== "new") return r;
+    // Two convertible shapes (matched EXPLICITLY so unknown future statuses
+    // stay inert): a "new" free-text request, and a "booked" slot
+    // reservation not yet stamped with its job. Booked rows keep their
+    // status — the Phase D manage page reads it; convertedJobId is the
+    // done marker.
+    const isNewRequest = r.status === "new";
+    const isUnconvertedBooked = r.status === "booked" && r.kind === "booked" && !r.convertedJobId;
+    if (!isNewRequest && !isUnconvertedBooked) return r;
 
     const { customer, customers: c2, changed } = upsertCustomerInList(nextCustomers, {
       name: r.name,
@@ -52,16 +59,22 @@ export function convertBookingRequests(
       // deriving it from the request keeps conversion fully deterministic.
       const requestDate = r.createdAt.slice(0, 10);
       const timingLine = r.preferredTiming.trim() ? `Preferred timing: ${r.preferredTiming.trim()}\n` : "";
+      const bookedLine =
+        isUnconvertedBooked && r.slot ? `Booked online for ${r.slot.date} ${r.slot.start}\n` : "";
       const lead: Job = {
         id: jobId,
         customerId: customer.id,
         customerName: customer.name,
-        title: "Quote request",
+        title: isUnconvertedBooked ? "Booked appointment" : "Quote request",
         description: r.details,
+        // D6 (owner-approved 2026-08-07): a slot booking enters as `lead`
+        // WITH schedule fields set — it renders on the calendar and counts
+        // as busy in conflict/availability math without skipping the
+        // estimate pipeline. Never hardcode a later status here.
         status: "lead",
-        scheduledDate: null,
-        scheduledStartTime: null,
-        scheduledEndTime: null,
+        scheduledDate: isUnconvertedBooked && r.slot ? r.slot.date : null,
+        scheduledStartTime: isUnconvertedBooked && r.slot ? r.slot.start : null,
+        scheduledEndTime: isUnconvertedBooked && r.slot ? r.slot.end : null,
         address: r.address,
         // AddJob new-job pricing parity (AddJobScreen.tsx ~337), fallbacks included.
         estimateTotal: 0,
@@ -71,7 +84,7 @@ export function convertBookingRequests(
         materialMarkup: settings.materialMarkup ?? 20,
         overhead: settings.overheadPercent ?? 15,
         margin: settings.marginPercent ?? 20,
-        notes: `${timingLine}Came in via booking link ${requestDate}`,
+        notes: `${bookedLine}${timingLine}Came in via booking link ${requestDate}`,
         invoiceId: null,
         createdAt: requestDate,
       };
@@ -80,7 +93,12 @@ export function convertBookingRequests(
     }
 
     requestsChanged = true;
-    return { ...r, status: "converted" as const, convertedJobId: jobId, convertedCustomerId: customer.id };
+    return {
+      ...r,
+      status: isNewRequest ? ("converted" as const) : r.status,
+      convertedJobId: jobId,
+      convertedCustomerId: customer.id,
+    };
   });
 
   return {
@@ -100,7 +118,14 @@ export async function applyBookingRequests(): Promise<void> {
     loadCustomers(),
     loadSettings(),
   ]);
-  if (!requests.some((r) => r.status === "new")) return;
+  if (
+    !requests.some(
+      (r) =>
+        r.status === "new" ||
+        (r.status === "booked" && r.kind === "booked" && !r.convertedJobId)
+    )
+  )
+    return;
   const out = convertBookingRequests(requests, jobs, customers, settings);
   if (out.customers !== customers) await saveCustomers(out.customers);
   if (out.jobs !== jobs) await saveJobs(out.jobs);

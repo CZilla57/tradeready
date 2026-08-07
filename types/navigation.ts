@@ -30,9 +30,11 @@ export type MainTabParamList = {
 
 export type TodayStackParamList = {
   TodayHome: undefined;
+  Calendar: undefined;
   Route: undefined;
   Settings: undefined;
   SettingsBusiness: undefined;
+  SettingsSchedule: undefined;
   SettingsPricing: undefined;
   SettingsInvoiceNumbering: undefined;
   SettingsAppearance: undefined;

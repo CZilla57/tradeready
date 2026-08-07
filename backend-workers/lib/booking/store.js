@@ -51,4 +51,135 @@ async function insertBookingRequest(env, userId, request) {
   if (!res.ok) throw new Error(`Supabase insert ${res.status}: ${await res.text()}`);
 }
 
-module.exports = { lookupUserByBookingToken, insertBookingRequest, newRequestId };
+// ── Phase 11 C (slots + reserve) ─────────────────────────────────────────────
+
+// rv<epoch-ms>_<6 hex> — same injected-inputs discipline as newRequestId.
+function newReservationId(nowMs, randHex) {
+  return `rv${nowMs}_${randHex}`;
+}
+
+// The user's job blobs — availability recompute input. Soft-deleted rows
+// excluded; the engine itself skips terminal statuses and unscheduled jobs.
+async function fetchJobsData(env, userId) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/jobs?user_id=eq.${encodeURIComponent(userId)}&deleted=eq.false&select=data`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase jobs fetch ${res.status}: ${await res.text()}`);
+  return (await res.json()).map((r) => r.data);
+}
+
+// Active holds — subtracted from offers and from the reserve-time recompute.
+async function fetchActiveReservations(env, userId) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/booking_reservations?user_id=eq.${encodeURIComponent(userId)}&status=eq.booked&select=slot_date,slot_start,slot_end`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase reservations fetch ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// THE atomic claim (spec §6 step 4). The partial unique index
+// (user_id, slot_start_utc) WHERE status='booked' serializes racing
+// customers; PostgREST answers the loser with 409 (Postgres 23505), which
+// this maps to {conflict:true} — never an exception, so the handler can
+// answer 409 slot_taken deliberately.
+async function insertReservation(env, row) {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/booking_reservations`, {
+    method: 'POST',
+    headers: { ...headers(env), 'Content-Type': 'application/json' },
+    body: JSON.stringify(row),
+  });
+  if (res.status === 409) return { conflict: true };
+  if (!res.ok) throw new Error(`Supabase reservation insert ${res.status}: ${await res.text()}`);
+  return { conflict: false };
+}
+
+// Compensation for a failed request-row insert: a reservation must never
+// keep holding a slot the customer has no record of.
+async function deleteReservation(env, id) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/booking_reservations?id=eq.${encodeURIComponent(id)}`,
+    { method: 'DELETE', headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase reservation delete ${res.status}: ${await res.text()}`);
+}
+
+// ── Phase 11 D (manage + respond) ────────────────────────────────────────────
+
+// The manage token is a per-booking capability living inside the request
+// blob — resolved by JSON-path exactly like the booking token.
+async function fetchRequestByManageToken(env, manageToken) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/bookingRequests?data->>manageToken=eq.${encodeURIComponent(manageToken)}&deleted=eq.false&select=id,user_id,data`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase manage lookup ${res.status}: ${await res.text()}`);
+  const rows = await res.json();
+  return rows.length ? rows[0] : null;
+}
+
+async function fetchRequestById(env, id) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/bookingRequests?id=eq.${encodeURIComponent(id)}&deleted=eq.false&select=id,user_id,data`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase request fetch ${res.status}: ${await res.text()}`);
+  const rows = await res.json();
+  return rows.length ? rows[0] : null;
+}
+
+async function fetchSettingsData(env, userId) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/settings?user_id=eq.${encodeURIComponent(userId)}&select=data`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase settings fetch ${res.status}: ${await res.text()}`);
+  const rows = await res.json();
+  return rows.length ? rows[0].data : null;
+}
+
+// Server-side status/history write. updated_at moves so the device's
+// incremental pull picks the change up like any other remote edit.
+async function patchBookingRequest(env, id, data, nowMs) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/bookingRequests?id=eq.${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: { ...headers(env), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data, updated_at: new Date(nowMs).toISOString() }),
+    }
+  );
+  if (!res.ok) throw new Error(`Supabase request patch ${res.status}: ${await res.text()}`);
+}
+
+// Freeing a slot is a status flip: the row leaves the partial unique index
+// (status='booked') and the slot is instantly re-offerable. The status=eq
+// filter makes repeats harmless no-ops.
+async function updateReservationStatus(env, requestId, status) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/booking_reservations?request_id=eq.${encodeURIComponent(requestId)}&status=eq.booked`,
+    {
+      method: 'PATCH',
+      headers: { ...headers(env), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    }
+  );
+  if (!res.ok) throw new Error(`Supabase reservation patch ${res.status}: ${await res.text()}`);
+}
+
+module.exports = {
+  lookupUserByBookingToken,
+  insertBookingRequest,
+  newRequestId,
+  newReservationId,
+  fetchJobsData,
+  fetchActiveReservations,
+  insertReservation,
+  deleteReservation,
+  fetchRequestByManageToken,
+  fetchRequestById,
+  fetchSettingsData,
+  patchBookingRequest,
+  updateReservationStatus,
+};

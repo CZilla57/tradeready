@@ -26,6 +26,7 @@ import {
   type TodayInsight,
 } from "../utils/todayInsights";
 import type { Job, Invoice, Settings } from "../types/models";
+import { resolveSchedule } from "../utils/scheduleConfig";
 import { track } from "../utils/analytics";
 
 const VISIBLE_LIMIT = 3;
@@ -72,8 +73,14 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
 
   // Static per data change — no ticking timer; the number refreshes on focus.
   const insights = useMemo(
-    () => selectTodayInsights(jobs, invoices, new Date()).slice(0, VISIBLE_LIMIT),
-    [jobs, invoices]
+    () =>
+      selectTodayInsights(
+        jobs,
+        invoices,
+        new Date(),
+        settings ? resolveSchedule(settings) : undefined
+      ).slice(0, VISIBLE_LIMIT),
+    [jobs, invoices, settings]
   );
 
   const visible =
