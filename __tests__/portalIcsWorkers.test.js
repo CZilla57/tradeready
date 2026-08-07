@@ -51,14 +51,20 @@ const ENV = { SUPABASE_URL: "https://supa.test", SUPABASE_SERVICE_ROLE_KEY: "srk
 const TOKEN = "p".repeat(48);
 
 function mockPortalBackend({ customerRows = [], jobRows = [], settingsRows = [] } = {}) {
-  global.fetch = jest.fn(async (url) => {
+  const calls = { logs: [] };
+  global.fetch = jest.fn(async (url, init = {}) => {
     const u = String(url);
+    if (u.includes("/rest/v1/portal_access_log") && (init.method || "GET") === "POST") {
+      calls.logs.push(JSON.parse(init.body));
+      return { ok: true, status: 201, json: async () => [], text: async () => "[]" };
+    }
     const body = u.includes("/rest/v1/customers") ? customerRows
       : u.includes("/rest/v1/jobs") ? jobRows
       : u.includes("/rest/v1/settings") ? settingsRows
       : [];
     return { ok: true, status: 200, json: async () => body, text: async () => "[]" };
   });
+  return calls;
 }
 
 afterEach(() => { delete global.fetch; });
@@ -83,12 +89,14 @@ describe("portalIcsCore", () => {
     expect((await portalIcsCore(ENV, { token: TOKEN, jobId: "j2", stampUtc: STAMP })).status).toBe(404);
   });
 
-  test("scheduled job → floating VEVENT with the business name", async () => {
-    mockPortalBackend({ customerRows: [customer], jobRows: [schedJob], settingsRows: [{ data: { businessName: "Ace" } }] });
-    const out = await portalIcsCore(ENV, { token: TOKEN, jobId: "j1", stampUtc: STAMP });
+  test("scheduled job → floating VEVENT with the business name + an 'ics' security-log row (prefix only)", async () => {
+    const calls = mockPortalBackend({ customerRows: [customer], jobRows: [schedJob], settingsRows: [{ data: { businessName: "Ace" } }] });
+    const out = await portalIcsCore(ENV, { token: TOKEN, jobId: "j1", stampUtc: STAMP, ip: "1.1.1.1" });
     expect(out.ok).toBe(true);
     expect(out.ics).toContain("DTSTART:20260812T090000");
     expect(out.ics).toContain("SUMMARY:Heater — Ace");
     expect(out.ics).toContain("UID:j1@tradeready-portal");
+    expect(calls.logs).toEqual([{ user_id: "u1", token_prefix: TOKEN.slice(0, 8), event: "ics", ip: "1.1.1.1" }]);
+    expect(JSON.stringify(calls.logs)).not.toContain(TOKEN);
   });
 });
