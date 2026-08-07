@@ -119,11 +119,26 @@ Nothing to set up here — it's built in and ready whenever you want it.
 - **Customer portal** — Customers → pick a customer → "Customer Portal" gives
   that customer their own persistent link showing their estimates (approve or
   decline through the same hosted approval page the estimate-send flow
-  already uses) and invoices (a Pay button when a payment link is already
-  cached on the invoice — the portal can't mint new ones). Create, share,
-  toggle off, or rotate for a fresh link, all from that customer's detail
-  screen. The backend side is read-only: it resolves the link to a sanitized,
-  whitelisted view and writes nothing.
+  already uses) and invoices (with paid-to-date shown, and a Pay button when
+  a payment link is already cached on the invoice — the portal can't mint new
+  ones). Create, share, toggle off, or rotate for a fresh link, all from that
+  customer's detail screen. Since 2026-08-07 the link itself is controlled
+  server-side, so turning it off or rotating it kills the old link
+  immediately — no waiting for a sync.
+- **What else the portal shows** (added 2026-08-07) — upcoming appointments
+  for the next 60 days, each with an "Add to calendar" download (an
+  appointment the customer booked through your booking link keeps its own
+  manage-page link); any change orders you sent a sign-off link for; and job
+  photos — but only photos you've marked visible with the eye toggle on the
+  job's photo strip. Photos are hidden from the portal unless you flip that
+  toggle, and shared photo links expire after 15 minutes, so a forwarded
+  photo link goes dead quickly.
+- **Portal requests** (added 2026-08-07) — the portal has a request box: the
+  customer can send you a message or ask to reschedule or cancel an
+  appointment. Those requests show up as rows on Today for you to act on —
+  the portal never changes your jobs, invoices, or schedule by itself. A
+  message from a portal customer is linked to their existing customer record,
+  not a duplicate.
 
 ---
 
@@ -199,7 +214,7 @@ utils/
   supabase.ts                    ← Supabase client (auth + database)
   notifications.ts               ← Push notification scheduling (overdue reminders)
   bookingLink.ts                 ← Booking-link URL builder + mint-endpoint client
-  portalLink.ts                  ← Customer-portal URL builder; reuses the booking mint endpoint
+  portalLink.ts                  ← Customer-portal URL builder + portal-manage client (server-owned mint/enable/rotate)
   pushToken.ts                   ← Expo push-token registration into the settings blob
   scheduleConfig.ts              ← resolveSchedule — Settings.schedule defaults + sanitizing
   calendar.ts                    ← Calendar day/week block layout + unscheduled queue
@@ -325,10 +340,27 @@ backend/                         ← Vercel serverless functions (deployed separ
   lib/guards.js                  ← Rate limiter + input caps shared by the AI endpoints
   lib/booking/                   ← store/validate/submit/config/mint/notifyOwner —
                                    booking link backend logic
-  lib/estimate/portalView.js     ← portal-view handler — whitelisted, read-only
-                                   customer-portal bundle (estimates + invoices)
+  lib/estimate/portalView.js     ← portal-view handler — FROZEN at the v1 read
+                                   shape (estimates + invoices); the completed
+                                   Phase 12 portal is Workers-only (see below)
   lib/estimate/portalStore.js    ← Read-only, tenant-scoped Supabase reads for
-                                   portal-view (token→customer, jobs, invoices)
+                                   the v1 portal-view (token→customer, jobs, invoices)
+
+backend-workers/                 ← Cloudflare Worker — the live backend since
+                                   2026-08-06 (portal-relevant files shown;
+                                   the Phase 12 portal exists ONLY here)
+  src/routes/estimate/           ← portal-view (v2), portal-ics, portal-request,
+                                   portal-manage route handlers
+  src/routes/photosPublic.js     ← Anonymous signed photo read for portal photos
+                                   (the owner-JWT /api/photos route is separate)
+  lib/estimate/portalAssemble.js ← Whitelisted portal bundle — appointments,
+                                   estimates, change orders, invoices (+ paid
+                                   to date), customer-visible photos
+  lib/estimate/portalTokenStore.js ← Server-owned token resolver (hash-only
+                                   portal_tokens table; instant disable/rotate)
+  lib/estimate/portalRequest.js  ← Customer message / reschedule / cancel
+                                   request writes (capped, honeypotted)
+  lib/photoSign.js               ← HMAC-signed, expiring portal photo URLs
 ```
 
 ---
@@ -543,34 +575,50 @@ customers a time-based rather than deterministic id, two devices converting
 the same request concurrently can each create a duplicate customer record for
 the same person, which the existing duplicate-customer merge prompt recovers.
 
-**Customer portal token lives on the customer record.** `Customer.portal`
-(the minted share token + its enabled flag) is a plain field on the same
-synced customer blob as name, notes, and everything else — the same
-cross-device last-write-wins class as the booking link above, not a special
-case. A second device that saves that customer before pulling the latest
-portal token can clobber it; the fix is the same one-tap recovery as booking:
-tap "Get a new link" to rotate, then re-share.
+**The portal token on the customer record is only a display copy (since
+2026-08-07).** The real authority is the server's `portal_tokens` table,
+which stores only a sha256 hash of each token (the raw token is returned
+exactly once, when the link is created) — so disabling or rotating a link
+takes effect on the very next request, with no sync round-trip.
+`Customer.portal` on the device is a display copy kept so the URL row and
+share sheet work offline; CustomerDetail's create/toggle/rotate buttons call
+the server first and save the copy only after the server confirms.
+Cross-device last-write-wins can still clobber the *copy* (a stale device
+overwriting the customer blob), which makes a device display an outdated
+link — if the link a device shows ever stops working, rotate from
+CustomerDetail and re-share.
+
+**An out-of-date app can still mint an untracked portal link.** A phone
+running a pre-2026-08-07 build mints portal tokens the old stateless way,
+writing them only onto the customer blob. The server's fallback honors such a
+token (and registers it in `portal_tokens` on first use), so nothing breaks —
+but until the next rotate, that customer can briefly have two working links.
+Rotating from CustomerDetail revokes every link for that customer at once.
+
+**The portal's abuse limits are best-effort.** A customer can send at most 5
+portal requests (messages, reschedule or cancel asks) per day per link,
+counted against the `portal_access_log` table — if that log is unreachable
+the cap is skipped rather than blocking a legitimate customer (deliberate
+fail-open). Separately, the per-IP rate limits on the public portal
+endpoints are held in memory per Worker isolate, so the effective global
+limit is a multiple of the configured number.
 
 **Estimates and invoices are invisible on the portal until customerId is
-stamped.** The portal-view backend matches a customer's jobs (for estimates)
-and invoices by `customerId`, but older records that predate that field only
-carry a typed customer name. Those estimates and invoices stay invisible on
-the customer's portal page until `migrateCustomerIdentity` backfills
-`customerId` onto them, which runs automatically on the owner's next sign-in
-— so the gap is transient, not permanent, but a portal link shared and opened
-before that backfill runs will show fewer estimates and invoices than exist.
+stamped.** The portal-view backend matches a customer's jobs (for estimates,
+appointments, change orders, and photos) and invoices by `customerId`, but
+older records that predate that field only carry a typed customer name. Those
+records stay invisible on the customer's portal page until
+`migrateCustomerIdentity` backfills `customerId` onto them, which runs
+automatically on the owner's next sign-in — so the gap is transient, not
+permanent, but a portal link shared and opened before that backfill runs will
+show less than exists.
 
 **Archiving a customer does not disable their portal link.** Archiving only
 hides the customer from list views (Customers, Jobs, search) — it deliberately
-does not touch `Customer.portal`, so the customer-facing portal keeps working
-after archive, the same way archived customers' invoices and notifications
-keep working. Disable or rotate the link from CustomerDetail if you need to
-cut it off.
-
-**Change orders don't appear on the customer portal yet.** The portal
-(`backend/lib/estimate/portalView.js`) surfaces estimates and invoices only —
-a change order's e-sign link (change.html) or the on-site manual-decision
-record are the only ways a customer sees or responds to one today.
+touches neither the server-side portal token nor `Customer.portal`, so the
+customer-facing portal keeps working after archive, the same way archived
+customers' invoices and notifications keep working. Disable or rotate the
+link from CustomerDetail if you need to cut it off.
 
 **First-device detection counts settings rows.** `initialSync` decides
 push-vs-pull by counting the user's rows in the cloud `settings` table
