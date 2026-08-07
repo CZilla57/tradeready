@@ -1,4 +1,4 @@
-﻿# Marketing Website Roadmap — gettradereadyapp.com
+# Marketing Website Roadmap — gettradereadyapp.com
 
 **Created:** 2026-08-07, from an external (Codex) passive review of the live site dated
 2026-08-07, with every finding re-verified against the `tradeready-legal` repo and live
