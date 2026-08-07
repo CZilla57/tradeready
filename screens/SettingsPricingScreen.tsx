@@ -37,6 +37,29 @@ export default function SettingsPricingScreen({ navigation }: TodayStackScreenPr
             <Text style={styles.keyNote}>
               Used to estimate the tax deduction for logged trips (Money → Mileage). Set to the standard mileage rate for your tax year.
             </Text>
+            <Field
+              label="Owner labor cost rate ($/hr — optional)"
+              value={s.laborCostRate === undefined ? "" : String(s.laborCostRate)}
+              onChangeText={(v) => {
+                // Blank must stay UNSET — absent ≠ 0. An explicit 0 means "my
+                // labor costs nothing"; absent means "not configured", and the
+                // profitability layer labels profit "before paying yourself"
+                // (types/models.ts laborCostRate). The parseFloat(v) || 0
+                // pattern of the fields above would destroy that distinction.
+                const trimmed = v.trim();
+                if (trimmed === "") {
+                  update("laborCostRate", undefined);
+                  return;
+                }
+                const n = parseFloat(trimmed);
+                update("laborCostRate", Number.isFinite(n) && n >= 0 ? n : undefined);
+              }}
+              keyboardType="decimal-pad"
+              colors={colors}
+            />
+            <Text style={styles.keyNote}>
+              What you pay yourself per hour — used only for job profit math (job → Estimate vs actual), never in customer prices. Leave blank to see profit before paying yourself.
+            </Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

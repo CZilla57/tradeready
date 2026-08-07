@@ -14,6 +14,7 @@
 
 import type { Expense, ExpenseCategoryId, Job, JobStatus } from "../types/models";
 import type { JobProfitability, ProfitWarning } from "./jobProfitability";
+import type { ProfitabilityHistory } from "./profitabilityAggregate";
 import { changeOrderStatus } from "./changeOrders";
 import { computeEstimateBreakdown } from "./pricingEngine";
 import { roundToCents, toAmount } from "./invoicePayments";
@@ -268,6 +269,59 @@ export function buildWhatChangedItems(
   }
 
   return items;
+}
+
+export interface HistorySummaryRowVM {
+  key: string;
+  label: string;
+  value: string;
+}
+
+/**
+ * The Money tab aggregate card's rows from trailing history. Unknown metrics
+ * are OMITTED, never zero-filled — the card's count line already says how
+ * much data exists.
+ */
+export function buildHistorySummaryRows(
+  h: ProfitabilityHistory,
+): HistorySummaryRowVM[] {
+  const rows: HistorySummaryRowVM[] = [];
+
+  if (h.laborCount > 0 && h.medianLaborOverrunHours !== null) {
+    rows.push({
+      key: "labor",
+      label: "Typical labor vs estimate",
+      value:
+        h.medianLaborOverrunHours === 0
+          ? "on estimate"
+          : h.medianLaborOverrunHours > 0
+            ? `+${formatLaborHint(h.medianLaborOverrunHours)} over`
+            : `${formatLaborHint(-h.medianLaborOverrunHours)} under`,
+    });
+  }
+
+  if (h.materialsCount > 0 && h.medianMaterialsVariance !== null) {
+    rows.push({
+      key: "materials",
+      label: "Typical materials vs estimate",
+      value:
+        h.medianMaterialsVariance === 0
+          ? "on estimate"
+          : h.medianMaterialsVariance > 0
+            ? `+${formatMoney(h.medianMaterialsVariance)} over`
+            : `${formatMoney(-h.medianMaterialsVariance)} under`,
+    });
+  }
+
+  if (h.hourlyCount > 0 && h.medianEffectiveHourly !== null) {
+    rows.push({
+      key: "hourly",
+      label: "Typical earned per hour",
+      value: `${formatMoney(h.medianEffectiveHourly)}/hr`,
+    });
+  }
+
+  return rows;
 }
 
 /**
