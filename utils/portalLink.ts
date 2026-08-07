@@ -5,14 +5,9 @@
 // The caller still writes a DISPLAY COPY onto the customer record (URL row +
 // share sheet work offline); normal sync publishes it. Discriminated result
 // instead of Alerts (bookingLink / estimateApprovalLink convention).
-//
-// mintPortalToken (the pre-12D stateless mint) is kept exported so an
-// OTA-interleaved caller can't strand — removed in the Phase E sweep.
 
 import Constants from "expo-constants";
 import { supabase } from "./supabase";
-import { mintBookingToken } from "./bookingLink";
-import type { MintResult } from "./bookingLink";
 
 const BACKEND_URL = (Constants.expoConfig?.extra as { backendUrl?: string } | undefined)?.backendUrl;
 
@@ -57,6 +52,3 @@ export async function managePortal(
     return { ok: false, reason: "network", message: "Please check your connection and try again." };
   }
 }
-
-export const mintPortalToken: () => Promise<MintResult> = mintBookingToken;
-export type { MintResult };
