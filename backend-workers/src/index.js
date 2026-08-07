@@ -27,6 +27,7 @@ import { receiptExtractHandler } from './routes/receiptExtract.js';
 import { deleteAccountHandler } from './routes/deleteAccount.js';
 import { createPaymentLinkHandler } from './routes/createPaymentLink.js';
 import { invoicePdfHandler } from './routes/invoicePdf.js';
+import { photosHandler } from './routes/photos.js';
 import { subscriptionWebhookHandler } from './routes/subscriptionWebhook.js';
 import { bookingMintHandler } from './routes/booking/mint.js';
 import { bookingConfigHandler } from './routes/booking/config.js';
@@ -52,6 +53,7 @@ app.all('/api/receipt-extract', receiptExtractHandler);
 app.all('/api/delete-account', deleteAccountHandler);
 app.all('/api/create-payment-link', createPaymentLinkHandler);
 app.all('/api/invoice-pdf', invoicePdfHandler);
+app.all('/api/photos/:photoId', photosHandler);
 app.all('/api/subscription/webhook', subscriptionWebhookHandler);
 
 app.all('/api/booking/mint', bookingMintHandler);

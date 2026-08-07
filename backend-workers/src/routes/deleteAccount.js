@@ -30,7 +30,29 @@ const DATA_TABLES = [
   'recurringJobs',
   'recurringInvoices',
   'trips',
+  'jobPhotos',
 ];
+
+// Best-effort purge of a user's job photos from R2 (2026-08-06 job-photo sync).
+// Keys are `${userId}/${photoId}.jpg`; list+delete in batches of ≤1000 until
+// the prefix is drained. Never throws: an orphaned R2 object is pennies and is
+// far less bad than aborting the account deletion. PHOTOS may be absent on an
+// older deploy — the caller guards for that.
+async function purgeUserPhotos(PHOTOS, userId) {
+  const prefix = `${userId}/`;
+  let cursor;
+  try {
+    do {
+      const listing = await PHOTOS.list({ prefix, cursor });
+      if (listing.objects.length) {
+        await PHOTOS.delete(listing.objects.map((o) => o.key));
+      }
+      cursor = listing.truncated ? listing.cursor : undefined;
+    } while (cursor);
+  } catch (err) {
+    console.error('delete-account: R2 photo purge failed (orphans tolerated):', err.message);
+  }
+}
 
 // Tight rate limit for a destructive action: 5 requests per IP per 5 minutes.
 const rateLimitMap = new Map();
@@ -111,6 +133,11 @@ export async function deleteAccountHandler(c) {
     const failedTable = deleteResults.find(r => !r.ok && r.status !== 404);
     if (failedTable) {
       throw new Error(`Data delete failed: HTTP ${failedTable.status}`);
+    }
+
+    // Best-effort R2 photo purge (never blocks the account deletion).
+    if (c.env.PHOTOS) {
+      await purgeUserPhotos(c.env.PHOTOS, userId);
     }
 
     // Delete the auth user last — requires service role admin access.

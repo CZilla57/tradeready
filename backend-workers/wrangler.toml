@@ -40,3 +40,11 @@ ESTIMATE_PUBLIC_BASE = "https://gettradereadyapp.com/estimate.html"
 [[r2_buckets]]
 binding = "INVOICE_PDFS"
 bucket_name = "tradeready-invoice-pdfs"
+
+# R2 bucket mirroring job photos for cross-device sync + reinstall survival
+# (2026-08-06 job-photo R2 sync spec). Key scheme: {userId}/{photoId}.jpg.
+# Owner op before this works in prod:
+#   wrangler r2 bucket create tradeready-photos
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "tradeready-photos"
