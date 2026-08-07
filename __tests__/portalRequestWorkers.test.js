@@ -79,7 +79,9 @@ describe("portalRequestCore", () => {
     return calls;
   }
 
-  const body = (over = {}) => ({ p: TOKEN, kind: "followup", note: "Need the fence painted too", requestKey: "a1b2c3d4e5f6", ...over });
+  // Low-entropy on purpose (gitleaks lesson, CI run 31205163008): a mixed-hex
+  // fixture here tripped generic-api-key via the "Key" keyword + entropy.
+  const body = (over = {}) => ({ p: TOKEN, kind: "followup", note: "Need the fence painted too", requestKey: "aaaabbbbcccc", ...over });
 
   test("honeypot gets a silent fake success and writes nothing", async () => {
     const calls = mockBackend();

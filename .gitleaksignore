@@ -35,3 +35,10 @@ ea1913b6461e2bb20a31a51cb1a05396fbd41a85:__tests__/paymentLink.test.js:square-ac
 # (same public-by-design client key as the utils/supabase.js entry above;
 # kept as a real value so local `wrangler dev` works out of the box)
 277522467d1510ab8ebef4fd6a75f148241c3095:backend-workers/.dev.vars.example:generic-api-key:6
+
+# Fake portal-request idempotency key fixture (Phase 12C, CI run 31205163008):
+# "requestKey: \"a1b2c3d4e5f6\"" — the "Key" keyword plus 3.58 entropy tripped
+# generic-api-key. Never a credential: it's the page-minted idempotency nonce
+# in a unit test. Renamed to a low-entropy form in the very next commit, so no
+# new fingerprints can accrue (same pattern as the Square fixture above).
+b9719669d4561adf46699920254b864b64c3251c:__tests__/portalRequestWorkers.test.js:generic-api-key:82
