@@ -62,6 +62,49 @@ describe("mergeRemoteRecord — invoices", () => {
   });
 });
 
+describe("mergeRemoteRecord — bookingRequests history union (Phase 11 D7)", () => {
+  const req = (over) => ({
+    id: "bk1", status: "confirmed", kind: "booked", name: "Dana",
+    history: [{ at: "2026-08-07T15:00:00.000Z", actor: "customer", event: "booked" }],
+    ...over,
+  });
+
+  test("no local copy → remote reference passes through (cheap path)", () => {
+    const remote = req({});
+    expect(mergeRemoteRecord("bookingRequests", undefined, remote)).toBe(remote);
+  });
+
+  test("identical histories → remote reference (no reconstruction)", () => {
+    const remote = req({});
+    expect(mergeRemoteRecord("bookingRequests", req({}), remote)).toBe(remote);
+  });
+
+  test("a local-only entry survives, sorted by timestamp; scalars stay remote's", () => {
+    const local = req({
+      status: "booked", // stale local status
+      history: [
+        { at: "2026-08-07T15:00:00.000Z", actor: "customer", event: "booked" },
+        { at: "2026-08-08T09:00:00.000Z", actor: "system", event: "device_note" },
+      ],
+    });
+    const remote = req({
+      status: "confirmed",
+      history: [
+        { at: "2026-08-07T15:00:00.000Z", actor: "customer", event: "booked" },
+        { at: "2026-08-09T10:00:00.000Z", actor: "customer", event: "confirm" },
+      ],
+    });
+    const result = mergeRemoteRecord("bookingRequests", local, remote);
+    expect(result.status).toBe("confirmed"); // LWW for everything but history
+    expect(result.history.map((h) => h.event)).toEqual(["booked", "device_note", "confirm"]);
+  });
+
+  test("records without history behave like plain replaces", () => {
+    const remote = req({ history: undefined });
+    expect(mergeRemoteRecord("bookingRequests", req({ history: undefined }), remote)).toBe(remote);
+  });
+});
+
 describe("mergeRemoteRecord — every other table replaces", () => {
   test.each(["jobs", "customers", "expenses", "pricebook"])(
     "%s takes the remote record wholesale, ignoring local",

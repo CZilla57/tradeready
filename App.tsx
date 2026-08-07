@@ -489,6 +489,17 @@ function RootNavigator() {
           params: { screen: "JobList" },
         });
       }
+      // Customer acted on an existing booking (reschedule/cancel — Phase 11
+      // D4): land on the exact job when the push carries its id, else the
+      // coarse Jobs list like booking_request.
+      if (data?.type === "booking_update" && navigationRef.isReady()) {
+        track("booking_update_opened", {});
+        const jobId = typeof data.jobId === "string" ? data.jobId : undefined;
+        navigationRef.navigate("Main", {
+          screen: "Jobs",
+          params: jobId ? { screen: "JobDetail", params: { jobId } } : { screen: "JobList" },
+        });
+      }
     });
     return () => sub.remove();
   }, []);
