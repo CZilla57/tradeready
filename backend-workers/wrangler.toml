@@ -32,3 +32,11 @@ ESTIMATE_PUBLIC_BASE = "https://gettradereadyapp.com/estimate.html"
 # Vercel dashboard shows an explicit value. Same for the CORS escape hatch:
 # ESTIMATE_PUBLIC_ORIGIN = ""
 # CHANGE_PUBLIC_BASE = ""
+
+# R2 bucket holding device-generated invoice PDFs (2026-08-06 spec) so the
+# 15-min auto-email sweep can attach the SAME PDF the manual send produces.
+# Owner op before this works in prod:
+#   wrangler r2 bucket create tradeready-invoice-pdfs
+[[r2_buckets]]
+binding = "INVOICE_PDFS"
+bucket_name = "tradeready-invoice-pdfs"
