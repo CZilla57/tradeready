@@ -37,6 +37,15 @@ These override anything below. Breaking one is a release blocker, not a style ch
 
 ## Phase W1 — Security headers + security.txt
 
+**✅ SHIPPED + ENFORCING 2026-08-07** — `tradeready-legal` `6e0965c` (headers
+report-only + security.txt) then `96b6277` (owner-approved enforce flip). Live
+verification: all four headers on marketing + transactional paths, every path
+still 200, security.txt 200, and zero CSP violations/console errors across
+index, reset (CDN supabase-js + SRI loads), book, booking, estimate, change,
+portal, and confirmed under the **enforcing** policy, with backend round-trips
+confirmed. Maintenance rule: any new external script/CDN/API host must be added
+to the `_headers` allowlist or it will be silently blocked.
+
 *Codex priority 1 (verified: live response has only `nosniff` + referrer-policy;
 HSTS, CSP, Permissions-Policy, and frame-ancestors/X-Frame-Options are all absent;
 no `_headers` file exists in the repo). Highest-value, but CSP is the one item in
@@ -67,6 +76,15 @@ this roadmap that can break live flows — treat it with real care.*
   enforced CSP; headers verified with a fresh curl.
 
 ## Phase W2 — Claims and privacy truth-up
+
+**✅ SHIPPED 2026-08-07** — `tradeready-legal` `71cfb41`, all three items
+live-verified. Resolutions: homepage narrowed "everything syncs" → "your work
+syncs" (the trip-sync device smoke is still pending — restore the absolute only
+after it passes); privacy retention bullet now covers encrypted backups (≤30
+days — conservative vs Supabase's 28-day PITR max; owner may tighten after
+confirming the plan's actual backup config), crash/diagnostic reports (≤90
+days, Sentry default), support emails, and a legal-hold carve-out; support page
+now carries the never-send-sensitive-data warning.
 
 *Codex priorities 2–3, corrected against current app state (its app audit was stale).*
 
