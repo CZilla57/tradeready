@@ -44,3 +44,51 @@ describe("buildJobIcs", () => {
     expect(ics).toContain("SUMMARY:Appointment — Ace");
   });
 });
+
+const { portalIcsCore } = require("../backend-workers/lib/estimate/portalIcs.js");
+
+const ENV = { SUPABASE_URL: "https://supa.test", SUPABASE_SERVICE_ROLE_KEY: "srk" };
+const TOKEN = "p".repeat(48);
+
+function mockPortalBackend({ customerRows = [], jobRows = [], settingsRows = [] } = {}) {
+  global.fetch = jest.fn(async (url) => {
+    const u = String(url);
+    const body = u.includes("/rest/v1/customers") ? customerRows
+      : u.includes("/rest/v1/jobs") ? jobRows
+      : u.includes("/rest/v1/settings") ? settingsRows
+      : [];
+    return { ok: true, status: 200, json: async () => body, text: async () => "[]" };
+  });
+}
+
+afterEach(() => { delete global.fetch; });
+
+describe("portalIcsCore", () => {
+  const customer = { user_id: "u1", id: "c1", data: { name: "Dana" } };
+  const schedJob = { id: "j1", data: { title: "Heater", customerId: "c1", scheduledDate: "2026-08-12", scheduledStartTime: "09:00", scheduledEndTime: "10:00" } };
+
+  test("unknown token → oracle-free 404", async () => {
+    mockPortalBackend({ customerRows: [] });
+    expect(await portalIcsCore(ENV, { token: TOKEN, jobId: "j1", stampUtc: STAMP }))
+      .toEqual({ ok: false, status: 404, error: "This link is invalid." });
+  });
+
+  test("job not in this customer's rows → same 404", async () => {
+    mockPortalBackend({ customerRows: [customer], jobRows: [schedJob] });
+    expect((await portalIcsCore(ENV, { token: TOKEN, jobId: "other", stampUtc: STAMP })).status).toBe(404);
+  });
+
+  test("unscheduled job → same 404", async () => {
+    mockPortalBackend({ customerRows: [customer], jobRows: [{ id: "j2", data: { title: "NoSched", customerId: "c1" } }] });
+    expect((await portalIcsCore(ENV, { token: TOKEN, jobId: "j2", stampUtc: STAMP })).status).toBe(404);
+  });
+
+  test("scheduled job → floating VEVENT with the business name", async () => {
+    mockPortalBackend({ customerRows: [customer], jobRows: [schedJob], settingsRows: [{ data: { businessName: "Ace" } }] });
+    const out = await portalIcsCore(ENV, { token: TOKEN, jobId: "j1", stampUtc: STAMP });
+    expect(out.ok).toBe(true);
+    expect(out.ics).toContain("DTSTART:20260812T090000");
+    expect(out.ics).toContain("SUMMARY:Heater — Ace");
+    expect(out.ics).toContain("UID:j1@tradeready-portal");
+  });
+});
