@@ -207,6 +207,15 @@ export interface Job {
    * history still counts them.
    */
   archivedAt?: DateString;
+  /**
+   * FK to the CSV import batch that created this record (2026-08 CSV-import
+   * spec). OPTIONAL and additive — absent on every record created by any other
+   * path (manual entry, booking conversion, sync pull). Stamped ONLY on records
+   * a batch created (never on merge-matched existing customers), so "Undo import"
+   * — which deletes every record carrying the batch id — cannot remove
+   * pre-existing data. JSON-blob sync ⇒ no backend migration.
+   */
+  importBatchId?: string;
 }
 
 export interface PricebookEntry {
@@ -387,6 +396,15 @@ export interface Invoice {
   // NOTE: there is no `created` field. The PDF's issue date is recovered from the
   // ms timestamp both creation paths embed in `id` (see invoiceIssueDate in
   // pdfTemplates); sample and legacy rows with non-timestamp ids render as "today".
+  /**
+   * FK to the CSV import batch that created this record (2026-08 CSV-import
+   * spec). OPTIONAL and additive — absent on every record created by any other
+   * path (manual entry, booking conversion, sync pull). Stamped ONLY on records
+   * a batch created (never on merge-matched existing customers), so "Undo import"
+   * — which deletes every record carrying the batch id — cannot remove
+   * pre-existing data. JSON-blob sync ⇒ no backend migration.
+   */
+  importBatchId?: string;
 }
 
 export interface Customer {
@@ -416,6 +434,15 @@ export interface Customer {
    * search; their invoices/jobs keep working normally.
    */
   archivedAt?: DateString;
+  /**
+   * FK to the CSV import batch that created this record (2026-08 CSV-import
+   * spec). OPTIONAL and additive — absent on every record created by any other
+   * path (manual entry, booking conversion, sync pull). Stamped ONLY on records
+   * a batch created (never on merge-matched existing customers), so "Undo import"
+   * — which deletes every record carrying the batch id — cannot remove
+   * pre-existing data. JSON-blob sync ⇒ no backend migration.
+   */
+  importBatchId?: string;
 }
 
 export interface Expense {
@@ -428,6 +455,15 @@ export interface Expense {
   date: DateString;
   notes: string;
   receiptUri: string | null;
+  /**
+   * FK to the CSV import batch that created this record (2026-08 CSV-import
+   * spec). OPTIONAL and additive — absent on every record created by any other
+   * path (manual entry, booking conversion, sync pull). Stamped ONLY on records
+   * a batch created (never on merge-matched existing customers), so "Undo import"
+   * — which deletes every record carrying the batch id — cannot remove
+   * pre-existing data. JSON-blob sync ⇒ no backend migration.
+   */
+  importBatchId?: string;
 }
 
 /** The fields AddExpenseModal hands to onSave, before id/createdAt are stamped. */
