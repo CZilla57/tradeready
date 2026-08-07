@@ -17,10 +17,8 @@
 //   over strictness for a solo-operator inbox.
 
 const { createHash } = require('node:crypto');
-const {
-  lookupCustomerByPortalToken,
-  fetchCustomerJobs,
-} = require('./portalStore.js');
+const { fetchCustomerJobs } = require('./portalStore.js');
+const { resolvePortalCustomer } = require('./portalTokenStore.js');
 const {
   insertPortalRequest,
   logPortalEvent,
@@ -57,7 +55,7 @@ async function portalRequestCore(env, { body, ip, nowMs }) {
   const note = cap(typeof body.note === 'string' ? body.note.trim() : '', 300);
   if (kind === 'followup' && !note) return { status: 400, json: { error: 'Please describe what you need.' } };
 
-  const row = await lookupCustomerByPortalToken(env, String(token));
+  const row = await resolvePortalCustomer(env, String(token));
   if (!row) return INVALID;
   const tokenPrefix = String(token).slice(0, 8);
 

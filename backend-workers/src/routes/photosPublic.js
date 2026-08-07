@@ -8,6 +8,7 @@
 import { createRateLimiter } from '../../lib/guards.js';
 import { resolvePublicPhotoKey } from '../../lib/photoSign.js';
 import { PHOTO_ID_RE } from '../../lib/photoUpload.js';
+import { logPortalEvent } from '../../lib/estimate/portalRequestStore.js';
 import { clientIp } from '../appCors.js';
 
 const allow = createRateLimiter({ limit: 60 });
@@ -30,6 +31,9 @@ export async function photosPublicHandler(c) {
 
   const obj = await c.env.PHOTOS.get(out.key);
   if (!obj) return c.json({ error: 'This link is invalid.' }, 404);
+  // Security log (Phase 12D read events) — this route authenticates by HMAC,
+  // not portal token, so the prefix column carries the literal marker.
+  await logPortalEvent(c.env, { userId: c.req.query('u'), tokenPrefix: 'signedurl', event: 'photo', ip: clientIp(c) });
   return c.body(obj.body, 200, {
     'Content-Type': 'image/jpeg',
     'Cache-Control': 'private, max-age=300',

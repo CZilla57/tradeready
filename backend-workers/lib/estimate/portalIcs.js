@@ -4,17 +4,18 @@
 // portal view uses. READ-ONLY like the whole portal family.
 
 const {
-  lookupCustomerByPortalToken,
   fetchBusinessName,
   fetchCustomerJobs,
 } = require('./portalStore.js');
+const { resolvePortalCustomer } = require('./portalTokenStore.js');
+const { logPortalEvent } = require('./portalRequestStore.js');
 const { buildJobIcs } = require('../booking/ics.js');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const INVALID = { ok: false, status: 404, error: 'This link is invalid.' };
 
-async function portalIcsCore(env, { token, jobId, stampUtc }) {
-  const row = await lookupCustomerByPortalToken(env, String(token));
+async function portalIcsCore(env, { token, jobId, stampUtc, ip }) {
+  const row = await resolvePortalCustomer(env, String(token));
   if (!row) return INVALID;
   const jobs = await fetchCustomerJobs(env, row.user_id, row.id);
   const job = jobs.find((r) => r.id === String(jobId));
@@ -32,6 +33,8 @@ async function portalIcsCore(env, { token, jobId, stampUtc }) {
     uid: `${String(jobId).slice(0, 24)}@tradeready-portal`,
     stampUtc,
   });
+  // Security log (Phase 12D read events) — best-effort, prefix only.
+  await logPortalEvent(env, { userId: row.user_id, tokenPrefix: String(token).slice(0, 8), event: 'ics', ip });
   return { ok: true, ics };
 }
 

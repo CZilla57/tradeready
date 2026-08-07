@@ -11,7 +11,7 @@ import { render, fireEvent, waitFor } from "@testing-library/react-native";
 import { Alert } from "react-native";
 import CustomerDetailScreen from "../screens/CustomerDetailScreen";
 import { loadJobs, loadCustomers, saveCustomers } from "../utils/storage";
-import { mintPortalToken, buildPortalUrl } from "../utils/portalLink";
+import { managePortal, buildPortalUrl } from "../utils/portalLink";
 
 // CustomerDetailScreen uses useFocusEffect (from @react-navigation/native) to
 // refresh displayCustomer from storage; run it as a mount effect, same as
@@ -30,11 +30,12 @@ jest.mock("../utils/storage", () => ({
   updateCustomerNotes: jest.fn(() => Promise.resolve(null)),
 }));
 
-// Only mintPortalToken is faked — buildPortalUrl stays real so the test
-// asserts against the actual URL format instead of a duplicated literal.
+// Only managePortal is faked (Phase 12D: the server-authoritative manage
+// call) — buildPortalUrl stays real so the test asserts against the actual
+// URL format instead of a duplicated literal.
 jest.mock("../utils/portalLink", () => ({
   ...jest.requireActual("../utils/portalLink"),
-  mintPortalToken: jest.fn(),
+  managePortal: jest.fn(),
 }));
 
 const navigation = {
@@ -86,19 +87,31 @@ describe("CustomerDetail customer portal section", () => {
     expect(await findByText("Create portal link")).toBeTruthy();
   });
 
-  it("tapping create calls mintPortalToken and saves the new portal onto this customer only", async () => {
-    (mintPortalToken as jest.Mock).mockResolvedValue({ ok: true, token: TOKEN });
+  it("tapping create calls managePortal('mint') and saves the new portal onto this customer only", async () => {
+    (managePortal as jest.Mock).mockResolvedValue({ ok: true, token: TOKEN });
 
     const { findByText } = await renderScreen(cust);
     const createBtn = await findByText("Create portal link");
     await fireEvent.press(createBtn);
 
     await waitFor(() => expect(saveCustomers).toHaveBeenCalledTimes(1));
-    expect(mintPortalToken).toHaveBeenCalledTimes(1);
+    expect(managePortal).toHaveBeenCalledWith("mint", "c1");
     expect(saveCustomers).toHaveBeenCalledWith([
       { ...cust, portal: { token: TOKEN, enabled: true } },
       otherCust,
     ]);
+  });
+
+  it("a 409 already-exists mint shows the sync explanation and saves nothing", async () => {
+    (managePortal as jest.Mock).mockResolvedValue({ ok: false, reason: "already-exists", message: "This customer already has a portal link." });
+    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+
+    const { findByText } = await renderScreen(cust);
+    await fireEvent.press(await findByText("Create portal link"));
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    expect(alertSpy.mock.calls[0][0]).toBe("Portal link already exists");
+    expect(saveCustomers).not.toHaveBeenCalled();
   });
 
   it("with a portal present, renders the portal URL and an ON 'Portal enabled' toggle", async () => {
@@ -111,7 +124,8 @@ describe("CustomerDetail customer portal section", () => {
     expect(getByLabelText("Portal enabled").props.value).toBe(true);
   });
 
-  it("flipping the toggle saves the same token with enabled: false", async () => {
+  it("flipping the toggle calls the server FIRST, then saves the display copy", async () => {
+    (managePortal as jest.Mock).mockResolvedValue({ ok: true, enabled: false });
     const custWithPortal = { ...cust, portal: { token: TOKEN, enabled: true } };
     (loadCustomers as jest.Mock).mockResolvedValue([custWithPortal, otherCust]);
 
@@ -120,8 +134,43 @@ describe("CustomerDetail customer portal section", () => {
     await fireEvent(toggle, "valueChange", false);
 
     await waitFor(() => expect(saveCustomers).toHaveBeenCalledTimes(1));
+    expect(managePortal).toHaveBeenCalledWith("set_enabled", "c1", false);
     expect(saveCustomers).toHaveBeenCalledWith([
       { ...custWithPortal, portal: { token: TOKEN, enabled: false } },
+      otherCust,
+    ]);
+  });
+
+  it("a failed toggle Alerts and leaves the blob copy untouched (the switch must not lie)", async () => {
+    (managePortal as jest.Mock).mockResolvedValue({ ok: false, reason: "network", message: "Please check your connection and try again." });
+    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const custWithPortal = { ...cust, portal: { token: TOKEN, enabled: true } };
+    (loadCustomers as jest.Mock).mockResolvedValue([custWithPortal, otherCust]);
+
+    const { findByLabelText } = await renderScreen(custWithPortal);
+    await fireEvent(await findByLabelText("Portal enabled"), "valueChange", false);
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    expect(saveCustomers).not.toHaveBeenCalled();
+  });
+
+  it("rotate confirms, calls managePortal('rotate'), and saves the fresh token", async () => {
+    const NEW_TOKEN = "f".repeat(48);
+    (managePortal as jest.Mock).mockResolvedValue({ ok: true, token: NEW_TOKEN });
+    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const custWithPortal = { ...cust, portal: { token: TOKEN, enabled: true } };
+    (loadCustomers as jest.Mock).mockResolvedValue([custWithPortal, otherCust]);
+
+    const { findByText } = await renderScreen(custWithPortal);
+    await fireEvent.press(await findByText("Get a new link"));
+
+    const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
+    buttons.find((b) => b.text === "Get new link")?.onPress?.();
+
+    await waitFor(() => expect(saveCustomers).toHaveBeenCalledTimes(1));
+    expect(managePortal).toHaveBeenCalledWith("rotate", "c1");
+    expect(saveCustomers).toHaveBeenCalledWith([
+      { ...custWithPortal, portal: { token: NEW_TOKEN, enabled: true } },
       otherCust,
     ]);
   });
@@ -142,7 +191,7 @@ describe("CustomerDetail customer portal section", () => {
       "This customer doesn't have a full record yet. Add or edit one of their details, then create the portal link."
     );
     expect(saveCustomers).not.toHaveBeenCalled();
-    expect(mintPortalToken).not.toHaveBeenCalled();
+    expect(managePortal).not.toHaveBeenCalled();
   });
 
   it("surfaces the existing portal instead of minting a new one during the stale-paint window", async () => {
@@ -160,11 +209,11 @@ describe("CustomerDetail customer portal section", () => {
 
     expect(await findByText(buildPortalUrl(TOKEN))).toBeTruthy();
     expect(saveCustomers).not.toHaveBeenCalled();
-    expect(mintPortalToken).not.toHaveBeenCalled();
+    expect(managePortal).not.toHaveBeenCalled();
   });
 
   it("a mint failure shows an Alert and saves nothing", async () => {
-    (mintPortalToken as jest.Mock).mockResolvedValue({
+    (managePortal as jest.Mock).mockResolvedValue({
       ok: false,
       reason: "network",
       message: "Please check your connection and try again.",

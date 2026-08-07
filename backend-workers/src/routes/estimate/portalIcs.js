@@ -22,7 +22,7 @@ export async function portalIcsHandler(c) {
 
   let out;
   try {
-    out = await portalIcsCore(c.env, { token, jobId, stampUtc: new Date().toISOString() });
+    out = await portalIcsCore(c.env, { token, jobId, stampUtc: new Date().toISOString(), ip: clientIp(c) });
   } catch (err) {
     console.error('[estimate/portal-ics] failed:', err.message);
     return c.json({ error: 'Database error' }, 500);

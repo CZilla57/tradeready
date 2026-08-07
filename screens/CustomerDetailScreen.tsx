@@ -20,7 +20,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { loadJobs, loadCustomers, saveCustomers, updateCustomerNotes } from '../utils/storage';
 import { isArchived, withArchived } from '../utils/archive';
 import { performCustomerMerge } from '../utils/customerMerge';
-import { mintPortalToken, buildPortalUrl } from '../utils/portalLink';
+import { managePortal, buildPortalUrl } from '../utils/portalLink';
 import { composeEmail } from '../utils/messaging';
 import { emailHtmlFromText } from '../utils/emailHtml';
 import { jobBillableTotal } from '../utils/changeOrders';
@@ -265,9 +265,24 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
         setDisplayCustomer((prev: any) => ({ ...prev, portal: record.portal }));
         return;
       }
-      const out = await mintPortalToken();
+      // Phase 12D: the server-owned token table is the auth authority. Mint
+      // refuses (409) when an active token already exists anywhere — a
+      // stale-paint Create on a second device must never orphan a link
+      // that's already in the customer's inbox.
+      const out = await managePortal('mint', displayCustomer.id);
       if (!out.ok) {
-        Alert.alert("Couldn't create portal link", out.message);
+        if (out.reason === 'already-exists') {
+          Alert.alert(
+            'Portal link already exists',
+            'This customer already has a portal link (created on another device). It will appear here after sync.'
+          );
+        } else {
+          Alert.alert("Couldn't create portal link", out.message);
+        }
+        return;
+      }
+      if (!out.token) {
+        Alert.alert("Couldn't create portal link", 'Please try again.');
         return;
       }
       const next = { token: out.token, enabled: true };
@@ -284,6 +299,14 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
       const custs = await loadCustomers();
       const current = custs.find((c) => c.id === displayCustomer.id)?.portal;
       if (!current) return;
+      // Server FIRST (Phase 12D): instant server-side enable/disable is the
+      // feature — the blob copy is display-only and must never lead the
+      // server state, so a failed call leaves the switch where it was.
+      const out = await managePortal('set_enabled', displayCustomer.id, enabled);
+      if (!out.ok) {
+        Alert.alert("Couldn't update the portal", out.message);
+        return;
+      }
       const next = { ...current, enabled };
       await saveCustomers(custs.map((c) => (c.id === displayCustomer.id ? { ...c, portal: next } : c)));
       setDisplayCustomer((prev: any) => ({ ...prev, portal: next }));
@@ -321,13 +344,35 @@ export default function CustomerDetailScreen({ route, navigation }: CustomerStac
     ]);
   };
 
+  // Rotate is its own server action (Phase 12D) — revokes EVERY prior token
+  // for this customer instantly, then returns the fresh one. Create can't be
+  // reused here: mint 409s while an active token exists.
+  const handleRotatePortalLink = async () => {
+    try {
+      const custs = await loadCustomers();
+      const record = custs.find((c) => c.id === displayCustomer.id);
+      if (!record) return;
+      const out = await managePortal('rotate', displayCustomer.id);
+      if (!out.ok || !out.token) {
+        Alert.alert("Couldn't create a new link", out.ok ? 'Please try again.' : out.message);
+        return;
+      }
+      const next = { token: out.token, enabled: true };
+      await saveCustomers(custs.map((c) => (c.id === displayCustomer.id ? { ...c, portal: next } : c)));
+      setDisplayCustomer((prev: any) => ({ ...prev, portal: next }));
+    } catch (err: unknown) {
+      reportError(err, { context: 'portalLinkRotate' });
+      Alert.alert("Couldn't save the portal link", 'Please try again.');
+    }
+  };
+
   const handleNewPortalLink = () => {
     Alert.alert(
       'Get a new link?',
       "This customer's current portal link will stop working immediately.",
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Get new link', style: 'destructive', onPress: () => { void handleCreatePortalLink(); } },
+        { text: 'Get new link', style: 'destructive', onPress: () => { void handleRotatePortalLink(); } },
       ]
     );
   };

@@ -11,13 +11,14 @@
 import { applyCors } from '../../../lib/estimate/cors.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import {
-  lookupCustomerByPortalToken,
   fetchBusinessName,
   fetchCustomerJobs,
   fetchCustomerInvoices,
   fetchCustomerBookingRequests,
   fetchCustomerJobPhotos,
 } from '../../../lib/estimate/portalStore.js';
+import { resolvePortalCustomer } from '../../../lib/estimate/portalTokenStore.js';
+import { logPortalEvent } from '../../../lib/estimate/portalRequestStore.js';
 import { assemblePortalView } from '../../../lib/estimate/portalAssemble.js';
 import { clientIp } from '../../appCors.js';
 
@@ -36,7 +37,9 @@ export async function portalViewHandler(c) {
 
   let row;
   try {
-    row = await lookupCustomerByPortalToken(c.env, String(token));
+    // Phase 12D: table-first resolution — revoked/disabled tokens hard-stop
+    // here; legacy blob tokens fall back and get lazily backfilled.
+    row = await resolvePortalCustomer(c.env, String(token));
   } catch (err) {
     console.error('[estimate/portal-view] lookup failed:', err.message);
     return c.json({ error: 'Database error' }, 500);
@@ -65,6 +68,9 @@ export async function portalViewHandler(c) {
       photoRows = []; // photos are additive — never fail the whole portal for them
     }
   }
+
+  // Security log (Phase 12D read events) — best-effort, prefix only.
+  await logPortalEvent(c.env, { userId: row.user_id, tokenPrefix: String(token).slice(0, 8), event: 'view', ip });
 
   return c.json(
     assemblePortalView({
