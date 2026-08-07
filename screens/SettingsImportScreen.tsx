@@ -3,11 +3,11 @@
 // columns, validates, previews, then commits with ONE saveX per collection. No
 // draft state (SettingsBookingScreen precedent) — do not add useSettingsDraft.
 // All parse/map/validate logic lives in the pure utils/* modules; this screen is
-// just orchestration + I/O. P3 added Jobs; P4 adds Invoices (including
-// historical PAID ones — see buildInvoiceImport's money-semantics doc). Only
-// entities with a wired pure builder appear in the selector (Expenses lands in
-// a later phase — YAGNI for now).
-import React, { useMemo, useState } from "react";
+// just orchestration + I/O. P3 added Jobs; P4 added Invoices (including
+// historical PAID ones — see buildInvoiceImport's money-semantics doc); P5
+// adds Expenses — all four entities with a wired pure builder now appear in
+// the selector.
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
@@ -17,30 +17,52 @@ import { useTheme } from "../hooks/useTheme";
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { parseCsv, hashCsv } from "../utils/csvImport";
 import { detectMapping, detectDateFormat, FIELD_DEFS, type ImportEntity, type DateFormat } from "../utils/importMapping";
-import { buildCustomerImport, buildJobImport, buildInvoiceImport, stripBatch, type ImportCounts } from "../utils/importEngine";
+import {
+  buildCustomerImport,
+  buildJobImport,
+  buildInvoiceImport,
+  buildExpenseImport,
+  stripBatch,
+  type ImportCounts,
+  type RowOutcome,
+} from "../utils/importEngine";
 import { newBatchId, recordImportBatch, findBatchByFileHash } from "../utils/importHistory";
-import { loadCustomers, saveCustomers, loadJobs, saveJobs, loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
+import {
+  loadCustomers, saveCustomers,
+  loadJobs, saveJobs,
+  loadInvoices, saveInvoices,
+  loadExpenses, saveExpenses,
+  loadSettings,
+  clearSampleData,
+} from "../utils/storage";
+import { isSampleId } from "../utils/sampleData";
 import { reportError } from "../utils/analytics";
 import { getTodayDateString } from "../utils/dateHelpers";
 import type { TodayStackScreenProps } from "../types/navigation";
 
 type Stage = "idle" | "mapping" | "preview" | "report";
 
-// Only entities with a wired pure builder show up here.
+// The cap on how many skip/flag rows the report renders directly — a bad
+// file can produce thousands of outcomes, and the screen isn't a table
+// viewer; the remainder is summarized as "+N more" instead.
+const REPORT_ROW_CAP = 50;
+
 const ENTITY_OPTIONS: { key: ImportEntity; label: string }[] = [
   { key: "customers", label: "Customers" },
   { key: "jobs", label: "Jobs" },
   { key: "invoices", label: "Invoices" },
+  { key: "expenses", label: "Expenses" },
 ];
 
 // Which mapped field key carries "the" date for a given entity — drives the
-// date-format selector below. Reused (extended) by a future expense slot.
-// For invoices this is "due", but the SAME chosen format is applied to BOTH
-// `due` and `paidAt` parsing inside buildInvoiceImport — a CSV export uses one
-// date convention throughout, never two.
+// date-format selector below. For invoices this is "due", but the SAME chosen
+// format is applied to BOTH `due` and `paidAt` parsing inside
+// buildInvoiceImport — a CSV export uses one date convention throughout,
+// never two.
 const DATE_FIELD_BY_ENTITY: Partial<Record<ImportEntity, string>> = {
   jobs: "scheduledDate",
   invoices: "due",
+  expenses: "date",
 };
 
 type DateFormatChoice = "auto" | DateFormat;
@@ -64,14 +86,39 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
   const [mapping, setMapping] = useState<(string | null)[]>([]);
   const [fileHash, setFileHash] = useState("");
   const [counts, setCounts] = useState<ImportCounts | null>(null);
+  const [outcomes, setOutcomes] = useState<RowOutcome[]>([]);
   const [lastBatchId, setLastBatchId] = useState<string | null>(null);
   const [dateFormatChoice, setDateFormatChoice] = useState<DateFormatChoice>("auto");
+  // Whether any sample (seed) records are still present — drives the "clear
+  // sample data first" offer on the idle stage. null = still checking.
+  const [samplePresent, setSamplePresent] = useState<boolean | null>(null);
 
   const dateFieldKey = DATE_FIELD_BY_ENTITY[entity];
   const dateColIndex = dateFieldKey ? mapping.findIndex((k) => k === dateFieldKey) : -1;
+  // Once a file is picked, switching entities would silently discard the
+  // loaded mapping/report — lock the selector until back to idle.
+  const entityLocked = stage !== "idle";
+
+  useEffect(() => {
+    let cancelled = false;
+    async function checkSampleData() {
+      try {
+        const [customers, jobs, invoices, expenses] = await Promise.all([
+          loadCustomers(), loadJobs(), loadInvoices(), loadExpenses(),
+        ]);
+        const present = [...customers, ...jobs, ...invoices, ...expenses].some((r) => isSampleId(r.id));
+        if (!cancelled) setSamplePresent(present);
+      } catch (e) {
+        reportError(e, { context: "csvImport.sampleCheck" });
+        if (!cancelled) setSamplePresent(false);
+      }
+    }
+    void checkSampleData();
+    return () => { cancelled = true; };
+  }, []);
 
   function selectEntity(next: ImportEntity) {
-    if (next === entity) return;
+    if (entityLocked || next === entity) return;
     setEntity(next);
     setStage("idle");
     setHeaders([]);
@@ -79,8 +126,34 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
     setMapping([]);
     setFileHash("");
     setCounts(null);
+    setOutcomes([]);
     setLastBatchId(null);
     setDateFormatChoice("auto");
+  }
+
+  async function clearSampleDataFirst() {
+    Alert.alert(
+      "Clear sample data?",
+      "This removes the example customers, jobs, invoices, and expenses TradeReady seeded for you. Your own data is not affected.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear sample data",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              try {
+                await clearSampleData();
+                setSamplePresent(false);
+              } catch (e) {
+                reportError(e, { context: "csvImport.clearSampleData" });
+                Alert.alert("Could not clear sample data", "Please try again.");
+              }
+            })();
+          },
+        },
+      ]
+    );
   }
 
   async function pickFile() {
@@ -137,6 +210,7 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
   async function commit() {
     let batchId = "";
     let resultCounts: ImportCounts;
+    let resultOutcomes: RowOutcome[];
     try {
       batchId = newBatchId();
       switch (entity) {
@@ -145,6 +219,7 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
           const res = buildCustomerImport(rows, mapping, existing, batchId);
           await saveCustomers(res.records); // ONE save for the whole collection — the durable write
           resultCounts = res.counts;
+          resultOutcomes = res.outcomes;
           break;
         }
         case "jobs": {
@@ -158,6 +233,7 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
           await saveCustomers(res.customers); // ONE save for the customers collection
           await saveJobs(res.jobs);           // ONE save for the jobs collection
           resultCounts = res.counts;
+          resultOutcomes = res.outcomes;
           break;
         }
         case "invoices": {
@@ -183,6 +259,19 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
           await saveCustomers(res.customers); // ONE save for the customers collection
           await saveInvoices(res.invoices);   // ONE save for the invoices collection
           resultCounts = res.counts;
+          resultOutcomes = res.outcomes;
+          break;
+        }
+        case "expenses": {
+          const resolvedDateFormat: DateFormat | null =
+            dateFormatChoice === "auto"
+              ? detectDateFormat(dateColIndex >= 0 ? rows.map((r) => r[dateColIndex]) : [])
+              : dateFormatChoice;
+          const existing = await loadExpenses();
+          const res = buildExpenseImport(rows, mapping, existing, batchId, resolvedDateFormat);
+          await saveExpenses(res.expenses); // ONE save for the whole collection — the durable write
+          resultCounts = res.counts;
+          resultOutcomes = res.outcomes;
           break;
         }
         default:
@@ -200,6 +289,7 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
     // Collections are durably saved — always surface the report/undo now, even if
     // the operational metadata write below fails.
     setCounts(resultCounts);
+    setOutcomes(resultOutcomes);
     setLastBatchId(batchId);
     setStage("report");
     try {
@@ -237,11 +327,18 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
           Alert.alert("Import undone", "The imported invoices were removed.");
           break;
         }
+        case "expenses": {
+          const existingExpenses = await loadExpenses();
+          await saveExpenses(stripBatch(existingExpenses, lastBatchId));
+          Alert.alert("Import undone", "The imported expenses were removed.");
+          break;
+        }
         default:
           reportError(new Error(`Unwired import entity: ${entity}`), { context: "csvImport.undo" });
           return;
       }
       setLastBatchId(null);
+      setOutcomes([]);
       setStage("idle");
     } catch (e) {
       reportError(e, { context: "csvImport.undo" });
@@ -254,16 +351,18 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.h1}>Import data</Text>
         <Text style={styles.sub}>
-          Bring customers, jobs, or invoices in from a Jobber, Housecall Pro, QuickBooks, or spreadsheet CSV export.
+          Bring customers, jobs, invoices, or expenses in from a Jobber, Housecall Pro, QuickBooks, or spreadsheet CSV export.
         </Text>
 
         <View style={styles.entityRow}>
           {ENTITY_OPTIONS.map((opt) => (
             <TouchableOpacity
               key={opt.key}
-              style={[styles.chip, entity === opt.key && styles.chipOn]}
+              style={[styles.chip, entity === opt.key && styles.chipOn, entityLocked && styles.chipLocked]}
               onPress={() => selectEntity(opt.key)}
+              disabled={entityLocked}
               accessibilityRole="button"
+              accessibilityState={{ disabled: entityLocked }}
               accessibilityLabel={`Import ${opt.label}`}
             >
               <Text style={[styles.chipText, entity === opt.key && styles.chipTextOn]}>{opt.label}</Text>
@@ -274,6 +373,16 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
         {stage === "idle" && (
           <View style={styles.card}>
             <Button label="Choose a CSV file" onPress={() => { void pickFile(); }} />
+            {samplePresent && (
+              <TouchableOpacity
+                onPress={() => { void clearSampleDataFirst(); }}
+                accessibilityRole="button"
+                accessibilityLabel="Clear sample data first"
+                style={styles.sampleRow}
+              >
+                <Text style={styles.link}>Clear sample data first</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -350,6 +459,30 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
                 {counts.created} new · {counts.matched} matched existing · {counts.skip} skipped
               </Text>
             )}
+            {entity === "expenses" && (
+              <Text style={styles.sub}>
+                {counts.ok} imported · {counts.flag} flagged (unrecognized category) · {counts.skip} skipped
+              </Text>
+            )}
+            {(() => {
+              const problems = outcomes.filter((o) => o.status !== "ok");
+              if (problems.length === 0) return null;
+              const shown = problems.slice(0, REPORT_ROW_CAP);
+              const extra = problems.length - shown.length;
+              return (
+                <View style={styles.reportDetail}>
+                  {shown.map((o) => (
+                    <Text
+                      key={o.rowIndex}
+                      style={o.status === "flag" ? styles.reportRowFlag : styles.reportRowSkip}
+                    >
+                      Row {o.rowIndex + 1}: {o.reason ?? (o.status === "flag" ? "Flagged" : "Skipped")}
+                    </Text>
+                  ))}
+                  {extra > 0 && <Text style={styles.sub}>+{extra} more</Text>}
+                </View>
+              );
+            })()}
             <Button label="Undo this import" variant="secondary" onPress={() => { void undo(); }} style={styles.actionBtn} />
             <TouchableOpacity onPress={() => setStage("idle")} accessibilityRole="button" accessibilityLabel="Import another file">
               <Text style={styles.link}>Import another file</Text>
@@ -370,6 +503,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     h2: { fontSize: fontSize.lg, fontFamily: fonts.display, color: colors.textPrimary, marginBottom: spacing.sm },
     sub: { fontSize: fontSize.sm, fontFamily: fonts.bodyRegular, color: colors.textMuted, marginTop: spacing.xs },
     entityRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
+    chipLocked: { opacity: 0.5 },
+    sampleRow: { marginTop: spacing.sm },
+    reportDetail: { marginTop: spacing.sm, gap: spacing.xs },
+    reportRowSkip: { fontSize: fontSize.sm, fontFamily: fonts.mono, color: colors.textMuted },
+    reportRowFlag: { fontSize: fontSize.sm, fontFamily: fonts.mono, color: colors.warning },
     rowMap: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginVertical: spacing.xs },
     dateFormatRow: { marginTop: spacing.sm },
     headerCell: { width: 110, fontFamily: fonts.mono, fontSize: fontSize.sm, color: colors.textPrimary },
