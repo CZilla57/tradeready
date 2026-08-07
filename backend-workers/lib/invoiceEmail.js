@@ -14,7 +14,7 @@ const { isAllowedPaymentLink, sanitizeFromPhrase, sanitizeSubject } = require(".
 
 const SENDER = "invoices@gettradereadyapp.com";
 
-function buildInvoiceEmail({ invoice, settings }) {
+function buildInvoiceEmail({ invoice, settings, attachment }) {
   const paid = amountPaid(invoice);
   const balance = balanceDue(invoice);
   // A partly-paid invoice (e.g. a deposit) names both numbers so the customer
@@ -77,6 +77,7 @@ ${settings.phone || ""}`.replace(/\n{3,}/g, "\n\n");
     text,
   };
   if (settings.email) email.reply_to = settings.email;
+  if (attachment) email.attachments = [attachment];
   return email;
 }
 
