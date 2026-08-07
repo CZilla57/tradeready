@@ -130,6 +130,7 @@ describe("clearAllUserData", () => {
       "pricebook",
       "review_requests",
       "dismissed_duplicate_pairs",
+      "insightMutes",
       "__syncQueue",
       "__lastSyncedAt",
       "__dataOwner",

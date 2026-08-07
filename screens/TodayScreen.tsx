@@ -27,7 +27,9 @@ import {
   loadInvoices,
   loadBookingRequests,
   markBookingRequestHandled,
+  loadRecurringJobs,
 } from '../utils/storage';
+import { buildCustomerList } from '../utils/customerList';
 import { selectBookingAttention, type BookingAttention } from '../utils/bookingAttention';
 import { respondToBooking } from '../utils/bookingRespond';
 import { sendAppointmentMessage } from '../utils/appointmentSend';
@@ -57,7 +59,7 @@ import {
   type SetupChecklistState,
   type SetupTaskId,
 } from '../utils/setupChecklist';
-import type { Job, Invoice, Customer, Settings, BookingRequest } from '../types/models';
+import type { Job, Invoice, Customer, RecurringJob, Settings, BookingRequest } from '../types/models';
 import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
 
@@ -437,6 +439,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const [checklistState, setChecklistState] = useState<SetupChecklistState | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [bookingRequests, setBookingRequests] = useState<BookingRequest[]>([]);
+  const [recurringJobs, setRecurringJobs] = useState<RecurringJob[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -445,7 +448,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings] = await Promise.all([
+          const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings, recurring] = await Promise.all([
             loadJobs(),
             getExpectedEarningsForDate(todayString),
             loadLeadJobs(),
@@ -454,9 +457,11 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
             loadSetupChecklistState(),
             loadInvoices(),
             loadBookingRequests(),
+            loadRecurringJobs(),
           ]);
           if (active) {
             setBookingRequests(bookings);
+            setRecurringJobs(recurring);
             setAllJobs(allJobsList);
             setEarnings(expectedEarnings);
             setOverdueInvoices(filterOverdueInvoices(allInvoices));
@@ -483,7 +488,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   );
 
   const { refreshing, onRefresh } = useRefresh(async () => {
-    const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings] = await Promise.all([
+    const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings, recurring] = await Promise.all([
       loadJobs(),
       getExpectedEarningsForDate(todayString),
       loadLeadJobs(),
@@ -492,8 +497,10 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       loadSetupChecklistState(),
       loadInvoices(),
       loadBookingRequests(),
+      loadRecurringJobs(),
     ]);
     setBookingRequests(bookings);
+    setRecurringJobs(recurring);
     setAllJobs(allJobsList);
     setEarnings(expectedEarnings);
     setOverdueInvoices(filterOverdueInvoices(allInvoices));
@@ -670,6 +677,20 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         break;
       case 'selectDate':
         setSelectedDate(target.date);
+        break;
+      case 'customer': {
+        // CustomerDetail consumes the rollup entry (invoices, totals), not the
+        // bare record — build it the same way GlobalSearch does.
+        const entry = buildCustomerList(invoices, customers).find((e) => e.id === target.customerId);
+        if (entry) {
+          navigation.getParent()?.navigate('Customers', { screen: 'CustomerDetail', initial: false, params: { customer: entry } });
+        } else {
+          navigation.getParent()?.navigate('Customers');
+        }
+        break;
+      }
+      case 'customers':
+        navigation.getParent()?.navigate('Customers');
         break;
       default: {
         // Compile-time exhaustiveness: a new InsightTarget variant fails
@@ -859,6 +880,8 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         <InsightsCard
           jobs={allJobs}
           invoices={invoices}
+          customers={customers}
+          recurringJobs={recurringJobs}
           settings={settings}
           onNavigate={handleInsightNavigate}
           onAskCoach={handleAskCoach}

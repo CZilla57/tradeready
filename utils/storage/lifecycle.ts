@@ -18,6 +18,7 @@ import { clearWidgetSnapshot } from "../widgetBridge";
 import { SESSION_STORAGE_KEY } from "../secureStoreAdapter";
 import { REVIEW_REQUESTS_STORAGE_KEY } from "../reviewRequest";
 import { DISMISSED_DUPLICATES_STORAGE_KEY } from "../duplicateCustomers";
+import { INSIGHT_MUTES_STORAGE_KEY } from "../insightMutes";
 import { ONBOARDING_DRAFT_KEY } from "../onboardingDraft";
 import { SETUP_CHECKLIST_STATE_KEY } from "../setupChecklist";
 import type { TradeId } from "../../types/models";
@@ -118,6 +119,9 @@ export async function clearAllUserData(): Promise<void> {
     // account's record ids — neither may leak to the next account.
     REVIEW_REQUESTS_STORAGE_KEY,
     DISMISSED_DUPLICATES_STORAGE_KEY,
+    // Insight mutes embed this account's job/customer/invoice ids; a stale
+    // mute leaking into the next account would silently hide its insights.
+    INSIGHT_MUTES_STORAGE_KEY,
     "__syncQueue",
     "__lastSyncedAt",
     "__dataOwner",

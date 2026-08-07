@@ -463,6 +463,20 @@ After approval, implement pure export builders first, then controls, packaging, 
 
 ## Phase 15 — Contextual AI & proactive operations
 
+> **STATUS (2026-08-08): v1 BUILT** on `feat/contextual-ai-insights` per the
+> owner-approved design
+> (`docs/superpowers/specs/2026-08-07-contextual-ai-design.md`, D1–D8):
+> Phase A insight identity + dismiss/snooze store + "why" reasons + analytics
+> (`ffcd328`), Phase B low_margin_estimate (`c91a624`), Phase C
+> maintenance_due + customer deep link (`7f9eab9`); docs sweep in Phase E.
+> The owner-optional expense_anomaly rule (Phase D) was not built. Built
+> ahead of Phase 13 by owner call — the job-cost conditions ("actual cost
+> above estimate" beyond labor hours) remain BLOCKED on Phase 13's data
+> layer, as ranked in the design. The kickoff's evaluation step (compare
+> contextual entry points against the AI tab via the new `ai_chat_sent`
+> source/provider props) starts once the OTA ships and data accrues. Gate
+> green at every phase (2,680 tests / 196 suites after C).
+
 > **Added 2026-08-06.** Sequenced AFTER Phase 13 — several listed conditions
 > need profitability figures. Builds on shipped deterministic surfaces
 > (`utils/todayInsights.ts` + `components/InsightsCard.tsx` 5-rule card,

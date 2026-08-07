@@ -69,6 +69,16 @@ The home screen. Shows what matters right now.
   "Needs scheduling" queue, tap-to-reschedule sheet
 - Booking rows: customer reschedule requests + cancellations needing action
   (`utils/bookingAttention.ts`; rows self-dismiss as resolved)
+- Insights card (`utils/todayInsights.ts` + `components/InsightsCard.tsx`,
+  2026-08-04; Phase 15 contextual-AI extensions 2026-08-08): seven
+  deterministic rules — labor overrun, low-margin estimate, uninvoiced
+  complete work, invoices due soon, tomorrow's open slot, unscheduled
+  approved jobs, maintenance-due customers — top 3 by fixed priority, each
+  with a stable id, a "Why am I seeing this?" explanation (long-press), and
+  deep-link actions. Non-self-resolving kinds (low-margin, maintenance-due)
+  support dismiss/snooze (`utils/insightMutes.ts`, device-local). "Ask
+  coach" rows prefill the AI tab — never auto-sent, numbers computed
+  on-device
 - Route map launch (opens Apple/Google Maps — ⚠️ not optimized)
 - Quick actions: Start job, Mark complete, Call customer
 - Earnings summary for today
@@ -139,8 +149,11 @@ Everything financial in one place.
 
 ### Tab 6 — Chat (AI Coach)
 - Chat interface — ask Claude or Groq about running the business
-- ⚠️ Suggested questions / contextual prompts: not built
-- ⚠️ Proactive insights feed: not built
+- Quick prompts on the empty state — four buttons, two data-aware (overdue
+  count/total, average job value)
+- Proactive insights live on the Today tab (see Tab 1), not here; insight
+  "Ask coach" actions deep-link into this chat with a prefilled prompt
+  (`initialPrompt` param — never auto-sent)
 
 ### Settings (opened via the gear icon in Today's header — not a tab)
 A hub screen (`SettingsHubScreen`) whose rows each push a focused subpage;
@@ -521,8 +534,8 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 | Business chat | ✅ Built | Asks anything | Answers based on trade context |
 | Difficult customers | ✅ Built | Describes situation | Drafts a professional response |
 | Contract review | ⚠️ Not built | Photographs a contract | Flags unusual clauses in plain English |
-| Proactive insights | ⚠️ Not built | (automatic) | Analyzes data and surfaces actionable tips |
-| Receipt scanning | ⚠️ Not built | Photographs a receipt | Extracts amount, vendor, category |
+| Proactive insights | ✅ Built (2026-08-04; extended 2026-08-08) | (automatic) | Deterministic Today-card rules surface actionable conditions; AI only drafts via "Ask coach" prefills |
+| Receipt scanning | ✅ Built (2026-07-19) | Photographs a receipt | Extracts amount, vendor, category (user Anthropic key or backend Groq vision) |
 
 ---
 
@@ -551,7 +564,7 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 - ⚠️ Google Maps Directions API: planned for route optimization; not yet wired up
 
 ### Observability
-- **PostHog** — 33 business events (sign_up, job_created, invoice_paid, etc. — grep `track(` in screens/utils/hooks/components for the full set)
+- **PostHog** — 51 business events as of 2026-08-08 (sign_up, job_created, invoice_paid, insight_shown/tapped/dismissed, etc. — grep `track(` in screens/utils/hooks/components for the full set)
 - **Sentry** — error reporting via `reportError()` in all critical catch blocks
 
 ### Future (multi-user / scale)
@@ -591,7 +604,7 @@ Build in this sequence so you always have something shippable:
 ✅ Recurring jobs
 ✅ Pricebook with AI-assisted pricing
 ✅ Dark mode
-⬜ Proactive insights feed
+✅ Proactive insights feed (Today card, 2026-08-04; Phase 15 contextual-AI extensions 2026-08-08)
 
 **Phase 5 — Scale**
 ✅ Cloud sync (Supabase — local-first)

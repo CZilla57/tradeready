@@ -5,7 +5,7 @@
 
 import { selectTodayInsights } from '../utils/todayInsights';
 import { resolveSchedule } from '../utils/scheduleConfig';
-import type { Job, Invoice, Settings } from '../types/models';
+import type { Job, Invoice, Customer, RecurringJob, Settings } from '../types/models';
 
 const NOW = new Date(2026, 7, 4, 10, 0);
 
@@ -274,5 +274,284 @@ describe('priority order', () => {
     ];
     const kinds = selectTodayInsights(jobs, [invoice({})], NOW).map(i => i.kind);
     expect(kinds).toEqual(['labor_overrun', 'uninvoiced_complete', 'due_soon', 'open_slot', 'unscheduled_approved']);
+  });
+});
+
+// Phase 15B: low_margin_estimate — implied margin from the job's own stored
+// fields (labor hours × rate, marked-up materials, the job's own overhead %),
+// compared against the Settings margin target on the same base the pricing
+// engine applies margin to (costs + overhead).
+describe('low_margin_estimate', () => {
+  // laborCost 1000 (10h × $100), no materials, overhead 0 → implied margin
+  // is simply (total − 1000) / 1000 × 100.
+  const lowJob = (overrides: Partial<Job>) =>
+    job({
+      status: 'lead',
+      laborHours: 10,
+      laborRate: 100,
+      materials: [],
+      overhead: 0,
+      ...overrides,
+    });
+
+  test('fires at exactly target − 3 points, silent a tenth above', () => {
+    const atBoundary = selectTodayInsights([lowJob({ estimateTotal: 1170 })], [], NOW);
+    expect(atBoundary).toHaveLength(1);
+    expect(atBoundary[0].kind).toBe('low_margin_estimate');
+    expect(atBoundary[0].title).toBe("'Faucet repair' is priced 3 points under your 20% margin");
+    expect(atBoundary[0].detail).toBe('$170 profit on $1,170');
+    expect(atBoundary[0].target).toEqual({ type: 'job', jobId: 'j1' });
+
+    expect(selectTodayInsights([lowJob({ estimateTotal: 1171 })], [], NOW)).toHaveLength(0);
+  });
+
+  test('below break-even gets the severe copy with the shortfall', () => {
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 950 })], [], NOW);
+    expect(insight.title).toBe("'Faucet repair' is priced below your costs and overhead");
+    expect(insight.detail).toBe('$50 short of break-even');
+  });
+
+  test("overhead is allocated at the job's own percent", () => {
+    // costBase 1000, overhead 15% → $150; total 1200 → $50 profit, 4.3% implied.
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 1200, overhead: 15 })], [], NOW);
+    expect(insight.reason).toContain('overhead at 15% ($150)');
+    expect(insight.reason).toContain('4.3%');
+  });
+
+  test('materials enter marked-up', () => {
+    // 2 × $100 at 20% markup → $240; costBase 1240; total 1300 → $60 profit.
+    const [insight] = selectTodayInsights(
+      [lowJob({
+        estimateTotal: 1300,
+        materials: [{ id: 'm1', name: 'Pipe', quantity: 2, unitCost: 100 }],
+        materialMarkup: 20,
+      })],
+      [],
+      NOW
+    );
+    expect(insight.reason).toContain('materials $240');
+    expect(insight.detail).toBe('$60 profit on $1,300');
+  });
+
+  test('only lead/estimate_sent qualify — approved jobs are contracted', () => {
+    const approved = selectTodayInsights([lowJob({ estimateTotal: 1000, status: 'approved' })], [], NOW);
+    expect(approved.map(i => i.kind)).not.toContain('low_margin_estimate');
+    const sent = selectTodayInsights([lowJob({ estimateTotal: 1000, status: 'estimate_sent' })], [], NOW);
+    expect(sent.map(i => i.kind)).toEqual(['low_margin_estimate']);
+  });
+
+  test('jobs without real pricing inputs are excluded, never guessed', () => {
+    expect(selectTodayInsights([lowJob({ estimateTotal: 1000, laborHours: 0 })], [], NOW)).toHaveLength(0);
+    expect(selectTodayInsights([lowJob({ estimateTotal: 1000, laborRate: 0 })], [], NOW)).toHaveLength(0);
+    expect(selectTodayInsights([lowJob({ estimateTotal: 0 })], [], NOW)).toHaveLength(0);
+  });
+
+  test('one row: the worst offender, with the count of others in the detail', () => {
+    const insights = selectTodayInsights(
+      [
+        lowJob({ id: 'mild', title: 'Mild', estimateTotal: 1100 }),
+        lowJob({ id: 'bad', title: 'Bad', estimateTotal: 900 }),
+      ],
+      [],
+      NOW
+    );
+    expect(insights).toHaveLength(1);
+    expect(insights[0].title).toContain("'Bad'");
+    expect(insights[0].detail).toContain('· 1 more under target');
+  });
+
+  test('honors a custom Settings margin target', () => {
+    const jobs = [lowJob({ estimateTotal: 1400 })]; // implied 40%
+    expect(selectTodayInsights(jobs, [], NOW)).toHaveLength(0); // default 20% target
+    expect(
+      selectTodayInsights(jobs, [], NOW, undefined, { targetMarginPercent: 50 })
+    ).toHaveLength(1);
+  });
+
+  test('id embeds the price so a reprice resets an earlier dismissal', () => {
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 1170 })], [], NOW);
+    expect(insight.id).toBe('low_margin_estimate:j1:1170');
+  });
+
+  test('coachPrompt carries the computed numbers and no customer identity', () => {
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 1170 })], [], NOW);
+    expect(insight.coachPrompt).toContain('$1,170');
+    expect(insight.coachPrompt).toContain('labor $1,000');
+    expect(insight.coachPrompt).toContain('20% target');
+    expect(insight.coachPrompt).not.toContain('Dana');
+  });
+
+  test('slots directly after labor_overrun in priority order', () => {
+    const jobs = [
+      job({ id: 'over', timeSessions: [session(5)] }),
+      lowJob({ id: 'cheap', estimateTotal: 1000 }),
+      job({ id: 'done', status: 'complete' }),
+    ];
+    const kinds = selectTodayInsights(jobs, [], NOW).map(i => i.kind);
+    expect(kinds).toEqual(['labor_overrun', 'low_margin_estimate', 'uninvoiced_complete']);
+  });
+});
+
+// Phase 15C: maintenance_due — last delivered job 6+ calendar months ago
+// (local component math, DST-proof: Feb→Aug crosses a DST change), strict
+// identity exclusions instead of guesses, suppressed while work is in motion.
+describe('maintenance_due', () => {
+  const customer = (overrides: Partial<Customer> = {}): Customer => ({
+    id: 'c1',
+    name: 'Dana Smith',
+    email: '',
+    phone: '555-1234',
+    address: '',
+    notes: '',
+    ...overrides,
+  });
+  const rule = (overrides: Partial<RecurringJob> = {}): RecurringJob =>
+    ({ id: 'rj1', customerId: 'c1', isActive: true, ...overrides } as RecurringJob);
+  const historyJob = (overrides: Partial<Job> = {}) =>
+    job({ id: 'h1', status: 'paid', scheduledDate: '2026-02-04', title: 'Furnace tune-up', ...overrides });
+  const extras = (customers: Customer[], recurringJobs: RecurringJob[] = []) =>
+    ({ customers, recurringJobs });
+
+  test('fires at exactly 6 calendar months, silent a day short', () => {
+    const due = selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()]));
+    expect(due).toHaveLength(1);
+    expect(due[0].kind).toBe('maintenance_due');
+    expect(due[0].id).toBe('maintenance_due:c1');
+    expect(due[0].title).toBe("It's been 6 months since you worked for Dana Smith");
+    expect(due[0].detail).toBe('Last job: Furnace tune-up');
+    expect(due[0].target).toEqual({ type: 'customer', customerId: 'c1' });
+
+    const short = selectTodayInsights(
+      [historyJob({ scheduledDate: '2026-02-05' })], [], NOW, undefined, extras([customer()])
+    );
+    expect(short).toHaveLength(0);
+  });
+
+  test('coachPrompt uses the first name only; reason carries the date math', () => {
+    const [insight] = selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()]));
+    expect(insight.coachPrompt).toContain('Dana');
+    expect(insight.coachPrompt).not.toContain('Smith');
+    expect(insight.reason).toContain('2026-02-04');
+    expect(insight.reason).toContain('threshold: 6');
+  });
+
+  test('customers without a contact, or archived, are excluded', () => {
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer({ phone: ' ', email: '' })]))
+    ).toHaveLength(0);
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer({ archivedAt: '2026-07-01' })]))
+    ).toHaveLength(0);
+  });
+
+  test('anything in the active pipeline suppresses — unless that job is archived', () => {
+    const inMotion = [historyJob(), job({ id: 'j2', status: 'scheduled', scheduledDate: null })];
+    const active = selectTodayInsights(inMotion, [], NOW, undefined, extras([customer()]));
+    expect(active.map(i => i.kind)).not.toContain('maintenance_due');
+
+    const archived = [historyJob(), job({ id: 'j2', status: 'in_progress', archivedAt: '2026-07-01' })];
+    const stillDue = selectTodayInsights(archived, [], NOW, undefined, extras([customer()]));
+    expect(stillDue.map(i => i.kind)).toContain('maintenance_due');
+  });
+
+  test('an active recurring rule suppresses; an inactive one does not', () => {
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()], [rule()]))
+    ).toHaveLength(0);
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()], [rule({ isActive: false })]))
+    ).toHaveLength(1);
+  });
+
+  test('no delivered history means silence — never inferred', () => {
+    // Lead-only history, unlinked (customerId "") history, and a delivered
+    // job with no date all fail the join rather than guess.
+    expect(
+      selectTodayInsights([historyJob({ status: 'lead' })], [], NOW, undefined, extras([customer()]))
+        .map(i => i.kind)
+    ).not.toContain('maintenance_due');
+    expect(
+      selectTodayInsights([historyJob({ customerId: '' })], [], NOW, undefined, extras([customer()]))
+    ).toHaveLength(0);
+    expect(
+      selectTodayInsights([historyJob({ scheduledDate: null })], [], NOW, undefined, extras([customer()]))
+    ).toHaveLength(0);
+    expect(selectTodayInsights([], [], NOW, undefined, extras([customer()]))).toHaveLength(0);
+  });
+
+  test('several due customers aggregate into one row targeting the Customers tab', () => {
+    const insights = selectTodayInsights(
+      [historyJob(), historyJob({ id: 'h2', customerId: 'c2', scheduledDate: '2025-11-01' })],
+      [],
+      NOW,
+      undefined,
+      extras([customer(), customer({ id: 'c2', name: 'Bob Reyes' })])
+    );
+    expect(insights).toHaveLength(1);
+    expect(insights[0].id).toBe('maintenance_due:all');
+    expect(insights[0].title).toBe("2 customers haven't been serviced in 6+ months");
+    expect(insights[0].target).toEqual({ type: 'customers' });
+  });
+
+  test('rides last in priority order', () => {
+    const jobs = [
+      job({ id: 'left', status: 'approved', laborHours: 9, customerId: 'c2' }),
+      historyJob(),
+    ];
+    const kinds = selectTodayInsights(jobs, [], NOW, undefined, extras([customer()])).map(i => i.kind);
+    expect(kinds).toEqual(['unscheduled_approved', 'maintenance_due']);
+  });
+});
+
+// Phase 15 foundation: every insight carries a stable dedup id (what
+// dismissals/snoozes and analytics hang on) and a deterministic reason.
+describe('insight identity and reasons', () => {
+  test('every insight has a non-empty id and reason', () => {
+    const jobs = [
+      job({ id: 'over', timeSessions: [session(5)] }),
+      job({ id: 'done', status: 'complete' }),
+      job({ id: 'sched', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00' }),
+      job({ id: 'fit', status: 'approved', laborHours: 2 }),
+      job({ id: 'left', status: 'approved', laborHours: 9 }),
+    ];
+    for (const insight of selectTodayInsights(jobs, [invoice({})], NOW)) {
+      expect(insight.id).toBeTruthy();
+      expect(insight.reason).toBeTruthy();
+    }
+  });
+
+  test('single-record rows key on the record id; aggregates key on :all', () => {
+    const one = selectTodayInsights([job({ id: 'done1', status: 'complete' })], [], NOW);
+    expect(one[0].id).toBe('uninvoiced_complete:done1');
+
+    const many = selectTodayInsights(
+      [job({ id: 'done1', status: 'complete' }), job({ id: 'done2', status: 'complete' })],
+      [],
+      NOW
+    );
+    expect(many[0].id).toBe('uninvoiced_complete:all');
+
+    const dueOne = selectTodayInsights([], [invoice({ id: 'i9' })], NOW);
+    expect(dueOne[0].id).toBe('due_soon:i9');
+  });
+
+  test('labor_overrun and unscheduled_approved ids embed the job id; open_slot the date', () => {
+    const jobs = [
+      job({ id: 'over', timeSessions: [session(5)] }),
+      job({ id: 'sched', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00' }),
+      job({ id: 'left', status: 'approved', laborHours: 9, title: 'Gutter clean' }),
+    ];
+    const ids = selectTodayInsights(jobs, [], NOW).map(i => i.id);
+    expect(ids).toEqual(['labor_overrun:over', 'open_slot:2026-08-05', 'unscheduled_approved:left']);
+  });
+
+  test('reasons carry the deterministic rationale, numbers computed in code', () => {
+    const [overrun] = selectTodayInsights([job({ timeSessions: [session(3.5)] })], [], NOW);
+    expect(overrun.reason).toContain('3h 30m');
+    expect(overrun.reason).toContain('2h labor estimate');
+
+    const [due] = selectTodayInsights([], [invoice({ id: 'i9' })], NOW);
+    expect(due.reason).toContain('INV-0042');
+    expect(due.reason).toContain('due tomorrow');
   });
 });
