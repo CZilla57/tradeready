@@ -22,7 +22,7 @@ export { loadRecurringJobs, saveRecurringJobs } from "./recurringJobs";
 export { loadRecurringInvoices, saveRecurringInvoices } from "./recurringInvoices";
 export { loadTrips, saveTrips } from "./trips";
 export { loadBookingRequests, saveBookingRequests } from "./bookingRequests";
-export { loadJobPhotos, saveJobPhotos } from "./jobPhotos";
+export { loadJobPhotos, saveJobPhotos, setJobPhotoVisibility } from "./jobPhotos";
 export { loadPricebook, savePricebook } from "./pricebook";
 export { applyEstimateDecisions } from "./estimateApprovals";
 export { applyBookingRequests } from "./bookingConversion";

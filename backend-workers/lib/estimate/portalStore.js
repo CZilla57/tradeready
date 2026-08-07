@@ -60,4 +60,20 @@ async function fetchCustomerBookingRequests(env, userId, customerId) {
   );
 }
 
-module.exports = { lookupCustomerByPortalToken, fetchBusinessName, fetchCustomerJobs, fetchCustomerInvoices, fetchCustomerBookingRequests };
+// Photo metadata for this customer's jobs (Phase 12B) — used to offer
+// customer-visible photos on the portal. Scoped by user_id AND an explicit
+// job-id list that itself came from the customer-scoped jobs query, so the
+// tenant boundary holds transitively. Ids are server-generated shapes
+// (j…/jbk_…); anything outside [A-Za-z0-9_-] is stripped before the in-list
+// so a hostile id can never break out of the PostgREST filter.
+async function fetchCustomerJobPhotos(env, userId, jobIds) {
+  const ids = (Array.isArray(jobIds) ? jobIds : []).slice(0, 50);
+  if (!ids.length) return [];
+  const list = ids.map((id) => `"${String(id).replace(/[^A-Za-z0-9_-]/g, '')}"`).join(',');
+  return get(
+    env,
+    `jobPhotos?user_id=eq.${encodeURIComponent(userId)}&data->>jobId=in.(${list})&deleted=eq.false&select=id,data`
+  );
+}
+
+module.exports = { lookupCustomerByPortalToken, fetchBusinessName, fetchCustomerJobs, fetchCustomerInvoices, fetchCustomerBookingRequests, fetchCustomerJobPhotos };

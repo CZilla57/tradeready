@@ -25,3 +25,19 @@ export async function saveJobPhotos(photos: JobPhoto[]): Promise<void> {
   await enqueueCollectionChanges("jobPhotos", old, photos);
   trySync();
 }
+
+/**
+ * Flip a photo's portal visibility (Phase 12B). Goes through the normal
+ * load → map → save path so the change diff-enqueues and syncs like any
+ * other record edit. Returns the updated record, or null for an unknown id.
+ */
+export async function setJobPhotoVisibility(photoId: string, visible: boolean): Promise<JobPhoto | null> {
+  const photos = await loadJobPhotos();
+  const idx = photos.findIndex((p) => p.id === photoId);
+  if (idx === -1) return null;
+  const updated: JobPhoto = { ...photos[idx], customerVisible: visible };
+  const next = photos.slice();
+  next[idx] = updated;
+  await saveJobPhotos(next);
+  return updated;
+}

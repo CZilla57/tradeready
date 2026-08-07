@@ -22,7 +22,7 @@ import * as ImagePicker from "expo-image-picker";
 import { jobPhotoUri } from "../utils/photoStorage";
 import { attachJobPhoto, deleteJobPhoto, ensurePhotoLocal, detachJobPhotos, restoreJobPhotos } from "../utils/photoSync";
 import { useFocusEffect } from "@react-navigation/native";
-import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer, loadJobPhotos } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer, loadJobPhotos, setJobPhotoVisibility } from "../utils/storage";
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
@@ -382,7 +382,9 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
   );
 }
 
-function PhotosCard({ photos, readyIds, onAdd, onDelete }: { photos: JobPhoto[]; readyIds: Set<string>; onAdd: () => void; onDelete: (photoId: string) => void }) {
+// Exported for __tests__/jobPhotoVisibilityToggle.test.tsx (the toggle badge
+// is only reachable through this card).
+export function PhotosCard({ photos, readyIds, onAdd, onDelete, onToggleVisible }: { photos: JobPhoto[]; readyIds: Set<string>; onAdd: () => void; onDelete: (photoId: string) => void; onToggleVisible: (photoId: string) => void }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -443,6 +445,16 @@ function PhotosCard({ photos, readyIds, onAdd, onDelete }: { photos: JobPhoto[];
               >
                 <View style={styles.photoDeleteCircle}>
                   <Ionicons name="close" size={13} color="#fff" />
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.photoVisibilityBtn}
+                onPress={() => onToggleVisible(photo.id)}
+                accessibilityRole="button"
+                accessibilityLabel={photo.customerVisible === true ? "Visible to customer — tap to hide" : "Hidden from customer — tap to show on portal"}
+              >
+                <View style={[styles.photoDeleteCircle, styles.photoVisibilityCircle, photo.customerVisible === true && styles.photoVisibleCircle]}>
+                  <Ionicons name={photo.customerVisible === true ? "eye" : "eye-off"} size={13} color="#fff" />
                 </View>
               </TouchableOpacity>
             </View>
@@ -997,6 +1009,14 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     await deleteJobPhoto(photoId);
   }
 
+  async function handleTogglePhotoVisibility(photoId: string) {
+    const current = jobPhotos.find((p) => p.id === photoId);
+    if (!current) return;
+    const nextVisible = current.customerVisible !== true;
+    setJobPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, customerVisible: nextVisible } : p)));
+    await setJobPhotoVisibility(photoId, nextVisible);
+  }
+
   async function handleClockIn() {
     if (!job) return;
     const updated = applyClockIn(job, new Date().toISOString());
@@ -1091,6 +1111,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           readyIds={readyPhotoIds}
           onAdd={handleAddPhoto}
           onDelete={handleDeletePhoto}
+          onToggleVisible={handleTogglePhotoVisibility}
         />
 
         <Divider />
@@ -1293,6 +1314,20 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
     },
+    // Mirror of photoDeleteBtn in the opposite corner (same 44pt inside-the-
+    // thumb hit-target rationale).
+    photoVisibilityBtn: {
+      position: 'absolute' as const,
+      bottom: 0,
+      left: 0,
+      width: 44,
+      height: 44,
+      alignItems: 'flex-start' as const,
+      justifyContent: 'flex-end' as const,
+      padding: 6,
+    },
+    photoVisibilityCircle: { backgroundColor: colors.textMuted },
+    photoVisibleCircle: { backgroundColor: colors.success },
     noPhotosText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted },
     viewerBg: {
       flex: 1,

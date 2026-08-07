@@ -247,6 +247,12 @@ export interface JobPhoto {
    * file renders an "uploading from another device" placeholder (not a bug).
    */
   uploadedAt?: string;
+  /**
+   * TRUE = the owner explicitly marked this photo visible on the customer
+   * portal (Phase 12B). ABSENT MEANS HIDDEN — every consumer checks
+   * `=== true`, so old records and new captures are private by default.
+   */
+  customerVisible?: boolean;
   /** Pixel dimensions after client compression (optional, for layout hints). */
   width?: number;
   height?: number;
