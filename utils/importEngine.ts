@@ -7,7 +7,8 @@
 import { upsertCustomerInList } from "./storage/customers";
 import { getTodayDateString } from "./dateHelpers";
 import { parseImportDate, type DateFormat } from "./importMapping";
-import type { Customer, Job, JobStatus } from "../types/models";
+import { nextInvoiceNumber, type InvoiceNumberOptions } from "./invoiceNumber";
+import type { Customer, Invoice, Job, JobStatus } from "../types/models";
 
 export interface RowOutcome {
   rowIndex: number;
@@ -203,4 +204,138 @@ export function buildJobImport(
   });
 
   return { customers, jobs, outcomes, counts };
+}
+
+// ---------------------------------------------------------------------------
+// Invoices (Phase 4 — the MONEY phase). Historical invoices, including
+// already-paid ones, are joined against the same customer registry as
+// customers/jobs. See utils/invoicePayments.ts for why a paid invoice here
+// never gets a fabricated `payments` ledger: amountPaid/balanceDue already
+// derive correctly from `paid`/`amount`/`paidAt` for legacy (ledger-less)
+// invoices, so inventing ledger entries would just be redundant risk.
+
+/** Strip everything but digits/./- and parse; null on empty or NaN input. */
+function parseMoney(raw: string): number | null {
+  const cleaned = (raw || "").replace(/[^0-9.\-]/g, "");
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Build a UNIQUE invoice id whose embedded ms decodes (via invoiceIssueDate's
+ * UTC reader in utils/pdfTemplates.ts) back to the source issue date. UTC is
+ * deliberate here — it round-trips through invoiceIssueDate's getUTCFullYear /
+ * toISOString; the invoice's due/paidAt fields stay local YYYY-MM-DD strings
+ * (FA-039). The intra-day offset keeps every id on the correct UTC calendar day
+ * (1..86_399_999 ms after UTC midnight) while making same-date rows unique
+ * within a batch (row index) and across batches/sessions (real-clock nowMs).
+ */
+function importInvoiceId(dateStr: string | null, index: number, nowMs: number): string {
+  let dayFloor: number;
+  if (dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    dayFloor = Date.UTC(y, m - 1, d);          // 00:00:00.000Z of the source date
+  } else {
+    dayFloor = nowMs - (nowMs % 86_400_000);   // UTC midnight of today
+  }
+  const slot = 1 + (((nowMs % 86_400_000) + index) % 86_399_998);
+  return String(dayFloor + slot);
+}
+
+export interface InvoiceImportResult {
+  customers: Customer[];
+  invoices: Invoice[];
+  outcomes: RowOutcome[];
+  counts: ImportCounts;
+}
+
+/**
+ * Regex for a paid CLAIM in a text cell that failed to parse as a date — e.g.
+ * "Yes" / "Paid" / "True". Never used to infer a date, only to decide whether
+ * a blank/unparseable paid-date column should be flagged (vs. silently
+ * treated as an ordinary open invoice with no paid claim at all).
+ */
+const PAID_CLAIM_RE = /paid|yes|true/i;
+
+export function buildInvoiceImport(
+  rows: string[][],
+  mapping: (string | null)[],
+  existingCustomers: Customer[],
+  existingInvoices: Invoice[],
+  batchId: string,
+  dateFormat: DateFormat | null,
+  numberOptions: InvoiceNumberOptions | undefined,
+  nowMs: number,
+): InvoiceImportResult {
+  let customers = existingCustomers;
+  const invoices: Invoice[] = [...existingInvoices];
+  const outcomes: RowOutcome[] = [];
+  const counts: ImportCounts = { ok: 0, skip: 0, flag: 0, created: 0, matched: 0 };
+
+  rows.forEach((row, rowIndex) => {
+    const customerName = fieldValue(row, mapping, "customer");
+    const amount = parseMoney(fieldValue(row, mapping, "amount"));
+    if (!customerName || amount == null) {
+      outcomes.push({ rowIndex, status: "skip", reason: "Missing customer or amount" });
+      counts.skip += 1;
+      return;
+    }
+
+    // Join or create the customer within this same batch — customers are
+    // created ONLY through upsertCustomerInList (module-header invariant).
+    const existedBefore = customers.some((c) => normName(c.name) === normName(customerName));
+    const up = upsertCustomerInList(customers, {
+      name: customerName,
+      email: fieldValue(row, mapping, "email"),
+      phone: fieldValue(row, mapping, "phone"),
+    });
+    const customer = up.customer!;
+    if (existedBefore) {
+      customers = up.customers;               // backfill only; never stamped
+      counts.matched += 1;
+    } else {
+      customers = up.customers.map((c) => (c.id === customer.id ? { ...c, importBatchId: batchId } : c));
+      counts.created += 1;
+    }
+
+    const dueParsed = parseImportDate(fieldValue(row, mapping, "due"), dateFormat);
+    const paidAtCell = fieldValue(row, mapping, "paidAt");
+    const paidAtParsed = parseImportDate(paidAtCell, dateFormat);
+    const paid = !!paidAtParsed;                // paid ONLY if a real paid date parses
+    const claimedPaid = !paidAtParsed && PAID_CLAIM_RE.test(paidAtCell.trim());
+
+    const due = dueParsed ?? getTodayDateString();
+    const idDateStr = dueParsed ?? paidAtParsed ?? null;
+    const id = importInvoiceId(idDateStr, rowIndex, nowMs);
+
+    const mappedNumber = fieldValue(row, mapping, "number");
+    const number = mappedNumber || nextInvoiceNumber(invoices, numberOptions);
+
+    const inv: Invoice = {
+      id,
+      customer: customer.name,
+      customerId: customer.id,
+      number,
+      amount,
+      due,
+      email: fieldValue(row, mapping, "email") || customer.email || "",
+      phone: fieldValue(row, mapping, "phone") || customer.phone || "",
+      desc: fieldValue(row, mapping, "desc"),
+      paid,
+      importBatchId: batchId,
+      ...(paid ? { paidAt: paidAtParsed! } : {}),
+    };
+    invoices.push(inv);
+
+    if (claimedPaid) {
+      outcomes.push({ rowIndex, status: "flag", reason: "Marked paid but no paid date → imported outstanding" });
+      counts.flag += 1;
+    } else {
+      outcomes.push({ rowIndex, status: "ok" });
+      counts.ok += 1;
+    }
+  });
+
+  return { customers, invoices, outcomes, counts };
 }
