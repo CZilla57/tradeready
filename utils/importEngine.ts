@@ -8,7 +8,8 @@ import { upsertCustomerInList } from "./storage/customers";
 import { getTodayDateString } from "./dateHelpers";
 import { parseImportDate, type DateFormat } from "./importMapping";
 import { nextInvoiceNumber, type InvoiceNumberOptions } from "./invoiceNumber";
-import type { Customer, Invoice, Job, JobStatus } from "../types/models";
+import { EXPENSE_CATEGORIES } from "./moneyUtils";
+import type { Customer, Expense, ExpenseCategoryId, Invoice, Job, JobStatus } from "../types/models";
 
 export interface RowOutcome {
   rowIndex: number;
@@ -338,4 +339,89 @@ export function buildInvoiceImport(
   });
 
   return { customers, invoices, outcomes, counts };
+}
+
+// ---------------------------------------------------------------------------
+// Expenses (Phase 5 — the final entity). No customer join — expenses are
+// business overhead, not tied to a client. Category is keyword-mapped onto
+// the canonical EXPENSE_CATEGORIES ids; anything unrecognized falls back to
+// the "other" catch-all and the row is flagged (not skipped) so the import
+// still proceeds, mirroring the jobs status fallback above.
+
+export function mapExpenseCategory(raw: string): { id: ExpenseCategoryId; recognized: boolean } {
+  const s = (raw || "").trim().toLowerCase();
+  if (!s) return { id: "other", recognized: false };
+  // Match against the canonical labels/ids first.
+  for (const c of EXPENSE_CATEGORIES) {
+    if (c.id === s || c.label.toLowerCase() === s || s.includes(c.id)) {
+      return { id: c.id, recognized: true };
+    }
+  }
+  const extra: { id: ExpenseCategoryId; words: string[] }[] = [
+    { id: "fuel", words: ["gas", "fuel", "mileage", "transport"] },
+    { id: "tools", words: ["tool", "equipment", "rental"] },
+    { id: "labor", words: ["subcontractor", "sub", "labour", "labor", "crew"] },
+    { id: "marketing", words: ["ad", "advertis", "marketing"] },
+    { id: "software", words: ["software", "subscription", "app"] },
+    { id: "insurance", words: ["insurance"] },
+    { id: "materials", words: ["material", "supply", "supplies", "lumber"] },
+  ];
+  for (const e of extra) if (e.words.some((w) => s.includes(w))) return { id: e.id, recognized: true };
+  return { id: "other", recognized: false };
+}
+
+export interface ExpenseImportResult {
+  expenses: Expense[];
+  outcomes: RowOutcome[];
+  counts: ImportCounts;
+}
+
+let _expSeq = 0;
+function newExpenseId(): string {
+  _expSeq += 1;
+  return `e${Date.now()}_${_expSeq}`;
+}
+
+export function buildExpenseImport(
+  rows: string[][],
+  mapping: (string | null)[],
+  existingExpenses: Expense[],
+  batchId: string,
+  dateFormat: DateFormat | null,
+): ExpenseImportResult {
+  const expenses: Expense[] = [...existingExpenses];
+  const outcomes: RowOutcome[] = [];
+  const counts: ImportCounts = { ok: 0, skip: 0, flag: 0, created: 0, matched: 0 };
+
+  rows.forEach((row, rowIndex) => {
+    const amount = parseMoney(fieldValue(row, mapping, "amount"));
+    const date = parseImportDate(fieldValue(row, mapping, "date"), dateFormat);
+    if (amount == null || !date) {
+      outcomes.push({ rowIndex, status: "skip", reason: amount == null ? "Missing amount" : "Unparseable date" });
+      counts.skip += 1;
+      return;
+    }
+    const catRaw = fieldValue(row, mapping, "category");
+    const { id: category, recognized } = mapExpenseCategory(catRaw);
+    expenses.push({
+      id: newExpenseId(),
+      createdAt: getTodayDateString(),
+      description: fieldValue(row, mapping, "description"),
+      amount,
+      category,
+      date,
+      notes: fieldValue(row, mapping, "notes"),
+      receiptUri: null,
+      importBatchId: batchId,
+    });
+    if (catRaw && !recognized) {
+      outcomes.push({ rowIndex, status: "flag", reason: `Unknown category "${catRaw}" → Other` });
+      counts.flag += 1;
+    } else {
+      outcomes.push({ rowIndex, status: "ok" });
+      counts.ok += 1;
+    }
+  });
+
+  return { expenses, outcomes, counts };
 }

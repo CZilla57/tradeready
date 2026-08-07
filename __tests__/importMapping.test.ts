@@ -68,4 +68,8 @@ describe("parseImportDate", () => {
     expect(parseImportDate("not a date", "MDY")).toBeNull();
     expect(parseImportDate("13/13/2026", "MDY")).toBeNull();
   });
+  test("expands a two-digit year to 20xx", () => {
+    expect(parseImportDate("7/4/26", "MDY")).toBe("2026-07-04");
+    expect(parseImportDate("4/7/26", "DMY")).toBe("2026-07-04");
+  });
 });
