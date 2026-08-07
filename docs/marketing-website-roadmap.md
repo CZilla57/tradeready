@@ -109,6 +109,16 @@ now carries the never-send-sensitive-data warning.
 
 ## Phase W3 — Mobile ergonomics and accessibility
 
+**✅ SHIPPED 2026-08-07** — `tradeready-legal` `807ada4` + `44b49ee`/`08becc3`
+(tap-target 1px fixes after live measurement). Live-verified at 375px and
+1280px, light + dark: steps headings h3→h2 (heading order now h1→h2), skip
+link (drops in on focus, verified programmatically), nav links 44px, footer
+links 45px, theme-color meta, sticky desktop header 80px < 84px
+scroll-padding, no horizontal overflow. **Correction:** the italic note below
+is WRONG — the mobile topbar was already `position: static` ≤720px (a
+max-width block later in the stylesheet); Codex's sticky-mobile-header
+complaint was mistaken, and no un-stick change was needed.
+
 *Codex design items 1–2, verified in source. The two-row mobile nav is sticky at ALL
 widths (`.topbar { position: sticky }` with no media gate — index.html:64), so Codex's
 ~104px-of-sticky-viewport complaint is correct.*
@@ -149,6 +159,14 @@ transactional pages are indexable.*
 
 ## Phase W5 — Support and legal page visual alignment
 
+**✅ SHIPPED 2026-08-07** — `tradeready-legal` `7f72765` (built by a subagent,
+reviewed + live-verified). support.html: full Blueprint treatment (navy topbar,
+drafting-grid page band, title-block footer); mono email at clamp size renders
+single-line at 375px (old mid-word break gone). privacy/terms: lighter
+same-family shell, and they gained the dark scheme they never had. Text-diff
+confirmed every sentence verbatim; zero external resources; zero JS; fonts
+verified loading live under the enforced CSP.*
+
 *Codex design item 4.*
 
 - [ ] Restyle support.html (and give privacy/terms a lighter version of the same
@@ -158,6 +176,14 @@ transactional pages are indexable.*
   produces ugly mid-word breaks at 390px; wrap the whole address or shrink it).
 
 ## Phase W6 — Content growth (gated)
+
+**◐ PARTIAL 2026-08-07** — the one ungated item shipped: `/whats-new.html`
+(`tradeready-legal` commit, approved ASC What's New copy verbatim for 1.1 +
+1.0, legal-page shell, in sitemap, linked from the homepage footer Rev cell).
+Still gated and NOT done: **booking section** (client OTA not shipped — a
+fact-checked, paste-ready section is staged in
+`docs/website-booking-section-staged.md`), **social proof** (no real ratings
+yet), **screenshot refresh** (needs owner assets).
 
 *Codex design item 3 plus forward-looking additions. Every item here has an explicit
 gate — none are "just do it".*
