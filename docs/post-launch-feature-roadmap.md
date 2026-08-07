@@ -180,6 +180,18 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 ## Phase 11 — Calendar, availability & real online booking
 
+> **STATUS (2026-08-07): ALL FOUR PHASES BUILT** on `feat/calendar-availability`
+> per the owner-approved design
+> (`docs/superpowers/specs/2026-08-07-calendar-availability-booking-design.md`,
+> D1–D8 approved). Phase A calendar + Schedule settings, Phase B availability
+> engine + Workers twin + parity suite, Phase C slots/reserve endpoints +
+> `booking_reservations` migration (APPLIED) + book.html slot picker
+> (**LIVE** — Worker deployed, page pushed, real slots verified 187-slot
+> response), Phase D manage/respond endpoints + booking.html + history union
+> + Today booking rows (built; Worker redeploy + legal-repo push + owner
+> smoke pending at time of writing). Feature flag:
+> `Settings.schedule.bookableSlotsEnabled` (owner-enabled 2026-08-07).
+
 > **Added 2026-08-06** (Codex-audit adoption; deepens next-queue item 4 and
 > extends shipped Phase 9). Context verified: the booking link (`cec034f`)
 > already provides the request model, hosted page, and conversion flow;

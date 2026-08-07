@@ -95,6 +95,20 @@ Nothing to set up here — it's built in and ready whenever you want it.
   notifications you'll also get a push alert (this needs a build with the push
   entitlement — it's a silent no-op in Expo Go, so on Expo Go you'll only see
   the email).
+- **Bookable time slots** (added 2026-08-07) — flip "Bookable time slots" on
+  the same Settings page and your booking link upgrades from a text box to a
+  real slot picker: customers choose from your actual open times, computed
+  from your working hours (Settings → Schedule), your calendar, and other
+  bookings. Two customers can never take the same slot — the second one is
+  asked to pick another time. A booked slot lands on your calendar
+  automatically, and the customer gets a manage page where they can confirm,
+  add the appointment to their phone's calendar, ask to reschedule, or
+  cancel. Reschedule requests and cancellations show up as rows on Today.
+- **Calendar** (added 2026-08-07) — the calendar icon in Today's header opens
+  day and week views of your schedule, with an "Needs scheduling" queue for
+  approved jobs that don't have a time yet. Tap any job block to view or
+  reschedule it; conflict warnings respect the buffer time you set in
+  Settings → Schedule.
 
 ---
 
@@ -187,6 +201,11 @@ utils/
   bookingLink.ts                 ← Booking-link URL builder + mint-endpoint client
   portalLink.ts                  ← Customer-portal URL builder; reuses the booking mint endpoint
   pushToken.ts                   ← Expo push-token registration into the settings blob
+  scheduleConfig.ts              ← resolveSchedule — Settings.schedule defaults + sanitizing
+  calendar.ts                    ← Calendar day/week block layout + unscheduled queue
+  availability.ts                ← Bookable-slot engine (open slots from hours/jobs/buffers)
+  bookingAttention.ts            ← Today rows for customer reschedule/cancel actions
+  bookingRespond.ts              ← Owner respond client (resolve reschedule / decline)
   pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
   pdfExport.ts                   ← PDF rendering and share sheet
   photoStorage.ts                ← Device photo management + logo downscale for PDFs
@@ -250,6 +269,7 @@ components/
 
 screens/
   TodayScreen.tsx                ← Today tab: schedule, earnings summary, route launch
+  CalendarScreen.tsx             ← Day/week calendar + tap-to-reschedule sheet
   RouteScreen.tsx                ← Map view (deep-links to Apple/Google Maps)
   JobsScreen.tsx                 ← Job list with status filters (Active / Estimates / Completed)
   JobDetailScreen.tsx            ← Job detail: status pipeline, time tracking, materials
@@ -276,7 +296,8 @@ screens/
   SettingsReviewsScreen.tsx       ← Review-request toggle, delay, and Google review link
   SettingsNotificationsScreen.tsx ← Overdue-invoice reminder rules and notification prefs
   SettingsPaymentsScreen.tsx      ← Payment processor setup: Stripe Connect, PayPal.Me, Venmo
-  SettingsBookingScreen.tsx       ← Public booking link: enable/share, mint/rotate token
+  SettingsBookingScreen.tsx       ← Public booking link: enable/share, mint/rotate token, slot toggle
+  SettingsScheduleScreen.tsx      ← Working hours, work days, buffers, time off
   SettingsSubscriptionScreen.tsx  ← Subscription status + manage/subscribe entry point
   SettingsAccountScreen.tsx       ← Clear sample data, sign out, delete account
   ChatScreen.tsx                 ← AI Coach chat (Groq via backend proxy)
@@ -424,11 +445,23 @@ a network connection is available.
 while both are offline, last-write wins when they both sync. There is no
 general merge or conflict detection.
 
-The one exception is an invoice's **payment ledger**, which is merged rather
-than replaced: `pullRemote` unions the two sides' `payments` by payment id
-(`utils/syncMerge.ts` → `mergePaymentLedgers` in `utils/invoicePayments.ts`),
+**Offline scheduling can be double-booked online (added 2026-08-07).** The
+bookable-slots feature computes open times from the jobs that have reached the
+cloud. A job you schedule while your phone is offline is invisible to the
+booking page until your next sync, so a customer could book that same window
+in the meantime. The clash shows up as a conflict warning on the calendar and
+in Add Job as soon as the booking syncs down — resolve it by rescheduling one
+of the two.
+
+There are two designed exceptions. An invoice's **payment ledger** is merged
+rather than replaced: `pullRemote` unions the two sides' `payments` by payment
+id (`utils/syncMerge.ts` → `mergePaymentLedgers` in `utils/invoicePayments.ts`),
 then recomputes `paid` / `paidAt` from the union. Everything else on the
 invoice — amount, customer, description — still follows last-write-wins.
+Similarly, a booking request's **history** (the audit trail of customer
+confirm/reschedule/cancel actions, added 2026-08-07) is unioned on pull so a
+server-appended entry and a device write racing each other can't drop
+anything; all other booking-request fields stay last-write-wins.
 
 The exception exists because a ledger can legitimately grow on both sides at
 once: the Stripe webhook appends a payment server-side while the tradesperson
