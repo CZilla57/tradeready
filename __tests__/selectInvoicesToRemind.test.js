@@ -75,6 +75,23 @@ describe("selectInvoicesToRemind — job-completion gating", () => {
     });
     expect(result).toHaveLength(0);
   });
+
+  test("an imported invoice is excluded even though an otherwise-identical non-imported invoice is returned", () => {
+    // Vercel-copy parity with the backend-workers assertion below — the
+    // `selectInvoicesToRemind` required at the top of this file IS the
+    // backend/lib (Vercel) copy, kept dunning-consistent with the CF Workers
+    // copy so neither cron auto-emails a customer over imported historical AR.
+    const imported = invoice({ id: "inv-imported", importBatchId: "batch1" });
+    const control = invoice({ id: "inv-control" });
+    const result = selectInvoicesToRemind({
+      invoices: [imported, control],
+      settings: baseSettings,
+      alreadySentInvoiceIds: [],
+      jobs: [],
+      today,
+    });
+    expect(result.map((i) => i.id)).toEqual(["inv-control"]);
+  });
 });
 
 describe("selectInvoicesToRemind — imported invoices excluded from auto-dunning", () => {

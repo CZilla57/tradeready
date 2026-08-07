@@ -80,7 +80,12 @@ function selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds, job
       invoice.due &&
       daysPastDue(invoice.due, today) >= earliest &&
       !sent.has(invoice.id) &&
-      isJobDunningEligible(invoice.jobId ? jobStatusById.get(invoice.jobId) : undefined)
+      isJobDunningEligible(invoice.jobId ? jobStatusById.get(invoice.jobId) : undefined) &&
+      // Imported historical AR must never trigger an automated payment-reminder
+      // email to the tradesperson's customer — the owner brought this invoice
+      // in from a CSV export, often already settled or long past being
+      // actionable, and the customer never opted into TradeReady's dunning.
+      !invoice.importBatchId
   );
 }
 
