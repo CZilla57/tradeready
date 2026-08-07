@@ -62,17 +62,30 @@ const requestRows = [
   { id: "bk2", data: { status: "cancelled", kind: "booked", manageToken: "x".repeat(48), convertedJobId: "j_sched2", convertedCustomerId: "c1" } },
 ];
 
+const photoRows = [
+  // Visible + uploaded → served
+  { id: "p1_vis", data: { id: "p1_vis", jobId: "j_sched", createdAt: "2026-08-08", uploadedAt: "2026-08-08", customerVisible: true } },
+  // Absent flag → hidden (fail closed)
+  { id: "p2_absent", data: { id: "p2_absent", jobId: "j_sched", createdAt: "2026-08-08", uploadedAt: "2026-08-08" } },
+  // Explicitly hidden
+  { id: "p3_off", data: { id: "p3_off", jobId: "j_sched", createdAt: "2026-08-08", uploadedAt: "2026-08-08", customerVisible: false } },
+  // Visible but not yet uploaded → bytes unknown, never offered
+  { id: "p4_pending", data: { id: "p4_pending", jobId: "j_sched", createdAt: "2026-08-08", customerVisible: true } },
+];
+
+const SECRET = "s".repeat(32);
+
 function assemble(over = {}) {
   return assemblePortalView({
-    businessName: "B".repeat(150), customerRow, jobRows, invoiceRows, requestRows,
-    token: TOKEN, apiOrigin: ORIGIN, nowMs: NOW_MS, ...over,
+    businessName: "B".repeat(150), customerRow, jobRows, invoiceRows, requestRows, photoRows,
+    token: TOKEN, apiOrigin: ORIGIN, nowMs: NOW_MS, userId: "u1", photoSecret: SECRET, ...over,
   });
 }
 
 describe("assemblePortalView — whitelist boundary", () => {
-  test("top level has exactly the six keys", () => {
+  test("top level has exactly the seven keys", () => {
     expect(Object.keys(assemble()).sort()).toEqual(
-      ["appointments", "businessName", "changeOrders", "customerName", "estimates", "invoices"]
+      ["appointments", "businessName", "changeOrders", "customerName", "estimates", "invoices", "photos"]
     );
   });
 
@@ -96,6 +109,9 @@ describe("assemblePortalView — whitelist boundary", () => {
       expect(Object.keys(co).sort()).toEqual(["amount", "changeUrl", "jobTitle", "status", "title"]);
     for (const i of out.invoices)
       expect(Object.keys(i).sort()).toEqual(["amount", "amountPaid", "balanceDue", "due", "number", "paid", "paidAt", "paymentLinkUrl"]);
+    expect(out.photos.length).toBeGreaterThan(0);
+    for (const p of out.photos)
+      expect(Object.keys(p).sort()).toEqual(["jobTitle", "url"]);
   });
 
   test("nothing sensitive crosses the wire", () => {
@@ -171,5 +187,31 @@ describe("invoices", () => {
       number: "INV-0004", amount: 100, customerId: "c1",
       paymentLinkUrl: "https://squareup.com/pay/tok", paymentLinkAmount: 100 } }] });
     expect(out.invoices[0].paymentLinkUrl).toBeNull();
+  });
+});
+
+describe("photos (Phase 12B — fail closed)", () => {
+  const { verifyPhotoSignature, PHOTO_URL_TTL_SEC } = require("../backend-workers/lib/photoSign.js");
+
+  test("only explicitly-visible, uploaded photos are served, with job title", () => {
+    const out = assemble().photos;
+    expect(out).toHaveLength(1);
+    expect(out[0].jobTitle).toBe("Water heater swap");
+    expect(out[0].url).toContain(`${ORIGIN}/api/photos-public/p1_vis?u=u1&e=`);
+  });
+
+  test("the embedded signature verifies for exactly the signed inputs", () => {
+    const url = new URL(assemble().photos[0].url);
+    const expiresAtSec = url.searchParams.get("e");
+    const sig = url.searchParams.get("s");
+    expect(Number(expiresAtSec)).toBe(Math.floor(NOW_MS / 1000) + PHOTO_URL_TTL_SEC);
+    expect(verifyPhotoSignature({ secret: SECRET, userId: "u1", photoId: "p1_vis", expiresAtSec, sig, nowMs: NOW_MS })).toBe(true);
+    expect(verifyPhotoSignature({ secret: SECRET, userId: "u1", photoId: "p2_absent", expiresAtSec, sig, nowMs: NOW_MS })).toBe(false);
+  });
+
+  test("no secret → empty photos section, everything else intact", () => {
+    const out = assemble({ photoSecret: undefined });
+    expect(out.photos).toEqual([]);
+    expect(out.invoices.length).toBeGreaterThan(0);
   });
 });

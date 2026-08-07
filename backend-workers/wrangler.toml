@@ -48,3 +48,8 @@ bucket_name = "tradeready-invoice-pdfs"
 [[r2_buckets]]
 binding = "PHOTOS"
 bucket_name = "tradeready-photos"
+
+# Phase 12B: portal photo URLs are HMAC-signed with PORTAL_URL_SIGNING_SECRET
+# (set via `wrangler secret put PORTAL_URL_SIGNING_SECRET` — never in this
+# file). Missing secret = portal photos section stays empty and the
+# photos-public route 404s (fail-soft).

@@ -9,6 +9,7 @@
 const { balanceDue, amountPaid, PAID_EPSILON } = require('../paymentMath.js');
 const { isAllowedPaymentLink } = require('../reminderEmail.js');
 const { changeOrderStatus } = require('./changeOrderMath.js');
+const { photoSignature, PHOTO_URL_TTL_SEC } = require('../photoSign.js');
 
 const ESTIMATE_PAGE = 'https://gettradereadyapp.com/estimate.html';
 const CHANGE_PAGE = 'https://gettradereadyapp.com/change.html';
@@ -146,7 +147,29 @@ function buildInvoices(invoiceRows) {
   });
 }
 
-function assemblePortalView({ businessName, customerRow, jobRows, invoiceRows, requestRows, token, apiOrigin, nowMs }) {
+// Only photos the owner EXPLICITLY marked customer-visible, and only ones
+// whose bytes are confirmed in R2 (uploadedAt). Absent flag = hidden — fail
+// closed. URLs are signed per response with a 15-minute TTL and never
+// persisted (spec §6); no secret configured → the section is empty and the
+// portal otherwise works.
+function buildPhotos(jobRows, photoRows, { userId, apiOrigin, photoSecret, nowMs }) {
+  if (!photoSecret) return [];
+  const titleByJobId = new Map(jobRows.map((r) => [r.id, cap(r.data && r.data.title, 200)]));
+  const expiresAtSec = Math.floor(nowMs / 1000) + PHOTO_URL_TTL_SEC;
+  const out = [];
+  for (const r of Array.isArray(photoRows) ? photoRows : []) {
+    const d = r && r.data;
+    if (!d || d.customerVisible !== true || !d.uploadedAt) continue;
+    const sig = photoSignature({ secret: photoSecret, userId, photoId: r.id, expiresAtSec });
+    out.push({
+      jobTitle: titleByJobId.get(d.jobId) || '',
+      url: `${apiOrigin}/api/photos-public/${encodeURIComponent(r.id)}?u=${encodeURIComponent(userId)}&e=${expiresAtSec}&s=${sig}`,
+    });
+  }
+  return out;
+}
+
+function assemblePortalView({ businessName, customerRow, jobRows, invoiceRows, requestRows, photoRows, token, apiOrigin, nowMs, userId, photoSecret }) {
   return {
     businessName: cap(businessName, 120),
     customerName: cap(customerRow.data?.name, 120),
@@ -154,6 +177,7 @@ function assemblePortalView({ businessName, customerRow, jobRows, invoiceRows, r
     estimates: buildEstimates(jobRows),
     changeOrders: buildChangeOrders(jobRows),
     invoices: buildInvoices(invoiceRows),
+    photos: buildPhotos(jobRows, photoRows, { userId, apiOrigin, photoSecret, nowMs }),
   };
 }
 

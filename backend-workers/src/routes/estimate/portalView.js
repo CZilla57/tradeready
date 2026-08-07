@@ -16,6 +16,7 @@ import {
   fetchCustomerJobs,
   fetchCustomerInvoices,
   fetchCustomerBookingRequests,
+  fetchCustomerJobPhotos,
 } from '../../../lib/estimate/portalStore.js';
 import { assemblePortalView } from '../../../lib/estimate/portalAssemble.js';
 import { clientIp } from '../../appCors.js';
@@ -55,6 +56,16 @@ export async function portalViewHandler(c) {
     return c.json({ error: 'Database error' }, 500);
   }
 
+  let photoRows = [];
+  if (c.env.PORTAL_URL_SIGNING_SECRET) {
+    try {
+      photoRows = await fetchCustomerJobPhotos(c.env, row.user_id, jobRows.map((r) => r.id));
+    } catch (err) {
+      console.error('[estimate/portal-view] photos fetch failed:', err.message);
+      photoRows = []; // photos are additive — never fail the whole portal for them
+    }
+  }
+
   return c.json(
     assemblePortalView({
       businessName,
@@ -62,9 +73,12 @@ export async function portalViewHandler(c) {
       jobRows,
       invoiceRows,
       requestRows,
+      photoRows,
       token: String(token),
       apiOrigin: new URL(c.req.url).origin,
       nowMs: Date.now(),
+      userId: row.user_id,
+      photoSecret: c.env.PORTAL_URL_SIGNING_SECRET,
     }),
     200
   );
