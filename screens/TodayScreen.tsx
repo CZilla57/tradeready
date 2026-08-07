@@ -26,6 +26,7 @@ import {
   resolveCustomer,
   loadInvoices,
   loadBookingRequests,
+  markBookingRequestHandled,
 } from '../utils/storage';
 import { selectBookingAttention, type BookingAttention } from '../utils/bookingAttention';
 import { respondToBooking } from '../utils/bookingRespond';
@@ -551,7 +552,21 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     );
   }
 
+  async function handleDismissPortalChange(requestId: string) {
+    const nowIso = new Date().toISOString();
+    // In-memory stamp drops the row immediately; the storage write syncs the
+    // dismissal to every device.
+    setBookingRequests((prev) =>
+      prev.map((r) => (r.id === requestId ? { ...r, handledAt: nowIso } : r))
+    );
+    await markBookingRequestHandled(requestId, nowIso);
+  }
+
   function bookingRowLabel(row: BookingAttention): string {
+    if (row.kind === 'portal_change') {
+      const verb = row.request.portalKind === 'cancel' ? 'cancel' : 'reschedule';
+      return `${row.request.name} asked to ${verb} an appointment`;
+    }
     const when = row.request.slot ? formatDisplayDate(row.request.slot.date) : '';
     return row.kind === 'reschedule_requested'
       ? `${row.request.name} asked to reschedule ${when}`
@@ -561,6 +576,21 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   function handleBookingRowPress(row: BookingAttention) {
     const slot = row.request.slot;
     const when = slot ? `${formatDisplayDate(slot.date)}, ${formatTimeRange(slot.start, slot.end)}` : '';
+    if (row.kind === 'portal_change') {
+      const verb = row.request.portalKind === 'cancel' ? 'cancel' : 'reschedule';
+      Alert.alert(
+        `${row.request.name} asked to ${verb}`,
+        // note IS the server-templated details line — job title, date, and
+        // the customer's own words.
+        row.note ?? '',
+        [
+          { text: 'View job', onPress: () => openJobFromBooking(row.jobId) },
+          { text: 'Done', onPress: () => { void handleDismissPortalChange(row.request.id); } },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
     if (row.kind === 'reschedule_requested') {
       Alert.alert(
         `${row.request.name} asked to reschedule`,
