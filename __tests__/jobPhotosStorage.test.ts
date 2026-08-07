@@ -6,7 +6,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { enqueueCollectionChanges, trySync } from '../utils/sync';
-import { loadJobPhotos, saveJobPhotos } from '../utils/storage';
+import { loadJobPhotos, saveJobPhotos, setJobPhotoVisibility } from '../utils/storage';
 import type { JobPhoto } from '../types/models';
 
 jest.mock('../utils/sync', () => ({
@@ -66,5 +66,32 @@ describe('jobPhotos storage', () => {
   test('corrupt JSON degrades to [] instead of throwing', async () => {
     (AsyncStorage.getItem as jest.Mock).mockResolvedValue('{not json');
     expect(await loadJobPhotos()).toEqual([]);
+  });
+});
+
+describe('setJobPhotoVisibility (Phase 12B — absent means HIDDEN)', () => {
+  test('toggling on persists customerVisible: true through the normal save path', async () => {
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify([photo]));
+    const updated = await setJobPhotoVisibility(photo.id, true);
+    expect(updated).toEqual({ ...photo, customerVisible: true });
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+      'jobPhotos',
+      JSON.stringify([{ ...photo, customerVisible: true }])
+    );
+    expect(enqueueCollectionChanges).toHaveBeenCalledWith('jobPhotos', [photo], [{ ...photo, customerVisible: true }]);
+    expect(trySync).toHaveBeenCalled();
+  });
+
+  test('toggling off persists customerVisible: false (explicit, not deleted)', async () => {
+    const visible: JobPhoto = { ...photo, customerVisible: true };
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify([visible]));
+    const updated = await setJobPhotoVisibility(photo.id, false);
+    expect(updated?.customerVisible).toBe(false);
+  });
+
+  test('unknown id returns null and writes nothing', async () => {
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify([photo]));
+    expect(await setJobPhotoVisibility('p_nope', true)).toBeNull();
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
   });
 });
