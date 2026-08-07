@@ -1,11 +1,9 @@
 // __tests__/portalLink.test.ts
 // Phase 12D: managePortal is the owner-side wrapper for the server-owned
 // token table (mint / set_enabled / rotate) — discriminated result, no
-// Alerts, bearer-authed. The legacy stateless mint identity assertion stays
-// while the export exists (removed in the Phase E sweep).
+// Alerts, bearer-authed.
 
-import { buildPortalUrl, mintPortalToken, managePortal, PORTAL_PUBLIC_BASE } from '../utils/portalLink';
-import { mintBookingToken } from '../utils/bookingLink';
+import { buildPortalUrl, managePortal, PORTAL_PUBLIC_BASE } from '../utils/portalLink';
 import { supabase } from '../utils/supabase';
 
 jest.mock('../utils/supabase', () => ({
@@ -19,10 +17,6 @@ describe('portalLink', () => {
     expect(PORTAL_PUBLIC_BASE).toBe('https://gettradereadyapp.com/portal.html');
     expect(buildPortalUrl('abc123')).toBe('https://gettradereadyapp.com/portal.html?p=abc123');
     expect(buildPortalUrl('a&b')).toBe('https://gettradereadyapp.com/portal.html?p=a%26b');
-  });
-
-  it('mintPortalToken IS mintBookingToken (single mint wrapper, no fork)', () => {
-    expect(mintPortalToken).toBe(mintBookingToken);
   });
 });
 

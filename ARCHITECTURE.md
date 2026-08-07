@@ -83,7 +83,8 @@ Full job lifecycle from lead to paid.
 - Job list (filterable: Active, Estimates, Completed)
 - Job detail
   - Customer info
-  - Job description and photos
+  - Job description and photos (each photo has a customer-visibility eye
+    toggle for the portal, 2026-08-07 — absent means hidden, fail closed)
   - Status timeline (Lead → Estimate Sent → Approved → Scheduled → In Progress → Complete → Invoiced → Paid)
   - Time tracking (clock in/out, session history)
   - Linked invoice
@@ -132,6 +133,8 @@ Everything financial in one place.
   - Total revenue / amount owed
   - Notes
   - One-tap call / text / email
+  - Customer Portal — create / share / disable / rotate the customer's portal
+    link (server-authoritative since 2026-08-07; see Customer Portal below)
 - Add / edit customer
 
 ### Tab 6 — Chat (AI Coach)
@@ -171,10 +174,13 @@ Support and Legal are single-tap actions that live on the hub itself
 - notes
 - createdAt
 - portal (optional — `{token, enabled}`; the per-customer portal link's share
-  token, shared from CustomerDetail. Device-written only, same pattern as
-  `Settings.bookingLink`: the backend's `portal-view` action resolves it to a
-  whitelisted read-only bundle but never writes it. Public by design — the
-  token travels in the shared URL — so not a SecureStore field)
+  token, shared from CustomerDetail. Since Phase 12D (2026-08-07) this is a
+  DISPLAY COPY only — the auth authority is the server-owned `portal_tokens`
+  table (see Customer Portal below). CustomerDetail's create/toggle/rotate
+  call the JWT-authed `portal-manage` endpoint first and save the copy only
+  after the server confirms; normal sync then publishes it so the URL row and
+  share sheet work offline. Public by design — the token travels in the
+  shared URL — so not a SecureStore field)
 - importBatchId (optional) — FK to the CSV import batch that created this
   record (2026-08 CSV data import, `SettingsImportScreen`). Additive-optional;
   absent on every record from any other path (manual entry, booking
@@ -265,8 +271,11 @@ Support and Legal are single-tap actions that live on the hub itself
   Deduction total = business miles × `settings.mileageRate` (default 0.70).
 
 ### BookingRequest
-- id (`bk<epoch-ms>_<6 hex>`, server-minted), status:
-  `new | converted | booked | confirmed | reschedule_requested | cancelled | declined`
+- id (`bk<epoch-ms>_<6 hex>`, server-minted; portal requests use
+  `bkpr_<hash>` — see Customer Portal), status:
+  `new | converted | booked | confirmed | reschedule_requested | cancelled | declined | portal_change_requested`
+  (the last added by Phase 12C, 2026-08-07 — old clients skip it by the
+  explicit-match rule)
 - name, phone, email, address, details, preferredTiming
 - createdAt (ISO, server clock); convertedJobId / convertedCustomerId (set on conversion)
 - Phase 11 additive fields (2026-08-07): `kind` (`request | booked`), `slot`
@@ -275,6 +284,12 @@ Support and Legal are single-tap actions that live on the hub itself
   like the portal token), `history` (append-only audit trail, SERVER-written;
   unioned on pull by `utils/syncMerge.ts` so a device push racing a server
   append can't drop an entry)
+- Phase 12C additive fields (2026-08-07, portal requests): `source:
+  "portal"` + `sourceCustomerId` (conversion links the EXISTING customer by
+  id instead of name-matching), `jobRef` + `portalKind`
+  (`reschedule | cancel`, the appointment change asked for), `handledAt`
+  (DEVICE-written when the owner dismisses the request on Today; absent =
+  still needs attention)
 - A public request-a-quote submission (booking link, 2026-08-04). Rows are
   INSERTED server-side only — the token-gated `/api/booking/submit` endpoint
   writes them with the service role (`backend/lib/booking/store.js`) — and are
@@ -394,17 +409,90 @@ payment-link/webhook flow (`backend/api/stripe/webhook.js`), applied to a
   a device that pulls before pushing preserves them; a device that pushes a
   stale blob after the server write can still clobber `approval.*` — the
   same accepted risk as the Stripe invoice-paid case.
-- **Customer portal shares this dispatcher (2026-08-05).** `GET
-  /api/estimate/portal-view` joins `create-link` / `respond` / `view` in
-  `api/estimate/[action].js`'s route list — still one Vercel function (11 of
-  12). It is read-only and token-gated: given a customer's `Customer.portal`
-  token, it resolves a whitelisted bundle (business name, customer name,
-  approval-carrying estimates linking back to this same hosted approval
-  page, and invoices with `balanceDue` plus allowlist-filtered
-  `paymentLinkUrl`) for the public `portal.html` page. It adds no write path
-  of its own — approve/decline still goes through `respond` above, and Pay
-  still goes through a payment link minted elsewhere; `portal-view` only
-  reads and sanitizes.
+- **Customer portal grew out of this dispatcher (2026-08-05).** `GET
+  /api/estimate/portal-view` joined `create-link` / `respond` / `view` in
+  `api/estimate/[action].js`'s route list as a read-only, token-gated
+  estimates+invoices bundle. That v1 read shape is where the Vercel twin
+  remains frozen; the completed Phase 12 portal is Workers-only — see the
+  Customer Portal section below.
+
+---
+
+## Customer Portal (Phase 12 — completed 2026-08-07)
+
+The per-customer portal (`portal.html?p=<token>`) grew from the v1
+estimates+invoices bundle into a full read surface plus one narrow write
+path. Every Phase 12 endpoint lives on the Workers backend only — the Vercel
+twin stays frozen at the v1 read shape and gets no mirror of any of this.
+
+**portal-view response (v2).** Assembled key-by-key in
+`backend-workers/lib/estimate/portalAssemble.js` — the whitelist is the
+security boundary; no field beyond it may cross:
+- `appointments[]` — scheduled jobs in a `[today − 1 day, +60 days]` window
+  (owner-naive string comparison, never Date-parsed — FA-039); each carries
+  `jobRef`, an `icsUrl`, and a `manageUrl` to the booking manage page when
+  the job originated from a booking that is still actionable
+- `estimates[]` — unchanged v1 shape (approval-carrying jobs linking back to
+  the hosted approval page)
+- `changeOrders[]` — only link-carrying, non-cancelled change orders,
+  linking to `change.html`
+- `invoices[]` — v1 shape plus `amountPaid`, the ledger-derived paid-to-date
+- `photos[]` — ONLY photos with `JobPhoto.customerVisible === true` AND an
+  `uploadedAt` (i.e. mirrored to R2). URLs are HMAC-signed
+  (`PORTAL_URL_SIGNING_SECRET`, TTL 900 s) and never persisted; a missing
+  secret yields an empty photos section — fail closed. The owner opts each
+  photo in via JobDetail's eye toggle; absent means hidden.
+
+**Endpoints (all Workers-only):**
+- `GET /api/estimate/portal-ics` — one floating-local-time VEVENT for an
+  owner-scheduled job (no timezone conversion: the appointment happens at
+  the owner's wall-clock time). Booked slots keep the booking manage page's
+  own ICS instead.
+- `POST /api/estimate/portal-request` — the portal's one public write.
+  `followup` inserts a `bookingRequests` row (`status: "new"`,
+  `source: 'portal'` + `sourceCustomerId`) so device conversion links the
+  EXISTING customer by id instead of creating a duplicate.
+  `reschedule` / `cancel` create rows with the NEW status
+  `portal_change_requested`, which old clients skip harmlessly and Today
+  surfaces until the owner stamps `handledAt`. Idempotent: `bkpr_` ids
+  derive from `sha256(token|requestKey)` and inserts use
+  `Prefer: resolution=ignore-duplicates`. A honeypot field drops bots; a
+  durable cap of 5 requests/day/token is counted via `portal_access_log`
+  and deliberately fails OPEN on log errors.
+- `GET /api/photos-public/:photoId` — anonymous HMAC-signed photo read; the
+  owner-JWT `/api/photos` route is unchanged and separate.
+- `POST /api/estimate/portal-manage` — owner-JWT management: `mint` (409
+  `already_exists` while an active token exists — the stale-paint guard),
+  `set_enabled`, and `rotate` (revokes ALL of the customer's token rows,
+  then mints fresh).
+
+**Server-owned tokens (Phase 12D).** The `portal_tokens` table stores sha256
+hashes ONLY — the raw token is returned exactly once, at mint/rotate, and is
+never written anywhere server-side. Resolution order
+(`backend-workers/lib/estimate/portalTokenStore.js`) is the load-bearing
+contract:
+1. hash known to the table + active → authenticated;
+2. hash known but revoked/disabled → hard-stop 404 — NEVER falls through to
+   the blob. This stop is what makes rotate/disable instant and permanent;
+3. hash unknown → legacy blob fallback (pre-12D tokens) with a lazy backfill,
+   so the next request takes the indexed path and rotation governs that link
+   too.
+`Customer.portal` on the device is a display copy (see Data Models);
+CustomerDetail's controls call `portal-manage` first and save the copy only
+after the server confirms.
+
+**Tables (both migrations applied 2026-08-07):**
+- `portal_tokens` — `token_hash` PK, `user_id`, `customer_id`, `enabled`,
+  one-way `revoked_at`
+- `portal_access_log` — security log of `view` / `ics` / `photo` / `request` /
+  `denied` events; rows record an 8-character `token_prefix`, never raw tokens
+
+**Accepted residuals (design decisions, not oversights):** an OTA-old
+client's stateless mint creates a blob-only token that the fallback honors
+and backfills — two live links are possible until the next rotate; the daily
+request cap fails open when `portal_access_log` is unreachable (a legitimate
+customer is never blocked by a logging outage); in-memory IP rate limits are
+per-isolate. User-facing phrasing lives in README's Known limitations.
 
 ---
 
@@ -509,7 +597,9 @@ Build in this sequence so you always have something shippable:
 ✅ Cloud sync (Supabase — local-first)
 ⬜ Web dashboard
 ⬜ Team / subcontractor support
-⬜ Customer self-booking portal
+✅ Customer self-booking portal (bookable slots on the booking link +
+   per-customer portal with appointments, change orders, photos and
+   reschedule/cancel requests — both completed 2026-08-07)
 
 ---
 
