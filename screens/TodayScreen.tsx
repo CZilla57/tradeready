@@ -669,6 +669,15 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         </View>
         <TouchableOpacity
           style={styles.settingsBtn}
+          onPress={() => navigation.navigate('Calendar')}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Open calendar"
+        >
+          <Ionicons name="calendar-outline" size={22} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.settingsBtn}
           onPress={() => navigation.navigate('Search')}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           accessibilityRole="button"

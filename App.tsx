@@ -68,6 +68,7 @@ import SettingsImportScreen        from "./screens/SettingsImportScreen";
 import TodayScreen                from "./screens/TodayScreen";
 import MoneyScreen                from "./screens/MoneyScreen";
 import ChatScreen                 from "./screens/ChatScreen";
+import CalendarScreen             from "./screens/CalendarScreen";
 import RouteScreen                from "./screens/RouteScreen";
 import RecurringJobsScreen        from "./screens/RecurringJobsScreen";
 import MileageLogScreen           from "./screens/MileageLogScreen";
@@ -133,6 +134,7 @@ function TodayTab() {
   return (
     <TodayStack.Navigator screenOptions={navOpts}>
       <TodayStack.Screen name="TodayHome" component={TodayScreen} options={{ headerShown: false }} />
+      <TodayStack.Screen name="Calendar" component={CalendarScreen} options={{ title: "Calendar" }} />
       <TodayStack.Screen name="Route" component={RouteScreen} options={{ title: "Today's Route" }} />
       <TodayStack.Screen name="Settings" component={SettingsHubScreen} options={{ title: "Settings" }} />
       <TodayStack.Screen name="SettingsBusiness" component={SettingsBusinessScreen} options={{ title: "Business profile" }} />
