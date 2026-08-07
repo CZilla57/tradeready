@@ -21,7 +21,7 @@ Owner decisions taken in the 2026-08-06 brainstorm:
 
 | Question | Decision |
 |---|---|
-| Email content | Deterministic template (no AI): line-item summary + pay link when available. No PDF attachment in V1. |
+| Email content | Deterministic template (no AI): line-item summary + pay link when available. No PDF attachment in V1. _(Superseded 2026-08-06: auto-emails now attach the R2-stored device PDF, grace-then-plain — see `2026-08-06-auto-email-invoice-pdf-attachment-design.md`.)_ |
 | Send timing | Backend sweep every 15 min; the 0–15 min lag doubles as a delete-to-cancel grace window. |
 | Customer has no email | Invoice still auto-created; app falls back to today's behavior (opens the send screen). |
 | Architecture | Client stamps the invoice + mints the pay link at creation; backend sweeps and sends. No backend Stripe surface, no backend write-back into synced invoice data. |
