@@ -34,7 +34,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | deferred (reaffirmed 2026-08-06) |
 | 11 | Calendar, availability & real online booking | 🔥🔥🔥 | High | Booking link (#9), smart pickers, reminders | staged 2026-08-06 — prompt ready |
 | 12 | Customer portal completion | 🔥🔥 | Med–High | Held portal branch, approval/change-order endpoints | staged — precondition: merge `feat/customer-portal` |
-| 13 | Estimated-vs-actual job profitability | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | staged 2026-08-06 — prompt ready |
+| 13 | Estimated-vs-actual job profitability | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | **MERGED** `683ec15` 2026-08-07 (device smoke + OTA pending) |
 | 14 | Accountant package / bookkeeping handoff | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | staged — low urgency stands |
 | 15 | Contextual AI & proactive operations | 🔥🔥 | Med–High | todayInsights, follow-ups, dunning, AI layer | staged — sequenced after #13 |
 
@@ -325,21 +325,22 @@ After approval, implement read-only additions before new write paths. Each publi
 
 ## Phase 13 — Estimated-versus-actual job profitability
 
-> **STATUS (2026-08-07): BUILT, not yet merged** on `feat/job-profitability`
-> per the owner-approved design
+> **STATUS (2026-08-07): MERGED to master** (no-ff `683ec15`, pushed; CI
+> Verify gate green) per the owner-approved design
 > (`docs/superpowers/specs/2026-08-07-job-profitability-design.md`, D1–D6):
 > 13B pure calculation layer + `Expense.jobId` / `Settings.laborCostRate`
 > (`66eb773`), 13C Job Detail estimate-vs-actual card + expense-to-job linking
 > + completion review (`3143d22`), 13D Money aggregate card + pricing
 > reality-check warnings + owner labor-cost-rate setting (`86a97fd`), 13E docs
-> sweep (this block + README + ARCHITECTURE, no code). Owner decisions honored:
-> D1 `Expense.jobId` yes / retro-link deferred, D2 `laborCostRate` yes, D3
-> refunds out of scope v1, D4 processing fees unknown v1 (never invented), D5
-> per-job-type aggregation deferred, D6 compute-with-warnings (unknown ≠ zero).
-> Gate green at `86a97fd`: tsc 0, 2,731 tests / 199 suites, lint 0. Not pushed,
-> not merged — awaiting the owner's merge call and device smoke; client changes
-> ride the next OTA (standing owner call). On merge, Phase 15's job-cost insight
-> conditions ("actual cost above estimate" beyond labor hours) unblock, and
+> sweep (README + ARCHITECTURE + this block, no code) (`22e1fe7`). Owner
+> decisions honored: D1 `Expense.jobId` yes / retro-link deferred, D2
+> `laborCostRate` yes, D3 refunds out of scope v1, D4 processing fees unknown
+> v1 (never invented), D5 per-job-type aggregation deferred, D6
+> compute-with-warnings (unknown ≠ zero). Gate re-verified green on the merged
+> tree before push: tsc 0, 2,731 tests / 199 suites, lint 0. **Remaining:**
+> owner device smoke, then the client card/UI reaches users on the next OTA
+> (standing owner call — not yet OTA'd). Merge unblocks Phase 15's job-cost
+> insight conditions ("actual cost above estimate" beyond labor hours), and
 > Phase 14's accountant package may want a `jobId` column on `expenses.csv`
 > (design §7, not done).
 
