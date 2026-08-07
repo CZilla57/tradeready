@@ -32,7 +32,8 @@ import {
   sanitizeScope,
   cannedScope,
 } from "../utils/estimateDocument";
-import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook, resolveCustomer } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, loadPricebook, savePricebook, resolveCustomer, loadInvoices, loadExpenses } from "../utils/storage";
+import { computeProfitabilityHistory, getHistoryWarnings, type ProfitabilityHistory } from "../utils/profitabilityAggregate";
 import { createApprovalLink } from "../utils/estimateApprovalLink";
 import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { Button, Card, Divider } from "../components/UI";
@@ -110,6 +111,27 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     load();
   }, [jobId]);
 
+  // Trailing-history "reality check" (Phase 13D): best-effort context — the
+  // calculator works identically without it, and getHistoryWarnings stays
+  // silent until >= 3 completed jobs carry real tracked data per metric.
+  const [history, setHistory] = useState<ProfitabilityHistory | null>(null);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [jobs, invoices, expenses, s] = await Promise.all([
+          loadJobs(), loadInvoices(), loadExpenses(), loadSettings(),
+        ]);
+        if (active) {
+          setHistory(computeProfitabilityHistory(jobs, invoices, expenses, s, new Date()));
+        }
+      } catch {
+        // History is optional context; the calculator renders without it.
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
   const params = buildEstimateInput(
     { laborHours, laborRate, materials, materialMarkup, overheadPercent, marginPercent, travelMiles, isEmergency, taxPercent },
     settings,
@@ -125,6 +147,16 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     params,
   });
   const breakEven = breakEvenPrice(params);
+  const historyWarnings = history
+    ? getHistoryWarnings(history, {
+        effectiveHourlyRate: breakdown.effectiveHourlyRate,
+        materialBaseCost: breakdown.materialBaseCost,
+        subtotal: breakdown.subtotal,
+        overheadCost: breakdown.overheadCost,
+        profit: breakdown.profit,
+        marginPercent: params.marginPercent ?? 20,
+      })
+    : [];
   const hasExistingData = parseFloat(laborHours) > 0 || materials.length > 0;
 
   function addMaterial() {
@@ -425,7 +457,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
             breakdown={breakdown}
             range={range}
             breakEven={breakEven}
-            warnings={warnings}
+            warnings={[...warnings, ...historyWarnings]}
             onSave={saveToJob}
             saving={saving}
             onGenerateEstimate={generateEstimate}

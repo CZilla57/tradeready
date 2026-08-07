@@ -36,6 +36,7 @@ import { RevenueForecastCard } from '../components/money/RevenueForecastCard';
 import { AvgJobValueCard }      from '../components/money/AvgJobValueCard';
 import { InvoiceAgingCard }    from '../components/money/InvoiceAgingCard';
 import { RevenueByTypeCard }   from '../components/money/RevenueByTypeCard';
+import { JobProfitabilityCard } from '../components/money/JobProfitabilityCard';
 import { SeasonalTrendsCard }  from '../components/money/SeasonalTrendsCard';
 import { CustomerMixCard }     from '../components/money/CustomerMixCard';
 import { ExpenseTrendsCard }  from '../components/money/ExpenseTrendsCard';
@@ -303,6 +304,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
                   prevEnd={prevRange?.end ?? null}
                 />
                 <RevenueByTypeCard jobs={jobs} />
+                <JobProfitabilityCard jobs={jobs} invoices={invoices} expenses={expenses} />
               </MoneySection>
 
               <MoneySection title="Tools">
@@ -356,6 +358,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
         visible={showAddModal}
         onClose={handleCloseModal}
         onSave={handleSaveExpense}
+        jobs={jobs}
       />
     </View>
   );
