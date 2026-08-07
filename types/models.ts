@@ -182,6 +182,13 @@ export interface Job {
   notes: string;
   invoiceId: string | null;
   createdAt: DateString;
+  /**
+   * LEGACY (pre-2026-08-06): absolute device-local photo URIs. Superseded by
+   * the synced `jobPhotos` collection (JobPhoto records keyed by jobId). Kept
+   * optional so old records still parse; the sign-in adoption migration
+   * (utils/photoSync.ts) drains any remaining URIs into JobPhoto records.
+   * Do NOT write new entries here — attach photos via saveJobPhotos.
+   */
   photos?: string[];
   timeSessions?: TimeSession[];
   recurringJobId?: string;
@@ -216,6 +223,33 @@ export interface Job {
    * pre-existing data. JSON-blob sync ⇒ no backend migration.
    */
   importBatchId?: string;
+}
+
+/**
+ * A single job photo, synced cross-device via the `jobPhotos` collection
+ * (2026-08-06 job-photo R2 sync spec). Per-photo records make each photo its
+ * own last-write-wins unit, so two devices attaching photos to the same job
+ * offline never clobber each other's lists (the whole-Job LWW hazard that made
+ * Job.photos legacy). The local file is deterministic —
+ * `${documentDirectory}job-photos/${id}.jpg` — and the R2 key is derived
+ * server-side as `${userId}/${id}.jpg`, so neither path is stored here.
+ */
+export interface JobPhoto {
+  /** `p<timestamp>_<base36-rand>` — IS the local filename and the R2 object name. */
+  id: string;
+  /** FK to Job.id this photo belongs to. */
+  jobId: string;
+  /** ISO timestamp the photo was captured/attached. */
+  createdAt: string;
+  /**
+   * ISO timestamp stamped after a confirmed R2 PUT. ABSENT = still pending
+   * upload on the origin device; a second device seeing this with no local
+   * file renders an "uploading from another device" placeholder (not a bug).
+   */
+  uploadedAt?: string;
+  /** Pixel dimensions after client compression (optional, for layout hints). */
+  width?: number;
+  height?: number;
 }
 
 export interface PricebookEntry {
