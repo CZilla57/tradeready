@@ -15,7 +15,7 @@ import { useTheme } from "../hooks/useTheme";
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { parseCsv, hashCsv } from "../utils/csvImport";
 import { detectMapping, FIELD_DEFS, type ImportEntity } from "../utils/importMapping";
-import { buildCustomerImport, stripBatch, type ImportCounts } from "../utils/importEngine";
+import { buildCustomerImport, stripBatch, type ImportCounts, type CustomerImportResult } from "../utils/importEngine";
 import { newBatchId, recordImportBatch, findBatchByFileHash } from "../utils/importHistory";
 import { loadCustomers, saveCustomers } from "../utils/storage";
 import { reportError } from "../utils/analytics";
@@ -90,18 +90,27 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
   }
 
   async function commit() {
+    let batchId: string;
+    let res: CustomerImportResult;
     try {
-      const batchId = newBatchId();
+      batchId = newBatchId();
       const existing = await loadCustomers();
-      const res = buildCustomerImport(rows, mapping, existing, batchId);
-      await saveCustomers(res.records); // ONE save for the whole collection
-      await recordImportBatch({ batchId, entity, fileHash, date: getTodayDateString(), counts: res.counts });
-      setCounts(res.counts);
-      setLastBatchId(batchId);
-      setStage("report");
+      res = buildCustomerImport(rows, mapping, existing, batchId);
+      await saveCustomers(res.records); // ONE save for the whole collection — the durable write
     } catch (e) {
       reportError(e, { context: "csvImport.commit" });
       Alert.alert("Import failed", "Nothing was changed. Please try again.");
+      return;
+    }
+    // Customers are durably saved — always surface the report/undo now, even if
+    // the operational metadata write below fails.
+    setCounts(res.counts);
+    setLastBatchId(batchId);
+    setStage("report");
+    try {
+      await recordImportBatch({ batchId, entity, fileHash, date: getTodayDateString(), counts: res.counts });
+    } catch (histErr) {
+      reportError(histErr, { context: "csvImport.recordHistory" });
     }
   }
 

@@ -58,6 +58,7 @@ export function buildCustomerImport(
       counts.skip += 1;
       return;
     }
+    const notes = fieldValue(row, mapping, "notes");
     const existedBefore = acc.some((c) => normName(c.name) === normName(name));
     const { customer, customers: next, changed } = upsertCustomerInList(acc, {
       name,
@@ -71,11 +72,11 @@ export function buildCustomerImport(
       return;
     }
     if (existedBefore) {
-      acc = next;                       // backfill applied (if changed); never stamped
+      acc = next;                       // backfill applied (if changed); never stamped, notes untouched
       counts.matched += 1;
     } else {
-      // Newly created — stamp importBatchId on that record only.
-      acc = next.map((c) => (c.id === customer.id ? { ...c, importBatchId: batchId } : c));
+      // Newly created — stamp importBatchId and mapped notes on that record only.
+      acc = next.map((c) => (c.id === customer.id ? { ...c, importBatchId: batchId, notes: notes || c.notes } : c));
       counts.created += 1;
     }
     outcomes.push({ rowIndex, status: "ok" });

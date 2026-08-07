@@ -32,6 +32,33 @@ describe("buildCustomerImport", () => {
     const res = buildCustomerImport([["Grace", "Hopper"]], cols(["name", "name"]), [], "b");
     expect(res.records[0].name).toBe("Grace Hopper");
   });
+
+  test("stamps mapped notes onto a newly-created customer", () => {
+    const res = buildCustomerImport(
+      [["Grace Hopper", "Prefers morning appointments"]],
+      cols(["name", "notes"]),
+      [],
+      "batch1",
+    );
+    const grace = res.records.find((c) => c.name === "Grace Hopper")!;
+    expect(grace.notes).toBe("Prefers morning appointments");
+    expect(grace.importBatchId).toBe("batch1");
+  });
+
+  test("does not overwrite an existing customer's notes on match", () => {
+    const existing: Customer[] = [
+      { id: "c1", name: "Ada Lovelace", email: "", phone: "", address: "", notes: "VIP client" },
+    ];
+    const res = buildCustomerImport(
+      [["Ada Lovelace", "Imported note that should be ignored"]],
+      cols(["name", "notes"]),
+      existing,
+      "batch1",
+    );
+    const ada = res.records.find((c) => c.name === "Ada Lovelace")!;
+    expect(ada.notes).toBe("VIP client");
+    expect(ada.importBatchId).toBeUndefined();
+  });
 });
 
 describe("stripBatch", () => {
