@@ -3,9 +3,10 @@
 // columns, validates, previews, then commits with ONE saveX per collection. No
 // draft state (SettingsBookingScreen precedent) — do not add useSettingsDraft.
 // All parse/map/validate logic lives in the pure utils/* modules; this screen is
-// just orchestration + I/O. P3 adds a Jobs slot alongside Customers; only
-// entities with a wired pure builder appear in the selector (Invoices/Expenses
-// land in later phases — YAGNI for now).
+// just orchestration + I/O. P3 added Jobs; P4 adds Invoices (including
+// historical PAID ones — see buildInvoiceImport's money-semantics doc). Only
+// entities with a wired pure builder appear in the selector (Expenses lands in
+// a later phase — YAGNI for now).
 import React, { useMemo, useState } from "react";
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
@@ -16,9 +17,9 @@ import { useTheme } from "../hooks/useTheme";
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { parseCsv, hashCsv } from "../utils/csvImport";
 import { detectMapping, detectDateFormat, FIELD_DEFS, type ImportEntity, type DateFormat } from "../utils/importMapping";
-import { buildCustomerImport, buildJobImport, stripBatch, type ImportCounts } from "../utils/importEngine";
+import { buildCustomerImport, buildJobImport, buildInvoiceImport, stripBatch, type ImportCounts } from "../utils/importEngine";
 import { newBatchId, recordImportBatch, findBatchByFileHash } from "../utils/importHistory";
-import { loadCustomers, saveCustomers, loadJobs, saveJobs } from "../utils/storage";
+import { loadCustomers, saveCustomers, loadJobs, saveJobs, loadInvoices, saveInvoices, loadSettings } from "../utils/storage";
 import { reportError } from "../utils/analytics";
 import { getTodayDateString } from "../utils/dateHelpers";
 import type { TodayStackScreenProps } from "../types/navigation";
@@ -29,12 +30,17 @@ type Stage = "idle" | "mapping" | "preview" | "report";
 const ENTITY_OPTIONS: { key: ImportEntity; label: string }[] = [
   { key: "customers", label: "Customers" },
   { key: "jobs", label: "Jobs" },
+  { key: "invoices", label: "Invoices" },
 ];
 
 // Which mapped field key carries "the" date for a given entity — drives the
-// date-format selector below. Reused (extended) by future invoice/expense slots.
+// date-format selector below. Reused (extended) by a future expense slot.
+// For invoices this is "due", but the SAME chosen format is applied to BOTH
+// `due` and `paidAt` parsing inside buildInvoiceImport — a CSV export uses one
+// date convention throughout, never two.
 const DATE_FIELD_BY_ENTITY: Partial<Record<ImportEntity, string>> = {
   jobs: "scheduledDate",
+  invoices: "due",
 };
 
 type DateFormatChoice = "auto" | DateFormat;
@@ -129,10 +135,18 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
   }
 
   async function commit() {
-    const batchId = newBatchId();
+    let batchId = "";
     let resultCounts: ImportCounts;
     try {
+      batchId = newBatchId();
       switch (entity) {
+        case "customers": {
+          const existing = await loadCustomers();
+          const res = buildCustomerImport(rows, mapping, existing, batchId);
+          await saveCustomers(res.records); // ONE save for the whole collection — the durable write
+          resultCounts = res.counts;
+          break;
+        }
         case "jobs": {
           const resolvedDateFormat: DateFormat | null =
             dateFormatChoice === "auto"
@@ -146,14 +160,37 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
           resultCounts = res.counts;
           break;
         }
-        case "customers":
-        default: {
-          const existing = await loadCustomers();
-          const res = buildCustomerImport(rows, mapping, existing, batchId);
-          await saveCustomers(res.records); // ONE save for the whole collection — the durable write
+        case "invoices": {
+          // Money phase: paid semantics, id/number derivation, and the
+          // customer join all live in buildInvoiceImport — see its doc.
+          const resolvedDateFormat: DateFormat | null =
+            dateFormatChoice === "auto"
+              ? detectDateFormat(dateColIndex >= 0 ? rows.map((r) => r[dateColIndex]) : [])
+              : dateFormatChoice;
+          const settings = await loadSettings(); // carries invoicePrefix/invoiceStartNumber
+          const existingCustomers = await loadCustomers();
+          const existingInvoices = await loadInvoices();
+          const res = buildInvoiceImport(
+            rows,
+            mapping,
+            existingCustomers,
+            existingInvoices,
+            batchId,
+            resolvedDateFormat,
+            settings,
+            Date.now(),
+          );
+          await saveCustomers(res.customers); // ONE save for the customers collection
+          await saveInvoices(res.invoices);   // ONE save for the invoices collection
           resultCounts = res.counts;
           break;
         }
+        default:
+          // An entity reaches the selector only once it has a wired case above
+          // (see ENTITY_OPTIONS) — this guards a future unwired entity from
+          // silently running a different entity's commit logic.
+          reportError(new Error(`Unwired import entity: ${entity}`), { context: "csvImport.commit" });
+          return;
       }
     } catch (e) {
       reportError(e, { context: "csvImport.commit" });
@@ -176,6 +213,12 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
     if (!lastBatchId) return;
     try {
       switch (entity) {
+        case "customers": {
+          const existing = await loadCustomers();
+          await saveCustomers(stripBatch(existing, lastBatchId));
+          Alert.alert("Import undone", "The imported customers were removed.");
+          break;
+        }
         case "jobs": {
           // Owner decision: undoing a jobs import removes only the jobs.
           // Batch-created customers stay in place — later invoice imports
@@ -185,13 +228,18 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
           Alert.alert("Import undone", "The imported jobs were removed.");
           break;
         }
-        case "customers":
-        default: {
-          const existing = await loadCustomers();
-          await saveCustomers(stripBatch(existing, lastBatchId));
-          Alert.alert("Import undone", "The imported customers were removed.");
+        case "invoices": {
+          // Same rationale as jobs: undo strips only the invoices. A
+          // customer created during import is a real customer — later
+          // imports (or the owner) may already be depending on it.
+          const existingInvoices = await loadInvoices();
+          await saveInvoices(stripBatch(existingInvoices, lastBatchId));
+          Alert.alert("Import undone", "The imported invoices were removed.");
           break;
         }
+        default:
+          reportError(new Error(`Unwired import entity: ${entity}`), { context: "csvImport.undo" });
+          return;
       }
       setLastBatchId(null);
       setStage("idle");
@@ -206,7 +254,7 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.h1}>Import data</Text>
         <Text style={styles.sub}>
-          Bring customers or jobs in from a Jobber, Housecall Pro, QuickBooks, or spreadsheet CSV export.
+          Bring customers, jobs, or invoices in from a Jobber, Housecall Pro, QuickBooks, or spreadsheet CSV export.
         </Text>
 
         <View style={styles.entityRow}>
@@ -287,11 +335,17 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
         {stage === "report" && counts && (
           <View style={styles.card}>
             <Text style={styles.h2}>Import complete</Text>
-            {entity === "jobs" ? (
+            {entity === "jobs" && (
               <Text style={styles.sub}>
                 {counts.ok} imported · {counts.flag} flagged (unrecognized status) · {counts.skip} skipped
               </Text>
-            ) : (
+            )}
+            {entity === "invoices" && (
+              <Text style={styles.sub}>
+                {counts.ok} imported · {counts.flag} flagged (paid claim, no paid date) · {counts.skip} skipped
+              </Text>
+            )}
+            {entity === "customers" && (
               <Text style={styles.sub}>
                 {counts.created} new · {counts.matched} matched existing · {counts.skip} skipped
               </Text>
