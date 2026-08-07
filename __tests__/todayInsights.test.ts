@@ -5,7 +5,7 @@
 
 import { selectTodayInsights } from '../utils/todayInsights';
 import { resolveSchedule } from '../utils/scheduleConfig';
-import type { Job, Invoice, Settings } from '../types/models';
+import type { Job, Invoice, Customer, RecurringJob, Settings } from '../types/models';
 
 const NOW = new Date(2026, 7, 4, 10, 0);
 
@@ -389,6 +389,117 @@ describe('low_margin_estimate', () => {
     ];
     const kinds = selectTodayInsights(jobs, [], NOW).map(i => i.kind);
     expect(kinds).toEqual(['labor_overrun', 'low_margin_estimate', 'uninvoiced_complete']);
+  });
+});
+
+// Phase 15C: maintenance_due — last delivered job 6+ calendar months ago
+// (local component math, DST-proof: Feb→Aug crosses a DST change), strict
+// identity exclusions instead of guesses, suppressed while work is in motion.
+describe('maintenance_due', () => {
+  const customer = (overrides: Partial<Customer> = {}): Customer => ({
+    id: 'c1',
+    name: 'Dana Smith',
+    email: '',
+    phone: '555-1234',
+    address: '',
+    notes: '',
+    ...overrides,
+  });
+  const rule = (overrides: Partial<RecurringJob> = {}): RecurringJob =>
+    ({ id: 'rj1', customerId: 'c1', isActive: true, ...overrides } as RecurringJob);
+  const historyJob = (overrides: Partial<Job> = {}) =>
+    job({ id: 'h1', status: 'paid', scheduledDate: '2026-02-04', title: 'Furnace tune-up', ...overrides });
+  const extras = (customers: Customer[], recurringJobs: RecurringJob[] = []) =>
+    ({ customers, recurringJobs });
+
+  test('fires at exactly 6 calendar months, silent a day short', () => {
+    const due = selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()]));
+    expect(due).toHaveLength(1);
+    expect(due[0].kind).toBe('maintenance_due');
+    expect(due[0].id).toBe('maintenance_due:c1');
+    expect(due[0].title).toBe("It's been 6 months since you worked for Dana Smith");
+    expect(due[0].detail).toBe('Last job: Furnace tune-up');
+    expect(due[0].target).toEqual({ type: 'customer', customerId: 'c1' });
+
+    const short = selectTodayInsights(
+      [historyJob({ scheduledDate: '2026-02-05' })], [], NOW, undefined, extras([customer()])
+    );
+    expect(short).toHaveLength(0);
+  });
+
+  test('coachPrompt uses the first name only; reason carries the date math', () => {
+    const [insight] = selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()]));
+    expect(insight.coachPrompt).toContain('Dana');
+    expect(insight.coachPrompt).not.toContain('Smith');
+    expect(insight.reason).toContain('2026-02-04');
+    expect(insight.reason).toContain('threshold: 6');
+  });
+
+  test('customers without a contact, or archived, are excluded', () => {
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer({ phone: ' ', email: '' })]))
+    ).toHaveLength(0);
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer({ archivedAt: '2026-07-01' })]))
+    ).toHaveLength(0);
+  });
+
+  test('anything in the active pipeline suppresses — unless that job is archived', () => {
+    const inMotion = [historyJob(), job({ id: 'j2', status: 'scheduled', scheduledDate: null })];
+    const active = selectTodayInsights(inMotion, [], NOW, undefined, extras([customer()]));
+    expect(active.map(i => i.kind)).not.toContain('maintenance_due');
+
+    const archived = [historyJob(), job({ id: 'j2', status: 'in_progress', archivedAt: '2026-07-01' })];
+    const stillDue = selectTodayInsights(archived, [], NOW, undefined, extras([customer()]));
+    expect(stillDue.map(i => i.kind)).toContain('maintenance_due');
+  });
+
+  test('an active recurring rule suppresses; an inactive one does not', () => {
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()], [rule()]))
+    ).toHaveLength(0);
+    expect(
+      selectTodayInsights([historyJob()], [], NOW, undefined, extras([customer()], [rule({ isActive: false })]))
+    ).toHaveLength(1);
+  });
+
+  test('no delivered history means silence — never inferred', () => {
+    // Lead-only history, unlinked (customerId "") history, and a delivered
+    // job with no date all fail the join rather than guess.
+    expect(
+      selectTodayInsights([historyJob({ status: 'lead' })], [], NOW, undefined, extras([customer()]))
+        .map(i => i.kind)
+    ).not.toContain('maintenance_due');
+    expect(
+      selectTodayInsights([historyJob({ customerId: '' })], [], NOW, undefined, extras([customer()]))
+    ).toHaveLength(0);
+    expect(
+      selectTodayInsights([historyJob({ scheduledDate: null })], [], NOW, undefined, extras([customer()]))
+    ).toHaveLength(0);
+    expect(selectTodayInsights([], [], NOW, undefined, extras([customer()]))).toHaveLength(0);
+  });
+
+  test('several due customers aggregate into one row targeting the Customers tab', () => {
+    const insights = selectTodayInsights(
+      [historyJob(), historyJob({ id: 'h2', customerId: 'c2', scheduledDate: '2025-11-01' })],
+      [],
+      NOW,
+      undefined,
+      extras([customer(), customer({ id: 'c2', name: 'Bob Reyes' })])
+    );
+    expect(insights).toHaveLength(1);
+    expect(insights[0].id).toBe('maintenance_due:all');
+    expect(insights[0].title).toBe("2 customers haven't been serviced in 6+ months");
+    expect(insights[0].target).toEqual({ type: 'customers' });
+  });
+
+  test('rides last in priority order', () => {
+    const jobs = [
+      job({ id: 'left', status: 'approved', laborHours: 9, customerId: 'c2' }),
+      historyJob(),
+    ];
+    const kinds = selectTodayInsights(jobs, [], NOW, undefined, extras([customer()])).map(i => i.kind);
+    expect(kinds).toEqual(['unscheduled_approved', 'maintenance_due']);
   });
 });
 

@@ -49,11 +49,16 @@ jest.mock("../utils/storage", () => ({
   loadSettings: jest.fn(() => Promise.resolve({})),
   resolveCustomer: jest.fn(() => null),
   loadBookingRequests: jest.fn(() => Promise.resolve([])),
+  loadRecurringJobs: jest.fn(() => Promise.resolve([])),
 }));
 
 jest.mock("../utils/setupChecklist", () => ({
   loadSetupChecklistState: jest.fn(() => Promise.resolve(null)),
   markSampleTourDone: jest.fn(),
+  // The insights card gates on this; mirror the real "dismissed = complete".
+  isSetupComplete: jest.fn(
+    (_settings: unknown, state: { dismissed?: boolean } | null) => !!state?.dismissed
+  ),
 }));
 
 jest.mock("../utils/appointmentSend", () => ({
@@ -84,6 +89,44 @@ describe("cross-tab navigation preserves the target stack's initial route", () =
       screen: "JobDetail",
       initial: false,
       params: { jobId: "j1" },
+    });
+  });
+
+  it("tapping a maintenance-due insight targets Customers > CustomerDetail with initial: false", async () => {
+    const storage = jest.requireMock("../utils/storage");
+    const checklist = jest.requireMock("../utils/setupChecklist");
+    // A delivered job old enough that the maintenance_due rule always fires.
+    const oldJob = {
+      id: "j9",
+      title: "Furnace tune-up",
+      customerId: "c1",
+      customerName: "Dana Smith",
+      status: "paid",
+      scheduledDate: "2025-09-01",
+    } as Job;
+    storage.loadJobs.mockResolvedValue([oldJob]);
+    storage.loadCustomers.mockResolvedValue([
+      { id: "c1", name: "Dana Smith", phone: "555-0100", email: "", address: "", notes: "" },
+    ]);
+    checklist.loadSetupChecklistState.mockResolvedValue({ dismissed: true });
+
+    const parentNavigate = jest.fn();
+    const navigation = {
+      navigate: jest.fn(),
+      getParent: jest.fn(() => ({ navigate: parentNavigate })),
+    } as any;
+
+    const { findByText } = await render(
+      <TodayScreen navigation={navigation} route={{} as any} />
+    );
+
+    const row = await findByText(/since you worked for Dana Smith/);
+    await fireEvent.press(row);
+
+    expect(parentNavigate).toHaveBeenCalledWith("Customers", {
+      screen: "CustomerDetail",
+      initial: false,
+      params: { customer: expect.objectContaining({ id: "c1" }) },
     });
   });
 });

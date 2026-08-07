@@ -5,7 +5,7 @@
 // The card (components/InsightsCard.tsx) renders the first 3 of whatever this
 // returns, so PRIORITY IS THE ORDER THE RULES RUN in selectTodayInsights.
 
-import type { Job, Invoice } from "../types/models";
+import type { Job, Invoice, Customer, RecurringJob } from "../types/models";
 import { computeTimeTracking, formatElapsed } from "./timeTracking";
 import { computeEstimateBreakdown } from "./pricingEngine";
 import { formatLaborHint, largestFreeGap } from "./scheduleSmarts";
@@ -30,7 +30,8 @@ export type InsightKind =
   | "uninvoiced_complete"
   | "due_soon"
   | "open_slot"
-  | "unscheduled_approved";
+  | "unscheduled_approved"
+  | "maintenance_due";
 
 export type InsightTarget =
   | { type: "job"; jobId: string }
@@ -39,7 +40,9 @@ export type InsightTarget =
   | { type: "invoices" }
   | { type: "jobs" }
   | { type: "schedule"; jobId: string }
-  | { type: "selectDate"; date: string };
+  | { type: "selectDate"; date: string }
+  | { type: "customer"; customerId: string }
+  | { type: "customers" };
 
 export type TodayInsight = {
   kind: InsightKind;
@@ -315,12 +318,118 @@ function selectScheduleInsights(
   return out;
 }
 
+/** Fixed cadence for the maintenance-due rule — a constant, not a setting, per
+ * the v1 spec (the work-day-constant precedent; a per-trade table or Settings
+ * field is a later, separately-approved change). */
+const MAINTENANCE_DUE_MONTHS = 6;
+
+/** Statuses that count as delivered service history. */
+const SERVICE_HISTORY_STATUSES: ReadonlySet<Job["status"]> = new Set([
+  "complete",
+  "invoiced",
+  "paid",
+]);
+
+/** Statuses meaning "there's already work in motion for this customer". */
+const ACTIVE_PIPELINE_STATUSES: ReadonlySet<Job["status"]> = new Set([
+  "lead",
+  "estimate_sent",
+  "approved",
+  "scheduled",
+  "in_progress",
+]);
+
+/** Whole calendar months elapsed from a local YYYY-MM-DD to `now` — pure
+ * component math, never Date-parsing the string (FA-039), so timezone/DST
+ * can't shift the boundary. */
+function monthsBetween(from: string, now: Date): number {
+  const [y, m, d] = from.split("-").map(Number);
+  let months = (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
+  if (now.getDate() < d) months -= 1;
+  return months;
+}
+
+/**
+ * maintenance_due: customers whose last delivered job is MAINTENANCE_DUE_MONTHS+
+ * months behind them, with nothing in motion. Strict exclusions instead of
+ * guesses (Phase 15 spec §C): customers must be active with a real contact;
+ * history joins on a real customerId (jobs with customerId "" never match,
+ * and invoice-only customers have no job history — stated v1 limitation);
+ * "last service" is the latest scheduledDate over complete/invoiced/paid jobs
+ * (archived history still counts — archiving tidies lists, it does not
+ * rewrite history); suppressed while ANY non-archived job is in the active
+ * pipeline or an active recurring-job rule covers the customer.
+ */
+function selectMaintenanceDue(
+  jobs: Job[],
+  customers: Customer[],
+  recurringJobs: RecurringJob[],
+  now: Date
+): TodayInsight[] {
+  type Due = { customer: Customer; months: number; lastDate: string; lastTitle: string };
+  const due: Due[] = [];
+  for (const customer of customers) {
+    if (!customer.id || isArchived(customer)) continue;
+    if (!(customer.phone || "").trim() && !(customer.email || "").trim()) continue;
+    const theirJobs = jobs.filter((j) => j.customerId === customer.id);
+    if (theirJobs.some((j) => ACTIVE_PIPELINE_STATUSES.has(j.status) && !isArchived(j))) continue;
+    if (recurringJobs.some((r) => r.isActive && r.customerId === customer.id)) continue;
+    let lastDate = "";
+    let lastTitle = "";
+    for (const j of theirJobs) {
+      if (!SERVICE_HISTORY_STATUSES.has(j.status) || !j.scheduledDate) continue;
+      if (j.scheduledDate > lastDate) {
+        lastDate = j.scheduledDate;
+        lastTitle = j.title;
+      }
+    }
+    if (!lastDate) continue;
+    const months = monthsBetween(lastDate, now);
+    if (months >= MAINTENANCE_DUE_MONTHS) due.push({ customer, months, lastDate, lastTitle });
+  }
+  if (due.length === 0) return [];
+  due.sort((a, b) => b.months - a.months);
+  if (due.length === 1) {
+    const { customer, months, lastDate, lastTitle } = due[0];
+    const firstName = customer.name.trim().split(/\s+/)[0] || customer.name;
+    return [{
+      kind: "maintenance_due",
+      id: `maintenance_due:${customer.id}`,
+      title: `It's been ${months} months since you worked for ${customer.name}`,
+      detail: lastTitle ? `Last job: ${lastTitle}` : undefined,
+      reason:
+        `Your last delivered job for ${customer.name}${lastTitle ? ` ('${lastTitle}')` : ""} was ` +
+        `${lastDate} — ${months} months ago (threshold: ${MAINTENANCE_DUE_MONTHS}). They have no ` +
+        `upcoming or in-progress work and no active recurring plan. Snoozing hides this for 30 days.`,
+      target: { type: "customer", customerId: customer.id },
+      // Privacy (spec §E table): first name + service facts only — no
+      // financials, no contact details, no full name.
+      coachPrompt:
+        `It's been ${months} months since I did${lastTitle ? ` '${lastTitle}'` : " a job"} for ` +
+        `${firstName}. Draft a short, friendly check-in text offering to schedule their next service.`,
+    }];
+  }
+  return [{
+    kind: "maintenance_due",
+    id: "maintenance_due:all",
+    title: `${due.length} customers haven't been serviced in ${MAINTENANCE_DUE_MONTHS}+ months`,
+    reason:
+      `${due.length} customers had their last delivered job over ${MAINTENANCE_DUE_MONTHS} months ` +
+      `ago and have no upcoming work or active recurring plan. Snoozing hides this for 30 days.`,
+    target: { type: "customers" },
+  }];
+}
+
 /** Phase 15 additions ride an options bag so the positional signature stays
  * stable as rules gain inputs. */
 export type InsightExtras = {
   /** Settings.marginPercent — the low-margin rule's target. Default 20, the
    * pricing engine's own default (buildEstimateInput). */
   targetMarginPercent?: number;
+  /** Customer registry — enables the maintenance_due rule when provided. */
+  customers?: Customer[];
+  /** Active recurring-job rules — suppress maintenance_due for covered customers. */
+  recurringJobs?: RecurringJob[];
 };
 
 export function selectTodayInsights(
@@ -339,5 +448,8 @@ export function selectTodayInsights(
     ...selectUninvoicedComplete(safeJobs),
     ...selectDueSoon(safeInvoices, now),
     ...selectScheduleInsights(safeJobs, now, schedule),
+    // Long-horizon, so it rides last — it must never crowd out today's-money
+    // rows given the card's top-3 cap.
+    ...selectMaintenanceDue(safeJobs, extras.customers ?? [], extras.recurringJobs ?? [], now),
   ];
 }

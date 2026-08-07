@@ -28,7 +28,7 @@ import {
   type InsightTarget,
   type TodayInsight,
 } from "../utils/todayInsights";
-import type { Job, Invoice, Settings } from "../types/models";
+import type { Job, Invoice, Customer, RecurringJob, Settings } from "../types/models";
 import { resolveSchedule } from "../utils/scheduleConfig";
 import { track } from "../utils/analytics";
 import {
@@ -48,6 +48,7 @@ const KIND_ICONS: Record<InsightKind, keyof typeof Ionicons.glyphMap> = {
   due_soon: "alarm-outline",
   open_slot: "today-outline",
   unscheduled_approved: "calendar-outline",
+  maintenance_due: "build-outline",
 };
 
 // Kinds whose condition can't self-resolve get dismiss (and, when listed in
@@ -55,19 +56,25 @@ const KIND_ICONS: Record<InsightKind, keyof typeof Ionicons.glyphMap> = {
 // — their rows disappear on their own as the condition resolves (2026-08-04
 // owner decision). low_margin_estimate's dismissal is keyed to the job's
 // current price (the insight id embeds estimateTotal), so a repriced job
-// re-fires despite an earlier dismiss.
-const MUTEABLE_KINDS: ReadonlySet<InsightKind> = new Set<InsightKind>(["low_margin_estimate"]);
-const SNOOZE_DAYS: Partial<Record<InsightKind, number>> = {};
+// re-fires despite an earlier dismiss. maintenance_due can sit for months, so
+// it gets snooze as well as dismiss.
+const MUTEABLE_KINDS: ReadonlySet<InsightKind> = new Set<InsightKind>([
+  "low_margin_estimate",
+  "maintenance_due",
+]);
+const SNOOZE_DAYS: Partial<Record<InsightKind, number>> = { maintenance_due: 30 };
 
 interface InsightsCardProps {
   jobs: Job[];
   invoices: Invoice[];
+  customers: Customer[];
+  recurringJobs: RecurringJob[];
   settings: Settings | null;
   onNavigate: (target: InsightTarget) => void;
   onAskCoach: (prompt: string) => void;
 }
 
-export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach }: InsightsCardProps) {
+export function InsightsCard({ jobs, invoices, customers, recurringJobs, settings, onNavigate, onAskCoach }: InsightsCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [state, setState] = useState<SetupChecklistState | null>(null);
@@ -101,9 +108,9 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
         invoices,
         new Date(),
         settings ? resolveSchedule(settings) : undefined,
-        { targetMarginPercent: settings?.marginPercent }
+        { targetMarginPercent: settings?.marginPercent, customers, recurringJobs }
       ),
-    [jobs, invoices, settings]
+    [jobs, invoices, customers, recurringJobs, settings]
   );
 
   // Mute-filter BEFORE the top-3 slice so muting a row promotes the next one.
