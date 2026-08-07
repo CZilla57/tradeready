@@ -51,3 +51,27 @@ test("business name read selects only data", async () => {
   expect(await store.fetchBusinessName(ENV, "u1")).toBe("Ace");
   expect(String(f.mock.calls[0][0])).toContain("settings?user_id=eq.u1&select=data");
 });
+
+describe("fetchCustomerJobPhotos (Phase 12B)", () => {
+  test("scopes by user_id and an explicit quoted job-id in-list", async () => {
+    const f = mockFetch([]);
+    await store.fetchCustomerJobPhotos(ENV, "u1", ["j1", "j2"]);
+    const url = String(f.mock.calls[0][0]);
+    expect(url).toContain("jobPhotos?user_id=eq.u1");
+    expect(url).toContain('data->>jobId=in.("j1","j2")');
+    expect(url).toContain("deleted=eq.false");
+  });
+
+  test("empty job list makes zero network calls", async () => {
+    const f = mockFetch([]);
+    expect(await store.fetchCustomerJobPhotos(ENV, "u1", [])).toEqual([]);
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  test("hostile characters in ids are stripped from the in-list", async () => {
+    const f = mockFetch([]);
+    await store.fetchCustomerJobPhotos(ENV, "u1", ['j1"),(select', "j2"]);
+    const url = String(f.mock.calls[0][0]);
+    expect(url).toContain('in.("j1select","j2")');
+  });
+});
