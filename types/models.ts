@@ -496,6 +496,19 @@ export interface Expense {
   notes: string;
   receiptUri: string | null;
   /**
+   * FK to Job.id when the owner linked this expense to a job (Phase 13
+   * job-profitability spec, 2026-08-07). OPTIONAL and additive — ABSENT on
+   * every pre-Phase-13 record and on any expense the owner leaves unlinked;
+   * absent keeps the pre-Phase-13 meaning: business overhead. Set only by
+   * the expense-creation UI (AddExpenseModal job picker, Phase 13C); CSV
+   * import and Siri/widget replay never set it — they have no job identity
+   * and must not guess one. A jobId pointing at a deleted job degrades to
+   * unlinked. Never backfilled by migration: absent is the truthful state
+   * for historical records (utils/jobProfitability.ts reports unknown, not
+   * zero). JSON-blob sync ⇒ no backend migration.
+   */
+  jobId?: string;
+  /**
    * FK to the CSV import batch that created this record (2026-08 CSV-import
    * spec). OPTIONAL and additive — absent on every record created by any other
    * path (manual entry, booking conversion, sync pull). Stamped ONLY on records
@@ -733,6 +746,19 @@ export interface Settings {
 
   // Pricing defaults — set once, applied to every estimate.
   laborRate: number;
+  /**
+   * Optional owner labor-COST rate ($/hr) for job-profitability math (Phase
+   * 13 spec, 2026-08-07) — what the owner "pays themselves". Deliberately
+   * SEPARATE from laborRate (the BILLING rate above) and never used in any
+   * customer-facing price. OPTIONAL and additive: ABSENT means unset — the
+   * profitability layer then excludes owner labor from cost, labels profit
+   * "before paying yourself", and emits a labor_cost_rate_unset warning
+   * (utils/jobProfitability.ts). The app NEVER defaults it — an invented
+   * cost rate would fabricate profit numbers. An explicit 0 is valid and
+   * distinct from unset (labor deliberately costed at nothing). Plain
+   * settings number — NOT a SECURE_FIELD.
+   */
+  laborCostRate?: number;
   materialMarkup: number;
   overheadPercent: number;
   marginPercent: number;
