@@ -49,4 +49,15 @@ async function fetchCustomerInvoices(env, userId, customerId) {
   );
 }
 
-module.exports = { lookupCustomerByPortalToken, fetchBusinessName, fetchCustomerJobs, fetchCustomerInvoices };
+// This customer's booking requests — used only to attach the shipped
+// manage-page link to appointments that originated as bookings. Read-only
+// like everything else here; scoped by BOTH user_id and the converted
+// customer id so a portal token can never see another customer's bookings.
+async function fetchCustomerBookingRequests(env, userId, customerId) {
+  return get(
+    env,
+    `bookingRequests?user_id=eq.${encodeURIComponent(userId)}&data->>convertedCustomerId=eq.${encodeURIComponent(customerId)}&deleted=eq.false&select=id,data`
+  );
+}
+
+module.exports = { lookupCustomerByPortalToken, fetchBusinessName, fetchCustomerJobs, fetchCustomerInvoices, fetchCustomerBookingRequests };
