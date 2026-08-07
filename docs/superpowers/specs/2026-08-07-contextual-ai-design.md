@@ -1,7 +1,12 @@
 # Contextual AI & Proactive Operations (Phase 15) — Design
 
 **Date:** 2026-08-07
-**Status:** PROPOSED — awaiting owner approval. Nothing implemented, nothing committed beyond this doc.
+**Status:** APPROVED 2026-08-07; v1 Phases A–C implemented 2026-08-08 on
+`feat/contextual-ai-insights` (A foundation `ffcd328`, B low_margin_estimate
+`c91a624`, C maintenance_due `7f9eab9`). Phase D (`expense_anomaly`) was
+owner-optional and was not opted in. Deviation from §A's id table: the
+low-margin id prefix is `low_margin_estimate:` (kind-prefixed, consistent
+with every other id), not the `low_margin:` shorthand written there.
 **Kickoff:** `docs/post-launch-feature-roadmap.md` Phase 15 (owner-curated, 2026-08-06)
 **Scope if approved:** extend `utils/todayInsights.ts` + `components/InsightsCard.tsx` with insight
 identity, dismiss/snooze, "why am I seeing this", and 2–3 new deterministic rules; new

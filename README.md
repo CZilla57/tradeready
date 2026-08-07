@@ -221,6 +221,8 @@ utils/
   availability.ts                ← Bookable-slot engine (open slots from hours/jobs/buffers)
   bookingAttention.ts            ← Today rows for customer reschedule/cancel actions
   bookingRespond.ts              ← Owner respond client (resolve reschedule / decline)
+  todayInsights.ts               ← Deterministic Today-insight rules (7 kinds, stable ids + "why" reasons)
+  insightMutes.ts                ← Per-insight dismiss/snooze store (device-local, wiped on sign-out)
   pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
   pdfExport.ts                   ← PDF rendering and share sheet
   photoStorage.ts                ← Device photo management + logo downscale for PDFs
@@ -261,6 +263,7 @@ components/
   Field.tsx                      ← Shared text-input (label + input + escape hatches)
   DateTimePickerSheet.tsx        ← Cross-platform date/time picker (iOS sheet / Android dialog)
   SyncBanner.tsx                 ← Sync status banner (pending items indicator)
+  InsightsCard.tsx               ← Today insights card (top-3 rows, dismiss/snooze, "Ask coach")
   PricebookPickerModal.tsx       ← Pricebook item picker for job materials
   money/
     SummaryCard.tsx              ← Income/expense summary widget
@@ -445,7 +448,7 @@ npm run test:watch    # watch mode — re-runs on file save
 | `__tests__/paywallCopy.test.js` | Paywall trial wording from the store's intro-offer data |
 | `__tests__/backendGuards.test.js` | Backend rate limiter + AI payload input caps |
 
-_(Table lists the core suites; `npm test` is the authoritative count — 38 suites as of 2026-07-13.)_
+_(Table lists the core suites; `npm test` is the authoritative count — 196 suites / 2,680 tests as of 2026-08-08.)_
 
 **Tech notes:**
 
