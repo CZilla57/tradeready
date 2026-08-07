@@ -62,6 +62,7 @@ export default function SettingsHubScreen({ navigation }: TodayStackScreenProps<
         { icon: "business-outline", label: "Business profile", onPress: () => navigation.navigate("SettingsBusiness") },
         { icon: "calculator-outline", label: "Pricing defaults", onPress: () => navigation.navigate("SettingsPricing") },
         { icon: "receipt-outline", label: "Invoice numbering", onPress: () => navigation.navigate("SettingsInvoiceNumbering") },
+        { icon: "cloud-upload-outline", label: "Import data", onPress: () => navigation.navigate("SettingsImport") },
       ],
     },
     {

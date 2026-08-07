@@ -43,6 +43,7 @@ export type TodayStackParamList = {
   SettingsReviews: undefined;
   SettingsSubscription: undefined;
   SettingsAccount: undefined;
+  SettingsImport: undefined;
   Search: undefined;
 };
 
