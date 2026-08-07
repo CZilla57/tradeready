@@ -39,6 +39,10 @@ import {
 } from "./storage";
 import { resolvePaymentLink, getProviderKey } from "./invoiceHelpers";
 import { track, reportError } from "./analytics";
+import Constants from "expo-constants";
+import * as FileSystem from "expo-file-system/legacy";
+import { supabase } from "./supabase";
+import { buildInvoicePdfFile } from "./invoicePdfFile";
 import type { Job, JobStatus, Invoice, InvoiceLineItem, Settings, Customer } from "../types/models";
 
 /**
@@ -240,6 +244,13 @@ export interface AutoInvoiceResult {
   email: string;
 }
 
+// Backend URL, resolved once at module load (mirrors utils/invoiceHelpers.ts).
+// A placeholder/unset value means there's no endpoint to hit — the PDF upload
+// short-circuits and the sweep's grace-then-plain path covers the invoice.
+const BACKEND_URL: string = Constants.expoConfig?.extra?.backendUrl ?? "";
+const BACKEND_URL_IS_PLACEHOLDER: boolean =
+  Constants.expoConfig?.extra?.backendUrlIsPlaceholder ?? true;
+
 /**
  * The auto-invoice-on-complete flow. Call AFTER the job's status was written
  * to "complete". Returns the result (invoice id + auto-email disposition), or
@@ -308,8 +319,10 @@ export async function createAutoInvoiceForJob(jobId: string): Promise<AutoInvoic
 
   if (autoEmailQueued) {
     // Fire-and-forget (local-first: completion never waits on the network).
-    // mintAutoInvoicePaymentLink catches internally and never rejects.
+    // Both catch internally and never reject; independent (the PDF template
+    // renders no payment link), so order between them does not matter.
     void mintAutoInvoicePaymentLink(invoice.id);
+    void uploadAutoInvoicePdf(invoice.id);
   }
 
   track("invoice_created", {
@@ -367,6 +380,46 @@ export async function mintAutoInvoicePaymentLink(invoiceId: string): Promise<voi
     );
   } catch (err: unknown) {
     reportError(err, { context: "autoInvoiceMintLink" });
+  }
+}
+
+/**
+ * Best-effort upload of a freshly auto-created invoice's PDF to the backend,
+ * which stores it in R2 so the auto-email sweep can attach the SAME PDF the
+ * manual send produces (2026-08-06 spec). Reuses buildInvoicePdfFile verbatim
+ * — no second layout. Fire-and-forget: never awaited on the completion path,
+ * never throws. A placeholder backend URL, a missing PDF, no session, or any
+ * network error → no upload; the sweep's grace-then-plain path covers it.
+ */
+export async function uploadAutoInvoicePdf(invoiceId: string): Promise<void> {
+  try {
+    if (!BACKEND_URL || BACKEND_URL_IS_PLACEHOLDER) return;
+    const [invoices, settings] = await Promise.all([loadInvoices(), loadSettings()]);
+    const invoice = invoices.find((i) => i.id === invoiceId);
+    if (!invoice) return;
+
+    const uri = await buildInvoicePdfFile(invoice, settings);
+    if (!uri) return; // buildInvoicePdfFile already reported the failure
+
+    const pdfBase64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    if (!pdfBase64) return;
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+
+    const res = await fetch(`${BACKEND_URL}/api/invoice-pdf`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ invoiceId, pdfBase64 }),
+    });
+    if (!res.ok) throw new Error(`invoice-pdf upload ${res.status}`);
+  } catch (err: unknown) {
+    reportError(err, { context: "autoInvoiceUploadPdf" });
   }
 }
 
