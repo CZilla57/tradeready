@@ -454,10 +454,16 @@ legacy invoices (the majority of production data today) are not covered.
 Do NOT "simplify" this back to a plain replace, and do not widen the union to
 other tables without designing a merge for their shape.
 
-**Photos are device-local only.** Photos attached to jobs are stored in the
-device file system via `expo-file-system` and are not synced to the cloud. If
-you reinstall the app or sign in on a different device, those photos will not
-be present.
+**Job photos sync across devices since 2026-08-06.** Photos attached to jobs are
+still rendered from the device file system (the app never waits on the network
+to show a photo), but they are now mirrored to Cloudflare R2 in the background:
+each photo is a record in the synced `jobPhotos` collection, and its
+compressed JPEG bytes upload to R2 and download on demand. Attach on one device
+and the photo appears on your others after sync; reinstall and photos re-download.
+A photo captured on another device shows a placeholder until its bytes arrive.
+The image bytes themselves are last-write-wins per photo id (adds never
+conflict). **Receipt photos and the business logo remain device-local only** —
+they use the same file store but are not yet mirrored.
 
 **SecureStore fields are device-local only.** API keys (`providerKey`,
 `anthropicKey`, `groqKey`) live in the iOS Keychain / Android Keystore and
