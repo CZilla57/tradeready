@@ -259,6 +259,20 @@ After approval, ship behind a feature flag until migration, backend, hosted page
 
 ## Phase 12 — Customer portal completion
 
+> **STATUS (2026-08-07): SHIPPED — owner smoke PASSED, feature CLOSED.**
+> All five phases merged + CI green (design spec
+> `docs/superpowers/specs/2026-08-07-portal-completion-design.md`, D1–D7
+> approved): A read additions (appointments + manage links, change orders,
+> amountPaid, portal-ics), B customer-visible photos (JobPhoto.customerVisible
+> + HMAC signed URLs, secret set), C portal-request write path
+> (`portal_change_requested` status, portal_access_log cap — migration
+> applied), D server-owned `portal_tokens` (instant revoke/rotate, migration
+> applied, Worker deployed), E portal.html rebuild (LIVE + E2E-verified) +
+> docs sweep + smoke (`docs/superpowers/plans/2026-08-07-portal-completion-smoke.md`,
+> PASSED 2026-08-07). Remaining: client pieces ride the next OTA (standing
+> owner call). The precondition note below is a dated record — both
+> preconditions cleared before kickoff.
+
 > **Added 2026-08-06.** PRECONDITIONS: the built, review-approved portal
 > branch `feat/customer-portal` (`4339848`) is still UNMERGED — merging it is
 > an owner decision that comes before this phase; capability 6 (customer-
