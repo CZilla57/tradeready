@@ -531,7 +531,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
 
   function openJobFromBooking(jobId?: string) {
     if (jobId) {
-      navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId } });
+      navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', initial: false, params: { jobId } });
     } else {
       goToJobs();
     }
@@ -591,8 +591,12 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     }
   }
 
+  // Every cross-tab jump to a non-initial screen carries initial: false —
+  // tabs mount lazily, and without it the target screen becomes the stack's
+  // ONLY route (no list beneath, no back button). Guarded by
+  // __tests__/crossTabNavigation.test.tsx.
   function handleJobPress(job: Job) {
-    navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId: job.id } });
+    navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', initial: false, params: { jobId: job.id } });
   }
 
   async function handleOnMyWay(job: Job) {
@@ -607,7 +611,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   }
 
   function handleScheduleJob() {
-    navigation.getParent()?.navigate('Jobs', { screen: 'AddJob' });
+    navigation.getParent()?.navigate('Jobs', { screen: 'AddJob', initial: false });
   }
 
   function handlePlanRoute() {
@@ -617,10 +621,10 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   function handleInsightNavigate(target: InsightTarget) {
     switch (target.type) {
       case 'job':
-        navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId: target.jobId } });
+        navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', initial: false, params: { jobId: target.jobId } });
         break;
       case 'createInvoice':
-        navigation.getParent()?.navigate('Jobs', { screen: 'CreateInvoiceFromJob', params: { jobId: target.jobId } });
+        navigation.getParent()?.navigate('Jobs', { screen: 'CreateInvoiceFromJob', initial: false, params: { jobId: target.jobId } });
         break;
       case 'invoice':
         navigation.getParent()?.navigate('Invoices', { screen: 'InvoiceList', params: { openInvoiceId: target.invoiceId } });
@@ -632,7 +636,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
         navigation.getParent()?.navigate('Jobs');
         break;
       case 'schedule':
-        navigation.getParent()?.navigate('Jobs', { screen: 'AddJob', params: { jobId: target.jobId, focusSchedule: true } });
+        navigation.getParent()?.navigate('Jobs', { screen: 'AddJob', initial: false, params: { jobId: target.jobId, focusSchedule: true } });
         break;
       case 'selectDate':
         setSelectedDate(target.date);
@@ -690,17 +694,17 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
     track('sample_job_opened');
     markSampleTourDone();
     setChecklistState(prev => (prev ? { ...prev, sampleTourDone: true } : prev));
-    navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', params: { jobId: target.id } });
+    navigation.getParent()?.navigate('Jobs', { screen: 'JobDetail', initial: false, params: { jobId: target.id } });
   }
 
   function handleAddFirstCustomer() {
     track('first_action_tapped', { action: 'add_customer' });
-    navigation.getParent()?.navigate('Customers', { screen: 'AddCustomer' });
+    navigation.getParent()?.navigate('Customers', { screen: 'AddCustomer', initial: false });
   }
 
   function handleCreateFirstJob() {
     track('first_action_tapped', { action: 'create_job' });
-    navigation.getParent()?.navigate('Jobs', { screen: 'AddJob' });
+    navigation.getParent()?.navigate('Jobs', { screen: 'AddJob', initial: false });
   }
 
   let hero: { icon: keyof typeof Ionicons.glyphMap; title: string; subtitle: string; onPress: () => void } | null = null;

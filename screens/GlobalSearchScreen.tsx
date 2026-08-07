@@ -51,7 +51,7 @@ export default function GlobalSearchScreen({ navigation }: TodayStackScreenProps
   );
 
   function openJob(job: Job) {
-    navigation.navigate("Jobs", { screen: "JobDetail", params: { jobId: job.id } });
+    navigation.navigate("Jobs", { screen: "JobDetail", initial: false, params: { jobId: job.id } });
   }
 
   function openInvoice(inv: Invoice) {
@@ -63,7 +63,7 @@ export default function GlobalSearchScreen({ navigation }: TodayStackScreenProps
     // bare record — build it the same way CustomersScreen does.
     const entry = buildCustomerList(invoices, customers).find((e) => e.id === customer.id);
     if (entry) {
-      navigation.navigate("Customers", { screen: "CustomerDetail", params: { customer: entry } });
+      navigation.navigate("Customers", { screen: "CustomerDetail", initial: false, params: { customer: entry } });
     } else {
       navigation.navigate("Customers", { screen: "CustomerList" });
     }

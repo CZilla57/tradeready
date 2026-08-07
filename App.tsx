@@ -433,28 +433,28 @@ function RootNavigator() {
       if (data?.type === "review_request" && data?.jobId && navigationRef.isReady()) {
         navigationRef.navigate("Main", {
           screen: "Jobs",
-          params: { screen: "ReviewRequest", params: { jobId: String(data.jobId), source: "notification" } },
+          params: { screen: "ReviewRequest", initial: false, params: { jobId: String(data.jobId), source: "notification" } },
         });
       }
       if (data?.type === "estimate_follow_up" && data?.jobId && navigationRef.isReady()) {
         track("estimate_follow_up_opened", { source: "notification" });
         navigationRef.navigate("Main", {
           screen: "Jobs",
-          params: { screen: "EstimateFollowUp", params: { jobId: String(data.jobId), source: "notification" } },
+          params: { screen: "EstimateFollowUp", initial: false, params: { jobId: String(data.jobId), source: "notification" } },
         });
       }
       if (data?.type === "overdue_outreach" && data?.invoiceId && navigationRef.isReady()) {
         track("overdue_outreach_opened", { daysPastDue: data.daysPastDue });
         navigationRef.navigate("Main", {
           screen: "Invoices",
-          params: { screen: "Outreach", params: { invoiceId: String(data.invoiceId) } },
+          params: { screen: "Outreach", initial: false, params: { invoiceId: String(data.invoiceId) } },
         });
       }
       if (data?.type === "appointment_confirm" && data?.jobId && navigationRef.isReady()) {
         track("appointment_confirm_opened", {});
         navigationRef.navigate("Main", {
           screen: "Jobs",
-          params: { screen: "JobDetail", params: { jobId: String(data.jobId) } },
+          params: { screen: "JobDetail", initial: false, params: { jobId: String(data.jobId) } },
         });
       }
       if (data?.type === "recurring_invoice" && data?.ruleId && navigationRef.isReady()) {
@@ -497,7 +497,7 @@ function RootNavigator() {
         const jobId = typeof data.jobId === "string" ? data.jobId : undefined;
         navigationRef.navigate("Main", {
           screen: "Jobs",
-          params: jobId ? { screen: "JobDetail", params: { jobId } } : { screen: "JobList" },
+          params: jobId ? { screen: "JobDetail", initial: false, params: { jobId } } : { screen: "JobList" },
         });
       }
     });
@@ -530,13 +530,13 @@ function RootNavigator() {
       removeWidgetSharedItem(PENDING_OPEN_URL_KEY).catch(() => {});
       navigationRef.navigate("Main", {
         screen: "Jobs",
-        params: { screen: "JobDetail", params: { jobId: link.jobId, autoAction: "onmyway" } },
+        params: { screen: "JobDetail", initial: false, params: { jobId: link.jobId, autoAction: "onmyway" } },
       });
       return;
     }
     navigationRef.navigate("Main", {
       screen: "Jobs",
-      params: { screen: "JobDetail", params: { jobId: link.jobId } },
+      params: { screen: "JobDetail", initial: false, params: { jobId: link.jobId } },
     });
   }, []);
 

@@ -164,6 +164,7 @@ export default function CalendarScreen({ navigation }: TodayStackScreenProps<"Ca
     (jobId: string) => {
       navigation.getParent()?.navigate("Jobs", {
         screen: "JobDetail",
+        initial: false,
         params: { jobId },
       });
     },
