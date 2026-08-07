@@ -41,10 +41,16 @@ export type InsightTarget =
 
 export type TodayInsight = {
   kind: InsightKind;
+  /** Stable dedup identity (Phase 15): what dismissals/snoozes and analytics
+   * hang on. Deterministic per kind — `kind:recordId`, `kind:all` for
+   * aggregate rows, `kind:date`/`kind:period` for time-scoped rows. */
+  id: string;
   title: string;
   detail?: string;
   target: InsightTarget;
-  /** labor_overrun only: prefills the AI coach input (never auto-sent). */
+  /** Deterministic "why am I seeing this" — every number computed in code. */
+  reason: string;
+  /** Prefills the AI coach input (never auto-sent). */
   coachPrompt?: string;
 };
 
@@ -82,7 +88,12 @@ function selectLaborOverruns(jobs: Job[], now: Date): TodayInsight[] {
     if (t.overUnder === null || t.overUnder < OVERRUN_MIN_HOURS) continue;
     out.push({
       kind: "labor_overrun",
+      id: `labor_overrun:${job.id}`,
       title: `'${job.title}' is ${formatElapsed(t.overUnder * 3600000)} over its ${formatLaborHint(job.laborHours)} labor estimate`,
+      reason:
+        `You've logged ${formatElapsed(t.liveMs)} on '${job.title}' against a ` +
+        `${formatLaborHint(job.laborHours)} labor estimate — at least 15 minutes over. ` +
+        `This clears on its own when the job is completed or the estimate is updated.`,
       target: { type: "job", jobId: job.id },
       coachPrompt:
         `I'm working on '${job.title}' and I've logged ${formatElapsed(t.liveMs)} ` +
@@ -101,14 +112,18 @@ function selectUninvoicedComplete(jobs: Job[]): TodayInsight[] {
     const job = done[0];
     return [{
       kind: "uninvoiced_complete",
+      id: `uninvoiced_complete:${job.id}`,
       title: `'${job.title}' is complete but not invoiced`,
       detail: jobBillableTotal(job) > 0 ? `${formatQuote(jobBillableTotal(job))} to bill` : undefined,
+      reason: `'${job.title}' is marked complete but has no invoice yet. This clears once an invoice is created.`,
       target: { type: "createInvoice", jobId: job.id },
     }];
   }
   return [{
     kind: "uninvoiced_complete",
+    id: "uninvoiced_complete:all",
     title: `${done.length} completed jobs haven't been invoiced`,
+    reason: `${done.length} jobs are marked complete but have no invoice yet. This clears as invoices are created.`,
     target: { type: "jobs" },
   }];
 }
@@ -128,14 +143,22 @@ function selectDueSoon(invoices: Invoice[], now: Date): TodayInsight[] {
     const { inv, days } = soon[0];
     return [{
       kind: "due_soon",
+      id: `due_soon:${inv.id}`,
       title: `Invoice ${inv.number} (${formatMoney(balanceDue(inv))}) is due ${dueLabel(days)}`,
+      reason:
+        `Invoice ${inv.number} still has a balance and is due ${dueLabel(days)} ` +
+        `(within the ${DUE_SOON_DAYS}-day heads-up window). Once past due it moves to the Overdue section.`,
       target: { type: "invoice", invoiceId: inv.id },
     }];
   }
   const total = soon.reduce((s, { inv }) => s + balanceDue(inv), 0);
   return [{
     kind: "due_soon",
+    id: "due_soon:all",
     title: `${formatMoney(total)} across ${soon.length} invoices is due within ${DUE_SOON_DAYS} days`,
+    reason:
+      `${soon.length} invoices still carry a balance and fall due within ${DUE_SOON_DAYS} days. ` +
+      `Once past due they move to the Overdue section.`,
     target: { type: "invoices" },
   }];
 }
@@ -161,17 +184,26 @@ function selectScheduleInsights(
     const fit = unscheduled
       .filter((j) => j.laborHours > 0 && j.laborHours * 60 <= gap.minutes)
       .sort((a, b) => b.laborHours - a.laborHours)[0];
+    const gapReason =
+      `Tomorrow (${tomorrow}) has ${gapLabel} free between your working hours ` +
+      `${schedule.workDayStart}–${schedule.workDayEnd} — at least 2 hours.`;
     if (fit) {
       fittedJobId = fit.id;
       out.push({
         kind: "open_slot",
+        id: `open_slot:${tomorrow}`,
         title: `Tomorrow has a ${gapLabel} open slot — '${fit.title}' (${formatLaborHint(fit.laborHours)}) would fit`,
+        reason:
+          `${gapReason} '${fit.title}' is approved, unscheduled, and its ` +
+          `${formatLaborHint(fit.laborHours)} labor estimate fits the gap.`,
         target: { type: "schedule", jobId: fit.id },
       });
     } else {
       out.push({
         kind: "open_slot",
+        id: `open_slot:${tomorrow}`,
         title: `Tomorrow has a ${gapLabel} open slot`,
+        reason: gapReason,
         target: { type: "selectDate", date: tomorrow },
       });
     }
@@ -181,13 +213,17 @@ function selectScheduleInsights(
   if (remaining.length === 1) {
     out.push({
       kind: "unscheduled_approved",
+      id: `unscheduled_approved:${remaining[0].id}`,
       title: `'${remaining[0].title}' is approved but not scheduled`,
+      reason: `'${remaining[0].title}' is approved but has no date on the schedule. This clears once it's scheduled.`,
       target: { type: "schedule", jobId: remaining[0].id },
     });
   } else if (remaining.length > 1) {
     out.push({
       kind: "unscheduled_approved",
+      id: "unscheduled_approved:all",
       title: `${remaining.length} approved jobs aren't on the schedule yet`,
+      reason: `${remaining.length} approved jobs have no date on the schedule. This clears as they're scheduled.`,
       target: { type: "jobs" },
     });
   }

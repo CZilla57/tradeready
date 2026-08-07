@@ -276,3 +276,56 @@ describe('priority order', () => {
     expect(kinds).toEqual(['labor_overrun', 'uninvoiced_complete', 'due_soon', 'open_slot', 'unscheduled_approved']);
   });
 });
+
+// Phase 15 foundation: every insight carries a stable dedup id (what
+// dismissals/snoozes and analytics hang on) and a deterministic reason.
+describe('insight identity and reasons', () => {
+  test('every insight has a non-empty id and reason', () => {
+    const jobs = [
+      job({ id: 'over', timeSessions: [session(5)] }),
+      job({ id: 'done', status: 'complete' }),
+      job({ id: 'sched', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00' }),
+      job({ id: 'fit', status: 'approved', laborHours: 2 }),
+      job({ id: 'left', status: 'approved', laborHours: 9 }),
+    ];
+    for (const insight of selectTodayInsights(jobs, [invoice({})], NOW)) {
+      expect(insight.id).toBeTruthy();
+      expect(insight.reason).toBeTruthy();
+    }
+  });
+
+  test('single-record rows key on the record id; aggregates key on :all', () => {
+    const one = selectTodayInsights([job({ id: 'done1', status: 'complete' })], [], NOW);
+    expect(one[0].id).toBe('uninvoiced_complete:done1');
+
+    const many = selectTodayInsights(
+      [job({ id: 'done1', status: 'complete' }), job({ id: 'done2', status: 'complete' })],
+      [],
+      NOW
+    );
+    expect(many[0].id).toBe('uninvoiced_complete:all');
+
+    const dueOne = selectTodayInsights([], [invoice({ id: 'i9' })], NOW);
+    expect(dueOne[0].id).toBe('due_soon:i9');
+  });
+
+  test('labor_overrun and unscheduled_approved ids embed the job id; open_slot the date', () => {
+    const jobs = [
+      job({ id: 'over', timeSessions: [session(5)] }),
+      job({ id: 'sched', status: 'scheduled', scheduledDate: '2026-08-05', scheduledStartTime: '09:00', scheduledEndTime: '11:00' }),
+      job({ id: 'left', status: 'approved', laborHours: 9, title: 'Gutter clean' }),
+    ];
+    const ids = selectTodayInsights(jobs, [], NOW).map(i => i.id);
+    expect(ids).toEqual(['labor_overrun:over', 'open_slot:2026-08-05', 'unscheduled_approved:left']);
+  });
+
+  test('reasons carry the deterministic rationale, numbers computed in code', () => {
+    const [overrun] = selectTodayInsights([job({ timeSessions: [session(3.5)] })], [], NOW);
+    expect(overrun.reason).toContain('3h 30m');
+    expect(overrun.reason).toContain('2h labor estimate');
+
+    const [due] = selectTodayInsights([], [invoice({ id: 'i9' })], NOW);
+    expect(due.reason).toContain('INV-0042');
+    expect(due.reason).toContain('due tomorrow');
+  });
+});

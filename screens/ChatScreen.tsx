@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useLayoutEffect, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useLayoutEffect, useMemo, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -151,9 +151,13 @@ export default function ChatScreen({ navigation, route }: ChatStackScreenProps<'
   // once and clear the param so it can never re-fire. NEVER auto-send — the
   // user reviews and edits before anything leaves the device.
   const initialPrompt = route.params?.initialPrompt;
+  // Marks the NEXT send as insight-originated for the ai_chat_sent source
+  // prop (Phase 15 evaluation: contextual entry points vs the standalone tab).
+  const prefillPending = useRef(false);
   useEffect(() => {
     if (initialPrompt) {
       setInput(initialPrompt);
+      prefillPending.current = true;
       navigation.setParams({ initialPrompt: undefined });
     }
   }, [initialPrompt, navigation]);
@@ -161,7 +165,11 @@ export default function ChatScreen({ navigation, route }: ChatStackScreenProps<'
   async function send(overrideText?: string) {
     const text = (overrideText ?? input).trim();
     if (!text || sending) return;
-    track('ai_chat_sent');
+    track('ai_chat_sent', {
+      source: prefillPending.current ? 'insight_prefill' : 'organic',
+      provider: settings?.anthropicKey ? 'anthropic' : settings?.groqKey ? 'groq' : 'backend',
+    });
+    prefillPending.current = false;
     setInput("");
 
     const userMsg: LocalMessage = { id: String(Date.now()), role: "user", text };

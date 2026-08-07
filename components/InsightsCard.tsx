@@ -1,14 +1,17 @@
 // components/InsightsCard.tsx
-// Proactive deterministic insights on Today (2026-08-04 spec) — takes the
-// setup checklist's visual slot once setup is complete. The rules live in
-// utils/todayInsights.ts (pure, tested); this card is presentation + gating:
-// nothing renders until the "Finish setting up" card is gone (dismissed or
-// every task done — the shared isSetupComplete definition) and at least one
-// insight fired. No dismiss button by design: rows disappear on their own as
-// the underlying condition resolves.
+// Proactive deterministic insights on Today (2026-08-04 spec; extended by the
+// 2026-08-07 Phase 15 contextual-AI spec) — takes the setup checklist's visual
+// slot once setup is complete. The rules live in utils/todayInsights.ts (pure,
+// tested); this card is presentation + gating: nothing renders until the
+// "Finish setting up" card is gone (dismissed or every task done — the shared
+// isSetupComplete definition) and at least one insight fired. The original
+// kinds self-resolve and deliberately have NO dismiss button; only kinds in
+// MUTEABLE_KINDS (long-horizon conditions that can't self-clear) get
+// dismiss/snooze, persisted via utils/insightMutes.ts. Every row answers
+// "Why am I seeing this?" from its deterministic `reason` (long-press).
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
@@ -28,6 +31,13 @@ import {
 import type { Job, Invoice, Settings } from "../types/models";
 import { resolveSchedule } from "../utils/scheduleConfig";
 import { track } from "../utils/analytics";
+import {
+  loadInsightMutes,
+  muteInsight,
+  makeMute,
+  filterMutedInsights,
+  type InsightMute,
+} from "../utils/insightMutes";
 
 const VISIBLE_LIMIT = 3;
 
@@ -38,6 +48,13 @@ const KIND_ICONS: Record<InsightKind, keyof typeof Ionicons.glyphMap> = {
   open_slot: "today-outline",
   unscheduled_approved: "calendar-outline",
 };
+
+// Kinds whose condition can't self-resolve get dismiss (and, when listed in
+// SNOOZE_DAYS, snooze). The original five kinds stay OUT of this set by design
+// — their rows disappear on their own as the condition resolves (2026-08-04
+// owner decision). The first muteable kinds arrive with the Phase 15 rules.
+const MUTEABLE_KINDS: ReadonlySet<InsightKind> = new Set<InsightKind>([]);
+const SNOOZE_DAYS: Partial<Record<InsightKind, number>> = {};
 
 interface InsightsCardProps {
   jobs: Job[];
@@ -52,12 +69,14 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [state, setState] = useState<SetupChecklistState | null>(null);
   const [notifGranted, setNotifGranted] = useState(false);
+  const [mutes, setMutes] = useState<InsightMute[] | null>(null);
   const lastShownKey = useRef("");
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
       loadSetupChecklistState().then(s => { if (active) setState(s); });
+      loadInsightMutes().then(m => { if (active) setMutes(m); });
       Notifications.getPermissionsAsync()
         .then(({ status }) => { if (active) setNotifGranted(status === "granted"); })
         .catch(() => {});
@@ -72,26 +91,36 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
   );
 
   // Static per data change — no ticking timer; the number refreshes on focus.
-  const insights = useMemo(
+  const allInsights = useMemo(
     () =>
       selectTodayInsights(
         jobs,
         invoices,
         new Date(),
         settings ? resolveSchedule(settings) : undefined
-      ).slice(0, VISIBLE_LIMIT),
+      ),
     [jobs, invoices, settings]
   );
 
-  const visible =
-    !!settings && state !== null && isSetupComplete(settings, state, notifGranted) && insights.length > 0;
+  // Mute-filter BEFORE the top-3 slice so muting a row promotes the next one.
+  const insights = useMemo(
+    () => filterMutedInsights(allInsights, mutes ?? [], new Date()).slice(0, VISIBLE_LIMIT),
+    [allInsights, mutes]
+  );
 
-  // insight_shown once per distinct visible-kinds set, not per render.
-  const shownKey = visible ? insights.map(i => i.kind).join(",") : "";
+  const visible =
+    !!settings &&
+    state !== null &&
+    mutes !== null &&
+    isSetupComplete(settings, state, notifGranted) &&
+    insights.length > 0;
+
+  // insight_shown once per distinct visible set, not per render.
+  const shownKey = visible ? insights.map(i => i.id).join(",") : "";
   useEffect(() => {
     if (shownKey && shownKey !== lastShownKey.current) {
       lastShownKey.current = shownKey;
-      track("insight_shown", { kinds: insights.map(i => i.kind) });
+      track("insight_shown", { kinds: insights.map(i => i.kind), ids: insights.map(i => i.id) });
     }
   }, [shownKey, insights]);
 
@@ -108,6 +137,47 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
     onAskCoach(insight.coachPrompt);
   }
 
+  function applyMute(insight: TodayInsight, days?: number) {
+    // Optimistic: drop the row immediately, persist behind it. muteInsight
+    // prunes stale entries against the ids the engine can still emit.
+    const now = new Date();
+    setMutes(prev => [...(prev ?? []).filter(m => m.id !== insight.id), makeMute(insight.id, now, days)]);
+    muteInsight(insight.id, now, { days, liveIds: allInsights.map(i => i.id) }).catch(() => {});
+  }
+
+  function handleOverflow(insight: TodayInsight) {
+    const snoozeDays = SNOOZE_DAYS[insight.kind];
+    Alert.alert(insight.title, undefined, [
+      {
+        text: "Why am I seeing this?",
+        onPress: () => {
+          track("insight_reason_viewed", { kind: insight.kind });
+          Alert.alert("Why am I seeing this?", insight.reason);
+        },
+      },
+      ...(MUTEABLE_KINDS.has(insight.kind) && snoozeDays
+        ? [{
+            text: `Snooze ${snoozeDays} days`,
+            onPress: () => {
+              track("insight_snoozed", { kind: insight.kind, insightId: insight.id, days: snoozeDays });
+              applyMute(insight, snoozeDays);
+            },
+          }]
+        : []),
+      ...(MUTEABLE_KINDS.has(insight.kind)
+        ? [{
+            text: "Dismiss",
+            style: "destructive" as const,
+            onPress: () => {
+              track("insight_dismissed", { kind: insight.kind, insightId: insight.id });
+              applyMute(insight);
+            },
+          }]
+        : []),
+      { text: "Cancel", style: "cancel" as const },
+    ]);
+  }
+
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
@@ -115,14 +185,21 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
       </View>
       {insights.map((insight, i) => (
         <TouchableOpacity
-          key={`${insight.kind}_${i}`}
+          key={insight.id}
           style={[styles.row, i > 0 && styles.rowBorder]}
           onPress={() => handleTap(insight)}
+          onLongPress={() => handleOverflow(insight)}
           activeOpacity={0.7}
           accessibilityRole="button"
           accessibilityLabel={insight.title}
-          accessibilityActions={insight.coachPrompt ? [{ name: 'askCoach', label: 'Ask coach' }] : undefined}
-          onAccessibilityAction={insight.coachPrompt ? (e) => { if (e.nativeEvent.actionName === 'askCoach') handleCoach(insight); } : undefined}
+          accessibilityActions={[
+            ...(insight.coachPrompt ? [{ name: 'askCoach', label: 'Ask coach' }] : []),
+            { name: 'longpress', label: 'More options' },
+          ]}
+          onAccessibilityAction={(e) => {
+            if (e.nativeEvent.actionName === 'askCoach') handleCoach(insight);
+            if (e.nativeEvent.actionName === 'longpress') handleOverflow(insight);
+          }}
         >
           <Ionicons name={KIND_ICONS[insight.kind]} size={22} color={colors.accent} />
           <View style={styles.rowText}>
@@ -141,6 +218,16 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
               </TouchableOpacity>
             ) : null}
           </View>
+          {MUTEABLE_KINDS.has(insight.kind) ? (
+            <TouchableOpacity
+              onPress={() => handleOverflow(insight)}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Options for ${insight.title}`}
+            >
+              <Ionicons name="ellipsis-horizontal" size={16} color={colors.textMuted} />
+            </TouchableOpacity>
+          ) : null}
           <Text style={styles.chevron}>›</Text>
         </TouchableOpacity>
       ))}

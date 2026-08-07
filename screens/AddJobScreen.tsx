@@ -399,6 +399,9 @@ export default function AddJobScreen({ route, navigation }: JobStackScreenProps<
         // (sample seeds don't count).
         track('job_created', {
           ...(isDuplicating ? { duplicated: true } : {}),
+          // Internal record id (not PII) — lets the Phase 15 maintenance-due
+          // insight measure "customer rebooked within N days" conversions.
+          ...(resolvedCustomerId ? { customerId: resolvedCustomerId } : {}),
           first: jobs.filter((j: { id: string }) => !isSampleId(j.id)).length === 0,
         });
       }
