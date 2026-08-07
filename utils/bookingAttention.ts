@@ -15,7 +15,12 @@ import { isArchived } from "./archive";
 
 export type BookingAttention =
   | { kind: "reschedule_requested"; request: BookingRequest; jobId?: string; note?: string }
-  | { kind: "cancelled"; request: BookingRequest; jobId?: string };
+  | { kind: "cancelled"; request: BookingRequest; jobId?: string }
+  // Phase 12C: a portal customer asked to reschedule/cancel an OWNER-scheduled
+  // appointment (no booking slot behind it). Surfaced until the owner stamps
+  // handledAt (markBookingRequestHandled) — explicit dismissal, not job-state
+  // driven, because the owner may resolve it without touching the job.
+  | { kind: "portal_change"; request: BookingRequest; jobId?: string; note?: string };
 
 function lastRescheduleNote(request: BookingRequest): string | undefined {
   const entries = (request.history ?? []).filter(
@@ -42,6 +47,14 @@ export function selectBookingAttention(
 ): BookingAttention[] {
   const out: BookingAttention[] = [];
   for (const r of requests) {
+    // Portal change requests carry no kind/slot — handled before the booked
+    // guard below.
+    if (r.status === "portal_change_requested") {
+      if (!r.handledAt) {
+        out.push({ kind: "portal_change", request: r, jobId: r.jobRef, note: r.details || undefined });
+      }
+      continue;
+    }
     if (r.kind !== "booked" || !r.slot) continue;
     if (r.status === "reschedule_requested") {
       out.push({
@@ -57,8 +70,9 @@ export function selectBookingAttention(
       out.push({ kind: "cancelled", request: r, jobId: r.convertedJobId });
     }
   }
+  const rank = { reschedule_requested: 0, portal_change: 1, cancelled: 2 } as const;
   return out.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "reschedule_requested" ? -1 : 1;
+    if (a.kind !== b.kind) return rank[a.kind] - rank[b.kind];
     return (a.request.slot?.date ?? "").localeCompare(b.request.slot?.date ?? "");
   });
 }

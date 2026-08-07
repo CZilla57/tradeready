@@ -2,10 +2,22 @@
 // the owner's eyes on Today. Reschedule requests always do (until the
 // owner responds); cancellations only while the converted job STILL holds
 // the slot on the calendar — clearing or moving the job self-dismisses the
-// row, so nothing lingers.
+// row, so nothing lingers. Phase 12C adds portal change requests
+// (status portal_change_requested), surfaced until the owner stamps
+// handledAt via markBookingRequestHandled.
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { selectBookingAttention } from "../utils/bookingAttention";
+import { markBookingRequestHandled } from "../utils/storage/bookingRequests";
 import type { BookingRequest, Job } from "../types/models";
+
+jest.mock("../utils/sync", () => ({
+  enqueue: jest.fn(),
+  enqueueCollectionChanges: jest.fn(),
+  trySync: jest.fn(),
+  pruneQueueRecords: jest.fn(),
+}));
+jest.mock("../utils/notifications", () => ({ syncNotifications: jest.fn() }));
 
 const slot = {
   date: "2026-08-12",
@@ -125,5 +137,74 @@ describe("selectBookingAttention", () => {
       ]
     );
     expect(rows.map((r) => r.request.id)).toEqual(["r1", "r2", "c1"]);
+  });
+});
+
+describe("portal change requests (Phase 12C)", () => {
+  const change = (over: Partial<BookingRequest> = {}): BookingRequest => ({
+    id: "bkpr_aabbccddeeff00112233",
+    status: "portal_change_requested",
+    name: "Dana Fox",
+    phone: "",
+    email: "",
+    address: "",
+    details: 'Reschedule requested for "Water heater swap" (2026-08-12) — Tuesday works better',
+    preferredTiming: "",
+    createdAt: "2026-08-10T12:00:00.000Z",
+    source: "portal",
+    sourceCustomerId: "c1",
+    jobRef: "j1",
+    portalKind: "reschedule",
+    ...over,
+  });
+
+  test("surfaced with jobRef and the templated details while unhandled", () => {
+    const rows = selectBookingAttention([change()], []);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "portal_change",
+      jobId: "j1",
+      note: 'Reschedule requested for "Water heater swap" (2026-08-12) — Tuesday works better',
+    });
+  });
+
+  test("hidden once handledAt is stamped", () => {
+    expect(selectBookingAttention([change({ handledAt: "2026-08-10T13:00:00.000Z" })], [])).toHaveLength(0);
+  });
+
+  test("sorts after reschedule requests, before cancellations", () => {
+    const rows = selectBookingAttention(
+      [
+        req({ id: "c1", status: "cancelled", convertedJobId: "j1" }),
+        change(),
+        req({ id: "r1", status: "reschedule_requested", convertedJobId: "j3" }),
+      ],
+      [job({ id: "j1" }), job({ id: "j3" })]
+    );
+    expect(rows.map((r) => r.kind)).toEqual(["reschedule_requested", "portal_change", "cancelled"]);
+  });
+});
+
+describe("markBookingRequestHandled", () => {
+  beforeEach(() => {
+    (AsyncStorage.getItem as jest.Mock).mockReset();
+    (AsyncStorage.setItem as jest.Mock).mockReset().mockResolvedValue(undefined);
+  });
+
+  test("stamps handledAt through the normal synced save path", async () => {
+    const row = { id: "bkpr_x", status: "portal_change_requested", name: "D" };
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify([row]));
+    await markBookingRequestHandled("bkpr_x", "2026-08-10T13:00:00.000Z");
+    const written = JSON.parse((AsyncStorage.setItem as jest.Mock).mock.calls[0][1]);
+    expect(written[0].handledAt).toBe("2026-08-10T13:00:00.000Z");
+  });
+
+  test("unknown id or already-handled row writes nothing", async () => {
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(
+      JSON.stringify([{ id: "bkpr_x", handledAt: "2026-08-09T00:00:00.000Z" }])
+    );
+    await markBookingRequestHandled("bkpr_x", "2026-08-10T13:00:00.000Z");
+    await markBookingRequestHandled("bkpr_nope", "2026-08-10T13:00:00.000Z");
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
   });
 });

@@ -547,7 +547,12 @@ export type BookingRequestStatus =
   | "confirmed"
   | "reschedule_requested"
   | "cancelled"
-  | "declined";
+  | "declined"
+  // Phase 12C: a portal customer's reschedule/cancel ask about an
+  // owner-scheduled appointment. SERVER-written by portal-request; never
+  // converted to a lead — Today's attention row surfaces it until the owner
+  // stamps handledAt. Old clients skip it by the explicit-match rule above.
+  | "portal_change_requested";
 
 /** One auditable state change on a booking (SERVER-written, append-only). */
 export interface BookingHistoryEntry {
@@ -597,6 +602,20 @@ export interface BookingRequest {
   /** Append-only audit trail, SERVER-written (mirrors EstimateApproval's
    *  server-side-write discipline). */
   history?: BookingHistoryEntry[];
+  /** "portal" when the row was created by the customer-portal request path
+   *  (Phase 12C). Conversion writes a portal-aware provenance note. */
+  source?: "portal";
+  /** The portal customer's record id — conversion links THIS customer
+   *  instead of name-matching (the portal copied contact fields FROM it). */
+  sourceCustomerId?: string;
+  /** portal_change_requested only: the appointment's job id the change
+   *  request refers to. */
+  jobRef?: string;
+  /** portal_change_requested only: what the customer asked for. */
+  portalKind?: "reschedule" | "cancel";
+  /** DEVICE-written when the owner dismisses a portal change request on
+   *  Today. Absent = still needs attention. */
+  handledAt?: string;
 }
 
 /** A reminder rule: notify N days after an invoice's due date. */

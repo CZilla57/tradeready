@@ -53,6 +53,65 @@ const bookedRequest: BookingRequest = {
   history: [{ at: '2026-08-07T15:00:00.000Z', actor: 'customer', event: 'booked' }],
 };
 
+describe('convertBookingRequests — portal requests (Phase 12C)', () => {
+  const existing: Customer = {
+    id: 'c_dana',
+    name: 'Dana Rivers',
+    phone: '555-0142',
+    email: 'dana@example.com',
+    address: '12 Elm St',
+    createdAt: '2026-08-01',
+  } as Customer;
+
+  const portalFollowup: BookingRequest = {
+    ...request,
+    id: 'bkpr_aabbccddeeff00112233',
+    details: 'Fence needs painting too',
+    preferredTiming: '',
+    source: 'portal',
+    sourceCustomerId: 'c_dana',
+  };
+
+  test('sourceCustomerId links the EXISTING customer — no new record, no field churn', () => {
+    const customersIn = [existing];
+    const out = convertBookingRequests([portalFollowup], [], customersIn, settings);
+    expect(out.changed).toBe(true);
+    expect(out.customers).toBe(customersIn); // untouched by reference — no upsert ran
+    expect(out.customers[0]).toBe(existing);
+    expect(out.jobs[0].customerId).toBe('c_dana');
+    expect(out.requests[0].status).toBe('converted');
+    expect(out.requests[0].convertedCustomerId).toBe('c_dana');
+  });
+
+  test('a dangling sourceCustomerId falls back to the name-keyed upsert', () => {
+    const out = convertBookingRequests([{ ...portalFollowup, sourceCustomerId: 'c_gone' }], [], [], settings);
+    expect(out.customers).toHaveLength(1);
+    expect(out.customers[0].name).toBe('Dana Rivers');
+    expect(out.jobs[0].customerId).toBe(out.customers[0].id);
+  });
+
+  test('portal provenance line replaces the booking-link one', () => {
+    const out = convertBookingRequests([portalFollowup], [], [existing], settings);
+    expect(out.jobs[0].notes).toContain('Came in via customer portal');
+    expect(out.jobs[0].notes).not.toContain('booking link');
+  });
+
+  test('portal_change_requested rows are INERT here — never converted to leads', () => {
+    const change: BookingRequest = {
+      ...portalFollowup,
+      id: 'bkpr_ffeeddccbbaa99887766',
+      status: 'portal_change_requested',
+      jobRef: 'j1',
+      portalKind: 'reschedule',
+      details: 'Reschedule requested for "Water heater swap" (2026-08-12)',
+    };
+    const out = convertBookingRequests([change], [], [existing], settings);
+    expect(out.changed).toBe(false);
+    expect(out.jobs).toHaveLength(0);
+    expect(out.requests[0]).toBe(change);
+  });
+});
+
 describe('convertBookingRequests — booked kind (Phase 11 C3)', () => {
   test('a booked request becomes a lead job WITH the slot schedule, status stays booked', () => {
     const out = convertBookingRequests([bookedRequest], [], [], settings);

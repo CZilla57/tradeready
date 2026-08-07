@@ -44,13 +44,23 @@ export function convertBookingRequests(
     const isUnconvertedBooked = r.status === "booked" && r.kind === "booked" && !r.convertedJobId;
     if (!isNewRequest && !isUnconvertedBooked) return r;
 
-    const { customer, customers: c2, changed } = upsertCustomerInList(nextCustomers, {
-      name: r.name,
-      email: r.email,
-      phone: r.phone,
-      address: r.address,
-    });
-    if (changed) { nextCustomers = c2; customersChanged = true; }
+    // Phase 12C: portal requests carry the customer's record id — the portal
+    // copied the contact fields FROM that record, so link it directly instead
+    // of name-matching (no upsert, no backfill churn). Dangling id (deleted /
+    // merged-away record) falls back to the normal upsert path.
+    let customer = r.sourceCustomerId
+      ? nextCustomers.find((c) => c.id === r.sourceCustomerId)
+      : undefined;
+    if (!customer) {
+      const up = upsertCustomerInList(nextCustomers, {
+        name: r.name,
+        email: r.email,
+        phone: r.phone,
+        address: r.address,
+      });
+      if (up.changed) { nextCustomers = up.customers; customersChanged = true; }
+      customer = up.customer ?? undefined;
+    }
     if (!customer) return r; // unusable name — leave the request for inspection
 
     const jobId = `jbk_${r.id}`;
@@ -84,7 +94,7 @@ export function convertBookingRequests(
         materialMarkup: settings.materialMarkup ?? 20,
         overhead: settings.overheadPercent ?? 15,
         margin: settings.marginPercent ?? 20,
-        notes: `${bookedLine}${timingLine}Came in via booking link ${requestDate}`,
+        notes: `${bookedLine}${timingLine}${r.source === "portal" ? "Came in via customer portal" : "Came in via booking link"} ${requestDate}`,
         invoiceId: null,
         createdAt: requestDate,
       };
