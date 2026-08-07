@@ -25,6 +25,13 @@ export type ConflictQuery = {
   start: string;
   end?: string | null;
   laborHours: number;
+  /**
+   * Required gap between appointments (Settings.schedule.bufferMinutes via
+   * resolveSchedule). Pads the CANDIDATE window symmetrically, so a gap
+   * smaller than the buffer conflicts and a gap exactly equal to it is legal
+   * (strict-touch semantics preserved). Absent/0 = pre-Phase-11 behavior.
+   */
+  bufferMinutes?: number;
 };
 
 function toMinutes(time: string): number {
@@ -93,7 +100,10 @@ function window(
  */
 export function findScheduleConflicts(jobs: Job[], query: ConflictQuery): Job[] {
   if (!query.date || !query.start) return [];
-  const [qStart, qEnd] = window(query.start, query.end, query.laborHours);
+  const [rawStart, rawEnd] = window(query.start, query.end, query.laborHours);
+  const buffer = query.bufferMinutes ?? 0;
+  const qStart = Math.max(0, rawStart - buffer);
+  const qEnd = Math.min(24 * 60, rawEnd + buffer);
   return jobs.filter((j) => {
     if (j.id === query.excludeJobId) return false;
     if (j.scheduledDate !== query.date) return false;

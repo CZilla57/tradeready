@@ -170,6 +170,53 @@ describe('findScheduleConflicts', () => {
   });
 });
 
+describe('findScheduleConflicts with bufferMinutes (Phase 11 A2)', () => {
+  // Other job (fixture default): 09:00–11:00 on 2026-08-03.
+  const after = { date: '2026-08-03', start: '11:00', end: '13:00', laborHours: 2 };
+
+  test('bufferMinutes 0 or absent keeps strict-touch behavior exactly', () => {
+    expect(findScheduleConflicts([job({})], after)).toHaveLength(0);
+    expect(findScheduleConflicts([job({})], { ...after, bufferMinutes: 0 })).toHaveLength(0);
+  });
+
+  test('touching windows conflict once any buffer exists', () => {
+    expect(findScheduleConflicts([job({})], { ...after, bufferMinutes: 30 })).toHaveLength(1);
+  });
+
+  test('a gap smaller than the buffer conflicts', () => {
+    // 15-minute gap after the 11:00 end, buffer 30
+    expect(
+      findScheduleConflicts([job({})], { ...after, start: '11:15', end: '13:15', bufferMinutes: 30 })
+    ).toHaveLength(1);
+  });
+
+  test('a gap exactly equal to the buffer is legal', () => {
+    expect(
+      findScheduleConflicts([job({})], { ...after, start: '11:30', end: '13:30', bufferMinutes: 30 })
+    ).toHaveLength(0);
+  });
+
+  test('buffer pads before the candidate too', () => {
+    // Other job 13:30–14:30; candidate ends 13:15, buffer 30 → padded end 13:45
+    expect(
+      findScheduleConflicts(
+        [job({ scheduledStartTime: '13:30', scheduledEndTime: '14:30' })],
+        { date: '2026-08-03', start: '11:00', end: '13:15', bufferMinutes: 30, laborHours: 2 }
+      )
+    ).toHaveLength(1);
+  });
+
+  test('padded window clamps at midnight without breaking the day boundary', () => {
+    // Candidate 00:10–01:00 with 30-min buffer → padded start clamps to 00:00
+    expect(
+      findScheduleConflicts(
+        [job({ scheduledStartTime: '01:15', scheduledEndTime: '02:00' })],
+        { date: '2026-08-03', start: '00:10', end: '01:00', bufferMinutes: 30, laborHours: 1 }
+      )
+    ).toHaveLength(1);
+  });
+});
+
 describe('largestFreeGap', () => {
   test('no scheduled jobs that day → null (empty day is silent by design)', () => {
     expect(largestFreeGap([job({ scheduledDate: '2026-08-04' })], '2026-08-05')).toBeNull();
