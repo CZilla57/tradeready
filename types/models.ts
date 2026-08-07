@@ -525,14 +525,42 @@ export interface Trip {
 }
 
 /**
+ * Booking-request lifecycle. "new"/"converted" are the original free-text
+ * request states. The Phase 11 states (2026-08-07 spec §3c): "booked" is a
+ * slot reservation (stays "booked" after device conversion — the customer
+ * manage page keeps reading it; `convertedJobId` is the done marker);
+ * "confirmed"/"reschedule_requested"/"cancelled"/"declined" are written
+ * SERVER-side by the Phase D manage/respond endpoints. Additive union:
+ * OTA-old clients skip everything that isn't "new" (bookingConversion
+ * matches statuses explicitly), so unknown states are inert, never corrupted.
+ */
+export type BookingRequestStatus =
+  | "new"
+  | "converted"
+  | "booked"
+  | "confirmed"
+  | "reschedule_requested"
+  | "cancelled"
+  | "declined";
+
+/** One auditable state change on a booking (SERVER-written, append-only). */
+export interface BookingHistoryEntry {
+  at: string; // ISO timestamp, server clock
+  actor: "customer" | "owner" | "system";
+  event: string;
+  note?: string;
+}
+
+/**
  * A public request-a-quote submission (booking link, 2026-08-04 spec).
  * Rows are INSERTED server-side only (backend/lib/booking/); the device's
  * applyBookingRequests converts status "new" → Customer + lead Job and flips
- * status to "converted". Synced like any collection.
+ * status to "converted", and kind "booked" → Customer + lead Job carrying
+ * the slot's schedule fields (status preserved). Synced like any collection.
  */
 export interface BookingRequest {
   id: string;            // server-minted: bk<epoch-ms>_<6 hex>
-  status: "new" | "converted";
+  status: BookingRequestStatus;
   name: string;
   phone: string;
   email: string;
@@ -542,6 +570,27 @@ export interface BookingRequest {
   createdAt: string;     // ISO timestamp, server clock
   convertedJobId?: string;
   convertedCustomerId?: string;
+  /** Absent = legacy free-text request (pre-Phase-11 rows). */
+  kind?: "request" | "booked";
+  /**
+   * The reserved slot (kind "booked" only). Owner-naive date/start/end are
+   * authoritative for what lands on the Job; the UTC instants exist for the
+   * server's uniqueness + customer display.
+   */
+  slot?: {
+    date: DateString;
+    start: TimeString;
+    end: TimeString;
+    timeZone: string;
+    startUtc: string;
+    endUtc: string;
+  };
+  /** Phase D customer-manage capability token — public-by-design (it lives
+   *  in the confirmation link), like Customer.portal.token. */
+  manageToken?: string;
+  /** Append-only audit trail, SERVER-written (mirrors EstimateApproval's
+   *  server-side-write discipline). */
+  history?: BookingHistoryEntry[];
 }
 
 /** A reminder rule: notify N days after an invoice's due date. */

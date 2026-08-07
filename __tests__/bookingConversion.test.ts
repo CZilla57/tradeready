@@ -30,6 +30,69 @@ const request: BookingRequest = {
   createdAt: '2026-08-04T15:00:00.000Z',
 };
 
+const bookedRequest: BookingRequest = {
+  id: 'bk1700000001000_d4e5f6',
+  status: 'booked',
+  kind: 'booked',
+  name: 'Sam Ortiz',
+  phone: '555-0177',
+  email: 'sam@example.com',
+  address: '9 Oak Ave',
+  details: 'Panel inspection',
+  preferredTiming: '',
+  createdAt: '2026-08-07T15:00:00.000Z',
+  slot: {
+    date: '2026-08-12',
+    start: '09:00',
+    end: '10:00',
+    timeZone: 'America/Chicago',
+    startUtc: '2026-08-12T14:00:00.000Z',
+    endUtc: '2026-08-12T15:00:00.000Z',
+  },
+  manageToken: 'm'.repeat(48),
+  history: [{ at: '2026-08-07T15:00:00.000Z', actor: 'customer', event: 'booked' }],
+};
+
+describe('convertBookingRequests — booked kind (Phase 11 C3)', () => {
+  test('a booked request becomes a lead job WITH the slot schedule, status stays booked', () => {
+    const out = convertBookingRequests([bookedRequest], [], [], settings);
+    expect(out.changed).toBe(true);
+
+    const j = out.jobs[0];
+    expect(j.id).toBe('jbk_bk1700000001000_d4e5f6');
+    // D6 (owner-approved): slot-booked jobs enter as lead WITH schedule set —
+    // they show on the calendar and count as busy without skipping pipeline.
+    expect(j.status).toBe('lead');
+    expect(j.title).toBe('Booked appointment');
+    expect(j.scheduledDate).toBe('2026-08-12');
+    expect(j.scheduledStartTime).toBe('09:00');
+    expect(j.scheduledEndTime).toBe('10:00');
+    expect(j.notes).toContain('Booked online for 2026-08-12 09:00');
+
+    // Status is NOT flipped to converted — the customer's manage page keeps
+    // reading booked/confirmed; the convertedJobId stamp is the done marker.
+    const r = out.requests[0];
+    expect(r.status).toBe('booked');
+    expect(r.convertedJobId).toBe(j.id);
+    expect(r.convertedCustomerId).toBe(out.customers[0].id);
+  });
+
+  test('idempotent: a booked request with convertedJobId is untouched on rerun', () => {
+    const first = convertBookingRequests([bookedRequest], [], [], settings);
+    const second = convertBookingRequests(first.requests, first.jobs, first.customers, settings);
+    expect(second.changed).toBe(false);
+    expect(second.jobs).toBe(first.jobs);
+    expect(second.requests).toBe(first.requests);
+  });
+
+  test('crash recovery: job already exists but stamp is missing → stamps without duplicating', () => {
+    const first = convertBookingRequests([bookedRequest], [], [], settings);
+    const rerun = convertBookingRequests([bookedRequest], first.jobs, first.customers, settings);
+    expect(rerun.jobs).toHaveLength(1);
+    expect(rerun.requests[0].convertedJobId).toBe('jbk_bk1700000001000_d4e5f6');
+  });
+});
+
 describe('convertBookingRequests', () => {
   test('converts a new request into a customer with full contact info + a lead job', () => {
     const out = convertBookingRequests([request], [], [], settings);

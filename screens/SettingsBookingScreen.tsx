@@ -21,12 +21,14 @@ export default function SettingsBookingScreen({ navigation }: TodayStackScreenPr
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [bookingLink, setBookingLink] = useState<Settings["bookingLink"] | null>(null);
+  const [schedule, setSchedule] = useState<Settings["schedule"] | null>(null);
   const [loaded, setLoaded] = useState(false);
   useSettingsTabPop(navigation);
 
   useEffect(() => {
     loadSettings().then((l) => {
       setBookingLink(l.bookingLink ?? null);
+      setSchedule(l.schedule ?? null);
       setLoaded(true);
     });
   }, []);
@@ -54,6 +56,26 @@ export default function SettingsBookingScreen({ navigation }: TodayStackScreenPr
       setBookingLink(next);
     } catch (err: unknown) {
       reportError(err, { context: 'bookingLinkToggle' });
+      Alert.alert("Couldn't update", (err as Error).message || "Please try again.");
+    }
+  };
+
+  // Phase 11 C (2026-08-07 spec §7): the slot-booking feature flag. Enabling
+  // stamps the device's IANA zone once (kept thereafter; editable later via
+  // a deliberate re-enable) — the server needs it to resolve naive slots to
+  // UTC instants. Same immediate-action pattern as the link toggle above.
+  const handleToggleSlots = async (enabled: boolean) => {
+    try {
+      const current = await loadSettings();
+      const timeZone =
+        current.schedule?.timeZone ||
+        Intl.DateTimeFormat().resolvedOptions().timeZone ||
+        "UTC";
+      const nextSchedule = { ...current.schedule, bookableSlotsEnabled: enabled, timeZone };
+      await saveSettings({ ...current, schedule: nextSchedule });
+      setSchedule(nextSchedule);
+    } catch (err: unknown) {
+      reportError(err, { context: 'bookingSlotsToggle' });
       Alert.alert("Couldn't update", (err as Error).message || "Please try again.");
     }
   };
@@ -105,6 +127,22 @@ export default function SettingsBookingScreen({ navigation }: TodayStackScreenPr
                   accessibilityLabel="Accepting requests"
                 />
               </View>
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleTextWrap}>
+                  <Text style={styles.toggleLabel}>Bookable time slots</Text>
+                  <Text style={styles.toggleHint}>
+                    {schedule?.bookableSlotsEnabled
+                      ? `Customers pick from your open slots (${schedule?.timeZone ?? "device timezone"}). Hours live in Settings → Schedule.`
+                      : "Off: customers describe their timing in a text box and you schedule from the lead."}
+                  </Text>
+                </View>
+                <Switch
+                  value={schedule?.bookableSlotsEnabled === true}
+                  onValueChange={(v) => { void handleToggleSlots(v); }}
+                  trackColor={{ false: colors.border, true: colors.accent }}
+                  accessibilityLabel="Bookable time slots"
+                />
+              </View>
               <TouchableOpacity
                 style={styles.listRow}
                 onPress={handleNewBookingLink}
@@ -134,8 +172,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.sm, ...shadow.card },
     providerHint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
     bookingUrlText: { fontFamily: fonts.mono, fontSize: fontSize.sm, color: colors.textPrimary, marginBottom: spacing.sm },
-    toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.md },
+    toggleTextWrap: { flex: 1, marginRight: spacing.sm },
     toggleLabel: { fontFamily: fonts.bodyRegular, fontSize: fontSize.md, color: colors.textPrimary },
+    toggleHint: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
     listRow: { flexDirection: "row", alignItems: "center", paddingVertical: 13 },
     listRowText: { fontFamily: fonts.bodyRegular, flex: 1, fontSize: fontSize.md, color: colors.textPrimary },
     listRowChevron: { fontSize: 20, color: colors.textMuted },
