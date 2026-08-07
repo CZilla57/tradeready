@@ -34,7 +34,7 @@ export type ConflictQuery = {
   bufferMinutes?: number;
 };
 
-function toMinutes(time: string): number {
+export function toMinutes(time: string): number {
   const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
 }
@@ -82,8 +82,12 @@ export function formatLaborHint(laborHours: number): string {
   return `${m}m`;
 }
 
-/** [startMinutes, endMinutes) window; a missing end blocks max(labor, 1h). */
-function window(
+/**
+ * [startMinutes, endMinutes) window; a missing end blocks max(labor, 1h).
+ * Exported for the calendar selectors (utils/calendar.ts) so the block-size
+ * rule has exactly one home.
+ */
+export function blockWindow(
   start: string,
   end: string | null | undefined,
   laborHours: number
@@ -100,7 +104,7 @@ function window(
  */
 export function findScheduleConflicts(jobs: Job[], query: ConflictQuery): Job[] {
   if (!query.date || !query.start) return [];
-  const [rawStart, rawEnd] = window(query.start, query.end, query.laborHours);
+  const [rawStart, rawEnd] = blockWindow(query.start, query.end, query.laborHours);
   const buffer = query.bufferMinutes ?? 0;
   const qStart = Math.max(0, rawStart - buffer);
   const qEnd = Math.min(24 * 60, rawEnd + buffer);
@@ -109,7 +113,7 @@ export function findScheduleConflicts(jobs: Job[], query: ConflictQuery): Job[] 
     if (j.scheduledDate !== query.date) return false;
     if (!j.scheduledStartTime) return false;
     if (TERMINAL_STATUSES.has(j.status)) return false;
-    const [s, e] = window(j.scheduledStartTime, j.scheduledEndTime, j.laborHours ?? 0);
+    const [s, e] = blockWindow(j.scheduledStartTime, j.scheduledEndTime, j.laborHours ?? 0);
     return qStart < e && s < qEnd;
   });
 }
@@ -141,7 +145,7 @@ export function largestFreeGap(
   const endMin = toMinutes(dayEnd);
 
   const busy = dayJobs
-    .map((j) => window(j.scheduledStartTime as string, j.scheduledEndTime, j.laborHours ?? 0))
+    .map((j) => blockWindow(j.scheduledStartTime as string, j.scheduledEndTime, j.laborHours ?? 0))
     .map(([s, e]): [number, number] => [Math.max(s, startMin), Math.min(e, endMin)])
     .filter(([s, e]) => s < e)
     .sort((a, b) => a[0] - b[0]);

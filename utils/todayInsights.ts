@@ -9,6 +9,7 @@ import type { Job, Invoice } from "../types/models";
 import { computeTimeTracking, formatElapsed } from "./timeTracking";
 import { formatLaborHint, largestFreeGap } from "./scheduleSmarts";
 import { isArchived } from "./archive";
+import { selectUnscheduledApproved } from "./calendar";
 import { isFullyPaid, balanceDue } from "./invoicePayments";
 import { daysPastDue } from "./invoiceHelpers";
 import { formatMoney, formatQuote } from "./format";
@@ -136,9 +137,7 @@ function selectScheduleInsights(jobs: Job[], now: Date): TodayInsight[] {
   const out: TodayInsight[] = [];
   const tomorrow = shiftDate(formatLocalDate(now), 1); // local-frame (FA-039)
 
-  const unscheduled = jobs.filter(
-    (j) => j.status === "approved" && !j.scheduledDate && !isArchived(j)
-  );
+  const unscheduled = selectUnscheduledApproved(jobs);
 
   let fittedJobId: string | null = null;
   const gap = largestFreeGap(jobs, tomorrow, WORK_DAY_START, WORK_DAY_END);
