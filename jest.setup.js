@@ -46,6 +46,7 @@ jest.mock("expo-file-system/legacy", () => ({
   copyAsync: jest.fn(() => Promise.resolve()),
   deleteAsync: jest.fn(() => Promise.resolve()),
   getInfoAsync: jest.fn(() => Promise.resolve({ exists: false })),
+  EncodingType: { Base64: "base64", UTF8: "utf8" },
 }));
 
 jest.mock("expo-mail-composer", () => ({

@@ -127,4 +127,20 @@ describe("buildInvoiceEmail", () => {
     expect(email.to).toEqual(["jane@example.com"]);
     expect(email.text).toContain("$500.00");
   });
+
+  test("attachment present → email.attachments is set", () => {
+    const email = buildInvoiceEmail({
+      invoice: inv(),
+      settings,
+      attachment: { filename: "Invoice-INV-0001.pdf", content: "JVBERi0=" },
+    });
+    expect(email.attachments).toEqual([
+      { filename: "Invoice-INV-0001.pdf", content: "JVBERi0=" },
+    ]);
+  });
+
+  test("no attachment → no attachments key (guards the plain-send path)", () => {
+    const email = buildInvoiceEmail({ invoice: inv(), settings });
+    expect(email.attachments).toBeUndefined();
+  });
 });

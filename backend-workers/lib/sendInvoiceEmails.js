@@ -12,6 +12,7 @@
 
 const { selectInvoicesToAutoEmail } = require("./selectInvoicesToAutoEmail");
 const { buildInvoiceEmail } = require("./invoiceEmail");
+const { attachmentDecision, invoicePdfName } = require("./invoicePdfAttach");
 
 // Same rationale as sendReminders.js's cap: sends are one-and-done per
 // invoice, so honest volume is bounded by NEW auto-invoices in a day; 25
@@ -47,8 +48,9 @@ async function markLog(env, logId, patch) {
   }
 }
 
-// Runs one sweep. Returns { scanned, sent, failed, capped }; throws on a
-// fatal (whole-batch) error — callers map that to a 500 / scheduled-run log.
+// Runs one sweep. Returns { scanned, sent, failed, capped, waitingOnPdf };
+// throws on a fatal (whole-batch) error — callers map that to a 500 /
+// scheduled-run log.
 async function runInvoiceEmails(env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY || !env.RESEND_API_KEY) {
     throw new Error("Server misconfiguration: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY required.");
@@ -59,6 +61,8 @@ async function runInvoiceEmails(env) {
   let sent = 0;
   let failed = 0;
   let capped = 0;
+  let waitingOnPdf = 0;
+  let warnedMissingBucket = false;
 
   const [invRows, setRows, logRows] = await Promise.all([
     // All non-deleted invoices; the selector filters to stamped+fresh+unpaid.
@@ -104,6 +108,41 @@ async function runInvoiceEmails(env) {
         deferred++;
         continue;
       }
+
+      // Resolve the R2 PDF + grace decision BEFORE claiming: a deferral must
+      // write no log row so a later sweep retries once the upload lands.
+      let attachment = null;
+      let pdfKey = null;
+      try {
+        const bucket = env.INVOICE_PDFS;
+        let obj = null;
+        if (bucket) {
+          pdfKey = `${userId}/${invoice.id}.pdf`;
+          obj = await bucket.get(pdfKey);
+        } else if (!warnedMissingBucket) {
+          warnedMissingBucket = true;
+          console.error("[send-invoice-emails] INVOICE_PDFS binding missing — sending plain");
+        }
+        const stamped = Date.parse(invoice.autoEmailRequestedAt);
+        const ageMs = Number.isFinite(stamped) ? today.getTime() - stamped : Infinity;
+        const decision = attachmentDecision({ hasObject: !!obj, ageMs });
+        if (decision === "defer") {
+          waitingOnPdf++;
+          continue; // no claim; retried next sweep
+        }
+        if (obj) {
+          const buf = await obj.arrayBuffer();
+          attachment = {
+            filename: invoicePdfName(invoice),
+            content: Buffer.from(buf).toString("base64"),
+          };
+        }
+        // decision === "plain" → attachment stays null
+      } catch (pdfErr) {
+        // An R2 read glitch must never block billing — fall through to plain.
+        console.error("[send-invoice-emails] pdf fetch error", invoice.id, pdfErr.message);
+      }
+
       scanned++;
       // Per-invoice isolation: a network throw on the claim must not abort
       // the whole batch.
@@ -129,7 +168,7 @@ async function runInvoiceEmails(env) {
 
         // SEND, then record the outcome via best-effort markLog (never throws).
         try {
-          const email = buildInvoiceEmail({ invoice, settings });
+          const email = buildInvoiceEmail({ invoice, settings, attachment });
           const r = await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -138,6 +177,13 @@ async function runInvoiceEmails(env) {
           if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
           sent++;
           await markLog(env, logId, { status: "sent", sent_at: new Date().toISOString() });
+          if (pdfKey && env.INVOICE_PDFS) {
+            try {
+              await env.INVOICE_PDFS.delete(pdfKey);
+            } catch (delErr) {
+              console.error("[send-invoice-emails] pdf delete failed", invoice.id, delErr.message);
+            }
+          }
         } catch (sendErr) {
           failed++;
           console.error("[send-invoice-emails] send failed", invoice.id, sendErr.message);
@@ -155,7 +201,7 @@ async function runInvoiceEmails(env) {
     }
   }
 
-  return { scanned, sent, failed, capped };
+  return { scanned, sent, failed, capped, waitingOnPdf };
 }
 
 module.exports = { runInvoiceEmails, MAX_INVOICE_EMAILS_PER_USER_PER_DAY };
