@@ -183,7 +183,7 @@ verified loading live under the enforced CSP.*
 Still gated and NOT done: **booking section** (client OTA not shipped — a
 fact-checked, paste-ready section is staged in
 `docs/website-booking-section-staged.md`), **social proof** (no real ratings
-yet), **screenshot refresh** (needs owner assets).
+yet), **screenshot refresh** — ✅ DONE 2026-08-07 (`8097f1a`: all four slots refreshed from owner captures, jpg+webp pairs regenerated, live-verified).
 
 *Codex design item 3 plus forward-looking additions. Every item here has an explicit
 gate — none are "just do it".*
