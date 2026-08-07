@@ -85,6 +85,7 @@ import * as Notifications from "expo-notifications";
 
 import { colors as staticColors, fontSize } from "./utils/theme";
 import { loadSettings, loadInvoices, migrateCustomerIdentity, migrateSampleDataIds, applyEstimateDecisions, applyBookingRequests, scrubLegacySquareToken } from "./utils/storage";
+import { migrateLegacyJobPhotos } from "./utils/photoSync";
 import { registerPushToken } from "./utils/pushToken";
 import { rootGateLoading } from "./utils/rootGate";
 import { fontScaleChanged } from "./utils/fontScaleRestart";
@@ -411,6 +412,8 @@ function RootNavigator() {
       .then(() => applyBookingRequests())
       .catch(() => {})
       .then(() => scrubLegacySquareToken())
+      .catch(() => {})
+      .then(() => migrateLegacyJobPhotos())
       .catch(() => {})
       .then(() => registerPushToken())
       .catch(() => {});

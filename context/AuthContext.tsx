@@ -11,6 +11,7 @@ import { identifyUser } from '../utils/analytics';
 import { applyEstimateDecisions, applyBookingRequests } from '../utils/storage';
 import { registerPushToken } from '../utils/pushToken';
 import { replayWidgetActions } from '../utils/widgetActions';
+import { uploadPendingPhotos } from '../utils/photoSync';
 import { registerBackgroundRefresh } from '../utils/backgroundRefresh';
 
 interface AuthContextValue {
@@ -118,6 +119,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .then(() => applyEstimateDecisions())
           .then(() => applyBookingRequests())
           .then(() => registerPushToken())
+          // Mirror any job photos captured offline to R2 once we're back online.
+          .then(() => uploadPendingPhotos())
           // Replay queued widget/Siri actions, then re-mirror: remote changes
           // land via raw writes that never pass through the save-path mirror
           // hooks, and replayWidgetActions ends in its own refresh.

@@ -128,18 +128,74 @@ export const LOGO_COMPRESS = 0.8;
  * platform did not report (ImagePicker documents width/height as "can be 0"):
  * resizing on a 0 would upscale a small logo instead of shrinking a big one.
  */
+/**
+ * Actions capping a `width`x`height` image at `maxDim` on its longest side,
+ * preserving aspect ratio. Returns no actions for an image already within the
+ * cap or for dimensions the platform did not report (width/height "can be 0"),
+ * so a small image is never upscaled. Shared by the logo path and the
+ * job-photo compression path (2026-08-06).
+ */
+export function resizeActions(
+  width: number,
+  height: number,
+  maxDim: number,
+): ImageManipulator.Action[] {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return [];
+  if (width <= 0 || height <= 0) return [];
+  if (Math.max(width, height) <= maxDim) return [];
+  return [
+    width >= height ? { resize: { width: maxDim } } : { resize: { height: maxDim } },
+  ];
+}
+
 export function logoResizeActions(
   width: number,
   height: number,
 ): ImageManipulator.Action[] {
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return [];
-  if (width <= 0 || height <= 0) return [];
-  if (Math.max(width, height) <= LOGO_MAX_DIMENSION) return [];
-  return [
-    width >= height
-      ? { resize: { width: LOGO_MAX_DIMENSION } }
-      : { resize: { height: LOGO_MAX_DIMENSION } },
-  ];
+  return resizeActions(width, height, LOGO_MAX_DIMENSION);
+}
+
+/** Longest side (px) and JPEG quality for job photos mirrored to R2 (2026-08-06 spec). */
+export const PHOTO_MAX_DIMENSION = 1600;
+export const PHOTO_COMPRESS = 0.7;
+
+/**
+ * Deterministic local path for a job photo — the photoId IS the filename, so a
+ * record synced from another device resolves to a stable path once its bytes
+ * are downloaded (Phase 4). No per-file path is ever stored.
+ */
+export function jobPhotoUri(photoId: string): string {
+  return `${FileSystem.documentDirectory}job-photos/${photoId}.jpg`;
+}
+
+/**
+ * Compress + downscale a picked image and write it to `job-photos/{photoId}.jpg`.
+ * Always re-encodes to JPEG, so a HEIC/PNG source becomes the `image/jpeg` the
+ * R2 upload requires. Returns the stored dimensions, or null on failure
+ * (reported once — mirrors persistPhotoSafe's swallow-and-report contract).
+ */
+export async function saveCompressedJobPhoto(
+  tempUri: string,
+  photoId: string,
+): Promise<{ width: number; height: number } | null> {
+  try {
+    const dir = `${FileSystem.documentDirectory}job-photos/`;
+    const info = await FileSystem.getInfoAsync(dir);
+    if (!info.exists) {
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    }
+    const probe = await ImageManipulator.manipulateAsync(tempUri);
+    const result = await ImageManipulator.manipulateAsync(
+      tempUri,
+      resizeActions(probe.width, probe.height, PHOTO_MAX_DIMENSION),
+      { compress: PHOTO_COMPRESS, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    await FileSystem.copyAsync({ from: result.uri, to: jobPhotoUri(photoId) });
+    return { width: result.width, height: result.height };
+  } catch (err) {
+    reportError(err, { context: "saveCompressedJobPhoto", photoId });
+    return null;
+  }
 }
 
 /**

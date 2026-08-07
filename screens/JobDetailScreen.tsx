@@ -19,9 +19,10 @@ import {
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { persistPhotoSafe, deletePhoto } from "../utils/photoStorage";
+import { jobPhotoUri } from "../utils/photoStorage";
+import { attachJobPhoto, deleteJobPhoto } from "../utils/photoSync";
 import { useFocusEffect } from "@react-navigation/native";
-import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer } from "../utils/storage";
+import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer, loadJobPhotos } from "../utils/storage";
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
 import { sendAppointmentMessage } from "../utils/appointmentSend";
 import { ACTIVE_STATUSES } from "../utils/appointmentMessages";
@@ -41,7 +42,7 @@ import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { useUndo } from "../context/UndoContext";
 import { isArchived, withArchived } from "../utils/archive";
-import type { Job, Customer, JobStatus } from "../types/models";
+import type { Job, Customer, JobStatus, JobPhoto } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
 // ── Pipeline ───────────────────────────────────────────────────────────────
@@ -381,7 +382,7 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
   );
 }
 
-function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () => void; onDelete: (uri: string) => void }) {
+function PhotosCard({ photos, onAdd, onDelete }: { photos: JobPhoto[]; onAdd: () => void; onDelete: (photoId: string) => void }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -404,8 +405,10 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
         </Text>
       ) : (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
-          {photos.map((uri, i) => (
-            <View key={i} style={styles.photoThumbWrap}>
+          {photos.map((photo, i) => {
+            const uri = jobPhotoUri(photo.id);
+            return (
+            <View key={photo.id} style={styles.photoThumbWrap}>
               <TouchableOpacity
                 onPress={() => setViewerUri(uri)}
                 activeOpacity={0.85}
@@ -419,7 +422,7 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
                 onPress={() =>
                   Alert.alert("Delete photo?", "This cannot be undone.", [
                     { text: "Cancel", style: "cancel" },
-                    { text: "Delete", style: "destructive", onPress: () => onDelete(uri) },
+                    { text: "Delete", style: "destructive", onPress: () => onDelete(photo.id) },
                   ])
                 }
                 accessibilityLabel="Delete photo"
@@ -430,7 +433,8 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: string[]; onAdd: () =
                 </View>
               </TouchableOpacity>
             </View>
-          ))}
+            );
+          })}
         </ScrollView>
       )}
 
@@ -679,6 +683,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<boolean>(false);
   const [reviewSent, setReviewSent] = useState<boolean>(false);
+  const [jobPhotos, setJobPhotos] = useState<JobPhoto[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -688,7 +693,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
         setLoading(true);
         setLoadError(false);
         try {
-          const [jobs, customers, invoices, reviewRecord] = await Promise.all([
+          const [jobs, customers, invoices, reviewRecord, photos] = await Promise.all([
             loadJobs(),
             loadCustomers(),
             loadInvoices(),
@@ -696,8 +701,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
             // getItem + JSON.parse); a bad review record must not fail
             // the whole job load — degrade to "not sent yet".
             getReviewRequestRecord(jobId).catch(() => null),
+            loadJobPhotos(),
           ]);
           if (!active) return;
+
+          setJobPhotos(photos.filter((p) => p.jobId === jobId));
 
           // Read-side sweep (FA-038) — same reconcile as JobsScreen, so a
           // webhook-paid invoice is reflected even when the user deep-links
@@ -917,12 +925,12 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           }
           const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
           if (!result.canceled && job) {
-            const uri = await persistPhotoSafe(result.assets[0].uri, "job-photos");
-            if (!uri) {
+            const rec = await attachJobPhoto(job.id, result.assets[0].uri);
+            if (!rec) {
               Alert.alert("Couldn't save that photo", "The photo wasn't added to this job. Please try again.");
               return;
             }
-            await updateJob({ photos: [...(job.photos || []), uri] });
+            setJobPhotos((prev) => [...prev, rec]);
           }
         },
       },
@@ -936,12 +944,12 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           }
           const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] as any, quality: 0.8 });
           if (!result.canceled && job) {
-            const uri = await persistPhotoSafe(result.assets[0].uri, "job-photos");
-            if (!uri) {
+            const rec = await attachJobPhoto(job.id, result.assets[0].uri);
+            if (!rec) {
               Alert.alert("Couldn't save that photo", "The photo wasn't added to this job. Please try again.");
               return;
             }
-            await updateJob({ photos: [...(job.photos || []), uri] });
+            setJobPhotos((prev) => [...prev, rec]);
           }
         },
       },
@@ -949,10 +957,10 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
     ]);
   }
 
-  async function handleDeletePhoto(uri: string) {
+  async function handleDeletePhoto(photoId: string) {
     if (!job) return;
-    await updateJob({ photos: (job.photos || []).filter((p) => p !== uri) });
-    await deletePhoto(uri);
+    setJobPhotos((prev) => prev.filter((p) => p.id !== photoId));
+    await deleteJobPhoto(photoId);
   }
 
   async function handleClockIn() {
@@ -1045,7 +1053,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           />
         )}
         <PhotosCard
-          photos={job.photos || []}
+          photos={jobPhotos}
           onAdd={handleAddPhoto}
           onDelete={handleDeletePhoto}
         />
