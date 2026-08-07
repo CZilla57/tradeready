@@ -34,6 +34,8 @@ import { bookingConfigHandler } from './routes/booking/config.js';
 import { bookingSubmitHandler } from './routes/booking/submit.js';
 import { bookingSlotsHandler } from './routes/booking/slots.js';
 import { bookingReserveHandler } from './routes/booking/reserve.js';
+import { bookingManageHandler } from './routes/booking/manage.js';
+import { bookingRespondHandler } from './routes/booking/respond.js';
 import { estimateCreateLinkHandler } from './routes/estimate/createLink.js';
 import { estimateRespondHandler } from './routes/estimate/respond.js';
 import { estimateViewHandler } from './routes/estimate/view.js';
@@ -63,6 +65,8 @@ app.all('/api/booking/config', bookingConfigHandler);
 app.all('/api/booking/submit', bookingSubmitHandler);
 app.all('/api/booking/slots', bookingSlotsHandler);
 app.all('/api/booking/reserve', bookingReserveHandler);
+app.all('/api/booking/manage', bookingManageHandler);
+app.all('/api/booking/respond', bookingRespondHandler);
 app.all('/api/booking/:action', (c) => c.json({ error: 'Not found' }, 404));
 
 app.all('/api/estimate/create-link', estimateCreateLinkHandler);
