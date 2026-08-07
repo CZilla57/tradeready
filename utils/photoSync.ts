@@ -112,6 +112,58 @@ export async function uploadPendingPhotos(): Promise<void> {
   }
 }
 
+/**
+ * Ensure a photo's bytes are on local disk, downloading from R2 if needed.
+ * Returns true when the local file is present afterwards. Fast-returns true if
+ * it already exists; returns false (no download) for a record the origin device
+ * hasn't uploaded yet (no uploadedAt) — the caller renders a "waiting" state.
+ * A non-2xx download leaves no partial file behind.
+ */
+export async function ensurePhotoLocal(photo: JobPhoto): Promise<boolean> {
+  const uri = jobPhotoUri(photo.id);
+  if (await photoExists(uri)) return true;
+  if (!photo.uploadedAt || !backendReady()) return false;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return false;
+    const res = await FileSystem.downloadAsync(`${BACKEND_URL}/api/photos/${photo.id}`, uri, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status >= 200 && res.status < 300) return true;
+    await deletePhoto(uri); // discard an error-body written to the target
+    return false;
+  } catch (err) {
+    reportError(err, { context: "ensurePhotoLocal", photoId: photo.id });
+    return false;
+  }
+}
+
+/**
+ * Download every uploaded photo missing from local disk (reinstall self-heal +
+ * cross-device backfill). Small concurrency, fire-and-forget; never throws.
+ * ensurePhotoLocal skips records already present, so this only fetches the gaps.
+ * Triggered on app foreground (after the pull that sync runs there).
+ */
+export async function backfillMissingPhotos(): Promise<void> {
+  try {
+    if (!backendReady()) return;
+    const photos = await loadJobPhotos();
+    const candidates = photos.filter((p) => p.uploadedAt);
+    if (candidates.length === 0) return;
+
+    let i = 0;
+    const worker = async () => {
+      while (i < candidates.length) {
+        await ensurePhotoLocal(candidates[i++]);
+      }
+    };
+    await Promise.all([worker(), worker()]); // concurrency 2
+  } catch (err) {
+    reportError(err, { context: "backfillMissingPhotos" });
+  }
+}
+
 /** Best-effort R2 delete for one photo. A failed delete leaves an orphan
  * (pennies; swept at account deletion) rather than blocking the local delete. */
 async function deleteRemotePhoto(photoId: string): Promise<void> {

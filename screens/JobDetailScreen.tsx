@@ -20,7 +20,7 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { jobPhotoUri } from "../utils/photoStorage";
-import { attachJobPhoto, deleteJobPhoto } from "../utils/photoSync";
+import { attachJobPhoto, deleteJobPhoto, ensurePhotoLocal } from "../utils/photoSync";
 import { useFocusEffect } from "@react-navigation/native";
 import { loadJobs, saveJobs, loadCustomers, loadSettings, loadInvoices, resolveCustomer, loadJobPhotos } from "../utils/storage";
 import { scheduleReviewRequest, getReviewRequestRecord } from "../utils/reviewRequest";
@@ -382,7 +382,7 @@ function EstimateCard({ job, navigation }: { job: Job; navigation: JobStackScree
   );
 }
 
-function PhotosCard({ photos, onAdd, onDelete }: { photos: JobPhoto[]; onAdd: () => void; onDelete: (photoId: string) => void }) {
+function PhotosCard({ photos, readyIds, onAdd, onDelete }: { photos: JobPhoto[]; readyIds: Set<string>; onAdd: () => void; onDelete: (photoId: string) => void }) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -409,14 +409,27 @@ function PhotosCard({ photos, onAdd, onDelete }: { photos: JobPhoto[]; onAdd: ()
             const uri = jobPhotoUri(photo.id);
             return (
             <View key={photo.id} style={styles.photoThumbWrap}>
-              <TouchableOpacity
-                onPress={() => setViewerUri(uri)}
-                activeOpacity={0.85}
-                accessibilityRole="imagebutton"
-                accessibilityLabel={`View photo ${i + 1} of ${photos.length}`}
-              >
-                <Image source={{ uri }} style={styles.photoThumb} contentFit="cover" />
-              </TouchableOpacity>
+              {readyIds.has(photo.id) ? (
+                <TouchableOpacity
+                  onPress={() => setViewerUri(uri)}
+                  activeOpacity={0.85}
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel={`View photo ${i + 1} of ${photos.length}`}
+                >
+                  <Image source={{ uri }} style={styles.photoThumb} contentFit="cover" />
+                </TouchableOpacity>
+              ) : (
+                <View
+                  style={[styles.photoThumb, styles.photoPlaceholder]}
+                  accessibilityLabel={photo.uploadedAt ? "Photo downloading" : "Photo uploading from another device"}
+                >
+                  {photo.uploadedAt ? (
+                    <ActivityIndicator size="small" color={colors.textMuted} />
+                  ) : (
+                    <Ionicons name="cloud-upload-outline" size={20} color={colors.textMuted} />
+                  )}
+                </View>
+              )}
               <TouchableOpacity
                 style={styles.photoDeleteBtn}
                 onPress={() =>
@@ -684,6 +697,9 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
   const [loadError, setLoadError] = useState<boolean>(false);
   const [reviewSent, setReviewSent] = useState<boolean>(false);
   const [jobPhotos, setJobPhotos] = useState<JobPhoto[]>([]);
+  // Ids whose bytes are on local disk and safe to render (others show a
+  // downloading / waiting-for-other-device placeholder).
+  const [readyPhotoIds, setReadyPhotoIds] = useState<Set<string>>(new Set());
 
   useFocusEffect(
     useCallback(() => {
@@ -705,7 +721,18 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
           ]);
           if (!active) return;
 
-          setJobPhotos(photos.filter((p) => p.jobId === jobId));
+          const myPhotos = photos.filter((p) => p.jobId === jobId);
+          setJobPhotos(myPhotos);
+          // Priority-fetch this job's photos: ensurePhotoLocal returns true fast
+          // for files already on disk and downloads the rest. Each resolves
+          // independently so present photos render immediately.
+          myPhotos.forEach((p) => {
+            ensurePhotoLocal(p).then((ok) => {
+              if (active && ok) {
+                setReadyPhotoIds((prev) => (prev.has(p.id) ? prev : new Set(prev).add(p.id)));
+              }
+            });
+          });
 
           // Read-side sweep (FA-038) — same reconcile as JobsScreen, so a
           // webhook-paid invoice is reflected even when the user deep-links
@@ -931,6 +958,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
               return;
             }
             setJobPhotos((prev) => [...prev, rec]);
+            setReadyPhotoIds((prev) => new Set(prev).add(rec.id));
           }
         },
       },
@@ -950,6 +978,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
               return;
             }
             setJobPhotos((prev) => [...prev, rec]);
+            setReadyPhotoIds((prev) => new Set(prev).add(rec.id));
           }
         },
       },
@@ -1054,6 +1083,7 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
         )}
         <PhotosCard
           photos={jobPhotos}
+          readyIds={readyPhotoIds}
           onAdd={handleAddPhoto}
           onDelete={handleDeletePhoto}
         />
@@ -1233,6 +1263,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       height: 88,
       borderRadius: radius.md,
       backgroundColor: colors.border,
+    },
+    photoPlaceholder: {
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
     },
     // The 44pt target sits fully inside the 88pt thumb: RN clips hit-testing
     // to the parent's bounds, so the old corner-overhang badge (top/right -6

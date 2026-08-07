@@ -9,6 +9,8 @@ import {
   newPhotoId,
   attachJobPhoto,
   uploadPendingPhotos,
+  ensurePhotoLocal,
+  backfillMissingPhotos,
   deleteJobPhoto,
   migrateLegacyJobPhotos,
 } from "../utils/photoSync";
@@ -21,6 +23,7 @@ import type { Job, JobPhoto } from "../types/models";
 jest.mock("expo-file-system/legacy", () => ({
   documentDirectory: "file:///mock/",
   uploadAsync: jest.fn(),
+  downloadAsync: jest.fn(),
   FileSystemUploadType: { BINARY_CONTENT: "binary" },
 }));
 
@@ -42,6 +45,7 @@ jest.mock("../utils/supabase", () => ({
 jest.mock("../utils/analytics", () => ({ reportError: jest.fn() }));
 
 const uploadAsync = FileSystem.uploadAsync as jest.Mock;
+const downloadAsync = FileSystem.downloadAsync as jest.Mock;
 const getSession = supabase.auth.getSession as jest.Mock;
 
 const REC: JobPhoto = {
@@ -63,6 +67,7 @@ beforeEach(() => {
   (deletePhoto as jest.Mock).mockResolvedValue(undefined);
   getSession.mockResolvedValue({ data: { session: null } }); // no token by default
   uploadAsync.mockResolvedValue({ status: 200 });
+  downloadAsync.mockResolvedValue({ status: 200, uri: "file:///mock/job-photos/x.jpg" });
   (global as any).fetch = jest.fn(() => Promise.resolve({ ok: true, status: 204 }));
 });
 
@@ -139,6 +144,62 @@ describe("uploadPendingPhotos", () => {
     (loadJobPhotos as jest.Mock).mockResolvedValue([{ ...REC, uploadedAt: undefined }]);
     await uploadPendingPhotos(); // getSession returns no session by default
     expect(uploadAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("ensurePhotoLocal", () => {
+  test("returns true without downloading when the file is already local", async () => {
+    (photoExists as jest.Mock).mockResolvedValue(true);
+    expect(await ensurePhotoLocal(REC)).toBe(true);
+    expect(downloadAsync).not.toHaveBeenCalled();
+  });
+
+  test("returns false without downloading a record the origin hasn't uploaded", async () => {
+    (photoExists as jest.Mock).mockResolvedValue(false);
+    expect(await ensurePhotoLocal({ ...REC, uploadedAt: undefined })).toBe(false);
+    expect(downloadAsync).not.toHaveBeenCalled();
+  });
+
+  test("downloads a missing-but-uploaded photo and returns true", async () => {
+    (photoExists as jest.Mock).mockResolvedValue(false);
+    getSession.mockResolvedValue({ data: { session: { access_token: "tok" } } });
+    const uploaded = { ...REC, uploadedAt: "2026-08-06T00:00:05.000Z" };
+    expect(await ensurePhotoLocal(uploaded)).toBe(true);
+    expect(downloadAsync).toHaveBeenCalledWith(
+      `https://tradeready-backend.tradeready.workers.dev/api/photos/${REC.id}`,
+      `file:///mock/job-photos/${REC.id}.jpg`,
+      expect.objectContaining({ headers: { Authorization: "Bearer tok" } }),
+    );
+  });
+
+  test("discards a partial file and returns false on a non-2xx download", async () => {
+    (photoExists as jest.Mock).mockResolvedValue(false);
+    getSession.mockResolvedValue({ data: { session: { access_token: "tok" } } });
+    downloadAsync.mockResolvedValue({ status: 404, uri: "x" });
+    expect(await ensurePhotoLocal({ ...REC, uploadedAt: "2026-08-06T00:00:05.000Z" })).toBe(false);
+    expect(deletePhoto).toHaveBeenCalledWith(`file:///mock/job-photos/${REC.id}.jpg`);
+  });
+});
+
+describe("backfillMissingPhotos", () => {
+  test("downloads only uploaded records that are missing locally", async () => {
+    const up1 = { ...REC, id: "p1_a", uploadedAt: "2026-08-06T00:00:05.000Z" };
+    const up2 = { ...REC, id: "p2_b", uploadedAt: "2026-08-06T00:00:06.000Z" };
+    const pendingNoUpload = { ...REC, id: "p3_c", uploadedAt: undefined };
+    (loadJobPhotos as jest.Mock).mockResolvedValue([up1, up2, pendingNoUpload]);
+    (photoExists as jest.Mock).mockResolvedValue(false);
+    getSession.mockResolvedValue({ data: { session: { access_token: "tok" } } });
+
+    await backfillMissingPhotos();
+
+    // up1 + up2 fetched; the not-yet-uploaded record is never a candidate.
+    expect(downloadAsync).toHaveBeenCalledTimes(2);
+  });
+
+  test("no-op when there are no uploaded records", async () => {
+    (loadJobPhotos as jest.Mock).mockResolvedValue([{ ...REC, uploadedAt: undefined }]);
+    await backfillMissingPhotos();
+    expect(downloadAsync).not.toHaveBeenCalled();
   });
 });
 
