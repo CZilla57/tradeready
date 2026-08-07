@@ -126,6 +126,13 @@ widths (`.topbar { position: sticky }` with no media gate — index.html:64), so
 
 ## Phase W4 — SEO and indexing hygiene
 
+**✅ SHIPPED 2026-08-07** — `tradeready-legal` `a4b72d1`, all items live-verified:
+noindex on all 7 transactional pages (and confirmed absent on the 4 marketing
+pages), robots.txt + sitemap.xml (4 extensionless URLs), SoftwareApplication
+JSON-LD on the homepage (parses in the live DOM, no CSP issues, no
+aggregateRating). Also aligned canonicals with the extensionless URL forms:
+support's `.html` canonical corrected, privacy/terms canonicals added.
+
 *Codex noted the missing sitemap and structured data. The bigger gap it missed: the
 transactional pages are indexable.*
 
