@@ -36,6 +36,7 @@ import { formatDisplayDate, formatTimeRange } from "../utils/dateHelpers";
 import { computeTimeTracking, formatElapsed, TIME_TRACKING_STATUSES, applyClockIn, applyClockOut } from "../utils/timeTracking";
 import { approvedChangeOrderTotal, jobBillableTotal } from "../utils/changeOrders";
 import ChangeOrdersSection from "../components/ChangeOrdersSection";
+import JobProfitabilitySection from "../components/JobProfitabilitySection";
 import { Button, Card, Divider } from "../components/UI";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
@@ -708,6 +709,10 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<boolean>(false);
   const [reviewSent, setReviewSent] = useState<boolean>(false);
+  // Completion moment (Phase 13C): set once by advanceStatus when the job
+  // just completed and no invoice flow took over the screen; the
+  // profitability section opens its "What changed?" review and clears it.
+  const [completionReview, setCompletionReview] = useState<boolean>(false);
   const [jobPhotos, setJobPhotos] = useState<JobPhoto[]>([]);
   // Ids whose bytes are on local disk and safe to render (others show a
   // downloading / waiting-for-other-device placeholder).
@@ -847,9 +852,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
       // jump straight to the send screen. Any unmet gate — toggle off, deposit
       // invoice pending, no estimate — returns null, and any failure degrades
       // to the manual flow (the "Create invoice →" primary action below).
+      let invoiceFlowTookOver = false;
       try {
         const result = await createAutoInvoiceForJob(job.id);
         if (result) {
+          invoiceFlowTookOver = true;
           setJob((prev) =>
             prev ? { ...prev, ...jobChangesAfterInvoiceSave("create", result.invoiceId, false) } : prev
           );
@@ -875,6 +882,10 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
       } catch (error: unknown) {
         reportError(error, { context: "autoInvoiceOnComplete" });
       }
+
+      // Completion moment (Phase 13C): when no invoice flow took over the
+      // screen, surface the est-vs-actual review once as the wrap-up.
+      if (!invoiceFlowTookOver) setCompletionReview(true);
     }
   }
 
@@ -1106,6 +1117,11 @@ export default function JobDetailScreen({ route, navigation }: JobStackScreenPro
             onClockOut={handleClockOut}
           />
         )}
+        <JobProfitabilitySection
+          job={job}
+          autoOpenReview={completionReview}
+          onReviewShown={() => setCompletionReview(false)}
+        />
         <PhotosCard
           photos={jobPhotos}
           readyIds={readyPhotoIds}

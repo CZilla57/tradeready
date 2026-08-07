@@ -1,4 +1,4 @@
-import type { ExpenseCategoryId } from '../types/models';
+import type { Expense, ExpenseCategoryId, ExpenseDraft } from '../types/models';
 
 export interface ExpenseCategory {
   id: ExpenseCategoryId;
@@ -121,4 +121,18 @@ export function getLast6MonthLabels(): MonthLabel[] {
 
 export function generateExpenseId(): string {
   return Date.now().toString() + Math.random().toString(36).substr(2, 5);
+}
+
+/**
+ * The single home for turning an ExpenseDraft into a persisted Expense
+ * (id + createdAt stamp). Both save paths — the Money tab's useMoneyData and
+ * JobProfitabilitySection's linked add — go through this so the stamp rule
+ * can't drift between copies.
+ */
+export function stampExpense(draft: ExpenseDraft): Expense {
+  return {
+    id: generateExpenseId(),
+    createdAt: new Date().toISOString(),
+    ...draft,
+  };
 }

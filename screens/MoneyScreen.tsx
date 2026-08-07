@@ -356,6 +356,7 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
         visible={showAddModal}
         onClose={handleCloseModal}
         onSave={handleSaveExpense}
+        jobs={jobs}
       />
     </View>
   );

@@ -24,18 +24,26 @@ import { KeyboardDoneBar } from '../KeyboardDoneBar';
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from '../../utils/theme';
 import { useTheme } from '../../hooks/useTheme';
 import { EXPENSE_CATEGORIES } from '../../utils/moneyUtils';
-import type { ExpenseDraft } from '../../types/models';
+import { selectLinkableJobs } from '../../utils/profitabilityDisplay';
+import type { ExpenseDraft, Job } from '../../types/models';
 
 interface AddExpenseModalProps {
   visible: boolean;
   onClose: () => void;
   onSave: (fields: ExpenseDraft) => void;
+  /**
+   * Candidates for the optional "Link to job" picker (Phase 13C). Omitted or
+   * empty hides the picker entirely — the modal stays usable everywhere.
+   */
+  jobs?: Job[];
+  /** Pre-selects a job (JobDetail's "Add expense to this job" path). */
+  defaultJobId?: string;
 }
 
 /** Receipt-scan lifecycle for the banner under the photo preview. */
 type ScanState = 'idle' | 'reading' | 'filled' | 'empty' | 'failed';
 
-export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalProps) {
+export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, onClose, onSave, jobs, defaultJobId }: AddExpenseModalProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
@@ -45,6 +53,7 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
   const [date, setDate]                     = useState(new Date().toISOString().split('T')[0]);
   const [notes, setNotes]                   = useState('');
   const [receiptUri, setReceiptUri]         = useState<string | null>(null);
+  const [jobId, setJobId]                   = useState<string | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [scanState, setScanState]           = useState<ScanState>('idle');
   const [scanLooksBlurry, setScanLooksBlurry] = useState(false);
@@ -72,6 +81,7 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
     setDate(new Date().toISOString().split('T')[0]);
     setNotes('');
     setReceiptUri(null);
+    setJobId(defaultJobId ?? null);
     setShowDatePicker(false);
     setScanState('idle');
     setScanLooksBlurry(false);
@@ -84,7 +94,14 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
       damping: 25,
       stiffness: 250,
     }).start();
-  }, [visible, translateY]);
+  }, [visible, translateY, defaultJobId]);
+
+  // Jobs offered by the link picker; a provided defaultJobId is always kept
+  // in the list so the pre-linked add can't lose its own job to the filter.
+  const linkableJobs = useMemo(
+    () => selectLinkableJobs(jobs ?? [], defaultJobId),
+    [jobs, defaultJobId]
+  );
 
   const dismissRef = useRef<() => void>(() => {});
   dismissRef.current = () => {
@@ -242,6 +259,9 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
       date:        date || new Date().toISOString().split('T')[0],
       notes:       notes.trim(),
       receiptUri:  receiptUri || null,
+      // Absent (not null) when unlinked — absent means business overhead,
+      // the pre-Phase-13 meaning (types/models.ts Expense.jobId).
+      ...(jobId ? { jobId } : {}),
     });
   }
 
@@ -339,6 +359,46 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
                 </TouchableOpacity>
               ))}
             </ScrollView>
+
+            {linkableJobs.length > 0 && (
+              <>
+                <Text style={styles.fieldLabel}>
+                  Link to job <Text style={styles.optionalLabel}>(optional)</Text>
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
+                  <TouchableOpacity
+                    style={[styles.categoryChip, jobId === null && styles.categoryChipSelected]}
+                    onPress={() => setJobId(null)}
+                    accessibilityRole="button"
+                    accessibilityLabel="No job link"
+                  >
+                    <Text style={[styles.categoryChipLabel, jobId === null && styles.categoryChipLabelSelected]}>
+                      None
+                    </Text>
+                  </TouchableOpacity>
+                  {linkableJobs.map(j => (
+                    <TouchableOpacity
+                      key={j.id}
+                      style={[styles.categoryChip, jobId === j.id && styles.categoryChipSelected]}
+                      onPress={() => setJobId(j.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Link to job ${j.title}`}
+                    >
+                      <Text
+                        style={[
+                          styles.categoryChipLabel,
+                          styles.jobChipLabel,
+                          jobId === j.id && styles.categoryChipLabelSelected,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {j.title}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </>
+            )}
 
             <Text style={styles.fieldLabel}>
               Notes <Text style={styles.optionalLabel}>(optional)</Text>
@@ -501,6 +561,9 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     categoryChipLabelSelected: {
       fontFamily: fonts.bodySemiBold,
       color: colors.accent,
+    },
+    jobChipLabel: {
+      maxWidth: 160,
     },
     modalActions: {
       flexDirection: 'row',

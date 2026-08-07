@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import type { Invoice, Expense, Job, ExpenseDraft } from '../types/models';
 import { loadInvoices, loadExpenses, saveExpenses, loadJobs } from '../utils/storage';
-import { generateExpenseId } from '../utils/moneyUtils';
+import { stampExpense } from '../utils/moneyUtils';
 import { track, reportError } from '../utils/analytics';
 import { useUndo } from '../context/UndoContext';
 
@@ -77,15 +77,11 @@ export function useMoneyData(): UseMoneyDataReturn {
   }, []);
 
   const handleAddExpense = useCallback((fields: ExpenseDraft) => {
-    const expense: Expense = {
-      id:        generateExpenseId(),
-      createdAt: new Date().toISOString(),
-      ...fields,
-    };
+    const expense: Expense = stampExpense(fields);
     setExpenses(prev => {
       const updated = [expense, ...prev];
       persistExpenses(updated).then(() => {
-        track('expense_logged', { category: fields.category });
+        track('expense_logged', { category: fields.category, linkedToJob: Boolean(fields.jobId) });
       });
       return updated;
     });
