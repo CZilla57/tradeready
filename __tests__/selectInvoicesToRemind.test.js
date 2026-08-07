@@ -76,3 +76,25 @@ describe("selectInvoicesToRemind — job-completion gating", () => {
     expect(result).toHaveLength(0);
   });
 });
+
+describe("selectInvoicesToRemind — imported invoices excluded from auto-dunning", () => {
+  // This exclusion is Fix 1 of the CSV-import final-review wave, landed on
+  // backend-workers/lib/selectInvoicesToRemind.js (the live CF Workers cron
+  // path) — kept in parity with utils/notifications.ts' local scheduler. Test
+  // against the backend-workers module specifically, distinct from the
+  // `selectInvoicesToRemind` required at the top of this file.
+  const { selectInvoicesToRemind: selectInvoicesToRemindWorkers } = require("../backend-workers/lib/selectInvoicesToRemind");
+
+  test("an imported invoice is excluded even though an otherwise-identical non-imported invoice is returned", () => {
+    const imported = invoice({ id: "inv-imported", importBatchId: "batch1" });
+    const control = invoice({ id: "inv-control" });
+    const result = selectInvoicesToRemindWorkers({
+      invoices: [imported, control],
+      settings: baseSettings,
+      alreadySentInvoiceIds: [],
+      jobs: [],
+      today,
+    });
+    expect(result.map((i) => i.id)).toEqual(["inv-control"]);
+  });
+});

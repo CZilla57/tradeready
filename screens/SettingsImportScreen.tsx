@@ -54,15 +54,18 @@ const ENTITY_OPTIONS: { key: ImportEntity; label: string }[] = [
   { key: "expenses", label: "Expenses" },
 ];
 
-// Which mapped field key carries "the" date for a given entity — drives the
-// date-format selector below. For invoices this is "due", but the SAME chosen
-// format is applied to BOTH `due` and `paidAt` parsing inside
-// buildInvoiceImport — a CSV export uses one date convention throughout,
-// never two.
-const DATE_FIELD_BY_ENTITY: Partial<Record<ImportEntity, string>> = {
-  jobs: "scheduledDate",
-  invoices: "due",
-  expenses: "date",
+// Which mapped field key(s) carry "a" date for a given entity — drives the
+// date-format selector below. Invoices can carry TWO independently-mappable
+// date columns (due, paidAt); if the user maps either one, the selector must
+// appear, or dates silently default to MDY (a DMY-locale misparse). Whichever
+// of these is actually mapped, the SAME chosen format is applied to every
+// date field inside buildInvoiceImport — a CSV export uses one date
+// convention throughout, never two.
+const DATE_FIELDS_BY_ENTITY: Record<ImportEntity, string[]> = {
+  customers: [],
+  jobs: ["scheduledDate"],
+  invoices: ["due", "paidAt"],
+  expenses: ["date"],
 };
 
 type DateFormatChoice = "auto" | DateFormat;
@@ -93,8 +96,8 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
   // sample data first" offer on the idle stage. null = still checking.
   const [samplePresent, setSamplePresent] = useState<boolean | null>(null);
 
-  const dateFieldKey = DATE_FIELD_BY_ENTITY[entity];
-  const dateColIndex = dateFieldKey ? mapping.findIndex((k) => k === dateFieldKey) : -1;
+  const dateFieldKeys = DATE_FIELDS_BY_ENTITY[entity];
+  const dateColIndex = mapping.findIndex((k) => k !== null && dateFieldKeys.includes(k));
   // Once a file is picked, switching entities would silently discard the
   // loaded mapping/report — lock the selector until back to idle.
   const entityLocked = stage !== "idle";

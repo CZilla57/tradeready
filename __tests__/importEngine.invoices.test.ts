@@ -8,7 +8,7 @@
 import { buildInvoiceImport } from "../utils/importEngine";
 import { amountPaid, balanceDue } from "../utils/invoicePayments";
 import { invoiceIssueDate } from "../utils/pdfTemplates";
-import type { Customer } from "../types/models";
+import type { Customer, Invoice } from "../types/models";
 
 // Column layout used by most cases below: customer, amount, number, due, paidAt.
 const mapping = ["customer", "amount", "number", "due", "paidAt"];
@@ -102,6 +102,35 @@ describe("buildInvoiceImport — invoice id uniqueness + issue-date recovery", (
     expect(a.id).not.toBe(b.id);
     expect(invoiceIssueDate(a.id).slice(0, 10)).toBe("2026-07-04");
     expect(invoiceIssueDate(b.id).slice(0, 10)).toBe("2026-07-04");
+  });
+
+  test("a row that would collide with an EXISTING invoice's id gets a distinct id that still round-trips", () => {
+    // Pin the same date + row index + nowMs that a fresh import would compute
+    // for row 0, then plant an existing invoice with exactly that id — a
+    // cross-session same-ms-same-date collision.
+    const collidingRows = [["Ada", "100", "", "07/04/2026", ""]];
+    const probe = buildInvoiceImport(collidingRows, mapping, [], [], "probe", "MDY", undefined, FIXED_NOW);
+    const collidingId = probe.invoices[0].id;
+    const existingInvoices: Invoice[] = [
+      {
+        id: collidingId,
+        customer: "Someone Else",
+        customerId: "c-old",
+        number: "INV-0",
+        amount: 1,
+        due: "2026-01-01",
+        email: "",
+        phone: "",
+        desc: "",
+        paid: false,
+      },
+    ];
+
+    const res = buildInvoiceImport(collidingRows, mapping, [], existingInvoices, "b5", "MDY", undefined, FIXED_NOW);
+    const inv = res.invoices.find((i) => i.customer === "Ada")!;
+
+    expect(inv.id).not.toBe(collidingId);
+    expect(invoiceIssueDate(inv.id).slice(0, 10)).toBe("2026-07-04");
   });
 });
 

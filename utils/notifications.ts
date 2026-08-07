@@ -113,7 +113,10 @@ export async function syncNotifications(): Promise<void> {
       (inv) =>
         !isFullyPaid(inv) &&
         inv.due &&
-        isJobDunningEligible(inv.jobId ? jobStatusById.get(inv.jobId) : undefined)
+        isJobDunningEligible(inv.jobId ? jobStatusById.get(inv.jobId) : undefined) &&
+        // Kept in parity with backend-workers/lib/selectInvoicesToRemind.js:
+        // an imported invoice must never trigger a reminder, local or emailed.
+        !inv.importBatchId
     );
     const now = new Date();
     let count = 0;

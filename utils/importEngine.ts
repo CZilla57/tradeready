@@ -231,17 +231,36 @@ function parseMoney(raw: string): number | null {
  * (FA-039). The intra-day offset keeps every id on the correct UTC calendar day
  * (1..86_399_999 ms after UTC midnight) while making same-date rows unique
  * within a batch (row index) and across batches/sessions (real-clock nowMs).
+ *
+ * That alone doesn't check the EXISTING invoice collection, though — a
+ * cross-session import landing on the same source date, row index, and
+ * millisecond-of-day as a prior one could collide and corrupt an existing
+ * invoice's id. `usedIds` is seeded by the caller from every existing invoice
+ * id plus every id already assigned this batch; on a collision the intra-day
+ * slot is bumped by +1 (wrapping back to 1 rather than spilling into the next
+ * UTC day, which invoiceIssueDate reads from) and retried until unique.
  */
-function importInvoiceId(dateStr: string | null, index: number, nowMs: number): string {
+function uniqueImportInvoiceId(
+  dateStr: string | null,
+  index: number,
+  nowMs: number,
+  usedIds: Set<string>,
+): string {
   let dayFloor: number;
   if (dateStr) {
     const [y, m, d] = dateStr.split("-").map(Number);
-    dayFloor = Date.UTC(y, m - 1, d);          // 00:00:00.000Z of the source date
+    dayFloor = Date.UTC(y, m - 1, d);
   } else {
-    dayFloor = nowMs - (nowMs % 86_400_000);   // UTC midnight of today
+    dayFloor = nowMs - (nowMs % 86_400_000);
   }
-  const slot = 1 + (((nowMs % 86_400_000) + index) % 86_399_998);
-  return String(dayFloor + slot);
+  let slot = 1 + (((nowMs % 86_400_000) + index) % 86_399_998);
+  let id = String(dayFloor + slot);
+  while (usedIds.has(id)) {
+    slot = slot >= 86_399_998 ? 1 : slot + 1;
+    id = String(dayFloor + slot);
+  }
+  usedIds.add(id);
+  return id;
 }
 
 export interface InvoiceImportResult {
@@ -273,6 +292,7 @@ export function buildInvoiceImport(
   const invoices: Invoice[] = [...existingInvoices];
   const outcomes: RowOutcome[] = [];
   const counts: ImportCounts = { ok: 0, skip: 0, flag: 0, created: 0, matched: 0 };
+  const usedInvoiceIds = new Set<string>(existingInvoices.map((i) => i.id));
 
   rows.forEach((row, rowIndex) => {
     const customerName = fieldValue(row, mapping, "customer");
@@ -308,7 +328,7 @@ export function buildInvoiceImport(
 
     const due = dueParsed ?? getTodayDateString();
     const idDateStr = dueParsed ?? paidAtParsed ?? null;
-    const id = importInvoiceId(idDateStr, rowIndex, nowMs);
+    const id = uniqueImportInvoiceId(idDateStr, rowIndex, nowMs, usedInvoiceIds);
 
     const mappedNumber = fieldValue(row, mapping, "number");
     const number = mappedNumber || nextInvoiceNumber(invoices, numberOptions);
