@@ -237,6 +237,9 @@ utils/
   invoiceNumber.ts               ← Next-invoice-number rule (INV-%04d)
   reviewRequest.ts               ← Customer review request helpers
   moneyUtils.ts                  ← Expense categories, date filters, date range math
+  jobProfitability.ts            ← Pure per-job estimate-vs-actual figures (unknown ≠ zero + warnings)
+  profitabilityDisplay.ts        ← Profitability view-model: card rows, "What changed?" items, warning copy
+  profitabilityAggregate.ts      ← Trailing completed-job medians + pricing "reality check" warnings
   businessSnapshot.ts            ← Business metrics snapshot for AI context
   conversionFunnel.ts            ← Lead → paid conversion funnel analytics
   avgJobValue.ts                 ← Average job value analytics
@@ -264,6 +267,7 @@ components/
   DateTimePickerSheet.tsx        ← Cross-platform date/time picker (iOS sheet / Android dialog)
   SyncBanner.tsx                 ← Sync status banner (pending items indicator)
   InsightsCard.tsx               ← Today insights card (top-3 rows, dismiss/snooze, "Ask coach")
+  JobProfitabilitySection.tsx    ← Job Detail estimate-vs-actual card (variance, warnings, drill-down)
   PricebookPickerModal.tsx       ← Pricebook item picker for job materials
   money/
     SummaryCard.tsx              ← Income/expense summary widget
@@ -284,6 +288,7 @@ components/
     CustomerMixCard.tsx          ← New vs repeat customer mix
     ExpenseTrendsCard.tsx        ← Expense trends chart
     RevenueForecastCard.tsx      ← Revenue forecast chart
+    JobProfitabilityCard.tsx     ← Aggregate estimate-vs-actual medians across completed jobs
 
 screens/
   TodayScreen.tsx                ← Today tab: schedule, earnings summary, route launch
@@ -447,8 +452,11 @@ npm run test:watch    # watch mode — re-runs on file save
 | `__tests__/UI.test.js` | Component smoke tests — Badge, Button, EmptyState, StatCard |
 | `__tests__/paywallCopy.test.js` | Paywall trial wording from the store's intro-offer data |
 | `__tests__/backendGuards.test.js` | Backend rate limiter + AI payload input caps |
+| `__tests__/jobProfitability.test.ts` | Per-job estimate-vs-actual math: unknown-≠-zero warnings, no double-counted materials, cost/billing rate split |
+| `__tests__/profitabilityDisplay.test.ts` | Profitability view-model: row/variance strings, warning copy, "—" for unknowns |
+| `__tests__/profitabilityAggregate.test.ts` | Trailing completed-job medians + pricing reality-check warning gating |
 
-_(Table lists the core suites; `npm test` is the authoritative count — 196 suites / 2,680 tests as of 2026-08-08.)_
+_(Table lists the core suites; `npm test` is the authoritative count — 199 suites / 2,731 tests as of 2026-08-07.)_
 
 **Tech notes:**
 
@@ -643,6 +651,30 @@ sign-out button checks `__syncQueue` first: with items pending it offers
 "Sync & sign out" (flush, then clear) or "Sign out anyway" (destructive).
 Only the destructive choice discards the queue — but it does so permanently:
 `clearAllUserData()` removes `__syncQueue` along with the collections.
+
+**Job profitability shows costs before payment-processing fees (added
+2026-08-07).** The estimate-vs-actual figures on a job — and the trailing
+medians on Money — never subtract the card/processor's cut, because the
+Stripe webhook records only the gross amount collected; the fee is not stored
+anywhere in the app. Profit is therefore slightly optimistic by whatever the
+processor charged, and the figures show a "fees not included" warning rather
+than guessing a number.
+
+**Refunds cannot be recorded, so profitability can overstate what you kept
+(added 2026-08-07).** There is no refund entry anywhere in the app. If you
+refund a customer, the collected total still reflects the original payment.
+The correction path is to void the payment on the invoice — voided payments
+stay visible in the ledger history but drop out of collected totals — and, if
+money genuinely moved, record the new reality manually. Overpayment (a
+customer paying more than the balance) is the one case shown explicitly, as
+its own figure.
+
+**An expense can only be linked to a job when you log it (added 2026-08-07).**
+The "Link to job" picker appears in the Add Expense sheet at creation time.
+There is no way to link an already-saved expense to a job, or to move a link
+to a different job, afterward. A materials expense you entered before deciding
+to track a job's profitability stays counted as general business overhead and
+will not appear in that job's actual costs.
 
 ---
 

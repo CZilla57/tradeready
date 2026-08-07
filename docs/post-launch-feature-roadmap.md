@@ -325,6 +325,24 @@ After approval, implement read-only additions before new write paths. Each publi
 
 ## Phase 13 — Estimated-versus-actual job profitability
 
+> **STATUS (2026-08-07): BUILT, not yet merged** on `feat/job-profitability`
+> per the owner-approved design
+> (`docs/superpowers/specs/2026-08-07-job-profitability-design.md`, D1–D6):
+> 13B pure calculation layer + `Expense.jobId` / `Settings.laborCostRate`
+> (`66eb773`), 13C Job Detail estimate-vs-actual card + expense-to-job linking
+> + completion review (`3143d22`), 13D Money aggregate card + pricing
+> reality-check warnings + owner labor-cost-rate setting (`86a97fd`), 13E docs
+> sweep (this block + README + ARCHITECTURE, no code). Owner decisions honored:
+> D1 `Expense.jobId` yes / retro-link deferred, D2 `laborCostRate` yes, D3
+> refunds out of scope v1, D4 processing fees unknown v1 (never invented), D5
+> per-job-type aggregation deferred, D6 compute-with-warnings (unknown ≠ zero).
+> Gate green at `86a97fd`: tsc 0, 2,731 tests / 199 suites, lint 0. Not pushed,
+> not merged — awaiting the owner's merge call and device smoke; client changes
+> ride the next OTA (standing owner call). On merge, Phase 15's job-cost insight
+> conditions ("actual cost above estimate" beyond labor hours) unblock, and
+> Phase 14's accountant package may want a `jobId` column on `expenses.csv`
+> (design §7, not done).
+
 > **Added 2026-08-06** (deepens next-queue item 5; the Today Insights
 > labor-overrun rule is the first step). Inventory note, verified 2026-08-06:
 > `Expense` (types/models.ts:412) has NO `jobId` today — "actual job-linked

@@ -97,6 +97,12 @@ Full job lifecycle from lead to paid.
     toggle for the portal, 2026-08-07 — absent means hidden, fail closed)
   - Status timeline (Lead → Estimate Sent → Approved → Scheduled → In Progress → Complete → Invoiced → Paid)
   - Time tracking (clock in/out, session history)
+  - Estimate-vs-actual profitability card (Phase 13, 2026-08-07): estimated
+    vs. actual revenue/labor/materials/profit with variance rows, a
+    cash-collected summary, a "What changed?" drill-down, and a completion-time
+    review. Unknown figures (untracked hours, unlinked expenses, legacy jobs)
+    stay unknown and carry a warning — never shown as $0. Shows once a job is
+    in progress or later and has an estimate.
   - Linked invoice
   - Notes and materials used
 - New job / edit job form
@@ -125,6 +131,12 @@ Everything financial in one place.
   2026-08-03 — see Data Models below.
 - Analytics cards: conversion funnel, avg job value, invoice aging, revenue by type,
   seasonal trends, customer mix, expense trends, revenue forecast
+- Job profitability card (`components/money/JobProfitabilityCard.tsx`, Phase 13,
+  2026-08-07): medians of estimate-vs-actual across completed jobs that have
+  tracked data, with an explicit "N of M completed jobs have tracked data"
+  coverage line so partial data is never presented as complete. Medians, not
+  means; per-job-type grouping deferred (owner decision D5). Hidden until there
+  is at least one completed job.
 - Tax set-aside card (`components/money/TaxSetAsideCard.tsx`): current IRS
   payment-period reserve + YTD + deadline from `utils/taxEstimate.ts` (SE tax +
   user-set effective income-tax rate; ledger-based cash income). Settings live
@@ -267,7 +279,10 @@ Support and Legal are single-tap actions that live on the hub itself
 - id, date, amount
 - category: `fuel | materials | tools | insurance | marketing | subcontractor | office | other`
 - description, receiptPhoto (device-local path)
-- jobId (optional)
+- jobId (optional) — set only by the Add Expense job picker (Phase 13,
+  2026-08-07); links the expense into that job's actual costs. Absent means
+  general business overhead (the pre-Phase-13 meaning) and is never backfilled;
+  CSV import and Siri/widget replay never guess it.
 - importBatchId (optional) — see Customer above.
 
 ### Trip
@@ -337,6 +352,11 @@ Support and Legal are single-tap actions that live on the hub itself
 - businessName, ownerName, trade
 - phone, email, address, logoPhoto
 - laborRate, materialMarkup, overhead, margin, minimumJobFee
+- laborCostRate (optional — owner labor-COST rate $/hr for job profitability,
+  Phase 13; deliberately separate from laborRate, the billing rate, and never
+  used in any customer-facing price. Unset excludes owner labor from cost and
+  labels profit "before paying yourself"; an explicit 0 is valid and distinct
+  from unset. Never defaulted — an invented rate would fabricate profit)
 - mileageRate (default 0.70 — $ per business mile, mileage deduction estimate)
 - taxIncomeRate (optional — effective income-tax % for the tax set-aside card;
   unset = SE tax only)
@@ -596,6 +616,7 @@ Build in this sequence so you always have something shippable:
 ⬜ Receipt scanning (OCR)
 ✅ Mileage tracking (odometer-based log + deduction estimate, cloud-synced; ⚠️ GPS auto-tracking not built)
 ✅ Quarterly tax estimates (set-aside card: SE tax + user rate, IRS payment periods, mileage-vs-fuel election; estimate only, not filing support)
+✅ Job profitability (estimate vs actual per job + trailing completed-job medians + pricing reality-check; 2026-08-07; unknown values stay unknown, never $0)
 ⚠️ Revenue reports (monthly chart + top customers built; detailed reports not built)
 
 **Phase 4 — Growth**
