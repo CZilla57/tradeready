@@ -13,7 +13,23 @@ const {
   computeCandidateSlots,
   zonedTimeToUtc,
   resolveSlotsUtc,
+  nowInZone,
 } = require("../backend-workers/lib/booking/availability.js");
+
+describe("nowInZone", () => {
+  test("maps a UTC instant to the owner-naive clock", () => {
+    // 2026-08-10T12:00Z = 07:00 CDT Monday
+    expect(nowInZone("America/Chicago", Date.UTC(2026, 7, 10, 12, 0))).toEqual({
+      date: "2026-08-10",
+      minutes: 7 * 60,
+    });
+    // Same instant is already Monday evening in Auckland (+12)
+    expect(nowInZone("Pacific/Auckland", Date.UTC(2026, 7, 10, 12, 0))).toEqual({
+      date: "2026-08-11",
+      minutes: 0,
+    });
+  });
+});
 
 describe("zonedTimeToUtc", () => {
   test("summer and winter offsets resolve correctly (America/Chicago)", () => {

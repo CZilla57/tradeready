@@ -19,24 +19,42 @@ function sanitizeSubjectPart(name) {
 }
 
 function buildBookingEmail({ to, request }) {
-  const lines = [
-    `New quote request via your booking link:`,
-    ``,
-    `Name: ${request.name}`,
-    `Phone: ${request.phone || '-'}`,
-    `Email: ${request.email || '-'}`,
-    `Address: ${request.address || '-'}`,
-    `Preferred timing: ${request.preferredTiming || '-'}`,
-    ``,
-    `What they need:`,
-    request.details,
-    ``,
-    `Open TradeReady to see the new lead in Jobs.`,
-  ];
+  // Accurate status wording (Phase 11 spec §2 Phase C): a slot booking is a
+  // confirmed appointment on the calendar, not a quote request.
+  const booked = request.kind === 'booked' && request.slot;
+  const lines = booked
+    ? [
+        `New booked appointment via your booking link:`,
+        ``,
+        `When: ${request.slot.date} at ${request.slot.start} (${request.slot.timeZone})`,
+        `Name: ${request.name}`,
+        `Phone: ${request.phone || '-'}`,
+        `Email: ${request.email || '-'}`,
+        `Address: ${request.address || '-'}`,
+        ``,
+        `What they need:`,
+        request.details,
+        ``,
+        `The slot is held for them. Open TradeReady to see it on your calendar.`,
+      ]
+    : [
+        `New quote request via your booking link:`,
+        ``,
+        `Name: ${request.name}`,
+        `Phone: ${request.phone || '-'}`,
+        `Email: ${request.email || '-'}`,
+        `Address: ${request.address || '-'}`,
+        `Preferred timing: ${request.preferredTiming || '-'}`,
+        ``,
+        `What they need:`,
+        request.details,
+        ``,
+        `Open TradeReady to see the new lead in Jobs.`,
+      ];
   return {
     from: SENDER,
     to,
-    subject: `New quote request from ${sanitizeSubjectPart(request.name)}`.slice(0, 120),
+    subject: `${booked ? 'New booked appointment' : 'New quote request'} from ${sanitizeSubjectPart(request.name)}`.slice(0, 120),
     text: lines.join('\n'),
   };
 }
@@ -73,8 +91,11 @@ async function notifyOwner(env, { userId, settingsData, request }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: token,
-          title: 'New quote request',
-          body: `${request.name} — ${String(request.details || '').slice(0, 120)}`,
+          title: request.kind === 'booked' ? 'New booked appointment' : 'New quote request',
+          body:
+            request.kind === 'booked' && request.slot
+              ? `${request.name} — ${request.slot.date} at ${request.slot.start}`
+              : `${request.name} — ${String(request.details || '').slice(0, 120)}`,
           data: { type: 'booking_request' },
         }),
       });

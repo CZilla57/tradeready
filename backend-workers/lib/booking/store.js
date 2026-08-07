@@ -51,4 +51,67 @@ async function insertBookingRequest(env, userId, request) {
   if (!res.ok) throw new Error(`Supabase insert ${res.status}: ${await res.text()}`);
 }
 
-module.exports = { lookupUserByBookingToken, insertBookingRequest, newRequestId };
+// ── Phase 11 C (slots + reserve) ─────────────────────────────────────────────
+
+// rv<epoch-ms>_<6 hex> — same injected-inputs discipline as newRequestId.
+function newReservationId(nowMs, randHex) {
+  return `rv${nowMs}_${randHex}`;
+}
+
+// The user's job blobs — availability recompute input. Soft-deleted rows
+// excluded; the engine itself skips terminal statuses and unscheduled jobs.
+async function fetchJobsData(env, userId) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/jobs?user_id=eq.${encodeURIComponent(userId)}&deleted=eq.false&select=data`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase jobs fetch ${res.status}: ${await res.text()}`);
+  return (await res.json()).map((r) => r.data);
+}
+
+// Active holds — subtracted from offers and from the reserve-time recompute.
+async function fetchActiveReservations(env, userId) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/booking_reservations?user_id=eq.${encodeURIComponent(userId)}&status=eq.booked&select=slot_date,slot_start,slot_end`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase reservations fetch ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// THE atomic claim (spec §6 step 4). The partial unique index
+// (user_id, slot_start_utc) WHERE status='booked' serializes racing
+// customers; PostgREST answers the loser with 409 (Postgres 23505), which
+// this maps to {conflict:true} — never an exception, so the handler can
+// answer 409 slot_taken deliberately.
+async function insertReservation(env, row) {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/booking_reservations`, {
+    method: 'POST',
+    headers: { ...headers(env), 'Content-Type': 'application/json' },
+    body: JSON.stringify(row),
+  });
+  if (res.status === 409) return { conflict: true };
+  if (!res.ok) throw new Error(`Supabase reservation insert ${res.status}: ${await res.text()}`);
+  return { conflict: false };
+}
+
+// Compensation for a failed request-row insert: a reservation must never
+// keep holding a slot the customer has no record of.
+async function deleteReservation(env, id) {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/booking_reservations?id=eq.${encodeURIComponent(id)}`,
+    { method: 'DELETE', headers: headers(env) }
+  );
+  if (!res.ok) throw new Error(`Supabase reservation delete ${res.status}: ${await res.text()}`);
+}
+
+module.exports = {
+  lookupUserByBookingToken,
+  insertBookingRequest,
+  newRequestId,
+  newReservationId,
+  fetchJobsData,
+  fetchActiveReservations,
+  insertReservation,
+  deleteReservation,
+};

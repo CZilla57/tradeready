@@ -303,10 +303,32 @@ function resolveSlotsUtc(slots, timeZone) {
   return out;
 }
 
+/** The owner-naive clock ({date, minutes}) for a UTC instant in `timeZone`
+ *  — what the engines' injected `now` expects at the public boundary. */
+function nowInZone(timeZone, nowMs) {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const parts = {};
+  for (const p of dtf.formatToParts(new Date(nowMs))) parts[p.type] = p.value;
+  const h = parts.hour === "24" ? 0 : Number(parts.hour);
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minutes: h * 60 + Number(parts.minute),
+  };
+}
+
 module.exports = {
   SCHEDULE_DEFAULTS,
   resolveSchedule,
   computeCandidateSlots,
   zonedTimeToUtc,
   resolveSlotsUtc,
+  nowInZone,
 };
