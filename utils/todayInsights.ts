@@ -7,6 +7,7 @@
 
 import type { Job, Invoice } from "../types/models";
 import { computeTimeTracking, formatElapsed } from "./timeTracking";
+import { computeEstimateBreakdown } from "./pricingEngine";
 import { formatLaborHint, largestFreeGap } from "./scheduleSmarts";
 import { isArchived } from "./archive";
 import { selectUnscheduledApproved } from "./calendar";
@@ -25,6 +26,7 @@ import { jobBillableTotal } from "./changeOrders";
 
 export type InsightKind =
   | "labor_overrun"
+  | "low_margin_estimate"
   | "uninvoiced_complete"
   | "due_soon"
   | "open_slot"
@@ -103,6 +105,89 @@ function selectLaborOverruns(jobs: Job[], now: Date): TodayInsight[] {
     });
   }
   return out;
+}
+
+/** Fire when the implied margin is at least this many percentage points under
+ * the Settings target — one point of drift is negotiation noise, three is a
+ * pricing problem. */
+const MARGIN_TOLERANCE_PTS = 3;
+
+/**
+ * Statuses where the price is still the owner's to change. After `approved`
+ * the estimate is contracted — a low margin there is Phase 13's est-vs-actual
+ * conversation, not a repricing prompt.
+ */
+const LOW_MARGIN_STATUSES: ReadonlySet<Job["status"]> = new Set([
+  "lead",
+  "estimate_sent",
+]);
+
+/**
+ * low_margin_estimate: the price on a not-yet-approved job doesn't deliver the
+ * Settings margin target. All inputs are the job's OWN stored fields — labor
+ * hours × rate, marked-up materials (computeEstimateBreakdown), and the job's
+ * own overhead % — so nothing is inferred. The implied margin uses the same
+ * base calculateEstimate applies margin to (costs + overhead). Jobs without
+ * real pricing inputs (CSV imports, quick-adds: laborHours/laborRate 0) are
+ * excluded rather than guessed at. Travel isn't stored on Job, so when travel
+ * existed costs are understated and this errs toward silence, never a false
+ * alarm. One row — the worst offender — with the count of others in the
+ * detail; its id embeds estimateTotal so a dismissal resets when the price
+ * changes (a repriced job is a new question).
+ */
+function selectLowMarginEstimates(jobs: Job[], targetMarginPercent: number): TodayInsight[] {
+  type Hit = {
+    job: Job;
+    impliedPct: number;
+    profit: number;
+    laborCost: number;
+    materialCost: number;
+    overheadAt: number;
+  };
+  const hits: Hit[] = [];
+  for (const job of jobs) {
+    if (!LOW_MARGIN_STATUSES.has(job.status) || isArchived(job)) continue;
+    if (!(job.estimateTotal > 0) || !(job.laborHours > 0) || !(job.laborRate > 0)) continue;
+    const { laborCost, materialCost } = computeEstimateBreakdown(job);
+    const costBase = laborCost + materialCost;
+    if (!(costBase > 0)) continue;
+    const overheadAt = costBase * ((job.overhead || 0) / 100);
+    const profit = job.estimateTotal - costBase - overheadAt;
+    const impliedPct = (profit / (costBase + overheadAt)) * 100;
+    if (impliedPct <= targetMarginPercent - MARGIN_TOLERANCE_PTS) {
+      hits.push({ job, impliedPct, profit, laborCost, materialCost, overheadAt });
+    }
+  }
+  if (hits.length === 0) return [];
+  hits.sort((a, b) => a.impliedPct - b.impliedPct);
+  const { job, impliedPct, profit, laborCost, materialCost, overheadAt } = hits[0];
+
+  const severe = profit < 0;
+  const pointsUnder = Math.round(targetMarginPercent - impliedPct);
+  const others = hits.length - 1;
+  const baseDetail = severe
+    ? `${formatQuote(-profit)} short of break-even`
+    : `${formatQuote(profit)} profit on ${formatQuote(job.estimateTotal)}`;
+  return [{
+    kind: "low_margin_estimate",
+    id: `low_margin_estimate:${job.id}:${job.estimateTotal}`,
+    title: severe
+      ? `'${job.title}' is priced below your costs and overhead`
+      : `'${job.title}' is priced ${pointsUnder} points under your ${targetMarginPercent}% margin`,
+    detail: others > 0 ? `${baseDetail} · ${others} more under target` : baseDetail,
+    reason:
+      `Priced at ${formatQuote(job.estimateTotal)}: labor ${formatQuote(laborCost)} + ` +
+      `materials ${formatQuote(materialCost)} + overhead at ${job.overhead || 0}% ` +
+      `(${formatQuote(overheadAt)}) leaves ${formatQuote(profit)} — an implied margin of ${impliedPct.toFixed(1)}% ` +
+      `vs your ${targetMarginPercent}% target. Dismissing hides this until the price changes.`,
+    target: { type: "job", jobId: job.id },
+    coachPrompt:
+      `My estimate for '${job.title}' totals ${formatQuote(job.estimateTotal)}: labor ` +
+      `${formatQuote(laborCost)}, materials ${formatQuote(materialCost)}, overhead ` +
+      `${formatQuote(overheadAt)} at ${job.overhead || 0}%. That leaves ${formatQuote(profit)} profit — ` +
+      `about ${impliedPct.toFixed(0)}% margin vs my ${targetMarginPercent}% target. ` +
+      `Should I raise the price, trim costs, or take it as-is?`,
+  }];
 }
 
 function selectUninvoicedComplete(jobs: Job[]): TodayInsight[] {
@@ -230,16 +315,27 @@ function selectScheduleInsights(
   return out;
 }
 
+/** Phase 15 additions ride an options bag so the positional signature stays
+ * stable as rules gain inputs. */
+export type InsightExtras = {
+  /** Settings.marginPercent — the low-margin rule's target. Default 20, the
+   * pricing engine's own default (buildEstimateInput). */
+  targetMarginPercent?: number;
+};
+
 export function selectTodayInsights(
   jobs: Job[],
   invoices: Invoice[],
   now: Date,
-  schedule: ResolvedSchedule = SCHEDULE_DEFAULTS
+  schedule: ResolvedSchedule = SCHEDULE_DEFAULTS,
+  extras: InsightExtras = {}
 ): TodayInsight[] {
   const safeJobs = jobs || [];
   const safeInvoices = invoices || [];
+  const targetMarginPercent = extras.targetMarginPercent ?? 20;
   return [
     ...selectLaborOverruns(safeJobs, now),
+    ...selectLowMarginEstimates(safeJobs, targetMarginPercent),
     ...selectUninvoicedComplete(safeJobs),
     ...selectDueSoon(safeInvoices, now),
     ...selectScheduleInsights(safeJobs, now, schedule),

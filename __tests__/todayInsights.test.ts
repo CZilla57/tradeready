@@ -277,6 +277,121 @@ describe('priority order', () => {
   });
 });
 
+// Phase 15B: low_margin_estimate — implied margin from the job's own stored
+// fields (labor hours × rate, marked-up materials, the job's own overhead %),
+// compared against the Settings margin target on the same base the pricing
+// engine applies margin to (costs + overhead).
+describe('low_margin_estimate', () => {
+  // laborCost 1000 (10h × $100), no materials, overhead 0 → implied margin
+  // is simply (total − 1000) / 1000 × 100.
+  const lowJob = (overrides: Partial<Job>) =>
+    job({
+      status: 'lead',
+      laborHours: 10,
+      laborRate: 100,
+      materials: [],
+      overhead: 0,
+      ...overrides,
+    });
+
+  test('fires at exactly target − 3 points, silent a tenth above', () => {
+    const atBoundary = selectTodayInsights([lowJob({ estimateTotal: 1170 })], [], NOW);
+    expect(atBoundary).toHaveLength(1);
+    expect(atBoundary[0].kind).toBe('low_margin_estimate');
+    expect(atBoundary[0].title).toBe("'Faucet repair' is priced 3 points under your 20% margin");
+    expect(atBoundary[0].detail).toBe('$170 profit on $1,170');
+    expect(atBoundary[0].target).toEqual({ type: 'job', jobId: 'j1' });
+
+    expect(selectTodayInsights([lowJob({ estimateTotal: 1171 })], [], NOW)).toHaveLength(0);
+  });
+
+  test('below break-even gets the severe copy with the shortfall', () => {
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 950 })], [], NOW);
+    expect(insight.title).toBe("'Faucet repair' is priced below your costs and overhead");
+    expect(insight.detail).toBe('$50 short of break-even');
+  });
+
+  test("overhead is allocated at the job's own percent", () => {
+    // costBase 1000, overhead 15% → $150; total 1200 → $50 profit, 4.3% implied.
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 1200, overhead: 15 })], [], NOW);
+    expect(insight.reason).toContain('overhead at 15% ($150)');
+    expect(insight.reason).toContain('4.3%');
+  });
+
+  test('materials enter marked-up', () => {
+    // 2 × $100 at 20% markup → $240; costBase 1240; total 1300 → $60 profit.
+    const [insight] = selectTodayInsights(
+      [lowJob({
+        estimateTotal: 1300,
+        materials: [{ id: 'm1', name: 'Pipe', quantity: 2, unitCost: 100 }],
+        materialMarkup: 20,
+      })],
+      [],
+      NOW
+    );
+    expect(insight.reason).toContain('materials $240');
+    expect(insight.detail).toBe('$60 profit on $1,300');
+  });
+
+  test('only lead/estimate_sent qualify — approved jobs are contracted', () => {
+    const approved = selectTodayInsights([lowJob({ estimateTotal: 1000, status: 'approved' })], [], NOW);
+    expect(approved.map(i => i.kind)).not.toContain('low_margin_estimate');
+    const sent = selectTodayInsights([lowJob({ estimateTotal: 1000, status: 'estimate_sent' })], [], NOW);
+    expect(sent.map(i => i.kind)).toEqual(['low_margin_estimate']);
+  });
+
+  test('jobs without real pricing inputs are excluded, never guessed', () => {
+    expect(selectTodayInsights([lowJob({ estimateTotal: 1000, laborHours: 0 })], [], NOW)).toHaveLength(0);
+    expect(selectTodayInsights([lowJob({ estimateTotal: 1000, laborRate: 0 })], [], NOW)).toHaveLength(0);
+    expect(selectTodayInsights([lowJob({ estimateTotal: 0 })], [], NOW)).toHaveLength(0);
+  });
+
+  test('one row: the worst offender, with the count of others in the detail', () => {
+    const insights = selectTodayInsights(
+      [
+        lowJob({ id: 'mild', title: 'Mild', estimateTotal: 1100 }),
+        lowJob({ id: 'bad', title: 'Bad', estimateTotal: 900 }),
+      ],
+      [],
+      NOW
+    );
+    expect(insights).toHaveLength(1);
+    expect(insights[0].title).toContain("'Bad'");
+    expect(insights[0].detail).toContain('· 1 more under target');
+  });
+
+  test('honors a custom Settings margin target', () => {
+    const jobs = [lowJob({ estimateTotal: 1400 })]; // implied 40%
+    expect(selectTodayInsights(jobs, [], NOW)).toHaveLength(0); // default 20% target
+    expect(
+      selectTodayInsights(jobs, [], NOW, undefined, { targetMarginPercent: 50 })
+    ).toHaveLength(1);
+  });
+
+  test('id embeds the price so a reprice resets an earlier dismissal', () => {
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 1170 })], [], NOW);
+    expect(insight.id).toBe('low_margin_estimate:j1:1170');
+  });
+
+  test('coachPrompt carries the computed numbers and no customer identity', () => {
+    const [insight] = selectTodayInsights([lowJob({ estimateTotal: 1170 })], [], NOW);
+    expect(insight.coachPrompt).toContain('$1,170');
+    expect(insight.coachPrompt).toContain('labor $1,000');
+    expect(insight.coachPrompt).toContain('20% target');
+    expect(insight.coachPrompt).not.toContain('Dana');
+  });
+
+  test('slots directly after labor_overrun in priority order', () => {
+    const jobs = [
+      job({ id: 'over', timeSessions: [session(5)] }),
+      lowJob({ id: 'cheap', estimateTotal: 1000 }),
+      job({ id: 'done', status: 'complete' }),
+    ];
+    const kinds = selectTodayInsights(jobs, [], NOW).map(i => i.kind);
+    expect(kinds).toEqual(['labor_overrun', 'low_margin_estimate', 'uninvoiced_complete']);
+  });
+});
+
 // Phase 15 foundation: every insight carries a stable dedup id (what
 // dismissals/snoozes and analytics hang on) and a deterministic reason.
 describe('insight identity and reasons', () => {

@@ -43,6 +43,7 @@ const VISIBLE_LIMIT = 3;
 
 const KIND_ICONS: Record<InsightKind, keyof typeof Ionicons.glyphMap> = {
   labor_overrun: "timer-outline",
+  low_margin_estimate: "trending-down-outline",
   uninvoiced_complete: "receipt-outline",
   due_soon: "alarm-outline",
   open_slot: "today-outline",
@@ -52,8 +53,10 @@ const KIND_ICONS: Record<InsightKind, keyof typeof Ionicons.glyphMap> = {
 // Kinds whose condition can't self-resolve get dismiss (and, when listed in
 // SNOOZE_DAYS, snooze). The original five kinds stay OUT of this set by design
 // — their rows disappear on their own as the condition resolves (2026-08-04
-// owner decision). The first muteable kinds arrive with the Phase 15 rules.
-const MUTEABLE_KINDS: ReadonlySet<InsightKind> = new Set<InsightKind>([]);
+// owner decision). low_margin_estimate's dismissal is keyed to the job's
+// current price (the insight id embeds estimateTotal), so a repriced job
+// re-fires despite an earlier dismiss.
+const MUTEABLE_KINDS: ReadonlySet<InsightKind> = new Set<InsightKind>(["low_margin_estimate"]);
 const SNOOZE_DAYS: Partial<Record<InsightKind, number>> = {};
 
 interface InsightsCardProps {
@@ -97,7 +100,8 @@ export function InsightsCard({ jobs, invoices, settings, onNavigate, onAskCoach 
         jobs,
         invoices,
         new Date(),
-        settings ? resolveSchedule(settings) : undefined
+        settings ? resolveSchedule(settings) : undefined,
+        { targetMarginPercent: settings?.marginPercent }
       ),
     [jobs, invoices, settings]
   );
