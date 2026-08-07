@@ -612,6 +612,40 @@ export interface RecurringInvoice {
   createdAt: DateString;
 }
 
+/** A whole-day time-off period (Phase 11). start/end are inclusive local "YYYY-MM-DD". */
+export interface ScheduleBlackout {
+  id: string;
+  start: DateString;
+  end: DateString;
+  reason?: string;
+}
+
+/**
+ * Owner scheduling config (Phase 11 calendar/availability, 2026-08-07 spec).
+ * OPTIONAL and additive — absent reproduces pre-Phase-11 behavior exactly
+ * (fixed 08:00–17:00 window, Mon–Sat, no buffers, no blackouts, no public
+ * slots). utils/scheduleConfig.ts resolveSchedule() is the ONLY sanctioned
+ * reader — it sanitizes and fills defaults; consumers never read these raw.
+ */
+export interface ScheduleConfig {
+  /** IANA zone (e.g. "America/Chicago"), stamped when slot booking is enabled. */
+  timeZone?: string;
+  /** ISO weekdays 1–7 (Mon=1). */
+  workDays?: number[];
+  workDayStart?: TimeString;
+  workDayEnd?: TimeString;
+  defaultDurationMinutes?: number;
+  /** Explicit gap between appointments. Config only — travel time is NEVER inferred. */
+  bufferMinutes?: number;
+  /** Minimum notice before the earliest publicly bookable slot. */
+  slotLeadHours?: number;
+  /** Bookable horizon in days. */
+  slotWindowDays?: number;
+  blackouts?: ScheduleBlackout[];
+  /** Phase C master switch AND the ship feature flag. Absent → off. */
+  bookableSlotsEnabled?: boolean;
+}
+
 export interface Settings {
   // Business info
   businessName: string;
@@ -660,6 +694,8 @@ export interface Settings {
    * alerts. Not a secret credential — not a SECURE_FIELD.
    */
   pushToken?: { token: string; platform: "ios" | "android"; updatedAt: string };
+  /** Owner scheduling config (Phase 11). OPTIONAL and additive — see ScheduleConfig. */
+  schedule?: ScheduleConfig;
 
   // Invoicing
   /**
