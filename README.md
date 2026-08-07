@@ -127,6 +127,23 @@ Nothing to set up here — it's built in and ready whenever you want it.
 
 ---
 
+## Step 8 — CSV data import (optional)
+
+Nothing to set up here — it's built in and ready whenever you want it.
+
+- **Import data** — Settings → "Import data" brings customers, jobs (with
+  schedule), invoices (including historical paid invoices), and expenses in
+  from a Jobber, Housecall Pro, QuickBooks, or plain spreadsheet CSV export.
+  Pick a file → map columns (common header names are recognized
+  automatically) → choose a date format → validate → preview → import → a
+  report of what imported and what was skipped or flagged, with reasons →
+  one-tap undo. A historical invoice marked paid with no mappable paid date
+  imports as outstanding and gets flagged rather than guessed. Imported
+  invoices are excluded from the automatic overdue-payment reminders so a
+  switcher's old receivables don't trigger emails to their customers.
+
+---
+
 ## File map — what does what
 
 ```
@@ -193,6 +210,10 @@ utils/
   customerMix.ts                 ← Customer mix analytics (new vs repeat)
   expenseTrends.ts               ← Expense trends analytics
   revenueForecast.ts             ← Revenue forecast analytics
+  csvImport.ts                   ← RFC-4180 CSV parser (never throws) + import-batch content hash
+  importMapping.ts               ← Per-entity field defs, header-synonym detection (Jobber/HCP/QB), date-format parsing
+  importEngine.ts                ← Pure per-entity import builders, status/category mapping, undo (stripBatch)
+  importHistory.ts               ← Non-synced AsyncStorage import-batch history
 
 hooks/
   useTheme.ts                    ← Dark/light theme hook (reads ThemeContext)
@@ -250,6 +271,7 @@ screens/
   SettingsAppearanceScreen.tsx    ← Dark/light theme toggle
   SettingsPricingScreen.tsx       ← Pricing defaults: hourly rate, materials markup, overhead
   SettingsInvoiceNumberingScreen.tsx ← Invoice numbering scheme (prefix, next number)
+  SettingsImportScreen.tsx        ← CSV data import: customers, jobs, invoices, expenses
   SettingsAIScreen.tsx            ← AI Assistant: Groq/Anthropic API keys
   SettingsReviewsScreen.tsx       ← Review-request toggle, delay, and Google review link
   SettingsNotificationsScreen.tsx ← Overdue-invoice reminder rules and notification prefs

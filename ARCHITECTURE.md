@@ -142,6 +142,8 @@ Support and Legal are single-tap actions that live on the hub itself
 - Appearance — dark / light mode toggle (`SettingsAppearanceScreen`)
 - Pricing defaults — labor rate, material markup, overhead, margin (`SettingsPricingScreen`)
 - Invoice numbering (`SettingsInvoiceNumberingScreen`)
+- Import data — CSV import of customers, jobs, invoices, expenses from
+  Jobber/Housecall Pro/QuickBooks/spreadsheet exports (`SettingsImportScreen`)
 - AI Assistant — Groq / Anthropic API keys (`SettingsAIScreen`)
 - Review requests (`SettingsReviewsScreen`)
 - Notifications — reminder rules, auto-outreach toggle (tap an overdue reminder to open a ready-to-send message), auto-email toggle (backend emails a one-and-done reminder once overdue) (`SettingsNotificationsScreen`)
@@ -166,6 +168,13 @@ Support and Legal are single-tap actions that live on the hub itself
   `Settings.bookingLink`: the backend's `portal-view` action resolves it to a
   whitelisted read-only bundle but never writes it. Public by design — the
   token travels in the shared URL — so not a SecureStore field)
+- importBatchId (optional) — FK to the CSV import batch that created this
+  record (2026-08 CSV data import, `SettingsImportScreen`). Additive-optional;
+  absent on every record from any other path (manual entry, booking
+  conversion, sync pull). Stamped only on records a batch created — never on
+  merge-matched existing customers — so "Undo import" can delete-by-batch-id
+  without touching pre-existing data. Same field on Job/Invoice/Expense below.
+  JSON-blob sync, so no backend migration was needed.
 
 ### Job
 - id, customerId, customerName (denormalized display)
@@ -182,6 +191,7 @@ Support and Legal are single-tap actions that live on the hub itself
   (server-written `approval` / device-written `manualDecision`); status
   derived, billable total = `estimateTotal` + approved COs
   (`utils/changeOrders.ts`)
+- importBatchId (optional) — see Customer above.
 
 ### Invoice
 - id, customerId (FK), customer (display name)
@@ -217,12 +227,22 @@ Support and Legal are single-tap actions that live on the hub itself
   so the customer sees their deposit credited. `overpaidAmount` surfaces money
   received beyond the invoice total, which `balanceDue` clamps away.
 - depositRequest (optional): `{amount, percent?, requestedAt}` — the up-front amount asked for.
+- importBatchId (optional) — see Customer above. An imported invoice marked
+  paid carries `paid`/`paidAt` but **no fabricated `payments` ledger** — it
+  rides the same legacy-derivation path as any pre-ledger invoice
+  (`utils/invoicePayments.ts`). A "paid" import row with no mappable paid
+  date imports as outstanding and is flagged in the import report rather than
+  guessed. Imported invoices are excluded from the automatic overdue-payment
+  reminder (`selectInvoicesToRemind`, both backend copies, and the client's
+  `utils/notifications.ts`) so a switcher's historical receivables never
+  auto-email their customers.
 
 ### Expense
 - id, date, amount
 - category: `fuel | materials | tools | insurance | marketing | subcontractor | office | other`
 - description, receiptPhoto (device-local path)
 - jobId (optional)
+- importBatchId (optional) — see Customer above.
 
 ### Trip
 - id, date, odometerStart, odometerEnd, miles (derived: `max(0, end - start)`)
