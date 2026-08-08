@@ -4,7 +4,7 @@
 import type { Customer, Expense, Invoice, Trip } from "../types/models";
 import { buildIncomeCsv, toCsv } from "./csvExport";
 import {
-  amountPaid, balanceDue, isFullyPaid, isPartlyPaid,
+  amountPaid, balanceDue, collectedInRange, isFullyPaid, isPartlyPaid,
   overpaidAmount, paymentsInRange, toAmount,
 } from "./invoicePayments";
 import { EXPENSE_CATEGORIES, isInRange } from "./moneyUtils";
@@ -179,4 +179,51 @@ export function collectWarnings(input: PackageInput, start: Date, end: Date): Ex
 const WARNINGS_HEADER = ["Code", "Severity", "Subject", "Detail"];
 export function buildWarningsCsv(warnings: ExportWarning[]): string {
   return toCsv(WARNINGS_HEADER, warnings.map((x) => [x.code, x.severity, x.subject, x.detail]));
+}
+
+function ymdLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+export function ymdLocalRange(start: Date, end: Date) {
+  return { start: ymdLocal(start), end: ymdLocal(end) };
+}
+
+export type PackageSummary = {
+  range_start: string; range_end: string;
+  cash_collected: number; voided_amount: number; expenses_total: number;
+  net_cash: number; net_cash_basis: string;
+  invoices_count: number; customers_count: number;
+  mileage_trips_count: number; mileage_miles_total: number; warnings_count: number;
+};
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+export function buildSummary(input: PackageInput, start: Date, end: Date): PackageSummary {
+  const cash = collectedInRange(input.invoices, start, end);
+  let voided = 0;
+  for (const i of input.invoices)
+    for (const p of paymentsInRange(i, start, end)) if (p.voidedAt) voided += toAmount(p.amount);
+  const expensesTotal = input.expenses
+    .filter((e) => isInRange(e.date, start, end))
+    .reduce((s, e) => s + toAmount(e.amount), 0);
+  const inScopeInvoices = input.invoices.filter((i) => {
+    const issue = recoverIssueDate(i.id);
+    return (issue !== null && isInRange(issue, start, end)) ||
+      paymentsInRange(i, start, end).some((p) => !p.voidedAt);
+  });
+  const trips = input.trips.filter((t) => isInRange(t.date, start, end));
+  const r = ymdLocalRange(start, end);
+  return {
+    range_start: r.start, range_end: r.end,
+    cash_collected: round2(cash), voided_amount: round2(voided), expenses_total: round2(expensesTotal),
+    net_cash: round2(cash - expensesTotal), net_cash_basis: "cash basis; before owner labor",
+    invoices_count: inScopeInvoices.length, customers_count: input.customers.length,
+    mileage_trips_count: trips.length, mileage_miles_total: round2(trips.reduce((s, t) => s + toAmount(t.miles), 0)),
+    warnings_count: collectWarnings(input, start, end).length,
+  };
+}
+
+export function buildSummaryJson(summary: PackageSummary): string {
+  return JSON.stringify(summary, null, 2);
 }
