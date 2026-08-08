@@ -10,6 +10,7 @@ import type { Invoice, Expense, Trip } from "../types/models";
 import { paymentsInRange, toAmount } from "./invoicePayments";
 import type { DateRange } from "./moneyUtils";
 import { EXPENSE_CATEGORIES, isInRange } from "./moneyUtils";
+import { base64Encode } from "./zipStore";
 
 /**
  * RFC-4180 field escaping: quote when the value contains a comma, quote,
@@ -193,5 +194,24 @@ export async function shareCsv(csv: string, filename: string): Promise<void> {
     await Sharing.shareAsync(uri, { mimeType: "text/csv", dialogTitle: filename });
   } catch {
     Alert.alert("Export error", "Could not create the CSV file. Please try again.");
+  }
+}
+
+/** Write a ZIP (as base64) to the cache directory and open the share sheet.
+ *  Same alert/return contract as shareCsv — callers never branch. */
+export async function shareZip(bytes: Uint8Array, filename: string): Promise<void> {
+  try {
+    const available = await Sharing.isAvailableAsync();
+    if (!available) {
+      Alert.alert("Sharing not available", "This device cannot share files.");
+      return;
+    }
+    const uri = `${FileSystem.cacheDirectory}${filename}`;
+    await FileSystem.writeAsStringAsync(uri, base64Encode(bytes), {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    await Sharing.shareAsync(uri, { mimeType: "application/zip", dialogTitle: filename });
+  } catch {
+    Alert.alert("Export error", "Could not create the export file. Please try again.");
   }
 }

@@ -1,7 +1,7 @@
 import { Alert } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import { buildIncomeCsv, buildExpensesCsv, buildTripsCsv, escapeCsvField, toCsv, exportDateRange, csvFilename, csvRowCount, shareCsv } from "../utils/csvExport";
+import { buildIncomeCsv, buildExpensesCsv, buildTripsCsv, escapeCsvField, toCsv, exportDateRange, csvFilename, csvRowCount, shareCsv, shareZip } from "../utils/csvExport";
 import { collectedInRange } from "../utils/invoicePayments";
 import type { Invoice, Expense, Trip } from "../types/models";
 
@@ -403,5 +403,29 @@ describe("shareCsv", () => {
       "Export error",
       "Could not create the CSV file. Please try again."
     );
+  });
+});
+
+describe("shareZip", () => {
+  beforeEach(() => { jest.clearAllMocks(); jest.spyOn(Alert, "alert").mockImplementation(() => {}); });
+
+  test("writes base64 zip to cache and shares with application/zip", async () => {
+    await shareZip(Uint8Array.from([0x50, 0x4b, 0x05, 0x06]), "TradeReady-Accounting_all-time.zip");
+    expect(FileSystem.writeAsStringAsync).toHaveBeenCalledWith(
+      "file:///mock/cache/TradeReady-Accounting_all-time.zip",
+      expect.any(String),
+      expect.objectContaining({ encoding: FileSystem.EncodingType.Base64 }),
+    );
+    expect(Sharing.shareAsync).toHaveBeenCalledWith(
+      "file:///mock/cache/TradeReady-Accounting_all-time.zip",
+      expect.objectContaining({ mimeType: "application/zip" }),
+    );
+  });
+
+  test("alerts and skips write when sharing unavailable", async () => {
+    (Sharing.isAvailableAsync as jest.Mock).mockResolvedValueOnce(false);
+    await shareZip(Uint8Array.from([0]), "x.zip");
+    expect(FileSystem.writeAsStringAsync).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith("Sharing not available", "This device cannot share files.");
   });
 });
