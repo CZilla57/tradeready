@@ -7,7 +7,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { loadInvoices, loadExpenses, loadTrips } from "../utils/storage";
+import { loadInvoices, loadExpenses, loadTrips, loadCustomers, loadJobs } from "../utils/storage";
 import { Button, Card } from "../components/UI";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
@@ -21,10 +21,12 @@ import {
   csvRowCount,
   exportDateRange,
   shareCsv,
+  shareZip,
   type ExportRangeId,
 } from "../utils/csvExport";
+import { buildAccountingPackage } from "../utils/accountingPackage";
 import type { DateRange } from "../utils/moneyUtils";
-import type { Expense, Invoice, Trip } from "../types/models";
+import type { Customer, Expense, Invoice, Job, Trip } from "../types/models";
 
 type RangeChoice = ExportRangeId | "custom";
 
@@ -57,6 +59,8 @@ export default function ExportDataScreen() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [jobNameById, setJobNameById] = useState<Record<string, string>>({});
 
   const [choice, setChoice] = useState<RangeChoice>("this_year");
   const [customStart, setCustomStart] = useState<Date>(() => new Date(new Date().getFullYear(), 0, 1));
@@ -68,6 +72,14 @@ export default function ExportDataScreen() {
       loadInvoices().then(setInvoices);
       loadExpenses().then(setExpenses);
       loadTrips().then(setTrips);
+      loadCustomers().then(setCustomers);
+      loadJobs().then((jobs: Job[]) => {
+        const byId: Record<string, string> = {};
+        jobs.forEach((job) => {
+          byId[job.id] = job.title;
+        });
+        setJobNameById(byId);
+      });
     }, [])
   );
 
@@ -93,6 +105,18 @@ export default function ExportDataScreen() {
       return;
     }
     shareCsv(csvs[dataset], csvFilename(dataset, range, choice));
+  }
+
+  function handlePackage() {
+    if (choice === "custom" && startOfDay(customStart) > endOfDay(customEnd)) {
+      Alert.alert("Check your dates", "The start date is after the end date.");
+      return;
+    }
+    const pkg = buildAccountingPackage(
+      { invoices, expenses, trips, customers, jobNameById },
+      range.start, range.end,
+    );
+    shareZip(pkg.bytes, pkg.filename);
   }
 
   const datasets: { key: "income" | "expenses" | "mileage"; label: string; hint: string }[] = [
@@ -149,6 +173,13 @@ export default function ExportDataScreen() {
         ) : null}
 
         <Text style={styles.heading}>Export</Text>
+        <Card style={styles.rowCard}>
+          <View style={styles.rowLeft}>
+            <Text style={styles.rowLabel}>Accountant package (.zip)</Text>
+            <Text style={styles.rowHint}>Everything your accountant needs, in one file</Text>
+          </View>
+          <Button label="Share" onPress={handlePackage} style={styles.shareBtn} />
+        </Card>
         {datasets.map((d) => (
           <Card key={d.key} style={styles.rowCard}>
             <View style={styles.rowLeft}>
