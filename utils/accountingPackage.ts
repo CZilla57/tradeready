@@ -269,7 +269,7 @@ export function buildAccountingPackage(
 ): { filename: string; bytes: Uint8Array } {
   const summary = buildSummary(input, start, end);
   const warnings = collectWarnings(input, start, end);
-  const csv = (name: string, body: string): ZipEntry => ({ name, bytes: utf8Encode("﻿" + body) });
+  const csv = (name: string, body: string): ZipEntry => ({ name, bytes: utf8Encode("\uFEFF" + body) });
   const text = (name: string, body: string): ZipEntry => ({ name, bytes: utf8Encode(body) });
 
   const entries: ZipEntry[] = [
