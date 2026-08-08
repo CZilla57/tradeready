@@ -24,7 +24,7 @@ export async function aiChatHandler(c) {
 
   const { GROQ_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY } = c.env;
   if (!GROQ_API_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    return c.json({ error: 'Server misconfiguration. Check Vercel environment variables.' }, 500);
+    return c.json({ error: 'Server misconfiguration. Check the server environment configuration.' }, 500);
   }
 
   // Authenticate caller via Supabase JWT

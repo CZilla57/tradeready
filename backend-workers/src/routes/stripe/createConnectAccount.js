@@ -18,7 +18,7 @@ export async function createConnectAccountHandler(c) {
 
   const { STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY } = c.env;
   if (!STRIPE_SECRET_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
-    return c.json({ error: 'Server misconfiguration. Check Vercel environment variables.' }, 500);
+    return c.json({ error: 'Server misconfiguration. Check the server environment configuration.' }, 500);
   }
 
   const auth = c.req.header('authorization');
