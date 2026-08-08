@@ -69,13 +69,15 @@ The home screen. Shows what matters right now.
 - Booking rows: customer reschedule requests + cancellations needing action
   (`utils/bookingAttention.ts`; rows self-dismiss as resolved)
 - Insights card (`utils/todayInsights.ts` + `components/InsightsCard.tsx`,
-  2026-08-04; Phase 15 contextual-AI extensions 2026-08-08): seven
+  2026-08-04; Phase 15 contextual-AI extensions 2026-08-08): eight
   deterministic rules — labor overrun, low-margin estimate, uninvoiced
   complete work, invoices due soon, tomorrow's open slot, unscheduled
-  approved jobs, maintenance-due customers — top 3 by fixed priority, each
+  approved jobs, maintenance-due customers, business-level expense anomaly —
+  top 3 by fixed priority, each
   with a stable id, a "Why am I seeing this?" explanation (long-press), and
-  deep-link actions. Non-self-resolving kinds (low-margin, maintenance-due)
-  support dismiss/snooze (`utils/insightMutes.ts`, device-local). "Ask
+  deep-link actions. Non-self-resolving kinds (low-margin, maintenance-due,
+  expense-anomaly) support dismiss/snooze (`utils/insightMutes.ts`,
+  device-local). "Ask
   coach" rows prefill the AI tab — never auto-sent, numbers computed
   on-device
 - Route map launch (opens Apple/Google Maps — ⚠️ not optimized)

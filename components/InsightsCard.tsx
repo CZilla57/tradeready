@@ -28,7 +28,7 @@ import {
   type InsightTarget,
   type TodayInsight,
 } from "../utils/todayInsights";
-import type { Job, Invoice, Customer, RecurringJob, Settings } from "../types/models";
+import type { Job, Invoice, Customer, RecurringJob, Settings, Expense } from "../types/models";
 import { resolveSchedule } from "../utils/scheduleConfig";
 import { track } from "../utils/analytics";
 import {
@@ -49,6 +49,7 @@ const KIND_ICONS: Record<InsightKind, keyof typeof Ionicons.glyphMap> = {
   open_slot: "today-outline",
   unscheduled_approved: "calendar-outline",
   maintenance_due: "build-outline",
+  expense_anomaly: "trending-up-outline",
 };
 
 // Kinds whose condition can't self-resolve get dismiss (and, when listed in
@@ -61,6 +62,9 @@ const KIND_ICONS: Record<InsightKind, keyof typeof Ionicons.glyphMap> = {
 const MUTEABLE_KINDS: ReadonlySet<InsightKind> = new Set<InsightKind>([
   "low_margin_estimate",
   "maintenance_due",
+  // Dismiss-only (not in SNOOZE_DAYS): its id is month-scoped, so a dismiss
+  // naturally lasts only the rest of the month and next month re-fires.
+  "expense_anomaly",
 ]);
 const SNOOZE_DAYS: Partial<Record<InsightKind, number>> = { maintenance_due: 30 };
 
@@ -69,12 +73,13 @@ interface InsightsCardProps {
   invoices: Invoice[];
   customers: Customer[];
   recurringJobs: RecurringJob[];
+  expenses: Expense[];
   settings: Settings | null;
   onNavigate: (target: InsightTarget) => void;
   onAskCoach: (prompt: string) => void;
 }
 
-export function InsightsCard({ jobs, invoices, customers, recurringJobs, settings, onNavigate, onAskCoach }: InsightsCardProps) {
+export function InsightsCard({ jobs, invoices, customers, recurringJobs, expenses, settings, onNavigate, onAskCoach }: InsightsCardProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
   const [state, setState] = useState<SetupChecklistState | null>(null);
@@ -108,9 +113,9 @@ export function InsightsCard({ jobs, invoices, customers, recurringJobs, setting
         invoices,
         new Date(),
         settings ? resolveSchedule(settings) : undefined,
-        { targetMarginPercent: settings?.marginPercent, customers, recurringJobs }
+        { targetMarginPercent: settings?.marginPercent, customers, recurringJobs, expenses }
       ),
-    [jobs, invoices, customers, recurringJobs, settings]
+    [jobs, invoices, customers, recurringJobs, expenses, settings]
   );
 
   // Mute-filter BEFORE the top-3 slice so muting a row promotes the next one.

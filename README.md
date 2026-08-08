@@ -244,7 +244,7 @@ utils/
   availability.ts                ← Bookable-slot engine (open slots from hours/jobs/buffers)
   bookingAttention.ts            ← Today rows for customer reschedule/cancel actions
   bookingRespond.ts              ← Owner respond client (resolve reschedule / decline)
-  todayInsights.ts               ← Deterministic Today-insight rules (7 kinds, stable ids + "why" reasons)
+  todayInsights.ts               ← Deterministic Today-insight rules (8 kinds, stable ids + "why" reasons)
   insightMutes.ts                ← Per-insight dismiss/snooze store (device-local, wiped on sign-out)
   pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
   pdfExport.ts                   ← PDF rendering and share sheet
