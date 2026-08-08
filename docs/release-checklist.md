@@ -23,9 +23,10 @@ Written 2026-07-18.
 - [ ] **Know what changed in the data layer.** `git log --oneline <last-release>..HEAD -- utils/storage/ utils/sync.ts utils/syncMerge.ts types/models.ts`.
       Anything here changes what gets written to users' devices and to Supabase.
       An empty result is a good sign; a non-empty one deserves a read.
-- [ ] **Backend and app agree.** If this release depends on a Vercel deployment or
-      a Supabase migration, confirm both are live *first*. Shipping a client that
-      expects a backend it does not have is worse than shipping neither.
+- [ ] **Backend and app agree.** If this release depends on a Worker deploy
+      (`backend-workers/`, `wrangler deploy`) or a Supabase migration, confirm both
+      are live *first*. Shipping a client that expects a backend it does not have is
+      worse than shipping neither.
 
 ---
 

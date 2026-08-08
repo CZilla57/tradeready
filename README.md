@@ -72,14 +72,15 @@ AI features (business chat, pricebook suggestions, receipt scanning) are proxied
 through the backend Worker using server-side API keys — no user-supplied keys
 required.
 
-- **AI Coach chat** — Groq (Llama 3.1) via `backend/api/ai-chat.js`
-- **Pricebook AI Assist** — Claude (Anthropic) via `backend/api/pricebook-suggest.js`
-- **Receipt scanning** — Claude vision via `backend/api/receipt-extract.js`; attaching
+- **AI Coach chat** — Groq (Llama 3.1) via the Worker's `/api/ai-chat` route
+- **Pricebook AI Assist** — Claude (Anthropic) via the Worker's `/api/pricebook-suggest` route
+- **Receipt scanning** — Claude vision via the Worker's `/api/receipt-extract` route; attaching
   a receipt photo to an expense pre-fills merchant/amount/date/category for review
   (never auto-saves; extraction failure falls back to plain manual entry)
 
-Required Vercel env vars: `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_URL`,
-`SUPABASE_ANON_KEY`.
+Required backend env (Cloudflare Worker — non-secret values in `backend-workers/wrangler.toml`
+`[vars]`, secrets set via `wrangler secret put`): `GROQ_API_KEY`, `ANTHROPIC_API_KEY`,
+`SUPABASE_URL`, `SUPABASE_ANON_KEY` (plus the Stripe, Resend, RevenueCat, and cron secrets).
 
 ---
 
@@ -248,8 +249,8 @@ utils/
   pdfTemplates.ts                ← HTML templates for invoice and estimate PDFs (XSS-safe)
   pdfExport.ts                   ← PDF rendering and share sheet
   photoStorage.ts                ← Device photo management + logo downscale for PDFs
-  aiService.ts                   ← Groq AI integration (backend-proxied via Vercel)
-  pricebookAI.ts                 ← Pricebook AI Assist (backend-proxied via Vercel)
+  aiService.ts                   ← Groq AI integration (proxied via the backend Worker)
+  pricebookAI.ts                 ← Pricebook AI Assist (proxied via the backend Worker)
   receiptOCR.ts                  ← Receipt scan: parse/clamp + routing (user key / backend)
   subscription.ts                ← RevenueCat subscription helpers
   paywallCopy.ts                 ← Trial wording derived from the store's real intro offer
@@ -366,7 +367,9 @@ context/
   SubscriptionContext.tsx        ← RevenueCat subscription state
   SyncStatusContext.tsx          ← Sync queue status (pending count, last sync)
 
-backend/                         ← Vercel serverless functions (deployed separately)
+backend/                         ← Vercel serverless functions — DORMANT since the
+                                   2026-08-06 cutover to backend-workers/ (kept
+                                   deployed as a rollback target, not the live backend)
   api/                           ← Stripe Connect, payment links, AI proxies,
                                    account deletion, subscription webhook
   api/booking/[action].js        ← Booking link dispatcher — mint (JWT-authed),
@@ -584,8 +587,8 @@ arrived from another device (matched on `recurringJobId`/`recurringInvoiceId`
 concurrent-edit envelope as last-write-wins above.
 
 **Estimate approvals are the one server-authoritative write path.** When a
-customer approves or declines an estimate via the hosted link, the Vercel
-backend writes `job.approval.*` straight to Supabase with the service-role
+customer approves or declines an estimate via the hosted link, the backend
+Worker writes `job.approval.*` straight to Supabase with the service-role
 key (bypassing the normal device→cloud flow) — the same pattern the Stripe
 webhook uses for invoice payments. The device picks the decision up on its
 next `pullRemote` (sign-in or app-foreground) and advances the job's status

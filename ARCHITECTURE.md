@@ -33,11 +33,10 @@ tab of its own.
 - Tax center and quarterly estimates
 - Proactive AI insights feed
 
-**AI on the backend:** AI calls are proxied through Vercel serverless functions
-using server-side API keys — no user-supplied keys required. Groq powers the
-AI Coach chat (`backend/api/ai-chat.js`); Claude powers pricebook suggestions
-(`backend/api/pricebook-suggest.js`) and receipt scanning
-(`backend/api/receipt-extract.js`, vision).
+**AI on the backend:** AI calls are proxied through the Cloudflare Worker backend
+(`backend-workers/`) using server-side API keys — no user-supplied keys required.
+Groq powers the AI Coach chat (`/api/ai-chat`); Claude powers pricebook suggestions
+(`/api/pricebook-suggest`) and receipt scanning (`/api/receipt-extract`, vision).
 
 **Sync is live:** Supabase (Postgres + Auth) is the sync backend today, not a future item.
 See the "Sync model" section of README.md for how the local-first queue works —
@@ -584,11 +583,16 @@ turn-by-turn directions, but there is no server-side waypoint optimization.
 - **expo-document-picker** — import existing customer lists
 - **@react-native-community/datetimepicker** — date/time picker (cross-platform)
 
-### Backend (Vercel serverless)
+### Backend (Cloudflare Worker)
+The backend runs as a single Cloudflare Worker (`backend-workers/`, deployed at
+`tradeready-backend.tradeready.workers.dev`) since the 2026-08-06 cutover. The
+predecessor Vercel serverless deployment (`backend/`) stays dormant as a rollback
+target — see the migration notes. A single Worker also removes the Vercel Hobby
+12-function cap that motivated the move.
 - **Stripe Connect** — Express account onboarding, payment link generation, webhook-driven invoice marking
 - AI proxy — Groq chat completions (`ai-chat.js`) + Anthropic pricebook suggestions (`pricebook-suggest.js`) + Anthropic vision receipt extraction (`receipt-extract.js`)
 - RevenueCat subscription webhook (`subscription/webhook.js`)
-- Booking link — public request-a-quote intake, one dispatcher function `api/booking/[action].js` routing `mint` (JWT-authed token mint), `config` (public, token-gated form bootstrap) and `submit` (public, token-gated insert) — the 11th of 12 Vercel Hobby-plan functions
+- Booking link — public request-a-quote intake, one dispatcher function `api/booking/[action].js` routing `mint` (JWT-authed token mint), `config` (public, token-gated form bootstrap) and `submit` (public, token-gated insert) — one route on the Worker (formerly the 11th of 12 Vercel Hobby-plan functions)
 - Push notification scheduling
 - PDF generation for proposals and invoices
 - ⚠️ Google Maps Directions API: planned for route optimization; not yet wired up

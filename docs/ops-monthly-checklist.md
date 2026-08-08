@@ -3,13 +3,20 @@
 Written 2026-07-16, just after the 1.0 App Store submission. This is a ~10-minute
 pass to run once a month. It exists because TradeReady is local-first: the app runs
 off data on the user's phone, so almost nothing scales with user count. The three
-things that do — Supabase (sync + sign-in), the Vercel backend (mostly the AI
-proxy), and the Resend reminder emails — all hit **plan quotas** long before they
-hit performance limits. That makes scaling a monitoring habit, not an engineering
-project.
+things that do — Supabase (sync + sign-in), the Cloudflare Worker backend (mostly
+the AI proxy), and the Resend reminder emails — all hit **plan quotas** long before
+they hit performance limits. That makes scaling a monitoring habit, not an
+engineering project.
 
-All free-tier numbers below are **as of July 2026** and providers change them —
-when this file and a provider's Usage page disagree, the Usage page wins.
+> **Backend moved 2026-08-06.** The backend cut over from Vercel serverless to a
+> single Cloudflare Worker (`tradeready-backend.tradeready.workers.dev`). The old
+> Vercel `backend` project stays **dormant** as a rollback target — no monitoring
+> action needed while it's idle. This checklist now targets Cloudflare; decommission
+> of the Vercel project is tracked separately in the migration runbook.
+
+All free-tier numbers below are **as of July 2026** (Cloudflare items as of August
+2026) and providers change them — when this file and a provider's Usage page
+disagree, the Usage page wins.
 
 ---
 
@@ -19,10 +26,12 @@ None of this is visible from the code — it lives in the provider dashboards, s
 was **unverified** when this doc was written. Do this once, tick the boxes, and
 date it.
 
-- [ ] **Vercel** — vercel.com → `backend` project → Settings → General.
-      **If it says Hobby, upgrade to Pro (~$20/mo) as soon as the app has paying
-      users.** Hobby's terms prohibit commercial use — this one is about
-      compliance, not capacity, so it doesn't wait for a usage signal.
+- [ ] **Cloudflare Workers** — dash.cloudflare.com → Workers & Pages →
+      `tradeready-backend`. Free plan (100k requests/day as of Aug 2026) **permits
+      commercial use**, so unlike the old Vercel Hobby plan there is no
+      compliance deadline — this is a pure capacity check. Move to Workers Paid
+      (~$5/mo, 10M requests) only when the daily request count approaches the free
+      cap. (The dormant Vercel `backend` project needs no plan action while idle.)
 - [ ] **Supabase** — supabase.com/dashboard → organization → Billing. Free is fine
       at launch; note the plan here when checked.
 - [ ] **Resend** — resend.com → Settings/Billing. Free = 100 emails/day, 3,000/month.
@@ -44,11 +53,11 @@ date it.
 | # | Service | Open | Look at | Act when |
 |---|---------|------|---------|----------|
 | 1 | Supabase | supabase.com/dashboard/project/ncbqswfdvckmdocbawaa → Reports / Usage | Database size, Egress, Auth MAU | DB above ~400 MB (free cap 500 MB) or egress past ~70% of quota mid-month → Pro ($25/mo). But read "the cheap lever" below first. |
-| 2 | Vercel | vercel.com → `backend` project → Usage + Observability | Function invocations, error rate, p95 duration | p95 on `/api/ai-chat` creeping toward the 10 s `maxDuration` (`backend/vercel.json`), or a rising error rate → check Groq before paying Vercel anything. |
+| 2 | Cloudflare Worker | dash.cloudflare.com → Workers & Pages → `tradeready-backend` → Metrics + Logs | Requests/day (vs 100k free cap), error rate, CPU time | Requests approaching the daily free cap → Workers Paid (~$5/mo). A rising error rate or CPU-limit exceptions on `/api/ai-chat` → check Groq first (the slow dependency), not Cloudflare. |
 | 3 | Resend | resend.com → Emails / Metrics | Emails sent per day | Sustained days above ~70 (free cap 100/day) → paid plan (~$20/mo for 50k/mo). |
 | 4 | Groq | console.groq.com → Usage | Request volume and 429 counts | Any recurring 429s → switch the account to the pay-as-you-go tier (cheap for `llama-3.1-8b-instant`). |
 | 5 | Sentry + PostHog | Subscription / Billing pages | Errors/month vs 5k; events/month vs 1M | Nearing a cap → upgrade or trim events. Overrunning these blinds the monitoring; the app itself is unaffected. |
-| 6 | Reminder cron | Vercel → `backend` → Logs, filter `/api/cron/send-reminders` | The daily 15:00 UTC run (schedule in `backend/vercel.json`) returns 200 | Any streak of 401/500 → check `CRON_SECRET` / `RESEND_API_KEY` env vars, then Resend status. |
+| 6 | Reminder cron | Cloudflare → `tradeready-backend` → Logs (or `npx wrangler tail`), find the scheduled run | The daily 15:00 UTC scheduled run (cron in `backend-workers/wrangler.toml` `[triggers]`, dispatched in `src/index.js` `scheduled()`) completes cleanly | Any streak of failures → check `CRON_SECRET` / `RESEND_API_KEY` Worker secrets, then Resend status. |
 
 **Leading indicator:** the PostHog MAU trend. If active users double month-over-month,
 run this pass mid-month instead of waiting for the next one.
@@ -109,11 +118,11 @@ under "Additional Data", and use this map:
 
 | `context` value | Points at | First thing to check |
 |---|---|---|
-| `aiChat` | Groq AI proxy (`backend/api/ai-chat.js`) | Groq 429s/quota. The proxy allows 20 turns/user/minute (`backend/api/ai-chat.js:24`), but all users share one Groq key. |
-| `generatePaymentLink`, `stripeConnect`, `stripeDisconnect` | Stripe endpoints on the backend | Vercel function logs, then the Stripe dashboard. |
+| `aiChat` | Groq AI proxy (Worker `/api/ai-chat`) | Groq 429s/quota. The proxy allows 20 turns/user/minute, but all users share one Groq key. |
+| `generatePaymentLink`, `stripeConnect`, `stripeDisconnect` | Stripe endpoints on the backend | Worker logs (`wrangler tail` / Cloudflare dashboard), then the Stripe dashboard. |
 | `pushQueue`, `pullRemote`, `initialSync` | Supabase sync | status.supabase.com, then the Supabase usage quotas (row 1 above). |
 | `purchase`, `restorePurchases` | RevenueCat | RevenueCat status page and dashboard. |
-| `deleteAccount` | Backend delete-account endpoint | Vercel function logs. |
+| `deleteAccount` | Backend delete-account endpoint | Worker logs (`wrangler tail` / Cloudflare dashboard). |
 | `onboardingFinish`, screen-load contexts | App-local code | Normal bug triage — not a scaling signal. |
 
 A **volume spike alert with sync contexts across many users** is the "backend is
@@ -124,18 +133,18 @@ order.
 
 ## What runs out first (the expected order)
 
-1. **Vercel Hobby terms** — immediately, if applicable; see the one-time list.
-2. **Resend 100/day** — scales with overdue invoices from opted-in users, not with
+1. **Resend 100/day** — scales with overdue invoices from opted-in users, not with
    total users. Cheap upgrade.
-3. **Groq free-tier caps** — a handful of simultaneous AI Coach users can trip
+2. **Groq free-tier caps** — a handful of simultaneous AI Coach users can trip
    shared per-minute limits. Cheap upgrade.
-4. **Supabase free tier** — sync pushes whole-record JSON blobs, so egress grows
+3. **Supabase free tier** — sync pushes whole-record JSON blobs, so egress grows
    faster than user count. **The cheap lever:** implementing per-record sync change
    tracking (a known open performance item) cuts egress substantially — worth
    doing before paying for Pro if egress is what trips.
-5. **Sentry/PostHog event caps** — lose visibility, not functionality.
-6. **Actual compute** — Vercel functions scale horizontally on their own; nothing
-   to do here for a long time.
+4. **Sentry/PostHog event caps** — lose visibility, not functionality.
+5. **Cloudflare Workers free cap** — 100k requests/day. The app is local-first, so
+   backend traffic is low; this is a distant concern. Workers scale automatically at
+   the edge — nothing to do but bump to the $5/mo plan if the daily cap is neared.
 
 ---
 
