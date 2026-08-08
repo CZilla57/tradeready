@@ -2,12 +2,13 @@
 // Pure builders for the accountant-package ZIP. No I/O, no Settings, no secrets.
 // Spec: docs/superpowers/specs/2026-08-07-accountant-package-design.md
 import type { Customer, Expense, Invoice, Trip } from "../types/models";
-import { buildIncomeCsv, toCsv } from "./csvExport";
+import { buildIncomeCsv, buildTripsCsv, toCsv } from "./csvExport";
 import {
   amountPaid, balanceDue, collectedInRange, isFullyPaid, isPartlyPaid,
   overpaidAmount, paymentsInRange, toAmount,
 } from "./invoicePayments";
 import { EXPENSE_CATEGORIES, isInRange } from "./moneyUtils";
+import { buildZip, utf8Encode, type ZipEntry } from "./zipStore";
 
 /** buildActivePaymentsCsv mirrors buildIncomeCsv exactly (non-voided payments,
  *  legacy method blank) — reuse that shape rather than duplicate its logic. */
@@ -255,4 +256,35 @@ export function buildReadme(summary: PackageSummary): string {
     `  - net_cash in summary.json is cash collected minus expenses (before paying yourself).`,
     ``,
   ].join("\n");
+}
+
+export function packageFilename(start: Date, end: Date, allTime: boolean): string {
+  if (allTime) return "TradeReady-Accounting_all-time.zip";
+  const r = ymdLocalRange(start, end);
+  return `TradeReady-Accounting_${r.start}_${r.end}.zip`;
+}
+
+export function buildAccountingPackage(
+  input: PackageInput, start: Date, end: Date,
+): { filename: string; bytes: Uint8Array } {
+  const summary = buildSummary(input, start, end);
+  const warnings = collectWarnings(input, start, end);
+  const csv = (name: string, body: string): ZipEntry => ({ name, bytes: utf8Encode("﻿" + body) });
+  const text = (name: string, body: string): ZipEntry => ({ name, bytes: utf8Encode(body) });
+
+  const entries: ZipEntry[] = [
+    csv("invoices.csv", buildInvoicesCsv(input.invoices, start, end)),
+    csv("invoice-line-items.csv", buildLineItemsCsv(input.invoices, start, end)),
+    csv("active-payments.csv", buildIncomeCsv(input.invoices, start, end)),
+    csv("payment-activity.csv", buildPaymentActivityCsv(input.invoices, start, end)),
+    csv("expenses.csv", buildExpensesCsv2(input.expenses, start, end, input.jobNameById)),
+    csv("mileage.csv", buildTripsCsv(input.trips, start, end)),
+    csv("customers.csv", buildCustomersCsv(input.customers)),
+    csv("category-mapping.csv", buildCategoryMappingCsv()),
+    csv("export-warnings.csv", buildWarningsCsv(warnings)),
+    text("summary.json", buildSummaryJson(summary)),
+    text("README.txt", buildReadme(summary)),
+  ];
+  const allTime = start.getTime() === 0;
+  return { filename: packageFilename(start, end, allTime), bytes: buildZip(entries) };
 }
