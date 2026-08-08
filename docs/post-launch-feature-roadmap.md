@@ -35,7 +35,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 11 | Calendar, availability & real online booking | 🔥🔥🔥 | High | Booking link (#9), smart pickers, reminders | staged 2026-08-06 — prompt ready |
 | 12 | Customer portal completion | 🔥🔥 | Med–High | Held portal branch, approval/change-order endpoints | staged — precondition: merge `feat/customer-portal` |
 | 13 | Estimated-vs-actual job profitability | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | **MERGED** `683ec15` 2026-08-07 (device smoke + OTA pending) |
-| 14 | Accountant package / bookkeeping handoff | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | staged — low urgency stands |
+| 14 | Accountant package / bookkeeping handoff | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | **BUILT** on `feat/accountant-package` (device smoke pending) |
 | 15 | Contextual AI & proactive operations | 🔥🔥 | Med–High | todayInsights, follow-ups, dunning, AI layer | staged — sequenced after #13 |
 
 ---
@@ -412,6 +412,28 @@ After approval, implement the pure calculation layer and exhaustive tests before
 ```
 
 ## Phase 14 — Accountant package & bookkeeping handoff
+
+> **STATUS (2026-08-07): BUILT** on `feat/accountant-package` (Tasks 1–8) per
+> the owner-approved design
+> (`docs/superpowers/specs/2026-08-07-accountant-package-design.md`):
+> `utils/zipStore.ts` (zero-dependency stored/uncompressed ZIP writer —
+> crc32/utf8/base64/buildZip), `utils/accountingPackage.ts` (per-file
+> builders for invoices.csv, invoice-line-items.csv, active-payments.csv,
+> payment-activity.csv, expenses.csv with a Job column, mileage.csv,
+> customers.csv, category-mapping.csv, export-warnings.csv, summary.json,
+> README.txt, plus the `buildAccountingPackage` assembler), the `shareZip`
+> delivery tail added to `utils/csvExport.ts`, and the "Accountant package
+> (.zip)" action on `ExportDataScreen` — 11 files bundled into
+> `TradeReady-Accounting_<start>_<end>.zip`. Owner decisions honored:
+> receipt attachments explicitly deferred (device-local, PII-heavy);
+> `vehicles.csv` omitted (no vehicle identity in the models); refund columns
+> omitted (no refund concept — voids only); nothing invented. Output is
+> deterministic for identical data + range (zeroed zip timestamps, fixed
+> entry order, stable row ordering, no wall-clock in any payload) and adds
+> zero new dependencies. Gate green: tsc 0, 2,768 tests / 205 suites, lint
+> 0. **Remaining:** owner device smoke, then the `ExportDataScreen` UI
+> change reaches users on the next OTA (standing owner call — not yet
+> OTA'd).
 
 > **Added 2026-08-06** (deepens next-queue item 7; its low-urgency ranking
 > stands). All referenced files verified present 2026-08-06

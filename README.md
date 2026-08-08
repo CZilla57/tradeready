@@ -173,6 +173,28 @@ Nothing to set up here — it's built in and ready whenever you want it.
 
 ---
 
+## Step 9 — Export data (optional)
+
+Nothing to set up here — it's built in and ready whenever you want it.
+
+- **Export data** — the download icon in the Money tab's header opens Export
+  Data: pick a date range (this month/quarter/year, last year, all time, or
+  custom) and share Income, Expenses, or Mileage as its own CSV file (opens
+  in Excel, Numbers, Google Sheets, or imports into accounting software;
+  income is listed one row per payment received).
+- **Accountant package (.zip)** (added 2026-08-07) — the same screen's
+  top action bundles everything for the selected range into one file
+  (`TradeReady-Accounting_<start>_<end>.zip`): invoices, invoice line items,
+  active payments, full payment activity (including voided), expenses (with
+  a linked-job column), mileage, customers, a category-id-to-label map, plus
+  a warnings file and a plain-English README describing every file and the
+  cash-basis convention. It's built entirely from data already in the app —
+  no new dependency — and produces byte-identical output for the same data
+  and range. Receipt photos are not bundled yet; `expenses.csv` only flags
+  which rows have one (`Has Receipt` column).
+
+---
+
 ## File map — what does what
 
 ```
@@ -249,6 +271,9 @@ utils/
   customerMix.ts                 ← Customer mix analytics (new vs repeat)
   expenseTrends.ts               ← Expense trends analytics
   revenueForecast.ts             ← Revenue forecast analytics
+  csvExport.ts                   ← Accounting CSV export: income/expenses/mileage builders + shareCsv/shareZip
+  zipStore.ts                    ← Zero-dependency stored-ZIP writer (crc32/utf8/base64/buildZip)
+  accountingPackage.ts           ← Accountant package builder — bundles CSVs + control files into a deterministic .zip
   csvImport.ts                   ← RFC-4180 CSV parser (never throws) + import-batch content hash
   importMapping.ts               ← Per-entity field defs, header-synonym detection (Jobber/HCP/QB), date-format parsing
   importEngine.ts                ← Pure per-entity import builders, status/category mapping, undo (stripBatch)
@@ -306,6 +331,7 @@ screens/
   MoneyScreen.tsx                ← Money tab: dashboard, expense log, analytics cards
   MileageLogScreen.tsx           ← Full mileage trip log (reached from Mileage deduction card)
   AddTripScreen.tsx              ← Add / edit trip (odometer start/end, from/to endpoint)
+  ExportDataScreen.tsx           ← Export data: per-dataset CSVs + the accountant package (.zip)
   CustomersScreen.tsx            ← Customer list with search
   CustomerDetailScreen.tsx       ← Customer history, notes, contact actions
   AddCustomerScreen.tsx          ← Add / edit customer
@@ -668,6 +694,12 @@ stay visible in the ledger history but drop out of collected totals — and, if
 money genuinely moved, record the new reality manually. Overpayment (a
 customer paying more than the balance) is the one case shown explicitly, as
 its own figure.
+
+**The accountant package doesn't include receipt images (added 2026-08-07).**
+The export's `expenses.csv` flags which expenses have a receipt attached
+(`Has Receipt` column) but does not bundle the receipt photos themselves —
+they stay device-local, the same as everywhere else in the app. Bundling
+receipts into the .zip is a possible follow-up, not built.
 
 **An expense can only be linked to a job when you log it (added 2026-08-07).**
 The "Link to job" picker appears in the Add Expense sheet at creation time.
