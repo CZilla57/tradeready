@@ -31,7 +31,7 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!STRIPE_SECRET_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
-    return res.status(500).json({ error: 'Server misconfiguration. Check Vercel environment variables.' });
+    return res.status(500).json({ error: 'Server misconfiguration. Check the server environment configuration.' });
   }
 
   const auth = req.headers['authorization'];

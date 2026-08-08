@@ -58,7 +58,7 @@ module.exports = async function handler(req, res) {
   }
 
   if (!STRIPE_SECRET_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
-    return res.status(500).json({ error: 'Server misconfiguration. Check Vercel environment variables.' });
+    return res.status(500).json({ error: 'Server misconfiguration. Check the server environment configuration.' });
   }
 
   // Auth: verify Supabase JWT
