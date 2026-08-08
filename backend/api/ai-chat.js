@@ -42,7 +42,7 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!GROQ_API_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    return res.status(500).json({ error: 'Server misconfiguration. Check Vercel environment variables.' });
+    return res.status(500).json({ error: 'Server misconfiguration. Check the server environment configuration.' });
   }
 
   // Authenticate caller via Supabase JWT
