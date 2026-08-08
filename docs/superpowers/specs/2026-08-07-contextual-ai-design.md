@@ -4,7 +4,8 @@
 **Status:** APPROVED 2026-08-07; v1 Phases A–C implemented 2026-08-08 on
 `feat/contextual-ai-insights` (A foundation `ffcd328`, B low_margin_estimate
 `c91a624`, C maintenance_due `7f9eab9`). Phase D (`expense_anomaly`) was
-owner-optional and was not opted in. Deviation from §A's id table: the
+owner-optional; opted in and built 2026-08-08 on `feat/expense-anomaly-insight`
+(business-level only per §D, strictly-greater-than threshold). Deviation from §A's id table: the
 low-margin id prefix is `low_margin_estimate:` (kind-prefixed, consistent
 with every other id), not the `low_margin:` shorthand written there.
 **Kickoff:** `docs/post-launch-feature-roadmap.md` Phase 15 (owner-curated, 2026-08-06)

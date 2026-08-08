@@ -5,7 +5,8 @@
 // The card (components/InsightsCard.tsx) renders the first 3 of whatever this
 // returns, so PRIORITY IS THE ORDER THE RULES RUN in selectTodayInsights.
 
-import type { Job, Invoice, Customer, RecurringJob } from "../types/models";
+import type { Job, Invoice, Customer, RecurringJob, Expense, ExpenseCategoryId } from "../types/models";
+import { EXPENSE_CATEGORIES } from "./moneyUtils";
 import { computeTimeTracking, formatElapsed } from "./timeTracking";
 import { computeEstimateBreakdown } from "./pricingEngine";
 import { formatLaborHint, largestFreeGap } from "./scheduleSmarts";
@@ -31,7 +32,8 @@ export type InsightKind =
   | "due_soon"
   | "open_slot"
   | "unscheduled_approved"
-  | "maintenance_due";
+  | "maintenance_due"
+  | "expense_anomaly";
 
 export type InsightTarget =
   | { type: "job"; jobId: string }
@@ -42,7 +44,8 @@ export type InsightTarget =
   | { type: "schedule"; jobId: string }
   | { type: "selectDate"; date: string }
   | { type: "customer"; customerId: string }
-  | { type: "customers" };
+  | { type: "customers" }
+  | { type: "money" };
 
 export type TodayInsight = {
   kind: InsightKind;
@@ -420,6 +423,102 @@ function selectMaintenanceDue(
   }];
 }
 
+/** Month-to-date spend must exceed this multiple of the prior-3-month average
+ * to surface — 1.5× is a real spike, not seasonal drift. */
+const EXPENSE_ANOMALY_MULT = 1.5;
+/** Below this month-to-date total the multiple is noise — a $40 month that
+ * doubles to $90 is not worth a card. */
+const EXPENSE_ANOMALY_MIN_MTD = 200;
+
+/** The `YYYY-MM` string `offset` whole months before another — pure component
+ * math, never Date-parsing the string (FA-039). */
+function shiftMonth(ym: string, offset: number): string {
+  let y = Number(ym.slice(0, 4));
+  let m = Number(ym.slice(5, 7)) - offset;
+  while (m <= 0) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * expense_anomaly: business-level spend is running hot this month. Fires when
+ * month-to-date expense total exceeds EXPENSE_ANOMALY_MULT × the average of the
+ * prior three FULL calendar months — with all three non-zero (a sample floor:
+ * no proration, no guessing from thin history) and MTD ≥ EXPENSE_ANOMALY_MIN_MTD
+ * (small-base noise floor). Business-level only; per-job attribution is Phase
+ * 13's territory and deliberately out of scope here. All month math is
+ * local-frame string work (FA-039) — `expense.date` is a local YYYY-MM-DD,
+ * never Date-parsed. One row, month-scoped id: a dismissal lasts the rest of the
+ * month and next month is a fresh question. Fires strictly greater than the
+ * threshold (exactly 1.5× is silent), matching the spec's ">" wording.
+ */
+function selectExpenseAnomaly(expenses: Expense[], now: Date): TodayInsight[] {
+  const today = formatLocalDate(now); // local YYYY-MM-DD (FA-039)
+  const currentYM = today.slice(0, 7);
+  const priorYMs = [shiftMonth(currentYM, 1), shiftMonth(currentYM, 2), shiftMonth(currentYM, 3)];
+
+  let mtd = 0;
+  const priorTotals = [0, 0, 0];
+  const mtdByCat: Partial<Record<ExpenseCategoryId, number>> = {};
+  const priorByCat: Partial<Record<ExpenseCategoryId, number>> = {};
+  for (const e of expenses) {
+    const date = e.date || "";
+    const ym = date.slice(0, 7);
+    const amount = e.amount || 0;
+    if (ym === currentYM && date <= today) {
+      // Month-to-date: current month, up to and including today (string compare
+      // is safe — same month, same YYYY-MM-DD format).
+      mtd += amount;
+      mtdByCat[e.category] = (mtdByCat[e.category] || 0) + amount;
+    } else {
+      const idx = priorYMs.indexOf(ym);
+      if (idx >= 0) {
+        priorTotals[idx] += amount;
+        priorByCat[e.category] = (priorByCat[e.category] || 0) + amount;
+      }
+    }
+  }
+
+  if (priorTotals.some((t) => !(t > 0))) return []; // need three full non-zero months
+  const avg = (priorTotals[0] + priorTotals[1] + priorTotals[2]) / 3;
+  if (!(avg > 0) || mtd < EXPENSE_ANOMALY_MIN_MTD || !(mtd > EXPENSE_ANOMALY_MULT * avg)) return [];
+
+  const pct = Math.round(((mtd - avg) / avg) * 100);
+
+  // Biggest driver: the category with the largest jump over its own prior-3-mo
+  // average — the concrete "where the money went" line in the reason.
+  let topCat: ExpenseCategoryId | null = null;
+  let topDelta = -Infinity;
+  let topMtd = 0;
+  let topAvg = 0;
+  for (const id of Object.keys(mtdByCat) as ExpenseCategoryId[]) {
+    const cMtd = mtdByCat[id] || 0;
+    const cAvg = (priorByCat[id] || 0) / 3;
+    const delta = cMtd - cAvg;
+    if (delta > topDelta) {
+      topDelta = delta;
+      topCat = id;
+      topMtd = cMtd;
+      topAvg = cAvg;
+    }
+  }
+  const catLabel = EXPENSE_CATEGORIES.find((c) => c.id === topCat)?.label ?? "Other";
+
+  return [{
+    kind: "expense_anomaly",
+    id: `expense_anomaly:${currentYM}`,
+    title: `Spending is running ${pct}% above your recent monthly average`,
+    detail: `${formatMoney(mtd)} so far vs ${formatMoney(avg)} average`,
+    reason:
+      `This month you've spent ${formatMoney(mtd)} through ${today}, versus a ` +
+      `${formatMoney(avg)} average over the prior three months ` +
+      `(${priorYMs[0]}, ${priorYMs[1]}, ${priorYMs[2]}) — ${pct}% higher. Biggest driver: ` +
+      `${catLabel} (${formatMoney(topMtd)} vs ${formatMoney(topAvg)} average). ` +
+      `Dismissing hides this for the rest of the month.`,
+    target: { type: "money" },
+  }];
+}
+
 /** Phase 15 additions ride an options bag so the positional signature stays
  * stable as rules gain inputs. */
 export type InsightExtras = {
@@ -430,6 +529,8 @@ export type InsightExtras = {
   customers?: Customer[];
   /** Active recurring-job rules — suppress maintenance_due for covered customers. */
   recurringJobs?: RecurringJob[];
+  /** Expense records — enables the expense_anomaly rule when provided. */
+  expenses?: Expense[];
 };
 
 export function selectTodayInsights(
@@ -451,5 +552,8 @@ export function selectTodayInsights(
     // Long-horizon, so it rides last — it must never crowd out today's-money
     // rows given the card's top-3 cap.
     ...selectMaintenanceDue(safeJobs, extras.customers ?? [], extras.recurringJobs ?? [], now),
+    // Business-level spend trend — lowest priority (a month-scale signal, not a
+    // today action), so it sits after every job/invoice/customer row.
+    ...selectExpenseAnomaly(extras.expenses ?? [], now),
   ];
 }

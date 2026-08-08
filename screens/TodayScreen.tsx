@@ -25,6 +25,7 @@ import {
   loadSettings,
   resolveCustomer,
   loadInvoices,
+  loadExpenses,
   loadBookingRequests,
   markBookingRequestHandled,
   loadRecurringJobs,
@@ -59,7 +60,7 @@ import {
   type SetupChecklistState,
   type SetupTaskId,
 } from '../utils/setupChecklist';
-import type { Job, Invoice, Customer, RecurringJob, Settings, BookingRequest } from '../types/models';
+import type { Job, Invoice, Customer, RecurringJob, Settings, BookingRequest, Expense } from '../types/models';
 import { reportError, track } from '../utils/analytics';
 import type { TodayStackScreenProps } from '../types/navigation';
 
@@ -440,6 +441,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [bookingRequests, setBookingRequests] = useState<BookingRequest[]>([]);
   const [recurringJobs, setRecurringJobs] = useState<RecurringJob[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -448,7 +450,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       async function fetchTodayData() {
         setLoading(true);
         try {
-          const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings, recurring] = await Promise.all([
+          const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings, recurring, expensesList] = await Promise.all([
             loadJobs(),
             getExpectedEarningsForDate(todayString),
             loadLeadJobs(),
@@ -458,10 +460,12 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
             loadInvoices(),
             loadBookingRequests(),
             loadRecurringJobs(),
+            loadExpenses(),
           ]);
           if (active) {
             setBookingRequests(bookings);
             setRecurringJobs(recurring);
+            setExpenses(expensesList);
             setAllJobs(allJobsList);
             setEarnings(expectedEarnings);
             setOverdueInvoices(filterOverdueInvoices(allInvoices));
@@ -488,7 +492,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
   );
 
   const { refreshing, onRefresh } = useRefresh(async () => {
-    const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings, recurring] = await Promise.all([
+    const [allJobsList, expectedEarnings, leads, loadedSettings, customerList, checklist, allInvoices, bookings, recurring, expensesList] = await Promise.all([
       loadJobs(),
       getExpectedEarningsForDate(todayString),
       loadLeadJobs(),
@@ -498,9 +502,11 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       loadInvoices(),
       loadBookingRequests(),
       loadRecurringJobs(),
+      loadExpenses(),
     ]);
     setBookingRequests(bookings);
     setRecurringJobs(recurring);
+    setExpenses(expensesList);
     setAllJobs(allJobsList);
     setEarnings(expectedEarnings);
     setOverdueInvoices(filterOverdueInvoices(allInvoices));
@@ -692,6 +698,9 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
       case 'customers':
         navigation.getParent()?.navigate('Customers');
         break;
+      case 'money':
+        navigation.getParent()?.navigate('Money');
+        break;
       default: {
         // Compile-time exhaustiveness: a new InsightTarget variant fails
         // typecheck here instead of silently no-oping at runtime.
@@ -882,6 +891,7 @@ export default function TodayScreen({ navigation }: TodayStackScreenProps<'Today
           invoices={invoices}
           customers={customers}
           recurringJobs={recurringJobs}
+          expenses={expenses}
           settings={settings}
           onNavigate={handleInsightNavigate}
           onAskCoach={handleAskCoach}

@@ -5,7 +5,8 @@
 
 import { selectTodayInsights } from '../utils/todayInsights';
 import { resolveSchedule } from '../utils/scheduleConfig';
-import type { Job, Invoice, Customer, RecurringJob, Settings } from '../types/models';
+import { formatMoney } from '../utils/format';
+import type { Job, Invoice, Customer, RecurringJob, Settings, Expense } from '../types/models';
 
 const NOW = new Date(2026, 7, 4, 10, 0);
 
@@ -48,6 +49,28 @@ function invoice(overrides: Partial<Invoice>): Invoice {
     paid: false,
     ...overrides,
   };
+}
+
+function expense(overrides: Partial<Expense>): Expense {
+  return {
+    id: 'e1',
+    createdAt: '2026-08-01',
+    description: 'Supplies',
+    amount: 100,
+    category: 'materials',
+    date: '2026-08-01',
+    notes: '',
+    receiptUri: null,
+    ...overrides,
+  };
+}
+
+/** Convenience: expense_anomaly is fed via the extras bag (5th arg). Filters to
+ * the rule under test so an empty-jobs open_slot can't contaminate the count. */
+function anomalyInsights(expenses: Expense[]) {
+  return selectTodayInsights([], [], NOW, undefined, { expenses }).filter(
+    (i) => i.kind === 'expense_anomaly'
+  );
 }
 
 /** An ended clock session of exactly `hours` on Aug 4. */
@@ -553,5 +576,89 @@ describe('insight identity and reasons', () => {
     const [due] = selectTodayInsights([], [invoice({ id: 'i9' })], NOW);
     expect(due.reason).toContain('INV-0042');
     expect(due.reason).toContain('due tomorrow');
+  });
+});
+
+describe('expense_anomaly', () => {
+  // NOW = Aug 4 2026. Current month 2026-08 (MTD through the 4th); prior three
+  // full months = 2026-07, 2026-06, 2026-05.
+  const priorEven = [
+    expense({ id: 'p1', date: '2026-07-15', amount: 1000 }),
+    expense({ id: 'p2', date: '2026-06-15', amount: 1000 }),
+    expense({ id: 'p3', date: '2026-05-15', amount: 1000 }),
+  ];
+
+  test('fires above 1.5x the prior-3-month average, with % and money in the card', () => {
+    const [i] = anomalyInsights([...priorEven, expense({ id: 'm', date: '2026-08-02', amount: 1600 })]);
+    expect(i.kind).toBe('expense_anomaly');
+    expect(i.id).toBe('expense_anomaly:2026-08');
+    expect(i.title).toContain('60%'); // (1600-1000)/1000
+    expect(i.detail).toBe(`${formatMoney(1600)} so far vs ${formatMoney(1000)} average`);
+    expect(i.target).toEqual({ type: 'money' });
+  });
+
+  test('threshold is strictly greater than 1.5x — exactly 1.5x is silent', () => {
+    expect(anomalyInsights([...priorEven, expense({ id: 'm', date: '2026-08-01', amount: 1500 })])).toHaveLength(0);
+    expect(anomalyInsights([...priorEven, expense({ id: 'm', date: '2026-08-01', amount: 1501 })])).toHaveLength(1);
+  });
+
+  test('MTD below the $200 noise floor never fires, even at a huge ratio', () => {
+    const prior = [
+      expense({ id: 'p1', date: '2026-07-15', amount: 100 }),
+      expense({ id: 'p2', date: '2026-06-15', amount: 100 }),
+      expense({ id: 'p3', date: '2026-05-15', amount: 100 }),
+    ];
+    expect(anomalyInsights([...prior, expense({ id: 'm', date: '2026-08-01', amount: 199 })])).toHaveLength(0);
+    expect(anomalyInsights([...prior, expense({ id: 'm', date: '2026-08-01', amount: 200 })])).toHaveLength(1);
+  });
+
+  test('requires all three prior months non-zero — a gap silences it', () => {
+    const twoMonths = [
+      expense({ id: 'p1', date: '2026-07-15', amount: 1000 }),
+      expense({ id: 'p2', date: '2026-06-15', amount: 1000 }),
+      // no 2026-05 record → that month totals 0
+      expense({ id: 'm', date: '2026-08-01', amount: 5000 }),
+    ];
+    expect(anomalyInsights(twoMonths)).toHaveLength(0);
+  });
+
+  test('thin or empty history is silent', () => {
+    expect(anomalyInsights([])).toHaveLength(0);
+    expect(anomalyInsights([expense({ date: '2026-07-15', amount: 1000 })])).toHaveLength(0);
+  });
+
+  test('MTD is to-date — a future-dated current-month expense is excluded', () => {
+    const withFuture = [
+      ...priorEven,
+      expense({ id: 'now', date: '2026-08-02', amount: 1400 }),
+      expense({ id: 'future', date: '2026-08-20', amount: 1000 }), // after today (the 4th)
+    ];
+    // Counting only the 08-02 $1400 leaves MTD 1400 ≤ 1.5×1000 → silent.
+    expect(anomalyInsights(withFuture)).toHaveLength(0);
+  });
+
+  test('reason names the biggest-driver category', () => {
+    const perMonth = (ym: string) => [
+      expense({ id: `mat-${ym}`, date: `${ym}-15`, amount: 900, category: 'materials' }),
+      expense({ id: `fuel-${ym}`, date: `${ym}-15`, amount: 100, category: 'fuel' }),
+    ];
+    const expenses = [
+      ...perMonth('2026-07'), ...perMonth('2026-06'), ...perMonth('2026-05'),
+      expense({ id: 'mat-08', date: '2026-08-02', amount: 900, category: 'materials' }),
+      expense({ id: 'fuel-08', date: '2026-08-02', amount: 1200, category: 'fuel' }), // the spike
+    ];
+    const [i] = anomalyInsights(expenses);
+    expect(i).toBeDefined();
+    expect(i.reason).toContain('Fuel & Transport');
+  });
+
+  test('rides last in priority order, after job/invoice rows', () => {
+    const overrunJob = job({ timeSessions: [session(3.5)] }); // 3.5h vs 2h estimate → labor_overrun
+    const insights = selectTodayInsights([overrunJob], [], NOW, undefined, {
+      expenses: [...priorEven, expense({ id: 'm', date: '2026-08-02', amount: 1600 })],
+    });
+    expect(insights.length).toBeGreaterThan(1);
+    expect(insights[0].kind).toBe('labor_overrun');
+    expect(insights[insights.length - 1].kind).toBe('expense_anomaly');
   });
 });

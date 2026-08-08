@@ -50,6 +50,7 @@ jest.mock("../utils/storage", () => ({
   resolveCustomer: jest.fn(() => null),
   loadBookingRequests: jest.fn(() => Promise.resolve([])),
   loadRecurringJobs: jest.fn(() => Promise.resolve([])),
+  loadExpenses: jest.fn(() => Promise.resolve([])),
 }));
 
 jest.mock("../utils/setupChecklist", () => ({
