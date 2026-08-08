@@ -29,6 +29,16 @@ export function recoverIssueDate(id: string): string | null {
   return `${y}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
+/** An invoice is in scope for a range if its issue date (recovered from the id)
+ *  falls in range, OR it has at least one non-voided in-range payment. Shared
+ *  by buildInvoicesCsv, buildLineItemsCsv, collectWarnings and buildSummary so
+ *  the "in scope" definition exists exactly once. */
+export function isInvoiceInScope(i: Invoice, start: Date, end: Date): boolean {
+  const issue = recoverIssueDate(i.id);
+  return (issue !== null && isInRange(issue, start, end)) ||
+    paymentsInRange(i, start, end).some((p) => !p.voidedAt);
+}
+
 export function paymentSource(id: string): "device" | "stripe" | "legacy" {
   if (id.startsWith("stripe_")) return "stripe";
   if (id.startsWith("legacy_")) return "legacy";
@@ -50,9 +60,7 @@ const INVOICES_HEADER = ["Invoice #", "Issue Date", "Customer", "Email", "Phone"
 export function buildInvoicesCsv(invoices: Invoice[], start: Date, end: Date): string {
   const rows = invoices
     .map((i) => ({ i, issue: recoverIssueDate(i.id) }))
-    .filter(({ i, issue }) =>
-      (issue !== null && isInRange(issue, start, end)) ||
-      paymentsInRange(i, start, end).some((p) => !p.voidedAt))
+    .filter(({ i }) => isInvoiceInScope(i, start, end))
     .sort((a, b) => {
       if (a.issue === b.issue) return byCode(a.i.number || "", b.i.number || "") || byCode(a.i.id, b.i.id);
       if (a.issue === null) return 1;
@@ -71,12 +79,9 @@ const LINE_ITEMS_HEADER = ["Invoice #", "Description", "Category", "Amount"];
 export function buildLineItemsCsv(invoices: Invoice[], start: Date, end: Date): string {
   const rows: string[][] = [];
   const inScope = invoices
-    .map((i) => ({ i, issue: recoverIssueDate(i.id) }))
-    .filter(({ i, issue }) =>
-      (issue !== null && isInRange(issue, start, end)) ||
-      paymentsInRange(i, start, end).some((p) => !p.voidedAt))
-    .sort((a, b) => byCode(a.i.number || "", b.i.number || "") || byCode(a.i.id, b.i.id));
-  for (const { i } of inScope) {
+    .filter((i) => isInvoiceInScope(i, start, end))
+    .sort((a, b) => byCode(a.number || "", b.number || "") || byCode(a.id, b.id));
+  for (const i of inScope) {
     for (const li of i.lineItems || []) {
       rows.push([i.number || "", li.description || "", li.category, money(li.amount)]);
     }
@@ -140,15 +145,12 @@ export function collectWarnings(input: PackageInput, start: Date, end: Date): Ex
   const push = (code: string, severity: "warn" | "info", subject: string, detail: string) =>
     w.push({ code, severity, subject, detail });
 
-  const inScopeInvoices = input.invoices.filter((i) => {
-    const issue = recoverIssueDate(i.id);
-    return (issue !== null && isInRange(issue, start, end)) ||
-      paymentsInRange(i, start, end).some((p) => !p.voidedAt);
-  });
+  const inScopeInvoices = input.invoices.filter((i) => isInvoiceInScope(i, start, end));
 
   const activeRows = buildIncomeCsv(input.invoices, start, end).trim().split("\r\n").length - 1;
   const expenseRows = input.expenses.filter((e) => isInRange(e.date, start, end)).length;
   const tripRows = input.trips.filter((t) => isInRange(t.date, start, end)).length;
+  const hasPaymentActivity = input.invoices.some((i) => paymentsInRange(i, start, end).length > 0);
 
   for (const i of inScopeInvoices) {
     if (recoverIssueDate(i.id) === null)
@@ -159,6 +161,9 @@ export function collectWarnings(input: PackageInput, start: Date, end: Date): Ex
       push("legacy_invoice_no_ledger", "info", i.number || i.id, "Paid before payment history existed; derived from the paid flag.");
     if (overpaidAmount(i) > 0)
       push("overpayment_present", "warn", i.number || i.id, `Overpaid by ${overpaidAmount(i).toFixed(2)}.`);
+  }
+
+  for (const i of input.invoices) {
     if (paymentsInRange(i, start, end).some((p) => p.voidedAt))
       push("voided_payments_present", "info", i.number || i.id, "Contains voided payments (see payment-activity.csv).");
   }
@@ -171,7 +176,8 @@ export function collectWarnings(input: PackageInput, start: Date, end: Date): Ex
   if (tripRows > 0)
     push("mileage_is_device_local", "info", "mileage.csv", "Trips are stored on this device only; another device may hold others.");
 
-  if (activeRows === 0 && expenseRows === 0 && tripRows === 0 && inScopeInvoices.length === 0 && input.customers.length === 0)
+  if (activeRows === 0 && expenseRows === 0 && tripRows === 0 && inScopeInvoices.length === 0 &&
+      input.customers.length === 0 && !hasPaymentActivity)
     push("no_records_in_range", "info", "range", "No records fell in the selected date range.");
 
   return w;
@@ -208,17 +214,15 @@ export function buildSummary(input: PackageInput, start: Date, end: Date): Packa
   const expensesTotal = input.expenses
     .filter((e) => isInRange(e.date, start, end))
     .reduce((s, e) => s + toAmount(e.amount), 0);
-  const inScopeInvoices = input.invoices.filter((i) => {
-    const issue = recoverIssueDate(i.id);
-    return (issue !== null && isInRange(issue, start, end)) ||
-      paymentsInRange(i, start, end).some((p) => !p.voidedAt);
-  });
+  const inScopeInvoices = input.invoices.filter((i) => isInvoiceInScope(i, start, end));
   const trips = input.trips.filter((t) => isInRange(t.date, start, end));
   const r = ymdLocalRange(start, end);
+  const cashCollected = round2(cash);
+  const expensesTotalRounded = round2(expensesTotal);
   return {
     range_start: r.start, range_end: r.end,
-    cash_collected: round2(cash), voided_amount: round2(voided), expenses_total: round2(expensesTotal),
-    net_cash: round2(cash - expensesTotal), net_cash_basis: "cash basis; before owner labor",
+    cash_collected: cashCollected, voided_amount: round2(voided), expenses_total: expensesTotalRounded,
+    net_cash: round2(cashCollected - expensesTotalRounded), net_cash_basis: "cash basis; before owner labor",
     invoices_count: inScopeInvoices.length, customers_count: input.customers.length,
     mileage_trips_count: trips.length, mileage_miles_total: round2(trips.reduce((s, t) => s + toAmount(t.miles), 0)),
     warnings_count: collectWarnings(input, start, end).length,
