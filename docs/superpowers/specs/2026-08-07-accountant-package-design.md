@@ -1,8 +1,10 @@
 # Accountant Package & Bookkeeping Handoff — Design
 
 **Date:** 2026-08-07 · **Branch:** `feat/accountant-package` · **Roadmap:** post-launch Phase 14
-**Status:** owner-approved design (2026-08-07). Deepens the shipped CSV export (Phase 7)
-into a single accountant-ready ZIP while preserving every existing per-dataset export.
+**Status:** BUILT on `feat/accountant-package` (Tasks 1–8, 2026-08-07) — gate
+green (tsc 0 / all tests / lint 0); owner device smoke pending. Deepens the
+shipped CSV export (Phase 7) into a single accountant-ready ZIP while
+preserving every existing per-dataset export.
 
 ## Goal
 

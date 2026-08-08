@@ -144,6 +144,16 @@ Everything financial in one place.
   mileage OR actual fuel expenses, never both; unset deducts neither). Estimate
   only, persistent disclaimer; SS wage base is versioned per year (annual
   update: docs/ops-monthly-checklist.md)
+- Data export (`ExportDataScreen`, reached via the Money tab header's
+  download icon): per-dataset CSV export (income/expenses/mileage,
+  `utils/csvExport.ts`) plus an accountant package (added 2026-08-07) — a
+  single `.zip` bundling invoices, invoice line items, payments (active +
+  full activity), expenses, mileage, customers, a category map, and control
+  files (warnings + summary + README) (`utils/accountingPackage.ts`). The
+  zip is written by a zero-dependency, deterministic "stored" (uncompressed)
+  writer (`utils/zipStore.ts` — crc32/utf8/base64/buildZip, zeroed
+  timestamps, fixed entry order) and shared via the `shareZip` tail added to
+  `utils/csvExport.ts`. ⚠️ Receipt images are not bundled — deferred.
 - ⚠️ Receipt scanning: not built (manual entry only)
 - ⚠️ GPS auto-tracking of mileage: not built (odometer entry only)
 
