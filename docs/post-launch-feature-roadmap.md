@@ -35,7 +35,7 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 11 | Calendar, availability & real online booking | 🔥🔥🔥 | High | Booking link (#9), smart pickers, reminders | staged 2026-08-06 — prompt ready |
 | 12 | Customer portal completion | 🔥🔥 | Med–High | Held portal branch, approval/change-order endpoints | staged — precondition: merge `feat/customer-portal` |
 | 13 | Estimated-vs-actual job profitability | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | **MERGED** `683ec15` 2026-08-07 (device smoke + OTA pending) |
-| 14 | Accountant package / bookkeeping handoff | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | **BUILT** on `feat/accountant-package` (device smoke pending) |
+| 14 | Accountant package / bookkeeping handoff | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | **MERGED** `d89a968` 2026-08-07 (device smoke + OTA pending) |
 | 15 | Contextual AI & proactive operations | 🔥🔥 | Med–High | todayInsights, follow-ups, dunning, AI layer | staged — sequenced after #13 |
 
 ---
@@ -413,9 +413,12 @@ After approval, implement the pure calculation layer and exhaustive tests before
 
 ## Phase 14 — Accountant package & bookkeeping handoff
 
-> **STATUS (2026-08-07): BUILT** on `feat/accountant-package` (Tasks 1–8) per
-> the owner-approved design
-> (`docs/superpowers/specs/2026-08-07-accountant-package-design.md`):
+> **STATUS (2026-08-07): MERGED to master** (no-ff `d89a968`) per the
+> owner-approved design
+> (`docs/superpowers/specs/2026-08-07-accountant-package-design.md`), built
+> subagent-driven (10 tasks, each implement+review+gate) with a clean
+> whole-branch final review (Ready-to-merge) plus a polish commit
+> (`e021009`) and a stored-ZIP round-trip test (`171aa43`):
 > `utils/zipStore.ts` (zero-dependency stored/uncompressed ZIP writer —
 > crc32/utf8/base64/buildZip), `utils/accountingPackage.ts` (per-file
 > builders for invoices.csv, invoice-line-items.csv, active-payments.csv,
@@ -430,10 +433,10 @@ After approval, implement the pure calculation layer and exhaustive tests before
 > omitted (no refund concept — voids only); nothing invented. Output is
 > deterministic for identical data + range (zeroed zip timestamps, fixed
 > entry order, stable row ordering, no wall-clock in any payload) and adds
-> zero new dependencies. Gate green: tsc 0, 2,768 tests / 205 suites, lint
-> 0. **Remaining:** owner device smoke, then the `ExportDataScreen` UI
-> change reaches users on the next OTA (standing owner call — not yet
-> OTA'd).
+> zero new dependencies. Gate green on the merged tree: tsc 0, 2,775 tests /
+> 206 suites, lint 0. **Remaining:** owner device smoke, then the
+> `ExportDataScreen` UI change reaches users on the next OTA (standing owner
+> call — not yet OTA'd).
 
 > **Added 2026-08-06** (deepens next-queue item 7; its low-urgency ranking
 > stands). All referenced files verified present 2026-08-06
