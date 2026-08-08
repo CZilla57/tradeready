@@ -227,3 +227,32 @@ export function buildSummary(input: PackageInput, start: Date, end: Date): Packa
 export function buildSummaryJson(summary: PackageSummary): string {
   return JSON.stringify(summary, null, 2);
 }
+
+export function buildReadme(summary: PackageSummary): string {
+  return [
+    `TradeReady accounting export`,
+    `Date range: ${summary.range_start} to ${summary.range_end}`,
+    ``,
+    `Income is reported on a cash basis: a payment appears on the date the money`,
+    `was actually received, so deposits and partial payments land in the right period.`,
+    ``,
+    `Files:`,
+    `  invoices.csv            One row per invoice (issue date, amount, paid, balance, status).`,
+    `  invoice-line-items.csv  Itemised breakdown; absent for manually-created invoices.`,
+    `  active-payments.csv     Money received (voided payments excluded). Cash-basis income.`,
+    `  payment-activity.csv    Every payment including voided ones, with void dates.`,
+    `  expenses.csv            Business expenses; Job column links to a job when set.`,
+    `  mileage.csv             Logged drives (raw miles; apply your own rate).`,
+    `  customers.csv           Customer contact details.`,
+    `  category-mapping.csv    Expense category id -> label reference.`,
+    `  export-warnings.csv     Anything the export could not fully determine.`,
+    `  summary.json            Control totals for reconciliation.`,
+    ``,
+    `Notes:`,
+    `  - No values are inferred. Unknown fields are left blank and flagged in export-warnings.csv.`,
+    `  - There is no refund concept in the app; only voids are recorded.`,
+    `  - Mileage and receipts are stored on the device only and may differ between devices.`,
+    `  - net_cash in summary.json is cash collected minus expenses (before paying yourself).`,
+    ``,
+  ].join("\n");
+}
