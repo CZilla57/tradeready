@@ -1,7 +1,7 @@
 # Post-Launch Feature Roadmap — Solo-Operator Features
 
-**Created:** 2026-07-17 · **Statuses updated:** 2026-08-06
-**Status:** Items **1–7 and 9 are SHIPPED** (merged to master; 1–2 OTA'd 2026-07-30, 5 OTA'd earlier, the rest live or riding the post-1.1.0 OTA). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). **Phases 11–15** (added 2026-08-06) stage the next generation with owner-curated kickoff prompts. For priorities, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
+**Created:** 2026-07-17 · **Statuses updated:** 2026-08-12
+**Status:** Items **1–7, 9, and 11–15 are SHIPPED** (merged to master; see each row/STATUS block for OTA state). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 (two-way SMS inbox) stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). **Phases 16–22** (added 2026-08-09) are a fresh competitive-gap review against Jobber/Housecall Pro/QuickBooks Self-Employed, scoped for post-1.2 — none built yet, all need owner go-ahead at kickoff. For priorities, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
 
 ## What this is
 
@@ -20,23 +20,31 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 ## Rule of the road: ship order
 
-| # | Feature | Impact | Effort | Reuses | Status (2026-08-06) |
+| # | Feature | Impact | Effort | Reuses | Status (2026-08-12) |
 |---|---------|--------|--------|--------|---------------------|
-| 1 | Estimate approval loop (+ e-sign) | 🔥🔥🔥 | Med | SendEstimateScreen, status pipeline, hosted legal site | **SHIPPED** — merged, OTA'd 2026-07-30 |
-| 2 | Appointment & "on my way" reminders | 🔥🔥🔥 | Low–Med | Notifications + composers (as built — cron/Resend rejected in design) | **SHIPPED** — merged, OTA'd 2026-07-30 |
-| 3 | Deposits / partial payments | 🔥🔥 | Med | Stripe Connect, invoice model | **SHIPPED** — merged; migration + backend live |
-| 4 | Tax set-aside / quarterly estimate | 🔥🔥🔥 (differentiator) | Med | P&L data, mileage, AI coach | **SHIPPED** — merged `acbeff1` |
-| 5 | Receipt OCR | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **SHIPPED** — merged `8144eca`, OTA'd |
-| 6 | Recurring invoices (maintenance plans) | 🔥 | Med | RecurringJobs engine, invoice model | **SHIPPED** — merged 2026-08-01 |
-| 7 | Accounting / CSV export | 🔥 | Low | Existing money/expense data | **SHIPPED** — merged 2026-08-01 |
+| 1 | <span style="color:green">Estimate approval loop (+ e-sign)</span> | 🔥🔥🔥 | Med | SendEstimateScreen, status pipeline, hosted legal site | **SHIPPED** — merged, OTA'd 2026-07-30 |
+| 2 | <span style="color:green">Appointment & "on my way" reminders</span> | 🔥🔥🔥 | Low–Med | Notifications + composers (as built — cron/Resend rejected in design) | **SHIPPED** — merged, OTA'd 2026-07-30 |
+| 3 | <span style="color:green">Deposits / partial payments</span> | 🔥🔥 | Med | Stripe Connect, invoice model | **SHIPPED** — merged; migration + backend live |
+| 4 | <span style="color:green">Tax set-aside / quarterly estimate</span> | 🔥🔥🔥 (differentiator) | Med | P&L data, mileage, AI coach | **SHIPPED** — merged `acbeff1` |
+| 5 | <span style="color:green">Receipt OCR</span> | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **SHIPPED** — merged `8144eca`, OTA'd |
+| 6 | <span style="color:green">Recurring invoices (maintenance plans)</span> | 🔥 | Med | RecurringJobs engine, invoice model | **SHIPPED** — merged 2026-08-01 |
+| 7 | <span style="color:green">Accounting / CSV export</span> | 🔥 | Low | Existing money/expense data | **SHIPPED** — merged 2026-08-01 |
 | 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog — approval-gated (dep + privacy label) |
-| 9 | Online booking / request-a-quote link | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | **SHIPPED** — merged `cec034f` 2026-08-04 |
+| 9 | <span style="color:green">Online booking / request-a-quote link</span> | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | **SHIPPED** — merged `cec034f` 2026-08-04 |
 | 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | deferred (reaffirmed 2026-08-06) |
-| 11 | Calendar, availability & real online booking | 🔥🔥🔥 | High | Booking link (#9), smart pickers, reminders | staged 2026-08-06 — prompt ready |
-| 12 | Customer portal completion | 🔥🔥 | Med–High | Held portal branch, approval/change-order endpoints | staged — precondition: merge `feat/customer-portal` |
-| 13 | Estimated-vs-actual job profitability | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | **MERGED** `683ec15` 2026-08-07 (device smoke + OTA pending) |
-| 14 | Accountant package / bookkeeping handoff | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | **MERGED** `d89a968` 2026-08-07 (device smoke + OTA pending) |
-| 15 | Contextual AI & proactive operations | 🔥🔥 | Med–High | todayInsights, follow-ups, dunning, AI layer | staged — sequenced after #13 |
+| 11 | <span style="color:green">Calendar, availability & real online booking</span> | 🔥🔥🔥 | High | Booking link (#9), smart pickers, reminders | **SHIPPED** — `feat/calendar-availability`, all 4 phases (2026-08-07) |
+| 12 | <span style="color:green">Customer portal completion</span> | 🔥🔥 | Med–High | Held portal branch, approval/change-order endpoints | **SHIPPED** — owner smoke PASSED, feature closed (2026-08-07) |
+| 13 | <span style="color:green">Estimated-vs-actual job profitability</span> | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | **SHIPPED** — merged `683ec15` 2026-08-07 |
+| 14 | <span style="color:green">Accountant package / bookkeeping handoff</span> | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | **SHIPPED** — merged `d89a968` 2026-08-07 |
+| 15 | <span style="color:green">Contextual AI & proactive operations</span> | 🔥🔥 | Med–High | todayInsights, follow-ups, dunning, AI layer | **SHIPPED** — merged `60da60b` 2026-08-07 |
+| 16 | Missed-call text-back | 🔥🔥🔥 | Med (evaluate-first) | Outreach/notification infra, Phase 10 provider decision | staged 2026-08-09 — prompt ready |
+| 17 | Live QuickBooks Online / Xero sync | 🔥🔥 | High (partner API) | csvExport.ts / Phase 14 mappings, backend AI-proxy pattern | staged 2026-08-09 — prompt ready |
+| 18 | In-person card payment (Tap to Pay) | 🔥🔥 | High (native + Apple entitlement) | Stripe Connect, payment ledger (Phase 3) | staged 2026-08-09 — prompt ready |
+| 19 | Legally-binding e-signature (upgrade) | 🔥 | Low–Med | Phase 1 consent snapshot + estimate-approval flow | staged 2026-08-09 — prompt ready |
+| 20 | Custom job/inspection forms & checklists | 🔥🔥 | Med–High | Photo pipeline, Job model, sync | staged 2026-08-09 — prompt ready |
+| 21 | Multi-property / equipment history | 🔥 | Med | Customer model, JobDetailScreen | staged 2026-08-09 — prompt ready |
+| 22 | Customer financing at checkout | 🔥 | High (lender partnership) | Invoice/estimate send flow | staged 2026-08-09 — prompt ready (business decision, not just eng) |
+| 23 | Read-only open API for other services | 🔥 | Med | Workers backend, owner-scoped RLS, portal-token pattern | staged 2026-08-12 — prompt ready |
 
 ---
 
@@ -577,6 +585,126 @@ After approval, implement two or three highest-value insights first and compare 
 
 ---
 
+## Phase 16 — Missed-call text-back
+
+> **Added 2026-08-09** — competitive-gap review against Jobber/Housecall Pro/
+> QuickBooks Self-Employed, scoped to solo-operator value (no team/dispatch
+> items). Not yet built.
+
+**Why:** The single most solo-relevant feature on this list — a customer calls while you're on a ladder with your hands full, you can't pick up, and the call just... ends. Housecall Pro's version auto-texts the caller with a "sorry I missed you, here's my booking link" message. Directly recovers jobs that would otherwise go to whoever answers first. Shares its phone-number-provisioning question with the deferred Phase 10 (two-way SMS) — evaluate together, since standing up SMS infrastructure for one and not the other is wasted spend either way.
+
+**Kickoff prompt:**
+> Load `superpowers:brainstorming` and `tradeready-architecture-contract`. Revisit Phase 10's two-way-SMS evaluation alongside this: I want missed calls to a tradesperson's business line to trigger an automatic text back (e.g. "Sorry I missed you — here's my booking link: ...") reusing the booking link from Phase 9/11. This requires either a provisioned business phone number (Twilio-style, ongoing per-message cost) or a carrier/CallKit-level integration — investigate what's actually feasible from an Expo/React Native app on iOS, since apps cannot generally intercept a missed call on someone else's cell number without call-forwarding setup. Give me an honest feasibility and cost memo first — this may be a no-go as a native app feature and more of a "forward your business number to Google Voice" setup guide instead. Only if there's a real in-app path, produce a phase-gated plan. Stop for go-ahead either way.
+
+## Phase 17 — Live QuickBooks Online / Xero sync
+
+> **Added 2026-08-09** — competitive-gap review, not yet built.
+
+**Why:** The Accountant Package (Phase 14) hands an accountant a ZIP of CSVs once a year — useful, but competitors post transactions directly into the customer's own QuickBooks Online or Xero ledger, which is what most solo owners' accountants actually expect and ask for. This is a bigger lift than it looks: it means registering as a developer with Intuit/Xero, building OAuth token storage + refresh, and mapping Job/Invoice/Expense onto their APIs — not just formatting a file.
+
+**Kickoff prompt:**
+> Load `superpowers:brainstorming`, `tradeready-architecture-contract`, and re-read the Phase 14 accountant-package spec (`docs/superpowers/specs/2026-08-07-accountant-package-design.md`) for the existing export mappings — reuse those field mappings rather than re-deriving them. I want to evaluate live QuickBooks Online and/or Xero sync (push invoices/expenses/customers, not just export a file). This needs OAuth app registration with Intuit and/or Xero (their developer approval process, sandbox testing, ongoing token refresh, and their own rate limits) — this is a new external dependency and partner relationship, not just code, so it needs explicit owner approval before any registration happens. Give me a go/no-go memo covering registration lead time, ongoing maintenance burden (their APIs change), and whether one-way push (safer) or two-way sync (riskier, conflict-prone) is the right scope. Only if it's a go, produce a phase-gated plan. Stop for go-ahead either way.
+
+## Phase 18 — In-person card payment (Tap to Pay)
+
+> **Added 2026-08-09** — competitive-gap review, not yet built.
+
+**Why:** Right now the only collection path is a Stripe payment link sent to the customer — there's no way to tap/swipe a card standing at the job site and get paid on the spot, which is a real friction point ("I'll mail you a check"). Apple's Tap to Pay on iPhone (contactless only, no extra hardware, works with the existing Stripe Connect integration via Stripe Terminal SDK) is the natural fit for a solo trade — no card reader to carry or lose. Requires a native module and a special Apple entitlement application, so this needs explicit dependency approval and has real lead time before any code lands.
+
+**Kickoff prompt:**
+> Load `superpowers:brainstorming`, `tradeready-payments-and-billing`, and `tradeready-architecture-contract`. I want to evaluate in-person card payment collection at the job site, reusing the existing Stripe Connect accounts — most likely via Stripe Terminal SDK's Tap to Pay on iPhone (contactless, no extra hardware). This requires a new native dependency and an Apple entitlement application (lead time, may be rejected) — flag this clearly as a dependency + app.json change requiring my approval before any registration or install. Cover how a collected in-person payment reconciles with the existing invoice/payment-ledger model (Phase 3) so it doesn't fork from the Stripe-link path. Give me a go/no-go recommendation with the entitlement lead time called out, then a phase-gated plan. Stop for go-ahead.
+
+## Phase 19 — Legally-binding e-signature (upgrade)
+
+> **Added 2026-08-09** — competitive-gap review, not yet built. **Note the
+> overlap with Phase 1:** the shipped estimate-approval loop already captures
+> a typed-name consent with an immutable snapshot, which is legally valid
+> consent under the U.S. ESIGN Act for most contractor-estimate purposes.
+> This phase is a genuine upgrade (drawn signature, applicable to any
+> document — estimates, contracts, change orders) but may not be worth the
+> build cost if typed-name consent already covers the real risk. Evaluate
+> before committing, don't assume it's needed.
+
+**Why:** Jobber/Housecall Pro let a customer draw a signature (finger/stylus) on any document, not just tap Approve. For most solo trades this is more about the *feel* of professionalism/being taken seriously on a big-ticket job (kitchen remodel, roof) than a legal necessity — the existing typed-name consent already covers the ESIGN Act bar.
+
+**Kickoff prompt:**
+> Load `superpowers:brainstorming` and re-read Phase 1's shipped consent-capture design (typed-name + immutable snapshot in the estimate-approval flow). Before building anything, give me an honest assessment: does a drawn signature meaningfully add legal or trust value over the typed-name consent already shipped, for a solo trade's estimates/contracts? If it's a go, I want it reusable across estimates, change orders (Phase — change-orders feature), and any future contract documents, using a lightweight canvas-based signature capture with no new native dependency if at all possible. Phase-gated plan, stop for go-ahead.
+
+## Phase 20 — Custom job/inspection forms & checklists
+
+> **Added 2026-08-09** — competitive-gap review, not yet built.
+
+**Why:** Jobber has a form builder — safety checklists, inspection reports, pre/post-job walkthroughs, each attachable to a job with photos and free text. TradeReady has no equivalent; today a solo tradesperson doing this kind of documentation is stuck with paper or a generic notes app. This is a genuine differentiator opportunity for licensed trades (HVAC/electrical/plumbing) that need documented inspections, and it reuses the existing photo pipeline and Job model.
+
+**Kickoff prompt:**
+> Load `superpowers:brainstorming`, `tradeready-architecture-contract`, and `tradeready-storage-and-sync`. I want custom job/inspection forms: the tradesperson defines a reusable checklist template (text items, pass/fail, photo-required fields), attaches an instance of it to a job, fills it in on-device (including photos, reusing the existing photo pipeline), and it becomes part of the job's record — exportable/shareable like an estimate PDF. Design the template data model carefully (this is new schema — flag any migration) and how templates sync/scope per-user. Start with a small built-in template library rather than a full drag-and-drop builder. Phase-gated plan, stop for go-ahead.
+
+## Phase 21 — Multi-property / equipment history
+
+> **Added 2026-08-09** — competitive-gap review, not yet built.
+
+**Why:** TradeReady's Customer model is flat — one address, no history of what equipment is installed where. Jobber's "Properties" concept lets one client have multiple service addresses, and tracks equipment (make/model/serial/install date/warranty) at each one, so a returning HVAC or appliance tech immediately sees what they're walking into. Useful for repeat/maintenance-plan customers (Phase 6) especially.
+
+**Kickoff prompt:**
+> Load `superpowers:brainstorming`, `tradeready-architecture-contract`, and `tradeready-storage-and-sync`. I want to extend the Customer model to support multiple service properties per customer, and optionally track equipment (type, make/model, serial number, install date, warranty expiration) per property, surfaced on CustomerDetailScreen and JobDetailScreen. This touches core data shapes — design the migration path carefully (existing customers have exactly one implicit property today) and confirm this doesn't break the getOrCreateCustomer/identity contract. Phase-gated plan, stop for go-ahead.
+
+## Phase 22 — Customer financing at checkout
+
+> **Added 2026-08-09** — competitive-gap review, not yet built. **This is
+> primarily a business decision, not an engineering one** — it requires
+> partnering with a lender (Wisetack-style point-of-sale financing), which
+> means an application/approval process and a revenue-share or fee
+> arrangement before any code is worth writing.
+
+**Why:** Housecall Pro and Jobber both offer "let your customer pay over time" financing at invoice/estimate time, which helps close bigger jobs (a $8k roof repair becomes "$180/month"). Lowest priority on this list for a true solo shop — it's real leverage on higher-ticket trades (roofing, HVAC replacement) and much less relevant to a handyman/small-repair business.
+
+**Kickoff prompt:**
+> Before any design work: I want a business memo, not a build — is customer financing worth pursuing given TradeReady's current user base and job-size profile? Cover what a Wisetack-style integration actually requires (lender partnership/application, KYC, revenue share, and where financing would surface in the estimate/invoice send flow). Only proceed to `superpowers:brainstorming` and a phase-gated plan if the answer is yes and I've picked a partner.
+
+## Phase 23 — Read-only open API for other services
+
+> **Added 2026-08-12** — owner-initiated. Not yet built. **Distinct from
+> Phase 17** (live QuickBooks/Xero *push*): this is a *pull* surface — a
+> generic, authenticated, read-only HTTP API any external service (Zapier, a
+> customer's own tooling, an accountant's software) can call to read that
+> owner's TradeReady data. Phase 17 pushes into one named partner; this lets
+> arbitrary consumers read. They can share an underlying field-mapping /
+> allowlist layer.
+
+**Why:** TradeReady's data is already cloud-resident and tenant-isolated
+(Supabase Postgres, owner-scoped RLS — see `ARCHITECTURE.md`), and the backend
+(`backend-workers/`) already serves authenticated HTTP endpoints. A read-only
+open API turns "your data is locked in the app" into "your data is yours to
+route anywhere," which is a real retention/trust lever for power users and a
+prerequisite for any third-party integration ecosystem. The hard infrastructure
+mostly exists: the **customer portal** and **booking link** already prove the
+pattern — token-authenticated, tenant-scoped endpoints returning **explicit
+allowlisted fields** (never full records), with rotatable/revocable tokens
+(`portal_tokens`), rate limiting, and security logging. This phase generalizes
+that pattern from "one customer, one job" to "one owner, their whole account,
+read-only."
+
+⚠️ **Scope discipline:** read-only only. No write-back in this phase — writes
+fight the local-first sync model (the cloud copy lags the device's last sync,
+and an external write racing a device push needs the union-merge care the
+invoice-payment ledger already uses). Write access, if ever, is a separate
+later phase with its own approval.
+
+**Kickoff prompt:**
+> Load `superpowers:brainstorming`, `tradeready-architecture-contract`, and `tradeready-storage-and-sync`, and re-read the customer-portal token/allowlist design (`docs/superpowers/specs/2026-08-07-portal-completion-design.md`) and the Phase 14 accountant-package field mappings (`docs/superpowers/specs/2026-08-07-accountant-package-design.md`) — reuse both rather than re-deriving them. I want a **read-only, open, authenticated HTTP API** that lets an external service (Zapier, an accountant's tool, the owner's own scripts) read one owner's TradeReady data — jobs, estimates, invoices, payments, expenses, customers, mileage. This is a *pull* API for arbitrary consumers, distinct from Phase 17's QuickBooks/Xero *push*, though they should share the field-mapping/allowlist layer.
+>
+> Design, and stop for approval before any code:
+> - **Auth:** per-owner API keys (or OAuth) that are high-entropy, rotatable, revocable, and tenant-scoped — mirror the `portal_tokens` server-owned-table pattern; never reuse portal/booking tokens. Cover key issuance/rotation UX in-app.
+> - **Response contract:** every endpoint returns an **explicit allowlist**, not a sanitized copy of the full record. Never expose internal notes, costs, margins, labor-cost rate, AI discussions, local file paths, other owners' data, or secrets. Define the exact public schema per resource.
+> - **Read-only guarantee:** no write paths in this phase; state that as an invariant, not a convention.
+> - **Freshness honesty:** the API reads the Supabase cloud copy, which is only as current as the owning device's last sync — document this and consider surfacing a `lastSyncedAt` so consumers aren't misled.
+> - **Operational safety:** rate limiting, per-key usage caps, security logging that never logs raw keys, pagination, and stable/versioned response shapes (`/v1/...`).
+> - **Privacy/cost:** send no more than each endpoint needs; no PII beyond what the owner's own account already contains.
+>
+> Produce the resource list + public schemas, auth/threat model, versioning strategy, rate-limit/abuse design, and a phase-gated plan (read endpoints before key-management UI before docs). Stop for go-ahead.
+
+---
+
 ## 2026-08-06 update — external audit & next queue
 
 A second external audit (Codex; the first was ChatGPT's, reviewed 2026-08-03) was
@@ -642,6 +770,13 @@ depth-not-breadth, solo-operator thesis holds.
 
 ## Notes
 
+- **Phases 16–22 (added 2026-08-09):** a fresh competitive-gap review against
+  Jobber/Housecall Pro/QuickBooks Self-Employed, done after Phases 11–15
+  shipped. Deliberately scoped post-1.2 — none are prioritized ahead of
+  whatever's already in flight. Several carry explicit dependency/partner/
+  entitlement approval gates (17, 18, 22) or an evaluate-first framing (16,
+  19) rather than a straight build — read each Why block before treating a
+  kickoff prompt as a green light.
 - **Phases 11–15 (added 2026-08-06):** owner-curated kickoff prompts from the
   Codex-audit adoption — deeper successors to the original ten-item list, not
   part of its 2026-07-17 leverage ranking. Their context blockquotes carry
