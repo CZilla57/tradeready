@@ -10,7 +10,7 @@ import { createRateLimiter, validateChatPayload } from '../../lib/guards.js';
 import { enforceDailyCap } from '../../lib/aiUsage.js';
 import { appCors, jsonBody } from '../appCors.js';
 
-const GROQ_MODEL = 'llama-3.1-8b-instant';
+const GROQ_MODEL = 'openai/gpt-oss-20b';
 
 // 20 chat turns per user per minute — far above human usage, low enough to
 // stop runaway loops from burning the server-side Groq key.
@@ -84,8 +84,12 @@ export async function aiChatHandler(c) {
       body: JSON.stringify({
         model: GROQ_MODEL,
         messages: chatMessages,
-        max_tokens: 600,
+        max_tokens: 1024,
         temperature: 0.7,
+        // GPT-OSS is a reasoning model: keep the thinking pass cheap and out of
+        // `content` so the visible reply isn't truncated or polluted.
+        reasoning_effort: 'low',
+        reasoning_format: 'hidden',
       }),
     });
 
