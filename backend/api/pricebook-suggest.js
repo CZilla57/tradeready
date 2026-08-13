@@ -21,7 +21,7 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
-const GROQ_MODEL = "llama-3.1-8b-instant";
+const GROQ_MODEL = "openai/gpt-oss-20b";
 
 // Real hosts this project serves — tradeready.app was never ours (dead entry
 // from the original scaffold; see backend/lib/estimate/cors.js for the
@@ -96,8 +96,13 @@ module.exports = async function handler(req, res) {
       },
       body: JSON.stringify({
         model: GROQ_MODEL,
-        max_tokens: 1000,
+        max_tokens: 1536,
         messages: [{ role: "user", content: prompt }],
+        // GPT-OSS is a reasoning model: minimize thinking tokens and strip them
+        // from `content` so the JSON answer isn't truncated or preceded by
+        // reasoning text that would confuse the parser below.
+        reasoning_effort: "low",
+        reasoning_format: "hidden",
       }),
     });
 

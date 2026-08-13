@@ -15,7 +15,7 @@ import { createRateLimiter, validatePricebookPayload } from '../../lib/guards.js
 import { enforceDailyCap } from '../../lib/aiUsage.js';
 import { appCors, jsonBody } from '../appCors.js';
 
-const GROQ_MODEL = 'llama-3.1-8b-instant';
+const GROQ_MODEL = 'openai/gpt-oss-20b';
 
 // 10 suggestions per user per minute — pricebook entries are one-shot lookups;
 // this caps abuse of the server-side Groq key.
@@ -79,8 +79,13 @@ export async function pricebookSuggestHandler(c) {
       },
       body: JSON.stringify({
         model: GROQ_MODEL,
-        max_tokens: 1000,
+        max_tokens: 1536,
         messages: [{ role: 'user', content: prompt }],
+        // GPT-OSS is a reasoning model: minimize thinking tokens and strip them
+        // from `content` so the JSON answer isn't truncated or preceded by
+        // reasoning text that would confuse the parser below.
+        reasoning_effort: 'low',
+        reasoning_format: 'hidden',
       }),
     });
 
