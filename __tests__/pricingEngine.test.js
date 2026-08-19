@@ -29,10 +29,11 @@ describe("calculateEstimate — labor", () => {
     expect(r.laborCost).toBe(200);
     // overhead = 200 × 0.15 = 30
     expect(r.overheadCost).toBe(30);
-    // profit base = 200 + 30 = 230; profit = 230 × 0.20 = 46
-    expect(r.profit).toBe(46);
-    // total = 230 + 46 = 276
-    expect(r.total).toBe(276);
+    // TRUE margin: cost = 200 + 30 = 230; price = 230 ÷ (1 − 0.20) = 287.50
+    // profit = 287.50 − 230 = 57.50 (= exactly 20% of the 287.50 price)
+    expect(r.profit).toBe(57.5);
+    // total = 287.50
+    expect(r.total).toBe(287.5);
     expect(r.hitMinimum).toBe(false);
   });
 
@@ -231,10 +232,12 @@ describe("calculateEstimate — all factors combined", () => {
     // materialBase: 2 × $50 = $100; with 25% markup → $125
     // subtotal: $300 + $125 = $425
     // overhead: $425 × 10% = $42.50
-    // profitBase: $425 + $42.50 = $467.50; margin 20% → $93.50
-    // preTaxTotal: $467.50 + $93.50 = $561   (> minimum $50 → no floor)
-    // tax: $561 × 8% = $44.88
-    // total: $561 + $44.88 = $605.88
+    // cost (profitBase): $425 + $42.50 = $467.50
+    // TRUE margin 20%: preTaxTotal = $467.50 ÷ (1 − 0.20) = $584.375 → $584.38
+    //   profit = $584.375 − $467.50 = $116.875 → $116.88 (= 20% of the price)
+    // preTaxTotal: $584.375 (> minimum $50 → no floor)
+    // tax: $584.375 × 8% = $46.75
+    // total: $584.375 + $46.75 = $631.125 → $631.13
     const r = calculateEstimate({
       laborHours: 2,
       laborRate: 100,
@@ -255,12 +258,45 @@ describe("calculateEstimate — all factors combined", () => {
     expect(r.materialCost).toBe(125);
     expect(r.subtotal).toBe(425);
     expect(r.overheadCost).toBe(42.5);
-    expect(r.profit).toBe(93.5);
-    expect(r.preTaxTotal).toBe(561);
+    expect(r.profit).toBe(116.88);
+    expect(r.preTaxTotal).toBe(584.38);
     expect(r.hitMinimum).toBe(false);
-    expect(r.totalBeforeTax).toBe(561);
-    expect(r.taxAmount).toBe(44.88);
-    expect(r.total).toBe(605.88);
+    expect(r.totalBeforeTax).toBe(584.38);
+    expect(r.taxAmount).toBe(46.75);
+    expect(r.total).toBe(631.13);
+  });
+});
+
+describe("calculateEstimate — true margin property", () => {
+  test("profit is exactly marginPercent of the price (share OF price, not markup on cost)", () => {
+    // cost = 8h × $100 = $800 labor, no overhead → profitBase $800.
+    // TRUE margin 20%: price = 800 ÷ 0.8 = $1,000; profit = $200 = 20% of $1,000.
+    const r = calculateEstimate({
+      ...BASE,
+      laborHours: 8,
+      laborRate: 100,
+      overheadPercent: 0,
+      marginPercent: 20,
+    });
+    expect(r.totalBeforeTax).toBe(1000);
+    expect(r.profit).toBe(200);
+    // The defining property: profit / price === margin / 100.
+    expect(r.profit / r.totalBeforeTax).toBeCloseTo(0.2, 10);
+  });
+
+  test("margin at the 100% edge is clamped, never Infinity/NaN", () => {
+    // cost = 2h × $100 = $200. A raw margin of 100 would be a division by zero;
+    // the clamp caps it at 99% → price = 200 ÷ 0.01 = $20,000 (finite).
+    const r = calculateEstimate({
+      ...BASE,
+      laborHours: 2,
+      laborRate: 100,
+      overheadPercent: 0,
+      marginPercent: 100,
+    });
+    expect(Number.isFinite(r.total)).toBe(true);
+    expect(r.totalBeforeTax).toBe(20000);
+    expect(r.profit).toBe(19800);
   });
 });
 

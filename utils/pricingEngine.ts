@@ -8,8 +8,8 @@
 //   Travel fee      = miles × fee per mile (if set)
 //   Subtotal        = labor + materials + travel
 //   Overhead        = subtotal × overhead%   (insurance, truck, tools, etc.)
-//   Profit          = (subtotal + overhead) × margin%
-//   TOTAL           = subtotal + overhead + profit
+//   TOTAL (pre-tax) = (subtotal + overhead) ÷ (1 − margin%)   ← TRUE margin: profit is a share OF THE PRICE
+//   Profit          = TOTAL − (subtotal + overhead)           (equals margin% of TOTAL)
 //   Tax             = total × tax% (if applicable — varies by state/trade)
 
 import type {
@@ -28,6 +28,11 @@ import type { BadgeColor } from "../components/UI";
 import { parseNumberInput } from "./numberInput";
 
 // ── Main calculation ───────────────────────────────────────────────────────
+
+// A true margin of 100% is a division by zero (price → ∞) and anything above
+// goes negative. Cap margin just below 100% — well above any real trade margin —
+// so the divide is always defined. Documented, deliberate ceiling.
+const MARGIN_CEILING = 99;
 
 export function calculateEstimate({
   laborHours = 0,
@@ -63,12 +68,15 @@ export function calculateEstimate({
   // Overhead (covers insurance, truck payment, tools, phone, etc.)
   const overheadCost = subtotal * (overheadPercent / 100);
 
-  // Profit margin on top of everything
-  const profitBase = subtotal + overheadCost;
-  const profit = profitBase * (marginPercent / 100);
-
-  // Pre-tax total
-  const preTaxTotal = profitBase + profit;
+  // TRUE margin: profit is a share OF THE PRICE, not a markup on cost.
+  //   price = cost ÷ (1 − margin);  profit = price − cost.
+  // Clamp margin into [0, MARGIN_CEILING] here — not just in callers like
+  // calculatePriceRange (which loosens margin by +5) — so every path is safe
+  // from the division-by-zero / negative-price cases at/above 100%.
+  const profitBase = subtotal + overheadCost; // total cost
+  const safeMargin = Math.min(Math.max(marginPercent, 0), MARGIN_CEILING);
+  const preTaxTotal = profitBase / (1 - safeMargin / 100);
+  const profit = preTaxTotal - profitBase;
 
   // Apply minimum job fee
   const totalBeforeTax = Math.max(preTaxTotal, minimumJobFee);
