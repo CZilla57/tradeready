@@ -1,0 +1,10 @@
+Client,Total,Invoice #,Due Date,Paid On,Description,Email,Phone
+Ada Lovelace,"$1,250.00",INV-1001,2026-07-15,2026-07-10,Kitchen faucet + garbage disposal replacement,ada@example.com,555-0101
+Grace Hopper,"$3,400.50",INV-1002,2026-08-20,,"Bathroom remodel: tile, vanity, and fixtures",grace.hopper@example.com,555-0102
+Katherine Johnson,$875.00,INV-1003,2026-07-01,,Water heater install (overdue),kjohnson@example.com,555-0103
+Alan Turing,"$12,000.00",INV-1004,2026-09-01,,Full HVAC system replacement,,555-0104
+Margaret Hamilton,$450.75,INV-1005,2026-08-05,2026-08-05,Emergency drain clearing,mhamilton@example.com,555-0105
+Nikola Tesla,"$2,000.00",INV-1006,2026-07-20,Yes,"Panel upgrade — marked ""paid"" with no date, should flag",tesla@example.com,555-0106
+Rosalind Franklin,$99.99,INV-1007,,2026-06-30,Service call + diagnostic,rfranklin@example.com,555-0108
+Sunset Diner,"$5,600.00",INV-1008,2026-08-15,,"Commercial kitchen exhaust hood, new customer",contact@sunsetdiner.example,555-0200
+Blank Row,,INV-1009,2026-08-10,,Missing amount — should be skipped,,555-0201
