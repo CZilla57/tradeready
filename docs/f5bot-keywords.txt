@@ -1,0 +1,52 @@
+# F5Bot keyword list — TradeReady Reddit monitoring
+#
+# HOW TO USE:
+#   1. Sign up free at https://f5bot.com with your email.
+#   2. Paste the keyword lines below (NOT the comment lines) into the "Reddit Keywords" box,
+#      one keyword/phrase per line. F5Bot emails you whenever one appears in a post or comment.
+#   3. Multi-word lines are matched as an exact phrase. Single words match anywhere.
+#   4. Start with the HIGH-INTENT block; add more only if volume is manageable.
+#   5. F5Bot has a ~100 keyword cap per account and matches site-wide (no per-sub filter),
+#      so favor specific phrases over broad single words to keep the noise down.
+#      Cross-reference hits against the Tier 1-3 subreddit list in reddit-lead-targeting.md.
+#
+# Avoid ultra-generic single words (invoice, quote, pricing) — they flood your inbox.
+
+# ---- HIGH INTENT: shopping for / frustrated with existing tools ----
+jobber too expensive
+alternative to jobber
+jobber vs housecall
+housecall pro alternative
+quickbooks too complicated
+best app for solo contractor
+field service app recommendation
+invoicing app for contractors
+estimate app for the field
+
+# ---- OFFLINE need (your differentiator) ----
+app that works offline
+no service on jobsite
+no signal jobsite
+invoice from my phone
+offline estimate app
+
+# ---- UNDERPRICING / margin pain ----
+underpriced the job
+quoted too low
+left money on the table
+not charging enough
+how do you price jobs
+
+# ---- SPREADSHEET / paper quoting ----
+quoting on a spreadsheet
+still using paper invoices
+excel estimate template
+write quotes by hand
+quotes in excel
+
+# ---- INVOICING / chasing payments ----
+chasing payments
+chasing late payments
+customer won't pay invoice
+net 30 killing me
+how to chase an invoice
