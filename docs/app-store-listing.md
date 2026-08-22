@@ -9,6 +9,16 @@ Auto-SENT overdue emails (server cron) are live but the real send path is
 unexercised, so the copy claims only "overdue reminders" (device-verified
 notifications).
 
+2026-08-18 refresh: de-emphasized "AI" (owner call — "AI" in the subtitle
+was suspected to make trade searchers scroll past). Subtitle "Invoice,
+estimate & AI pricing" → "Estimates, invoices & pricing"; promo text and
+three description bullets reworded ("pricing engine", "Smart rate
+suggestions", "Ready-to-send follow-ups", "built-in coach"). No feature
+was dropped — the pricing engine and coach are still described, just not
+headlined. NOT a review-relevant change (metadata only), so it can go into
+ASC anytime without a new build. Keywords unchanged (no "ai" keyword to
+remove there).
+
 2026-08-01 refresh: added What's New for 1.1.0 (build 7); legal/support
 URLs moved from czilla57.github.io to gettradereadyapp.com (the apex
 serves the site directly since 2026-07-30; old github.io URLs 301, but
@@ -33,11 +43,14 @@ management software. The name under the icon on the device stays
 
 ## Subtitle (30 chars max)
 
-**Invoice, estimate & AI pricing** (30)
+**Estimates, invoices & pricing** (29)
 
 ("Job" moved into the name, so the subtitle stopped spending characters on
-it and picked up "estimate" instead — Apple indexes name + subtitle +
-keywords, and duplicates waste slots.)
+it — Apple indexes name + subtitle + keywords, and duplicates waste slots.
+Refreshed 2026-08-18: "AI pricing" → "pricing". Owner call — "AI" in the
+subtitle was suspected to make trade searchers skip the listing, and it
+duplicated no keyword we need. The pricing engine and coach are still
+described in the body; they're just no longer the headline hook.)
 
 ## Category
 
@@ -46,8 +59,8 @@ Primary: **Business** · Secondary: **Productivity**
 ## Promotional text (170 chars max — editable anytime without review)
 
 > Price jobs with confidence, send estimates and invoices in seconds, and
-> get paid faster with payment links. Your AI coach knows your numbers.
-> Works offline. (161)
+> get paid faster with payment links. A built-in coach knows your numbers.
+> Works offline. (164)
 
 ## Keywords (100 chars max, comma-separated — avoid repeating name/subtitle words)
 
@@ -66,10 +79,10 @@ office software, no experience needed. If you're going out on your own for
 the first time, TradeReady teaches you the business as you use it.
 
 PRICE EVERY JOB WITH CONFIDENCE
-• Pricing calculator built for the trades: labor, materials with markup,
+• A pricing engine built for the trades: labor, materials with markup,
   overhead, and profit margin
 • Break-even warnings before you quote too low
-• AI rate suggestions for your trade and your area
+• Smart rate suggestions for your trade and your area
 • Build a pricebook of your standard services and reuse it in seconds
 
 WIN THE WORK
@@ -83,11 +96,11 @@ GET PAID FASTER
 • Send secure card-payment links (powered by Stripe) — invoices mark
   themselves paid when the money lands
 • Overdue reminders so nothing slips through the cracks
-• AI-written follow-up messages that stay friendly and get you paid
+• Ready-to-send follow-up messages that stay friendly and get you paid
 
 KNOW YOUR NUMBERS
-• An AI business coach that actually knows your business — ask it about
-  your revenue, overdue invoices, or what to charge, no setup required
+• A built-in business coach that actually knows your business — ask it
+  about your revenue, overdue invoices, or what to charge, no setup required
 • Profit & loss, revenue trends, conversion funnel, and cash-flow forecasts
 • Expense tracking and a mileage log for tax time
 • Time tracking with clock in/out on every job
@@ -109,6 +122,52 @@ settings.
 Privacy policy: https://gettradereadyapp.com/privacy.html
 Terms of use: https://gettradereadyapp.com/terms.html
 Questions? support@gettradereadyapp.com — a real person reads it.
+
+## What's New (version 1.2.0, build 12 — paste into ASC as-is)
+
+TradeReady 1.2 puts your day on your Home Screen and lets your customers
+help themselves.
+
+NEW
+• Home Screen widgets — Next Job and Job Timer keep you moving without
+  opening the app
+• Talk to TradeReady — "Hey Siri, what's my next job," clock in and out,
+  log an expense, start a mileage trip, or check what you're owed, all
+  hands-free
+• Customers can book you online — share your own booking link and they
+  pick a real open slot around your working hours, buffers, and days off
+• A customer portal — customers see their appointments and photos, request
+  changes, and reschedule or cancel themselves, no account needed
+• Job profitability — see estimate vs. actual cost on every job, right
+  down to the margin
+• One-tap accountant export — a complete package of CSVs, zipped and ready
+  to hand off at tax time
+• A smarter Today screen — TradeReady now flags low-margin estimates,
+  maintenance coming due, and expenses that look off
+• Import your existing customers, jobs, and invoices from a spreadsheet
+• Turn on auto-invoicing — the moment a job is marked complete, TradeReady
+  creates the invoice and emails it for you
+• Full iPad support
+
+IMPROVED
+• Smarter scheduling — end times auto-fill and overlaps get flagged
+  before you double-book
+• Faster, friendlier estimate follow-ups
+• Fixed a bug where switching tabs could leave the back button on the
+  wrong screen
+• Dozens of smaller fixes and polish throughout
+
+Questions? support@gettradereadyapp.com — a real person reads it.
+
+Notes cover everything since the 1.1.0 STORE release (build 7), including
+features delivered by OTA on 2026-08-06/08-07 (calendar/availability/
+booking, customer portal expansion, job profitability, accountant export,
+contextual AI insights, CSV import, auto-invoicing) plus the widgets/Siri/
+iPad support that ship natively for the first time in build 12. Claims
+discipline per docs/release-runbook-1.2.0.md: widgets/Siri copy is only
+valid once the Tier-2 smoke checklist has passed on this build — confirm
+before submitting, since build 12's own device smoke was still pending as
+of 2026-08-08.
 
 ## What's New (version 1.1.0, build 7 — paste into ASC as-is)
 

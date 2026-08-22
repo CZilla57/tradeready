@@ -25,3 +25,6 @@ web-build/
 # Claude Code session tooling artifacts
 .agents/
 skills-lock.json
+
+# App Store marketing screenshots (large binaries, not source)
+/assets/app-store/
