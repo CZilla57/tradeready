@@ -1,7 +1,7 @@
 import type { Invoice, Job, Customer, Settings } from '../types/models';
 import { formatMoney, formatQuote } from "./format";
 import { parseLocalDate } from "./moneyUtils";
-import { computeEstimateBreakdown } from "./pricingEngine";
+import { computeEstimateBreakdown, directCostLabel } from "./pricingEngine";
 import { isFullyPaid, isPartlyPaid, amountPaid, balanceDue, effectivePayments } from "./invoicePayments";
 
 const ACCENT = "#007aff";
@@ -321,8 +321,9 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
   const bizName = biz.businessName || "Your Business";
   const { contactLine, addressLine } = bizHeaderLines(biz);
 
-  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
+  const { laborCost, materialCost, overheadLine, hasMaterials, directCostLines } = computeEstimateBreakdown(job);
   const hasOverhead = overheadLine > 1;
+  const visibleDirect = (directCostLines || []).filter((l) => l.customerVisible);
   const customerName  = customer.name || job.customerName || "";
   const customerEmail = customer.email || "";
   const customerPhone = customer.phone || "";
@@ -336,6 +337,9 @@ export function estimateHtml(job: Job, customer: Partial<Customer> = {}, biz: Pa
       ? safe(job.materials[0].name) || "Materials"
       : `Materials (${job.materials.length} items)`;
     rows += `<tr><td>${label}</td><td>${formatQuote(materialCost)}</td></tr>`;
+  }
+  for (const dc of visibleDirect) {
+    rows += `<tr><td>${safe(directCostLabel(dc))}</td><td>${formatQuote(dc.amount)}</td></tr>`;
   }
   if (hasOverhead) {
     rows += `<tr><td>Overhead &amp; operating costs</td><td>${formatQuote(overheadLine)}</td></tr>`;

@@ -14,6 +14,7 @@
 // pricing aid; printing "low" invites anchoring.
 
 import { formatQuote } from "./format";
+import { directCostLabel } from "./pricingEngine";
 import type { EstimateBreakdown } from "../types/models";
 
 const VALID_DAYS = 30;
@@ -56,7 +57,15 @@ export function buildEstimateDocument({
   });
 
   const contactLine = [contactName, phone, email].filter(Boolean).join(" | ");
-  const operatingLine = breakdown.overheadCost + breakdown.profit;
+  // Customer-visible direct costs print as their own lines; hidden ones fold
+  // into "Overhead & operating costs" alongside overhead + profit, so the
+  // printed lines always sum to the total.
+  const directLines = breakdown.directCostLines || [];
+  const visibleDirect = directLines.filter((l) => l.customerVisible);
+  const hiddenDirectTotal = directLines
+    .filter((l) => !l.customerVisible)
+    .reduce((sum, l) => sum + l.amount, 0);
+  const operatingLine = breakdown.overheadCost + breakdown.profit + hiddenDirectTotal;
 
   const lines: string[] = [
     `ESTIMATE — ${jobTitle}`,
@@ -79,6 +88,9 @@ export function buildEstimateDocument({
   }
   if (breakdown.travelCost > 0) {
     lines.push(`Travel: ${formatQuote(breakdown.travelCost)}`);
+  }
+  for (const dc of visibleDirect) {
+    lines.push(`${directCostLabel(dc)}: ${formatQuote(dc.amount)}`);
   }
   if (operatingLine > 0) {
     lines.push(`Overhead & operating costs: ${formatQuote(operatingLine)}`);

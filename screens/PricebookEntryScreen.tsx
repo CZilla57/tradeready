@@ -9,10 +9,14 @@ import { calculateEstimate, buildEstimateInput } from "../utils/pricingEngine";
 import { formatQuote } from "../utils/format";
 import { Button, Card } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
+import { JobCostsEditor } from "../components/JobCostsEditor";
+import { LaborHoursEditor } from "../components/LaborHoursEditor";
+import { TemplatePickerModal } from "../components/TemplatePickerModal";
+import { applyTemplate, type TradeTemplate } from "../utils/tradeTemplates";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { PricebookEntry, Settings, AIPricingSuggestion } from "../types/models";
+import type { PricebookEntry, Settings, AIPricingSuggestion, JobCost, LaborTimeBreakdown } from "../types/models";
 import { getAIPricingSuggestion } from "../utils/pricebookAI";
 import { track } from '../utils/analytics';
 import type { MoneyStackScreenProps } from "../types/navigation";
@@ -37,9 +41,16 @@ export default function PricebookEntryScreen({
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
   const [laborHours, setLaborHours] = useState("2");
+  const [laborBreakdown, setLaborBreakdown] = useState<LaborTimeBreakdown | undefined>(undefined);
   const [laborRate, setLaborRate] = useState("85");
   const [materials, setMaterials] = useState<LocalMaterial[]>([]);
+  const [jobCosts, setJobCosts] = useState<JobCost[]>([]);
   const [materialMarkup, setMaterialMarkup] = useState("20");
+  const [templateVisible, setTemplateVisible] = useState(false);
+  // Ephemeral scope checklist from the last applied template — guidance only,
+  // never persisted or synced.
+  const [checklist, setChecklist] = useState<string[]>([]);
+  const [checklistOpen, setChecklistOpen] = useState(true);
   const [overheadPercent, setOverheadPercent] = useState("15");
   const [marginPercent, setMarginPercent] = useState("20");
   const [existingCategories, setExistingCategories] = useState<string[]>([]);
@@ -64,8 +75,10 @@ export default function PricebookEntryScreen({
           setDescription(entry.description || "");
           setCategory(entry.category || "");
           setLaborHours(String(entry.laborHours));
+          setLaborBreakdown(entry.laborBreakdown);
           setLaborRate(String(entry.laborRate));
           setMaterials(entry.materials as LocalMaterial[]);
+          setJobCosts((entry.jobCosts as JobCost[]) || []);
           setMaterialMarkup(String(entry.materialMarkup));
           setOverheadPercent(String(entry.overhead));
           setMarginPercent(String(entry.margin));
@@ -81,10 +94,23 @@ export default function PricebookEntryScreen({
   }, [entryId]);
 
   const params = buildEstimateInput(
-    { laborHours, laborRate, materials: materials as any, materialMarkup, overheadPercent, marginPercent, travelMiles: "0", isEmergency: false, taxPercent: "0" },
+    { laborHours, laborRate, materials: materials as any, materialMarkup, jobCosts, overheadPercent, marginPercent, travelMiles: "0", isEmergency: false, taxPercent: "0" },
     settings,
   );
   const breakdown = calculateEstimate(params);
+
+  // Seed the form from a trade template: empty, editable lines + a scope
+  // checklist. Never overwrites a name the owner already typed, and only
+  // replaces the materials/costs when the form is still empty so an
+  // accidental tap can't wipe work in progress.
+  function handleTemplateSelect(template: TradeTemplate) {
+    const seeded = applyTemplate(template);
+    if (!name.trim()) setName(template.name);
+    setMaterials((prev) => (prev.length === 0 ? seeded.materials : [...prev, ...seeded.materials]));
+    setJobCosts((prev) => (prev.length === 0 ? seeded.jobCosts : [...prev, ...seeded.jobCosts]));
+    setChecklist(template.scopeChecklist);
+    setChecklistOpen(true);
+  }
 
   function addMaterial() {
     setMaterials((prev) => [
@@ -118,6 +144,7 @@ export default function PricebookEntryScreen({
       description: description.trim() || undefined,
       category: category.trim() || undefined,
       laborHours: params.laborHours,
+      ...(laborBreakdown ? { laborBreakdown } : {}),
       laborRate: params.laborRate,
       materials: materials.map((m) => ({
         id: m.id,
@@ -126,6 +153,7 @@ export default function PricebookEntryScreen({
         unitCost: parseFloat(String(m.unitCost)) || 0,
       })),
       materialMarkup: params.materialMarkup,
+      ...(jobCosts.length > 0 ? { jobCosts } : {}),
       overhead: params.overheadPercent,
       margin: params.marginPercent,
       estimateTotal: breakdown.total,
@@ -185,6 +213,40 @@ export default function PricebookEntryScreen({
         style={{ flex: 1 }}
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          <Button
+            label="Start from a template"
+            variant="secondary"
+            onPress={() => setTemplateVisible(true)}
+            style={{ marginBottom: spacing.md }}
+          />
+
+          {checklist.length > 0 && (
+            <Card style={{ marginBottom: spacing.md }}>
+              <TouchableOpacity
+                style={styles.checklistHeader}
+                onPress={() => setChecklistOpen((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel={checklistOpen ? "Hide scope reminders" : "Show scope reminders"}
+              >
+                <Text style={styles.checklistTitle}>Scope reminders</Text>
+                <Ionicons name={checklistOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              {checklistOpen && (
+                <View style={{ marginTop: spacing.xs }}>
+                  {checklist.map((q, i) => (
+                    <View key={i} style={styles.checklistRow}>
+                      <Ionicons name="ellipse-outline" size={14} color={colors.textMuted} style={{ marginTop: 3 }} />
+                      <Text style={styles.checklistText}>{q}</Text>
+                    </View>
+                  ))}
+                  <Text style={styles.checklistNote}>
+                    Reminders only — fill in every number yourself. Nothing here is saved.
+                  </Text>
+                </View>
+              )}
+            </Card>
+          )}
+
           <Card>
             <Text style={styles.label}>Service name *</Text>
             <TextInput
@@ -246,31 +308,20 @@ export default function PricebookEntryScreen({
 
           <Card style={{ marginTop: spacing.md }}>
             <Text style={styles.sectionTitle}>Pricing</Text>
-            <View style={styles.fieldRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Labor hours</Text>
-                <TextInput
-                  style={styles.input}
-                  value={laborHours}
-                  onChangeText={setLaborHours}
-                  keyboardType="decimal-pad"
-                  inputAccessoryViewID="pricebookEntryDone"
-                  accessibilityLabel="Labor hours"
-                />
-              </View>
-              <View style={{ width: spacing.sm }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Labor rate ($/hr)</Text>
-                <TextInput
-                  style={styles.input}
-                  value={laborRate}
-                  onChangeText={setLaborRate}
-                  keyboardType="decimal-pad"
-                  inputAccessoryViewID="pricebookEntryDone"
-                  accessibilityLabel="Labor rate in dollars per hour"
-                />
-              </View>
-            </View>
+            <LaborHoursEditor
+              value={{ hours: laborHours, breakdown: laborBreakdown }}
+              onChange={(v) => { setLaborHours(v.hours); setLaborBreakdown(v.breakdown); }}
+              doneBarId="pricebookEntryDone"
+            />
+            <Text style={styles.label}>Labor rate ($/hr)</Text>
+            <TextInput
+              style={styles.input}
+              value={laborRate}
+              onChangeText={setLaborRate}
+              keyboardType="decimal-pad"
+              inputAccessoryViewID="pricebookEntryDone"
+              accessibilityLabel="Labor rate in dollars per hour"
+            />
 
             <Text style={[styles.label, { marginTop: spacing.md }]}>Materials</Text>
             {materials.map((m) => (
@@ -317,6 +368,9 @@ export default function PricebookEntryScreen({
             <TouchableOpacity style={styles.addMaterialBtn} onPress={addMaterial} accessibilityRole="button" accessibilityLabel="Add material">
               <Text style={styles.addMaterialText}>+ Add material</Text>
             </TouchableOpacity>
+
+            <Text style={[styles.label, { marginTop: spacing.md }]}>Direct costs</Text>
+            <JobCostsEditor value={jobCosts} onChange={setJobCosts} doneBarId="pricebookEntryDone" />
 
             <View style={[styles.fieldRow, { marginTop: spacing.md }]}>
               <View style={{ flex: 1 }}>
@@ -445,6 +499,12 @@ export default function PricebookEntryScreen({
         </ScrollView>
       </KeyboardAvoidingView>
       <KeyboardDoneBar nativeID="pricebookEntryDone" />
+      <TemplatePickerModal
+        visible={templateVisible}
+        trade={settings?.trade ?? "other"}
+        onSelect={handleTemplateSelect}
+        onDismiss={() => setTemplateVisible(false)}
+      />
     </View>
   );
 }
@@ -525,5 +585,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       marginLeft: spacing.sm,
     },
     applyBtnText: { fontFamily: fonts.bodySemiBold, color: "#fff", fontSize: fontSize.sm },
+    checklistHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    checklistTitle: { fontFamily: fonts.bodySemiBold, color: colors.textPrimary, fontSize: fontSize.md },
+    checklistRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-start", marginBottom: spacing.xs },
+    checklistText: { fontFamily: fonts.bodyRegular, color: colors.textSecondary, fontSize: fontSize.sm, flex: 1, lineHeight: 20 },
+    checklistNote: { fontFamily: fonts.bodyRegular, color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs, fontStyle: "italic" },
   });
 }

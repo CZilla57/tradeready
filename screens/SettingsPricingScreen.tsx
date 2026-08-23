@@ -27,12 +27,24 @@ export default function SettingsPricingScreen({ navigation }: TodayStackScreenPr
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
           <Text style={styles.ruleSubtitle}>These pre-fill your estimate calculator. You can always override them per job.</Text>
           <View style={styles.card}>
-            <Field label="Your hourly labor rate ($)" value={String(s.laborRate || "")} onChangeText={(v) => update("laborRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} />
+            <Field label="Your billing rate ($/hr)" value={String(s.laborRate || "")} onChangeText={(v) => update("laborRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} />
+            <Text style={styles.keyNote}>
+              This is your BILLING rate, not your take-home wage. Set it above what you pay yourself so it also covers slow days, tools, and time off.
+            </Text>
             <Field label="Material markup (%)" value={String(s.materialMarkup || "")} onChangeText={(v) => update("materialMarkup", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} />
             <Field label="Overhead % (insurance, truck, tools)" value={String(s.overheadPercent || "")} onChangeText={(v) => update("overheadPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} />
             <Field label="Profit margin %" value={String(s.marginPercent || "")} onChangeText={(v) => update("marginPercent", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} />
+            <Text style={styles.keyNote}>
+              Markup is added on top of your material cost (a handling charge). Margin is your profit as a share of the final price. They&apos;re different things — you can use both.
+            </Text>
             <Field label="Minimum job fee ($)" value={String(s.minimumJobFee || "")} onChangeText={(v) => update("minimumJobFee", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} />
+            <Text style={styles.keyNote}>
+              Charged when a job prices below it — covers turning up for small work. Doubles as your service-call minimum.
+            </Text>
             <Field label="Emergency/after-hours multiplier (e.g. 1.5 = 50% extra)" value={String(s.emergencyMultiplier || "")} onChangeText={(v) => update("emergencyMultiplier", parseFloat(v) || 1)} keyboardType="decimal-pad" colors={colors} />
+            <Text style={styles.keyNote}>
+              Multiplies your labor rate for nights, weekends, and urgent calls when the emergency toggle is on in the calculator.
+            </Text>
             <Field label="Mileage rate ($ per mile)" value={String(s.mileageRate ?? 0.70)} onChangeText={(v) => update("mileageRate", parseFloat(v) || 0)} keyboardType="decimal-pad" colors={colors} />
             <Text style={styles.keyNote}>
               Used to estimate the tax deduction for logged trips (Money → Mileage). Set to the standard mileage rate for your tax year.

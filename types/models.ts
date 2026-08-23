@@ -87,6 +87,110 @@ export interface TimeSession {
 }
 
 /**
+ * Optional breakdown of the estimate's billable labor hours into the components
+ * the trade guides teach owners to price (Phase 3). ADDITIVE-OPTIONAL: absent
+ * means the owner used the single "hours" field (today's behavior). When
+ * present, the four billable buckets SUM to the job's `laborHours` — the canon
+ * the engine/profitability/invoicing already read — so nothing downstream
+ * changes. `nonBillableNote` records drying/curing/waiting time the owner is
+ * deliberately NOT charging; it is never costed.
+ */
+export interface LaborTimeBreakdown {
+  onSiteHours: number;
+  driveHours: number;
+  supplyRunHours: number;
+  setupCleanupHours: number;
+  nonBillableNote?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Direct job costs (Phase 2)                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A direct-cost line that doesn't fit labor or materials — the costs the trade
+ * guides teach owners to price explicitly: permits, disposal/dump, equipment
+ * rental, subcontractors, delivery, trip/travel, and misc. Generic on purpose
+ * (one model, not a hard-coded field per trade).
+ */
+export type JobCostCategory =
+  | "permit"
+  | "disposal"
+  | "rental"
+  | "subcontractor"
+  | "delivery"
+  | "travel"
+  | "other";
+
+/**
+ * How a direct cost participates in the pricing math — the load-bearing choice.
+ *  - "passthrough": billed at cost. NO handling markup, NO overhead, NO margin;
+ *    added on TOP of the margined price. This is the guides' "permit fee passed
+ *    through at cost, outside the margin math".
+ *  - "in_margin_base": enters the subtotal like materials, so it earns overhead
+ *    and margin; an optional per-line handling markup applies first. This is the
+ *    guides' subcontractor/rental/disposal "priced into the job".
+ */
+export type JobCostMarkupPolicy = "passthrough" | "in_margin_base";
+
+/**
+ * A persisted direct-cost line on a Job / PricebookEntry / RecurringJob.
+ * ADDITIVE-OPTIONAL everywhere it appears (absent = the collection has none),
+ * so old records parse unchanged and JSON-blob sync needs no backend migration.
+ * markupPercent and taxable default to 0/false and are NEVER auto-invented.
+ */
+export interface JobCost {
+  id: string;                    // jc<timestamp>_<counter>
+  label: string;
+  category: JobCostCategory;
+  quantity: number;
+  unitCost: number;
+  /** Handling markup % — only meaningful for "in_margin_base"; default 0. */
+  markupPercent: number;
+  markupPolicy: JobCostMarkupPolicy;
+  /** Whether tax (when a tax % is applied) reaches this line. Default false so a
+   *  pass-through permit is excluded from the taxed base by default. */
+  taxable: boolean;
+  /** Itemised to the customer on estimates/invoices, or absorbed into the total. */
+  customerVisible: boolean;
+  notes?: string;
+}
+
+/**
+ * A direct-cost line as accepted by the estimate *inputs* (live calculator
+ * fields): quantity/unitCost/markupPercent may arrive as numeric strings from
+ * TextInputs — the engine parseNumberInput-s them. Persisted costs use JobCost.
+ */
+export interface JobCostInput {
+  id?: string;
+  label?: string;
+  category: JobCostCategory;
+  quantity: number | string;
+  unitCost: number | string;
+  markupPercent?: number | string;
+  markupPolicy: JobCostMarkupPolicy;
+  taxable?: boolean;
+  customerVisible?: boolean;
+  notes?: string;
+}
+
+/**
+ * The customer-facing amount computed for a single direct-cost line by the
+ * pricing engine: `qty × unitCost × (1 + markup%)` for "in_margin_base",
+ * `qty × unitCost` for "passthrough". Every estimate/invoice renderer consumes
+ * these so the line amounts are deterministic and sum to the stored total.
+ */
+export interface DirectCostLine {
+  id?: string;
+  label: string;
+  category: JobCostCategory;
+  amount: number;
+  markupPolicy: JobCostMarkupPolicy;
+  taxable: boolean;
+  customerVisible: boolean;
+}
+
+/**
  * Estimate-approval record. Absent until the estimate is "sent for approval".
  * `snapshot` freezes the estimate as sent so the customer approves exactly what
  * they saw and the backend never re-runs pricing math. `decision`/`consentAt`/
@@ -169,9 +273,19 @@ export interface Job {
   address: string;
   estimateTotal: number;
   laborHours: number;
+  /** Optional per-component split of laborHours (Phase 3). Additive-optional. */
+  laborBreakdown?: LaborTimeBreakdown;
   laborRate: number;
   materials: Material[];
   materialMarkup: number;
+  /**
+   * Explicit direct-cost lines (permits, disposal, rental, subcontractor, …).
+   * Phase 2 — ADDITIVE-OPTIONAL: ABSENT on every pre-Phase-2 job, treated as
+   * []. Included in the priced total per each line's markupPolicy; customer-
+   * visible lines render on the estimate/invoice, hidden ones fold into the
+   * residual overhead line so the parts always sum to estimateTotal.
+   */
+  jobCosts?: JobCost[];
   /**
    * NOTE: jobs persist `overhead`/`margin`, but pricingEngine.calculateEstimate
    * expects `overheadPercent`/`marginPercent`. Reconcile in roadmap #3 so the
@@ -264,9 +378,13 @@ export interface PricebookEntry {
   description?: string;
   category?: string;
   laborHours: number;
+  /** Optional per-component split of laborHours (Phase 3). Additive-optional. */
+  laborBreakdown?: LaborTimeBreakdown;
   laborRate: number;
   materials: Material[];
   materialMarkup: number;
+  /** Direct-cost lines carried by the saved service (Phase 2). Additive-optional. */
+  jobCosts?: JobCost[];
   overhead: number;
   margin: number;
   estimateTotal: number;
@@ -290,7 +408,17 @@ export interface AIPricingSuggestion {
   };
 }
 
-export type InvoiceLineCategory = 'labor' | 'materials' | 'overhead' | 'travel' | 'other';
+export type InvoiceLineCategory =
+  | 'labor'
+  | 'materials'
+  | 'overhead'
+  | 'travel'
+  | 'permit'
+  | 'disposal'
+  | 'rental'
+  | 'subcontractor'
+  | 'delivery'
+  | 'other';
 
 export interface InvoiceLineItem {
   description: string;
@@ -657,6 +785,8 @@ export interface RecurringJob {
   laborRate: number;
   materials: Material[];
   materialMarkup: number;
+  /** Direct-cost lines copied onto each generated occurrence (Phase 2). Additive-optional. */
+  jobCosts?: JobCost[];
   overhead: number;
   margin: number;
   cadence: RecurrenceCadence;
@@ -697,6 +827,13 @@ export interface RecurringInvoice {
   nextDueDate: DateString;
   isActive: boolean;
   createdAt: DateString;
+  /**
+   * Opt-in per-plan auto-delivery (Phase 6). ABSENT MEANS OFF. When true AND
+   * the master Settings.autoSendRecurringInvoicesEnabled is on AND the customer
+   * has a plausible email, generation stamps the plan's CURRENT occurrence for
+   * the backend auto-email sweep (never the catch-up backlog). Additive-optional.
+   */
+  autoSendEnabled?: boolean;
 }
 
 /** A whole-day time-off period (Phase 11). start/end are inclusive local "YYYY-MM-DD". */
@@ -879,6 +1016,16 @@ export interface Settings {
    */
   autoEmailInvoiceOnComplete: boolean;
 
+  /**
+   * Master switch for recurring-invoice auto-delivery (Phase 6). When true, the
+   * backend sweep emails recurring-plan invoices that individual plans opted in
+   * to (RecurringInvoice.autoSendEnabled). Checked at SEND time, so turning it
+   * off halts anything still pending. Opt-in; absent → false (truthy-read
+   * convention, like autoEmailInvoiceOnComplete). Independent of the
+   * job-completion auto-email toggle.
+   */
+  autoSendRecurringInvoicesEnabled?: boolean;
+
   // AI — both stored in SecureStore, stripped from AsyncStorage on save.
   anthropicKey: string;
   groqKey: string;
@@ -915,6 +1062,8 @@ export interface EstimateInput {
   laborRate?: number;
   materials?: EstimateMaterialInput[];
   materialMarkup?: number;
+  /** Explicit direct-cost lines (Phase 2). Absent/[] reproduces pre-Phase-2 math. */
+  jobCosts?: JobCostInput[];
   overheadPercent?: number;
   marginPercent?: number;
   travelMiles?: number;
@@ -932,6 +1081,13 @@ export interface EstimateBreakdown {
   materialMarkupAmount: number;
   materialCost: number;
   travelCost: number;
+  /** Σ of "in_margin_base" direct-cost lines (after their handling markup) that
+   *  entered the subtotal. 0 when there are no direct costs. */
+  directCostMarginBase: number;
+  /** Σ of "passthrough" direct-cost lines, added at cost after the margin divide. */
+  directCostPassthrough: number;
+  /** Per-line customer-facing amounts, for deterministic rendering. */
+  directCostLines: DirectCostLine[];
   subtotal: number;
   overheadCost: number;
   profit: number;
@@ -962,6 +1118,13 @@ export interface JobEstimateBreakdown {
   laborCost: number;
   materialBaseCost: number;
   materialCost: number;
+  /**
+   * Customer-facing direct-cost lines. `overheadLine` is the residual AFTER
+   * subtracting the customer-VISIBLE ones, so labor + materials + visible
+   * direct lines + overheadLine ≡ estimateTotal; hidden direct costs live
+   * inside overheadLine. Empty on jobs with no jobCosts.
+   */
+  directCostLines: DirectCostLine[];
   overheadLine: number;
   estimateTotal: number;
   hasMaterials: boolean;

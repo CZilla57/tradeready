@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { supabase } from './supabase';
 import { formatMoney, formatQuote } from './format';
-import { computeEstimateBreakdown } from './pricingEngine';
+import { computeEstimateBreakdown, directCostLabel } from './pricingEngine';
 import { generateOneShot } from './oneShotAI';
 import { PAID_EPSILON, balanceDue, isPartlyPaid } from './invoicePayments';
 import { parseLocalDate } from './moneyUtils';
@@ -317,7 +317,8 @@ interface EstimateMessageParams {
 }
 
 export function buildGenericEstimateMessage({ job, customer, channel, biz, approvalLink }: EstimateMessageParams): string {
-  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
+  const { laborCost, materialCost, overheadLine, hasMaterials, directCostLines } = computeEstimateBreakdown(job);
+  const visibleDirect = directCostLines.filter((l) => l.customerVisible);
 
   if (channel === 'text') {
     const parts = [
@@ -326,6 +327,7 @@ export function buildGenericEstimateMessage({ job, customer, channel, biz, appro
       `Labor: ${formatQuote(laborCost)}`,
     ];
     if (hasMaterials) parts.push(`Materials: ${formatQuote(materialCost)}`);
+    for (const dc of visibleDirect) parts.push(`${directCostLabel(dc)}: ${formatQuote(dc.amount)}`);
     parts.push(`Total: ${formatQuote(job.estimateTotal)}.`);
     parts.push(approvalLink ? `View & approve: ${approvalLink}` : `Reply YES to approve or call ${biz.phone}.`);
     return parts.join(' ');
@@ -342,6 +344,9 @@ export function buildGenericEstimateMessage({ job, customer, channel, biz, appro
   ];
   if (hasMaterials) {
     lines.push(`  Materials (${job.materials.length} item${job.materials.length !== 1 ? 's' : ''})  ${formatQuote(materialCost)}`);
+  }
+  for (const dc of visibleDirect) {
+    lines.push(`  ${directCostLabel(dc)}  ${formatQuote(dc.amount)}`);
   }
   if (overheadLine > 0) {
     lines.push(`  Overhead & operating costs  ${formatQuote(overheadLine)}`);
@@ -371,11 +376,12 @@ export async function generateEstimateMessage({
   const fallback = () => buildGenericEstimateMessage({ job, customer, channel, biz, approvalLink });
   if (!apiKey) return fallback();
 
-  const { laborCost, materialCost, overheadLine, hasMaterials } = computeEstimateBreakdown(job);
+  const { laborCost, materialCost, overheadLine, hasMaterials, directCostLines } = computeEstimateBreakdown(job);
 
   const breakdown = [
     `Labor: ${job.laborHours} hrs @ $${job.laborRate}/hr = ${formatQuote(laborCost)}`,
     ...(hasMaterials ? [`Materials (${job.materials.length} items, with markup): ${formatQuote(materialCost)}`] : []),
+    ...directCostLines.filter((l) => l.customerVisible).map((dc) => `${directCostLabel(dc)}: ${formatQuote(dc.amount)}`),
     ...(overheadLine > 0 ? [`Overhead & operating costs: ${formatQuote(overheadLine)}`] : []),
     `Total estimate: ${formatQuote(job.estimateTotal)}`,
   ].join('\n');

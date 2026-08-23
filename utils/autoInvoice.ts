@@ -20,9 +20,10 @@
 // `other`-category lines (2026-08-05 spec), so all three invoice paths pick
 // them up from this single home.
 
-import { computeEstimateBreakdown } from "./pricingEngine";
+import { computeEstimateBreakdown, directCostLabel } from "./pricingEngine";
 import { approvedChangeOrderTotal, changeOrderStatus } from "./changeOrders";
 import { computeTimeTracking, applyClockOut } from "./timeTracking";
+import type { DirectCostLine } from "../types/models";
 import { nextInvoiceNumber } from "./invoiceNumber";
 import { roundToCents } from "./invoicePayments";
 import { jobChangesAfterInvoiceSave } from "./jobStatus";
@@ -96,6 +97,8 @@ export interface BillableBreakdown {
   materialCost: number;
   overheadLine: number;
   hasMaterials: boolean;
+  /** Direct-cost lines (Phase 2); customer-visible ones bill as their own lines. */
+  directCostLines: DirectCostLine[];
   usedTrackedTime: boolean;
   /** Σ approved change-order amounts included in `total` (0 when none). */
   changeOrderTotal: number;
@@ -121,6 +124,7 @@ export function computeBillableBreakdown(job: Job): BillableBreakdown {
       materialCost: base.materialCost,
       overheadLine: base.overheadLine,
       hasMaterials: base.hasMaterials,
+      directCostLines: base.directCostLines,
       usedTrackedTime,
       changeOrderTotal,
       total: roundToCents(base.estimateTotal + changeOrderTotal),
@@ -134,6 +138,7 @@ export function computeBillableBreakdown(job: Job): BillableBreakdown {
     materialCost: base.materialCost,
     overheadLine: base.overheadLine,
     hasMaterials: base.hasMaterials,
+    directCostLines: base.directCostLines,
     usedTrackedTime,
     changeOrderTotal,
     total: roundToCents(base.estimateTotal + laborCost - base.laborCost + changeOrderTotal),
@@ -160,6 +165,10 @@ export function buildInvoiceLineItems(job: Job): InvoiceLineItem[] {
       ? materials[0].name || "Materials"
       : `Materials (${materials.length} items)`;
     items.push({ description: label, amount: b.materialCost, category: "materials" });
+  }
+  for (const dc of b.directCostLines) {
+    if (!dc.customerVisible) continue; // hidden costs live inside the overhead residual
+    items.push({ description: directCostLabel(dc), amount: dc.amount, category: dc.category });
   }
   if (b.overheadLine > 1) {
     items.push({ description: "Overhead & operating costs", amount: b.overheadLine, category: "overhead" });

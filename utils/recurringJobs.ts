@@ -51,6 +51,7 @@ export async function checkAndGenerateRecurringJobs(): Promise<void> {
             laborRate: rule.laborRate,
             materials: rule.materials,
             materialMarkup: rule.materialMarkup,
+            ...(rule.jobCosts ? { jobCosts: rule.jobCosts } : {}),
             overhead: rule.overhead,
             margin: rule.margin,
             status: 'scheduled',

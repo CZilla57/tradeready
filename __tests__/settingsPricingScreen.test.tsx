@@ -43,14 +43,14 @@ describe("SettingsPricingScreen", () => {
     const { findByLabelText } = await render(
       <SettingsPricingScreen navigation={navigation} route={{} as any} />
     );
-    expect((await findByLabelText("Your hourly labor rate ($)")).props.value).toBe("85");
+    expect((await findByLabelText("Your billing rate ($/hr)")).props.value).toBe("85");
   });
 
   it("a $0 labor rate blocks the save", async () => {
     const { findByLabelText } = await render(
       <SettingsPricingScreen navigation={navigation} route={{} as any} />
     );
-    await fireEvent.changeText(await findByLabelText("Your hourly labor rate ($)"), "0");
+    await fireEvent.changeText(await findByLabelText("Your billing rate ($/hr)"), "0");
     await pressHeaderSave(navigation);
     await waitFor(() =>
       expect(Alert.alert).toHaveBeenCalledWith("Fix before saving", "Hourly labor rate must be greater than $0.")

@@ -21,6 +21,7 @@ import {
   getSanityWarnings,
   breakEvenPrice,
   buildEstimateInput,
+  getTimeAndTripWarnings,
   JOB_STATUSES,
 } from "../utils/pricingEngine";
 import { track } from "../utils/analytics";
@@ -39,9 +40,11 @@ import { stampEstimateSent } from "../utils/estimateFollowUps";
 import { Button, Card, Divider } from "../components/UI";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
 import { PricebookPickerModal } from "../components/PricebookPickerModal";
+import { JobCostsEditor } from "../components/JobCostsEditor";
+import { LaborHoursEditor } from "../components/LaborHoursEditor";
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { Job, Customer, Settings, PricebookEntry } from "../types/models";
+import type { Job, Customer, Settings, PricebookEntry, JobCost, LaborTimeBreakdown } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
 // One Done bar serves every decimal-pad input on the calculator tab
@@ -65,8 +68,10 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
   const [settings, setSettings] = useState<Settings | null>(null);
 
   const [laborHours, setLaborHours] = useState("2");
+  const [laborBreakdown, setLaborBreakdown] = useState<LaborTimeBreakdown | undefined>(undefined);
   const [laborRate, setLaborRate] = useState("85");
   const [materials, setMaterials] = useState<LocalMaterial[]>([]);
+  const [jobCosts, setJobCosts] = useState<JobCost[]>([]);
   const [materialMarkup, setMaterialMarkup] = useState("20");
   const [overheadPercent, setOverheadPercent] = useState("15");
   const [marginPercent, setMarginPercent] = useState("20");
@@ -91,8 +96,10 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
       if (j) {
         setJob(j);
         setLaborHours(String(j.laborHours || 2));
+        setLaborBreakdown(j.laborBreakdown);
         setLaborRate(String(j.laborRate || s.laborRate || 85));
         setMaterials((j.materials as LocalMaterial[]) || []);
+        setJobCosts((j.jobCosts as JobCost[]) || []);
         setMaterialMarkup(String(j.materialMarkup ?? s.materialMarkup ?? 20));
         setOverheadPercent(String(j.overhead ?? s.overheadPercent ?? 15));
         setMarginPercent(String(j.margin ?? s.marginPercent ?? 20));
@@ -133,7 +140,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
   }, []);
 
   const params = buildEstimateInput(
-    { laborHours, laborRate, materials, materialMarkup, overheadPercent, marginPercent, travelMiles, isEmergency, taxPercent },
+    { laborHours, laborRate, materials, materialMarkup, jobCosts, overheadPercent, marginPercent, travelMiles, isEmergency, taxPercent },
     settings,
   );
 
@@ -147,6 +154,11 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     params,
   });
   const breakEven = breakEvenPrice(params);
+  const tripWarnings = getTimeAndTripWarnings({
+    driveHours: laborBreakdown?.driveHours ?? 0,
+    travelMiles: parseFloat(travelMiles) || 0,
+    jobCosts,
+  });
   const historyWarnings = history
     ? getHistoryWarnings(history, {
         effectiveHourlyRate: breakdown.effectiveHourlyRate,
@@ -180,13 +192,18 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     if (mode === "replace") {
       setLaborHours(String(entry.laborHours));
       setLaborRate(String(entry.laborRate));
+      setLaborBreakdown(entry.laborBreakdown);
       setMaterials(entry.materials as LocalMaterial[]);
+      setJobCosts((entry.jobCosts as JobCost[]) || []);
       setMaterialMarkup(String(entry.materialMarkup));
       setOverheadPercent(String(entry.overhead));
       setMarginPercent(String(entry.margin));
     } else {
       setLaborHours(String((parseFloat(laborHours) || 0) + entry.laborHours));
+      // Summed hours can't carry a per-component split — fall back to single total.
+      setLaborBreakdown(undefined);
       setMaterials((prev) => [...prev, ...(entry.materials as LocalMaterial[])]);
+      setJobCosts((prev) => [...prev, ...((entry.jobCosts as JobCost[]) || [])]);
       setMaterialMarkup(String(Math.max(parseFloat(materialMarkup) || 0, entry.materialMarkup)));
       setOverheadPercent(String(Math.max(parseFloat(overheadPercent) || 0, entry.overhead)));
       setMarginPercent(String(Math.max(parseFloat(marginPercent) || 0, entry.margin)));
@@ -201,6 +218,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
       id: `pb-${Date.now()}`,
       name,
       laborHours: params.laborHours,
+      ...(laborBreakdown ? { laborBreakdown } : {}),
       laborRate: params.laborRate,
       materials: materials.map((m) => ({
         id: m.id,
@@ -209,6 +227,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         unitCost: m.unitCost,
       })),
       materialMarkup: params.materialMarkup,
+      ...(jobCosts.length > 0 ? { jobCosts } : {}),
       overhead: params.overheadPercent,
       margin: params.marginPercent,
       estimateTotal: breakdown.total,
@@ -253,9 +272,11 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         ? {
             ...j,
             laborHours: params.laborHours,
+            laborBreakdown,
             laborRate: params.laborRate,
             materials,
             materialMarkup: params.materialMarkup,
+            jobCosts,
             overhead: params.overheadPercent,
             margin: params.marginPercent,
             estimateTotal: breakdown.total,
@@ -332,9 +353,11 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
     const updated: Job = {
       ...job,
       laborHours: params.laborHours,
+      laborBreakdown,
       laborRate: params.laborRate,
       materials,
       materialMarkup: params.materialMarkup,
+      jobCosts,
       overhead: params.overheadPercent,
       margin: params.marginPercent,
       estimateTotal: breakdown.total,
@@ -443,8 +466,11 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
         {tab === "calculator" ? (
           <CalculatorTab
             laborHours={laborHours} setLaborHours={setLaborHours}
+            laborBreakdown={laborBreakdown} setLaborBreakdown={setLaborBreakdown}
             laborRate={laborRate} setLaborRate={setLaborRate}
             materials={materials}
+            jobCosts={jobCosts}
+            setJobCosts={setJobCosts}
             materialMarkup={materialMarkup} setMaterialMarkup={setMaterialMarkup}
             overheadPercent={overheadPercent} setOverheadPercent={setOverheadPercent}
             marginPercent={marginPercent} setMarginPercent={setMarginPercent}
@@ -457,7 +483,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
             breakdown={breakdown}
             range={range}
             breakEven={breakEven}
-            warnings={[...warnings, ...historyWarnings]}
+            warnings={[...warnings, ...tripWarnings, ...historyWarnings]}
             onSave={saveToJob}
             saving={saving}
             onGenerateEstimate={generateEstimate}
@@ -498,8 +524,11 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
 
 interface CalculatorTabProps {
   laborHours: string; setLaborHours: (v: string) => void;
+  laborBreakdown: LaborTimeBreakdown | undefined; setLaborBreakdown: (v: LaborTimeBreakdown | undefined) => void;
   laborRate: string; setLaborRate: (v: string) => void;
   materials: LocalMaterial[];
+  jobCosts: JobCost[];
+  setJobCosts: (v: JobCost[]) => void;
   materialMarkup: string; setMaterialMarkup: (v: string) => void;
   overheadPercent: string; setOverheadPercent: (v: string) => void;
   marginPercent: string; setMarginPercent: (v: string) => void;
@@ -521,8 +550,9 @@ interface CalculatorTabProps {
 }
 
 function CalculatorTab({
-  laborHours, setLaborHours, laborRate, setLaborRate,
+  laborHours, setLaborHours, laborBreakdown, setLaborBreakdown, laborRate, setLaborRate,
   materials, materialMarkup, setMaterialMarkup,
+  jobCosts, setJobCosts,
   overheadPercent, setOverheadPercent, marginPercent, setMarginPercent,
   travelMiles, setTravelMiles, taxPercent, setTaxPercent,
   isEmergency, setIsEmergency,
@@ -533,6 +563,7 @@ function CalculatorTab({
 }: CalculatorTabProps) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+  const [helpOpen, setHelpOpen] = useState(false);
   return (
     <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
       <View style={{ flexDirection: "row", marginBottom: spacing.md, gap: spacing.sm }}>
@@ -557,10 +588,38 @@ function CalculatorTab({
         </View>
       ))}
 
+      <Card style={{ marginBottom: spacing.sm }}>
+        <TouchableOpacity
+          style={styles.helpHeader}
+          onPress={() => setHelpOpen((v) => !v)}
+          accessibilityRole="button"
+          accessibilityLabel={helpOpen ? "Hide how this price works" : "Show how this price works"}
+        >
+          <Text style={styles.helpTitle}>Understanding your price</Text>
+          <Ionicons name={helpOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.textSecondary} />
+        </TouchableOpacity>
+        {helpOpen && (
+          <View style={{ marginTop: spacing.xs }}>
+            <HelpItem text="Rate is your billing rate, not your take-home pay — set it high enough to cover slow days, tools, and time off." styles={styles} />
+            <HelpItem text="Markup covers the hassle of sourcing materials. Margin is your profit as a share of the final price — they're different, and you can use both." styles={styles} />
+            <HelpItem text="Overhead is the share of your insurance, vehicle, and tools this job should carry, entered as a percent of the job." styles={styles} />
+            <HelpItem text="Recommended is your target price. Break-even is the floor that covers costs with zero profit — quoting below it loses money." styles={styles} />
+            <HelpItem text="Minimum job fee is charged when a job prices below it — it covers turning up for small work." styles={styles} />
+            <HelpItem text="Emergency / after-hours raises your labor rate by your multiplier for nights, weekends, and urgent calls." styles={styles} />
+            <HelpItem text="Direct costs (permits, disposal, rental, subcontractors) can be billed at cost or marked up. Permits are usually billed at cost." styles={styles} />
+            <Text style={styles.helpNote}>These are tools to price with intention — they don&apos;t guarantee a profit.</Text>
+          </View>
+        )}
+      </Card>
+
       <SectionLabel>Labor</SectionLabel>
       <Card>
-        <View style={styles.inputRow}>
-          <SmallInput label="Hours" value={laborHours} onChange={setLaborHours} placeholder="2" suffix="hrs" />
+        <LaborHoursEditor
+          value={{ hours: laborHours, breakdown: laborBreakdown }}
+          onChange={(v) => { setLaborHours(v.hours); setLaborBreakdown(v.breakdown); }}
+          doneBarId={CALC_DONE_ID}
+        />
+        <View style={[styles.inputRow, { marginTop: spacing.sm }]}>
           <SmallInput label="Rate" value={laborRate} onChange={setLaborRate} placeholder="85" prefix="$" suffix="/hr" />
           <View style={styles.calcResult}>
             <Text style={styles.calcResultLabel}>Labor total</Text>
@@ -569,7 +628,7 @@ function CalculatorTab({
         </View>
         <View style={[styles.inputRow, { marginTop: spacing.sm, alignItems: "center" }]}>
           <Text style={styles.toggleLabel}>Emergency / after-hours rate</Text>
-          <Switch value={isEmergency} onValueChange={setIsEmergency} trackColor={{ true: colors.warning }} accessibilityLabel="Emergency or after-hours rate" />
+          <Switch value={isEmergency} onValueChange={setIsEmergency} trackColor={{ true: colors.warning }} accessibilityLabel="Emergency or after-hours rate — raises your labor rate by your multiplier" />
         </View>
       </Card>
 
@@ -629,6 +688,11 @@ function CalculatorTab({
             <Text style={styles.calcResultValue}>{formatQuote(breakdown.materialCost)}</Text>
           </View>
         </View>
+      </Card>
+
+      <SectionLabel>Direct costs</SectionLabel>
+      <Card>
+        <JobCostsEditor value={jobCosts} onChange={setJobCosts} doneBarId={CALC_DONE_ID} />
       </Card>
 
       <SectionLabel>Business costs</SectionLabel>
@@ -736,6 +800,16 @@ function EstimateTab({ generating, generatedEstimate, onRegenerate, onCopy, onEm
 }
 
 // ── Small reusable pieces ──────────────────────────────────────────────────────
+
+function HelpItem({ text, styles }: { text: string; styles: ReturnType<typeof createStyles> }) {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.helpRow}>
+      <Ionicons name="ellipse" size={5} color={colors.textMuted} style={{ marginTop: 7 }} />
+      <Text style={styles.helpText}>{text}</Text>
+    </View>
+  );
+}
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   const { colors, shadow } = useTheme();
@@ -857,6 +931,11 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
     },
     addMaterialText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.sm, color: colors.accent },
     emptyMaterials: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.sm },
+    helpHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    helpTitle: { fontFamily: fonts.bodySemiBold, fontSize: fontSize.md, color: colors.textPrimary },
+    helpRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-start", marginBottom: spacing.xs },
+    helpText: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, flex: 1, lineHeight: 20 },
+    helpNote: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs, fontStyle: "italic" },
     breakdownRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
     breakdownLabel: { fontFamily: fonts.bodyRegular, fontSize: fontSize.sm, color: colors.textSecondary, flex: 1 },
     breakdownValue: { fontFamily: fonts.mono, fontSize: 12, color: colors.textPrimary },
