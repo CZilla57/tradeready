@@ -156,16 +156,23 @@ export function buildProfitabilityRows(
         : null,
   });
 
-  // Only when known AND non-zero — an unknown renders nothing rather than a
-  // row of dashes, and a known $0 adds no information.
-  if (p.otherDirectExpenses !== null && p.otherDirectExpenses > 0) {
+  // Direct costs (Phase 2/5). Show the row when there is a planned direct cost
+  // OR an actual non-materials expense. The variance only compares when a plan
+  // exists — an unplanned "other" expense isn't an overrun of a zero plan, so
+  // when estimatedDirectCost is 0 this stays the pre-Phase-5 "Other job
+  // expenses" row (estimate "—", no variance).
+  const hasEstimatedDirect = p.estimatedDirectCost > 0;
+  const hasActualOther = p.otherDirectExpenses !== null && p.otherDirectExpenses > 0;
+  if (hasEstimatedDirect || hasActualOther) {
+    const showVariance =
+      hasEstimatedDirect && p.directCostVariance !== null && p.directCostVariance !== 0;
     rows.push({
       key: "otherExpenses",
-      label: "Other job expenses",
-      estimate: UNKNOWN,
-      actual: formatMoney(p.otherDirectExpenses),
-      variance: null,
-      varianceTone: null,
+      label: hasEstimatedDirect ? "Direct costs" : "Other job expenses",
+      estimate: hasEstimatedDirect ? formatQuote(p.estimatedDirectCost) : UNKNOWN,
+      actual: p.otherDirectExpenses !== null ? formatMoney(p.otherDirectExpenses) : UNKNOWN,
+      variance: showVariance ? signedMoney(p.directCostVariance as number) : null,
+      varianceTone: showVariance ? ((p.directCostVariance as number) > 0 ? "bad" : "good") : null,
     });
   }
 
@@ -180,11 +187,17 @@ export function buildProfitabilityRows(
   });
 
   // Estimate-side effective hourly mirrors the pricing engine's definition:
-  // (total − charged materials) / hours, on the saved-job breakdown.
+  // (total − charged materials − direct costs) / hours, on the saved-job
+  // breakdown — direct costs aren't labor earnings (matches the engine's
+  // effectiveHourlyRate).
   const estBreakdown = computeEstimateBreakdown(job);
+  const directLineTotal = estBreakdown.directCostLines.reduce((sum, l) => sum + l.amount, 0);
   const estimatedHourly =
     p.estimatedLaborHours > 0
-      ? roundToCents((p.estimatedRevenue - estBreakdown.materialCost) / p.estimatedLaborHours)
+      ? roundToCents(
+          (p.estimatedRevenue - estBreakdown.materialCost - directLineTotal) /
+            p.estimatedLaborHours,
+        )
       : null;
   rows.push({
     key: "hourly",

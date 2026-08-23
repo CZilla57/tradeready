@@ -26,7 +26,7 @@ import {
   roundToCents,
   toAmount,
 } from "./invoicePayments";
-import { computeEstimateBreakdown } from "./pricingEngine";
+import { computeDirectCosts, computeEstimateBreakdown } from "./pricingEngine";
 import { computeTimeTracking } from "./timeTracking";
 
 /** Machine-readable "this figure is incomplete and here is why" markers. */
@@ -73,6 +73,11 @@ export interface JobProfitability {
   actualMaterialExpense: number | null;
   otherDirectExpenses: number | null;
   materialsVariance: number | null;
+  /** Estimated direct-cost basis from job.jobCosts (Phase 2). 0 when none. */
+  estimatedDirectCost: number;
+  /** actual non-materials linked expenses − estimatedDirectCost; null when no
+   *  expenses are linked (actual unknown, never a fake $0). */
+  directCostVariance: number | null;
 
   /* Profit */
   estimatedGrossProfit: number;
@@ -194,6 +199,11 @@ export function computeJobProfitability(
     computeEstimateBreakdown(job).materialBaseCost,
   );
 
+  // Estimated direct costs (Phase 2): the raw cost basis the owner expects to
+  // pay out — a marked-up direct line's markup is margin, not cost, so the
+  // basis excludes it (same treatment as materials). 0 on pre-Phase-2 jobs.
+  const estimatedDirectCost = roundToCents(computeDirectCosts(job.jobCosts || []).costBasis);
+
   const linkedExp = linkedExpensesForJob(job, expenses);
   let actualMaterialExpense: number | null = null;
   let otherDirectExpenses: number | null = null;
@@ -214,6 +224,12 @@ export function computeJobProfitability(
     actualMaterialExpense !== null
       ? roundToCents(actualMaterialExpense - estimatedMaterialCost)
       : null;
+  // Actual direct costs are proxied by non-materials linked expenses
+  // (otherDirectExpenses). Unknown when nothing is linked.
+  const directCostVariance =
+    otherDirectExpenses !== null
+      ? roundToCents(otherDirectExpenses - estimatedDirectCost)
+      : null;
 
   /* Profit ------------------------------------------------------------ */
   // Gross profit = revenue − DIRECT costs. Actual costs come ONLY from
@@ -221,7 +237,10 @@ export function computeJobProfitability(
   // enter actuals (the double-counting rule); business overhead (unlinked
   // expenses) stays in the Money tab's P&L, not here.
   const estimatedGrossProfit = roundToCents(
-    estimatedRevenue - estimatedMaterialCost - (estimatedOwnerLaborCost ?? 0),
+    estimatedRevenue -
+      estimatedMaterialCost -
+      estimatedDirectCost -
+      (estimatedOwnerLaborCost ?? 0),
   );
   const knownActualCosts =
     (actualMaterialExpense ?? 0) +
@@ -260,6 +279,8 @@ export function computeJobProfitability(
     actualMaterialExpense,
     otherDirectExpenses,
     materialsVariance,
+    estimatedDirectCost,
+    directCostVariance,
     estimatedGrossProfit,
     actualGrossProfitBilled,
     actualGrossProfitCash,

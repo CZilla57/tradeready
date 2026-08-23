@@ -233,6 +233,33 @@ describe("buildProfitabilityRows", () => {
     expect(byKey.hourly.actual).toBe("—");
   });
 
+  test("direct costs (Phase 2/5): planned direct costs show an estimate side and variance", () => {
+    const job = makeJob({
+      materials: [],
+      estimateTotal: 700,
+      laborHours: 0,
+      laborRate: 0,
+      jobCosts: [
+        { id: "jc1", label: "Permit", category: "permit", quantity: 1, unitCost: 150, markupPercent: 0, markupPolicy: "passthrough", taxable: false, customerVisible: true },
+        { id: "jc2", label: "Sub", category: "subcontractor", quantity: 1, unitCost: 500, markupPercent: 10, markupPolicy: "in_margin_base", taxable: false, customerVisible: true },
+      ],
+    });
+    const expenses = [makeExpense({ id: "e9", jobId: "j1", category: "labor", amount: 520, description: "Sub invoice" })];
+    const p = computeJobProfitability(job, [], expenses, {}, NOW);
+    const byKey = Object.fromEntries(buildProfitabilityRows(job, p).map((r) => [r.key, r]));
+
+    // estimated direct cost basis = 150 + 500 = 650; actual 520 → came in under.
+    expect(byKey.otherExpenses).toMatchObject({
+      label: "Direct costs",
+      estimate: formatQuote(650),
+      actual: formatMoney(520),
+      variance: formatMoney(-130),
+      varianceTone: "good",
+    });
+    // Estimated gross profit is honest: 700 − 650 direct = 50 (the markup).
+    expect(byKey.profit.estimate).toBe(formatQuote(50));
+  });
+
   test("under-estimate hours and materials tone good; descope credit tone neutral", () => {
     const descope: ChangeOrder = {
       id: "co4",
