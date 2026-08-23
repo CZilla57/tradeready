@@ -94,3 +94,45 @@ describe("selectInvoicesToAutoEmail", () => {
     expect(selectInvoicesToAutoEmail({ invoices: undefined, settings, alreadyHandledInvoiceIds: [], today: TODAY })).toHaveLength(0);
   });
 });
+
+// Phase 6 — recurring-invoice auto-send is gated INDEPENDENTLY of the
+// job-completion toggle, on settings.autoSendRecurringInvoicesEnabled.
+describe("selectInvoicesToAutoEmail — recurring gate", () => {
+  const rinv = (over = {}) => inv({ id: "invR", recurringInvoiceId: "ri1", occurrenceNumber: 3, ...over });
+
+  test("a recurring invoice does NOT send under only the job-completion toggle", () => {
+    expect(
+      run([rinv()], { settings: { autoEmailInvoiceOnComplete: true } }),
+    ).toHaveLength(0);
+  });
+
+  test("a recurring invoice sends when the recurring toggle is on", () => {
+    expect(
+      run([rinv()], { settings: { autoSendRecurringInvoicesEnabled: true } }),
+    ).toHaveLength(1);
+  });
+
+  test("a job invoice does NOT send under only the recurring toggle", () => {
+    expect(
+      run([inv()], { settings: { autoSendRecurringInvoicesEnabled: true } }),
+    ).toHaveLength(0);
+  });
+
+  test("both gates off → nothing sends even when stamped", () => {
+    expect(run([rinv(), inv()], { settings: {} })).toHaveLength(0);
+  });
+
+  test("mixed batch honors each invoice's own gate", () => {
+    const out = run([rinv(), inv()], {
+      settings: { autoSendRecurringInvoicesEnabled: true, autoEmailInvoiceOnComplete: false },
+    });
+    expect(out.map((i) => i.id)).toEqual(["invR"]);
+  });
+
+  test("recurring invoices still obey freshness, paid, and email gates", () => {
+    const s = { settings: { autoSendRecurringInvoicesEnabled: true } };
+    expect(run([rinv({ autoEmailRequestedAt: STALE })], s)).toHaveLength(0);
+    expect(run([rinv({ paid: true })], s)).toHaveLength(0);
+    expect(run([rinv({ email: "no-at-sign" })], s)).toHaveLength(0);
+  });
+});

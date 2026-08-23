@@ -148,6 +148,9 @@ export default function RecurringInvoicesScreen({ navigation }: InvoiceStackScre
         {rule.isActive && (
           <Text style={styles.ruleNext}>Next: {rule.nextDueDate}</Text>
         )}
+        {rule.autoSendEnabled && (
+          <Text style={styles.ruleAutoSend}>✓ Auto-sends each invoice by email</Text>
+        )}
       </TouchableOpacity>
     );
   }
@@ -217,6 +220,12 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       fontSize: 10,
       color: colors.accent,
       marginTop: spacing.xs,
+    },
+    ruleAutoSend: {
+      fontFamily: fonts.bodyMedium,
+      fontSize: fontSize.xs,
+      color: colors.success,
+      marginTop: 2,
     },
   });
 }

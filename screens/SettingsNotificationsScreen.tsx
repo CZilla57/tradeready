@@ -197,6 +197,21 @@ export default function SettingsNotificationsScreen({ navigation }: TodayStackSc
             )}
           </View>
 
+          <View style={styles.card}>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Auto-send recurring invoices</Text>
+              <Switch
+                value={!!s.autoSendRecurringInvoicesEnabled}
+                onValueChange={(v) => update("autoSendRecurringInvoicesEnabled", v)}
+                trackColor={{ true: colors.accent }}
+                accessibilityLabel="Auto-send recurring invoices by email"
+              />
+            </View>
+            <Text style={styles.keyNote}>
+              Master switch for maintenance plans you&apos;ve set to auto-send. When on, each plan&apos;s newest invoice is emailed to the customer automatically (with a payment link when one can be made) — it does not collect payment, and back-dated catch-up invoices are never auto-sent. Turn a specific plan on under Recurring invoices. Turning this off halts anything still pending.
+            </Text>
+          </View>
+
           <Text style={[styles.ruleSubtitle, { marginTop: spacing.sm }]}>Message templates</Text>
           <View style={styles.card}>
             <Field

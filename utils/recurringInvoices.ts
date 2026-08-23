@@ -22,6 +22,8 @@ import {
 import { calculateNextDate, isEndConditionMet } from './recurrence';
 import { nextInvoiceNumber } from './invoiceNumber';
 import { syncNotifications } from './notifications';
+import { selectRecurringInvoiceToAutoSend } from './recurringAutoSend';
+import { mintAutoInvoicePaymentLink, uploadAutoInvoicePdf } from './autoInvoice';
 
 // Occurrence date + net terms. Same Date construction as calculateNextDate,
 // and same local-frame formatting (not toISOString/UTC, which loses a
@@ -87,6 +89,8 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
       loadSettings(),
     ]);
     const newInvoices: Invoice[] = [];
+    // Invoices stamped for the backend auto-email sweep this run (Phase 6).
+    const stampedForAutoSend: string[] = [];
     let anyUpdated = false;
 
     for (const rule of rules) {
@@ -98,6 +102,9 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
         customerId: rule.customerId,
         customerName: rule.customerName,
       });
+      // Invoices created for THIS rule this run — so auto-send can pick the
+      // current occurrence and never the catch-up backlog.
+      const ruleInvoices: Invoice[] = [];
 
       while (rule.nextDueDate <= today) {
         if (isEndConditionMet(rule)) {
@@ -137,6 +144,7 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
           };
 
           newInvoices.push(newInvoice);
+          ruleInvoices.push(newInvoice);
         }
         rule.occurrenceCount++;
         rule.lastGeneratedDate = rule.nextDueDate;
@@ -148,6 +156,20 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
           break;
         }
       }
+
+      // Auto-delivery (Phase 6): stamp ONLY the current occurrence for the
+      // backend sweep, and only when the plan opted in, the master setting is
+      // on, and the customer has a plausible email. The stamp mutates the
+      // invoice in place (email/phone are already the customer snapshot).
+      const toSend = selectRecurringInvoiceToAutoSend(ruleInvoices, {
+        ruleAutoSendEnabled: rule.autoSendEnabled,
+        masterEnabled: !!settings.autoSendRecurringInvoicesEnabled,
+        customerEmail: customer?.email,
+      });
+      if (toSend) {
+        toSend.autoEmailRequestedAt = new Date().toISOString();
+        stampedForAutoSend.push(toSend.id);
+      }
     }
 
     if (newInvoices.length > 0 || anyUpdated) {
@@ -156,6 +178,16 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
       // saveInvoices' own sweep raced the rules write above and may have read
       // pre-advance rules — re-run now that the advanced rules are persisted.
       syncNotifications();
+
+      // Phase 6: after the invoice is saved (local-first — save first, network
+      // best-effort after), mint a payment link + upload the PDF for each
+      // auto-send invoice so the backend email can include the SAME link/PDF
+      // the manual send produces. Fire-and-forget: never awaited, never throw
+      // (both catch internally). Idempotency is the sweep's one-and-done log.
+      for (const id of stampedForAutoSend) {
+        void mintAutoInvoicePaymentLink(id);
+        void uploadAutoInvoicePdf(id);
+      }
     }
   } finally {
     generating = false;

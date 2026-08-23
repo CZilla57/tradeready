@@ -20,15 +20,23 @@ const { isPlausibleEmail } = require("./selectInvoicesToRemind");
 const MAX_REQUEST_AGE_DAYS = 7;
 
 function selectInvoicesToAutoEmail({ invoices, settings, alreadyHandledInvoiceIds, today = new Date() }) {
-  // Checked at SEND time, not stamp time: turning the toggle off halts
-  // anything still pending.
-  if (!settings || !settings.autoEmailInvoiceOnComplete) return [];
+  if (!settings) return [];
+  // Two INDEPENDENT send-time gates (Phase 6). Each invoice obeys the one that
+  // matches its origin: recurring-plan invoices (recurringInvoiceId set) gate on
+  // autoSendRecurringInvoicesEnabled; job-completion invoices gate on
+  // autoEmailInvoiceOnComplete. Both checked at SEND time, so turning either off
+  // halts anything still pending. If neither is on, nothing sends.
+  const jobGate = !!settings.autoEmailInvoiceOnComplete;
+  const recurringGate = !!settings.autoSendRecurringInvoicesEnabled;
+  if (!jobGate && !recurringGate) return [];
   const handled = new Set(alreadyHandledInvoiceIds || []);
   const now = today.getTime();
   const maxAgeMs = MAX_REQUEST_AGE_DAYS * 86400000;
 
   return (invoices || []).filter((invoice) => {
     if (!invoice || !invoice.autoEmailRequestedAt) return false;
+    const gate = invoice.recurringInvoiceId ? recurringGate : jobGate;
+    if (!gate) return false;
     const stamped = Date.parse(invoice.autoEmailRequestedAt);
     // Unparseable → fail closed. Future-dated (clock skew) counts as fresh.
     if (!Number.isFinite(stamped) || now - stamped > maxAgeMs) return false;

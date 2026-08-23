@@ -13,6 +13,7 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
+  Switch,
   StyleSheet,
   Alert,
   KeyboardAvoidingView,
@@ -22,6 +23,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { loadRecurringInvoices, saveRecurringInvoices, loadCustomers, getOrCreateCustomer, resolveCustomer } from "../utils/storage";
 import { syncNotifications } from "../utils/notifications";
+import { isPlausiblyEmailable } from "../utils/autoInvoice";
+import { formatMoney } from "../utils/format";
 import { Button } from "../components/UI";
 import Field from "../components/Field";
 import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
@@ -72,6 +75,7 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>("never");
   const [endCount, setEndCount] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
+  const [autoSend, setAutoSend] = useState<boolean>(false);
   const [showStartDatePicker, setShowStartDatePicker] = useState<boolean>(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState<boolean>(false);
   const [existingRule, setExistingRule] = useState<RecurringInvoice | null>(null);
@@ -98,6 +102,7 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
       setEndCondition(rule.endCondition);
       setEndCount(rule.endCount != null ? String(rule.endCount) : "");
       setEndDate(rule.endDate ?? "");
+      setAutoSend(!!rule.autoSendEnabled);
       const record = resolveCustomer(customers, { customerId: rule.customerId, customerName: rule.customerName });
       setEmail(record?.email ?? "");
       setPhone(record?.phone ?? "");
@@ -129,6 +134,45 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
       return;
     }
 
+    // Auto-delivery (Phase 6): a plan can only auto-send to a valid email, and
+    // turning it on asks for an explicit confirmation showing exactly what will
+    // go out automatically. Only prompt when newly enabling it.
+    const enablingAutoSend = autoSend && !existingRule?.autoSendEnabled;
+    if (autoSend && !isPlausiblyEmailable(email.trim())) {
+      Alert.alert(
+        "Valid email required",
+        "Auto-send emails each invoice to the customer, so a valid customer email is required. Add one, or turn auto-send off.",
+      );
+      return;
+    }
+    if (enablingAutoSend) {
+      const dueObj = dateObjFromStr(startDate);
+      dueObj.setDate(dueObj.getDate() + parsedDueDays);
+      const ends =
+        endCondition === "never"
+          ? "until you cancel"
+          : endCondition === "count"
+            ? `after ${parsedEndCount} invoices`
+            : `on ${displayDate(endDate)}`;
+      const confirmed = await new Promise<boolean>((resolve) =>
+        Alert.alert(
+          "Turn on auto-send?",
+          `Each invoice will be emailed to ${email.trim()} automatically:\n\n` +
+            `• Amount: ${formatMoney(parsedAmount)}\n` +
+            `• First send: ${displayDate(startDate)}\n` +
+            `• Due: ${displayDate(toDateStr(dueObj))}\n` +
+            `• Delivery: email (with a payment link when available)\n` +
+            `• Repeats ${cadence}, ${ends}\n\n` +
+            `This sends the invoice — it does not collect payment. Requires "Auto-send recurring invoices" on in Settings → Notifications. You can pause or send manually anytime.`,
+          [
+            { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+            { text: "Turn on auto-send", onPress: () => resolve(true) },
+          ],
+        ),
+      );
+      if (!confirmed) return;
+    }
+
     setSaving(true);
     // The only sanctioned customer-creation path: upsert by normalized name;
     // blank contact fields backfill, existing values are never clobbered.
@@ -150,6 +194,7 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
       endCount: endCondition === "count" ? parsedEndCount : undefined,
       endDate: endCondition === "date" ? endDate : undefined,
       nextDueDate: startDate,
+      autoSendEnabled: autoSend,
     };
 
     let updated: RecurringInvoice[];
@@ -194,6 +239,21 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
             <Field label="Due (days)" value={dueDays} onChangeText={setDueDays} placeholder="30" keyboardType="number-pad" flex />
           </View>
           <Field label="Description of work" value={desc} onChangeText={setDesc} placeholder="Monthly maintenance visit" multiline />
+
+          <View style={styles.autoSendCard}>
+            <View style={styles.autoSendRow}>
+              <Text style={styles.autoSendLabel}>Auto-send each invoice by email</Text>
+              <Switch
+                value={autoSend}
+                onValueChange={setAutoSend}
+                trackColor={{ true: colors.accent }}
+                accessibilityLabel="Auto-send each invoice by email"
+              />
+            </View>
+            <Text style={styles.autoSendNote}>
+              Emails the newest invoice to the customer automatically (with a payment link when available). It doesn&apos;t collect payment, and never auto-sends back-dated catch-up invoices. Needs a valid email and the master switch in Settings → Notifications. Pause or send manually anytime.
+            </Text>
+          </View>
 
           <Text style={styles.fieldLabel}>Repeats</Text>
           <View style={styles.chipRow}>
@@ -382,6 +442,10 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       flex: 1,
     },
     pickerIcon: { marginLeft: spacing.sm },
+    autoSendCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, ...shadow.card },
+    autoSendRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    autoSendLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textPrimary, flex: 1, paddingRight: spacing.sm },
+    autoSendNote: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: 6, lineHeight: 18 },
     actions: { flexDirection: "row", marginTop: spacing.lg },
   });
 }

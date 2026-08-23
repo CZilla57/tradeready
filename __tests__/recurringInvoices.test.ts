@@ -7,6 +7,7 @@ import {
   loadCustomers,
   loadRecurringInvoices,
   saveRecurringInvoices,
+  loadSettings,
 } from '../utils/storage';
 import { syncNotifications } from '../utils/notifications';
 
@@ -44,6 +45,7 @@ const mockLoadRecurringInvoices =
 const mockSaveRecurringInvoices =
   saveRecurringInvoices as jest.MockedFunction<typeof saveRecurringInvoices>;
 const mockSyncNotifications = syncNotifications as jest.MockedFunction<typeof syncNotifications>;
+const mockLoadSettings = loadSettings as jest.MockedFunction<typeof loadSettings>;
 
 const alice: Customer = {
   id: 'c1', name: 'Alice', email: 'alice@x.com', phone: '555-0001', address: '', notes: '',
@@ -80,6 +82,64 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.useRealTimers();
+});
+
+// Phase 6 — auto-delivery stamping. Only the CURRENT occurrence is stamped for
+// the backend email sweep, and only when the plan opted in, the master setting
+// is on, and the customer email is plausible.
+describe('checkAndGenerateRecurringInvoices — auto-send stamping', () => {
+  function stamped(saved: Invoice[]): Invoice[] {
+    return saved.filter((i) => i.autoEmailRequestedAt);
+  }
+
+  test('stamps ONLY the newest occurrence when fully opted in (no catch-up burst)', async () => {
+    mockLoadSettings.mockResolvedValue({ autoSendRecurringInvoicesEnabled: true } as any);
+    // From 2026-06-10 weekly to today (2026-07-08): 5 occurrences.
+    mockLoadRecurringInvoices.mockResolvedValue([
+      makeRule({ nextDueDate: '2026-06-10', autoSendEnabled: true }),
+    ]);
+
+    await checkAndGenerateRecurringInvoices();
+
+    const saved: Invoice[] = mockSaveInvoices.mock.calls[0][0];
+    expect(saved.length).toBe(5);
+    const flagged = stamped(saved);
+    expect(flagged).toHaveLength(1);
+    // The newest occurrence carries the highest occurrenceNumber.
+    expect(flagged[0].occurrenceNumber).toBe(5);
+    expect(flagged[0].autoEmailRequestedAt).toBeTruthy();
+  });
+
+  test('stamps nothing when the master setting is off', async () => {
+    mockLoadSettings.mockResolvedValue({} as any); // master off
+    mockLoadRecurringInvoices.mockResolvedValue([
+      makeRule({ nextDueDate: '2026-07-08', autoSendEnabled: true }),
+    ]);
+
+    await checkAndGenerateRecurringInvoices();
+    expect(stamped(mockSaveInvoices.mock.calls[0][0])).toHaveLength(0);
+  });
+
+  test('stamps nothing when the plan has not opted in', async () => {
+    mockLoadSettings.mockResolvedValue({ autoSendRecurringInvoicesEnabled: true } as any);
+    mockLoadRecurringInvoices.mockResolvedValue([
+      makeRule({ nextDueDate: '2026-07-08', autoSendEnabled: false }),
+    ]);
+
+    await checkAndGenerateRecurringInvoices();
+    expect(stamped(mockSaveInvoices.mock.calls[0][0])).toHaveLength(0);
+  });
+
+  test('stamps nothing when the customer has no plausible email', async () => {
+    mockLoadSettings.mockResolvedValue({ autoSendRecurringInvoicesEnabled: true } as any);
+    mockLoadCustomers.mockResolvedValue([{ ...alice, email: '' }]);
+    mockLoadRecurringInvoices.mockResolvedValue([
+      makeRule({ nextDueDate: '2026-07-08', autoSendEnabled: true }),
+    ]);
+
+    await checkAndGenerateRecurringInvoices();
+    expect(stamped(mockSaveInvoices.mock.calls[0][0])).toHaveLength(0);
+  });
 });
 
 describe('checkAndGenerateRecurringInvoices', () => {
