@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, fontSize, fonts, layout } from '../utils/theme';
 import type { ColorScheme, ShadowScheme } from '../utils/theme';
 import { useTheme } from '../hooks/useTheme';
+import { ScreenHeader } from '../components/ScreenHeader';
 import { useRefresh } from '../hooks/useRefresh';
 import {
   DATE_FILTERS,
@@ -189,6 +190,19 @@ export default function MoneyScreen({ navigation }: MoneyStackScreenProps<'Money
   // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
     <View style={styles.container}>
+      <ScreenHeader
+        title="Money"
+        right={
+          <TouchableOpacity
+            onPress={() => navigation.navigate("ExportData")}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Export data"
+          >
+            <Ionicons name="download-outline" size={22} color={colors.accent} />
+          </TouchableOpacity>
+        }
+      />
 
       {/* ── Date Filter Chips ─────────────────────────────────────────────── */}
       <View style={styles.filterBar}>

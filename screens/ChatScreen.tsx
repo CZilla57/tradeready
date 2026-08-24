@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useLayoutEffect, useMemo, useEffect, useRef } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import { TRADE_TYPES, getTradeNickname } from "../utils/pricingEngine";
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
 import { KeyboardDoneBar } from "../components/KeyboardDoneBar";
+import { ScreenHeader } from "../components/ScreenHeader";
 import { Ionicons } from "@expo/vector-icons";
 import type { Settings } from "../types/models";
 import { track, reportError } from '../utils/analytics';
@@ -128,17 +129,14 @@ export default function ChatScreen({ navigation, route }: ChatStackScreenProps<'
   const [snapshot, setSnapshot] = useState<any>(null);
   const headerHeight = useHeaderHeight();
 
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      title: getTradeNickname(settings?.trade),
-      headerRight: () =>
-        messages.length > 0 ? (
-          <TouchableOpacity onPress={() => setMessages([])} style={{ marginRight: 4 }}>
-            <Text style={{ fontFamily: fonts.bodyRegular, color: colors.accent, fontSize: fontSize.md }}>New chat</Text>
-          </TouchableOpacity>
-        ) : null,
-    });
-  }, [navigation, messages.length, settings?.trade, colors.accent]);
+  // Title + "New chat" render in the in-screen ScreenHeader (see render), not
+  // the native header, to avoid the iOS 26 glass capsule on header buttons.
+  const headerActions =
+    messages.length > 0 ? (
+      <TouchableOpacity onPress={() => setMessages([])} accessibilityRole="button" accessibilityLabel="New chat">
+        <Text style={{ fontFamily: fonts.bodyRegular, color: colors.accent, fontSize: fontSize.md }}>New chat</Text>
+      </TouchableOpacity>
+    ) : null;
 
   useFocusEffect(
     useCallback(() => {
@@ -211,6 +209,7 @@ export default function ChatScreen({ navigation, route }: ChatStackScreenProps<'
   // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
     <View style={styles.container}>
+      <ScreenHeader title={getTradeNickname(settings?.trade)} right={headerActions} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : "height"}

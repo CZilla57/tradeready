@@ -23,6 +23,7 @@ import { formatQuote } from "../utils/format";
 import { Badge, EmptyState, StatCard } from "../components/UI";
 import { SearchField } from "../components/SearchField";
 import { Fab } from "../components/Fab";
+import { ScreenHeader } from "../components/ScreenHeader";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
@@ -162,6 +163,19 @@ export default function JobsScreen({ navigation }: JobStackScreenProps<'JobList'
   // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
     <View style={styles.container}>
+      <ScreenHeader
+        title="Jobs"
+        right={
+          <TouchableOpacity
+            onPress={() => navigation.navigate("RecurringJobs")}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Recurring jobs"
+          >
+            <Ionicons name="repeat-outline" size={22} color={colors.accent} />
+          </TouchableOpacity>
+        }
+      />
       {/* Stats */}
       <View style={styles.statsRow}>
         <StatCard label="Active jobs" value={String(activeJobs.length)} />

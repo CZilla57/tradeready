@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadInvoices, loadCustomers } from '../utils/storage';
 import { buildCustomerList, type CustomerListEntry } from '../utils/customerList';
@@ -83,6 +84,7 @@ const CustomerRow = ({ customer, onPress }: CustomerRowProps) => {
 
 export default function CustomersScreen({ navigation }: CustomerStackScreenProps<'CustomerList'>) {
   const { colors, shadow } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
 
   const [invoices, setInvoices]               = useState<Invoice[]>([]);
@@ -189,7 +191,7 @@ export default function CustomersScreen({ navigation }: CustomerStackScreenProps
   // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <View>
           <Text style={styles.headerTitle}>Customers</Text>
           <Text style={styles.headerSub}>

@@ -167,24 +167,7 @@ function JobsTab() {
   };
   return (
     <JobStack.Navigator screenOptions={navOpts}>
-      <JobStack.Screen
-        name="JobList"
-        component={JobsScreen}
-        options={({ navigation }) => ({
-          title: "Jobs",
-          headerRight: () => (
-            <TouchableOpacity
-              onPress={() => navigation.navigate("RecurringJobs")}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              style={{ paddingLeft: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel="Recurring jobs"
-            >
-              <Ionicons name="repeat-outline" size={22} color={colors.accent} />
-            </TouchableOpacity>
-          ),
-        })}
-      />
+      <JobStack.Screen name="JobList" component={JobsScreen} options={{ headerShown: false }} />
       <JobStack.Screen name="JobDetail"           component={JobDetailScreen}           options={{ title: "Job" }} />
       <JobStack.Screen name="AddJob"              component={AddJobScreen}              options={{ presentation: "modal" }} />
       <JobStack.Screen name="AddChangeOrder"      component={AddChangeOrderScreen}      options={{ presentation: "modal", title: "Add Change Order" }} />
@@ -223,13 +206,7 @@ function InvoicesTab() {
   };
   return (
     <InvoiceStack.Navigator screenOptions={navOpts}>
-      <InvoiceStack.Screen
-        name="InvoiceList"
-        component={InvoicesScreen}
-        // headerRight (recurring shortcut + Select toggle) is owned by
-        // InvoicesScreen — a screen-level setOptions overrides anything set here.
-        options={{ title: "Invoices" }}
-      />
+      <InvoiceStack.Screen name="InvoiceList" component={InvoicesScreen} options={{ headerShown: false }} />
       <InvoiceStack.Screen name="AddInvoice"  component={AddInvoiceScreen} options={{ presentation: "modal" }} />
       <InvoiceStack.Screen name="Outreach"    component={OutreachScreen}   options={{ title: "Outreach" }} />
       <InvoiceStack.Screen
@@ -257,7 +234,7 @@ function CustomersTab() {
   };
   return (
     <CustomerStack.Navigator screenOptions={navOpts}>
-      <CustomerStack.Screen name="CustomerList"   component={CustomersScreen}      options={{ title: "Customers" }} />
+      <CustomerStack.Screen name="CustomerList"   component={CustomersScreen}      options={{ headerShown: false }} />
       <CustomerStack.Screen name="CustomerDetail" component={CustomerDetailScreen} options={{ title: "Customer" }} />
       <CustomerStack.Screen name="AddCustomer"    component={AddCustomerScreen}    options={{ presentation: "modal" }} />
       <CustomerStack.Screen name="AddInvoice"     component={AddInvoiceScreen}     options={{ presentation: "modal" }} />
@@ -277,24 +254,7 @@ function MoneyTab() {
   };
   return (
     <MoneyStack.Navigator screenOptions={navOpts}>
-      <MoneyStack.Screen
-        name="MoneyHome"
-        component={MoneyScreen}
-        options={({ navigation }) => ({
-          title: "Money",
-          headerRight: () => (
-            <TouchableOpacity
-              onPress={() => navigation.navigate("ExportData")}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              style={{ paddingLeft: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel="Export data"
-            >
-              <Ionicons name="download-outline" size={22} color={colors.accent} />
-            </TouchableOpacity>
-          ),
-        })}
-      />
+      <MoneyStack.Screen name="MoneyHome" component={MoneyScreen} options={{ headerShown: false }} />
       <MoneyStack.Screen name="MileageLog"  component={MileageLogScreen}  options={{ title: "Mileage" }} />
       <MoneyStack.Screen name="AddTrip"     component={AddTripScreen}     options={{ presentation: "modal" }} />
       <MoneyStack.Screen name="Pricebook"      component={PricebookScreen}      options={{ title: "Pricebook" }} />
@@ -319,7 +279,7 @@ function ChatTab() {
   };
   return (
     <ChatStack.Navigator screenOptions={navOpts}>
-      <ChatStack.Screen name="ChatHome" component={ChatScreen} options={{ title: "AI Assistant" }} />
+      <ChatStack.Screen name="ChatHome" component={ChatScreen} options={{ headerShown: false }} />
     </ChatStack.Navigator>
   );
 }

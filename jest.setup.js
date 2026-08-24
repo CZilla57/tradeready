@@ -3,6 +3,13 @@
 
 import React from "react";
 
+// Safe-area context needs a provider at runtime; screens that read insets (via
+// the shared ScreenHeader) otherwise throw "No safe area value available" in
+// tests. The library ships a jest mock returning zero insets.
+jest.mock("react-native-safe-area-context", () =>
+  require("react-native-safe-area-context/jest/mock").default,
+);
+
 jest.mock("expo-constants", () => ({
   expoConfig: {
     extra: {

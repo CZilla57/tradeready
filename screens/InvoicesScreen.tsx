@@ -3,7 +3,7 @@
 // status filter chips. Tapping an invoice opens its detail modal (payment
 // history, outreach, PDF, edit); the top stat cards double as filter taps.
 
-import React, { useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -34,6 +34,7 @@ import { advanceJobsForPaidInvoices } from "../utils/jobStatus";
 import { Badge, StatCard, EmptyState } from "../components/UI";
 import { SearchField } from "../components/SearchField";
 import { Fab } from "../components/Fab";
+import { ScreenHeader } from "../components/ScreenHeader";
 import { RecordPaymentSheet } from "../components/RecordPaymentSheet";
 import { PaymentHistoryList } from "../components/PaymentHistoryList";
 import {
@@ -107,48 +108,42 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
     }
   }, [openInvoiceId, invoices, navigation]);
 
-  // Header carries BOTH the recurring-invoices shortcut and the "Select"
-  // multi-select toggle. This screen owns headerRight (setOptions wins over the
-  // navigator's static options), so the recurring icon has to live here — a
-  // bare Select button here would hide it. Recurring icon is hidden while
-  // selecting (only "Done" is relevant then).
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          {!selectMode && (
-            <TouchableOpacity
-              onPress={() => navigation.navigate("RecurringInvoices")}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              style={{ paddingRight: 16 }}
-              accessibilityRole="button"
-              accessibilityLabel="Recurring invoices"
-            >
-              <Ionicons name="repeat-outline" size={22} color={colors.accent} />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            onPress={() => {
-              if (selectMode) {
-                setSelectMode(false);
-                setSelectedIds([]);
-              } else {
-                setSelectMode(true);
-              }
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            style={{ paddingLeft: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel={selectMode ? "Done selecting" : "Select invoices"}
-          >
-            <Text style={{ fontFamily: fonts.bodyMedium, color: colors.accent, fontSize: fontSize.md }}>
-              {selectMode ? "Done" : "Select"}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      ),
-    });
-  }, [navigation, selectMode, colors.accent]);
+  // The recurring shortcut + Select toggle live in the in-screen ScreenHeader
+  // (see the render), not the native header — native headerRight buttons get an
+  // un-removable iOS 26 glass capsule (project note); an in-screen header avoids
+  // it and matches the Today tab.
+  const headerActions = (
+    <View style={{ flexDirection: "row", alignItems: "center" }}>
+      {!selectMode && (
+        <TouchableOpacity
+          onPress={() => navigation.navigate("RecurringInvoices")}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={{ paddingRight: 16 }}
+          accessibilityRole="button"
+          accessibilityLabel="Recurring invoices"
+        >
+          <Ionicons name="repeat-outline" size={22} color={colors.accent} />
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity
+        onPress={() => {
+          if (selectMode) {
+            setSelectMode(false);
+            setSelectedIds([]);
+          } else {
+            setSelectMode(true);
+          }
+        }}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        accessibilityRole="button"
+        accessibilityLabel={selectMode ? "Done selecting" : "Select invoices"}
+      >
+        <Text style={{ fontFamily: fonts.bodyMedium, color: colors.accent, fontSize: fontSize.md }}>
+          {selectMode ? "Done" : "Select"}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   // useFocusEffect reloads invoices every time you come back to this screen,
   // so changes made on other screens (like marking paid) show up immediately.
@@ -516,6 +511,7 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
   // a bottom-edge SafeAreaView here pads a dead strip above the tabs.
   return (
     <View style={styles.container}>
+      <ScreenHeader title="Invoices" right={headerActions} />
       {/* Stats row — each stat doubles as a filter tap */}
       <View style={styles.statsRow}>
         <StatCard
