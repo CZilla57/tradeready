@@ -44,7 +44,7 @@ import { JobCostsEditor } from "../components/JobCostsEditor";
 import { LaborHoursEditor } from "../components/LaborHoursEditor";
 import { spacing, radius, fontSize, fonts, layout, type ColorScheme, type ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { Job, Customer, Settings, PricebookEntry, JobCost, LaborTimeBreakdown } from "../types/models";
+import type { Job, Customer, Settings, PricebookEntry, JobCost, LaborTimeBreakdown, Material } from "../types/models";
 import type { JobStackScreenProps } from "../types/navigation";
 
 // One Done bar serves every decimal-pad input on the calculator tab
@@ -54,8 +54,20 @@ const CALC_DONE_ID = "pricingCalcDone";
 interface LocalMaterial {
   id: string;
   name: string;
-  quantity: number;
-  unitCost: number;
+  // number|string so the inputs can hold a partial decimal ("8." → "8.50")
+  // while typing — parsed to numbers only when persisted (toNumericMaterials).
+  // Matches the Pricebook entry screen's material handling.
+  quantity: number | string;
+  unitCost: number | string;
+}
+
+function toNumericMaterials(mats: LocalMaterial[]): Material[] {
+  return mats.map((m) => ({
+    id: m.id,
+    name: m.name,
+    quantity: parseFloat(String(m.quantity)) || 0,
+    unitCost: parseFloat(String(m.unitCost)) || 0,
+  }));
 }
 
 export default function PricingCalculatorScreen({ route, navigation }: JobStackScreenProps<'PricingCalculator'>) {
@@ -220,12 +232,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
       laborHours: params.laborHours,
       ...(laborBreakdown ? { laborBreakdown } : {}),
       laborRate: params.laborRate,
-      materials: materials.map((m) => ({
-        id: m.id,
-        name: m.name,
-        quantity: m.quantity,
-        unitCost: m.unitCost,
-      })),
+      materials: toNumericMaterials(materials),
       materialMarkup: params.materialMarkup,
       ...(jobCosts.length > 0 ? { jobCosts } : {}),
       overhead: params.overheadPercent,
@@ -274,7 +281,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
             laborHours: params.laborHours,
             laborBreakdown,
             laborRate: params.laborRate,
-            materials,
+            materials: toNumericMaterials(materials),
             materialMarkup: params.materialMarkup,
             jobCosts,
             overhead: params.overheadPercent,
@@ -355,7 +362,7 @@ export default function PricingCalculatorScreen({ route, navigation }: JobStackS
       laborHours: params.laborHours,
       laborBreakdown,
       laborRate: params.laborRate,
-      materials,
+      materials: toNumericMaterials(materials),
       materialMarkup: params.materialMarkup,
       jobCosts,
       overhead: params.overheadPercent,
@@ -653,7 +660,7 @@ function CalculatorTab({
               placeholder="Qty"
               placeholderTextColor={colors.textMuted}
               value={String(m.quantity)}
-              onChangeText={(v) => updateMaterial(m.id, "quantity", parseFloat(v) || 0)}
+              onChangeText={(v) => updateMaterial(m.id, "quantity", v)}
               keyboardType="decimal-pad"
               inputAccessoryViewID={CALC_DONE_ID}
               accessibilityLabel="Material quantity"
@@ -663,7 +670,7 @@ function CalculatorTab({
               placeholder="$ each"
               placeholderTextColor={colors.textMuted}
               value={String(m.unitCost)}
-              onChangeText={(v) => updateMaterial(m.id, "unitCost", parseFloat(v) || 0)}
+              onChangeText={(v) => updateMaterial(m.id, "unitCost", v)}
               keyboardType="decimal-pad"
               inputAccessoryViewID={CALC_DONE_ID}
               accessibilityLabel="Material cost each"

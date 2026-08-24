@@ -3,7 +3,7 @@
 // state, edits `value` through `onChange`. Used by the Pricing Calculator and
 // the Pricebook entry screen so the direct-costs UI lives in exactly one place.
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Switch, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { formatQuote } from "../utils/format";
@@ -19,9 +19,38 @@ interface Props {
   doneBarId?: string;
 }
 
+const NUM_FIELDS = ["quantity", "unitCost", "markupPercent"] as const;
+type NumFieldKey = (typeof NUM_FIELDS)[number];
+
 export function JobCostsEditor({ value, onChange, doneBarId }: Props) {
   const { colors, shadow } = useTheme();
   const styles = useMemo(() => createStyles(colors, shadow), [colors, shadow]);
+
+  // Text buffers for the numeric inputs (keyed `${id}:${field}`) so a partial
+  // decimal ("8." on the way to "8.50") isn't stripped by reformatting from the
+  // parsed number. The model (JobCost) stays numeric.
+  const [text, setText] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setText((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const c of value) {
+        for (const f of NUM_FIELDS) {
+          const key = `${c.id}:${f}`;
+          if (prev[key] === undefined || (parseFloat(prev[key]) || 0) !== (Number(c[f]) || 0)) {
+            next[key] = String(c[f]);
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [value]);
+
+  function updateNum(id: string, field: NumFieldKey, raw: string) {
+    setText((prev) => ({ ...prev, [`${id}:${field}`]: raw }));
+    update(id, { [field]: parseFloat(raw) || 0 });
+  }
 
   function add() {
     const category: JobCostCategory = "other";
@@ -109,10 +138,10 @@ export function JobCostsEditor({ value, onChange, doneBarId }: Props) {
             </ScrollView>
 
             <View style={styles.numRow}>
-              <NumField label="Qty" value={String(c.quantity)} onChange={(v) => update(c.id, { quantity: parseFloat(v) || 0 })} doneBarId={doneBarId} colors={colors} styles={styles} />
-              <NumField label="$ each" value={String(c.unitCost)} onChange={(v) => update(c.id, { unitCost: parseFloat(v) || 0 })} doneBarId={doneBarId} colors={colors} styles={styles} />
+              <NumField label="Qty" value={text[`${c.id}:quantity`] ?? String(c.quantity)} onChange={(v) => updateNum(c.id, "quantity", v)} doneBarId={doneBarId} colors={colors} styles={styles} />
+              <NumField label="$ each" value={text[`${c.id}:unitCost`] ?? String(c.unitCost)} onChange={(v) => updateNum(c.id, "unitCost", v)} doneBarId={doneBarId} colors={colors} styles={styles} />
               {!isPassthrough && (
-                <NumField label="Markup %" value={String(c.markupPercent)} onChange={(v) => update(c.id, { markupPercent: parseFloat(v) || 0 })} doneBarId={doneBarId} colors={colors} styles={styles} />
+                <NumField label="Markup %" value={text[`${c.id}:markupPercent`] ?? String(c.markupPercent)} onChange={(v) => updateNum(c.id, "markupPercent", v)} doneBarId={doneBarId} colors={colors} styles={styles} />
               )}
             </View>
 
