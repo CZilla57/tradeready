@@ -159,7 +159,8 @@ function TodayTab() {
 function JobsTab() {
   const { colors } = useThemeContext();
   const navOpts = {
-    headerStyle:           { backgroundColor: colors.surface },
+    headerStyle:           { backgroundColor: colors.background },
+    headerShadowVisible:   false,
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
@@ -214,7 +215,8 @@ function JobsTab() {
 function InvoicesTab() {
   const { colors } = useThemeContext();
   const navOpts = {
-    headerStyle:           { backgroundColor: colors.surface },
+    headerStyle:           { backgroundColor: colors.background },
+    headerShadowVisible:   false,
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
@@ -247,7 +249,8 @@ function InvoicesTab() {
 function CustomersTab() {
   const { colors } = useThemeContext();
   const navOpts = {
-    headerStyle:           { backgroundColor: colors.surface },
+    headerStyle:           { backgroundColor: colors.background },
+    headerShadowVisible:   false,
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
@@ -266,7 +269,8 @@ function CustomersTab() {
 function MoneyTab() {
   const { colors } = useThemeContext();
   const navOpts = {
-    headerStyle:           { backgroundColor: colors.surface },
+    headerStyle:           { backgroundColor: colors.background },
+    headerShadowVisible:   false,
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
@@ -307,7 +311,8 @@ function MoneyTab() {
 function ChatTab() {
   const { colors } = useThemeContext();
   const navOpts = {
-    headerStyle:           { backgroundColor: colors.surface },
+    headerStyle:           { backgroundColor: colors.background },
+    headerShadowVisible:   false,
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
