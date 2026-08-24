@@ -83,6 +83,16 @@ export default function RecurringInvoicesScreen({ navigation }: InvoiceStackScre
     syncNotifications();
   }
 
+  async function deletePlan(rule: RecurringInvoice) {
+    // Hard-remove the rule. Unlike Cancel (soft-deactivate), the plan is gone
+    // from the list. Invoices it already generated are real receivables and are
+    // never touched.
+    const updated = rules.filter((r) => r.id !== rule.id);
+    await saveRecurringInvoices(updated);
+    setRules(updated);
+    syncNotifications();
+  }
+
   function handleRowPress(rule: RecurringInvoice) {
     Alert.alert(
       rule.customerName,
@@ -98,18 +108,39 @@ export default function RecurringInvoicesScreen({ navigation }: InvoiceStackScre
           onPress: () => navigation.navigate("AddRecurringInvoice", { ruleId: rule.id }),
         },
         {
+          // Soft-stop: keeps the (deactivated) plan in the list so its
+          // occurrence history survives.
           text: "Cancel plan",
           style: "destructive" as const,
           onPress: () => {
             Alert.alert(
               "Cancel maintenance plan?",
-              "No more invoices will be generated. Invoices already created are not affected.",
+              "No more invoices will be generated. The plan stays in your list, paused. Invoices already created are not affected.",
               [
                 { text: "Keep plan", style: "cancel" },
                 {
                   text: "Cancel plan",
                   style: "destructive",
                   onPress: () => { setActive(rule, false); },
+                },
+              ]
+            );
+          },
+        },
+        {
+          // Hard delete: removes the plan entirely.
+          text: "Delete plan",
+          style: "destructive" as const,
+          onPress: () => {
+            Alert.alert(
+              "Delete maintenance plan?",
+              "This removes the plan permanently. Invoices it already generated are not affected.",
+              [
+                { text: "Keep plan", style: "cancel" },
+                {
+                  text: "Delete",
+                  style: "destructive",
+                  onPress: () => { deletePlan(rule); },
                 },
               ]
             );

@@ -11,6 +11,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
+  TextInput,
   ScrollView,
   TouchableOpacity,
   Switch,
@@ -31,7 +32,7 @@ import { DateTimePickerSheet } from "../components/DateTimePickerSheet";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from "../hooks/useTheme";
-import type { RecurrenceCadence, RecurrenceEndCondition, RecurringInvoice } from "../types/models";
+import type { Customer, RecurrenceCadence, RecurrenceEndCondition, RecurringInvoice } from "../types/models";
 import type { InvoiceStackScreenProps } from "../types/navigation";
 
 function todayStr(): string {
@@ -67,6 +68,9 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
   const [customer, setCustomer] = useState<string>("");
   const [email, setEmail] = useState<string>("");
   const [phone, setPhone] = useState<string>("");
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [showCustomerPicker, setShowCustomerPicker] = useState<boolean>(false);
+  const [customerSearch, setCustomerSearch] = useState<string>("");
   const [amount, setAmount] = useState<string>("");
   const [desc, setDesc] = useState<string>("");
   const [dueDays, setDueDays] = useState<string>("30");
@@ -108,6 +112,21 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
       setPhone(record?.phone ?? "");
     })();
   }, [ruleId, isEditing, navigation]);
+
+  useEffect(() => {
+    loadCustomers().then(setCustomers);
+  }, []);
+
+  // Pick an existing customer to auto-fill name + contact; the fields stay
+  // editable, and typing a brand-new name still works (getOrCreateCustomer on
+  // save matches or creates by name).
+  function selectExistingCustomer(c: Customer) {
+    setCustomer(c.name);
+    setEmail(c.email || "");
+    setPhone(c.phone || "");
+    setShowCustomerPicker(false);
+    setCustomerSearch("");
+  }
 
   async function handleSave() {
     if (!customer.trim()) {
@@ -230,6 +249,55 @@ export default function AddRecurringInvoiceScreen({ route, navigation }: Invoice
         style={{ flex: 1 }}
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          {customers.length > 0 && (
+            <View style={styles.pickerWrap}>
+              <TouchableOpacity
+                style={styles.pickerToggle}
+                onPress={() => setShowCustomerPicker((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel="Select an existing customer"
+                accessibilityState={{ expanded: showCustomerPicker }}
+              >
+                <Text style={styles.pickerToggleText}>Select existing customer</Text>
+                <Ionicons name={showCustomerPicker ? "chevron-up" : "chevron-down"} size={16} color={colors.accent} />
+              </TouchableOpacity>
+              {showCustomerPicker && (
+                <View style={styles.pickerList}>
+                  <TextInput
+                    style={styles.pickerSearch}
+                    value={customerSearch}
+                    onChangeText={setCustomerSearch}
+                    placeholder="Search customers…"
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    accessibilityLabel="Search customers"
+                  />
+                  <ScrollView style={{ maxHeight: 200 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+                    {customers
+                      .filter((c) => {
+                        const q = customerSearch.toLowerCase();
+                        return c.name.toLowerCase().includes(q) || (c.phone || "").includes(q) || (c.email || "").toLowerCase().includes(q);
+                      })
+                      .map((c) => (
+                        <TouchableOpacity
+                          key={c.id}
+                          style={styles.pickerOption}
+                          onPress={() => selectExistingCustomer(c)}
+                          accessibilityRole="button"
+                          accessibilityLabel={c.name}
+                        >
+                          <Text style={styles.pickerOptionName}>{c.name}</Text>
+                          {(c.email || c.phone) ? (
+                            <Text style={styles.pickerOptionSub}>{[c.email, c.phone].filter(Boolean).join(" · ")}</Text>
+                          ) : null}
+                        </TouchableOpacity>
+                      ))}
+                  </ScrollView>
+                </View>
+              )}
+            </View>
+          )}
           <Field label="Customer name *" value={customer} onChangeText={setCustomer} placeholder="Jane's Bakery" />
           <Field label="Customer email" value={email} onChangeText={setEmail} placeholder="jane@example.com" keyboardType="email-address" autoCapitalize="none" />
           <Field label="Customer phone" value={phone} onChangeText={setPhone} placeholder="(555) 123-4567" keyboardType="phone-pad" />
@@ -442,6 +510,26 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       flex: 1,
     },
     pickerIcon: { marginLeft: spacing.sm },
+    pickerWrap: { marginBottom: spacing.sm },
+    pickerToggle: {
+      flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+      paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
+      backgroundColor: colors.surface, borderRadius: radius.md,
+      borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    },
+    pickerToggleText: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.accent },
+    pickerList: {
+      marginTop: spacing.xs, backgroundColor: colors.surface, borderRadius: radius.md,
+      borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, overflow: "hidden",
+    },
+    pickerSearch: {
+      fontFamily: fonts.bodyRegular, minHeight: 44, paddingHorizontal: spacing.md,
+      fontSize: fontSize.md, color: colors.textPrimary,
+      borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
+    },
+    pickerOption: { paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+    pickerOptionName: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textPrimary },
+    pickerOptionSub: { fontFamily: fonts.bodyRegular, fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
     autoSendCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, ...shadow.card },
     autoSendRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
     autoSendLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSize.md, color: colors.textPrimary, flex: 1, paddingRight: spacing.sm },
