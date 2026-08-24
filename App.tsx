@@ -224,20 +224,9 @@ function InvoicesTab() {
       <InvoiceStack.Screen
         name="InvoiceList"
         component={InvoicesScreen}
-        options={({ navigation }) => ({
-          title: "Invoices",
-          headerRight: () => (
-            <TouchableOpacity
-              onPress={() => navigation.navigate("RecurringInvoices")}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              style={{ paddingLeft: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel="Recurring invoices"
-            >
-              <Ionicons name="repeat-outline" size={22} color={colors.accent} />
-            </TouchableOpacity>
-          ),
-        })}
+        // headerRight (recurring shortcut + Select toggle) is owned by
+        // InvoicesScreen — a screen-level setOptions overrides anything set here.
+        options={{ title: "Invoices" }}
       />
       <InvoiceStack.Screen name="AddInvoice"  component={AddInvoiceScreen} options={{ presentation: "modal" }} />
       <InvoiceStack.Screen name="Outreach"    component={OutreachScreen}   options={{ title: "Outreach" }} />

@@ -107,28 +107,45 @@ export default function InvoicesScreen({ navigation, route }: InvoiceStackScreen
     }
   }, [openInvoiceId, invoices, navigation]);
 
-  // Header "Select" toggles multi-select; "Done" backs out and clears it.
+  // Header carries BOTH the recurring-invoices shortcut and the "Select"
+  // multi-select toggle. This screen owns headerRight (setOptions wins over the
+  // navigator's static options), so the recurring icon has to live here — a
+  // bare Select button here would hide it. Recurring icon is hidden while
+  // selecting (only "Done" is relevant then).
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <TouchableOpacity
-          onPress={() => {
-            if (selectMode) {
-              setSelectMode(false);
-              setSelectedIds([]);
-            } else {
-              setSelectMode(true);
-            }
-          }}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          style={{ paddingLeft: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel={selectMode ? "Done selecting" : "Select invoices"}
-        >
-          <Text style={{ fontFamily: fonts.bodyMedium, color: colors.accent, fontSize: fontSize.md }}>
-            {selectMode ? "Done" : "Select"}
-          </Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          {!selectMode && (
+            <TouchableOpacity
+              onPress={() => navigation.navigate("RecurringInvoices")}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ paddingRight: 16 }}
+              accessibilityRole="button"
+              accessibilityLabel="Recurring invoices"
+            >
+              <Ionicons name="repeat-outline" size={22} color={colors.accent} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={() => {
+              if (selectMode) {
+                setSelectMode(false);
+                setSelectedIds([]);
+              } else {
+                setSelectMode(true);
+              }
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={{ paddingLeft: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={selectMode ? "Done selecting" : "Select invoices"}
+          >
+            <Text style={{ fontFamily: fonts.bodyMedium, color: colors.accent, fontSize: fontSize.md }}>
+              {selectMode ? "Done" : "Select"}
+            </Text>
+          </TouchableOpacity>
+        </View>
       ),
     });
   }, [navigation, selectMode, colors.accent]);
