@@ -2,6 +2,8 @@ import React, { useState, useEffect } from "react";
 import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import type { NativeStackHeaderProps } from "@react-navigation/native-stack";
+import { NavHeader } from "./components/NavHeader";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Text, View, ActivityIndicator, TouchableOpacity, Alert, Dimensions, Linking } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -131,6 +133,10 @@ function TodayTab() {
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
+    // Custom JS header on all sub-screens so back/action buttons aren't wrapped
+    // in the iOS 26 native-header glass capsule (tab home screens use
+    // headerShown:false + their own in-screen header, so this doesn't apply to them).
+    header: (props: NativeStackHeaderProps) => <NavHeader {...props} />,
   };
   return (
     <TodayStack.Navigator screenOptions={navOpts}>
@@ -164,6 +170,10 @@ function JobsTab() {
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
+    // Custom JS header on all sub-screens so back/action buttons aren't wrapped
+    // in the iOS 26 native-header glass capsule (tab home screens use
+    // headerShown:false + their own in-screen header, so this doesn't apply to them).
+    header: (props: NativeStackHeaderProps) => <NavHeader {...props} />,
   };
   return (
     <JobStack.Navigator screenOptions={navOpts}>
@@ -203,6 +213,10 @@ function InvoicesTab() {
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
+    // Custom JS header on all sub-screens so back/action buttons aren't wrapped
+    // in the iOS 26 native-header glass capsule (tab home screens use
+    // headerShown:false + their own in-screen header, so this doesn't apply to them).
+    header: (props: NativeStackHeaderProps) => <NavHeader {...props} />,
   };
   return (
     <InvoiceStack.Navigator screenOptions={navOpts}>
@@ -231,6 +245,10 @@ function CustomersTab() {
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
+    // Custom JS header on all sub-screens so back/action buttons aren't wrapped
+    // in the iOS 26 native-header glass capsule (tab home screens use
+    // headerShown:false + their own in-screen header, so this doesn't apply to them).
+    header: (props: NativeStackHeaderProps) => <NavHeader {...props} />,
   };
   return (
     <CustomerStack.Navigator screenOptions={navOpts}>
@@ -251,6 +269,10 @@ function MoneyTab() {
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
+    // Custom JS header on all sub-screens so back/action buttons aren't wrapped
+    // in the iOS 26 native-header glass capsule (tab home screens use
+    // headerShown:false + their own in-screen header, so this doesn't apply to them).
+    header: (props: NativeStackHeaderProps) => <NavHeader {...props} />,
   };
   return (
     <MoneyStack.Navigator screenOptions={navOpts}>
@@ -276,6 +298,10 @@ function ChatTab() {
     headerTintColor:       colors.accent,
     headerTitleStyle:      { color: colors.textPrimary, fontWeight: "600" as const },
     headerBackTitleVisible: false,
+    // Custom JS header on all sub-screens so back/action buttons aren't wrapped
+    // in the iOS 26 native-header glass capsule (tab home screens use
+    // headerShown:false + their own in-screen header, so this doesn't apply to them).
+    header: (props: NativeStackHeaderProps) => <NavHeader {...props} />,
   };
   return (
     <ChatStack.Navigator screenOptions={navOpts}>
