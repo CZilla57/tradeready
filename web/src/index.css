@@ -620,6 +620,15 @@ a.row:hover {
 .login-btn.google:hover {
   background: var(--surface-2);
 }
+.login-btn.apple {
+  margin-top: 10px;
+  background: #000;
+  border-color: #000;
+  color: #fff;
+}
+.login-btn.apple:hover {
+  background: #1a1a1a;
+}
 .login-divider {
   display: flex;
   align-items: center;

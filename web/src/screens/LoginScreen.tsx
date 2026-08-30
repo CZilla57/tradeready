@@ -4,7 +4,8 @@ import { useAuth } from '../lib/AuthContext';
 type Mode = 'signin' | 'signup' | 'reset';
 
 export default function LoginScreen() {
-  const { signIn, signUp, signInWithGoogle, resetPassword } = useAuth();
+  const { signIn, signUp, signInWithGoogle, signInWithApple, resetPassword } =
+    useAuth();
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -43,6 +44,17 @@ export default function LoginScreen() {
       await signInWithGoogle();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Google sign-in failed.');
+      setBusy(false);
+    }
+  }
+
+  async function apple() {
+    setBusy(true);
+    setError(null);
+    try {
+      await signInWithApple();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Apple sign-in failed.');
       setBusy(false);
     }
   }
@@ -119,6 +131,14 @@ export default function LoginScreen() {
               disabled={busy}
             >
               Continue with Google
+            </button>
+            <button
+              type="button"
+              className="login-btn apple"
+              onClick={apple}
+              disabled={busy}
+            >
+              Continue with Apple
             </button>
           </>
         )}
