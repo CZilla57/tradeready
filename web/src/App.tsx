@@ -3,6 +3,7 @@ import { useAuth } from './lib/AuthContext';
 import { DataProvider } from './lib/DataContext';
 import AppShell from './screens/AppShell';
 import LoginScreen from './screens/LoginScreen';
+import ResetPasswordScreen from './screens/ResetPasswordScreen';
 import TodayScreen from './screens/TodayScreen';
 import JobsScreen from './screens/JobsScreen';
 import JobDetailScreen from './screens/JobDetailScreen';
@@ -20,15 +21,31 @@ import PricebookDetailScreen from './screens/PricebookDetailScreen';
 import SettingsScreen from './screens/SettingsScreen';
 
 export default function App() {
-  const { session, initializing } = useAuth();
+  const { session, initializing, recovery } = useAuth();
 
   if (initializing) {
     return <div className="empty">Loading…</div>;
   }
 
+  // Password recovery takes precedence over the ordinary authenticated redirect:
+  // a recovery session must land on the password-update screen and cannot fall
+  // through into the portal until the user sets a new password (or signs out).
+  if (recovery) {
+    return (
+      <Routes>
+        <Route path="/reset-password" element={<ResetPasswordScreen />} />
+        <Route path="*" element={<Navigate to="/reset-password" replace />} />
+      </Routes>
+    );
+  }
+
   if (!session) {
     return (
       <Routes>
+        {/* Reachable while signed out so expired/invalid recovery links (which
+            create no session) still render a clear path back to requesting a
+            new reset email. */}
+        <Route path="/reset-password" element={<ResetPasswordScreen />} />
         <Route path="/login" element={<LoginScreen />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
