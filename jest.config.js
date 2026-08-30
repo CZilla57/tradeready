@@ -16,6 +16,13 @@ module.exports = {
     "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|@sentry/.*|native-base|react-native-svg|posthog-react-native)",
   ],
   moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json"],
+  // The standalone web portal (web/) is a separate package with its own Vitest
+  // suite and toolchain. The repo-root gate runs `npm ci` at the root and never
+  // installs web/node_modules, so its vitest-based tests can't resolve here and
+  // must not be collected by this jest-expo config — mirroring how the root
+  // tsconfig excludes web/ and the root eslint config ignores it. (Jest's
+  // default is ["/node_modules/"], preserved here.)
+  testPathIgnorePatterns: ["/node_modules/", "<rootDir>/web/"],
   moduleNameMapper: {
     // babel-preset-expo@12's bundled hermes-parser can't handle the Flow
     // `const` type-parameter constraint introduced in react-native@0.81.
