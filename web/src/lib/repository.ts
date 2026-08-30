@@ -6,6 +6,9 @@ import type {
   Expense,
   Settings,
   CustomerNotes,
+  PricebookEntry,
+  RecurringJob,
+  RecurringInvoice,
 } from '@shared/types/models';
 
 // The cloud data model is a set of owner-scoped blob tables:
@@ -30,6 +33,14 @@ export const fetchJobs = () => fetchCollection<Job>('jobs');
 export const fetchInvoices = () => fetchCollection<Invoice>('invoices');
 export const fetchCustomers = () => fetchCollection<Customer>('customers');
 export const fetchExpenses = () => fetchCollection<Expense>('expenses');
+export const fetchPricebook = () => fetchCollection<PricebookEntry>('pricebook');
+// camelCase table names are quoted identifiers in Postgres — supabase-js
+// resolves .from('recurringJobs') case-sensitively (see the migration
+// 20260803_local_collections_sync.sql).
+export const fetchRecurringJobs = () =>
+  fetchCollection<RecurringJob>('recurringJobs');
+export const fetchRecurringInvoices = () =>
+  fetchCollection<RecurringInvoice>('recurringInvoices');
 
 export async function fetchSettings(): Promise<Settings | null> {
   const { data, error } = await supabase

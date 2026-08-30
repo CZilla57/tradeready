@@ -666,3 +666,107 @@ a.row:hover {
   background: var(--blue-bg);
   color: var(--blue);
 }
+
+/* ---------- nav divider ---------- */
+.nav-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 10px 8px;
+}
+
+/* ---------- week nav ---------- */
+.week-nav {
+  display: flex;
+  gap: 6px;
+}
+.week-nav button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.week-nav button:hover {
+  background: var(--surface-2);
+}
+
+/* ---------- calendar week grid ---------- */
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 10px;
+}
+.day-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-height: 150px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.day-col.off {
+  background: var(--surface-2);
+  border-style: dashed;
+}
+.day-col.today {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.day-head .dow {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+.day-head .dom {
+  font-size: 15px;
+  font-weight: 700;
+}
+.day-empty {
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: center;
+  margin-top: 12px;
+}
+.day-job {
+  display: block;
+  background: var(--blue-bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.day-job:hover {
+  filter: brightness(0.97);
+}
+.dj-time {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--blue);
+  font-variant-numeric: tabular-nums;
+}
+.dj-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .week-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
