@@ -4,10 +4,18 @@ import { useData } from '../lib/DataContext';
 
 const NAV = [
   { to: '/', label: 'Today', ico: '🏠', end: true },
+  { to: '/calendar', label: 'Calendar', ico: '📅', end: false },
   { to: '/jobs', label: 'Jobs', ico: '🧰', end: false },
+  { to: '/estimates', label: 'Estimates', ico: '📝', end: false },
   { to: '/invoices', label: 'Invoices', ico: '🧾', end: false },
   { to: '/customers', label: 'Customers', ico: '👥', end: false },
   { to: '/money', label: 'Money', ico: '💰', end: false },
+];
+
+const NAV_MORE = [
+  { to: '/recurring', label: 'Recurring', ico: '🔁', end: false },
+  { to: '/pricebook', label: 'Pricebook', ico: '📗', end: false },
+  { to: '/settings', label: 'Settings', ico: '⚙️', end: false },
 ];
 
 export default function AppShell() {
@@ -23,6 +31,20 @@ export default function AppShell() {
           <span>TradeReady</span>
         </div>
         {NAV.map((n) => (
+          <NavLink
+            key={n.to}
+            to={n.to}
+            end={n.end}
+            className={({ isActive }) =>
+              `nav-link ${isActive ? 'active' : ''}`.trim()
+            }
+          >
+            <span className="ico">{n.ico}</span>
+            <span>{n.label}</span>
+          </NavLink>
+        ))}
+        <div className="nav-sep" />
+        {NAV_MORE.map((n) => (
           <NavLink
             key={n.to}
             to={n.to}

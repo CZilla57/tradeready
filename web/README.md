@@ -24,20 +24,32 @@ as the mobile sync layer does (`../utils/sync.ts`). RLS guarantees a session
 only ever sees its own account's rows — the anon key is public by design (it
 already ships inside the distributed mobile app bundle).
 
-## Scope (v1)
+## Scope
 
 Read-first portal:
 
 - **Login** — email/password, Google OAuth, password reset
 - **Today** — today's scheduled jobs + earnings/outstanding summary
+- **Calendar** — week view of scheduled jobs with work-day/blackout shading (via
+  `resolveSchedule`) + a "needs scheduling" queue; week navigation
 - **Jobs** — filterable list + job detail (status timeline, materials, customer, invoice)
+- **Estimates** — estimate-stage jobs + detail (as-sent line items, approval
+  status/signer, change orders, billable total)
 - **Invoices** — list with status badges + detail (payments ledger, line items)
 - **Customers** — list + detail (job & invoice history, revenue/owed)
 - **Money** — collected / expenses / net / outstanding + 6-month revenue chart
+- **Recurring** — recurring jobs + maintenance plans (cadence, next due, active)
+- **Pricebook** — saved services + detail (materials, labor, margins)
+- **Settings** — read-only business profile, pricing, invoicing, schedule,
+  payments, and automation toggles (secret keys are never rendered)
 
-Editing is intentionally out of scope for v1. The write path
+Editing is intentionally out of scope. The write path
 (`src/lib/repository.ts#upsertRecord`) is already wired to the same blob
 contract for the editing surface that follows.
+
+Not available on the web: mileage/**Trips** and the AI Coach — Trips are a
+Supabase collection but not surfaced here yet; the AI Coach needs the
+Cloudflare Worker backend rather than Supabase alone.
 
 ## Develop
 

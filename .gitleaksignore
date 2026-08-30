@@ -22,6 +22,12 @@
 # Supabase publishable anon key in the (pre-TS) Supabase client
 52d89264c9a49595284ccbc26587ce5fe56cc280:utils/supabase.js:generic-api-key:6
 
+# Same Supabase publishable anon key in the web portal's Supabase client
+# (web/src/lib/supabase.ts). Public-by-design client key, identical to the
+# utils/supabase.ts value above — RLS enforces access. Added with the web
+# portal (web/ workspace).
+2501b09fa85f2bd454df5df8d1e4b2f2e7438264:web/src/lib/supabase.ts:generic-api-key:8
+
 # Fake token-SHAPED test fixture from the 2026-08-03 Square-credential fix:
 # the test pins that buildPaymentLink NEVER emits a legacy stored Square
 # Access Token, so the fixture imitated one and its entropy tripped the

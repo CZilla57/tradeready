@@ -1,4 +1,4 @@
-import type { JobStatus, Invoice } from '@shared/types/models';
+import type { JobStatus, Invoice, Job } from '@shared/types/models';
 import { balanceDue, isFullyPaid } from '@shared/utils/invoicePayments';
 import { isOverdue } from './invoiceMath';
 
@@ -44,4 +44,35 @@ export function invoiceStatusBadge(inv: Invoice): {
   if (balanceDue(inv) < inv.amount)
     return { label: 'Partly paid', color: 'amber' };
   return { label: 'Unpaid', color: 'slate' };
+}
+
+/** Jobs that live in the estimate stage of the pipeline. */
+export const ESTIMATE_JOB_STATUSES: JobStatus[] = [
+  'lead',
+  'estimate_sent',
+  'approved',
+  'declined',
+];
+
+export function isEstimateJob(job: Job): boolean {
+  return (
+    ESTIMATE_JOB_STATUSES.includes(job.status) ||
+    !!job.approval ||
+    ((job.estimateTotal || 0) > 0 && job.status !== 'paid')
+  );
+}
+
+/** Approval-oriented status for the Estimates surface. */
+export function estimateStatusBadge(job: Job): {
+  label: string;
+  color: BadgeColor;
+} {
+  const decision = job.approval?.decision;
+  if (decision === 'approved' || job.status === 'approved')
+    return { label: 'Approved', color: 'green' };
+  if (decision === 'declined' || job.status === 'declined')
+    return { label: 'Declined', color: 'red' };
+  if (job.status === 'estimate_sent' || job.approval || job.estimateSentAt)
+    return { label: 'Sent', color: 'blue' };
+  return { label: 'Draft', color: 'slate' };
 }

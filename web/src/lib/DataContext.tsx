@@ -13,6 +13,9 @@ import type {
   Expense,
   Settings,
   CustomerNotes,
+  PricebookEntry,
+  RecurringJob,
+  RecurringInvoice,
 } from '@shared/types/models';
 import {
   fetchJobs,
@@ -21,6 +24,9 @@ import {
   fetchExpenses,
   fetchSettings,
   fetchCustomerNotes,
+  fetchPricebook,
+  fetchRecurringJobs,
+  fetchRecurringInvoices,
 } from './repository';
 import { useAuth } from './AuthContext';
 
@@ -31,6 +37,9 @@ interface DataValue {
   expenses: Expense[];
   settings: Settings | null;
   notes: CustomerNotes;
+  pricebook: PricebookEntry[];
+  recurringJobs: RecurringJob[];
+  recurringInvoices: RecurringInvoice[];
   loading: boolean;
   error: string | null;
   reload: () => void;
@@ -48,6 +57,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [notes, setNotes] = useState<CustomerNotes>({});
+  const [pricebook, setPricebook] = useState<PricebookEntry[]>([]);
+  const [recurringJobs, setRecurringJobs] = useState<RecurringJob[]>([]);
+  const [recurringInvoices, setRecurringInvoices] = useState<RecurringInvoice[]>(
+    [],
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -66,8 +80,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
       fetchExpenses(),
       fetchSettings(),
       fetchCustomerNotes(),
+      fetchPricebook(),
+      fetchRecurringJobs(),
+      fetchRecurringInvoices(),
     ])
-      .then(([j, i, c, e, s, n]) => {
+      .then(([j, i, c, e, s, n, pb, rj, ri]) => {
         if (!active) return;
         setJobs(j);
         setInvoices(i);
@@ -75,6 +92,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setExpenses(e);
         setSettings(s);
         setNotes(n);
+        setPricebook(pb);
+        setRecurringJobs(rj);
+        setRecurringInvoices(ri);
       })
       .catch((err: unknown) => {
         if (active)
@@ -97,6 +117,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
         expenses,
         settings,
         notes,
+        pricebook,
+        recurringJobs,
+        recurringInvoices,
         loading,
         error,
         reload,

@@ -1,0 +1,62 @@
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useData } from '../lib/DataContext';
+import { Card, PageHead, Empty, Badge } from '../ui/components';
+import { formatMoney } from '@shared/utils/format';
+
+export default function PricebookScreen() {
+  const { pricebook, loading, error } = useData();
+  const [q, setQ] = useState('');
+
+  const rows = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    return [...pricebook]
+      .filter(
+        (p) =>
+          !term ||
+          p.name?.toLowerCase().includes(term) ||
+          p.category?.toLowerCase().includes(term),
+      )
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [pricebook, q]);
+
+  if (loading) return <Empty>Loading pricebook…</Empty>;
+  if (error) return <Empty>Couldn’t load pricebook: {error}</Empty>;
+
+  return (
+    <>
+      <PageHead title="Pricebook" sub={`${rows.length} saved services`} />
+      <input
+        className="search"
+        placeholder="Search services or categories…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      <Card>
+        {rows.length === 0 ? (
+          <Empty>No saved services yet.</Empty>
+        ) : (
+          <div className="list">
+            {rows.map((p) => (
+              <Link key={p.id} to={`/pricebook/${p.id}`} className="row">
+                <div className="grow">
+                  <div className="title">{p.name || 'Service'}</div>
+                  <div className="meta">
+                    {p.category ? `${p.category} · ` : ''}
+                    {p.laborHours ?? 0} hr
+                    {p.materials?.length
+                      ? ` · ${p.materials.length} material${p.materials.length === 1 ? '' : 's'}`
+                      : ''}
+                  </div>
+                </div>
+                {p.category && <Badge color="slate">{p.category}</Badge>}
+                <span className="amt">{formatMoney(p.estimateTotal || 0)}</span>
+                <span className="chev">›</span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </Card>
+    </>
+  );
+}
