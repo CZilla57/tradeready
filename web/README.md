@@ -60,12 +60,15 @@ mutation it performs is changing the signed-in user's own password.
 2. The emailed link returns to `/reset-password`. `detectSessionInUrl`
    establishes a short-lived recovery session and fires a one-shot
    `PASSWORD_RECOVERY` event.
-3. `AuthContext` records that event in React state **and** a
-   `sessionStorage` flag (`tradeready.passwordRecovery`) so recovery mode
-   survives the re-render — and a manual reload — that follows the one-shot
-   event. While the flag is set, `App` routes every path to the
-   password-update screen, so a recovery session can **not** fall through into
-   the authenticated portal before the user finishes.
+3. `AuthContext` records that event in React state **and** a `localStorage`
+   flag (`tradeready.passwordRecovery`) so recovery mode survives the re-render,
+   a manual reload, **and a second/reopened tab** — the one-shot event fires
+   only in the tab that consumed the link, but the flag lives in the same
+   `localStorage` the Supabase session is persisted in, so every tab holding the
+   recovery session stays in recovery mode. (A stale flag left with no live
+   session is dropped on init.) While the flag is set, `App` routes every path
+   to the password-update screen, so a recovery session can **not** fall through
+   into the authenticated portal before the user finishes.
 4. `ResetPasswordScreen` collects and validates a new password (min length +
    matching confirmation), calls `supabase.auth.updateUser({ password })`,
    then clears recovery, signs out, and redirects to `/login`.

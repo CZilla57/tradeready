@@ -8,15 +8,20 @@ import {
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
-// sessionStorage flag that keeps the app in password-recovery mode across the
-// re-render (and any manual reload) that follows Supabase's one-shot
-// PASSWORD_RECOVERY event, so a recovery link cannot silently fall through into
-// the authenticated portal before the user sets a new password.
+// Flag that keeps the app in password-recovery mode after Supabase's one-shot
+// PASSWORD_RECOVERY event. It lives in localStorage — the same store Supabase
+// persists the session in (see ./supabase) — not sessionStorage, so it travels
+// with the recovery session into every tab. The one-shot event only fires in
+// the tab that consumed the link; a second tab (or a reopened one) restores the
+// session from localStorage but never sees that event, so a tab-local flag
+// would leave it treating the recovery session as an ordinary login and letting
+// it into the portal before the password is changed. A stale flag left with no
+// live session is dropped on init (see below).
 const RECOVERY_FLAG = 'tradeready.passwordRecovery';
 
 function readRecoveryFlag(): boolean {
   try {
-    return sessionStorage.getItem(RECOVERY_FLAG) === '1';
+    return localStorage.getItem(RECOVERY_FLAG) === '1';
   } catch {
     return false;
   }
@@ -24,11 +29,11 @@ function readRecoveryFlag(): boolean {
 
 function writeRecoveryFlag(on: boolean): void {
   try {
-    if (on) sessionStorage.setItem(RECOVERY_FLAG, '1');
-    else sessionStorage.removeItem(RECOVERY_FLAG);
+    if (on) localStorage.setItem(RECOVERY_FLAG, '1');
+    else localStorage.removeItem(RECOVERY_FLAG);
   } catch {
     // Private-mode / disabled storage: recovery still works within the current
-    // render via React state; only cross-reload persistence is lost.
+    // render via React state; only cross-reload/cross-tab persistence is lost.
   }
 }
 
@@ -61,7 +66,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     supabase.auth
       .getSession()
-      .then(({ data }) => setSession(data.session))
+      .then(({ data }) => {
+        setSession(data.session);
+        // A persisted recovery flag with no live session is stale — the recovery
+        // session expired or was already used/cleared elsewhere. Drop it so a
+        // later ordinary sign-in isn't trapped on the recovery screen. When a
+        // session IS present the flag stands, so a recovery session restored in a
+        // fresh tab (which never sees the one-shot event) still routes to the
+        // password-update screen.
+        if (!data.session) {
+          setRecovery(false);
+          writeRecoveryFlag(false);
+        }
+      })
       .finally(() => setInitializing(false));
 
     const {

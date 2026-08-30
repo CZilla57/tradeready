@@ -90,7 +90,29 @@ describe('AuthProvider', () => {
       h.fireAuthEvent('PASSWORD_RECOVERY', { user: { email: 'r@b.com' } });
     });
     expect(screen.getByTestId('recovery')).toHaveTextContent('true');
-    expect(window.sessionStorage.getItem('tradeready.passwordRecovery')).toBe('1');
+    // Persisted in localStorage (shared with the Supabase session) so other tabs
+    // see recovery mode too.
+    expect(window.localStorage.getItem('tradeready.passwordRecovery')).toBe('1');
+  });
+
+  it('restores recovery mode in a fresh tab from the persisted flag + session', async () => {
+    // A second/reopened tab: the one-shot PASSWORD_RECOVERY event never fires
+    // here, but the flag and the recovery session are both in localStorage.
+    window.localStorage.setItem('tradeready.passwordRecovery', '1');
+    h.auth.getSession.mockResolvedValueOnce({
+      data: { session: { user: { email: 'r@b.com' } } },
+    });
+    await renderProvider();
+    expect(screen.getByTestId('recovery')).toHaveTextContent('true');
+    expect(screen.getByTestId('email')).toHaveTextContent('r@b.com');
+  });
+
+  it('drops a stale recovery flag when there is no live session', async () => {
+    window.localStorage.setItem('tradeready.passwordRecovery', '1');
+    h.auth.getSession.mockResolvedValueOnce({ data: { session: null } });
+    await renderProvider();
+    expect(screen.getByTestId('recovery')).toHaveTextContent('false');
+    expect(window.localStorage.getItem('tradeready.passwordRecovery')).toBeNull();
   });
 
   it('leaves recovery mode on SIGNED_OUT', async () => {
@@ -103,7 +125,7 @@ describe('AuthProvider', () => {
       h.fireAuthEvent('SIGNED_OUT', null);
     });
     expect(screen.getByTestId('recovery')).toHaveTextContent('false');
-    expect(window.sessionStorage.getItem('tradeready.passwordRecovery')).toBeNull();
+    expect(window.localStorage.getItem('tradeready.passwordRecovery')).toBeNull();
   });
 
   it('updatePassword calls supabase.auth.updateUser', async () => {
