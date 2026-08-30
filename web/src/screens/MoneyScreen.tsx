@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, Stat } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, Stat, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 import { summarizeInvoices } from '../ui/invoiceMath';
 import { effectivePayments } from '@shared/utils/invoicePayments';
@@ -51,7 +51,8 @@ function expensesByMonth(expenses: Expense[]): Map<string, number> {
 }
 
 export default function MoneyScreen() {
-  const { invoices, expenses, loading, error } = useData();
+  const { invoices, expenses } = useData();
+  const state = useResources('invoices', 'expenses');
 
   const summary = useMemo(() => summarizeInvoices(invoices), [invoices]);
   const months = useMemo(() => last6Months(), []);
@@ -64,8 +65,14 @@ export default function MoneyScreen() {
 
   const maxRev = Math.max(1, ...months.map((m) => revMap.get(m) ?? 0));
 
-  if (loading) return <Empty>Loading finances…</Empty>;
-  if (error) return <Empty>Couldn’t load finances: {error}</Empty>;
+  if (state.loading) return <Empty>Loading finances…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load finances: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   return (
     <>

@@ -1,15 +1,23 @@
 import { Link, useParams } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, Empty, Badge, KV } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, Empty, Badge, KV, ErrorState } from '../ui/components';
 import { jobStatusBadge, JOB_PIPELINE } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate, formatTimeRange } from '@shared/utils/dateHelpers';
 
 export default function JobDetailScreen() {
   const { id } = useParams();
-  const { jobs, customers, invoices, loading } = useData();
+  const { jobs, customers, invoices } = useData();
+  const state = useResources('jobs');
 
-  if (loading) return <Empty>Loading…</Empty>;
+  if (state.loading) return <Empty>Loading…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load this job: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
   const job = jobs.find((j) => j.id === id);
   if (!job) return <Empty>Job not found.</Empty>;
 
@@ -39,7 +47,7 @@ export default function JobDetailScreen() {
         <Badge color={badge.color}>{badge.label}</Badge>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+      <div className="detail-grid wide-main">
         <div className="stack">
           {job.description && (
             <Card pad>

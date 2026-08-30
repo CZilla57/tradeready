@@ -1,12 +1,15 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 import { amountPaid } from '@shared/utils/invoicePayments';
 
 export default function CustomersScreen() {
-  const { customers, invoices, loading, error } = useData();
+  const { customers, invoices } = useData();
+  // Blocks on customers; invoices only feed the revenue column, so an invoice
+  // failure still lists customers (revenue reads 0 until it recovers).
+  const state = useResources('customers');
   const [q, setQ] = useState('');
 
   const revenueByName = useMemo(() => {
@@ -32,8 +35,14 @@ export default function CustomersScreen() {
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [customers, q]);
 
-  if (loading) return <Empty>Loading customers…</Empty>;
-  if (error) return <Empty>Couldn’t load customers: {error}</Empty>;
+  if (state.loading) return <Empty>Loading customers…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load customers: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   return (
     <>

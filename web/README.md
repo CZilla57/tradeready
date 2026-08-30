@@ -92,11 +92,44 @@ npm run dev        # http://localhost:5173
 Sign in with a real TradeReady account. Other scripts:
 
 ```bash
+npm run lint       # eslint (flat config: React + TS + browser)
 npm run typecheck  # tsc, no emit
 npm run test       # vitest run (jsdom + Testing Library)
 npm run build      # typecheck + production build to web/dist
 npm run preview    # serve the production build locally
 ```
+
+### Lint, test, and CI gates
+
+This package is a standalone workspace with its **own** lint and test gates —
+the repo root's `.eslintrc.js` and Jest config deliberately ignore `web/`
+because its browser/React toolchain doesn't fit the Expo/React-Native rules.
+
+- **Lint** — `npm run lint` uses `web/eslint.config.js` (ESLint flat config:
+  `@eslint/js` + `typescript-eslint` + `react-hooks` + `react-refresh`, browser
+  globals), and fails on any warning (`--max-warnings=0`).
+- **Tests** — [Vitest] + React Testing Library (`jsdom`). Coverage focuses on
+  data-loading resilience (`src/lib/DataContext.test.tsx`), routing/not-found
+  (`src/App.test.tsx`), auth (`src/lib/AuthContext.test.tsx`), the invoice and
+  change-order math (`src/ui/*.test.ts`), and status/filter behavior
+  (`src/ui/status.test.ts`, `src/screens/JobsScreen.test.tsx`).
+- **CI** — the `web` job in `.github/workflows/gate.yml` runs `npm ci` then
+  lint → tests → typecheck → build from `web/`, independently of the root RN
+  gate.
+
+[Vitest]: https://vitest.dev
+
+### Data-loading resilience
+
+`DataContext` loads each Supabase collection **independently** (not through a
+single `Promise.all`), tracking loading/`loaded`/error state per resource key.
+One collection failing (say `pricebook`) never blanks a screen that only needs
+another (Jobs, Money, Today…). Screens scope themselves to the resources they
+use via `useResources(...keys)`, which reports a blocking `loading`, a scoped
+`error` (with a retry action), or `refreshing` while already-loaded data stays
+on screen during a manual retry. When the authenticated user changes or signs
+out, all user-owned state is cleared and any in-flight request from the prior
+session is ignored — one account's rows are never shown under another's.
 
 > Build note: `vite.config.ts` sets `esbuild.tsconfigRaw` to a string so Vite
 > skips its per-file tsconfig lookup. Without it, esbuild walks up from the

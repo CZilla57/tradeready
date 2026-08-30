@@ -76,6 +76,28 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
+/**
+ * A scoped load failure with a retry action. Shown in place of a screen's body
+ * when the resources it needs failed and there is no prior data to fall back
+ * on — an unrelated collection failing never reaches here.
+ */
+export function ErrorState({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="error-state" role="alert">
+      <div className="error-state-msg">{message}</div>
+      <button type="button" className="retry-btn" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export function KV({ k, v }: { k: string; v: ReactNode }) {
   return (
     <div className="kv">

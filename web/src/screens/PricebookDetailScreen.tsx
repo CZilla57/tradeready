@@ -1,13 +1,21 @@
 import { Link, useParams } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, Empty, KV } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, Empty, KV, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 
 export default function PricebookDetailScreen() {
   const { id } = useParams();
-  const { pricebook, loading } = useData();
+  const { pricebook } = useData();
+  const state = useResources('pricebook');
 
-  if (loading) return <Empty>Loading…</Empty>;
+  if (state.loading) return <Empty>Loading…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load this service: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
   const entry = pricebook.find((p) => p.id === id);
   if (!entry) return <Empty>Service not found.</Empty>;
 
@@ -29,7 +37,7 @@ export default function PricebookDetailScreen() {
         </span>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+      <div className="detail-grid wide-main">
         <div className="stack">
           {entry.description && (
             <Card pad>

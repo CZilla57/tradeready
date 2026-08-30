@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, Badge } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, Badge, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 
 export default function PricebookScreen() {
-  const { pricebook, loading, error } = useData();
+  const { pricebook } = useData();
+  const state = useResources('pricebook');
   const [q, setQ] = useState('');
 
   const rows = useMemo(() => {
@@ -20,8 +21,14 @@ export default function PricebookScreen() {
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [pricebook, q]);
 
-  if (loading) return <Empty>Loading pricebook…</Empty>;
-  if (error) return <Empty>Couldn’t load pricebook: {error}</Empty>;
+  if (state.loading) return <Empty>Loading pricebook…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load pricebook: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   return (
     <>
