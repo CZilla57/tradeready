@@ -29,6 +29,8 @@ already ships inside the distributed mobile app bundle).
 Read-first portal:
 
 - **Login** — email/password, Google OAuth, password reset
+- **Reset password** (`/reset-password`) — the one place a signed-in-via-recovery
+  user sets a new password (the only write to auth this portal performs)
 - **Today** — today's scheduled jobs + earnings/outstanding summary
 - **Calendar** — week view of scheduled jobs with work-day/blackout shading (via
   `resolveSchedule`) + a "needs scheduling" queue; week navigation
@@ -47,6 +49,31 @@ Editing is intentionally out of scope. The write path
 (`src/lib/repository.ts#upsertRecord`) is already wired to the same blob
 contract for the editing surface that follows.
 
+### Password recovery flow
+
+The portal is otherwise read-only with respect to business data; the sole
+mutation it performs is changing the signed-in user's own password.
+
+1. From **Login → Forgot password?**, `resetPassword` calls
+   `supabase.auth.resetPasswordForEmail(email, { redirectTo:
+   <origin>/reset-password })`.
+2. The emailed link returns to `/reset-password`. `detectSessionInUrl`
+   establishes a short-lived recovery session and fires a one-shot
+   `PASSWORD_RECOVERY` event.
+3. `AuthContext` records that event in React state **and** a
+   `sessionStorage` flag (`tradeready.passwordRecovery`) so recovery mode
+   survives the re-render — and a manual reload — that follows the one-shot
+   event. While the flag is set, `App` routes every path to the
+   password-update screen, so a recovery session can **not** fall through into
+   the authenticated portal before the user finishes.
+4. `ResetPasswordScreen` collects and validates a new password (min length +
+   matching confirmation), calls `supabase.auth.updateUser({ password })`,
+   then clears recovery, signs out, and redirects to `/login`.
+5. Invalid, expired, or already-used links produce no session (Supabase encodes
+   the reason in the URL fragment). The screen detects the absence of a recovery
+   session, shows the reason, and offers a path back to request another reset
+   email.
+
 Not available on the web: mileage/**Trips** and the AI Coach — Trips are a
 Supabase collection but not surfaced here yet; the AI Coach needs the
 Cloudflare Worker backend rather than Supabase alone.
@@ -63,6 +90,7 @@ Sign in with a real TradeReady account. Other scripts:
 
 ```bash
 npm run typecheck  # tsc, no emit
+npm run test       # vitest run (jsdom + Testing Library)
 npm run build      # typecheck + production build to web/dist
 npm run preview    # serve the production build locally
 ```
@@ -83,8 +111,10 @@ client-side routing, configure a **SPA fallback** so unknown paths serve
 1. **DNS / hosting** — point `app.gettradereadyapp.com` at the host serving
    `web/dist`, with the SPA fallback above.
 2. **Supabase Auth → URL Configuration** — add the web origin
-   (`https://app.gettradereadyapp.com`) to **Redirect URLs** so the Google
-   OAuth and password-reset return handshakes are accepted.
+   (`https://app.gettradereadyapp.com`) **and** the recovery return path
+   (`https://app.gettradereadyapp.com/reset-password`) to **Redirect URLs** so
+   the Google OAuth and password-reset return handshakes are accepted. (The SPA
+   fallback above is what lets `/reset-password` load on a fresh visit.)
 3. **Google Cloud OAuth client** — add `https://app.gettradereadyapp.com` to
    **Authorized JavaScript origins** (and the Supabase callback URL to
    **Authorized redirect URIs** if not already present).
