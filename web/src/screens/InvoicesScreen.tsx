@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, Badge, Stat } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, Badge, Stat, ErrorState } from '../ui/components';
 import { invoiceStatusBadge } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate } from '@shared/utils/dateHelpers';
@@ -32,7 +32,8 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 export default function InvoicesScreen() {
-  const { invoices, loading, error } = useData();
+  const { invoices } = useData();
+  const state = useResources('invoices');
   const [filter, setFilter] = useState<Filter>('open');
   const [q, setQ] = useState('');
 
@@ -52,8 +53,14 @@ export default function InvoicesScreen() {
       .sort((a, b) => (b.due || '').localeCompare(a.due || ''));
   }, [active, filter, q]);
 
-  if (loading) return <Empty>Loading invoices…</Empty>;
-  if (error) return <Empty>Couldn’t load invoices: {error}</Empty>;
+  if (state.loading) return <Empty>Loading invoices…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load invoices: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   return (
     <>

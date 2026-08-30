@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, Badge } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, Badge, ErrorState } from '../ui/components';
 import { estimateStatusBadge, isEstimateJob } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate } from '@shared/utils/dateHelpers';
@@ -9,7 +9,8 @@ import { formatDisplayDate } from '@shared/utils/dateHelpers';
 type Filter = 'all' | 'sent' | 'approved' | 'declined';
 
 export default function EstimatesScreen() {
-  const { jobs, loading, error } = useData();
+  const { jobs } = useData();
+  const state = useResources('jobs');
   const [filter, setFilter] = useState<Filter>('all');
   const [q, setQ] = useState('');
 
@@ -35,8 +36,14 @@ export default function EstimatesScreen() {
       );
   }, [jobs, filter, q]);
 
-  if (loading) return <Empty>Loading estimates…</Empty>;
-  if (error) return <Empty>Couldn’t load estimates: {error}</Empty>;
+  if (state.loading) return <Empty>Loading estimates…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load estimates: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   const FILTERS: { key: Filter; label: string }[] = [
     { key: 'all', label: 'All' },

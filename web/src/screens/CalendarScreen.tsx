@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, Badge } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, Badge, ErrorState } from '../ui/components';
 import { jobStatusBadge } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import {
@@ -27,7 +27,10 @@ function timeKey(j: Job): string {
 const EMPTY_SETTINGS = {} as Settings;
 
 export default function CalendarScreen() {
-  const { jobs, settings, loading, error } = useData();
+  const { jobs, settings } = useData();
+  // Calendar needs jobs; settings only shade work days/blackouts, so a settings
+  // failure falls back to an unshaded grid rather than an empty screen.
+  const state = useResources('jobs');
   const today = getTodayDateString();
   const [anchor, setAnchor] = useState(today);
 
@@ -63,8 +66,14 @@ export default function CalendarScreen() {
     [jobs],
   );
 
-  if (loading) return <Empty>Loading calendar…</Empty>;
-  if (error) return <Empty>Couldn’t load calendar: {error}</Empty>;
+  if (state.loading) return <Empty>Loading calendar…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load calendar: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   return (
     <>
@@ -73,9 +82,23 @@ export default function CalendarScreen() {
         sub={weekMonthLabel(week)}
         right={
           <div className="week-nav">
-            <button onClick={() => setAnchor(shiftDate(anchor, -7))}>‹</button>
-            <button onClick={() => setAnchor(today)}>Today</button>
-            <button onClick={() => setAnchor(shiftDate(anchor, 7))}>›</button>
+            <button
+              type="button"
+              aria-label="Previous week"
+              onClick={() => setAnchor(shiftDate(anchor, -7))}
+            >
+              <span aria-hidden="true">‹</span>
+            </button>
+            <button type="button" onClick={() => setAnchor(today)}>
+              Today
+            </button>
+            <button
+              type="button"
+              aria-label="Next week"
+              onClick={() => setAnchor(shiftDate(anchor, 7))}
+            >
+              <span aria-hidden="true">›</span>
+            </button>
           </div>
         }
       />

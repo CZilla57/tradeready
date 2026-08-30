@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, Empty, Badge, KV } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, Empty, Badge, KV, ErrorState } from '../ui/components';
 import { invoiceStatusBadge } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate } from '@shared/utils/dateHelpers';
@@ -12,9 +12,17 @@ import {
 
 export default function InvoiceDetailScreen() {
   const { id } = useParams();
-  const { invoices, customers, loading } = useData();
+  const { invoices, customers } = useData();
+  const state = useResources('invoices');
 
-  if (loading) return <Empty>Loading…</Empty>;
+  if (state.loading) return <Empty>Loading…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load this invoice: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
   const inv = invoices.find((i) => i.id === id);
   if (!inv) return <Empty>Invoice not found.</Empty>;
 
@@ -42,7 +50,7 @@ export default function InvoiceDetailScreen() {
         <Badge color={badge.color}>{badge.label}</Badge>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+      <div className="detail-grid wide-main">
         <div className="stack">
           {inv.desc && (
             <Card pad>

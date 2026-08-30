@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, Badge } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, Badge, ErrorState } from '../ui/components';
 import { jobStatusBadge } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate } from '@shared/utils/dateHelpers';
@@ -33,7 +33,8 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 export default function JobsScreen() {
-  const { jobs, loading, error } = useData();
+  const { jobs } = useData();
+  const state = useResources('jobs');
   const [filter, setFilter] = useState<Filter>('active');
   const [q, setQ] = useState('');
 
@@ -52,8 +53,14 @@ export default function JobsScreen() {
       .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   }, [jobs, filter, q]);
 
-  if (loading) return <Empty>Loading jobs…</Empty>;
-  if (error) return <Empty>Couldn’t load jobs: {error}</Empty>;
+  if (state.loading) return <Empty>Loading jobs…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load jobs: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   return (
     <>

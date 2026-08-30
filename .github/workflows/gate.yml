@@ -53,6 +53,39 @@ jobs:
       - name: Lint
         run: npm run lint
 
+  # The standalone web portal (web/) has its own package.json, lockfile, and
+  # Vite/React/Vitest toolchain — the RN gate above never installs its deps.
+  # This leg gives it an independent gate: lint, tests, typecheck, and a
+  # production build, all run from web/ against its own lockfile.
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
   gitleaks:
     runs-on: ubuntu-latest
     steps:

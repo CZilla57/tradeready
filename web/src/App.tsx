@@ -19,6 +19,7 @@ import RecurringScreen from './screens/RecurringScreen';
 import PricebookScreen from './screens/PricebookScreen';
 import PricebookDetailScreen from './screens/PricebookDetailScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import NotFoundScreen from './screens/NotFoundScreen';
 
 export default function App() {
   const { session, initializing, recovery } = useAuth();
@@ -71,8 +72,10 @@ export default function App() {
           <Route path="/pricebook" element={<PricebookScreen />} />
           <Route path="/pricebook/:id" element={<PricebookDetailScreen />} />
           <Route path="/settings" element={<SettingsScreen />} />
+          {/* Unknown paths keep the app shell (nav stays visible) and show a
+              real not-found view rather than silently redirecting home. */}
+          <Route path="*" element={<NotFoundScreen />} />
         </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </DataProvider>
   );

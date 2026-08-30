@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, Empty, Badge, KV } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, Empty, Badge, KV, ErrorState } from '../ui/components';
 import { jobStatusBadge, invoiceStatusBadge } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate } from '@shared/utils/dateHelpers';
@@ -8,9 +8,17 @@ import { amountPaid, balanceDue } from '@shared/utils/invoicePayments';
 
 export default function CustomerDetailScreen() {
   const { id } = useParams();
-  const { customers, jobs, invoices, notes, loading } = useData();
+  const { customers, jobs, invoices, notes } = useData();
+  const state = useResources('customers');
 
-  if (loading) return <Empty>Loading…</Empty>;
+  if (state.loading) return <Empty>Loading…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load this customer: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
   const customer = customers.find((c) => c.id === id);
   if (!customer) return <Empty>Customer not found.</Empty>;
 
@@ -60,7 +68,7 @@ export default function CustomerDetailScreen() {
         </Card>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="detail-grid">
         <Card>
           <div className="section-label">Jobs</div>
           {custJobs.length === 0 ? (

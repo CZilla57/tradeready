@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Stat, Empty, Badge } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Stat, Empty, Badge, ErrorState } from '../ui/components';
 import { jobStatusBadge } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { balanceDue, isFullyPaid } from '@shared/utils/invoicePayments';
@@ -17,11 +17,20 @@ function timeKey(j: Job): string {
 }
 
 export default function TodayScreen() {
-  const { jobs, invoices, settings, loading, error } = useData();
+  const { jobs, invoices, settings } = useData();
+  // Today needs jobs + invoices; settings only supplies a greeting name, so a
+  // settings failure must not blank the day.
+  const state = useResources('jobs', 'invoices');
   const today = getTodayDateString();
 
-  if (loading) return <Empty>Loading your day…</Empty>;
-  if (error) return <Empty>Couldn’t load data: {error}</Empty>;
+  if (state.loading) return <Empty>Loading your day…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load your day: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   const todaysJobs = jobs
     .filter((j) => j.scheduledDate === today && !j.archivedAt)

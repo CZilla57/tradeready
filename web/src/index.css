@@ -75,6 +75,19 @@ button {
   cursor: pointer;
 }
 
+/* Keyboard focus stays visible everywhere. Pointer focus is left alone
+   (:focus-visible only), and inputs that clear their default outline below
+   still get this ring for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+/* On the navy sidebar the accent ring has poor contrast — use white there. */
+.sidebar :focus-visible {
+  outline-color: #fff;
+}
+
 /* ---------- layout ---------- */
 .app-shell {
   display: grid;
@@ -220,6 +233,9 @@ button {
   display: grid;
   gap: 16px;
 }
+.grid > * {
+  min-width: 0;
+}
 
 .grid-3 {
   grid-template-columns: repeat(3, 1fr);
@@ -227,6 +243,27 @@ button {
 
 .grid-4 {
   grid-template-columns: repeat(4, 1fr);
+}
+
+/* Two-column detail layouts. Semantic classes (not inline gridTemplateColumns)
+   so the mobile media queries below can actually override them. `.detail-grid`
+   is equal columns; `.wide-main` gives the primary column extra width. Both
+   collapse to a single column at the shared breakpoint. */
+.detail-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+}
+.detail-grid.wide-main {
+  grid-template-columns: 1.4fr 1fr;
+}
+/* Grid items default to min-width:auto, which refuses to shrink below their
+   content's min-content size — a long unbreakable email in a nowrap `.meta`
+   would otherwise force the whole column (and the page) wider than the
+   viewport. Let the columns shrink so ellipsis/wrapping can do their job. */
+.detail-grid > * {
+  min-width: 0;
 }
 
 @media (max-width: 860px) {
@@ -247,6 +284,31 @@ button {
   .grid-3,
   .grid-4 {
     grid-template-columns: 1fr 1fr;
+  }
+  .detail-grid,
+  .detail-grid.wide-main {
+    grid-template-columns: 1fr;
+  }
+  .page {
+    padding: 24px 20px 48px;
+  }
+}
+
+/* Phone widths: single-column stat grids and a tighter page gutter so nothing
+   overflows the viewport at ~390px. */
+@media (max-width: 560px) {
+  .grid-3,
+  .grid-4 {
+    grid-template-columns: 1fr;
+  }
+  .page {
+    padding: 18px 14px 40px;
+  }
+  .page-head {
+    flex-wrap: wrap;
+  }
+  .page-head h1 {
+    font-size: 21px;
   }
 }
 
@@ -407,6 +469,10 @@ a.row:hover {
   outline: none;
   border-color: var(--accent);
 }
+.search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 /* ---------- misc ---------- */
 .back-link {
@@ -430,6 +496,34 @@ a.row:hover {
 .muted {
   color: var(--text-2);
 }
+
+/* ---------- scoped error + retry ---------- */
+.error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  color: var(--text-2);
+  padding: 44px 20px;
+  font-size: 14.5px;
+}
+.error-state-msg {
+  max-width: 460px;
+  overflow-wrap: anywhere;
+}
+.retry-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 9px 18px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.retry-btn:hover {
+  background: var(--surface-2);
+}
 .kv {
   display: flex;
   justify-content: space-between;
@@ -442,10 +536,14 @@ a.row:hover {
 }
 .kv .k {
   color: var(--text-2);
+  flex: none;
 }
 .kv .v {
   font-weight: 600;
   text-align: right;
+  min-width: 0;
+  /* Long emails, addresses, and notes wrap instead of forcing the row wide. */
+  overflow-wrap: anywhere;
 }
 
 /* ---------- timeline ---------- */
@@ -595,6 +693,10 @@ a.row:hover {
   border-color: var(--accent);
   background: var(--surface);
 }
+.login-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .login-btn {
   padding: 12px 14px;
   border-radius: var(--radius-sm);
@@ -707,6 +809,11 @@ a.row:hover {
   grid-template-columns: repeat(7, 1fr);
   gap: 10px;
 }
+/* Keep a long, unbreakable job title from expanding a column past its track
+   (which would push the whole grid wider than the viewport). */
+.week-grid > * {
+  min-width: 0;
+}
 .day-col {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -777,5 +884,13 @@ a.row:hover {
 @media (max-width: 860px) {
   .week-grid {
     grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 560px) {
+  .week-grid {
+    grid-template-columns: 1fr;
+  }
+  .day-col {
+    min-height: 0;
   }
 }

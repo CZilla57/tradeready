@@ -1,5 +1,5 @@
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, Badge } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, Badge, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate } from '@shared/utils/dateHelpers';
 import type { RecurrenceCadence } from '@shared/types/models';
@@ -17,10 +17,17 @@ function cadence(c: RecurrenceCadence): string {
 }
 
 export default function RecurringScreen() {
-  const { recurringJobs, recurringInvoices, loading, error } = useData();
+  const { recurringJobs, recurringInvoices } = useData();
+  const state = useResources('recurringJobs', 'recurringInvoices');
 
-  if (loading) return <Empty>Loading recurring work…</Empty>;
-  if (error) return <Empty>Couldn’t load recurring work: {error}</Empty>;
+  if (state.loading) return <Empty>Loading recurring work…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load recurring work: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
 
   const jobs = [...recurringJobs].sort((a, b) =>
     (a.nextDueDate || '').localeCompare(b.nextDueDate || ''),

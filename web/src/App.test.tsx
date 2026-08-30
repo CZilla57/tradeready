@@ -45,9 +45,17 @@ vi.mock('./lib/DataContext', () => ({
     pricebook: [],
     recurringJobs: [],
     recurringInvoices: [],
+    loading: {},
+    loaded: {},
+    errors: {},
+    reload: vi.fn(),
+    retry: vi.fn(),
+  }),
+  useResources: () => ({
     loading: false,
     error: null,
-    reload: vi.fn(),
+    refreshing: false,
+    retry: vi.fn(),
   }),
 }));
 
@@ -86,6 +94,14 @@ describe('App routing', () => {
   it('sends a signed-out visitor to the login screen', () => {
     renderAt('/');
     expect(screen.getByText('Sign in to your portal')).toBeInTheDocument();
+  });
+
+  it('shows a not-found view for an unknown path in the authenticated portal', () => {
+    h.state.session = { user: { email: 'u@b.com' } };
+    renderAt('/does-not-exist');
+    expect(screen.getByText('Page not found')).toBeInTheDocument();
+    // The shell (and its navigation) stays put rather than redirecting away.
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
   });
 
   it('renders the recovery screen for a signed-out visitor at /reset-password', () => {

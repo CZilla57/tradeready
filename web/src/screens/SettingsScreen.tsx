@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { useData } from '../lib/DataContext';
-import { Card, PageHead, Empty, KV, Badge } from '../ui/components';
+import { useData, useResources } from '../lib/DataContext';
+import { Card, PageHead, Empty, KV, Badge, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 import { resolveSchedule } from '@shared/utils/scheduleConfig';
 import type { Settings } from '@shared/types/models';
@@ -13,14 +13,21 @@ function yesNo(v: unknown): string {
 }
 
 export default function SettingsScreen() {
-  const { settings, loading, error } = useData();
+  const { settings } = useData();
+  const state = useResources('settings');
   const schedule = useMemo(
     () => resolveSchedule(settings ?? EMPTY_SETTINGS),
     [settings],
   );
 
-  if (loading) return <Empty>Loading settings…</Empty>;
-  if (error) return <Empty>Couldn’t load settings: {error}</Empty>;
+  if (state.loading) return <Empty>Loading settings…</Empty>;
+  if (state.error)
+    return (
+      <ErrorState
+        message={`Couldn’t load settings: ${state.error}`}
+        onRetry={state.retry}
+      />
+    );
   if (!settings) return <Empty>No settings on file yet.</Empty>;
 
   const s = settings;
@@ -32,7 +39,7 @@ export default function SettingsScreen() {
         sub="Read-only view of your business configuration"
       />
 
-      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="detail-grid">
         <div className="stack">
           <Card pad>
             <div className="section-label" style={{ padding: '0 0 8px' }}>
