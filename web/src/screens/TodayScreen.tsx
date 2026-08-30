@@ -3,6 +3,7 @@ import { useData } from '../lib/DataContext';
 import { Card, PageHead, Stat, Empty, Badge } from '../ui/components';
 import { jobStatusBadge } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
+import { balanceDue, isFullyPaid } from '@shared/utils/invoicePayments';
 import {
   getTodayDateString,
   getGreeting,
@@ -31,11 +32,12 @@ export default function TodayScreen() {
     0,
   );
 
-  const openInvoices = invoices.filter((i) => !i.paid);
-  const outstanding = openInvoices.reduce(
-    (sum, i) => sum + (Number(i.amount) || 0),
-    0,
-  );
+  // Mirror the Invoices/Money screens' roll-up (see ui/invoiceMath.ts): an
+  // invoice is "open" when it still has a remaining balance, and Outstanding
+  // sums that remaining balance — so partial payments and the payment-derived
+  // paid status are respected, rather than the raw `paid` flag and full amount.
+  const openInvoices = invoices.filter((i) => !isFullyPaid(i));
+  const outstanding = openInvoices.reduce((sum, i) => sum + balanceDue(i), 0);
 
   const name = settings?.contactName?.trim() || settings?.businessName?.trim();
 
