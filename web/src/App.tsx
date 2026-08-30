@@ -1,0 +1,48 @@
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { useAuth } from './lib/AuthContext';
+import { DataProvider } from './lib/DataContext';
+import AppShell from './screens/AppShell';
+import LoginScreen from './screens/LoginScreen';
+import TodayScreen from './screens/TodayScreen';
+import JobsScreen from './screens/JobsScreen';
+import JobDetailScreen from './screens/JobDetailScreen';
+import InvoicesScreen from './screens/InvoicesScreen';
+import InvoiceDetailScreen from './screens/InvoiceDetailScreen';
+import CustomersScreen from './screens/CustomersScreen';
+import CustomerDetailScreen from './screens/CustomerDetailScreen';
+import MoneyScreen from './screens/MoneyScreen';
+
+export default function App() {
+  const { session, initializing } = useAuth();
+
+  if (initializing) {
+    return <div className="empty">Loading…</div>;
+  }
+
+  if (!session) {
+    return (
+      <Routes>
+        <Route path="/login" element={<LoginScreen />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  return (
+    <DataProvider>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="/" element={<TodayScreen />} />
+          <Route path="/jobs" element={<JobsScreen />} />
+          <Route path="/jobs/:id" element={<JobDetailScreen />} />
+          <Route path="/invoices" element={<InvoicesScreen />} />
+          <Route path="/invoices/:id" element={<InvoiceDetailScreen />} />
+          <Route path="/customers" element={<CustomersScreen />} />
+          <Route path="/customers/:id" element={<CustomerDetailScreen />} />
+          <Route path="/money" element={<MoneyScreen />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </DataProvider>
+  );
+}

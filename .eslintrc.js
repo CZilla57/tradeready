@@ -21,6 +21,11 @@ module.exports = {
     // can't resolve here (import/no-unresolved). Its gate is the wrangler
     // build + the parallel-run request diffs, not the app's eslint config.
     "backend-workers/",
+    // Standalone web portal: its own package.json + Vite/React toolchain and
+    // its own tsconfig/eslint story. The repo-root CI never installs
+    // web/node_modules, so its browser imports (react-dom, react-router-dom)
+    // can't resolve here — the app's RN eslint config is not its gate.
+    "web/",
     ".expo/",
     ".jest-cache/",
     "dist/",

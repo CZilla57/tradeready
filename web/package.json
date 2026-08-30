@@ -1,0 +1,27 @@
+{
+  "name": "tradeready-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TradeReady web portal — browser access to the same Supabase account the mobile app uses.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^6.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.9.3",
+    "vite": "^6.0.7"
+  }
+}
