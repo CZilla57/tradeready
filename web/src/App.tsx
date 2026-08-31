@@ -73,6 +73,11 @@ export default function App() {
     <DataProvider>
       <Suspense fallback={<Fallback />}>
         <Routes>
+          {/* Auth-only paths a signed-out visitor was parked on (the signed-out
+              catch-all sends everything to /login). Once the session exists we
+              bounce them home instead of falling through to the not-found view. */}
+          <Route path="/login" element={<Navigate to="/" replace />} />
+          <Route path="/reset-password" element={<Navigate to="/" replace />} />
           <Route element={<AppShell />}>
             <Route path="/" element={<TodayScreen />} />
             <Route path="/calendar" element={<CalendarScreen />} />
