@@ -121,6 +121,59 @@ async function persistInvoice(invoice: Invoice): Promise<Invoice> {
   return invoice;
 }
 
+// ---------------------------------------------------------------------------
+// Soft-delete (roadmap P0.4)
+//
+// Deletes are recorded as a TOMBSTONE — `deleted: true` plus a fresh
+// `updated_at` — never a row removal, exactly as the mobile push does
+// (../../utils/sync.ts → the `op === 'delete'` branch). A hard `DELETE` would
+// leave every other device with no record that the row is gone, so the next
+// pull that predates the delete would treat the row as new and resurrect it.
+// The fresh `updated_at` is what carries the tombstone across each device's
+// `gt('updated_at', since)` pull filter.
+//
+// This is only the persistence primitive: cross-entity consequences (an invoice
+// that references a deleted customer, a job's linked records) are DOMAIN logic
+// that belongs with each delete's UI, not here. Add that per entity when a
+// delete surface lands — this function just guarantees the write itself is a
+// correct, propagating tombstone.
+// ---------------------------------------------------------------------------
+
+/** The owner-scoped blob collections that carry a `deleted` tombstone column. */
+type DeletableCollection =
+  | 'jobs'
+  | 'invoices'
+  | 'customers'
+  | 'expenses'
+  | 'pricebook'
+  | 'recurringJobs'
+  | 'recurringInvoices';
+
+async function softDelete(
+  collection: DeletableCollection,
+  id: string,
+): Promise<void> {
+  const user_id = await currentUserId();
+  // Scope by id AND user_id to mirror the mobile delete exactly; RLS already
+  // restricts this to the owner's rows, so the user_id filter is belt-and-braces.
+  const { error } = await supabase
+    .from(collection)
+    .update({ deleted: true, updated_at: writeTimestamp() })
+    .eq('id', id)
+    .eq('user_id', user_id);
+  if (error) throw error;
+}
+
+export const deleteJob = (id: string) => softDelete('jobs', id);
+export const deleteInvoice = (id: string) => softDelete('invoices', id);
+export const deleteCustomer = (id: string) => softDelete('customers', id);
+export const deleteExpense = (id: string) => softDelete('expenses', id);
+export const deletePricebookEntry = (id: string) => softDelete('pricebook', id);
+export const deleteRecurringJob = (id: string) =>
+  softDelete('recurringJobs', id);
+export const deleteRecurringInvoice = (id: string) =>
+  softDelete('recurringInvoices', id);
+
 function validatePaymentDraft(draft: PaymentDraft): void {
   const amount = toAmount(draft.amount);
   if (!(amount > 0)) {

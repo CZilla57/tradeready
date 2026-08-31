@@ -31,9 +31,18 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   `InvoiceDetailScreen.test.tsx`.
 - **`saveInvoice` not yet surfaced.** Editing scalar invoice fields (amount,
   description, line items) needs its own edit form — a later step.
+- **P0.4 — landed (primitive).** `writeRepository.ts` exposes typed soft-delete
+  ops (`deleteInvoice`, `deleteJob`, `deleteCustomer`, `deleteExpense`,
+  `deletePricebookEntry`, `deleteRecurringJob`, `deleteRecurringInvoice`). Each
+  writes a `deleted:true` tombstone with a fresh `updated_at` (never a hard
+  `DELETE`, which would resurrect the row on the next device pull), scoped by
+  id + user_id like the mobile delete. Covered by `writeRepository.test.ts`.
+  Not yet surfaced in any screen, and cross-entity cascade (e.g. an invoice
+  referencing a deleted customer) is deliberately left to each delete's future
+  UI, not the primitive.
 
-Still open below: P0.3 (durable server-side `updated_at`), P0.4 (soft-delete
-op), P0.5/P0.6 for other domains, P2 (concurrency/resilience), P3 (scope).
+Still open below: P0.3 (durable server-side `updated_at`), P0.5/P0.6 for other
+domains, P2 (concurrency/resilience), P3 (scope).
 
 ## Context in one paragraph
 

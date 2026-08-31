@@ -5,6 +5,8 @@ import {
   recordInvoicePayment,
   markInvoicePaid,
   voidInvoicePayment,
+  deleteInvoice,
+  deleteJob,
   InvoiceNotFoundError,
   PaymentValidationError,
 } from './writeRepository';
@@ -16,10 +18,14 @@ const state = vi.hoisted(() => ({
   serverRow: null as { data: Invoice; deleted: boolean } | null,
   lastUpsert: null as Record<string, unknown> | null,
   upsertError: null as { message: string } | null,
+  lastTable: null as string | null,
+  lastUpdate: null as Record<string, unknown> | null,
+  updateFilters: {} as Record<string, unknown>,
+  updateError: null as { message: string } | null,
 }));
 
 vi.mock('./supabase', () => {
-  const from = () => ({
+  const from = (table: string) => ({
     select: () => ({
       eq: () => ({
         maybeSingle: async () => ({ data: state.serverRow, error: null }),
@@ -28,6 +34,23 @@ vi.mock('./supabase', () => {
     upsert: async (row: Record<string, unknown>) => {
       state.lastUpsert = row;
       return { error: state.upsertError };
+    },
+    // A thenable query builder: `.update(row).eq(a).eq(b)` records the payload
+    // and every filter, and awaits to the (possibly error) result.
+    update: (row: Record<string, unknown>) => {
+      state.lastTable = table;
+      state.lastUpdate = row;
+      state.updateFilters = {};
+      const builder = {
+        eq(col: string, val: unknown) {
+          state.updateFilters[col] = val;
+          return builder;
+        },
+        then(resolve: (r: { error: unknown }) => unknown) {
+          return Promise.resolve({ error: state.updateError }).then(resolve);
+        },
+      };
+      return builder;
     },
   });
   return {
@@ -68,6 +91,10 @@ beforeEach(() => {
   state.serverRow = null;
   state.lastUpsert = null;
   state.upsertError = null;
+  state.lastTable = null;
+  state.lastUpdate = null;
+  state.updateFilters = {};
+  state.updateError = null;
 });
 
 describe('persist stamping', () => {
@@ -178,6 +205,36 @@ describe('saveInvoice — edit scalars, keep the server ledger', () => {
     await saveInvoice(invoice({ id: 'inv-new' }));
     expect(state.lastUpsert!.id).toBe('inv-new');
     expect(state.lastUpsert!.deleted).toBe(false);
+  });
+});
+
+describe('soft-delete — P0.4 tombstones, never row removal', () => {
+  it('writes a deleted:true tombstone with a fresh updated_at, scoped to id+user', async () => {
+    const before = Date.now();
+    await deleteInvoice('inv-1');
+
+    expect(state.lastTable).toBe('invoices');
+    expect(state.lastUpdate!.deleted).toBe(true);
+    // The fresh stamp is what carries the tombstone across device pull filters.
+    expect(Date.parse(state.lastUpdate!.updated_at as string)).toBeGreaterThanOrEqual(
+      before,
+    );
+    expect(state.updateFilters).toEqual({ id: 'inv-1', user_id: 'user-1' });
+    // A tombstone is an UPDATE, never a hard delete (no upsert either).
+    expect(state.lastUpsert).toBeNull();
+  });
+
+  it('routes each typed deleter to its own collection', async () => {
+    await deleteJob('job-9');
+    expect(state.lastTable).toBe('jobs');
+    expect(state.updateFilters.id).toBe('job-9');
+  });
+
+  it('surfaces a delete error rather than reporting success', async () => {
+    state.updateError = { message: 'rls denied' };
+    await expect(deleteInvoice('inv-1')).rejects.toMatchObject({
+      message: 'rls denied',
+    });
   });
 });
 
