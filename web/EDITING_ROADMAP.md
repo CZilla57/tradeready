@@ -41,10 +41,14 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   referencing a deleted customer) is deliberately left to each delete's future
   UI, not the primitive.
 
-- **P0.3 — migration drafted, awaiting owner apply.** The durable server-side
-  `updated_at` fix is written (`supabase/migrations/20260831_updated_at_server_authority.sql`
-  + its verify script). It needs the owner to apply it in the Supabase SQL
-  editor — see the cutover plan under P0.3 below. No app release is coupled to it.
+- **P0.3 — APPLIED (2026-08-31).** The server-side `set_updated_at` trigger
+  (`supabase/migrations/20260831_updated_at_server_authority.sql`) is live on all
+  twelve sync tables — confirmed present on every one. Every write now gets an
+  authoritative DB-clock `updated_at`, closing the clock-skew propagation trap
+  for the web portal, all mobile versions, and the backend webhooks at once.
+  Optional remaining cleanup (no correctness impact, no coordination needed):
+  clients may stop sending `updated_at` — web via the single `writeTimestamp()`
+  in `writeRepository.ts`, mobile via `pushQueue` in `utils/sync.ts`.
 - **P0.5 — landed (primitive).** `saveSettings(patch)` merges a patch onto the
   full current settings blob (preserving unrendered fields, P0.2) and strips
   every credential field by iterating `SECURE_FIELDS` (never hand-named), so a
@@ -53,8 +57,9 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   push. Covered by `writeRepository.test.ts`; not yet surfaced in a settings
   edit UI.
 
-Still open below: P0.3 apply (owner), P0.6 (derived-field invariants for other
-domains), P2 (concurrency/resilience), P3 (scope).
+Still open below: P0.6 (derived-field invariants for other domains), P2
+(concurrency/resilience), P3 (scope). P0.3's optional client cleanup (dropping
+the now-redundant `updated_at` sends) is not required for correctness.
 
 ## Context in one paragraph
 
