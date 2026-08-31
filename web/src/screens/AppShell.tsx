@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
 import { useData } from '../lib/DataContext';
+import logo from '../assets/logo.png';
 
 const NAV = [
   { to: '/', label: 'Today', ico: '🏠', end: true },
@@ -27,7 +28,7 @@ export default function AppShell() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="dot">🔧</span>
+          <img className="dot" src={logo} alt="TradeReady logo" />
           <span>TradeReady</span>
         </div>
         {NAV.map((n) => (
