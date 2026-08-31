@@ -22,8 +22,15 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   asserts it is genuinely the sole mutation site).
 - **P1.3 — partial.** Payment drafts are validated; other domains' validation
   arrives with their operations.
-- **Not yet wired to the UI.** No screen imports the write module — the editing
-  surface (forms, buttons) is the next step, and is what will exercise P2.2/P2.3.
+- **First editing surface — landed.** `InvoiceDetailScreen` wires the three
+  money ops: record a payment (inline validated form), mark the balance paid,
+  and void a payment (with confirm). Each disables its control while in flight
+  (P2.2 double-submit + error surfacing — a failed write keeps the form open and
+  shows the error, never looks saved) and re-pulls invoices from the server on
+  success (P2.3 via `retry(['invoices'])`). Covered by
+  `InvoiceDetailScreen.test.tsx`.
+- **`saveInvoice` not yet surfaced.** Editing scalar invoice fields (amount,
+  description, line items) needs its own edit form — a later step.
 
 Still open below: P0.3 (durable server-side `updated_at`), P0.4 (soft-delete
 op), P0.5/P0.6 for other domains, P2 (concurrency/resilience), P3 (scope).
