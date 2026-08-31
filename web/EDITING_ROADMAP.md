@@ -8,6 +8,26 @@ It exists so future sessions don't re-derive the analysis. Read this first,
 then `web/README.md` ("A note on the future editing surface"), then the shared
 sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
 
+## Progress
+
+- **P0.1 — landed (write layer).** `web/src/lib/writeRepository.ts` is the
+  portal's single, typed write module. It implements ledger-preserving invoice
+  writes — `saveInvoice`, `recordInvoicePayment`, `markInvoicePaid`,
+  `voidInvoicePayment` — each starting from the authoritative server row and
+  reusing the shared ledger math (`@shared/utils/invoicePayments`), so a
+  concurrently-appended payment (Stripe webhook, another device) is never
+  clobbered by a whole-blob replace. Covered by `writeRepository.test.ts`.
+- **P1.1 / P1.2 — landed.** Reads and writes are in distinct modules, and
+  `readOnly.arch.test.ts` now allow-lists exactly `writeRepository.ts` (and
+  asserts it is genuinely the sole mutation site).
+- **P1.3 — partial.** Payment drafts are validated; other domains' validation
+  arrives with their operations.
+- **Not yet wired to the UI.** No screen imports the write module — the editing
+  surface (forms, buttons) is the next step, and is what will exercise P2.2/P2.3.
+
+Still open below: P0.3 (durable server-side `updated_at`), P0.4 (soft-delete
+op), P0.5/P0.6 for other domains, P2 (concurrency/resilience), P3 (scope).
+
 ## Context in one paragraph
 
 The cloud model is a set of owner-scoped blob tables

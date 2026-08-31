@@ -11,12 +11,19 @@ import { dirname, join, relative } from 'node:path';
 // (login, signup, OAuth, password reset/update, logout) — never through a
 // business-data table.
 //
-// This static/source-graph check fails if any web source file adds a Supabase
-// business-data mutation — `supabase.from(<table>).insert|update|upsert|delete`
-// — so the read-only contract can't regress silently (e.g. a reintroduced
-// generic `upsertRecord`). It is a guardrail against accidental drift, NOT a
-// security boundary: ownership is enforced by Supabase RLS (auth.uid() =
-// user_id), and no client-side check substitutes for that.
+// This static/source-graph check fails if any web source file OTHER than the
+// designated write module adds a Supabase business-data mutation —
+// `supabase.from(<table>).insert|update|upsert|delete` — so the read-only
+// contract can't regress silently (e.g. a reintroduced generic `upsertRecord`).
+// It is a guardrail against accidental drift, NOT a security boundary: ownership
+// is enforced by Supabase RLS (auth.uid() = user_id), and no client-side check
+// substitutes for that.
+//
+// Editing (web/EDITING_ROADMAP.md) is introduced as a SINGLE typed write module
+// so the "reads and writes live in distinct modules" invariant is machine-
+// checked: exactly one file may mutate, every other file stays read-only, and
+// that one file must actually be the write path (so a stale allow-list entry
+// can't silently disable the guard).
 
 const here = dirname(fileURLToPath(import.meta.url));
 const srcRoot = join(here, '..'); // web/src
@@ -42,6 +49,11 @@ function collectSourceFiles(dir: string): string[] {
 const MUTATION_RE =
   /\.from\s*\([^)]*\)\s*\.\s*(insert|update|upsert|delete)\s*\(/;
 
+// The sole file permitted to mutate business data, relative to web/src. Its own
+// mutations are the editing surface (roadmap P0.1+); everything else stays
+// read-only.
+const WRITE_MODULE = join('lib', 'writeRepository.ts');
+
 describe('read-only architecture', () => {
   const files = collectSourceFiles(srcRoot);
 
@@ -49,9 +61,10 @@ describe('read-only architecture', () => {
     expect(files.length).toBeGreaterThan(0);
   });
 
-  it('no web source performs a Supabase business-data mutation', () => {
+  it('no web source outside the write module performs a Supabase business-data mutation', () => {
     const offenders: string[] = [];
     for (const file of files) {
+      if (relative(srcRoot, file) === WRITE_MODULE) continue; // allow-listed
       // Collapse whitespace so a `.from(...)` chain split across lines is still
       // matched as one call.
       const source = readFileSync(file, 'utf8').replace(/\s+/g, ' ');
@@ -62,9 +75,25 @@ describe('read-only architecture', () => {
     expect(
       offenders,
       `read-only portal: business-data mutations (.from(...).insert|update|upsert|delete) ` +
-        `must not exist in web source. Writes belong in a separate, typed write ` +
-        `module (see web/README.md). Offending files: ${offenders.join(', ')}`,
+        `must live only in ${WRITE_MODULE} (a separate, typed write module — see ` +
+        `web/README.md and web/EDITING_ROADMAP.md). Offending files: ${offenders.join(', ')}`,
     ).toEqual([]);
+  });
+
+  it('the write module is the actual mutation site (allow-list is not stale)', () => {
+    // If writeRepository.ts stops containing a mutation (renamed, gutted), the
+    // allow-list above would be masking nothing while a mutation could have
+    // moved elsewhere undetected. Require the allow-listed file to genuinely be
+    // the write path.
+    const source = readFileSync(join(srcRoot, WRITE_MODULE), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+    expect(
+      MUTATION_RE.test(source),
+      `${WRITE_MODULE} is the designated write module but contains no Supabase ` +
+        `mutation — move the write path back into it or update WRITE_MODULE.`,
+    ).toBe(true);
   });
 
   it('the repository module exposes readers only', () => {
