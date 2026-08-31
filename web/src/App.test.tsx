@@ -108,6 +108,18 @@ describe('App routing', () => {
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
   });
 
+  it('sends an authenticated session parked on /login into the portal', async () => {
+    // The signed-out catch-all parks visitors on /login; after they sign in the
+    // session flips truthy while the URL is still /login, which must land in the
+    // portal rather than the not-found view.
+    h.state.session = { user: { email: 'u@b.com' } };
+    renderAt('/login');
+    expect(
+      await screen.findByRole('button', { name: 'Sign out' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+  });
+
   it('renders the recovery screen for a signed-out visitor at /reset-password', async () => {
     window.location.hash = '';
     renderAt('/reset-password');
