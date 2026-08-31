@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../lib/AuthContext';
+import logo from '../assets/logo.png';
 
 type Mode = 'signin' | 'signup' | 'reset';
 
@@ -63,7 +64,7 @@ export default function LoginScreen() {
     <div className="login-wrap">
       <div className="login-card">
         <div className="login-brand">
-          <span className="dot">🔧</span>
+          <img className="dot" src={logo} alt="TradeReady logo" />
           <span>TradeReady</span>
         </div>
         <h1 className="login-title">

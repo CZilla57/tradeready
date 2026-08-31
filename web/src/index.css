@@ -122,10 +122,8 @@ button {
   width: 26px;
   height: 26px;
   border-radius: 7px;
-  background: linear-gradient(135deg, #3d78ff, #7aa2ff);
-  display: grid;
-  place-items: center;
-  font-size: 15px;
+  object-fit: cover;
+  display: block;
 }
 
 .nav-link {
@@ -652,10 +650,8 @@ a.row:hover {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #3d78ff, #7aa2ff);
-  display: grid;
-  place-items: center;
-  font-size: 16px;
+  object-fit: cover;
+  display: block;
 }
 .login-title {
   font-size: 21px;

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
+import logo from '../assets/logo.png';
 
 // Supabase's password minimum is 6; we ask for a stronger 8 on the recovery
 // screen. The <input minLength> mirrors this for native browser validation.
@@ -88,7 +89,7 @@ export default function ResetPasswordScreen() {
     <div className="login-wrap">
       <div className="login-card">
         <div className="login-brand">
-          <span className="dot">🔧</span>
+          <img className="dot" src={logo} alt="TradeReady logo" />
           <span>TradeReady</span>
         </div>
         <h1 className="login-title">Choose a new password</h1>
