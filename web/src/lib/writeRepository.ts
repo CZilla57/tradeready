@@ -6,6 +6,7 @@ import type {
   Job,
   Payment,
   PaymentDraft,
+  PricebookEntry,
   Settings,
   TimeString,
 } from '@shared/types/models';
@@ -127,7 +128,7 @@ async function tryLoadInvoice(id: string): Promise<Invoice | null> {
  * The single low-level write primitive the typed operations build on.
  */
 async function upsertBlobRow(
-  collection: 'invoices' | 'customers' | 'jobs',
+  collection: 'invoices' | 'customers' | 'jobs' | 'pricebook',
   id: string,
   data: unknown,
 ): Promise<void> {
@@ -355,6 +356,29 @@ export async function setJobArchived(
   const server = await loadJob(jobId);
   const next = withArchived(server, archived, getTodayDateString());
   await upsertBlobRow('jobs', jobId, next);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Pricebook (roadmap P3 stage 4)
+//
+// A saved service is a plain last-write-wins blob. NOTE: `estimateTotal` is a
+// DERIVED price (pricingEngine.calculateEstimate over labor/materials/markup/
+// overhead/margin). The shared engine isn't cleanly web-importable (it pulls a
+// type from an RN component module), so the portal edits only the metadata
+// fields that don't affect the price — name, category, description. Editing the
+// pricing inputs needs the recompute and is deferred (like invoice line items
+// and job pricing). The caller passes the FULL entry with edits applied, so the
+// untouched pricing fields round-trip (P0.2).
+// ---------------------------------------------------------------------------
+
+export async function savePricebookEntry(
+  entry: PricebookEntry,
+): Promise<PricebookEntry> {
+  // Bump the blob's own updatedAt, matching the mobile save (distinct from the
+  // row's server-authoritative updated_at column).
+  const next: PricebookEntry = { ...entry, updatedAt: new Date().toISOString() };
+  await upsertBlobRow('pricebook', entry.id, next);
   return next;
 }
 

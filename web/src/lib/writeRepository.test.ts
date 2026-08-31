@@ -11,11 +11,12 @@ import {
   saveCustomer,
   updateJobDetails,
   setJobArchived,
+  savePricebookEntry,
   InvoiceNotFoundError,
   JobNotFoundError,
   PaymentValidationError,
 } from './writeRepository';
-import type { Customer, Job } from '@shared/types/models';
+import type { Customer, Job, PricebookEntry } from '@shared/types/models';
 
 // A controllable supabase mock. `select(...).eq(...).maybeSingle()` resolves the
 // current server row; `upsert(...)` captures what would be written and resolves
@@ -228,6 +229,38 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
     const written = state.lastUpsert!.data as Job;
     expect(written.archivedAt).toBeTruthy();
     expect(state.lastTable).toBe('jobs');
+  });
+});
+
+describe('savePricebookEntry — metadata edit, pricing preserved', () => {
+  function entry(over: Partial<PricebookEntry> = {}): PricebookEntry {
+    return {
+      id: 'pb1',
+      name: 'Drain clear',
+      laborHours: 2,
+      laborRate: 90,
+      materials: [],
+      materialMarkup: 15,
+      overhead: 10,
+      margin: 20,
+      estimateTotal: 350,
+      createdAt: '2026-08-01',
+      updatedAt: '2026-08-01',
+      ...over,
+    };
+  }
+
+  it('upserts the entry to pricebook, preserving derived pricing and bumping updatedAt', async () => {
+    await savePricebookEntry(entry({ name: 'Drain clearing' }));
+    const row = state.lastUpsert!;
+    const data = row.data as PricebookEntry;
+    expect(state.lastTable).toBe('pricebook');
+    expect(data.name).toBe('Drain clearing');
+    // Derived pricing fields the portal doesn't edit round-trip untouched.
+    expect(data.estimateTotal).toBe(350);
+    expect(data.margin).toBe(20);
+    // The blob's own updatedAt is refreshed.
+    expect(data.updatedAt).not.toBe('2026-08-01');
   });
 });
 

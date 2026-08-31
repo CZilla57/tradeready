@@ -285,10 +285,24 @@ five):
      changes (status ↔ invoice/approval coupling), estimate/pricing/materials
      authoring, and approval/change-order handling. These need P0.6 derived-field
      work and guarded transitions, so they're deliberately deferred from 3a.
-4. **Pricebook, Expenses, Settings.** Catalog/config maintenance:
-   `savePricebookEntry`, expense add/edit (Money), and wiring the existing
-   `saveSettings` into the read-only SettingsScreen. Simpler blobs; the settings
-   primitive already exists.
+4. **Pricebook, Expenses, Settings.** Catalog/config maintenance. Partially
+   landed:
+   - **Settings → Business profile. ✅ LANDED.** `ProfileEditor` on
+     `SettingsScreen` edits businessName/contactName/phone/email/address/region
+     via the existing `saveSettings` (merges onto the full blob, strips secrets).
+     Other settings sections (pricing/invoicing/schedule/payments/automation)
+     follow the same `saveSettings(patch)` pattern — additive later.
+   - **Pricebook → metadata. ✅ LANDED.** `PricebookEditor` on
+     `PricebookDetailScreen` edits name/category/description via
+     `savePricebookEntry` (whole-blob; bumps the blob's `updatedAt`) and deletes
+     via `deletePricebookEntry`. Pricing-field editing is DEFERRED: `estimateTotal`
+     is derived by `pricingEngine.calculateEstimate`, which isn't cleanly
+     web-importable (it pulls a type from an RN component module) — needs a
+     web-safe recompute first (like the invoiceMath reimplementation).
+   - **Expenses. OPEN.** A plain LWW blob (`saveExpense`/`deleteExpense`), but it
+     has no detail screen yet — needs an add/edit surface on the Money screen.
+   Covered by `SettingsScreen.test.tsx`, `PricebookDetailScreen.test.tsx`,
+   `writeRepository.test.ts`.
 5. **Recurring, Calendar scheduling, and creation flows.** Recurring rules +
    maintenance plans, drag/assign-to-schedule (a `saveJob`), and net-new record
    creation (new client-generated ids, heavier validation). Last because
