@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import type {
   Customer,
   DateString,
+  Expense,
   Invoice,
   Job,
   Payment,
@@ -128,7 +129,7 @@ async function tryLoadInvoice(id: string): Promise<Invoice | null> {
  * The single low-level write primitive the typed operations build on.
  */
 async function upsertBlobRow(
-  collection: 'invoices' | 'customers' | 'jobs' | 'pricebook',
+  collection: 'invoices' | 'customers' | 'jobs' | 'pricebook' | 'expenses',
   id: string,
   data: unknown,
 ): Promise<void> {
@@ -380,6 +381,20 @@ export async function savePricebookEntry(
   const next: PricebookEntry = { ...entry, updatedAt: new Date().toISOString() };
   await upsertBlobRow('pricebook', entry.id, next);
   return next;
+}
+
+// ---------------------------------------------------------------------------
+// Expenses (roadmap P3 stage 4)
+//
+// A plain last-write-wins blob. New records are stamped with the shared
+// `stampExpense` (id + createdAt) so their id format matches the mobile app
+// exactly; the caller does that and hands the full Expense here. Delete goes
+// through `deleteExpense` (soft-delete tombstone) above.
+// ---------------------------------------------------------------------------
+
+export async function saveExpense(expense: Expense): Promise<Expense> {
+  await upsertBlobRow('expenses', expense.id, expense);
+  return expense;
 }
 
 function validatePaymentDraft(draft: PaymentDraft): void {

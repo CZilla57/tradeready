@@ -299,8 +299,13 @@ five):
      is derived by `pricingEngine.calculateEstimate`, which isn't cleanly
      web-importable (it pulls a type from an RN component module) — needs a
      web-safe recompute first (like the invoiceMath reimplementation).
-   - **Expenses. OPEN.** A plain LWW blob (`saveExpense`/`deleteExpense`), but it
-     has no detail screen yet — needs an add/edit surface on the Money screen.
+   - **Expenses. ✅ LANDED.** An `ExpensesSection` on `MoneyScreen` lists
+     expenses and adds/edits/deletes them: `saveExpense` (whole-blob upsert; new
+     records stamped with the shared `stampExpense` so ids match the mobile app)
+     and `deleteExpense` (tombstone). Edits spread onto the existing record so
+     hidden fields (receiptUri, jobId, importBatchId, createdAt) round-trip.
+     Category select reuses the shared `EXPENSE_CATEGORIES`. Covered by
+     `MoneyScreen.test.tsx`.
    Covered by `SettingsScreen.test.tsx`, `PricebookDetailScreen.test.tsx`,
    `writeRepository.test.ts`.
 5. **Recurring, Calendar scheduling, and creation flows.** Recurring rules +

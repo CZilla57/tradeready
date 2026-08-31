@@ -12,11 +12,17 @@ import {
   updateJobDetails,
   setJobArchived,
   savePricebookEntry,
+  saveExpense,
   InvoiceNotFoundError,
   JobNotFoundError,
   PaymentValidationError,
 } from './writeRepository';
-import type { Customer, Job, PricebookEntry } from '@shared/types/models';
+import type {
+  Customer,
+  Expense,
+  Job,
+  PricebookEntry,
+} from '@shared/types/models';
 
 // A controllable supabase mock. `select(...).eq(...).maybeSingle()` resolves the
 // current server row; `upsert(...)` captures what would be written and resolves
@@ -261,6 +267,28 @@ describe('savePricebookEntry — metadata edit, pricing preserved', () => {
     expect(data.margin).toBe(20);
     // The blob's own updatedAt is refreshed.
     expect(data.updatedAt).not.toBe('2026-08-01');
+  });
+});
+
+describe('saveExpense — whole-blob upsert', () => {
+  it('upserts the expense to the expenses table with stamps', async () => {
+    const before = Date.now();
+    const expense: Expense = {
+      id: 'e1',
+      createdAt: '2026-08-01',
+      description: 'Pipe',
+      amount: 42,
+      category: 'materials',
+      date: '2026-08-15',
+      notes: '',
+      receiptUri: null,
+    };
+    await saveExpense(expense);
+    const row = state.lastUpsert!;
+    expect(state.lastTable).toBe('expenses');
+    expect(row.id).toBe('e1');
+    expect((row.data as Expense).amount).toBe(42);
+    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
   });
 });
 
