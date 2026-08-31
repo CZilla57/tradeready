@@ -74,40 +74,44 @@ beforeEach(() => {
   h.state.initializing = false;
 });
 
+// Screens are lazy-loaded (route-level code splitting), so each assertion uses
+// findBy*, which polls until the async chunk resolves and its content mounts.
 describe('App routing', () => {
-  it('routes a recovery session to the password-update screen, not the portal', () => {
+  it('routes a recovery session to the password-update screen, not the portal', async () => {
     h.state.recovery = true;
     h.state.session = { user: { email: 'r@b.com' } };
     renderAt('/');
-    expect(screen.getByText('Choose a new password')).toBeInTheDocument();
+    expect(await screen.findByText('Choose a new password')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
   });
 
-  it('lets an ordinary authenticated session enter the portal', () => {
+  it('lets an ordinary authenticated session enter the portal', async () => {
     h.state.recovery = false;
     h.state.session = { user: { email: 'u@b.com' } };
     renderAt('/');
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Sign out' }),
+    ).toBeInTheDocument();
     expect(screen.queryByText('Choose a new password')).not.toBeInTheDocument();
   });
 
-  it('sends a signed-out visitor to the login screen', () => {
+  it('sends a signed-out visitor to the login screen', async () => {
     renderAt('/');
-    expect(screen.getByText('Sign in to your portal')).toBeInTheDocument();
+    expect(await screen.findByText('Sign in to your portal')).toBeInTheDocument();
   });
 
-  it('shows a not-found view for an unknown path in the authenticated portal', () => {
+  it('shows a not-found view for an unknown path in the authenticated portal', async () => {
     h.state.session = { user: { email: 'u@b.com' } };
     renderAt('/does-not-exist');
-    expect(screen.getByText('Page not found')).toBeInTheDocument();
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
     // The shell (and its navigation) stays put rather than redirecting away.
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
   });
 
-  it('renders the recovery screen for a signed-out visitor at /reset-password', () => {
+  it('renders the recovery screen for a signed-out visitor at /reset-password', async () => {
     window.location.hash = '';
     renderAt('/reset-password');
-    expect(screen.getByText('Choose a new password')).toBeInTheDocument();
+    expect(await screen.findByText('Choose a new password')).toBeInTheDocument();
     expect(screen.getByText(/invalid or has expired/i)).toBeInTheDocument();
   });
 });
