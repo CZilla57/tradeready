@@ -64,26 +64,11 @@ export async function fetchCustomerNotes(): Promise<CustomerNotes> {
   return notes;
 }
 
-/**
- * Write helper matching the blob shape the mobile sync layer upserts
- * (../../utils/sync.ts). Read-first MVP screens do not call this yet; it exists
- * so the editing surface that follows can persist through the same contract.
- */
-export async function upsertRecord(
-  table: string,
-  id: string,
-  data: unknown,
-): Promise<void> {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not signed in');
-  const { error } = await supabase.from(table).upsert({
-    id,
-    user_id: user.id,
-    data,
-    updated_at: new Date().toISOString(),
-    deleted: false,
-  });
-  if (error) throw error;
-}
+// This module is read-only by design: it exposes owner-scoped `fetch*` readers
+// only. It intentionally contains no business-data write path (no insert /
+// update / upsert / delete). When editing is introduced it belongs in a
+// separate write module exposing typed, domain-specific operations that
+// validate their payloads — not a generic `write(table, id, data)` — while
+// Supabase RLS (auth.uid() = user_id) remains the ownership boundary. See
+// `web/README.md` ("A note on the future editing surface") and the read-only
+// architecture guard in `readOnly.arch.test.ts`.

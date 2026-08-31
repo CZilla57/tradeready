@@ -45,9 +45,31 @@ Read-first portal:
 - **Settings** — read-only business profile, pricing, invoicing, schedule,
   payments, and automation toggles (secret keys are never rendered)
 
-Editing is intentionally out of scope. The write path
-(`src/lib/repository.ts#upsertRecord`) is already wired to the same blob
-contract for the editing surface that follows.
+Editing is intentionally out of scope. `src/lib/repository.ts` exposes
+owner-scoped `fetch*` readers only — it carries **no** business-data write path
+(no insert / update / upsert / delete). A read-only architecture guard
+(`src/lib/readOnly.arch.test.ts`) fails the build if a Supabase business-data
+mutation is added to any web source file, so the read-only contract can't
+regress silently. (This is a static/source-graph guard, not a security
+boundary — the security boundary is Supabase RLS; see below.)
+
+#### A note on the future editing surface
+
+When editing is introduced, it should follow this shape rather than a generic
+`write(table, id, data)` helper:
+
+- **Separate write module.** Keep reads (`repository.ts`) and writes in
+  distinct modules so read-only screens never import a write path.
+- **Typed, domain-specific operations.** Expose operations like
+  `saveInvoice(invoice)` / `updateJobStatus(...)` — not an arbitrary table name
+  — so the callable surface is the domain model, not raw table access.
+- **Validate payloads** before they are sent (shape and invariants), so the
+  client never writes malformed blobs.
+- **RLS stays the ownership boundary.** Continue to enforce ownership through
+  Supabase row-level security (`auth.uid() = user_id`); client code is never a
+  substitute for it.
+- **Mutation-specific tests.** Add tests covering the write operations (and
+  their validation/failure paths) when the editing surface lands.
 
 ### Password recovery flow
 
