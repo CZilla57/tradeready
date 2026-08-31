@@ -41,8 +41,13 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   referencing a deleted customer) is deliberately left to each delete's future
   UI, not the primitive.
 
-Still open below: P0.3 (durable server-side `updated_at`), P0.5/P0.6 for other
-domains, P2 (concurrency/resilience), P3 (scope).
+- **P0.3 — migration drafted, awaiting owner apply.** The durable server-side
+  `updated_at` fix is written (`supabase/migrations/20260831_updated_at_server_authority.sql`
+  + its verify script). It needs the owner to apply it in the Supabase SQL
+  editor — see the cutover plan under P0.3 below. No app release is coupled to it.
+
+Still open below: P0.3 apply (owner), P0.5/P0.6 for other domains, P2
+(concurrency/resilience), P3 (scope).
 
 ## Context in one paragraph
 
@@ -100,6 +105,39 @@ code; a write that ignores any one can silently lose data.
 - **Do:** choose the timestamp source deliberately. Prefer the DB
   `default now()` over the browser clock where possible (the browser is less
   trustworthy than a device). Document the choice.
+
+- **Migration drafted — awaiting owner apply.**
+  `supabase/migrations/20260831_updated_at_server_authority.sql` adds a
+  `set_updated_at` BEFORE INSERT OR UPDATE trigger that stamps `now()` (the DB
+  clock) on every write to the twelve sync tables, **overriding** whatever the
+  client sent. Chosen over a COALESCE-only fill because the column is written
+  today from many clock domains — every mobile version, the web portal, and the
+  server-side Stripe / subscription / booking / estimate writers — and only an
+  unconditional override collapses them to one authoritative clock.
+
+  #### Cutover plan
+  1. **Apply the migration** in the Supabase SQL editor (idempotent; safe to
+     re-run). This is the whole correctness fix and requires **no app release**:
+     the trigger is backward-compatible, so every shipped mobile build, the
+     current web bundle, and the backends keep working — their `updated_at` is
+     simply replaced server-side.
+  2. **Verify** with the psql script (NOT the SQL editor — it needs one
+     transaction):
+     `psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f supabase/migrations/verify/20260831_updated_at_server_authority_verify.sql`
+     — expect "ALL CHECKS PASSED" (trigger present on all 12 tables; INSERT /
+     UPDATE / on-conflict-upsert all override a backdated value; coexists with
+     the invoice payment-merge trigger).
+  3. **Optional cleanup (later, no coordination needed).** Once the trigger is
+     confirmed in production, clients may stop sending `updated_at` entirely —
+     web via the single `writeTimestamp()` in `writeRepository.ts`, mobile via
+     `pushQueue` in `utils/sync.ts`. Purely cosmetic/bandwidth; not required for
+     correctness, and either surface can change independently.
+
+  - **Caution:** the override is unconditional, so a future backfill that
+    intentionally sets a historical `updated_at` must disable the trigger for
+    that table first (documented in the migration header).
+  - **Not applied to** tables outside the device blob-sync watermark
+    (`subscriptions`, `stripe_accounts`, …) — widen only with intent.
 
 ### P0.4 Soft-delete only
 - **Why:** deletes set `deleted:true` + `updated_at` (`utils/sync.ts:130`);

@@ -68,10 +68,13 @@ async function currentUserId(): Promise<string> {
 // identically today.
 //
 // Residual (roadmap P0.3): this trusts the browser clock, which is less
-// reliable than a device's. The durable fix is a server-side `updated_at =
-// now()` trigger on the blob tables (owner-applied via the Supabase SQL editor),
-// after which both surfaces can stop sending the column. Centralised here so
-// that swap is one edit.
+// reliable than a device's. The durable fix is the server-side `set_updated_at`
+// trigger in supabase/migrations/20260831_updated_at_server_authority.sql, which
+// overrides `updated_at` with the DB clock on every write. That trigger is
+// backward-compatible — this stamp is simply replaced server-side — so once it
+// is confirmed applied in production, sending `updated_at` here becomes optional
+// cleanup rather than a correctness requirement. Centralised here so that swap
+// is one edit.
 function writeTimestamp(): string {
   return new Date().toISOString();
 }
