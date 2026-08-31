@@ -57,9 +57,16 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   push. Covered by `writeRepository.test.ts`; not yet surfaced in a settings
   edit UI.
 
-Still open below: P0.6 (derived-field invariants for other domains), P2
-(concurrency/resilience), P3 (scope). P0.3's optional client cleanup (dropping
-the now-redundant `updated_at` sends) is not required for correctness.
+- **P3 scope — DECIDED.** The editable-surface rollout order is settled under
+  "Phase 3" below: (1) complete Invoices, (2) Customers, (3) Jobs & Estimates,
+  (4) Pricebook/Expenses/Settings, (5) Recurring/Calendar/creation — with Today
+  and Money staying read-only dashboards and Trips/Coach/photos/bookings out of
+  scope. Each stage carries a five-point definition of done.
+
+Still open below: P0.6 (derived-field invariants, handled per domain as each
+editable surface lands), P2 (concurrency/resilience). P0.3's optional client
+cleanup (dropping the now-redundant `updated_at` sends) is not required for
+correctness.
 
 ## Context in one paragraph
 
@@ -217,12 +224,64 @@ code; a write that ignores any one can silently lose data.
 
 ---
 
-## Phase 3 — Product scope
+## Phase 3 — Product scope (DECISION)
 
-- **Which screens become editable, in what order.** Suggest starting narrow
-  (e.g. invoices/jobs/customers) rather than all 15 screens at once.
-- **Out of scope today:** Trips, job photos, booking requests aren't surfaced in
-  the portal at all — decide explicitly whether editing includes them.
+Editable surfaces roll out in the order below — ordered by value (what is
+keyboard/desk work a phone is awkward for) balanced against write-risk (how
+tricky the domain's write semantics are) and reuse of what's already built.
+One domain reaches "done" before the next starts; the primitive lands in the
+write module first, then the screen.
+
+**Definition of done, per editable domain** (every stage below must meet all
+five):
+1. A typed write op in `writeRepository.ts` (never a generic table writer).
+2. Full-blob round-trip — load the current server row, merge the edit onto it,
+   write (P0.2); reuse the shared merge for any domain with a server-appended
+   field.
+3. P0.6 derived-field reconciliation where the domain has derived fields.
+4. The established UI pattern from `InvoiceDetailScreen`: in-flight disable
+   (P2.2), a failed write that stays open and shows the error, and a server
+   re-pull on success (P2.3).
+5. Mutation tests (write op + validation/failure paths).
+
+### Order
+
+1. **Invoices — complete it.** Payments already ship. Add scalar + line-item
+   editing via the existing `saveInvoice` (ledger already preserved, P0.1) and a
+   delete action via `deleteInvoice`. Highest immediate value (billing is
+   keyboard work) and the foundation is already built and partly wired.
+2. **Customers.** `saveCustomer` (contact info) + the notes write
+   (`customer_notes`, keyed by `customer_key`, not `id`). Low write-risk (a
+   last-write-wins blob), high utility (fixing contact details / adding notes
+   from a desk). Proves the non-invoice write pattern and the notes table shape.
+3. **Jobs & Estimates.** `saveJob` on the shared Job model — status, schedule,
+   materials, customer link; estimate-stage editing (line items, approval) is
+   the same write. The core workflow object, but the trickiest for P0.6 (job
+   status ↔ invoice coupling, profitability derivations) and for concurrency, so
+   it comes after the pattern is proven on simpler domains.
+4. **Pricebook, Expenses, Settings.** Catalog/config maintenance:
+   `savePricebookEntry`, expense add/edit (Money), and wiring the existing
+   `saveSettings` into the read-only SettingsScreen. Simpler blobs; the settings
+   primitive already exists.
+5. **Recurring, Calendar scheduling, and creation flows.** Recurring rules +
+   maintenance plans, drag/assign-to-schedule (a `saveJob`), and net-new record
+   creation (new client-generated ids, heavier validation). Last because
+   creation and scheduling add the most new surface and validation.
+
+### Stays read-only / out of scope
+
+- **Today** and **Money** are derived dashboards — no direct edits; they reflect
+  edits made on the source screens.
+- **Trips** and the **AI Coach** are still not surfaced in the portal at all
+  (Trips need a screen first; the Coach needs the Worker backend). Not editable
+  because not present.
+- **Job photos** and **booking requests** blobs exist but aren't surfaced;
+  excluded until they have a read surface, and booking `history` is
+  server-appended (treat like the invoice ledger if it ever becomes editable).
+
+This order is the recommendation of record; it can be resequenced if a
+particular surface becomes more urgent, but each stage keeps its five-point
+definition of done.
 
 ---
 
