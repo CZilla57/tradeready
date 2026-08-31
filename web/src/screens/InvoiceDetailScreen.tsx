@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useData, useResources } from '../lib/DataContext';
 import { Card, Empty, Badge, KV, ErrorState } from '../ui/components';
 import { invoiceStatusBadge } from '../ui/status';
@@ -16,6 +16,8 @@ import {
   recordInvoicePayment,
   markInvoicePaid,
   voidInvoicePayment,
+  saveInvoice,
+  deleteInvoice,
 } from '../lib/writeRepository';
 
 // Manual entry never offers "stripe" — those payments arrive only from the
@@ -208,6 +210,231 @@ function PaymentActions({ invoice }: { invoice: Invoice }) {
   );
 }
 
+/**
+ * Edit an invoice's own scalar fields and delete it (roadmap P3 stage 1).
+ *
+ * Scope matches the mobile "Edit Invoice" screen's invoice-LOCAL fields —
+ * number, amount, due, description, contact email/phone. It intentionally does
+ * NOT edit line items (an immutable snapshot from the job estimate) or the
+ * customer name/link (a customer-domain concern, roadmap stage 2). The write
+ * goes through `saveInvoice`, which preserves the server payment ledger and
+ * re-derives paid/paidAt from the (possibly new) amount — the same reconcile the
+ * mobile edit does.
+ */
+function InvoiceEditor({ invoice }: { invoice: Invoice }) {
+  const { retry } = useData();
+  const navigate = useNavigate();
+
+  const [open, setOpen] = useState(false);
+  const [number, setNumber] = useState(invoice.number ?? '');
+  const [amount, setAmount] = useState(String(invoice.amount ?? ''));
+  const [due, setDue] = useState(invoice.due ?? '');
+  const [desc, setDesc] = useState(invoice.desc ?? '');
+  const [email, setEmail] = useState(invoice.email ?? '');
+  const [phone, setPhone] = useState(invoice.phone ?? '');
+  const [busy, setBusy] = useState<'save' | 'delete' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Reset the form to the invoice's current values whenever it opens, so a
+  // cancelled edit followed by a re-open never shows stale input.
+  function openEditor() {
+    setNumber(invoice.number ?? '');
+    setAmount(String(invoice.amount ?? ''));
+    setDue(invoice.due ?? '');
+    setDesc(invoice.desc ?? '');
+    setEmail(invoice.email ?? '');
+    setPhone(invoice.phone ?? '');
+    setError(null);
+    setConfirmDelete(false);
+    setOpen(true);
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const parsed = parseFloat(amount);
+    if (!(parsed > 0)) {
+      setError('Enter an invoice amount greater than zero.');
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+      setError('Enter a due date.');
+      return;
+    }
+    if (!number.trim()) {
+      setError('Enter an invoice number.');
+      return;
+    }
+    setBusy('save');
+    setError(null);
+    try {
+      await saveInvoice({
+        ...invoice,
+        number: number.trim(),
+        amount: parsed,
+        due,
+        desc: desc.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+      });
+      retry(['invoices']);
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onDelete() {
+    if (busy) return;
+    setBusy('delete');
+    setError(null);
+    try {
+      await deleteInvoice(invoice.id);
+      // The row is now a tombstone; leave the (gone) detail view for the list.
+      navigate('/invoices');
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(null); // stay on the page so the error is visible
+    }
+  }
+
+  if (!open) {
+    return (
+      <Card pad>
+        <button type="button" className="btn" onClick={openEditor}>
+          Edit details
+        </button>
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        Edit invoice
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <label className="field">
+          <span>Invoice #</span>
+          <input
+            className="field-input"
+            type="text"
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Amount</span>
+          <input
+            className="field-input"
+            inputMode="decimal"
+            type="number"
+            step="0.01"
+            min="0"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+        </label>
+        {invoice.lineItems && invoice.lineItems.length > 0 && (
+          <div className="meta">
+            This invoice has itemized line items; editing the total here doesn’t
+            change them.
+          </div>
+        )}
+        <label className="field">
+          <span>Due date</span>
+          <input
+            className="field-input"
+            type="date"
+            value={due}
+            onChange={(e) => setDue(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Description</span>
+          <input
+            className="field-input"
+            type="text"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Customer email</span>
+          <input
+            className="field-input"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Customer phone</span>
+          <input
+            className="field-input"
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+        </label>
+        <div className="btn-row">
+          <button type="submit" className="btn primary" disabled={busy !== null}>
+            {busy === 'save' ? 'Saving…' : 'Save changes'}
+          </button>
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => setOpen(false)}
+            disabled={busy !== null}
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+
+      <div className="danger-zone">
+        {confirmDelete ? (
+          <div className="btn-row">
+            <span className="meta">Delete this invoice?</span>
+            <button
+              type="button"
+              className="btn danger sm"
+              onClick={onDelete}
+              disabled={busy !== null}
+            >
+              {busy === 'delete' ? 'Deleting…' : 'Delete'}
+            </button>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => setConfirmDelete(false)}
+              disabled={busy !== null}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="btn ghost sm danger-text"
+            onClick={() => setConfirmDelete(true)}
+          >
+            Delete invoice
+          </button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 /** The payments ledger with a per-row void action. */
 function PaymentsCard({ invoice }: { invoice: Invoice }) {
   const { retry } = useData();
@@ -374,6 +601,8 @@ export default function InvoiceDetailScreen() {
           </Card>
 
           <PaymentActions invoice={inv} />
+
+          <InvoiceEditor invoice={inv} />
 
           {(inv.email || inv.phone || customer) && (
             <Card pad>

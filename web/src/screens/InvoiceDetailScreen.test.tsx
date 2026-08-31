@@ -13,8 +13,16 @@ const writes = vi.hoisted(() => ({
   recordInvoicePayment: vi.fn(),
   markInvoicePaid: vi.fn(),
   voidInvoicePayment: vi.fn(),
+  saveInvoice: vi.fn(),
+  deleteInvoice: vi.fn(),
 }));
 vi.mock('../lib/writeRepository', () => writes);
+
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => navigate,
+}));
 
 const retry = vi.hoisted(() => vi.fn());
 const store = vi.hoisted(() => ({ invoices: [] as Invoice[] }));
@@ -52,7 +60,10 @@ beforeEach(() => {
   writes.recordInvoicePayment.mockReset().mockResolvedValue(invoice());
   writes.markInvoicePaid.mockReset().mockResolvedValue(invoice());
   writes.voidInvoicePayment.mockReset().mockResolvedValue(invoice());
+  writes.saveInvoice.mockReset().mockResolvedValue(invoice());
+  writes.deleteInvoice.mockReset().mockResolvedValue(undefined);
   retry.mockReset();
+  navigate.mockReset();
   store.invoices = [invoice()];
 });
 
@@ -123,6 +134,47 @@ describe('InvoiceDetailScreen — mark paid', () => {
     renderScreen();
     expect(screen.getByText('This invoice is fully paid.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Mark paid/ })).toBeNull();
+  });
+});
+
+describe('InvoiceDetailScreen — edit details', () => {
+  it('saves edited scalar fields via saveInvoice and refreshes', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit details' }));
+
+    const amount = screen.getByRole('spinbutton');
+    await userEvent.clear(amount);
+    await userEvent.type(amount, '1500');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveInvoice).toHaveBeenCalledTimes(1));
+    const arg = writes.saveInvoice.mock.calls[0][0];
+    expect(arg).toMatchObject({ id: 'inv-1', amount: 1500, number: '001' });
+    expect(retry).toHaveBeenCalledWith(['invoices']);
+  });
+
+  it('blocks a non-positive amount without calling saveInvoice', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit details' }));
+    await userEvent.clear(screen.getByRole('spinbutton'));
+    await userEvent.type(screen.getByRole('spinbutton'), '0');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/greater than zero/i);
+    expect(writes.saveInvoice).not.toHaveBeenCalled();
+  });
+
+  it('deletes the invoice after confirmation and navigates to the list', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit details' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete invoice' }));
+    // Confirmation revealed the destructive Delete button.
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(writes.deleteInvoice).toHaveBeenCalledWith('inv-1'),
+    );
+    expect(navigate).toHaveBeenCalledWith('/invoices');
   });
 });
 

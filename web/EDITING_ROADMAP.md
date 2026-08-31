@@ -246,10 +246,17 @@ five):
 
 ### Order
 
-1. **Invoices — complete it.** Payments already ship. Add scalar + line-item
-   editing via the existing `saveInvoice` (ledger already preserved, P0.1) and a
-   delete action via `deleteInvoice`. Highest immediate value (billing is
-   keyboard work) and the foundation is already built and partly wired.
+1. **Invoices — complete it. ✅ LANDED.** Payments already shipped; the
+   `InvoiceEditor` on `InvoiceDetailScreen` now edits the invoice-local scalar
+   fields (number, amount, due, description, contact email/phone) via
+   `saveInvoice` — which preserves the server ledger and re-derives paid/paidAt
+   from the new amount, matching the mobile edit's `reconcilePaidFields` — and
+   deletes via `deleteInvoice` behind an inline confirm (then navigates to the
+   list). Line-item editing is deliberately DEFERRED: line items are an immutable
+   snapshot from the job estimate (mobile's Edit Invoice doesn't touch them
+   either), so authoring them belongs with Estimates in stage 3. Editing the
+   customer name / re-linking `customerId` is likewise deferred to stage 2
+   (customer domain). Covered by `InvoiceDetailScreen.test.tsx`.
 2. **Customers.** `saveCustomer` (contact info) + the notes write
    (`customer_notes`, keyed by `customer_key`, not `id`). Low write-risk (a
    last-write-wins blob), high utility (fixing contact details / adding notes

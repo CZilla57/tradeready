@@ -507,6 +507,14 @@ a.row:hover {
   background: var(--red-bg);
   color: var(--red);
 }
+.danger-zone {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.btn.ghost.danger-text {
+  color: var(--red);
+}
 
 /* ---------- badges ---------- */
 .badge {
