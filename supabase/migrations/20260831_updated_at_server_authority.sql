@@ -71,9 +71,20 @@ $$;
 -- the set stays in one place; the camelCase names are quoted identifiers and
 -- must match the table names EXACTLY (supabase-js resolves them case-sensitively
 -- — see 20260803_local_collections_sync.sql).
+--
+-- A table that does not exist in THIS project is SKIPPED (with a notice), not an
+-- error. The whole block is one transaction, so a hard failure on one missing
+-- table would roll back every trigger — including the ones already created — and
+-- leave the project with none (the symptom: verify reports the trigger missing
+-- on `jobs`, the first table). Not every project has the newer collections
+-- (`trips`, `bookingRequests`, `jobPhotos`) or `customer_notes` applied yet;
+-- this migration is idempotent, so re-running it after those tables are created
+-- picks them up.
 do $$
 declare
   t text;
+  created int := 0;
+  skipped  int := 0;
   tables text[] := array[
     'jobs', 'invoices', 'customers', 'expenses', 'pricebook',
     'recurringJobs', 'recurringInvoices', 'trips', 'bookingRequests',
@@ -81,6 +92,11 @@ declare
   ];
 begin
   foreach t in array tables loop
+    if to_regclass(format('public.%I', t)) is null then
+      raise notice 'skip: public.% does not exist — trigger not created', t;
+      skipped := skipped + 1;
+      continue;
+    end if;
     execute format(
       'drop trigger if exists set_updated_at_trg on public.%I', t
     );
@@ -89,7 +105,9 @@ begin
          before insert or update on public.%I
          for each row execute function public.set_updated_at()', t
     );
+    created := created + 1;
   end loop;
+  raise notice 'set_updated_at_trg: created/updated on % table(s), skipped % missing', created, skipped;
 end;
 $$;
 

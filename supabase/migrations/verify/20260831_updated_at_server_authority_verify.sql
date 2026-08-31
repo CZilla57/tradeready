@@ -42,6 +42,8 @@ declare
   ledger     jsonb;
   jid        text := 'verify_updated_at_j1';
   iid        text := 'verify_updated_at_i1';
+  checked    int := 0;
+  absent     int := 0;
 begin
   select id into uid from auth.users limit 1;
   if uid is null then
@@ -49,7 +51,16 @@ begin
   end if;
 
   ------------------------------------------- 1. trigger present on every table
+  -- Only tables that EXIST in this project are required to carry the trigger —
+  -- the migration skips (does not create on) absent ones, so verify must skip
+  -- them too, or a legitimately-missing collection would fail an otherwise-good
+  -- apply. A present table missing the trigger is still a hard failure.
   foreach t in array tables loop
+    if to_regclass(format('public.%I', t)) is null then
+      raise notice 'CHECK 1 skip: public.% does not exist in this project', t;
+      absent := absent + 1;
+      continue;
+    end if;
     if not exists (
       select 1 from pg_trigger tg
         join pg_class c on c.oid = tg.tgrelid
@@ -59,10 +70,11 @@ begin
          and tg.tgname = 'set_updated_at_trg'
          and not tg.tgisinternal
     ) then
-      raise exception 'CHECK 1 FAILED: set_updated_at_trg missing on public.%', t;
+      raise exception 'CHECK 1 FAILED: set_updated_at_trg missing on existing table public.%', t;
     end if;
+    checked := checked + 1;
   end loop;
-  raise notice 'CHECK 1 ok: set_updated_at_trg present on all % tables', array_length(tables, 1);
+  raise notice 'CHECK 1 ok: set_updated_at_trg present on % existing table(s) (% absent, skipped)', checked, absent;
 
   ---------------------------------------------------- 2. INSERT overrides value
   insert into public.jobs (id, user_id, data, updated_at, deleted)
