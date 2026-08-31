@@ -45,9 +45,16 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   `updated_at` fix is written (`supabase/migrations/20260831_updated_at_server_authority.sql`
   + its verify script). It needs the owner to apply it in the Supabase SQL
   editor — see the cutover plan under P0.3 below. No app release is coupled to it.
+- **P0.5 — landed (primitive).** `saveSettings(patch)` merges a patch onto the
+  full current settings blob (preserving unrendered fields, P0.2) and strips
+  every credential field by iterating `SECURE_FIELDS` (never hand-named), so a
+  legacy blob's inline `providerKey`/`anthropicKey`/`groqKey` — or one a caller
+  mistakenly passes — can't reach the cloud. Upserts by user_id like the mobile
+  push. Covered by `writeRepository.test.ts`; not yet surfaced in a settings
+  edit UI.
 
-Still open below: P0.3 apply (owner), P0.5/P0.6 for other domains, P2
-(concurrency/resilience), P3 (scope).
+Still open below: P0.3 apply (owner), P0.6 (derived-field invariants for other
+domains), P2 (concurrency/resilience), P3 (scope).
 
 ## Context in one paragraph
 

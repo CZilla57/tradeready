@@ -7,6 +7,7 @@ import {
   voidInvoicePayment,
   deleteInvoice,
   deleteJob,
+  saveSettings,
   InvoiceNotFoundError,
   PaymentValidationError,
 } from './writeRepository';
@@ -16,6 +17,7 @@ import {
 // an error-free result. Auth returns a fixed signed-in user.
 const state = vi.hoisted(() => ({
   serverRow: null as { data: Invoice; deleted: boolean } | null,
+  settingsRow: null as { data: Record<string, unknown> } | null,
   lastUpsert: null as Record<string, unknown> | null,
   upsertError: null as { message: string } | null,
   lastTable: null as string | null,
@@ -25,34 +27,39 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('./supabase', () => {
-  const from = (table: string) => ({
-    select: () => ({
-      eq: () => ({
-        maybeSingle: async () => ({ data: state.serverRow, error: null }),
-      }),
-    }),
-    upsert: async (row: Record<string, unknown>) => {
-      state.lastUpsert = row;
-      return { error: state.upsertError };
-    },
-    // A thenable query builder: `.update(row).eq(a).eq(b)` records the payload
-    // and every filter, and awaits to the (possibly error) result.
-    update: (row: Record<string, unknown>) => {
-      state.lastTable = table;
-      state.lastUpdate = row;
-      state.updateFilters = {};
-      const builder = {
-        eq(col: string, val: unknown) {
-          state.updateFilters[col] = val;
-          return builder;
-        },
-        then(resolve: (r: { error: unknown }) => unknown) {
-          return Promise.resolve({ error: state.updateError }).then(resolve);
-        },
-      };
-      return builder;
-    },
-  });
+  const from = (table: string) => {
+    // `settings` is fetched with `.select('data').maybeSingle()` (no .eq);
+    // invoices with `.select(...).eq('id', …).maybeSingle()`. Support both.
+    const maybeSingle = async () => ({
+      data: table === 'settings' ? state.settingsRow : state.serverRow,
+      error: null,
+    });
+    return {
+      select: () => ({ maybeSingle, eq: () => ({ maybeSingle }) }),
+      upsert: async (row: Record<string, unknown>) => {
+        state.lastUpsert = row;
+        state.lastTable = table;
+        return { error: state.upsertError };
+      },
+      // A thenable query builder: `.update(row).eq(a).eq(b)` records the payload
+      // and every filter, and awaits to the (possibly error) result.
+      update: (row: Record<string, unknown>) => {
+        state.lastTable = table;
+        state.lastUpdate = row;
+        state.updateFilters = {};
+        const builder = {
+          eq(col: string, val: unknown) {
+            state.updateFilters[col] = val;
+            return builder;
+          },
+          then(resolve: (r: { error: unknown }) => unknown) {
+            return Promise.resolve({ error: state.updateError }).then(resolve);
+          },
+        };
+        return builder;
+      },
+    };
+  };
   return {
     supabase: {
       from,
@@ -89,12 +96,78 @@ function writtenInvoice(): Invoice {
 
 beforeEach(() => {
   state.serverRow = null;
+  state.settingsRow = null;
   state.lastUpsert = null;
   state.upsertError = null;
   state.lastTable = null;
   state.lastUpdate = null;
   state.updateFilters = {};
   state.updateError = null;
+});
+
+/** The blob that would have been written in the last settings upsert. */
+function writtenSettings(): Record<string, unknown> {
+  return state.lastUpsert!.data as Record<string, unknown>;
+}
+
+describe('saveSettings — P0.5 strip secure fields, keep the rest', () => {
+  it('strips credential fields carried on a legacy server blob', async () => {
+    state.settingsRow = {
+      data: {
+        businessName: 'Old Co',
+        laborRate: 90,
+        // A legacy blob written before the SecureStore split carried these inline.
+        providerKey: 'sk-provider',
+        anthropicKey: 'sk-anthropic',
+        groqKey: 'sk-groq',
+      },
+    };
+
+    await saveSettings({ businessName: 'New Co' });
+
+    const written = writtenSettings();
+    expect(written.businessName).toBe('New Co'); // patch applied
+    expect(written.laborRate).toBe(90); // unrendered field preserved (P0.2)
+    expect(written).not.toHaveProperty('providerKey');
+    expect(written).not.toHaveProperty('anthropicKey');
+    expect(written).not.toHaveProperty('groqKey');
+  });
+
+  it('strips a credential field even if the caller mistakenly includes one', async () => {
+    state.settingsRow = { data: { businessName: 'Co', laborRate: 80 } };
+    await saveSettings({
+      businessName: 'Co2',
+      groqKey: 'leak',
+    } as Parameters<typeof saveSettings>[0]);
+    expect(writtenSettings()).not.toHaveProperty('groqKey');
+  });
+
+  it('upserts by user_id with a fresh updated_at and no id/deleted column', async () => {
+    state.settingsRow = { data: { businessName: 'Co' } };
+    const before = Date.now();
+    await saveSettings({ phone: '555' });
+
+    const row = state.lastUpsert!;
+    expect(state.lastTable).toBe('settings');
+    expect(row.user_id).toBe('user-1');
+    expect(row).not.toHaveProperty('id');
+    expect(row).not.toHaveProperty('deleted');
+    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+  });
+
+  it('creates a settings row when none exists yet', async () => {
+    state.settingsRow = null;
+    await saveSettings({ businessName: 'Fresh' });
+    expect(writtenSettings().businessName).toBe('Fresh');
+  });
+
+  it('surfaces a write error rather than reporting success', async () => {
+    state.settingsRow = { data: { businessName: 'Co' } };
+    state.upsertError = { message: 'rls denied' };
+    await expect(saveSettings({ phone: '1' })).rejects.toMatchObject({
+      message: 'rls denied',
+    });
+  });
 });
 
 describe('persist stamping', () => {

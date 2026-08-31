@@ -4,7 +4,9 @@ import type {
   Invoice,
   Payment,
   PaymentDraft,
+  Settings,
 } from '@shared/types/models';
+import { SECURE_FIELDS } from '@shared/utils/storage/keys';
 import {
   applyPayment,
   mergePaymentLedgers,
@@ -176,6 +178,65 @@ export const deleteRecurringJob = (id: string) =>
   softDelete('recurringJobs', id);
 export const deleteRecurringInvoice = (id: string) =>
   softDelete('recurringInvoices', id);
+
+// ---------------------------------------------------------------------------
+// Settings (roadmap P0.5)
+//
+// The settings row is a single wide blob keyed by user_id (no id, no `deleted`).
+// A write has TWO non-negotiable invariants:
+//
+//   * Preserve unrendered fields (P0.2). The portal displays only some settings;
+//     a write must merge onto the FULL current server blob, never a partial the
+//     UI reconstructed, or a field the portal doesn't render is lost.
+//
+//   * Never write a credential field (P0.5). providerKey / anthropicKey /
+//     groqKey live in the device SecureStore and must never enter the cloud
+//     blob. A legacy blob written before that split can still carry them inline
+//     (the exact case mobile's pushAllLocalToCloud strips for), so we strip on
+//     the way out — iterating SECURE_FIELDS, never hand-naming (hand-naming is
+//     how groqKey once went unstripped: utils/storage/keys.ts).
+// ---------------------------------------------------------------------------
+
+async function loadSettings(): Promise<Settings | null> {
+  const { data, error } = await supabase
+    .from('settings')
+    .select('data')
+    .maybeSingle();
+  if (error) throw error;
+  return (data?.data as Settings) ?? null;
+}
+
+/** Remove every credential field, by iterating the shared constant. */
+function stripSecureFields(settings: Settings): Settings {
+  const safe = { ...settings } as Record<string, unknown>;
+  for (const field of SECURE_FIELDS) delete safe[field];
+  return safe as unknown as Settings;
+}
+
+/**
+ * Apply a patch to the user's settings.
+ *
+ * Merges the patch onto the current server blob (preserving fields the portal
+ * never renders), strips any credential field — whether it rode in on a legacy
+ * server blob or was mistakenly included in the patch — and upserts. Finer-
+ * grained typed operations (e.g. updateBusinessProfile) can wrap this as the
+ * settings edit UI defines its sections; the two invariants live here so every
+ * such wrapper inherits them.
+ */
+export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
+  const current = (await loadSettings()) ?? ({} as Settings);
+  const merged = stripSecureFields({ ...current, ...patch });
+  const user_id = await currentUserId();
+  // The settings row has no `id` / `deleted` — upsert conflicts on user_id,
+  // exactly as the mobile push does (../../utils/sync.ts).
+  const { error } = await supabase.from('settings').upsert({
+    user_id,
+    data: merged,
+    updated_at: writeTimestamp(),
+  });
+  if (error) throw error;
+  return merged;
+}
 
 function validatePaymentDraft(draft: PaymentDraft): void {
   const amount = toAmount(draft.amount);
