@@ -8,9 +8,11 @@ import {
   deleteInvoice,
   deleteJob,
   saveSettings,
+  saveCustomer,
   InvoiceNotFoundError,
   PaymentValidationError,
 } from './writeRepository';
+import type { Customer } from '@shared/types/models';
 
 // A controllable supabase mock. `select(...).eq(...).maybeSingle()` resolves the
 // current server row; `upsert(...)` captures what would be written and resolves
@@ -109,6 +111,42 @@ beforeEach(() => {
 function writtenSettings(): Record<string, unknown> {
   return state.lastUpsert!.data as Record<string, unknown>;
 }
+
+describe('saveCustomer — whole-blob upsert', () => {
+  function customer(over: Partial<Customer> = {}): Customer {
+    return {
+      id: 'c1',
+      name: 'Acme',
+      email: 'a@b.co',
+      phone: '555',
+      address: '1 St',
+      notes: '',
+      ...over,
+    };
+  }
+
+  it('upserts the full customer blob to the customers table with stamps', async () => {
+    const before = Date.now();
+    // Include a field the portal never renders to prove it round-trips (P0.2).
+    const c = customer({ portal: { token: 'tok', enabled: true } });
+    await saveCustomer(c);
+
+    const row = state.lastUpsert!;
+    expect(state.lastTable).toBe('customers');
+    expect(row.id).toBe('c1');
+    expect(row.user_id).toBe('user-1');
+    expect(row.deleted).toBe(false);
+    expect((row.data as Customer).portal).toEqual({ token: 'tok', enabled: true });
+    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+  });
+
+  it('surfaces a write error rather than reporting success', async () => {
+    state.upsertError = { message: 'rls denied' };
+    await expect(saveCustomer(customer())).rejects.toMatchObject({
+      message: 'rls denied',
+    });
+  });
+});
 
 describe('saveSettings — P0.5 strip secure fields, keep the rest', () => {
   it('strips credential fields carried on a legacy server blob', async () => {

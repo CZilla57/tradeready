@@ -257,10 +257,16 @@ five):
    either), so authoring them belongs with Estimates in stage 3. Editing the
    customer name / re-linking `customerId` is likewise deferred to stage 2
    (customer domain). Covered by `InvoiceDetailScreen.test.tsx`.
-2. **Customers.** `saveCustomer` (contact info) + the notes write
-   (`customer_notes`, keyed by `customer_key`, not `id`). Low write-risk (a
-   last-write-wins blob), high utility (fixing contact details / adding notes
-   from a desk). Proves the non-invoice write pattern and the notes table shape.
+2. **Customers. ✅ LANDED.** `CustomerEditor` on `CustomerDetailScreen` edits
+   name/email/phone/address/notes via `saveCustomer` (a whole-blob last-write-
+   wins upsert — Customer has no server-appended field, so no merge needed),
+   toggles archive via the shared `withArchived` helper (the model's safe
+   soft-removal — invoices/jobs keep working), and hard-deletes via
+   `deleteCustomer` behind a confirm carrying the mobile app's "invoices and jobs
+   stay but unlinked" warning. NOTE (correction to an earlier draft): notes now
+   live on the customer record's own `notes` field — the legacy `customer_notes`
+   table is being retired (`utils/storage/customers.ts`) and the portal never
+   writes it. Covered by `CustomerDetailScreen.test.tsx`.
 3. **Jobs & Estimates.** `saveJob` on the shared Job model — status, schedule,
    materials, customer link; estimate-stage editing (line items, approval) is
    the same write. The core workflow object, but the trickiest for P0.6 (job

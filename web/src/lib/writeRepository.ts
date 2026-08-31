@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type {
+  Customer,
   DateString,
   Invoice,
   Payment,
@@ -109,20 +110,28 @@ async function tryLoadInvoice(id: string): Promise<Invoice | null> {
 }
 
 /**
- * Whole-blob upsert of an invoice, stamped exactly as the mobile push does:
- * fresh `updated_at`, `deleted: false`, `user_id = auth.uid()`. The only place
- * this module touches `supabase.from('invoices')` with a mutation.
+ * Whole-blob upsert of one owner-scoped collection row, stamped exactly as the
+ * mobile push does: fresh `updated_at`, `deleted: false`, `user_id = auth.uid()`.
+ * The single low-level write primitive the typed operations build on.
  */
-async function persistInvoice(invoice: Invoice): Promise<Invoice> {
+async function upsertBlobRow(
+  collection: 'invoices' | 'customers',
+  id: string,
+  data: unknown,
+): Promise<void> {
   const user_id = await currentUserId();
-  const { error } = await supabase.from('invoices').upsert({
-    id: invoice.id,
+  const { error } = await supabase.from(collection).upsert({
+    id,
     user_id,
-    data: invoice,
+    data,
     updated_at: writeTimestamp(),
     deleted: false,
   });
   if (error) throw error;
+}
+
+async function persistInvoice(invoice: Invoice): Promise<Invoice> {
+  await upsertBlobRow('invoices', invoice.id, invoice);
   return invoice;
 }
 
@@ -236,6 +245,29 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   });
   if (error) throw error;
   return merged;
+}
+
+// ---------------------------------------------------------------------------
+// Customers (roadmap P3 stage 2)
+//
+// A Customer is a plain last-write-wins blob — it has no server-appended field
+// (unlike the invoice ledger), so a whole-blob write is correct, matching the
+// mobile `saveCustomers` path. Notes now live on the record itself
+// (`customer.notes`); the legacy `customer_notes` table is being retired
+// (utils/storage/customers.ts) and the portal never writes it. Archiving is just
+// this same write with `archivedAt` set/cleared (the caller uses the shared
+// `withArchived` helper), so it needs no separate op; hard delete goes through
+// `deleteCustomer` (soft-delete tombstone) above.
+// ---------------------------------------------------------------------------
+
+/**
+ * Save a customer record. The caller passes the FULL blob with its edits
+ * applied, so fields the portal doesn't render (portal token, archivedAt,
+ * importBatchId, …) are preserved (P0.2).
+ */
+export async function saveCustomer(customer: Customer): Promise<Customer> {
+  await upsertBlobRow('customers', customer.id, customer);
+  return customer;
 }
 
 function validatePaymentDraft(draft: PaymentDraft): void {
