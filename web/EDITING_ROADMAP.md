@@ -267,11 +267,24 @@ five):
    live on the customer record's own `notes` field — the legacy `customer_notes`
    table is being retired (`utils/storage/customers.ts`) and the portal never
    writes it. Covered by `CustomerDetailScreen.test.tsx`.
-3. **Jobs & Estimates.** `saveJob` on the shared Job model — status, schedule,
-   materials, customer link; estimate-stage editing (line items, approval) is
-   the same write. The core workflow object, but the trickiest for P0.6 (job
-   status ↔ invoice coupling, profitability derivations) and for concurrency, so
-   it comes after the pattern is proven on simpler domains.
+3. **Jobs & Estimates.** Split into 3a (done) and 3b (open) once the code
+   revealed the Job's consent-integrity coupling:
+   - **3a — Job operational editing. ✅ LANDED.** `JobEditor` on
+     `JobDetailScreen` edits title, description, address, schedule
+     (date/start/end), and notes via `updateJobDetails`, plus archive
+     (`setJobArchived`) and delete (`deleteJob`). CRITICAL: the Cloudflare Worker
+     backend writes `approval` and `changeOrders[].approval` to the jobs table
+     when a customer acts on the estimate portal (consent is frozen once
+     approved), and mobile appends `timeSessions` / stamps `invoiceId`/`status`.
+     So `updateJobDetails` applies the edit onto a FRESHLY re-fetched server row —
+     every field the portal doesn't set (approval, changeOrders, timeSessions,
+     status, invoiceId, pricing) is preserved from the authoritative server copy
+     and can't be clobbered. Covered by `JobDetailScreen.test.tsx` +
+     `writeRepository.test.ts` (server-authored fields survive an edit).
+   - **3b — Job status transitions & estimate editing. OPEN.** Free status
+     changes (status ↔ invoice/approval coupling), estimate/pricing/materials
+     authoring, and approval/change-order handling. These need P0.6 derived-field
+     work and guarded transitions, so they're deliberately deferred from 3a.
 4. **Pricebook, Expenses, Settings.** Catalog/config maintenance:
    `savePricebookEntry`, expense add/edit (Money), and wiring the existing
    `saveSettings` into the read-only SettingsScreen. Simpler blobs; the settings

@@ -9,16 +9,19 @@ import {
   deleteJob,
   saveSettings,
   saveCustomer,
+  updateJobDetails,
+  setJobArchived,
   InvoiceNotFoundError,
+  JobNotFoundError,
   PaymentValidationError,
 } from './writeRepository';
-import type { Customer } from '@shared/types/models';
+import type { Customer, Job } from '@shared/types/models';
 
 // A controllable supabase mock. `select(...).eq(...).maybeSingle()` resolves the
 // current server row; `upsert(...)` captures what would be written and resolves
 // an error-free result. Auth returns a fixed signed-in user.
 const state = vi.hoisted(() => ({
-  serverRow: null as { data: Invoice; deleted: boolean } | null,
+  serverRow: null as { data: unknown; deleted: boolean } | null,
   settingsRow: null as { data: Record<string, unknown> } | null,
   lastUpsert: null as Record<string, unknown> | null,
   upsertError: null as { message: string } | null,
@@ -145,6 +148,86 @@ describe('saveCustomer — whole-blob upsert', () => {
     await expect(saveCustomer(customer())).rejects.toMatchObject({
       message: 'rls denied',
     });
+  });
+});
+
+describe('updateJobDetails — edit onto a fresh server copy', () => {
+  function job(over: Partial<Job> = {}): Job {
+    return {
+      id: 'job-1',
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Old title',
+      description: '',
+      status: 'scheduled',
+      scheduledDate: null,
+      scheduledStartTime: null,
+      scheduledEndTime: null,
+      address: '',
+      estimateTotal: 500,
+      laborHours: 4,
+      laborRate: 90,
+      materials: [],
+      materialMarkup: 0,
+      overhead: 0,
+      margin: 0,
+      notes: '',
+      invoiceId: null,
+      createdAt: '2026-08-01',
+      ...over,
+    };
+  }
+
+  const edit = {
+    title: 'New title',
+    description: 'desc',
+    address: '5 Main',
+    scheduledDate: '2026-09-01',
+    scheduledStartTime: '09:00',
+    scheduledEndTime: '11:00',
+    notes: 'bring ladder',
+  };
+
+  it('preserves server-authored fields (approval, changeOrders, status) the edit never touches', async () => {
+    const approval = { decision: 'approved', token: 't', signerName: 'Jane' };
+    const changeOrders = [{ id: 'co1', approval: { decision: 'approved' } }];
+    state.serverRow = {
+      data: job({
+        approval,
+        changeOrders,
+        status: 'approved',
+        invoiceId: 'inv-9',
+      } as Partial<Job>),
+      deleted: false,
+    };
+
+    await updateJobDetails('job-1', edit);
+
+    const written = state.lastUpsert!.data as Job;
+    expect(state.lastTable).toBe('jobs');
+    // Edited operational fields applied…
+    expect(written.title).toBe('New title');
+    expect(written.scheduledDate).toBe('2026-09-01');
+    // …while consent/workflow fields survive untouched from the server copy.
+    expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
+    expect(written.changeOrders).toEqual(changeOrders);
+    expect(written.status).toBe('approved');
+    expect(written.invoiceId).toBe('inv-9');
+  });
+
+  it('throws JobNotFoundError when the row is missing', async () => {
+    state.serverRow = null;
+    await expect(updateJobDetails('job-1', edit)).rejects.toBeInstanceOf(
+      JobNotFoundError,
+    );
+  });
+
+  it('setJobArchived stamps archivedAt on the fresh server copy', async () => {
+    state.serverRow = { data: job(), deleted: false };
+    await setJobArchived('job-1', true);
+    const written = state.lastUpsert!.data as Job;
+    expect(written.archivedAt).toBeTruthy();
+    expect(state.lastTable).toBe('jobs');
   });
 });
 

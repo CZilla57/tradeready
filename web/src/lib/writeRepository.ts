@@ -3,11 +3,15 @@ import type {
   Customer,
   DateString,
   Invoice,
+  Job,
   Payment,
   PaymentDraft,
   Settings,
+  TimeString,
 } from '@shared/types/models';
 import { SECURE_FIELDS } from '@shared/utils/storage/keys';
+import { withArchived } from '@shared/utils/archive';
+import { getTodayDateString } from '@shared/utils/dateHelpers';
 import {
   applyPayment,
   mergePaymentLedgers,
@@ -42,6 +46,14 @@ export class InvoiceNotFoundError extends Error {
   constructor(public readonly invoiceId: string) {
     super(`Invoice not found: ${invoiceId}`);
     this.name = 'InvoiceNotFoundError';
+  }
+}
+
+/** Raised when a job write targets a row that isn't visible to this user. */
+export class JobNotFoundError extends Error {
+  constructor(public readonly jobId: string) {
+    super(`Job not found: ${jobId}`);
+    this.name = 'JobNotFoundError';
   }
 }
 
@@ -115,7 +127,7 @@ async function tryLoadInvoice(id: string): Promise<Invoice | null> {
  * The single low-level write primitive the typed operations build on.
  */
 async function upsertBlobRow(
-  collection: 'invoices' | 'customers',
+  collection: 'invoices' | 'customers' | 'jobs',
   id: string,
   data: unknown,
 ): Promise<void> {
@@ -268,6 +280,82 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
 export async function saveCustomer(customer: Customer): Promise<Customer> {
   await upsertBlobRow('customers', customer.id, customer);
   return customer;
+}
+
+// ---------------------------------------------------------------------------
+// Jobs (roadmap P3 stage 3)
+//
+// A Job is NOT a safe whole-blob overwrite target. The Cloudflare Worker backend
+// writes to the jobs table server-side when a customer acts on the estimate
+// portal: `approval` (estimate approve/decline — consent is frozen once
+// approved) and `changeOrders[].approval` (change-order responses). The mobile
+// app also appends `timeSessions` and stamps `invoiceId`/`status` from its own
+// workflow actions. A stale whole-blob push from the browser would clobber any
+// of these — including a customer's just-submitted consent.
+//
+// So the portal edits ONLY operational fields, and applies them onto a FRESHLY
+// re-fetched server row: everything the browser doesn't explicitly set (approval,
+// changeOrders, timeSessions, status, invoiceId, pricing) is taken from the
+// authoritative server copy and can't be lost. The residual — a customer action
+// landing between the re-fetch and the write — is the same narrow window the
+// invoice ledger and booking history carry (ARCHITECTURE.md).
+//
+// Status transitions, estimate/pricing, and approval/change-order editing are
+// intentionally NOT here: they are cross-entity-coupled (status ↔ invoice,
+// approval consent) and belong to a later, guarded step.
+// ---------------------------------------------------------------------------
+
+/** The operational job fields the portal may edit — none are consent- or
+ *  cross-entity-coupled. */
+export interface JobDetailsEdit {
+  title: string;
+  description: string;
+  address: string;
+  scheduledDate: DateString | null;
+  scheduledStartTime: TimeString | null;
+  scheduledEndTime: TimeString | null;
+  notes: string;
+}
+
+async function loadJob(id: string): Promise<Job> {
+  const { data, error } = await supabase
+    .from('jobs')
+    .select('data, deleted')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.deleted || !data.data) throw new JobNotFoundError(id);
+  return data.data as Job;
+}
+
+/**
+ * Apply an operational-field edit to a job.
+ *
+ * Fetches the current server row and spreads the edit onto it, so every field
+ * the portal does not set — notably `approval`, `changeOrders`, `timeSessions`,
+ * `status`, `invoiceId`, and pricing — is preserved from the authoritative
+ * server copy rather than a stale in-memory blob.
+ */
+export async function updateJobDetails(
+  jobId: string,
+  edit: JobDetailsEdit,
+): Promise<Job> {
+  const server = await loadJob(jobId);
+  const next: Job = { ...server, ...edit };
+  await upsertBlobRow('jobs', jobId, next);
+  return next;
+}
+
+/** Archive or unarchive a job (the model's safe soft-removal). Operates on the
+ *  fresh server row, so it never clobbers concurrent consent/workflow writes. */
+export async function setJobArchived(
+  jobId: string,
+  archived: boolean,
+): Promise<Job> {
+  const server = await loadJob(jobId);
+  const next = withArchived(server, archived, getTodayDateString());
+  await upsertBlobRow('jobs', jobId, next);
+  return next;
 }
 
 function validatePaymentDraft(draft: PaymentDraft): void {
