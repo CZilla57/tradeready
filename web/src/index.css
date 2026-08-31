@@ -148,8 +148,27 @@ button {
 }
 
 .nav-link .ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
-  text-align: center;
+}
+
+/* Inline Ionicons (matches the mobile app). Solid shapes fill with
+   currentColor; outline shapes get no fill and a 32-unit stroke. */
+.icon {
+  display: block;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 0;
+}
+
+.icon .ionicon-fill-none {
+  fill: none;
+}
+
+.icon .ionicon-stroke-width {
+  stroke-width: 32px;
 }
 
 .sidebar .spacer {
