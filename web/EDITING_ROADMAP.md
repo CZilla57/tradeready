@@ -287,11 +287,23 @@ five):
      work and guarded transitions, so they're deliberately deferred from 3a.
 4. **Pricebook, Expenses, Settings.** Catalog/config maintenance. Partially
    landed:
-   - **Settings → Business profile. ✅ LANDED.** `ProfileEditor` on
-     `SettingsScreen` edits businessName/contactName/phone/email/address/region
-     via the existing `saveSettings` (merges onto the full blob, strips secrets).
-     Other settings sections (pricing/invoicing/schedule/payments/automation)
-     follow the same `saveSettings(patch)` pattern — additive later.
+   - **Settings → Business profile, Pricing defaults, Invoicing. ✅ LANDED.**
+     `ProfileEditor` edits businessName/contactName/phone/email/address/region;
+     `PricingEditor` edits the seven direct-value pricing inputs (laborRate,
+     materialMarkup, overheadPercent, marginPercent, minimumJobFee,
+     travelFeePerMile, mileageRate — each validated non-negative, blank rejected
+     rather than silently saved as 0); `InvoicingEditor` edits invoicePrefix,
+     invoiceStartNumber (optional whole number; blank clears it so the util's
+     "INV"/1 defaults apply), and the two auto-on-complete flags (auto-email is
+     forced off whenever auto-create is off, so the pair can't drift). All three
+     go through the existing `saveSettings` (merges onto the full blob, strips
+     secrets) — none is a derived or cross-entity-coupled field, so no new write
+     op is needed. The estimate math and auto-invoice workflow that CONSUME these
+     values run on-device; the portal only stores the inputs. Remaining settings
+     sections (schedule/payments/automation) follow the same
+     `saveSettings(patch)` pattern — additive later; schedule is nested config
+     (`resolveSchedule`) and payments couples with Stripe onboarding, so both
+     carry more than the direct-value sections above.
    - **Pricebook → metadata. ✅ LANDED.** `PricebookEditor` on
      `PricebookDetailScreen` edits name/category/description via
      `savePricebookEntry` (whole-blob; bumps the blob's `updatedAt`) and deletes

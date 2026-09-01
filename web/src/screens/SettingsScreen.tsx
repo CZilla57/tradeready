@@ -17,6 +17,20 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
 }
 
+/** Render a stored number for a text field (undefined → the display default). */
+function numStr(v: number | undefined | null, fallback = 0): string {
+  return String(v ?? fallback);
+}
+
+/** Parse a required non-negative number field; null when blank or invalid.
+ *  (`Number('')` is 0, so blank is rejected explicitly rather than saved as 0.) */
+function parseNonNeg(s: string): number | null {
+  const t = s.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 /**
  * The editable Business profile card (roadmap P3 stage 4). Saves through
  * `saveSettings`, which merges the patch onto the full server settings blob
@@ -142,6 +156,264 @@ function ProfileEditor({ settings }: { settings: Settings }) {
   );
 }
 
+/**
+ * The editable Pricing defaults card (roadmap P3 stage 4). Every field here is a
+ * direct-value setting applied to future estimates — none is derived or
+ * cross-entity-coupled — so it saves through the same `saveSettings` patch path
+ * as the profile. The estimate math that CONSUMES these values is not run here;
+ * this only stores the inputs, exactly as the mobile Settings screen does.
+ */
+function PricingEditor({ settings }: { settings: Settings }) {
+  const { retry } = useData();
+  const [open, setOpen] = useState(false);
+  const [laborRate, setLaborRate] = useState('');
+  const [materialMarkup, setMaterialMarkup] = useState('');
+  const [overheadPercent, setOverheadPercent] = useState('');
+  const [marginPercent, setMarginPercent] = useState('');
+  const [minimumJobFee, setMinimumJobFee] = useState('');
+  const [travelFeePerMile, setTravelFeePerMile] = useState('');
+  const [mileageRate, setMileageRate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openEditor() {
+    setLaborRate(numStr(settings.laborRate));
+    setMaterialMarkup(numStr(settings.materialMarkup));
+    setOverheadPercent(numStr(settings.overheadPercent));
+    setMarginPercent(numStr(settings.marginPercent));
+    setMinimumJobFee(numStr(settings.minimumJobFee));
+    setTravelFeePerMile(numStr(settings.travelFeePerMile));
+    setMileageRate(numStr(settings.mileageRate));
+    setError(null);
+    setOpen(true);
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const values = {
+      laborRate: parseNonNeg(laborRate),
+      materialMarkup: parseNonNeg(materialMarkup),
+      overheadPercent: parseNonNeg(overheadPercent),
+      marginPercent: parseNonNeg(marginPercent),
+      minimumJobFee: parseNonNeg(minimumJobFee),
+      travelFeePerMile: parseNonNeg(travelFeePerMile),
+      mileageRate: parseNonNeg(mileageRate),
+    };
+    if (Object.values(values).some((v) => v === null)) {
+      setError('Enter a valid, non-negative number for every field.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await saveSettings(values as Partial<Settings>);
+      retry(['settings']);
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Card pad>
+        <div className="btn-row" style={{ justifyContent: 'space-between' }}>
+          <div className="section-label" style={{ padding: 0 }}>
+            Pricing defaults
+          </div>
+          <button type="button" className="btn sm" onClick={openEditor}>
+            Edit
+          </button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <KV k="Labor rate" v={`${formatMoney(settings.laborRate || 0)}/hr`} />
+          <KV k="Material markup" v={`${settings.materialMarkup ?? 0}%`} />
+          <KV k="Overhead" v={`${settings.overheadPercent ?? 0}%`} />
+          <KV k="Margin" v={`${settings.marginPercent ?? 0}%`} />
+          <KV k="Minimum job fee" v={formatMoney(settings.minimumJobFee || 0)} />
+          <KV k="Travel fee" v={`${formatMoney(settings.travelFeePerMile || 0)}/mi`} />
+          <KV k="Mileage rate" v={`${formatMoney(settings.mileageRate || 0)}/mi`} />
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        Pricing defaults
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <label className="field">
+          <span>Labor rate ($/hr)</span>
+          <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={laborRate} onChange={(e) => setLaborRate(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Material markup (%)</span>
+          <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={materialMarkup} onChange={(e) => setMaterialMarkup(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Overhead (%)</span>
+          <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={overheadPercent} onChange={(e) => setOverheadPercent(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Margin (%)</span>
+          <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={marginPercent} onChange={(e) => setMarginPercent(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Minimum job fee ($)</span>
+          <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={minimumJobFee} onChange={(e) => setMinimumJobFee(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Travel fee ($/mi)</span>
+          <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={travelFeePerMile} onChange={(e) => setTravelFeePerMile(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Mileage rate ($/mi)</span>
+          <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={mileageRate} onChange={(e) => setMileageRate(e.target.value)} />
+        </label>
+        <div className="btn-row">
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
+/**
+ * The editable Invoicing card (roadmap P3 stage 4). The prefix and start-number
+ * feed `utils/invoiceNumber` (blank prefix → "INV", absent start → 1), and the
+ * two auto-on-complete flags are plain booleans — all direct-value settings, so
+ * they save through the same `saveSettings` patch path. The auto-invoice
+ * workflow that READS these flags runs on-device; this only stores them.
+ */
+function InvoicingEditor({ settings }: { settings: Settings }) {
+  const { retry } = useData();
+  const [open, setOpen] = useState(false);
+  const [prefix, setPrefix] = useState('');
+  const [startNumber, setStartNumber] = useState('');
+  const [autoInvoice, setAutoInvoice] = useState(false);
+  const [autoEmail, setAutoEmail] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openEditor() {
+    setPrefix(settings.invoicePrefix ?? '');
+    setStartNumber(settings.invoiceStartNumber != null ? String(settings.invoiceStartNumber) : '');
+    setAutoInvoice(!!settings.autoInvoiceOnComplete);
+    setAutoEmail(!!settings.autoEmailInvoiceOnComplete);
+    setError(null);
+    setOpen(true);
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    // Start number is optional (blank → cleared, the util then defaults to 1);
+    // when present it must be a non-negative whole number.
+    const trimmedStart = startNumber.trim();
+    let startValue: number | undefined;
+    if (trimmedStart !== '') {
+      const n = Number(trimmedStart);
+      if (!Number.isInteger(n) || n < 0) {
+        setError('Start number must be a whole number (or left blank).');
+        return;
+      }
+      startValue = n;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await saveSettings({
+        invoicePrefix: prefix.trim(),
+        invoiceStartNumber: startValue,
+        autoInvoiceOnComplete: autoInvoice,
+        // Auto-email only makes sense alongside auto-create; keep them consistent.
+        autoEmailInvoiceOnComplete: autoInvoice && autoEmail,
+      });
+      retry(['settings']);
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Card pad>
+        <div className="btn-row" style={{ justifyContent: 'space-between' }}>
+          <div className="section-label" style={{ padding: 0 }}>
+            Invoicing
+          </div>
+          <button type="button" className="btn sm" onClick={openEditor}>
+            Edit
+          </button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <KV k="Number prefix" v={settings.invoicePrefix || '—'} />
+          <KV k="Start number" v={String(settings.invoiceStartNumber ?? '—')} />
+          <KV k="Auto-create on complete" v={yesNo(settings.autoInvoiceOnComplete)} />
+          <KV k="Auto-email on complete" v={yesNo(settings.autoEmailInvoiceOnComplete)} />
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        Invoicing
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <label className="field">
+          <span>Number prefix</span>
+          <input className="field-input" type="text" value={prefix} placeholder="INV" onChange={(e) => setPrefix(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Start number (optional)</span>
+          <input className="field-input" type="number" step="1" min="0" inputMode="numeric" value={startNumber} placeholder="1" onChange={(e) => setStartNumber(e.target.value)} />
+        </label>
+        <label className="field checkbox-field">
+          <input type="checkbox" checked={autoInvoice} onChange={(e) => setAutoInvoice(e.target.checked)} />
+          <span>Auto-create invoice when a job is completed</span>
+        </label>
+        <label className="field checkbox-field">
+          <input type="checkbox" checked={autoEmail} disabled={!autoInvoice} onChange={(e) => setAutoEmail(e.target.checked)} />
+          <span>Auto-email the invoice on completion</span>
+        </label>
+        <div className="btn-row">
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 export default function SettingsScreen() {
   const { settings } = useData();
   const state = useResources('settings');
@@ -172,35 +444,8 @@ export default function SettingsScreen() {
       <div className="detail-grid">
         <div className="stack">
           <ProfileEditor settings={s} />
-
-          <Card pad>
-            <div className="section-label" style={{ padding: '0 0 8px' }}>
-              Pricing defaults
-            </div>
-            <KV k="Labor rate" v={`${formatMoney(s.laborRate || 0)}/hr`} />
-            <KV k="Material markup" v={`${s.materialMarkup ?? 0}%`} />
-            <KV k="Overhead" v={`${s.overheadPercent ?? 0}%`} />
-            <KV k="Margin" v={`${s.marginPercent ?? 0}%`} />
-            <KV k="Minimum job fee" v={formatMoney(s.minimumJobFee || 0)} />
-            <KV k="Travel fee" v={`${formatMoney(s.travelFeePerMile || 0)}/mi`} />
-            <KV k="Mileage rate" v={`${formatMoney(s.mileageRate || 0)}/mi`} />
-          </Card>
-
-          <Card pad>
-            <div className="section-label" style={{ padding: '0 0 8px' }}>
-              Invoicing
-            </div>
-            <KV k="Number prefix" v={s.invoicePrefix || '—'} />
-            <KV k="Start number" v={String(s.invoiceStartNumber ?? '—')} />
-            <KV
-              k="Auto-create on complete"
-              v={yesNo(s.autoInvoiceOnComplete)}
-            />
-            <KV
-              k="Auto-email on complete"
-              v={yesNo(s.autoEmailInvoiceOnComplete)}
-            />
-          </Card>
+          <PricingEditor settings={s} />
+          <InvoicingEditor settings={s} />
         </div>
 
         <div className="stack">
@@ -268,9 +513,9 @@ export default function SettingsScreen() {
       </div>
 
       <div className="muted" style={{ marginTop: 16, fontSize: 13 }}>
-        You can update your business profile here. Pricing, invoicing, schedule,
-        payments, and automation settings are edited in the TradeReady mobile
-        app.
+        You can update your business profile, pricing defaults, and invoicing
+        settings here. Schedule, payments, and automation settings are edited in
+        the TradeReady mobile app.
       </div>
     </>
   );

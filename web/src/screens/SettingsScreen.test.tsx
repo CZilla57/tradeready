@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Settings } from '@shared/types/models';
 import SettingsScreen from './SettingsScreen';
@@ -15,7 +15,28 @@ vi.mock('../lib/DataContext', () => ({
 }));
 
 function settings(): Settings {
-  return { businessName: 'Acme Plumbing', phone: '555' } as Settings;
+  return {
+    businessName: 'Acme Plumbing',
+    phone: '555',
+    laborRate: 90,
+    materialMarkup: 20,
+    overheadPercent: 10,
+    marginPercent: 15,
+    minimumJobFee: 75,
+    travelFeePerMile: 1.5,
+    mileageRate: 0.7,
+    invoicePrefix: 'INV',
+    invoiceStartNumber: 100,
+    autoInvoiceOnComplete: false,
+    autoEmailInvoiceOnComplete: false,
+  } as Settings;
+}
+
+/** Open the section whose "Edit" button sits inside the card with this label. */
+async function openSection(label: string) {
+  const heading = screen.getByText(label);
+  const card = heading.closest('.card') as HTMLElement;
+  await userEvent.click(within(card).getByRole('button', { name: 'Edit' }));
 }
 
 beforeEach(() => {
@@ -27,7 +48,7 @@ beforeEach(() => {
 describe('SettingsScreen — business profile edit', () => {
   it('saves profile fields via saveSettings and refreshes', async () => {
     render(<SettingsScreen />);
-    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await openSection('Business profile');
 
     const nameInput = screen.getByDisplayValue('Acme Plumbing');
     await userEvent.clear(nameInput);
@@ -44,7 +65,7 @@ describe('SettingsScreen — business profile edit', () => {
   it('surfaces a save error without closing the form', async () => {
     writes.saveSettings.mockRejectedValue(new Error('rls denied'));
     render(<SettingsScreen />);
-    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await openSection('Business profile');
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() =>
@@ -53,5 +74,102 @@ describe('SettingsScreen — business profile edit', () => {
     // Still in edit mode.
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument();
     expect(retry).not.toHaveBeenCalled();
+  });
+});
+
+describe('SettingsScreen — pricing defaults edit', () => {
+  it('saves numeric pricing fields via saveSettings and refreshes', async () => {
+    render(<SettingsScreen />);
+    await openSection('Pricing defaults');
+
+    const laborInput = screen.getByDisplayValue('90');
+    await userEvent.clear(laborInput);
+    await userEvent.type(laborInput, '120');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toMatchObject({
+      laborRate: 120,
+      materialMarkup: 20,
+      marginPercent: 15,
+      mileageRate: 0.7,
+    });
+    expect(retry).toHaveBeenCalledWith(['settings']);
+  });
+
+  it('rejects an invalid number without calling saveSettings', async () => {
+    render(<SettingsScreen />);
+    await openSection('Pricing defaults');
+
+    const laborInput = screen.getByDisplayValue('90');
+    await userEvent.clear(laborInput);
+    // A `type="number"` input yields an empty value for non-numeric text, which
+    // our parser treats as invalid.
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/non-negative number/i),
+    );
+    expect(writes.saveSettings).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  });
+});
+
+describe('SettingsScreen — invoicing edit', () => {
+  it('saves prefix, start number, and auto flags', async () => {
+    render(<SettingsScreen />);
+    await openSection('Invoicing');
+
+    const prefixInput = screen.getByDisplayValue('INV');
+    await userEvent.clear(prefixInput);
+    await userEvent.type(prefixInput, 'ACM');
+    await userEvent.click(
+      screen.getByRole('checkbox', { name: /auto-create invoice/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toMatchObject({
+      invoicePrefix: 'ACM',
+      invoiceStartNumber: 100,
+      autoInvoiceOnComplete: true,
+    });
+    expect(retry).toHaveBeenCalledWith(['settings']);
+  });
+
+  it('forces auto-email off when auto-create is off', async () => {
+    store.settings = {
+      ...settings(),
+      autoInvoiceOnComplete: true,
+      autoEmailInvoiceOnComplete: true,
+    } as Settings;
+    render(<SettingsScreen />);
+    await openSection('Invoicing');
+
+    // Turn auto-create off; auto-email must not be sent as true.
+    await userEvent.click(
+      screen.getByRole('checkbox', { name: /auto-create invoice/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toMatchObject({
+      autoInvoiceOnComplete: false,
+      autoEmailInvoiceOnComplete: false,
+    });
+  });
+
+  it('clears the start number when left blank', async () => {
+    render(<SettingsScreen />);
+    await openSection('Invoicing');
+
+    await userEvent.clear(screen.getByDisplayValue('100'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toHaveProperty(
+      'invoiceStartNumber',
+      undefined,
+    );
   });
 });

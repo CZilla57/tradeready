@@ -482,6 +482,25 @@ a.row:hover {
   font-weight: 600;
   color: var(--text-2);
 }
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-weight: 400;
+  color: var(--text);
+  cursor: pointer;
+}
+.checkbox-field input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.checkbox-field input[type='checkbox']:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .field-input {
   padding: 10px 12px;
   border: 1px solid var(--border);
