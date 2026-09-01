@@ -130,3 +130,61 @@ describe('PricebookDetailScreen — edit', () => {
     expect(navigate).toHaveBeenCalledWith('/pricebook');
   });
 });
+
+describe('PricebookDetailScreen — materials editing', () => {
+  it('seeds the editor from stored materials', async () => {
+    store.pricebook = [
+      entry({ materials: [{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }] }),
+    ];
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit service' }));
+    expect(screen.getByDisplayValue('Filter')).toBeInTheDocument();
+  });
+
+  it('adds a material, recomputes the total, and writes it', async () => {
+    renderScreen(); // entry() has no materials, laborRate 90, minimumJobFee 0
+    await userEvent.click(screen.getByRole('button', { name: 'Edit service' }));
+
+    await userEvent.click(screen.getByRole('button', { name: '+ Add material' }));
+    await userEvent.type(screen.getByLabelText('Material name'), 'Copper pipe');
+    const qty = screen.getByLabelText('Material quantity');
+    await userEvent.clear(qty);
+    await userEvent.type(qty, '2');
+    const cost = screen.getByLabelText('Material unit cost');
+    await userEvent.clear(cost);
+    await userEvent.type(cost, '10');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.savePricebookEntry).toHaveBeenCalledTimes(1));
+    const arg = writes.savePricebookEntry.mock.calls[0][0];
+    expect(arg.materials).toHaveLength(1);
+    expect(arg.materials[0]).toMatchObject({ name: 'Copper pipe', quantity: 2, unitCost: 10 });
+    // labor 2×90=180; materials 2×10=20 ×1.15=23; subtotal 203; overhead 10% → 223.3;
+    // margin 20% → 223.3/0.8 = 279.125 → 279.13.
+    expect(arg.estimateTotal).toBeCloseTo(279.13, 2);
+  });
+
+  it('removes a material on Remove', async () => {
+    store.pricebook = [
+      entry({ materials: [{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }] }),
+    ];
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit service' }));
+    await userEvent.click(screen.getByRole('button', { name: /Remove Filter/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.savePricebookEntry).toHaveBeenCalledTimes(1));
+    expect(writes.savePricebookEntry.mock.calls[0][0].materials).toEqual([]);
+  });
+
+  it('rejects a material row with no name', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit service' }));
+    await userEvent.click(screen.getByRole('button', { name: '+ Add material' }));
+    // Row added with default qty 1 / cost 0 but no name → not abandoned, invalid.
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/every material needs a name/i);
+    expect(writes.savePricebookEntry).not.toHaveBeenCalled();
+  });
+});

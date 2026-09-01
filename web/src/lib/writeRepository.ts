@@ -5,6 +5,7 @@ import type {
   Expense,
   Invoice,
   Job,
+  Material,
   Payment,
   PaymentDraft,
   PricebookEntry,
@@ -664,14 +665,16 @@ function newPricebookId(): string {
 }
 
 /** The fields a new saved service is created from. `estimateTotal` is DERIVED —
- *  the caller recomputes it with the pricingMath port (P0.6), like the edit. New
- *  entries start with no materials/jobCosts (line-item authoring is deferred). */
+ *  the caller recomputes it with the pricingMath port (P0.6), like the edit.
+ *  `materials` are authored via the shared MaterialsEditor (default none);
+ *  jobCosts (direct-cost lines) are still not authored on creation. */
 export interface NewPricebookFields {
   name: string;
   category: string;
   description: string;
   laborHours: number;
   laborRate: number;
+  materials: Material[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -696,7 +699,7 @@ export async function createPricebookEntry(
     description: fields.description || undefined,
     laborHours: fields.laborHours,
     laborRate: fields.laborRate,
-    materials: [],
+    materials: fields.materials,
     materialMarkup: fields.materialMarkup,
     overhead: fields.overhead,
     margin: fields.margin,

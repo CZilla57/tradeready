@@ -539,6 +539,7 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       description: 'Annual maintenance',
       laborHours: 1.5,
       laborRate: 100,
+      materials: [{ id: 'm1', name: 'Anode rod', quantity: 1, unitCost: 40 }],
       materialMarkup: 20,
       overhead: 15,
       margin: 20,
@@ -556,7 +557,8 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       description: 'Annual maintenance',
       laborRate: 100,
       estimateTotal: 215.63,
-      materials: [],
+      // Authored materials round-trip onto the created record.
+      materials: [{ id: 'm1', name: 'Anode rod', quantity: 1, unitCost: 40 }],
     });
   });
 
@@ -567,6 +569,7 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       description: '',
       laborHours: 1,
       laborRate: 90,
+      materials: [],
       materialMarkup: 0,
       overhead: 0,
       margin: 0,
@@ -579,11 +582,11 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
   it('mints a unique id on each call within the same millisecond', async () => {
     const a = await createPricebookEntry({
       name: 'A', category: '', description: '', laborHours: 1, laborRate: 1,
-      materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+      materials: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
     });
     const b = await createPricebookEntry({
       name: 'B', category: '', description: '', laborHours: 1, laborRate: 1,
-      materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+      materials: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
     });
     expect(a.id).not.toBe(b.id);
   });

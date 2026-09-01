@@ -64,6 +64,27 @@ describe('PricebookScreen — create', () => {
     expect(navigate).toHaveBeenCalledWith('/pricebook/pb-new');
   });
 
+  it('authors a material on create and includes it in the recompute', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'New service' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'Heater flush');
+
+    await userEvent.click(screen.getByRole('button', { name: '+ Add material' }));
+    await userEvent.type(screen.getByLabelText('Material name'), 'Anode rod');
+    const cost = screen.getByLabelText('Material unit cost');
+    await userEvent.clear(cost);
+    await userEvent.type(cost, '40'); // qty defaults to 1
+    await userEvent.click(screen.getByRole('button', { name: 'Create service' }));
+
+    await waitFor(() => expect(writes.createPricebookEntry).toHaveBeenCalledTimes(1));
+    const arg = writes.createPricebookEntry.mock.calls[0][0];
+    expect(arg.materials).toHaveLength(1);
+    expect(arg.materials[0]).toMatchObject({ name: 'Anode rod', quantity: 1, unitCost: 40 });
+    // Materials contribute to the derived total (defaults: labor 1×85=85,
+    // materials 40×1.20=48 → subtotal 133, so the total exceeds the no-material one).
+    expect(arg.estimateTotal).toBeGreaterThan(143.75);
+  });
+
   it('requires a name', async () => {
     renderScreen();
     await userEvent.click(screen.getByRole('button', { name: 'New service' }));

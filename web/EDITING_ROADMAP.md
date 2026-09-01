@@ -360,8 +360,10 @@ five):
      recompute matches the mobile PricebookEntryScreen save path
      (buildEstimateInput→calculateEstimate: travel/tax 0, non-emergency,
      `minimumJobFee` from settings), so a service priced in the portal equals one
-     priced on the phone (P0.6). Material LINE-ITEM editing is still deferred — the
-     entry's materials/jobCosts round-trip untouched and feed the recompute.
+     priced on the phone (P0.6). Material LINE ITEMS are now editable via the
+     shared `MaterialsEditor` (see the line-item authoring note under stage 5c) —
+     both here and on the New service form — and feed the recompute; `jobCosts`
+     (direct-cost lines) still round-trip untouched, a separate authoring surface.
    - **Expenses. ✅ LANDED.** An `ExpensesSection` on `MoneyScreen` lists
      expenses and adds/edits/deletes them: `saveExpense` (whole-blob upsert; new
      records stamped with the shared `stampExpense` so ids match the mobile app)
@@ -451,11 +453,11 @@ five):
        `createPricebookEntry`, which mints a mobile-format id (`pb-<Date.now()>`,
        monotonic-guarded for burst uniqueness, matching PricebookEntryScreen,
        P1.4), stamps created/updatedAt, and upserts. The derived `estimateTotal`
-       is computed with the pricingMath port over the entered pricing inputs (no
-       materials) + settings `minimumJobFee`, matching the mobile save;
-       blank category/description collapse to `undefined`. Navigates to the new
-       record on success. Covered by `PricebookScreen.test.tsx` + `writeRepository
-       .test.ts`.
+       is computed with the pricingMath port over the entered pricing inputs and
+       any materials authored via the shared `MaterialsEditor` + settings
+       `minimumJobFee`, matching the mobile save; blank category/description
+       collapse to `undefined`. Navigates to the new record on success. Covered by
+       `PricebookScreen.test.tsx` + `writeRepository.test.ts`.
      - **New maintenance plan (recurring invoice). ✅ LANDED.** `RecurringScreen`
        has a "New plan" form (`NewPlanForm`) creating a standalone plan via a new
        typed op `createRecurringInvoice`, which mints a mobile-format id
@@ -517,10 +519,25 @@ five):
        start blank, matching the recurring-job editable surface
        (`RecurringJobRuleEdit`). Covered by `RecurringScreen.test.tsx` +
        `writeRepository.test.ts`.
-     - **Remaining creation: new estimate (pricing/line-item authoring). OPEN.**
-       Authoring a new job's estimate — line items, materials, the priced total on
-       a plain Job — is the same deferred 3b estimate surface (approval/change-
-       order handling lives there too). It is the last remaining editable surface.
+     - **Line-item / materials editor. ✅ LANDED (reusable component + Pricebook).**
+       `web/src/ui/MaterialsEditor.tsx` is a reusable `Material[]` row editor
+       (add / edit name-qty-unitCost / remove, with a live materials-cost preview)
+       backed by pure string-draft helpers in `web/src/ui/materialsDraft.ts`
+       (`parseMaterialDrafts` drops abandoned blank rows and validates the rest;
+       new ids match the mobile `m<Date.now()>` format, P1.4). It is STRING-drafted
+       like every other pricing field so mid-edit values ("1." / "") don't snap to
+       a number, parsed to stored `Material[]` only on save. Wired into BOTH
+       Pricebook surfaces (the `PricebookEditor` edit form and the New service
+       form), so a service's materials — and thus its derived `estimateTotal` —
+       are now fully authored in the portal. Covered by `materialsDraft.test.ts`,
+       `PricebookDetailScreen.test.tsx`, `PricebookScreen.test.tsx`.
+     - **Remaining: adopt the editor for jobs (OPEN).** The recurring-job rule
+       editor / New recurring-job form and a Job's own estimate (a new
+       `JobPricingEditor` + `updateJobPricing` write op, fresh-row merge preserving
+       approval / status / invoiceId) can now drop in the same `MaterialsEditor`;
+       both currently start/keep materials empty. Job estimate authoring also
+       carries the deferred 3b approval/change-order surface. This is the last
+       remaining editable surface.
 
 ### Stays read-only / out of scope
 
