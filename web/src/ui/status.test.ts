@@ -8,6 +8,7 @@ import {
   nextOperationalStatus,
   OPERATIONAL_STATUS_ADVANCE,
   JOB_PIPELINE,
+  canAuthorEstimate,
 } from './status';
 import type { JobStatus } from '@shared/types/models';
 
@@ -125,5 +126,25 @@ describe('nextOperationalStatus / OPERATIONAL_STATUS_ADVANCE', () => {
       expect(i).toBeGreaterThanOrEqual(0);
       expect(JOB_PIPELINE[i + 1]).toBe(next);
     }
+  });
+});
+
+describe('canAuthorEstimate', () => {
+  it('allows editing when there is no frozen approval decision', () => {
+    expect(canAuthorEstimate(job({ status: 'lead' }))).toBe(true);
+    // A tradesperson-marked "approved" status with no customer signature stays editable.
+    expect(canAuthorEstimate(job({ status: 'approved' }))).toBe(true);
+    expect(
+      canAuthorEstimate(job({ approval: { token: 't', sentAt: '2026-08-01' } } as Partial<Job>)),
+    ).toBe(true);
+  });
+
+  it('locks editing once the customer approved or declined', () => {
+    expect(
+      canAuthorEstimate(job({ approval: { decision: 'approved' } } as Partial<Job>)),
+    ).toBe(false);
+    expect(
+      canAuthorEstimate(job({ approval: { decision: 'declined' } } as Partial<Job>)),
+    ).toBe(false);
   });
 });

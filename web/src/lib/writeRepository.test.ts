@@ -13,6 +13,7 @@ import {
   updateJobDetails,
   setJobArchived,
   advanceJobStatus,
+  updateJobPricing,
   savePricebookEntry,
   saveExpense,
   createCustomer,
@@ -492,6 +493,59 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
     it('throws JobNotFoundError when the row is missing', async () => {
       state.serverRow = null;
       await expect(advanceJobStatus('job-1')).rejects.toBeInstanceOf(
+        JobNotFoundError,
+      );
+    });
+  });
+
+  describe('updateJobPricing — author the estimate onto a fresh server copy', () => {
+    const pricing = {
+      laborHours: 3,
+      laborRate: 100,
+      materials: [{ id: 'm1', name: 'Pipe', quantity: 2, unitCost: 15 }],
+      materialMarkup: 20,
+      overhead: 10,
+      margin: 20,
+      estimateTotal: 456,
+    };
+
+    it('overwrites only pricing fields, preserving status/approval/invoiceId/changeOrders', async () => {
+      const approval = { decision: 'approved', token: 't' };
+      const changeOrders = [{ id: 'co1' }];
+      const timeSessions = [{ start: '2026-09-01T09:00:00Z', end: null }];
+      state.serverRow = {
+        data: job({
+          status: 'scheduled',
+          invoiceId: 'inv-9',
+          approval,
+          changeOrders,
+          timeSessions,
+          jobCosts: [{ id: 'jc1', category: 'permit', quantity: 1, unitCost: 50 }],
+        } as Partial<Job>),
+        deleted: false,
+      };
+
+      await updateJobPricing('job-1', pricing);
+
+      const written = state.lastUpsert!.data as Job;
+      expect(state.lastTable).toBe('jobs');
+      // Pricing fields written…
+      expect(written.laborRate).toBe(100);
+      expect(written.materials).toEqual(pricing.materials);
+      expect(written.estimateTotal).toBe(456);
+      // …everything else preserved from the server row.
+      expect(written.status).toBe('scheduled');
+      expect(written.invoiceId).toBe('inv-9');
+      expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
+      expect(written.changeOrders).toEqual(changeOrders);
+      expect(written.timeSessions).toEqual(timeSessions);
+      // jobCosts are not authored here — preserved from the server row.
+      expect(written.jobCosts).toEqual([{ id: 'jc1', category: 'permit', quantity: 1, unitCost: 50 }]);
+    });
+
+    it('throws JobNotFoundError when the row is missing', async () => {
+      state.serverRow = null;
+      await expect(updateJobPricing('job-1', pricing)).rejects.toBeInstanceOf(
         JobNotFoundError,
       );
     });

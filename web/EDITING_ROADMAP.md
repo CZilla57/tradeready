@@ -300,12 +300,30 @@ five):
        review — those are separate flows it doesn't surface; the bare status
        change is internally consistent on its own. Covered by
        `writeRepository.test.ts`, `status.test.ts`, `JobDetailScreen.test.tsx`.
-     - **Still OPEN.** The consent-/invoice-coupled transitions
+     - **Estimate / pricing authoring. ✅ LANDED.** `JobPricingEditor` on
+       `JobDetailScreen` edits a job's pricing inputs (labor hours/rate, material
+       markup, overhead, margin) and its MATERIALS (via the shared
+       `MaterialsEditor`), recomputing the derived `estimateTotal` with the
+       `estimateTotalFromPricing` port over the edited inputs + materials AND the
+       job's existing `jobCosts` — matching the mobile PricingCalculator's
+       `saveToJob` (P0.6). The write op `updateJobPricing` spreads the FRESHLY
+       re-fetched server row and overwrites ONLY the pricing fields, so status,
+       approval, invoiceId, changeOrders, timeSessions, jobCosts, and
+       laborBreakdown survive untouched (same fresh-row guarantee as
+       `updateJobDetails`). CONSENT GATE: `canAuthorEstimate(job)` hides the editor
+       once the customer has a FROZEN `approval.decision` (approved/declined) —
+       re-pricing a signed estimate is the deferred change-order surface — and the
+       card shows a "locked" note instead; gating on the decision (not status)
+       keeps a tradesperson-marked "approved" job with no signature editable.
+       Covered by `writeRepository.test.ts`, `status.test.ts`,
+       `JobDetailScreen.test.tsx`.
+     - **Still OPEN.** The consent-/invoice-coupled STATUS transitions
        (`estimate_sent → approved`, `complete → invoiced`, `invoiced → paid` —
        the portal reflects the last two from the invoice ledger, it doesn't
-       drive them), plus estimate/materials authoring and approval/change-order
-       handling. These need guarded, cross-entity transitions, so they stay
-       deferred.
+       drive them), plus approval/change-order handling (send an estimate, record
+       a change order). These need guarded, cross-entity transitions and the
+       backend approval flow, so they stay deferred. `jobCosts` (direct-cost line)
+       authoring is likewise still a separate surface.
 4. **Pricebook, Expenses, Settings. ✅ LANDED.** Catalog/config maintenance.
    Every editable surface below is in; the only things left read-only are
    deliberate (Pricebook pricing fields — deferred pending a web-safe estimate
@@ -529,18 +547,20 @@ five):
        like every other pricing field so mid-edit values ("1." / "") don't snap to
        a number, parsed to stored `Material[]` only on save. Wired into the
        Pricebook surfaces (the `PricebookEditor` edit form and the New service
-       form) AND the recurring-job surfaces (the `JobRuleEditor` edit form and the
-       New recurring-job form), so their materials — and thus their derived
-       `estimateTotal` — are now fully authored in the portal. Covered by
+       form), the recurring-job surfaces (the `JobRuleEditor` edit form and the
+       New recurring-job form), AND a plain Job's estimate (`JobPricingEditor` on
+       `JobDetailScreen`, see stage 3b), so their materials — and thus their
+       derived `estimateTotal` — are now fully authored in the portal. Covered by
        `materialsDraft.test.ts`, `PricebookDetailScreen.test.tsx`,
-       `PricebookScreen.test.tsx`, `RecurringScreen.test.tsx`.
-     - **Remaining: a Job's own estimate (OPEN).** A plain Job still has no
-       pricing/materials editor: it needs a new `JobPricingEditor` on
-       `JobDetailScreen` + an `updateJobPricing` write op (fresh-row merge
-       preserving approval / status / invoiceId / changeOrders / timeSessions),
-       which can drop in the same `MaterialsEditor`. Job estimate authoring also
-       carries the deferred 3b approval/change-order surface. This is the last
-       remaining editable surface.
+       `PricebookScreen.test.tsx`, `RecurringScreen.test.tsx`,
+       `JobDetailScreen.test.tsx`.
+     - **Job estimate authoring. ✅ LANDED** (see stage 3b, "Estimate / pricing
+       authoring" — `JobPricingEditor` + `updateJobPricing`, consent-gated). The
+       pricing/materials editing surface is now complete across catalog, recurring,
+       and job estimates. What remains deferred is NOT an editing surface but the
+       approval/change-order WORKFLOW (sending an estimate, recording a change
+       order) and the consent-/invoice-coupled status transitions — both need the
+       Worker backend approval flow, tracked under stage 3b "Still OPEN".
 
 ### Stays read-only / out of scope
 

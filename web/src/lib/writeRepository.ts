@@ -546,6 +546,62 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 }
 
 // ---------------------------------------------------------------------------
+// Job estimate / pricing (roadmap P3 stage 3b — estimate authoring)
+//
+// The portal authors a job's estimate — the pricing inputs, its materials, and
+// the derived `estimateTotal` — exactly as the mobile PricingCalculator's
+// `saveToJob` does: spread the CURRENT job and overwrite ONLY the pricing fields,
+// leaving status, approval, invoiceId, changeOrders, timeSessions, jobCosts, and
+// laborBreakdown untouched. Applied onto a FRESHLY re-fetched server row
+// (`loadJob`), so a customer's estimate action or a mobile workflow write landing
+// between page load and save is never clobbered (same guarantee as
+// `updateJobDetails`).
+//
+// `estimateTotal` is DERIVED: the caller recomputes it with the pricingMath port
+// over the edited inputs + materials AND the job's EXISTING `jobCosts` (which the
+// portal doesn't author), matching the mobile save, and hands it in.
+//
+// CONSENT GATE (P0.1 spirit): once a customer has made a frozen approval decision
+// (`job.approval.decision`), the estimate is the price they signed — re-pricing it
+// silently would diverge from that consent. The UI hides the editor in that case
+// (post-approval changes are the deferred change-order surface); this op does not
+// itself enforce it, but the fresh-row spread means the approval snapshot always
+// survives regardless.
+// ---------------------------------------------------------------------------
+
+/** The pricing fields the portal authors on a job. `jobCosts`/`laborBreakdown`
+ *  are preserved from the server row (not authored here); `estimateTotal` is the
+ *  caller's pricingMath recompute over the inputs + materials + existing jobCosts. */
+export interface JobPricingEdit {
+  laborHours: number;
+  laborRate: number;
+  materials: Material[];
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  estimateTotal: number;
+}
+
+export async function updateJobPricing(
+  jobId: string,
+  edit: JobPricingEdit,
+): Promise<Job> {
+  const server = await loadJob(jobId);
+  const next: Job = {
+    ...server,
+    laborHours: edit.laborHours,
+    laborRate: edit.laborRate,
+    materials: edit.materials,
+    materialMarkup: edit.materialMarkup,
+    overhead: edit.overhead,
+    margin: edit.margin,
+    estimateTotal: edit.estimateTotal,
+  };
+  await upsertBlobRow('jobs', jobId, next);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
 // New job (roadmap P3 stage 5c — creation flows)
 //
 // A net-new job is a pure INSERT (fresh client id, no server row to preserve),
