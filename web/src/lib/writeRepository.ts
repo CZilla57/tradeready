@@ -569,6 +569,63 @@ export async function setRecurringJobActive(
   return next;
 }
 
+/** The recurring-job rule fields the portal edits. `estimateTotal` is DERIVED
+ *  (recomputed by the caller via `web/src/ui/pricingMath.ts` from the pricing
+ *  inputs + the rule's existing materials/jobCosts, P0.6). Customer re-linking
+ *  and material line-item editing are out of scope, like the plan editor. */
+export interface RecurringJobRuleEdit {
+  title: string;
+  description: string;
+  laborHours: number;
+  laborRate: number;
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  estimateTotal: number;
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+  nextDueDate: DateString;
+}
+
+/**
+ * Edit a recurring job's rule (roadmap P3 stage 5b).
+ *
+ * Mirrors `updateRecurringInvoiceRule`: applies the edited rule fields onto a
+ * FRESHLY re-fetched server row, so the series' history — id, customerId/Name,
+ * materials, jobCosts, occurrenceCount, lastGeneratedDate, isActive, createdAt —
+ * is preserved (never rolled back), and normalises endCount/endDate to the
+ * chosen endCondition. The one extra concern over the plan is the DERIVED
+ * `estimateTotal`: unlike a plan's flat `amount`, a job's total is a
+ * `calculateEstimate` derivation, so the caller recomputes it with the
+ * pricingMath port (matching the mobile save) and hands it in here.
+ */
+export async function updateRecurringJobRule(
+  id: string,
+  edit: RecurringJobRuleEdit,
+): Promise<RecurringJob> {
+  const server = await loadRecurringJob(id);
+  const next: RecurringJob = {
+    ...server,
+    title: edit.title,
+    description: edit.description,
+    laborHours: edit.laborHours,
+    laborRate: edit.laborRate,
+    materialMarkup: edit.materialMarkup,
+    overhead: edit.overhead,
+    margin: edit.margin,
+    estimateTotal: edit.estimateTotal,
+    cadence: edit.cadence,
+    endCondition: edit.endCondition,
+    endCount: edit.endCondition === 'count' ? edit.endCount : undefined,
+    endDate: edit.endCondition === 'date' ? edit.endDate : undefined,
+    nextDueDate: edit.nextDueDate,
+  };
+  await upsertBlobRow('recurringJobs', id, next);
+  return next;
+}
+
 /** Pause or resume a maintenance plan. Resume fast-forwards nextDueDate past
  *  today so elapsed occurrences aren't back-billed; pause only flips the flag. */
 export async function setRecurringInvoiceActive(

@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { RecurringInvoice, RecurringJob } from '@shared/types/models';
+import type { RecurringInvoice, RecurringJob, Settings } from '@shared/types/models';
 import RecurringScreen from './RecurringScreen';
 
 const writes = vi.hoisted(() => ({
   setRecurringJobActive: vi.fn(),
   setRecurringInvoiceActive: vi.fn(),
   updateRecurringInvoiceRule: vi.fn(),
+  updateRecurringJobRule: vi.fn(),
   deleteRecurringJob: vi.fn(),
   deleteRecurringInvoice: vi.fn(),
 }));
@@ -17,11 +18,13 @@ const retry = vi.hoisted(() => vi.fn());
 const store = vi.hoisted(() => ({
   recurringJobs: [] as RecurringJob[],
   recurringInvoices: [] as RecurringInvoice[],
+  settings: { minimumJobFee: 0 } as Settings,
 }));
 vi.mock('../lib/DataContext', () => ({
   useData: () => ({
     recurringJobs: store.recurringJobs,
     recurringInvoices: store.recurringInvoices,
+    settings: store.settings,
     retry,
   }),
   useResources: () => ({ loading: false, error: null, refreshing: false, retry }),
@@ -82,6 +85,7 @@ beforeEach(() => {
   writes.setRecurringJobActive.mockReset().mockResolvedValue(job());
   writes.setRecurringInvoiceActive.mockReset().mockResolvedValue(plan());
   writes.updateRecurringInvoiceRule.mockReset().mockResolvedValue(plan());
+  writes.updateRecurringJobRule.mockReset().mockResolvedValue(job());
   writes.deleteRecurringJob.mockReset().mockResolvedValue(undefined);
   writes.deleteRecurringInvoice.mockReset().mockResolvedValue(undefined);
   retry.mockReset();
@@ -215,9 +219,60 @@ describe('RecurringScreen — maintenance plan rule editing', () => {
     expect(writes.updateRecurringInvoiceRule).not.toHaveBeenCalled();
   });
 
-  it('does not offer Edit on recurring jobs (pricing deferred)', () => {
+});
+
+describe('RecurringScreen — recurring job rule editing', () => {
+  it('edits job rule + recomputes estimateTotal via the pricing port', async () => {
     render(<RecurringScreen />);
     const row = rowFor('Gutter clean');
-    expect(within(row).queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    // job() pricing: laborHours 2, overhead 0, margin 0. Set rate 100 → total 200.
+    const rate = within(row).getByDisplayValue('90');
+    await userEvent.clear(rate);
+    await userEvent.type(rate, '100');
+    await userEvent.click(within(row).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(writes.updateRecurringJobRule).toHaveBeenCalledTimes(1),
+    );
+    expect(writes.updateRecurringJobRule.mock.calls[0][0]).toBe('rj1');
+    expect(writes.updateRecurringJobRule.mock.calls[0][1]).toMatchObject({
+      title: 'Gutter clean',
+      laborRate: 100,
+      estimateTotal: 200,
+      cadence: 'monthly',
+      endCondition: 'never',
+      nextDueDate: '2026-09-01',
+    });
+    expect(retry).toHaveBeenCalledWith(['recurringJobs']);
+  });
+
+  it('requires a title', async () => {
+    render(<RecurringScreen />);
+    const row = rowFor('Gutter clean');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    await userEvent.clear(within(row).getByDisplayValue('Gutter clean'));
+    await userEvent.click(within(row).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(within(row).getByRole('alert')).toHaveTextContent(/title is required/i),
+    );
+    expect(writes.updateRecurringJobRule).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blank pricing field', async () => {
+    render(<RecurringScreen />);
+    const row = rowFor('Gutter clean');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    await userEvent.clear(within(row).getByDisplayValue('90')); // labor rate
+    await userEvent.click(within(row).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(within(row).getByRole('alert')).toHaveTextContent(/non-negative number/i),
+    );
+    expect(writes.updateRecurringJobRule).not.toHaveBeenCalled();
   });
 });

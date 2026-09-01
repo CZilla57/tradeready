@@ -18,6 +18,7 @@ import {
   setRecurringJobActive,
   setRecurringInvoiceActive,
   updateRecurringInvoiceRule,
+  updateRecurringJobRule,
   InvoiceNotFoundError,
   JobNotFoundError,
   PaymentValidationError,
@@ -603,6 +604,52 @@ describe('recurring pause/resume — preserve generation state', () => {
     expect(written.createdAt).toBe('2026-01-01');
     expect(written.customerId).toBe('c1');
     expect(written.customerName).toBe('Beta LLC');
+  });
+
+  it('updateRecurringJobRule applies edits, keeps history, and takes the caller total', async () => {
+    state.serverRow = {
+      data: recJob({
+        occurrenceCount: 4,
+        lastGeneratedDate: '2026-08-01',
+        isActive: true,
+        createdAt: '2026-01-01',
+        customerId: 'c1',
+        customerName: 'Acme',
+        materials: [{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }],
+      } as Partial<RecurringJob>),
+      deleted: false,
+    };
+
+    await updateRecurringJobRule('rj1', {
+      title: 'Deep gutter clean',
+      description: 'twice-yearly',
+      laborHours: 3,
+      laborRate: 100,
+      materialMarkup: 10,
+      overhead: 15,
+      margin: 20,
+      estimateTotal: 999, // recomputed by the caller (port); the op trusts it
+      cadence: 'quarterly',
+      endCondition: 'count',
+      endCount: 8,
+      nextDueDate: '2026-12-01',
+    });
+
+    const written = state.lastUpsert!.data as RecurringJob;
+    expect(state.lastTable).toBe('recurringJobs');
+    expect(written.title).toBe('Deep gutter clean');
+    expect(written.laborRate).toBe(100);
+    expect(written.estimateTotal).toBe(999);
+    expect(written.cadence).toBe('quarterly');
+    expect(written.endCondition).toBe('count');
+    expect(written.endCount).toBe(8);
+    expect(written.endDate).toBeUndefined();
+    // history + materials preserved from the server row
+    expect(written.occurrenceCount).toBe(4);
+    expect(written.lastGeneratedDate).toBe('2026-08-01');
+    expect(written.isActive).toBe(true);
+    expect(written.customerId).toBe('c1');
+    expect(written.materials).toEqual([{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }]);
   });
 
   it('updateRecurringInvoiceRule normalises end bounds to the chosen condition', async () => {

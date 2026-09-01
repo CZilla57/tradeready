@@ -8,14 +8,17 @@ import type {
   RecurrenceCadence,
   RecurrenceEndCondition,
   RecurringInvoice,
+  RecurringJob,
 } from '@shared/types/models';
 import {
   setRecurringJobActive,
   setRecurringInvoiceActive,
   updateRecurringInvoiceRule,
+  updateRecurringJobRule,
   deleteRecurringJob,
   deleteRecurringInvoice,
 } from '../lib/writeRepository';
+import { estimateTotalFromPricing } from '../ui/pricingMath';
 
 const CADENCES: RecurrenceCadence[] = [
   'daily',
@@ -45,6 +48,14 @@ function cadence(c: RecurrenceCadence): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
+}
+
+/** Parse a required non-negative number field; null when blank or invalid. */
+function parseNonNeg(s: string): number | null {
+  const t = s.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /**
@@ -315,6 +326,219 @@ function PlanEditor({
   );
 }
 
+/**
+ * Inline editor for a recurring-JOB rule (roadmap P3 stage 5b). Like `PlanEditor`
+ * but for a job series, with one extra concern: the DERIVED `estimateTotal`.
+ * Editing the pricing inputs (labor hours/rate, material markup, overhead,
+ * margin) recomputes the total on save via `estimateTotalFromPricing` (the
+ * pricingMath port), over the rule's existing materials/jobCosts and the owner's
+ * `minimumJobFee` — matching the mobile save path — so the series stays priced
+ * exactly as it would on the phone. `updateRecurringJobRule` preserves the
+ * series' generation history; customer re-linking and material line-item editing
+ * are out of scope.
+ */
+function JobRuleEditor({
+  rule,
+  onClose,
+  onSaved,
+}: {
+  rule: RecurringJob;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { settings } = useData();
+  const [title, setTitle] = useState(rule.title ?? '');
+  const [description, setDescription] = useState(rule.description ?? '');
+  const [laborHours, setLaborHours] = useState(String(rule.laborHours ?? 0));
+  const [laborRate, setLaborRate] = useState(String(rule.laborRate ?? 0));
+  const [materialMarkup, setMaterialMarkup] = useState(String(rule.materialMarkup ?? 0));
+  const [overhead, setOverhead] = useState(String(rule.overhead ?? 0));
+  const [margin, setMargin] = useState(String(rule.margin ?? 0));
+  const [cad, setCad] = useState<RecurrenceCadence>(rule.cadence);
+  const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>(rule.endCondition);
+  const [endCount, setEndCount] = useState(rule.endCount != null ? String(rule.endCount) : '');
+  const [endDate, setEndDate] = useState(rule.endDate ?? '');
+  const [nextDueDate, setNextDueDate] = useState(rule.nextDueDate || getTodayDateString());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (!title.trim()) {
+      setError('Job title is required.');
+      return;
+    }
+    const pricing = {
+      laborHours: parseNonNeg(laborHours),
+      laborRate: parseNonNeg(laborRate),
+      materialMarkup: parseNonNeg(materialMarkup),
+      overhead: parseNonNeg(overhead),
+      margin: parseNonNeg(margin),
+    };
+    if (Object.values(pricing).some((v) => v === null)) {
+      setError('Enter a valid, non-negative number for every pricing field.');
+      return;
+    }
+    let endCountValue: number | undefined;
+    if (endCondition === 'count') {
+      endCountValue = Number(endCount.trim());
+      if (!Number.isInteger(endCountValue) || endCountValue < 1) {
+        setError('Enter a number of jobs greater than zero.');
+        return;
+      }
+    }
+    if (endCondition === 'date' && !endDate) {
+      setError('Pick an end date for the series.');
+      return;
+    }
+    if (!nextDueDate) {
+      setError('Pick the next job date.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
+      // minimumJobFee from settings), over the rule's existing materials/jobCosts.
+      const estimateTotal = estimateTotalFromPricing({
+        laborHours: pricing.laborHours!,
+        laborRate: pricing.laborRate!,
+        materials: rule.materials ?? [],
+        materialMarkup: pricing.materialMarkup!,
+        jobCosts: rule.jobCosts,
+        overheadPercent: pricing.overhead!,
+        marginPercent: pricing.margin!,
+        minimumJobFee: settings?.minimumJobFee ?? 75,
+      });
+      await updateRecurringJobRule(rule.id, {
+        title: title.trim(),
+        description: description.trim(),
+        laborHours: pricing.laborHours!,
+        laborRate: pricing.laborRate!,
+        materialMarkup: pricing.materialMarkup!,
+        overhead: pricing.overhead!,
+        margin: pricing.margin!,
+        estimateTotal,
+        cadence: cad,
+        endCondition,
+        endCount: endCountValue,
+        endDate: endCondition === 'date' ? endDate : undefined,
+        nextDueDate,
+      });
+      onSaved();
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grow" style={{ minWidth: 240 }}>
+      <div className="title">{rule.title || rule.customerName || 'Recurring job'}</div>
+      {error && (
+        <div className="inline-alert error" role="alert" style={{ marginTop: 6 }}>
+          {error}
+        </div>
+      )}
+      <form className="pay-form" style={{ marginTop: 8, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <label className="field">
+          <span>Title</span>
+          <input className="field-input" type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Description</span>
+          <input className="field-input" type="text" value={description} onChange={(e) => setDescription(e.target.value)} />
+        </label>
+        <div className="btn-row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Labor hours</span>
+            <input className="field-input" type="number" step="0.25" min="0" inputMode="decimal" value={laborHours} onChange={(e) => setLaborHours(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Labor rate ($/hr)</span>
+            <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={laborRate} onChange={(e) => setLaborRate(e.target.value)} />
+          </label>
+        </div>
+        <div className="btn-row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Material markup (%)</span>
+            <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={materialMarkup} onChange={(e) => setMaterialMarkup(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Overhead (%)</span>
+            <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={overhead} onChange={(e) => setOverhead(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Margin (%)</span>
+            <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={margin} onChange={(e) => setMargin(e.target.value)} />
+          </label>
+        </div>
+        <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+          The total is recalculated from these. Material line items are edited in
+          the mobile app.
+        </div>
+        <div className="field">
+          <span>Repeats</span>
+          <div className="chip-row" role="group" aria-label="Repeats">
+            {CADENCES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`chip${cad === c ? ' selected' : ''}`}
+                aria-pressed={cad === c}
+                onClick={() => setCad(c)}
+              >
+                {CADENCE_LABEL[c]}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="field">
+          <span>Next job date</span>
+          <input className="field-input" type="date" value={nextDueDate} onChange={(e) => setNextDueDate(e.target.value)} />
+        </label>
+        <div className="field">
+          <span>Ends</span>
+          <div className="chip-row" role="group" aria-label="Ends">
+            {END_CONDITIONS.map((ec) => (
+              <button
+                key={ec}
+                type="button"
+                className={`chip${endCondition === ec ? ' selected' : ''}`}
+                aria-pressed={endCondition === ec}
+                onClick={() => setEndCondition(ec)}
+              >
+                {END_LABEL[ec]}
+              </button>
+            ))}
+          </div>
+        </div>
+        {endCondition === 'count' && (
+          <label className="field">
+            <span>Number of jobs</span>
+            <input className="field-input" type="number" step="1" min="1" inputMode="numeric" value={endCount} onChange={(e) => setEndCount(e.target.value)} />
+          </label>
+        )}
+        {endCondition === 'date' && (
+          <label className="field">
+            <span>End date</span>
+            <input className="field-input" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </label>
+        )}
+        <div className="btn-row">
+          <button type="submit" className="btn primary sm" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+          <button type="button" className="btn ghost sm" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export default function RecurringScreen() {
   const { recurringJobs, recurringInvoices, retry } = useData();
   const state = useResources('recurringJobs', 'recurringInvoices');
@@ -368,6 +592,16 @@ export default function RecurringScreen() {
                   await deleteRecurringJob(r.id);
                   retry(['recurringJobs']);
                 }}
+                renderEditor={(close) => (
+                  <JobRuleEditor
+                    rule={r}
+                    onClose={close}
+                    onSaved={() => {
+                      retry(['recurringJobs']);
+                      close();
+                    }}
+                  />
+                )}
               />
             ))}
           </div>

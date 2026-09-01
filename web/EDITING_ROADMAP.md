@@ -400,9 +400,19 @@ five):
      blocker as Pricebook pricing), so its rows still expose only pause/resume +
      delete, no Edit. Customer re-linking is out of scope here (customer domain).
      Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
-   - **5b (remaining) — Recurring-JOB rule editing (blocked on the web-safe
-     estimate recompute) and net-new record creation (new client-generated ids,
-     heavier validation). OPEN.**
+   - **5b — Recurring-JOB rule editing. ✅ LANDED.** Now that the pricingMath
+     port exists, `RecurringScreen`'s job rows get an inline `JobRuleEditor`
+     (title, description, the five pricing inputs, cadence, end condition +
+     count/date, next date) saved through a new typed op `updateRecurringJobRule`.
+     Same shape as the plan editor — applies onto a freshly re-fetched server row,
+     preserving the series' history (id, customerId/Name, materials, jobCosts,
+     occurrenceCount, lastGeneratedDate, isActive, createdAt) and normalising
+     endCount/endDate — with the one extra concern of the DERIVED `estimateTotal`,
+     recomputed on save via `estimateTotalFromPricing` (the port) over the rule's
+     existing materials/jobCosts + settings `minimumJobFee`, matching the mobile
+     save. Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
+   - **5b (remaining) — Net-new record creation (new client-generated ids,
+     heavier validation). OPEN** — the last untouched capability in the plan.
 
 ### Stays read-only / out of scope
 
