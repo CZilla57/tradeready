@@ -22,6 +22,12 @@ import {
   deleteRecurringInvoice,
 } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
+import { MaterialsEditor } from '../ui/MaterialsEditor';
+import {
+  materialsToDrafts,
+  parseMaterialDrafts,
+  type MaterialDraft,
+} from '../ui/materialsDraft';
 
 const CADENCES: RecurrenceCadence[] = [
   'daily',
@@ -357,6 +363,9 @@ function JobRuleEditor({
   const [materialMarkup, setMaterialMarkup] = useState(String(rule.materialMarkup ?? 0));
   const [overhead, setOverhead] = useState(String(rule.overhead ?? 0));
   const [margin, setMargin] = useState(String(rule.margin ?? 0));
+  const [materials, setMaterials] = useState<MaterialDraft[]>(
+    materialsToDrafts(rule.materials),
+  );
   const [cad, setCad] = useState<RecurrenceCadence>(rule.cadence);
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>(rule.endCondition);
   const [endCount, setEndCount] = useState(rule.endCount != null ? String(rule.endCount) : '');
@@ -383,6 +392,11 @@ function JobRuleEditor({
       setError('Enter a valid, non-negative number for every pricing field.');
       return;
     }
+    const parsedMaterials = parseMaterialDrafts(materials);
+    if (!parsedMaterials.ok) {
+      setError(parsedMaterials.error);
+      return;
+    }
     let endCountValue: number | undefined;
     if (endCondition === 'count') {
       endCountValue = Number(endCount.trim());
@@ -403,11 +417,12 @@ function JobRuleEditor({
     setError(null);
     try {
       // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
-      // minimumJobFee from settings), over the rule's existing materials/jobCosts.
+      // minimumJobFee from settings), over the EDITED materials + the rule's
+      // existing jobCosts.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
-        materials: rule.materials ?? [],
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         jobCosts: rule.jobCosts,
         overheadPercent: pricing.overhead!,
@@ -419,6 +434,7 @@ function JobRuleEditor({
         description: description.trim(),
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
@@ -478,9 +494,9 @@ function JobRuleEditor({
           </label>
         </div>
         <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
-          The total is recalculated from these. Material line items are edited in
-          the mobile app.
+          The total is recalculated from these.
         </div>
+        <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
         <div className="field">
           <span>Repeats</span>
           <div className="chip-row" role="group" aria-label="Repeats">
@@ -573,6 +589,7 @@ function NewJobRuleForm({
   const [materialMarkup, setMaterialMarkup] = useState(String(settings?.materialMarkup ?? 20));
   const [overhead, setOverhead] = useState(String(settings?.overheadPercent ?? 15));
   const [margin, setMargin] = useState(String(settings?.marginPercent ?? 20));
+  const [materials, setMaterials] = useState<MaterialDraft[]>([]);
   const [cad, setCad] = useState<RecurrenceCadence>('monthly');
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>('never');
   const [endCount, setEndCount] = useState('');
@@ -604,6 +621,11 @@ function NewJobRuleForm({
       setError('Enter a valid, non-negative number for every pricing field.');
       return;
     }
+    const parsedMaterials = parseMaterialDrafts(materials);
+    if (!parsedMaterials.ok) {
+      setError(parsedMaterials.error);
+      return;
+    }
     let endCountValue: number | undefined;
     if (endCondition === 'count') {
       endCountValue = Number(endCount.trim());
@@ -624,11 +646,11 @@ function NewJobRuleForm({
     setError(null);
     try {
       // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
-      // minimumJobFee from settings) over an empty material set (deferred).
+      // minimumJobFee from settings) over the authored materials.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
-        materials: [],
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         overheadPercent: pricing.overhead!,
         marginPercent: pricing.margin!,
@@ -641,6 +663,7 @@ function NewJobRuleForm({
         description: description.trim(),
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
@@ -723,9 +746,9 @@ function NewJobRuleForm({
             </label>
           </div>
           <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
-            The total is calculated from these. Material line items are added in
-            the mobile app.
+            The total is calculated from these.
           </div>
+          <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
           <div className="field">
             <span>Repeats</span>
             <div className="chip-row" role="group" aria-label="Repeats">

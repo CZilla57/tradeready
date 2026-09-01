@@ -808,13 +808,16 @@ export async function setRecurringJobActive(
 
 /** The recurring-job rule fields the portal edits. `estimateTotal` is DERIVED
  *  (recomputed by the caller via `web/src/ui/pricingMath.ts` from the pricing
- *  inputs + the rule's existing materials/jobCosts, P0.6). Customer re-linking
- *  and material line-item editing are out of scope, like the plan editor. */
+ *  inputs + materials, P0.6). Customer re-linking is out of scope, like the plan
+ *  editor. `materials` are authored via the shared MaterialsEditor and replace
+ *  the server list; `jobCosts` (direct-cost lines) stay preserved from the fresh
+ *  server row (a separate authoring surface). */
 export interface RecurringJobRuleEdit {
   title: string;
   description: string;
   laborHours: number;
   laborRate: number;
+  materials: Material[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -831,12 +834,11 @@ export interface RecurringJobRuleEdit {
  *
  * Mirrors `updateRecurringInvoiceRule`: applies the edited rule fields onto a
  * FRESHLY re-fetched server row, so the series' history — id, customerId/Name,
- * materials, jobCosts, occurrenceCount, lastGeneratedDate, isActive, createdAt —
- * is preserved (never rolled back), and normalises endCount/endDate to the
- * chosen endCondition. The one extra concern over the plan is the DERIVED
- * `estimateTotal`: unlike a plan's flat `amount`, a job's total is a
- * `calculateEstimate` derivation, so the caller recomputes it with the
- * pricingMath port (matching the mobile save) and hands it in here.
+ * jobCosts, occurrenceCount, lastGeneratedDate, isActive, createdAt — is
+ * preserved (never rolled back), and normalises endCount/endDate to the chosen
+ * endCondition. The DERIVED `estimateTotal` is recomputed by the caller with the
+ * pricingMath port over the edited pricing inputs AND materials (matching the
+ * mobile save); the edited `materials` are written in place of the server list.
  */
 export async function updateRecurringJobRule(
   id: string,
@@ -849,6 +851,7 @@ export async function updateRecurringJobRule(
     description: edit.description,
     laborHours: edit.laborHours,
     laborRate: edit.laborRate,
+    materials: edit.materials,
     materialMarkup: edit.materialMarkup,
     overhead: edit.overhead,
     margin: edit.margin,
@@ -951,9 +954,9 @@ function newRecurringJobId(): string {
 
 /** The fields a new recurring-job rule is created from. `estimateTotal` is
  *  DERIVED — the caller recomputes it with the pricingMath port (P0.6), like the
- *  rule edit. New series start with no materials/jobCosts (line-item authoring is
- *  deferred). The customer is picked from existing records, so both id and
- *  denormalized name are supplied. */
+ *  rule edit. `materials` are authored via the shared MaterialsEditor (default
+ *  none); jobCosts still aren't authored on creation. The customer is picked from
+ *  existing records, so both id and denormalized name are supplied. */
 export interface NewRecurringJobFields {
   customerId: string;
   customerName: string;
@@ -961,6 +964,7 @@ export interface NewRecurringJobFields {
   description: string;
   laborHours: number;
   laborRate: number;
+  materials: Material[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -984,10 +988,10 @@ export interface NewRecurringJobFields {
  * a single-entity insert (no coupled two-blob write that could half-fail) and
  * keeps both recurring creates consistent.
  *
- * Mirrors the rule shape `updateRecurringJobRule` writes: the pricing inputs plus
- * the caller-recomputed `estimateTotal`, with endCount/endDate normalised to the
- * chosen condition. `address`/`notes` start blank — they aren't in the portal's
- * recurring-job editable surface (matching `RecurringJobRuleEdit`).
+ * Mirrors the rule shape `updateRecurringJobRule` writes: the pricing inputs and
+ * authored materials plus the caller-recomputed `estimateTotal`, with
+ * endCount/endDate normalised to the chosen condition. `address`/`notes` start
+ * blank — they aren't in the portal's recurring-job editable surface.
  */
 export async function createRecurringJob(
   fields: NewRecurringJobFields,
@@ -1003,7 +1007,7 @@ export async function createRecurringJob(
     estimateTotal: fields.estimateTotal,
     laborHours: fields.laborHours,
     laborRate: fields.laborRate,
-    materials: [],
+    materials: fields.materials,
     materialMarkup: fields.materialMarkup,
     overhead: fields.overhead,
     margin: fields.margin,

@@ -425,15 +425,17 @@ five):
      Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
    - **5b — Recurring-JOB rule editing. ✅ LANDED.** Now that the pricingMath
      port exists, `RecurringScreen`'s job rows get an inline `JobRuleEditor`
-     (title, description, the five pricing inputs, cadence, end condition +
-     count/date, next date) saved through a new typed op `updateRecurringJobRule`.
-     Same shape as the plan editor — applies onto a freshly re-fetched server row,
-     preserving the series' history (id, customerId/Name, materials, jobCosts,
-     occurrenceCount, lastGeneratedDate, isActive, createdAt) and normalising
-     endCount/endDate — with the one extra concern of the DERIVED `estimateTotal`,
-     recomputed on save via `estimateTotalFromPricing` (the port) over the rule's
-     existing materials/jobCosts + settings `minimumJobFee`, matching the mobile
-     save. Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
+     (title, description, the five pricing inputs, MATERIALS via the shared
+     `MaterialsEditor`, cadence, end condition + count/date, next date) saved
+     through a new typed op `updateRecurringJobRule`. Same shape as the plan
+     editor — applies onto a freshly re-fetched server row, preserving the series'
+     history (id, customerId/Name, jobCosts, occurrenceCount, lastGeneratedDate,
+     isActive, createdAt) and normalising endCount/endDate — with the DERIVED
+     `estimateTotal` recomputed on save via `estimateTotalFromPricing` (the port)
+     over the edited materials + settings `minimumJobFee`, matching the mobile
+     save. The edited materials replace the server list; `jobCosts` (direct-cost
+     lines) stay preserved from the fresh row. Covered by `RecurringScreen.test.tsx`
+     + `writeRepository.test.ts`.
    - **5c — Creation flows. IN PROGRESS.**
      - **New customer. ✅ LANDED.** `CustomersScreen` has a "New customer" form
        (`NewCustomerForm`) creating a record via a new typed op `createCustomer`,
@@ -514,10 +516,9 @@ five):
        single-entity insert (no two-blob write that could half-fail). The customer
        is PICKED from existing records; the derived `estimateTotal` is recomputed
        the mobile way via the `estimateTotalFromPricing` port over the five pricing
-       inputs (seeded from the business defaults) with an empty material set —
-       line-item/materials authoring stays deferred, so `address`/`notes`/materials
-       start blank, matching the recurring-job editable surface
-       (`RecurringJobRuleEdit`). Covered by `RecurringScreen.test.tsx` +
+       inputs (seeded from the business defaults) AND any materials authored via
+       the shared `MaterialsEditor`. `address`/`notes` start blank (not in the
+       recurring-job editable surface). Covered by `RecurringScreen.test.tsx` +
        `writeRepository.test.ts`.
      - **Line-item / materials editor. ✅ LANDED (reusable component + Pricebook).**
        `web/src/ui/MaterialsEditor.tsx` is a reusable `Material[]` row editor
@@ -526,16 +527,18 @@ five):
        (`parseMaterialDrafts` drops abandoned blank rows and validates the rest;
        new ids match the mobile `m<Date.now()>` format, P1.4). It is STRING-drafted
        like every other pricing field so mid-edit values ("1." / "") don't snap to
-       a number, parsed to stored `Material[]` only on save. Wired into BOTH
+       a number, parsed to stored `Material[]` only on save. Wired into the
        Pricebook surfaces (the `PricebookEditor` edit form and the New service
-       form), so a service's materials — and thus its derived `estimateTotal` —
-       are now fully authored in the portal. Covered by `materialsDraft.test.ts`,
-       `PricebookDetailScreen.test.tsx`, `PricebookScreen.test.tsx`.
-     - **Remaining: adopt the editor for jobs (OPEN).** The recurring-job rule
-       editor / New recurring-job form and a Job's own estimate (a new
-       `JobPricingEditor` + `updateJobPricing` write op, fresh-row merge preserving
-       approval / status / invoiceId) can now drop in the same `MaterialsEditor`;
-       both currently start/keep materials empty. Job estimate authoring also
+       form) AND the recurring-job surfaces (the `JobRuleEditor` edit form and the
+       New recurring-job form), so their materials — and thus their derived
+       `estimateTotal` — are now fully authored in the portal. Covered by
+       `materialsDraft.test.ts`, `PricebookDetailScreen.test.tsx`,
+       `PricebookScreen.test.tsx`, `RecurringScreen.test.tsx`.
+     - **Remaining: a Job's own estimate (OPEN).** A plain Job still has no
+       pricing/materials editor: it needs a new `JobPricingEditor` on
+       `JobDetailScreen` + an `updateJobPricing` write op (fresh-row merge
+       preserving approval / status / invoiceId / changeOrders / timeSessions),
+       which can drop in the same `MaterialsEditor`. Job estimate authoring also
        carries the deferred 3b approval/change-order surface. This is the last
        remaining editable surface.
 

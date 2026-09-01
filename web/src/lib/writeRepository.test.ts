@@ -892,6 +892,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       description: 'twice-yearly',
       laborHours: 3,
       laborRate: 100,
+      materials: [{ id: 'm2', name: 'Brush', quantity: 2, unitCost: 5 }],
       materialMarkup: 10,
       overhead: 15,
       margin: 20,
@@ -911,12 +912,13 @@ describe('recurring pause/resume — preserve generation state', () => {
     expect(written.endCondition).toBe('count');
     expect(written.endCount).toBe(8);
     expect(written.endDate).toBeUndefined();
-    // history + materials preserved from the server row
+    // history preserved from the server row (never rolled back)…
     expect(written.occurrenceCount).toBe(4);
     expect(written.lastGeneratedDate).toBe('2026-08-01');
     expect(written.isActive).toBe(true);
     expect(written.customerId).toBe('c1');
-    expect(written.materials).toEqual([{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }]);
+    // …while the edited materials REPLACE the server list (Filter → Brush).
+    expect(written.materials).toEqual([{ id: 'm2', name: 'Brush', quantity: 2, unitCost: 5 }]);
   });
 
   it('createRecurringInvoice inits a fresh series with a mobile-format id', async () => {
@@ -978,6 +980,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       description: 'Quarterly',
       laborHours: 2,
       laborRate: 90,
+      materials: [{ id: 'm1', name: 'Sealant', quantity: 1, unitCost: 12 }],
       materialMarkup: 20,
       overhead: 15,
       margin: 20,
@@ -1005,8 +1008,8 @@ describe('recurring pause/resume — preserve generation state', () => {
       lastGeneratedDate: null,
       isActive: true,
     });
-    // No materials/jobCosts authored here; address/notes start blank.
-    expect(data.materials).toEqual([]);
+    // Authored materials round-trip; address/notes start blank.
+    expect(data.materials).toEqual([{ id: 'm1', name: 'Sealant', quantity: 1, unitCost: 12 }]);
     expect(data.address).toBe('');
     expect(data.notes).toBe('');
     expect(data.endDate).toBeUndefined();
@@ -1016,7 +1019,7 @@ describe('recurring pause/resume — preserve generation state', () => {
   it('createRecurringJob normalises end bounds and mints unique ids', async () => {
     const base = {
       customerId: 'c1', customerName: 'A', title: 'T', description: '',
-      laborHours: 1, laborRate: 80, materialMarkup: 0, overhead: 0, margin: 0,
+      laborHours: 1, laborRate: 80, materials: [], materialMarkup: 0, overhead: 0, margin: 0,
       estimateTotal: 80, cadence: 'monthly' as const, nextDueDate: '2026-10-01' as const,
     };
     const a = await createRecurringJob({ ...base, endCondition: 'date', endDate: '2027-01-01' });
