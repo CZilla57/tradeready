@@ -14,6 +14,7 @@ import {
   setJobArchived,
   savePricebookEntry,
   saveExpense,
+  scheduleJob,
   setRecurringJobActive,
   setRecurringInvoiceActive,
   InvoiceNotFoundError,
@@ -240,6 +241,53 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
     const written = state.lastUpsert!.data as Job;
     expect(written.archivedAt).toBeTruthy();
     expect(state.lastTable).toBe('jobs');
+  });
+
+  const schedule = {
+    scheduledDate: '2026-09-10' as const,
+    scheduledStartTime: '09:00' as const,
+    scheduledEndTime: '11:00' as const,
+  };
+
+  it('scheduleJob assigns the date and advances an approved job to scheduled (P0.6)', async () => {
+    const approval = { decision: 'approved', token: 't' };
+    state.serverRow = {
+      data: job({ status: 'approved', approval } as Partial<Job>),
+      deleted: false,
+    };
+    await scheduleJob('job-1', schedule);
+
+    const written = state.lastUpsert!.data as Job;
+    expect(state.lastTable).toBe('jobs');
+    expect(written.scheduledDate).toBe('2026-09-10');
+    expect(written.scheduledStartTime).toBe('09:00');
+    expect(written.status).toBe('scheduled'); // approved → scheduled
+    // consent survives the fresh-row merge
+    expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
+  });
+
+  it('scheduleJob never regresses a later status', async () => {
+    state.serverRow = { data: job({ status: 'in_progress' }), deleted: false };
+    await scheduleJob('job-1', schedule);
+    expect((state.lastUpsert!.data as Job).status).toBe('in_progress');
+  });
+
+  it('scheduleJob does not advance a pre-approval status', async () => {
+    state.serverRow = { data: job({ status: 'estimate_sent' }), deleted: false };
+    await scheduleJob('job-1', schedule);
+    expect((state.lastUpsert!.data as Job).status).toBe('estimate_sent');
+  });
+
+  it('scheduleJob clearing the date leaves status untouched', async () => {
+    state.serverRow = { data: job({ status: 'scheduled', scheduledDate: '2026-09-01' }), deleted: false };
+    await scheduleJob('job-1', {
+      scheduledDate: null,
+      scheduledStartTime: null,
+      scheduledEndTime: null,
+    });
+    const written = state.lastUpsert!.data as Job;
+    expect(written.scheduledDate).toBeNull();
+    expect(written.status).toBe('scheduled'); // no regress on unschedule
   });
 });
 

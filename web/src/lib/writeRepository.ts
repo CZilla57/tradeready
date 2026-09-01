@@ -389,6 +389,54 @@ export async function updateJobDetails(
   return next;
 }
 
+/** The schedule fields the calendar may assign/move. A null `scheduledDate`
+ *  unschedules the job (sends it back to the "needs scheduling" pile). */
+export interface JobScheduleEdit {
+  scheduledDate: DateString | null;
+  scheduledStartTime: TimeString | null;
+  scheduledEndTime: TimeString | null;
+}
+
+// The ONE automatic, schedule-driven status transition, reimplemented web-side
+// from utils/jobStatus.ts `advanceStatusForSchedule` (that module reaches
+// JOB_STATUSES in pricingEngine, which pulls an RN component type and isn't
+// web-importable — same reason invoiceMath/status.ts are reimplemented here).
+// Assigning a date advances an `approved` job to `scheduled` (its pipeline
+// `.next`); every other status is returned unchanged so later statuses never
+// regress and earlier ones don't skip approval. Kept in lockstep with the
+// shared helper (`web/src/ui/status.ts` JOB_PIPELINE pins the same order).
+function advanceStatusForSchedule(
+  status: Job['status'],
+  hasSchedule: boolean,
+): Job['status'] {
+  return hasSchedule && status === 'approved' ? 'scheduled' : status;
+}
+
+/**
+ * Assign, move, or clear a job's schedule from the calendar (roadmap P3 stage
+ * 5b) — the "saveJob" the schedule flow needs.
+ *
+ * Applies onto a FRESHLY re-fetched server row (like `updateJobDetails`), so
+ * consent/workflow fields the portal never sets (approval, changeOrders,
+ * timeSessions, invoiceId, pricing) are preserved. Unlike `updateJobDetails`,
+ * this DOES reconcile the one schedule-coupled derived field: gaining a date
+ * advances an approved job to `scheduled`, matching the mobile scheduling
+ * action (P0.6). Clearing the date never regresses a later status.
+ */
+export async function scheduleJob(
+  jobId: string,
+  edit: JobScheduleEdit,
+): Promise<Job> {
+  const server = await loadJob(jobId);
+  const next: Job = {
+    ...server,
+    ...edit,
+    status: advanceStatusForSchedule(server.status, !!edit.scheduledDate),
+  };
+  await upsertBlobRow('jobs', jobId, next);
+  return next;
+}
+
 /** Archive or unarchive a job (the model's safe soft-removal). Operates on the
  *  fresh server row, so it never clobbers concurrent consent/workflow writes. */
 export async function setJobArchived(

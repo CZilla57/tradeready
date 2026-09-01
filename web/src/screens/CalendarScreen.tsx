@@ -17,6 +17,7 @@ import {
   isBlackoutDate,
 } from '@shared/utils/scheduleConfig';
 import type { Job, Settings } from '@shared/types/models';
+import { scheduleJob } from '../lib/writeRepository';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -24,10 +25,134 @@ function timeKey(j: Job): string {
   return j.scheduledStartTime ?? '99:99';
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'Something went wrong';
+}
+
 const EMPTY_SETTINGS = {} as Settings;
 
+/**
+ * An inline "assign a date" scheduler for a job that needs one (roadmap P3
+ * stage 5b). Collapsed, it's a link to the job plus a Schedule button; expanded,
+ * a date (required) + optional start/end time form. Saving goes through
+ * `scheduleJob`, which applies the date onto the fresh server row and advances
+ * an approved job to `scheduled` (P0.6). Follows the InvoiceDetailScreen UX:
+ * in-flight disable, a failed write that stays open with the error, and a server
+ * re-pull on success handled by the caller.
+ */
+function NeedsSchedulingRow({
+  job,
+  defaultDate,
+  onScheduled,
+}: {
+  job: Job;
+  defaultDate: string;
+  onScheduled: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState(defaultDate);
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openForm() {
+    setDate(job.scheduledDate || defaultDate);
+    setStart(job.scheduledStartTime || '');
+    setEnd(job.scheduledEndTime || '');
+    setError(null);
+    setOpen(true);
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (!date) {
+      setError('Pick a date.');
+      return;
+    }
+    if (end && !start) {
+      setError('Set a start time too, or clear the end time.');
+      return;
+    }
+    if (start && end && end <= start) {
+      setError('End time must be after the start time.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await scheduleJob(job.id, {
+        scheduledDate: date,
+        scheduledStartTime: start || null,
+        scheduledEndTime: end || null,
+      });
+      onScheduled();
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    const b = jobStatusBadge(job.status);
+    return (
+      <div className="row">
+        <Link to={`/jobs/${job.id}`} className="grow">
+          <div className="title">{job.title || job.customerName || 'Job'}</div>
+          <div className="meta">{job.customerName || 'No customer'}</div>
+        </Link>
+        <Badge color={b.color}>{b.label}</Badge>
+        <span className="amt">{formatMoney(job.estimateTotal || 0)}</span>
+        <button type="button" className="btn sm" onClick={openForm}>
+          Schedule
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="row" style={{ flexWrap: 'wrap' }}>
+      <div className="grow" style={{ minWidth: 220 }}>
+        <div className="title">{job.title || job.customerName || 'Job'}</div>
+        {error && (
+          <div className="inline-alert error" role="alert" style={{ marginTop: 6 }}>
+            {error}
+          </div>
+        )}
+        <form className="pay-form" style={{ marginTop: 8, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+          <label className="field">
+            <span>Date</span>
+            <input className="field-input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <div className="btn-row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>Start (optional)</span>
+              <input className="field-input" type="time" value={start} onChange={(e) => setStart(e.target.value)} />
+            </label>
+            <label className="field" style={{ flex: 1 }}>
+              <span>End (optional)</span>
+              <input className="field-input" type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
+            </label>
+          </div>
+          <div className="btn-row">
+            <button type="submit" className="btn primary sm" disabled={busy}>
+              {busy ? 'Scheduling…' : 'Schedule job'}
+            </button>
+            <button type="button" className="btn ghost sm" onClick={() => setOpen(false)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function CalendarScreen() {
-  const { jobs, settings } = useData();
+  const { jobs, settings, retry } = useData();
   // Calendar needs jobs; settings only shade work days/blackouts, so a settings
   // failure falls back to an unshaded grid rather than an empty screen.
   const state = useResources('jobs');
@@ -149,21 +274,14 @@ export default function CalendarScreen() {
           <Empty>Every approved job has a date. Nice.</Empty>
         ) : (
           <div className="list">
-            {needsScheduling.map((j) => {
-              const b = jobStatusBadge(j.status);
-              return (
-                <Link key={j.id} to={`/jobs/${j.id}`} className="row">
-                  <div className="grow">
-                    <div className="title">
-                      {j.title || j.customerName || 'Job'}
-                    </div>
-                    <div className="meta">{j.customerName || 'No customer'}</div>
-                  </div>
-                  <Badge color={b.color}>{b.label}</Badge>
-                  <span className="amt">{formatMoney(j.estimateTotal || 0)}</span>
-                </Link>
-              );
-            })}
+            {needsScheduling.map((j) => (
+              <NeedsSchedulingRow
+                key={j.id}
+                job={j}
+                defaultDate={today}
+                onScheduled={() => retry(['jobs'])}
+              />
+            ))}
           </div>
         )}
       </Card>

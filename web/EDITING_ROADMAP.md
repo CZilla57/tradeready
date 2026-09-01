@@ -359,10 +359,27 @@ five):
      `utils/recurringInvoices.ts` `fastForwardedNextDueDate` over the pure
      `utils/recurrence.ts` helpers), while a recurring-job resume keeps back-fill.
      Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
-   - **5b — Recurring rule editing (cadence/amounts/end condition/nextDueDate),
-     calendar drag/assign scheduling, and net-new creation. OPEN.** These
-     recompute generation state and add the most new surface + validation, so
-     they follow 5a like 3b followed 3a.
+   - **5b — Calendar scheduling. ✅ LANDED.** `CalendarScreen`'s "Needs
+     scheduling" rows now assign a date (+ optional start/end time) inline via a
+     new typed op `scheduleJob(jobId, {scheduledDate, scheduledStartTime,
+     scheduledEndTime})` — the schedule flow's "saveJob". It applies onto a
+     FRESHLY re-fetched server row (like `updateJobDetails`, so approval /
+     changeOrders / timeSessions / invoiceId / pricing are preserved) and
+     reconciles the ONE schedule-coupled derived field (P0.6): gaining a date
+     advances an `approved` job to `scheduled`, matching the mobile scheduling
+     action. That advance is a web-side reimplementation of `utils/jobStatus.ts`
+     `advanceStatusForSchedule` (that module reaches `pricingEngine`'s
+     `JOB_STATUSES`, not web-importable — same reason invoiceMath/status.ts are
+     reimplemented) and keeps its no-regress/no-skip guarantee; clearing the date
+     never regresses a later status. Times validated (end needs a start; end >
+     start). Rescheduling an already-scheduled job still goes through
+     `JobEditor`/`updateJobDetails` on the detail screen; grid drag-and-drop was
+     deliberately not built (cramped, and the inline assign covers the desk task).
+     Covered by `CalendarScreen.test.tsx` + `writeRepository.test.ts`.
+   - **5b (remaining) — Recurring rule editing (cadence/amounts/end
+     condition/nextDueDate) and net-new record creation. OPEN.** These recompute
+     generation state / mint new client-generated ids with heavier validation, so
+     they stay last.
 
 ### Stays read-only / out of scope
 
