@@ -14,6 +14,7 @@ import {
   setJobArchived,
   savePricebookEntry,
   saveExpense,
+  createCustomer,
   scheduleJob,
   setRecurringJobActive,
   setRecurringInvoiceActive,
@@ -163,6 +164,40 @@ describe('saveCustomer — whole-blob upsert', () => {
     await expect(saveCustomer(customer())).rejects.toMatchObject({
       message: 'rls denied',
     });
+  });
+});
+
+describe('createCustomer — new record with a mobile-format id', () => {
+  it('mints a c<ms>_<n> id, stamps createdAt, and upserts the full record', async () => {
+    const before = Date.now();
+    const created = await createCustomer({
+      name: 'Jane’s Bakery',
+      email: 'jane@example.com',
+      phone: '555-1212',
+      address: '5 Main',
+      notes: 'gate code 4321',
+    });
+
+    expect(state.lastTable).toBe('customers');
+    // Mobile id format: c<Date.now()>_<counter>.
+    expect(created.id).toMatch(/^c\d+_\d+$/);
+    expect(Date.parse(created.createdAt as string)).toBeGreaterThanOrEqual(before);
+    const row = state.lastUpsert!;
+    expect(row.id).toBe(created.id);
+    expect(row.deleted).toBe(false);
+    expect(row.data as Customer).toMatchObject({
+      name: 'Jane’s Bakery',
+      email: 'jane@example.com',
+      phone: '555-1212',
+      address: '5 Main',
+      notes: 'gate code 4321',
+    });
+  });
+
+  it('mints a unique id on each call within the same millisecond', async () => {
+    const a = await createCustomer({ name: 'A', email: '', phone: '', address: '', notes: '' });
+    const b = await createCustomer({ name: 'B', email: '', phone: '', address: '', notes: '' });
+    expect(a.id).not.toBe(b.id);
   });
 });
 

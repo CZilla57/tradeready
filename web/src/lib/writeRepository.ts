@@ -327,6 +327,52 @@ export async function saveCustomer(customer: Customer): Promise<Customer> {
   return customer;
 }
 
+// New client-generated ids must match the format mobile creates (P1.4). The
+// mobile customer id is `c<Date.now()>_<counter>` (utils/storage/customers.ts
+// `newCustomerId`), the counter making ids unique within a burst that shares a
+// millisecond. Reproduced here so a portal-created customer is indistinguishable
+// from a phone-created one.
+let _cidCounter = 0;
+function newCustomerId(): string {
+  _cidCounter += 1;
+  return `c${Date.now()}_${_cidCounter}`;
+}
+
+/** The fields a new customer is created from. */
+export interface NewCustomerFields {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  notes: string;
+}
+
+/**
+ * Create a new customer (roadmap P3 stage 5 — creation flows).
+ *
+ * Mints a mobile-format id and stamps `createdAt`, producing the same
+ * fresh-record shape mobile's `upsertCustomerInList` writes, then upserts by id.
+ * Name-dedupe (mobile merges a same-name entry rather than duplicating) is a
+ * DISPLAY-layer decision here: the caller checks the loaded list and blocks a
+ * duplicate, so the portal never silently merges into a record the user can't
+ * see. A brand-new id means this is a pure insert — no server row to preserve.
+ */
+export async function createCustomer(
+  fields: NewCustomerFields,
+): Promise<Customer> {
+  const customer: Customer = {
+    id: newCustomerId(),
+    name: fields.name,
+    email: fields.email,
+    phone: fields.phone,
+    address: fields.address,
+    notes: fields.notes,
+    createdAt: new Date().toISOString(),
+  };
+  await upsertBlobRow('customers', customer.id, customer);
+  return customer;
+}
+
 // ---------------------------------------------------------------------------
 // Jobs (roadmap P3 stage 3)
 //

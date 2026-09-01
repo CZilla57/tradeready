@@ -411,8 +411,20 @@ five):
      recomputed on save via `estimateTotalFromPricing` (the port) over the rule's
      existing materials/jobCosts + settings `minimumJobFee`, matching the mobile
      save. Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
-   - **5b (remaining) — Net-new record creation (new client-generated ids,
-     heavier validation). OPEN** — the last untouched capability in the plan.
+   - **5c — Creation flows. IN PROGRESS.**
+     - **New customer. ✅ LANDED.** `CustomersScreen` has a "New customer" form
+       (`NewCustomerForm`) creating a record via a new typed op `createCustomer`,
+       which mints a mobile-format id (`c<Date.now()>_<counter>`, matching
+       `utils/storage/customers.ts` `newCustomerId`, P1.4), stamps `createdAt`,
+       and upserts — the same fresh-record shape mobile writes; it navigates to
+       the new record on success. Name is required, and a case-insensitive clash
+       with an existing NON-archived customer is blocked in the UI (mobile's
+       `upsertCustomerInList` dedupe key) rather than silently merged, so the
+       portal never creates a hidden duplicate. Covered by `CustomersScreen.test
+       .tsx` + `writeRepository.test.ts`.
+     - **Remaining creation: new job/estimate, invoice, expense, pricebook entry,
+       recurring rule. OPEN** — each mints its own client-generated id (confirm
+       the mobile format per entity) with per-domain validation.
 
 ### Stays read-only / out of scope
 
