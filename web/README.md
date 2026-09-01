@@ -55,6 +55,9 @@ boundary — the security boundary is Supabase RLS; see below.)
 
 #### A note on the future editing surface
 
+See [`EDITING_ROADMAP.md`](./EDITING_ROADMAP.md) for the full phased plan
+(data-integrity prerequisites, write architecture, concurrency, and scope).
+
 When editing is introduced, it should follow this shape rather than a generic
 `write(table, id, data)` helper:
 

@@ -1,0 +1,100 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import type { PricebookEntry, Settings } from '@shared/types/models';
+import PricebookScreen from './PricebookScreen';
+
+const writes = vi.hoisted(() => ({ createPricebookEntry: vi.fn() }));
+vi.mock('../lib/writeRepository', () => writes);
+
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => navigate,
+}));
+
+const retry = vi.hoisted(() => vi.fn());
+const store = vi.hoisted(() => ({
+  pricebook: [] as PricebookEntry[],
+  settings: { minimumJobFee: 0 } as Settings,
+}));
+vi.mock('../lib/DataContext', () => ({
+  useData: () => ({ pricebook: store.pricebook, settings: store.settings, retry }),
+  useResources: () => ({ loading: false, error: null, refreshing: false, retry }),
+}));
+
+function renderScreen() {
+  return render(
+    <MemoryRouter>
+      <PricebookScreen />
+    </MemoryRouter>,
+  );
+}
+
+beforeEach(() => {
+  writes.createPricebookEntry
+    .mockReset()
+    .mockResolvedValue({ id: 'pb-new' } as PricebookEntry);
+  navigate.mockReset();
+  retry.mockReset();
+  store.pricebook = [];
+  store.settings = { minimumJobFee: 0 } as Settings;
+});
+
+describe('PricebookScreen — create', () => {
+  it('creates a service, recomputes the total via the port, and navigates', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'New service' }));
+
+    await userEvent.type(screen.getByLabelText('Name'), 'Heater flush');
+    // Defaults: laborHours 1, laborRate 85, markup 20, overhead 15, margin 20.
+    // Set rate 100 → labor 100; overhead 15% → 115; margin 20% → 115/0.8 = 143.75.
+    const rate = screen.getByLabelText('Labor rate ($/hr)');
+    await userEvent.clear(rate);
+    await userEvent.type(rate, '100');
+    await userEvent.click(screen.getByRole('button', { name: 'Create service' }));
+
+    await waitFor(() => expect(writes.createPricebookEntry).toHaveBeenCalledTimes(1));
+    expect(writes.createPricebookEntry.mock.calls[0][0]).toMatchObject({
+      name: 'Heater flush',
+      laborRate: 100,
+      estimateTotal: 143.75,
+    });
+    expect(navigate).toHaveBeenCalledWith('/pricebook/pb-new');
+  });
+
+  it('requires a name', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'New service' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create service' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/name/i);
+    expect(writes.createPricebookEntry).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blank pricing field', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'New service' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'X');
+    await userEvent.clear(screen.getByLabelText('Labor hours'));
+    await userEvent.click(screen.getByRole('button', { name: 'Create service' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/non-negative number/i);
+    expect(writes.createPricebookEntry).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a write error and keeps the form open', async () => {
+    writes.createPricebookEntry.mockRejectedValue(new Error('rls denied'));
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'New service' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'X');
+    await userEvent.click(screen.getByRole('button', { name: 'Create service' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('rls denied'),
+    );
+    expect(screen.getByRole('button', { name: 'Create service' })).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});
