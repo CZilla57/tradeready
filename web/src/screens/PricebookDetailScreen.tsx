@@ -6,6 +6,12 @@ import { formatMoney } from '@shared/utils/format';
 import type { PricebookEntry } from '@shared/types/models';
 import { savePricebookEntry, deletePricebookEntry } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
+import { MaterialsEditor } from '../ui/MaterialsEditor';
+import {
+  materialsToDrafts,
+  parseMaterialDrafts,
+  type MaterialDraft,
+} from '../ui/materialsDraft';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
@@ -28,9 +34,10 @@ function parseNonNeg(s: string): number | null {
  * existing materials/jobCosts, using the owner's `minimumJobFee` from settings —
  * exactly the buildEstimateInput→calculateEstimate path the mobile
  * PricebookEntryScreen saves through (travel/tax 0, non-emergency), so a service
- * priced here matches one priced on the phone (P0.6). Material LINE-ITEM editing
- * (add/remove) is still deferred; the entry's materials round-trip untouched and
- * feed the recompute.
+ * priced here matches one priced on the phone (P0.6). Material LINE ITEMS are now
+ * editable via the shared `MaterialsEditor`; the edited list feeds the recompute
+ * and is written on the entry. `jobCosts` (direct-cost lines) still round-trip
+ * untouched and feed the recompute — authoring those is a separate surface.
  */
 function PricebookEditor({ entry }: { entry: PricebookEntry }) {
   const { retry, settings } = useData();
@@ -45,6 +52,9 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
   const [materialMarkup, setMaterialMarkup] = useState(String(entry.materialMarkup ?? 0));
   const [overhead, setOverhead] = useState(String(entry.overhead ?? 0));
   const [margin, setMargin] = useState(String(entry.margin ?? 0));
+  const [materials, setMaterials] = useState<MaterialDraft[]>(
+    materialsToDrafts(entry.materials),
+  );
   const [busy, setBusy] = useState<'save' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -58,6 +68,7 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
     setMaterialMarkup(String(entry.materialMarkup ?? 0));
     setOverhead(String(entry.overhead ?? 0));
     setMargin(String(entry.margin ?? 0));
+    setMaterials(materialsToDrafts(entry.materials));
     setError(null);
     setConfirmDelete(false);
     setOpen(true);
@@ -81,15 +92,21 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
       setError('Enter a valid, non-negative number for every pricing field.');
       return;
     }
+    const parsedMaterials = parseMaterialDrafts(materials);
+    if (!parsedMaterials.ok) {
+      setError(parsedMaterials.error);
+      return;
+    }
     setBusy('save');
     setError(null);
     try {
       // Recompute the derived total the same way the mobile save does
-      // (travel/tax 0, non-emergency; minimumJobFee from the owner's settings).
+      // (travel/tax 0, non-emergency; minimumJobFee from the owner's settings),
+      // now over the EDITED materials.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
-        materials: entry.materials ?? [],
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         jobCosts: entry.jobCosts,
         overheadPercent: pricing.overhead!,
@@ -106,6 +123,7 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
+        materials: parsedMaterials.materials,
         estimateTotal,
       });
       retry(['pricebook']);
@@ -210,10 +228,12 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
             <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={margin} onChange={(e) => setMargin(e.target.value)} />
           </label>
         </div>
-        <div className="meta">
-          The total is recalculated from these. Material line items are edited in
-          the mobile app.
-        </div>
+        <div className="meta">The total is recalculated from these.</div>
+        <MaterialsEditor
+          drafts={materials}
+          onChange={setMaterials}
+          disabled={busy !== null}
+        />
         <div className="btn-row">
           <button type="submit" className="btn primary" disabled={busy !== null}>
             {busy === 'save' ? 'Saving…' : 'Save changes'}

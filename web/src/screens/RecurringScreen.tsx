@@ -17,10 +17,17 @@ import {
   updateRecurringInvoiceRule,
   updateRecurringJobRule,
   createRecurringInvoice,
+  createRecurringJob,
   deleteRecurringJob,
   deleteRecurringInvoice,
 } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
+import { MaterialsEditor } from '../ui/MaterialsEditor';
+import {
+  materialsToDrafts,
+  parseMaterialDrafts,
+  type MaterialDraft,
+} from '../ui/materialsDraft';
 
 const CADENCES: RecurrenceCadence[] = [
   'daily',
@@ -356,6 +363,9 @@ function JobRuleEditor({
   const [materialMarkup, setMaterialMarkup] = useState(String(rule.materialMarkup ?? 0));
   const [overhead, setOverhead] = useState(String(rule.overhead ?? 0));
   const [margin, setMargin] = useState(String(rule.margin ?? 0));
+  const [materials, setMaterials] = useState<MaterialDraft[]>(
+    materialsToDrafts(rule.materials),
+  );
   const [cad, setCad] = useState<RecurrenceCadence>(rule.cadence);
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>(rule.endCondition);
   const [endCount, setEndCount] = useState(rule.endCount != null ? String(rule.endCount) : '');
@@ -382,6 +392,11 @@ function JobRuleEditor({
       setError('Enter a valid, non-negative number for every pricing field.');
       return;
     }
+    const parsedMaterials = parseMaterialDrafts(materials);
+    if (!parsedMaterials.ok) {
+      setError(parsedMaterials.error);
+      return;
+    }
     let endCountValue: number | undefined;
     if (endCondition === 'count') {
       endCountValue = Number(endCount.trim());
@@ -402,11 +417,12 @@ function JobRuleEditor({
     setError(null);
     try {
       // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
-      // minimumJobFee from settings), over the rule's existing materials/jobCosts.
+      // minimumJobFee from settings), over the EDITED materials + the rule's
+      // existing jobCosts.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
-        materials: rule.materials ?? [],
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         jobCosts: rule.jobCosts,
         overheadPercent: pricing.overhead!,
@@ -418,6 +434,7 @@ function JobRuleEditor({
         description: description.trim(),
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
@@ -477,9 +494,9 @@ function JobRuleEditor({
           </label>
         </div>
         <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
-          The total is recalculated from these. Material line items are edited in
-          the mobile app.
+          The total is recalculated from these.
         </div>
+        <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
         <div className="field">
           <span>Repeats</span>
           <div className="chip-row" role="group" aria-label="Repeats">
@@ -538,6 +555,259 @@ function JobRuleEditor({
         </div>
       </form>
     </div>
+  );
+}
+
+/**
+ * The "New recurring job" form (roadmap P3 stage 5c — creation flows). Creates a
+ * recurring-JOB rule via `createRecurringJob` (a fresh series — the generation
+ * engine emits the first occurrence on its next run, matching the plan create).
+ * The customer is picked from existing records (id + denormalized name; inline
+ * customer creation stays on the Customers screen). The derived `estimateTotal`
+ * is recomputed the mobile way via `estimateTotalFromPricing` over the five
+ * pricing inputs (materials are not authored here — line items stay deferred).
+ * Pricing inputs seed from the business defaults. Follows the house UX.
+ */
+function NewJobRuleForm({
+  customers,
+  onClose,
+  onCreated,
+}: {
+  customers: Customer[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const { settings } = useData();
+  const pickable = customers
+    .filter((c) => !c.archivedAt)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const [customerId, setCustomerId] = useState('');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [laborHours, setLaborHours] = useState('0');
+  const [laborRate, setLaborRate] = useState(String(settings?.laborRate ?? 85));
+  const [materialMarkup, setMaterialMarkup] = useState(String(settings?.materialMarkup ?? 20));
+  const [overhead, setOverhead] = useState(String(settings?.overheadPercent ?? 15));
+  const [margin, setMargin] = useState(String(settings?.marginPercent ?? 20));
+  const [materials, setMaterials] = useState<MaterialDraft[]>([]);
+  const [cad, setCad] = useState<RecurrenceCadence>('monthly');
+  const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>('never');
+  const [endCount, setEndCount] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [nextDueDate, setNextDueDate] = useState(getTodayDateString());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const customer = pickable.find((c) => c.id === customerId);
+    if (!customer) {
+      setError('Choose a customer.');
+      return;
+    }
+    if (!title.trim()) {
+      setError('Job title is required.');
+      return;
+    }
+    const pricing = {
+      laborHours: parseNonNeg(laborHours),
+      laborRate: parseNonNeg(laborRate),
+      materialMarkup: parseNonNeg(materialMarkup),
+      overhead: parseNonNeg(overhead),
+      margin: parseNonNeg(margin),
+    };
+    if (Object.values(pricing).some((v) => v === null)) {
+      setError('Enter a valid, non-negative number for every pricing field.');
+      return;
+    }
+    const parsedMaterials = parseMaterialDrafts(materials);
+    if (!parsedMaterials.ok) {
+      setError(parsedMaterials.error);
+      return;
+    }
+    let endCountValue: number | undefined;
+    if (endCondition === 'count') {
+      endCountValue = Number(endCount.trim());
+      if (!Number.isInteger(endCountValue) || endCountValue < 1) {
+        setError('Enter a number of jobs greater than zero.');
+        return;
+      }
+    }
+    if (endCondition === 'date' && !endDate) {
+      setError('Pick an end date for the series.');
+      return;
+    }
+    if (!nextDueDate) {
+      setError('Pick the first job date.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
+      // minimumJobFee from settings) over the authored materials.
+      const estimateTotal = estimateTotalFromPricing({
+        laborHours: pricing.laborHours!,
+        laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
+        materialMarkup: pricing.materialMarkup!,
+        overheadPercent: pricing.overhead!,
+        marginPercent: pricing.margin!,
+        minimumJobFee: settings?.minimumJobFee ?? 75,
+      });
+      await createRecurringJob({
+        customerId: customer.id,
+        customerName: customer.name,
+        title: title.trim(),
+        description: description.trim(),
+        laborHours: pricing.laborHours!,
+        laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
+        materialMarkup: pricing.materialMarkup!,
+        overhead: pricing.overhead!,
+        margin: pricing.margin!,
+        estimateTotal,
+        cadence: cad,
+        endCondition,
+        endCount: endCountValue,
+        endDate: endCondition === 'date' ? endDate : undefined,
+        nextDueDate,
+      });
+      onCreated();
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card pad style={{ marginTop: 12 }}>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        New recurring job
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      {pickable.length === 0 ? (
+        <div className="muted" style={{ fontSize: 13 }}>
+          Add a customer first — a recurring job repeats for an existing customer.
+          <div className="btn-row" style={{ marginTop: 10 }}>
+            <button type="button" className="btn ghost sm" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+          <label className="field">
+            <span>Customer</span>
+            <select className="field-input" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+              <option value="">Select a customer…</option>
+              {pickable.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name || 'Unnamed'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Title</span>
+            <input className="field-input" type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Description</span>
+            <input className="field-input" type="text" value={description} onChange={(e) => setDescription(e.target.value)} />
+          </label>
+          <div className="btn-row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>Labor hours</span>
+              <input className="field-input" type="number" step="0.25" min="0" inputMode="decimal" value={laborHours} onChange={(e) => setLaborHours(e.target.value)} />
+            </label>
+            <label className="field" style={{ flex: 1 }}>
+              <span>Labor rate ($/hr)</span>
+              <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={laborRate} onChange={(e) => setLaborRate(e.target.value)} />
+            </label>
+          </div>
+          <div className="btn-row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>Material markup (%)</span>
+              <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={materialMarkup} onChange={(e) => setMaterialMarkup(e.target.value)} />
+            </label>
+            <label className="field" style={{ flex: 1 }}>
+              <span>Overhead (%)</span>
+              <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={overhead} onChange={(e) => setOverhead(e.target.value)} />
+            </label>
+            <label className="field" style={{ flex: 1 }}>
+              <span>Margin (%)</span>
+              <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={margin} onChange={(e) => setMargin(e.target.value)} />
+            </label>
+          </div>
+          <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+            The total is calculated from these.
+          </div>
+          <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
+          <div className="field">
+            <span>Repeats</span>
+            <div className="chip-row" role="group" aria-label="Repeats">
+              {CADENCES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={`chip${cad === c ? ' selected' : ''}`}
+                  aria-pressed={cad === c}
+                  onClick={() => setCad(c)}
+                >
+                  {CADENCE_LABEL[c]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="field">
+            <span>First job date</span>
+            <input className="field-input" type="date" value={nextDueDate} onChange={(e) => setNextDueDate(e.target.value)} />
+          </label>
+          <div className="field">
+            <span>Ends</span>
+            <div className="chip-row" role="group" aria-label="Ends">
+              {END_CONDITIONS.map((ec) => (
+                <button
+                  key={ec}
+                  type="button"
+                  className={`chip${endCondition === ec ? ' selected' : ''}`}
+                  aria-pressed={endCondition === ec}
+                  onClick={() => setEndCondition(ec)}
+                >
+                  {END_LABEL[ec]}
+                </button>
+              ))}
+            </div>
+          </div>
+          {endCondition === 'count' && (
+            <label className="field">
+              <span>Number of jobs</span>
+              <input className="field-input" type="number" step="1" min="1" inputMode="numeric" value={endCount} onChange={(e) => setEndCount(e.target.value)} />
+            </label>
+          )}
+          {endCondition === 'date' && (
+            <label className="field">
+              <span>End date</span>
+              <input className="field-input" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </label>
+          )}
+          <div className="btn-row">
+            <button type="submit" className="btn primary" disabled={busy}>
+              {busy ? 'Creating…' : 'Create recurring job'}
+            </button>
+            <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </Card>
   );
 }
 
@@ -747,6 +1017,7 @@ export default function RecurringScreen() {
   const { recurringJobs, recurringInvoices, customers, retry } = useData();
   const state = useResources('recurringJobs', 'recurringInvoices');
   const [creatingPlan, setCreatingPlan] = useState(false);
+  const [creatingJob, setCreatingJob] = useState(false);
 
   if (state.loading) return <Empty>Loading recurring work…</Empty>;
   if (state.error)
@@ -772,7 +1043,26 @@ export default function RecurringScreen() {
       />
 
       <Card>
-        <div className="section-label">Recurring jobs ({jobs.length})</div>
+        <div className="btn-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="section-label" style={{ padding: 0 }}>
+            Recurring jobs ({jobs.length})
+          </div>
+          {!creatingJob && (
+            <button type="button" className="btn sm" onClick={() => setCreatingJob(true)}>
+              New job
+            </button>
+          )}
+        </div>
+        {creatingJob && (
+          <NewJobRuleForm
+            customers={customers}
+            onClose={() => setCreatingJob(false)}
+            onCreated={() => {
+              retry(['recurringJobs']);
+              setCreatingJob(false);
+            }}
+          />
+        )}
         {jobs.length === 0 ? (
           <Empty>No recurring jobs.</Empty>
         ) : (

@@ -6,6 +6,7 @@ import {
   jobStatusBadge,
   JOB_PIPELINE,
   nextOperationalStatus,
+  canAuthorEstimate,
 } from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate, formatTimeRange } from '@shared/utils/dateHelpers';
@@ -16,10 +17,32 @@ import {
   setJobArchived,
   deleteJob,
   advanceJobStatus,
+  updateJobPricing,
 } from '../lib/writeRepository';
+import { estimateTotalFromPricing } from '../ui/pricingMath';
+import { MaterialsEditor } from '../ui/MaterialsEditor';
+import {
+  materialsToDrafts,
+  parseMaterialDrafts,
+  type MaterialDraft,
+} from '../ui/materialsDraft';
+import { JobCostsEditor } from '../ui/JobCostsEditor';
+import {
+  jobCostsToDrafts,
+  parseJobCostDrafts,
+  type JobCostDraft,
+} from '../ui/jobCostsDraft';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
+}
+
+/** Parse a required non-negative number field; null when blank or invalid. */
+function parseNonNeg(s: string): number | null {
+  const t = s.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /**
@@ -72,6 +95,175 @@ function StatusAdvance({ job }: { job: Job }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Author a job's estimate — the pricing inputs, its materials, and the derived
+ * `estimateTotal` (roadmap P3 stage 3b, estimate authoring). Mirrors the mobile
+ * PricingCalculator's `saveToJob`: `updateJobPricing` spreads the fresh server
+ * row and overwrites only the pricing fields, so status / approval / invoiceId /
+ * changeOrders / timeSessions / jobCosts survive. `estimateTotal` is recomputed
+ * here via the shared `estimateTotalFromPricing` port over the edited inputs +
+ * materials AND the job's existing `jobCosts`, matching the mobile save (P0.6).
+ * Hidden once the customer has a frozen approval decision (`canAuthorEstimate`):
+ * re-pricing a signed estimate is the deferred change-order surface.
+ */
+function JobPricingEditor({ job }: { job: Job }) {
+  const { retry, settings } = useData();
+  const [open, setOpen] = useState(false);
+  const [laborHours, setLaborHours] = useState(String(job.laborHours ?? 0));
+  const [laborRate, setLaborRate] = useState(String(job.laborRate ?? 0));
+  const [materialMarkup, setMaterialMarkup] = useState(String(job.materialMarkup ?? 0));
+  const [overhead, setOverhead] = useState(String(job.overhead ?? 0));
+  const [margin, setMargin] = useState(String(job.margin ?? 0));
+  const [materials, setMaterials] = useState<MaterialDraft[]>(
+    materialsToDrafts(job.materials),
+  );
+  const [jobCosts, setJobCosts] = useState<JobCostDraft[]>(
+    jobCostsToDrafts(job.jobCosts),
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openEditor() {
+    setLaborHours(String(job.laborHours ?? 0));
+    setLaborRate(String(job.laborRate ?? 0));
+    setMaterialMarkup(String(job.materialMarkup ?? 0));
+    setOverhead(String(job.overhead ?? 0));
+    setMargin(String(job.margin ?? 0));
+    setMaterials(materialsToDrafts(job.materials));
+    setJobCosts(jobCostsToDrafts(job.jobCosts));
+    setError(null);
+    setOpen(true);
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const pricing = {
+      laborHours: parseNonNeg(laborHours),
+      laborRate: parseNonNeg(laborRate),
+      materialMarkup: parseNonNeg(materialMarkup),
+      overhead: parseNonNeg(overhead),
+      margin: parseNonNeg(margin),
+    };
+    if (Object.values(pricing).some((v) => v === null)) {
+      setError('Enter a valid, non-negative number for every pricing field.');
+      return;
+    }
+    const parsedMaterials = parseMaterialDrafts(materials);
+    if (!parsedMaterials.ok) {
+      setError(parsedMaterials.error);
+      return;
+    }
+    const parsedJobCosts = parseJobCostDrafts(jobCosts);
+    if (!parsedJobCosts.ok) {
+      setError(parsedJobCosts.error);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
+      // minimumJobFee from settings) over the edited inputs + materials +
+      // direct-cost lines.
+      const estimateTotal = estimateTotalFromPricing({
+        laborHours: pricing.laborHours!,
+        laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
+        materialMarkup: pricing.materialMarkup!,
+        jobCosts: parsedJobCosts.jobCosts,
+        overheadPercent: pricing.overhead!,
+        marginPercent: pricing.margin!,
+        minimumJobFee: settings?.minimumJobFee ?? 75,
+      });
+      await updateJobPricing(job.id, {
+        laborHours: pricing.laborHours!,
+        laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
+        jobCosts: parsedJobCosts.jobCosts,
+        materialMarkup: pricing.materialMarkup!,
+        overhead: pricing.overhead!,
+        margin: pricing.margin!,
+        estimateTotal,
+      });
+      retry(['jobs']);
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Card pad>
+        <div className="section-label" style={{ padding: '0 0 8px' }}>
+          Estimate
+        </div>
+        <KV k="Total" v={formatMoney(job.estimateTotal || 0)} />
+        <button type="button" className="btn" style={{ marginTop: 12 }} onClick={openEditor}>
+          Edit estimate
+        </button>
+        {error && (
+          <div className="inline-alert error" role="alert" style={{ marginTop: 12, marginBottom: 0 }}>
+            {error}
+          </div>
+        )}
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        Edit estimate
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <div className="btn-row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Labor hours</span>
+            <input className="field-input" type="number" step="0.25" min="0" inputMode="decimal" value={laborHours} onChange={(e) => setLaborHours(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Labor rate ($/hr)</span>
+            <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={laborRate} onChange={(e) => setLaborRate(e.target.value)} />
+          </label>
+        </div>
+        <div className="btn-row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Material markup (%)</span>
+            <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={materialMarkup} onChange={(e) => setMaterialMarkup(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Overhead (%)</span>
+            <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={overhead} onChange={(e) => setOverhead(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Margin (%)</span>
+            <input className="field-input" type="number" step="0.1" min="0" inputMode="decimal" value={margin} onChange={(e) => setMargin(e.target.value)} />
+          </label>
+        </div>
+        <div className="meta">The total is recalculated from these.</div>
+        <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
+        <JobCostsEditor drafts={jobCosts} onChange={setJobCosts} disabled={busy} />
+        <div className="btn-row">
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save estimate'}
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
   );
 }
 
@@ -423,6 +615,21 @@ export default function JobDetailScreen() {
                     </span>
                   </div>
                 ))}
+              </div>
+            </Card>
+          )}
+
+          {canAuthorEstimate(job) ? (
+            <JobPricingEditor job={job} />
+          ) : (
+            <Card pad>
+              <div className="section-label" style={{ padding: '0 0 8px' }}>
+                Estimate
+              </div>
+              <KV k="Total" v={formatMoney(job.estimateTotal || 0)} />
+              <div className="meta" style={{ marginTop: 8 }}>
+                Locked — the customer has {job.approval?.decision} this estimate.
+                Price changes go through a change order (mobile app).
               </div>
             </Card>
           )}

@@ -5,6 +5,8 @@ import { Card, PageHead, Empty, Badge, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 import { createPricebookEntry } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
+import { MaterialsEditor } from '../ui/MaterialsEditor';
+import { parseMaterialDrafts, type MaterialDraft } from '../ui/materialsDraft';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
@@ -22,8 +24,9 @@ function parseNonNeg(s: string): number | null {
  * The "New service" form (roadmap P3 stage 5 — creation flows). Creates a saved
  * service through `createPricebookEntry` (mobile-format id + createdAt/updatedAt)
  * and navigates to it. The derived `estimateTotal` is computed with the
- * pricingMath port over the entered pricing inputs (no materials yet) + the
- * owner's `minimumJobFee`, matching the mobile save. Follows the house UX:
+ * pricingMath port over the entered pricing inputs and any authored materials
+ * (via the shared MaterialsEditor) + the owner's `minimumJobFee`, matching the
+ * mobile save. Follows the house UX:
  * in-flight disable, a failed write that stays open with the error.
  */
 function NewServiceForm({ onClose }: { onClose: () => void }) {
@@ -37,6 +40,7 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
   const [materialMarkup, setMaterialMarkup] = useState(String(settings?.materialMarkup ?? 20));
   const [overhead, setOverhead] = useState(String(settings?.overheadPercent ?? 15));
   const [margin, setMargin] = useState(String(settings?.marginPercent ?? 20));
+  const [materials, setMaterials] = useState<MaterialDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,13 +62,18 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
       setError('Enter a valid, non-negative number for every pricing field.');
       return;
     }
+    const parsedMaterials = parseMaterialDrafts(materials);
+    if (!parsedMaterials.ok) {
+      setError(parsedMaterials.error);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
-        materials: [],
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         overheadPercent: pricing.overhead!,
         marginPercent: pricing.margin!,
@@ -76,6 +85,7 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
         description: description.trim(),
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
+        materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
@@ -136,9 +146,9 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
           </label>
         </div>
         <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
-          The total is calculated from these. Material line items are added in the
-          mobile app.
+          The total is calculated from these.
         </div>
+        <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
         <div className="btn-row">
           <button type="submit" className="btn primary" disabled={busy}>
             {busy ? 'Creating…' : 'Create service'}

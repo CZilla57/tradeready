@@ -13,9 +13,12 @@ import {
   updateJobDetails,
   setJobArchived,
   advanceJobStatus,
+  updateJobPricing,
   savePricebookEntry,
   saveExpense,
   createCustomer,
+  createJob,
+  createInvoice,
   createPricebookEntry,
   scheduleJob,
   setRecurringJobActive,
@@ -23,6 +26,7 @@ import {
   updateRecurringInvoiceRule,
   updateRecurringJobRule,
   createRecurringInvoice,
+  createRecurringJob,
   InvoiceNotFoundError,
   JobNotFoundError,
   JobStatusTransitionError,
@@ -205,6 +209,119 @@ describe('createCustomer — new record with a mobile-format id', () => {
   });
 });
 
+describe('createJob — new unpriced lead with a mobile-format id', () => {
+  const fields = {
+    customerId: 'c1',
+    customerName: 'Acme',
+    title: 'Deck rebuild',
+    description: 'Replace rotten boards',
+    address: '5 Main',
+    scheduledDate: '2026-09-10' as const,
+    scheduledStartTime: '09:00' as const,
+    scheduledEndTime: '11:00' as const,
+    notes: 'bring saw',
+    laborRate: 120,
+    materialMarkup: 25,
+    overhead: 18,
+    margin: 22,
+  };
+
+  it('mints a j<ms> id and writes the unpriced lead shape mobile creates', async () => {
+    const before = Date.now();
+    const created = await createJob(fields);
+
+    expect(state.lastTable).toBe('jobs');
+    expect(created.id).toMatch(/^j\d+$/); // mobile id format j<Date.now()>
+    const row = state.lastUpsert!;
+    expect(row.id).toBe(created.id);
+    expect(row.deleted).toBe(false);
+    const written = row.data as Job;
+    // Unpriced lead invariants.
+    expect(written.status).toBe('lead');
+    expect(written.estimateTotal).toBe(0);
+    expect(written.laborHours).toBe(0);
+    expect(written.materials).toEqual([]);
+    expect(written.invoiceId).toBeNull();
+    expect(/^\d{4}-\d{2}-\d{2}$/.test(written.createdAt as string)).toBe(true);
+    // Customer link, operational fields, and the seeded rates all carried.
+    expect(written).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Deck rebuild',
+      address: '5 Main',
+      scheduledDate: '2026-09-10',
+      laborRate: 120,
+      materialMarkup: 25,
+      overhead: 18,
+      margin: 22,
+    });
+    // Row stamp is fresh (P0.3).
+    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+  });
+
+  it('mints a unique id on each call within the same millisecond', async () => {
+    const a = await createJob(fields);
+    const b = await createJob(fields);
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('surfaces a write error rather than reporting success', async () => {
+    state.upsertError = { message: 'rls denied' };
+    await expect(createJob(fields)).rejects.toMatchObject({ message: 'rls denied' });
+  });
+});
+
+describe('createInvoice — new manual invoice with a mobile-format id', () => {
+  const fields = {
+    customer: 'Acme',
+    customerId: 'c1',
+    number: 'INV-0007',
+    amount: 450,
+    due: '2026-09-30' as const,
+    email: 'a@b.co',
+    phone: '555',
+    desc: 'Repair work',
+  };
+
+  it('mints a bare-numeric id and writes the fresh manual-invoice shape', async () => {
+    const created = await createInvoice(fields);
+
+    expect(state.lastTable).toBe('invoices');
+    // Mobile manual id format: String(Date.now()) — digits only.
+    expect(created.id).toMatch(/^\d+$/);
+    const row = state.lastUpsert!;
+    expect(row.id).toBe(created.id);
+    expect(row.deleted).toBe(false);
+    const written = row.data as Invoice;
+    // Fresh manual invoice: unpaid, no ledger, no line items / jobId.
+    expect(written.paid).toBe(false);
+    expect(written.payments).toBeUndefined();
+    expect(written.lineItems).toBeUndefined();
+    expect(written.jobId).toBeUndefined();
+    expect(written).toMatchObject({
+      customer: 'Acme',
+      customerId: 'c1',
+      number: 'INV-0007',
+      amount: 450,
+      due: '2026-09-30',
+      email: 'a@b.co',
+      phone: '555',
+      desc: 'Repair work',
+    });
+  });
+
+  it('mints a unique id on each call within the same millisecond', async () => {
+    const a = await createInvoice(fields);
+    const b = await createInvoice(fields);
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('surfaces a write error rather than reporting success', async () => {
+    state.upsertError = { message: 'rls denied' };
+    await expect(createInvoice(fields)).rejects.toMatchObject({ message: 'rls denied' });
+  });
+});
+
 describe('updateJobDetails — edit onto a fresh server copy', () => {
   function job(over: Partial<Job> = {}): Job {
     return {
@@ -380,6 +497,71 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
       );
     });
   });
+
+  describe('updateJobPricing — author the estimate onto a fresh server copy', () => {
+    const editedJobCost = {
+      id: 'jc2',
+      label: 'Dumpster',
+      category: 'disposal' as const,
+      quantity: 1,
+      unitCost: 200,
+      markupPercent: 0,
+      markupPolicy: 'in_margin_base' as const,
+      taxable: false,
+      customerVisible: true,
+    };
+    const pricing = {
+      laborHours: 3,
+      laborRate: 100,
+      materials: [{ id: 'm1', name: 'Pipe', quantity: 2, unitCost: 15 }],
+      jobCosts: [editedJobCost],
+      materialMarkup: 20,
+      overhead: 10,
+      margin: 20,
+      estimateTotal: 456,
+    };
+
+    it('overwrites only the pricing fields, preserving status/approval/invoiceId/changeOrders', async () => {
+      const approval = { decision: 'approved', token: 't' };
+      const changeOrders = [{ id: 'co1' }];
+      const timeSessions = [{ start: '2026-09-01T09:00:00Z', end: null }];
+      state.serverRow = {
+        data: job({
+          title: 'Deck rebuild',
+          status: 'scheduled',
+          invoiceId: 'inv-9',
+          approval,
+          changeOrders,
+          timeSessions,
+        } as Partial<Job>),
+        deleted: false,
+      };
+
+      await updateJobPricing('job-1', pricing);
+
+      const written = state.lastUpsert!.data as Job;
+      expect(state.lastTable).toBe('jobs');
+      // Pricing fields written (materials AND direct-cost lines)…
+      expect(written.laborRate).toBe(100);
+      expect(written.materials).toEqual(pricing.materials);
+      expect(written.jobCosts).toEqual([editedJobCost]);
+      expect(written.estimateTotal).toBe(456);
+      // …everything else preserved from the server row.
+      expect(written.title).toBe('Deck rebuild');
+      expect(written.status).toBe('scheduled');
+      expect(written.invoiceId).toBe('inv-9');
+      expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
+      expect(written.changeOrders).toEqual(changeOrders);
+      expect(written.timeSessions).toEqual(timeSessions);
+    });
+
+    it('throws JobNotFoundError when the row is missing', async () => {
+      state.serverRow = null;
+      await expect(updateJobPricing('job-1', pricing)).rejects.toBeInstanceOf(
+        JobNotFoundError,
+      );
+    });
+  });
 });
 
 describe('savePricebookEntry — metadata edit, pricing preserved', () => {
@@ -423,6 +605,7 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       description: 'Annual maintenance',
       laborHours: 1.5,
       laborRate: 100,
+      materials: [{ id: 'm1', name: 'Anode rod', quantity: 1, unitCost: 40 }],
       materialMarkup: 20,
       overhead: 15,
       margin: 20,
@@ -440,7 +623,8 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       description: 'Annual maintenance',
       laborRate: 100,
       estimateTotal: 215.63,
-      materials: [],
+      // Authored materials round-trip onto the created record.
+      materials: [{ id: 'm1', name: 'Anode rod', quantity: 1, unitCost: 40 }],
     });
   });
 
@@ -451,6 +635,7 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       description: '',
       laborHours: 1,
       laborRate: 90,
+      materials: [],
       materialMarkup: 0,
       overhead: 0,
       margin: 0,
@@ -463,11 +648,11 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
   it('mints a unique id on each call within the same millisecond', async () => {
     const a = await createPricebookEntry({
       name: 'A', category: '', description: '', laborHours: 1, laborRate: 1,
-      materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+      materials: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
     });
     const b = await createPricebookEntry({
       name: 'B', category: '', description: '', laborHours: 1, laborRate: 1,
-      materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+      materials: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
     });
     expect(a.id).not.toBe(b.id);
   });
@@ -773,6 +958,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       description: 'twice-yearly',
       laborHours: 3,
       laborRate: 100,
+      materials: [{ id: 'm2', name: 'Brush', quantity: 2, unitCost: 5 }],
       materialMarkup: 10,
       overhead: 15,
       margin: 20,
@@ -792,12 +978,13 @@ describe('recurring pause/resume — preserve generation state', () => {
     expect(written.endCondition).toBe('count');
     expect(written.endCount).toBe(8);
     expect(written.endDate).toBeUndefined();
-    // history + materials preserved from the server row
+    // history preserved from the server row (never rolled back)…
     expect(written.occurrenceCount).toBe(4);
     expect(written.lastGeneratedDate).toBe('2026-08-01');
     expect(written.isActive).toBe(true);
     expect(written.customerId).toBe('c1');
-    expect(written.materials).toEqual([{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }]);
+    // …while the edited materials REPLACE the server list (Filter → Brush).
+    expect(written.materials).toEqual([{ id: 'm2', name: 'Brush', quantity: 2, unitCost: 5 }]);
   });
 
   it('createRecurringInvoice inits a fresh series with a mobile-format id', async () => {
@@ -845,6 +1032,64 @@ describe('recurring pause/resume — preserve generation state', () => {
       customerId: 'c2', customerName: 'B', description: '', amount: 10, dueDays: 30,
       cadence: 'monthly', endCondition: 'never', nextDueDate: '2026-10-01', autoSendEnabled: false,
     });
+    expect(a.endCount).toBeUndefined();
+    expect(a.endDate).toBe('2027-01-01');
+    expect(b.endDate).toBeUndefined();
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('createRecurringJob inits a fresh series with a rj_<ms> id and no first occurrence', async () => {
+    const created = await createRecurringJob({
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Gutter clean',
+      description: 'Quarterly',
+      laborHours: 2,
+      laborRate: 90,
+      materials: [{ id: 'm1', name: 'Sealant', quantity: 1, unitCost: 12 }],
+      materialMarkup: 20,
+      overhead: 15,
+      margin: 20,
+      estimateTotal: 320,
+      cadence: 'quarterly',
+      endCondition: 'count',
+      endCount: 8,
+      nextDueDate: '2026-10-01',
+    });
+
+    expect(state.lastTable).toBe('recurringJobs');
+    expect(created.id).toMatch(/^rj_\d+$/); // mobile id format rj_<Date.now()>
+    const data = state.lastUpsert!.data as RecurringJob;
+    expect(data).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Gutter clean',
+      estimateTotal: 320,
+      cadence: 'quarterly',
+      endCondition: 'count',
+      endCount: 8,
+      nextDueDate: '2026-10-01',
+      // fresh generation state — the engine emits the first occurrence later
+      occurrenceCount: 0,
+      lastGeneratedDate: null,
+      isActive: true,
+    });
+    // Authored materials round-trip; address/notes start blank.
+    expect(data.materials).toEqual([{ id: 'm1', name: 'Sealant', quantity: 1, unitCost: 12 }]);
+    expect(data.address).toBe('');
+    expect(data.notes).toBe('');
+    expect(data.endDate).toBeUndefined();
+    expect(data.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('createRecurringJob normalises end bounds and mints unique ids', async () => {
+    const base = {
+      customerId: 'c1', customerName: 'A', title: 'T', description: '',
+      laborHours: 1, laborRate: 80, materials: [], materialMarkup: 0, overhead: 0, margin: 0,
+      estimateTotal: 80, cadence: 'monthly' as const, nextDueDate: '2026-10-01' as const,
+    };
+    const a = await createRecurringJob({ ...base, endCondition: 'date', endDate: '2027-01-01' });
+    const b = await createRecurringJob({ ...base, endCondition: 'never' });
     expect(a.endCount).toBeUndefined();
     expect(a.endDate).toBe('2027-01-01');
     expect(b.endDate).toBeUndefined();

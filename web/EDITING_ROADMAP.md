@@ -300,12 +300,47 @@ five):
        review — those are separate flows it doesn't surface; the bare status
        change is internally consistent on its own. Covered by
        `writeRepository.test.ts`, `status.test.ts`, `JobDetailScreen.test.tsx`.
-     - **Still OPEN.** The consent-/invoice-coupled transitions
-       (`estimate_sent → approved`, `complete → invoiced`, `invoiced → paid` —
-       the portal reflects the last two from the invoice ledger, it doesn't
-       drive them), plus estimate/materials authoring and approval/change-order
-       handling. These need guarded, cross-entity transitions, so they stay
-       deferred.
+     - **Estimate / pricing authoring. ✅ LANDED.** `JobPricingEditor` on
+       `JobDetailScreen` edits a job's pricing inputs (labor hours/rate, material
+       markup, overhead, margin), its MATERIALS (via the shared `MaterialsEditor`),
+       and its DIRECT-COST lines (via the shared `JobCostsEditor` — permits,
+       disposal, subcontractors…), recomputing the derived `estimateTotal` with the
+       `estimateTotalFromPricing` port over the edited inputs + materials + jobCosts
+       — matching the mobile PricingCalculator's `saveToJob` (P0.6). The write op
+       `updateJobPricing` spreads the FRESHLY re-fetched server row and overwrites
+       ONLY the pricing fields, so status, approval, invoiceId, changeOrders,
+       timeSessions, and laborBreakdown survive untouched (same fresh-row guarantee
+       as `updateJobDetails`). CONSENT GATE: `canAuthorEstimate(job)` hides the
+       editor once the customer has a FROZEN `approval.decision` (approved/declined)
+       — re-pricing a signed estimate is the deferred change-order surface — and the
+       card shows a "locked" note instead; gating on the decision (not status)
+       keeps a tradesperson-marked "approved" job with no signature editable.
+       Covered by `writeRepository.test.ts`, `status.test.ts`,
+       `JobDetailScreen.test.tsx`.
+     - **Direct-cost (jobCosts) authoring. ✅ LANDED.** `JobCostsEditor`
+       (`web/src/ui/JobCostsEditor.tsx` + pure helpers in `jobCostsDraft.ts`)
+       edits label / category / quantity / unit cost per line, DERIVING the markup
+       policy from the category (permits pass through at cost, everything else is
+       priced into the margin, via the ported `defaultMarkupPolicyForCategory`).
+       The advanced per-line knobs — handling `markupPercent`, `taxable`,
+       `customerVisible`, `notes` — are PRESERVED from an existing line (P0.2) and
+       default to 0 / false / visible / none on a new line (authored on mobile).
+       Wired into `JobPricingEditor`; feeds the same recompute. New ids match the
+       mobile `jc<timestamp>_<counter>` format (P1.4). Covered by
+       `jobCostsDraft.test.ts`, `JobDetailScreen.test.tsx`, `writeRepository.test.ts`.
+     - **Still OPEN — backend-gated, not an editing surface.** The remaining work
+       is WORKFLOW that needs the Cloudflare Worker approval backend, which the
+       portal (Supabase-only, no Worker reach) cannot drive: sending an estimate /
+       minting a customer approval link, recording a change order, and the
+       consent-/invoice-coupled STATUS transitions (`estimate_sent → approved`,
+       `complete → invoiced`, `invoiced → paid` — the portal reflects the invoiced/
+       paid ones from the invoice ledger rather than driving them). A faithful
+       "create invoice from a job" is also deferred: its billable-breakdown / line-
+       item math (`utils/autoInvoice.ts` `computeBillableBreakdown`) pulls tracked
+       time, change orders, and the RN-only pricing engine, so it needs a web port
+       first (like pricingMath). `jobCosts` line-item authoring on Pricebook /
+       recurring-job entries (they carry the field too) can reuse `JobCostsEditor`
+       when wanted — additive, not blocking.
 4. **Pricebook, Expenses, Settings. ✅ LANDED.** Catalog/config maintenance.
    Every editable surface below is in; the only things left read-only are
    deliberate (Pricebook pricing fields — deferred pending a web-safe estimate
@@ -360,8 +395,10 @@ five):
      recompute matches the mobile PricebookEntryScreen save path
      (buildEstimateInput→calculateEstimate: travel/tax 0, non-emergency,
      `minimumJobFee` from settings), so a service priced in the portal equals one
-     priced on the phone (P0.6). Material LINE-ITEM editing is still deferred — the
-     entry's materials/jobCosts round-trip untouched and feed the recompute.
+     priced on the phone (P0.6). Material LINE ITEMS are now editable via the
+     shared `MaterialsEditor` (see the line-item authoring note under stage 5c) —
+     both here and on the New service form — and feed the recompute; `jobCosts`
+     (direct-cost lines) still round-trip untouched, a separate authoring surface.
    - **Expenses. ✅ LANDED.** An `ExpensesSection` on `MoneyScreen` lists
      expenses and adds/edits/deletes them: `saveExpense` (whole-blob upsert; new
      records stamped with the shared `stampExpense` so ids match the mobile app)
@@ -423,15 +460,17 @@ five):
      Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
    - **5b — Recurring-JOB rule editing. ✅ LANDED.** Now that the pricingMath
      port exists, `RecurringScreen`'s job rows get an inline `JobRuleEditor`
-     (title, description, the five pricing inputs, cadence, end condition +
-     count/date, next date) saved through a new typed op `updateRecurringJobRule`.
-     Same shape as the plan editor — applies onto a freshly re-fetched server row,
-     preserving the series' history (id, customerId/Name, materials, jobCosts,
-     occurrenceCount, lastGeneratedDate, isActive, createdAt) and normalising
-     endCount/endDate — with the one extra concern of the DERIVED `estimateTotal`,
-     recomputed on save via `estimateTotalFromPricing` (the port) over the rule's
-     existing materials/jobCosts + settings `minimumJobFee`, matching the mobile
-     save. Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
+     (title, description, the five pricing inputs, MATERIALS via the shared
+     `MaterialsEditor`, cadence, end condition + count/date, next date) saved
+     through a new typed op `updateRecurringJobRule`. Same shape as the plan
+     editor — applies onto a freshly re-fetched server row, preserving the series'
+     history (id, customerId/Name, jobCosts, occurrenceCount, lastGeneratedDate,
+     isActive, createdAt) and normalising endCount/endDate — with the DERIVED
+     `estimateTotal` recomputed on save via `estimateTotalFromPricing` (the port)
+     over the edited materials + settings `minimumJobFee`, matching the mobile
+     save. The edited materials replace the server list; `jobCosts` (direct-cost
+     lines) stay preserved from the fresh row. Covered by `RecurringScreen.test.tsx`
+     + `writeRepository.test.ts`.
    - **5c — Creation flows. IN PROGRESS.**
      - **New customer. ✅ LANDED.** `CustomersScreen` has a "New customer" form
        (`NewCustomerForm`) creating a record via a new typed op `createCustomer`,
@@ -451,11 +490,11 @@ five):
        `createPricebookEntry`, which mints a mobile-format id (`pb-<Date.now()>`,
        monotonic-guarded for burst uniqueness, matching PricebookEntryScreen,
        P1.4), stamps created/updatedAt, and upserts. The derived `estimateTotal`
-       is computed with the pricingMath port over the entered pricing inputs (no
-       materials) + settings `minimumJobFee`, matching the mobile save;
-       blank category/description collapse to `undefined`. Navigates to the new
-       record on success. Covered by `PricebookScreen.test.tsx` + `writeRepository
-       .test.ts`.
+       is computed with the pricingMath port over the entered pricing inputs and
+       any materials authored via the shared `MaterialsEditor` + settings
+       `minimumJobFee`, matching the mobile save; blank category/description
+       collapse to `undefined`. Navigates to the new record on success. Covered by
+       `PricebookScreen.test.tsx` + `writeRepository.test.ts`.
      - **New maintenance plan (recurring invoice). ✅ LANDED.** `RecurringScreen`
        has a "New plan" form (`NewPlanForm`) creating a standalone plan via a new
        typed op `createRecurringInvoice`, which mints a mobile-format id
@@ -468,12 +507,77 @@ five):
        prompts to add a customer first when none exist). Validation mirrors mobile
        (customer, amount > 0, net ≥ 0, positive end count, end date when required).
        Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
-     - **Remaining creation: new recurring JOB, new invoice, new job/estimate.
-       OPEN.** Recurring-JOB creation is coupled — the mobile create also spawns a
-       first Job occurrence (occurrenceNumber 1, status lead) with job
-       pricing/materials — so it goes with the heavy new-job/new-invoice flows
-       (customer linking, line items, status/ledger init), not with the standalone
-       plan create.
+     - **New job (unpriced lead). ✅ LANDED.** `JobsScreen` has a "New job" form
+       (`NewJobForm`) creating a record via a new typed op `createJob`, which
+       mints a mobile-format id (`j<Date.now()>`, monotonic-guarded, matching
+       AddJobScreen, P1.4) and writes the exact fresh-record shape mobile's
+       unpriced-job path writes: `status: 'lead'`, estimateTotal 0, laborHours 0,
+       empty materials, `invoiceId: null`, `createdAt` today. A brand-new id
+       means a pure insert (no server row to preserve). The customer is PICKED
+       from existing records (a job needs id + denormalized name; inline customer
+       creation stays on the Customers screen) and a title is required; the four
+       rate fields (laborRate/materialMarkup/overhead/margin) are SEEDED from the
+       Settings business defaults (mobile's `settings.overheadPercent`/
+       `marginPercent` → job `overhead`/`margin`), so the eventual estimate uses
+       the owner's rates. Estimate/pricing/materials authoring is the deferred
+       part of 3b, so creation stops at the operational shell. Navigates to the
+       new record on success. Covered by `JobsScreen.test.tsx` +
+       `writeRepository.test.ts`.
+     - **New invoice (manual). ✅ LANDED.** `InvoicesScreen` has a "New invoice"
+       form (`NewInvoiceForm`) creating a standalone MANUAL invoice via a new
+       typed op `createInvoice` — the AddInvoiceScreen analog, NOT the
+       create-from-job path (which snapshots the estimate's line items). It mints
+       a mobile-format id (`String(Date.now())`, monotonic-guarded, P1.4) and
+       writes the fresh-record shape mobile writes: `paid: false`, no ledger, no
+       `lineItems`/`jobId` (a pure insert — no server row to merge). The number
+       defaults to the shared `nextInvoiceNumber(invoices, settings)` (honouring
+       the Settings prefix/start), overridable — keeping the numbering rule
+       single-sourced. The customer is PICKED from existing records, setting both
+       the denormalized `customer` name and the `customerId` link and adopting the
+       customer's contact snapshot (editable), mirroring mobile's
+       getOrCreateCustomer denormalization. Validation mirrors the InvoiceEditor
+       (amount > 0, a due date, a number). Line-item authoring stays deferred (an
+       estimate-snapshot concern). Covered by `InvoicesScreen.test.tsx` +
+       `writeRepository.test.ts`.
+     - **New recurring job. ✅ LANDED.** `RecurringScreen` has a "New job" form
+       (`NewJobRuleForm`) creating a recurring-JOB rule via a new typed op
+       `createRecurringJob`, which mints a mobile-format id (`rj_<Date.now()>`,
+       monotonic-guarded, P1.4). DECISION — fresh series, NOT mobile's coupled
+       spawn: mobile's create also writes a first Job occurrence (occurrenceNumber
+       1), but the portal instead initialises a fresh series (occurrenceCount 0,
+       lastGeneratedDate null, isActive true) and lets the generation engine emit
+       the first occurrence on its next run — exactly the choice
+       `createRecurringInvoice` already made for plans, keeping the op a
+       single-entity insert (no two-blob write that could half-fail). The customer
+       is PICKED from existing records; the derived `estimateTotal` is recomputed
+       the mobile way via the `estimateTotalFromPricing` port over the five pricing
+       inputs (seeded from the business defaults) AND any materials authored via
+       the shared `MaterialsEditor`. `address`/`notes` start blank (not in the
+       recurring-job editable surface). Covered by `RecurringScreen.test.tsx` +
+       `writeRepository.test.ts`.
+     - **Line-item / materials editor. ✅ LANDED (reusable component + Pricebook).**
+       `web/src/ui/MaterialsEditor.tsx` is a reusable `Material[]` row editor
+       (add / edit name-qty-unitCost / remove, with a live materials-cost preview)
+       backed by pure string-draft helpers in `web/src/ui/materialsDraft.ts`
+       (`parseMaterialDrafts` drops abandoned blank rows and validates the rest;
+       new ids match the mobile `m<Date.now()>` format, P1.4). It is STRING-drafted
+       like every other pricing field so mid-edit values ("1." / "") don't snap to
+       a number, parsed to stored `Material[]` only on save. Wired into the
+       Pricebook surfaces (the `PricebookEditor` edit form and the New service
+       form), the recurring-job surfaces (the `JobRuleEditor` edit form and the
+       New recurring-job form), AND a plain Job's estimate (`JobPricingEditor` on
+       `JobDetailScreen`, see stage 3b), so their materials — and thus their
+       derived `estimateTotal` — are now fully authored in the portal. Covered by
+       `materialsDraft.test.ts`, `PricebookDetailScreen.test.tsx`,
+       `PricebookScreen.test.tsx`, `RecurringScreen.test.tsx`,
+       `JobDetailScreen.test.tsx`.
+     - **Job estimate authoring. ✅ LANDED** (see stage 3b, "Estimate / pricing
+       authoring" — `JobPricingEditor` + `updateJobPricing`, consent-gated). The
+       pricing/materials editing surface is now complete across catalog, recurring,
+       and job estimates. What remains deferred is NOT an editing surface but the
+       approval/change-order WORKFLOW (sending an estimate, recording a change
+       order) and the consent-/invoice-coupled status transitions — both need the
+       Worker backend approval flow, tracked under stage 3b "Still OPEN".
 
 ### Stays read-only / out of scope
 

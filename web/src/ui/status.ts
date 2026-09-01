@@ -98,6 +98,20 @@ export function nextOperationalStatus(
   return OPERATIONAL_STATUS_ADVANCE[status] ?? null;
 }
 
+/**
+ * Whether the portal may author a job's estimate / pricing. Once the customer
+ * has made a FROZEN approval decision (`job.approval.decision`), the estimate is
+ * the price they signed — silently re-pricing it would diverge from that consent,
+ * so post-approval changes belong to the change-order flow (deferred), not the
+ * pricing editor. Gating on the approval decision (the actual consent artifact)
+ * rather than status is deliberate: a job a tradesperson manually marked
+ * "approved" with no customer signature carries no `approval.decision` and stays
+ * editable.
+ */
+export function canAuthorEstimate(job: Job): boolean {
+  return !job.approval?.decision;
+}
+
 /** Approval-oriented status for the Estimates surface. */
 export function estimateStatusBadge(job: Job): {
   label: string;

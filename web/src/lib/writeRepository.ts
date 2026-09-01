@@ -5,6 +5,8 @@ import type {
   Expense,
   Invoice,
   Job,
+  JobCost,
+  Material,
   Payment,
   PaymentDraft,
   PricebookEntry,
@@ -545,6 +547,148 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 }
 
 // ---------------------------------------------------------------------------
+// Job estimate / pricing (roadmap P3 stage 3b — estimate authoring)
+//
+// The portal authors a job's estimate — the pricing inputs, its materials, and
+// the derived `estimateTotal` — exactly as the mobile PricingCalculator's
+// `saveToJob` does: spread the CURRENT job and overwrite ONLY the pricing fields,
+// leaving status, approval, invoiceId, changeOrders, timeSessions, jobCosts, and
+// laborBreakdown untouched. Applied onto a FRESHLY re-fetched server row
+// (`loadJob`), so a customer's estimate action or a mobile workflow write landing
+// between page load and save is never clobbered (same guarantee as
+// `updateJobDetails`).
+//
+// `estimateTotal` is DERIVED: the caller recomputes it with the pricingMath port
+// over the edited inputs, materials, and direct-cost lines, matching the mobile
+// save, and hands it in.
+//
+// CONSENT GATE (P0.1 spirit): once a customer has made a frozen approval decision
+// (`job.approval.decision`), the estimate is the price they signed — re-pricing it
+// silently would diverge from that consent. The UI hides the editor in that case
+// (post-approval changes are the deferred change-order surface); this op does not
+// itself enforce it, but the fresh-row spread means the approval snapshot always
+// survives regardless.
+// ---------------------------------------------------------------------------
+
+/** The pricing fields the portal authors on a job. `laborBreakdown` is preserved
+ *  from the server row (not authored here); `estimateTotal` is the caller's
+ *  pricingMath recompute over the inputs + materials + jobCosts. */
+export interface JobPricingEdit {
+  laborHours: number;
+  laborRate: number;
+  materials: Material[];
+  jobCosts: JobCost[];
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  estimateTotal: number;
+}
+
+export async function updateJobPricing(
+  jobId: string,
+  edit: JobPricingEdit,
+): Promise<Job> {
+  const server = await loadJob(jobId);
+  const next: Job = {
+    ...server,
+    laborHours: edit.laborHours,
+    laborRate: edit.laborRate,
+    materials: edit.materials,
+    jobCosts: edit.jobCosts,
+    materialMarkup: edit.materialMarkup,
+    overhead: edit.overhead,
+    margin: edit.margin,
+    estimateTotal: edit.estimateTotal,
+  };
+  await upsertBlobRow('jobs', jobId, next);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// New job (roadmap P3 stage 5c — creation flows)
+//
+// A net-new job is a pure INSERT (fresh client id, no server row to preserve),
+// so none of the fresh-row merge machinery the edit path needs applies here.
+// The portal creates only an UNPRICED LEAD — status `lead`, estimateTotal 0, no
+// materials, no invoice — exactly the shape mobile's AddJobScreen writes for a
+// plain new job. The estimate/pricing inputs (labor hours, materials, the priced
+// total) are authored later; that surface is the still-deferred part of 3b, so
+// creation stops at the operational shell (customer link, title, schedule, …).
+//
+// The four rate fields (laborRate/materialMarkup/overhead/margin) are SEEDED
+// from the owner's business defaults so the eventual estimate uses the right
+// rates; the caller reads them from Settings and passes them in (like
+// createPricebookEntry), keeping this op a pure builder. Mobile maps
+// settings.overheadPercent/marginPercent onto the job's overhead/margin — the
+// caller does the same before calling.
+// ---------------------------------------------------------------------------
+
+// Mobile mints a job id as `j<Date.now()>` (screens/AddJobScreen.tsx). Same
+// shape, monotonic-guarded so a same-ms burst can't collide on the id. P1.4.
+let _jobLastMs = 0;
+function newJobId(): string {
+  let ms = Date.now();
+  if (ms <= _jobLastMs) ms = _jobLastMs + 1;
+  _jobLastMs = ms;
+  return `j${ms}`;
+}
+
+/** The fields a new lead job is created from. The four rate fields are the
+ *  Settings-seeded pricing defaults (estimate authoring is deferred, so the job
+ *  starts unpriced with these rates ready for a later estimate). */
+export interface NewJobFields {
+  customerId: string;
+  customerName: string;
+  title: string;
+  description: string;
+  address: string;
+  scheduledDate: DateString | null;
+  scheduledStartTime: TimeString | null;
+  scheduledEndTime: TimeString | null;
+  notes: string;
+  laborRate: number;
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+}
+
+/**
+ * Create a new unpriced lead job (roadmap P3 stage 5c — creation flows).
+ *
+ * Mints a mobile-format id and stamps `status: 'lead'`, `createdAt` (today),
+ * `invoiceId: null`, and the unpriced seed (estimateTotal 0, laborHours 0, empty
+ * materials) — the exact fresh-record shape mobile's AddJobScreen writes for a
+ * plain new job. A brand-new id means this is a pure insert, no server row to
+ * preserve.
+ */
+export async function createJob(fields: NewJobFields): Promise<Job> {
+  const job: Job = {
+    id: newJobId(),
+    customerId: fields.customerId,
+    customerName: fields.customerName,
+    title: fields.title,
+    description: fields.description,
+    status: 'lead',
+    scheduledDate: fields.scheduledDate,
+    scheduledStartTime: fields.scheduledStartTime,
+    scheduledEndTime: fields.scheduledEndTime,
+    address: fields.address,
+    estimateTotal: 0,
+    laborHours: 0,
+    laborRate: fields.laborRate,
+    materials: [],
+    materialMarkup: fields.materialMarkup,
+    overhead: fields.overhead,
+    margin: fields.margin,
+    notes: fields.notes,
+    invoiceId: null,
+    createdAt: getTodayDateString(),
+  };
+  await upsertBlobRow('jobs', job.id, job);
+  return job;
+}
+
+// ---------------------------------------------------------------------------
 // Pricebook (roadmap P3 stage 4)
 //
 // A saved service is a plain last-write-wins blob. NOTE: `estimateTotal` is a
@@ -580,14 +724,16 @@ function newPricebookId(): string {
 }
 
 /** The fields a new saved service is created from. `estimateTotal` is DERIVED —
- *  the caller recomputes it with the pricingMath port (P0.6), like the edit. New
- *  entries start with no materials/jobCosts (line-item authoring is deferred). */
+ *  the caller recomputes it with the pricingMath port (P0.6), like the edit.
+ *  `materials` are authored via the shared MaterialsEditor (default none);
+ *  jobCosts (direct-cost lines) are still not authored on creation. */
 export interface NewPricebookFields {
   name: string;
   category: string;
   description: string;
   laborHours: number;
   laborRate: number;
+  materials: Material[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -612,7 +758,7 @@ export async function createPricebookEntry(
     description: fields.description || undefined,
     laborHours: fields.laborHours,
     laborRate: fields.laborRate,
-    materials: [],
+    materials: fields.materials,
     materialMarkup: fields.materialMarkup,
     overhead: fields.overhead,
     margin: fields.margin,
@@ -721,13 +867,16 @@ export async function setRecurringJobActive(
 
 /** The recurring-job rule fields the portal edits. `estimateTotal` is DERIVED
  *  (recomputed by the caller via `web/src/ui/pricingMath.ts` from the pricing
- *  inputs + the rule's existing materials/jobCosts, P0.6). Customer re-linking
- *  and material line-item editing are out of scope, like the plan editor. */
+ *  inputs + materials, P0.6). Customer re-linking is out of scope, like the plan
+ *  editor. `materials` are authored via the shared MaterialsEditor and replace
+ *  the server list; `jobCosts` (direct-cost lines) stay preserved from the fresh
+ *  server row (a separate authoring surface). */
 export interface RecurringJobRuleEdit {
   title: string;
   description: string;
   laborHours: number;
   laborRate: number;
+  materials: Material[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -744,12 +893,11 @@ export interface RecurringJobRuleEdit {
  *
  * Mirrors `updateRecurringInvoiceRule`: applies the edited rule fields onto a
  * FRESHLY re-fetched server row, so the series' history — id, customerId/Name,
- * materials, jobCosts, occurrenceCount, lastGeneratedDate, isActive, createdAt —
- * is preserved (never rolled back), and normalises endCount/endDate to the
- * chosen endCondition. The one extra concern over the plan is the DERIVED
- * `estimateTotal`: unlike a plan's flat `amount`, a job's total is a
- * `calculateEstimate` derivation, so the caller recomputes it with the
- * pricingMath port (matching the mobile save) and hands it in here.
+ * jobCosts, occurrenceCount, lastGeneratedDate, isActive, createdAt — is
+ * preserved (never rolled back), and normalises endCount/endDate to the chosen
+ * endCondition. The DERIVED `estimateTotal` is recomputed by the caller with the
+ * pricingMath port over the edited pricing inputs AND materials (matching the
+ * mobile save); the edited `materials` are written in place of the server list.
  */
 export async function updateRecurringJobRule(
   id: string,
@@ -762,6 +910,7 @@ export async function updateRecurringJobRule(
     description: edit.description,
     laborHours: edit.laborHours,
     laborRate: edit.laborRate,
+    materials: edit.materials,
     materialMarkup: edit.materialMarkup,
     overhead: edit.overhead,
     margin: edit.margin,
@@ -852,6 +1001,89 @@ export async function createRecurringInvoice(
   return rule;
 }
 
+// Mobile mints a recurring-job id as `rj_<Date.now()>` (screens/AddJobScreen.tsx).
+// Same shape, monotonic-guarded so a same-ms burst can't collide. P1.4.
+let _rjLastMs = 0;
+function newRecurringJobId(): string {
+  let ms = Date.now();
+  if (ms <= _rjLastMs) ms = _rjLastMs + 1;
+  _rjLastMs = ms;
+  return `rj_${ms}`;
+}
+
+/** The fields a new recurring-job rule is created from. `estimateTotal` is
+ *  DERIVED — the caller recomputes it with the pricingMath port (P0.6), like the
+ *  rule edit. `materials` are authored via the shared MaterialsEditor (default
+ *  none); jobCosts still aren't authored on creation. The customer is picked from
+ *  existing records, so both id and denormalized name are supplied. */
+export interface NewRecurringJobFields {
+  customerId: string;
+  customerName: string;
+  title: string;
+  description: string;
+  laborHours: number;
+  laborRate: number;
+  materials: Material[];
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  estimateTotal: number;
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+  nextDueDate: DateString;
+}
+
+/**
+ * Create a new recurring-job rule (roadmap P3 stage 5c — creation flows).
+ *
+ * DECISION — fresh series, no eager first occurrence. Mobile's recurring-job
+ * create spawns a first Job (occurrenceNumber 1) alongside the rule. The portal
+ * instead initialises a FRESH series (occurrenceCount 0, lastGeneratedDate null,
+ * isActive true) and lets the generation engine (utils/recurringJobs.ts) emit
+ * the first occurrence on its next run from `nextDueDate` — exactly the choice
+ * `createRecurringInvoice` already made for maintenance plans. This keeps the op
+ * a single-entity insert (no coupled two-blob write that could half-fail) and
+ * keeps both recurring creates consistent.
+ *
+ * Mirrors the rule shape `updateRecurringJobRule` writes: the pricing inputs and
+ * authored materials plus the caller-recomputed `estimateTotal`, with
+ * endCount/endDate normalised to the chosen condition. `address`/`notes` start
+ * blank — they aren't in the portal's recurring-job editable surface.
+ */
+export async function createRecurringJob(
+  fields: NewRecurringJobFields,
+): Promise<RecurringJob> {
+  const rule: RecurringJob = {
+    id: newRecurringJobId(),
+    customerId: fields.customerId,
+    customerName: fields.customerName,
+    title: fields.title,
+    description: fields.description,
+    address: '',
+    notes: '',
+    estimateTotal: fields.estimateTotal,
+    laborHours: fields.laborHours,
+    laborRate: fields.laborRate,
+    materials: fields.materials,
+    materialMarkup: fields.materialMarkup,
+    overhead: fields.overhead,
+    margin: fields.margin,
+    cadence: fields.cadence,
+    endCondition: fields.endCondition,
+    endCount: fields.endCondition === 'count' ? fields.endCount : undefined,
+    endDate: fields.endCondition === 'date' ? fields.endDate : undefined,
+    occurrenceCount: 0,
+    lastGeneratedDate: null,
+    nextDueDate: fields.nextDueDate,
+    isActive: true,
+    createdAt: getTodayDateString(),
+  };
+  await upsertBlobRow('recurringJobs', rule.id, rule);
+  return rule;
+}
+
 /** The maintenance-plan rule fields the portal edits. Excludes customer
  *  re-linking (customerId/customerName — a customer-domain concern, deferred
  *  like invoice customer editing) and every generation-state field. */
@@ -932,6 +1164,70 @@ export async function saveInvoice(edited: Invoice): Promise<Invoice> {
     ? mergePaymentLedgers(server, edited)
     : reconcilePaidFields(edited);
   return persistInvoice(next);
+}
+
+// ---------------------------------------------------------------------------
+// New invoice (roadmap P3 stage 5c — creation flows)
+//
+// A standalone MANUAL invoice, matching mobile's AddInvoiceScreen (NOT the
+// create-from-job path, which snapshots the estimate's line items). It is a pure
+// insert with a fresh client id, so there is no server ledger to preserve — a
+// brand-new invoice starts with no payments and `paid: false`. `lineItems` and
+// `jobId` are deliberately absent: manual invoices carry neither (line items are
+// an estimate snapshot, authored with the deferred estimate surface).
+//
+// The `number` is resolved by the CALLER via the shared `nextInvoiceNumber`
+// (max existing digit + 1, honouring the Settings prefix/start), with an
+// optional user override — exactly as the mobile screen does — so the numbering
+// rule stays single-sourced. The customer is picked from existing records, so
+// both the denormalised `customer` name and the `customerId` link are set (the
+// invoice keys off the name; the id link mirrors mobile's getOrCreateCustomer).
+// ---------------------------------------------------------------------------
+
+// Mobile mints a manual invoice id as `String(Date.now())` (AddInvoiceScreen).
+// Same bare-numeric shape, monotonic-guarded so a same-ms burst can't collide. P1.4.
+let _invLastMs = 0;
+function newInvoiceId(): string {
+  let ms = Date.now();
+  if (ms <= _invLastMs) ms = _invLastMs + 1;
+  _invLastMs = ms;
+  return String(ms);
+}
+
+/** The fields a new manual invoice is created from. `number` is pre-resolved by
+ *  the caller (shared `nextInvoiceNumber`, or a user override). */
+export interface NewInvoiceFields {
+  customer: string;
+  customerId: string;
+  number: string;
+  amount: number;
+  due: DateString;
+  email: string;
+  phone: string;
+  desc: string;
+}
+
+/**
+ * Create a new manual invoice (roadmap P3 stage 5c — creation flows).
+ *
+ * Mints a mobile-format id and writes the fresh-record shape AddInvoiceScreen
+ * writes: `paid: false`, no ledger, no line items. A brand-new id means a pure
+ * insert — no server row to merge.
+ */
+export async function createInvoice(fields: NewInvoiceFields): Promise<Invoice> {
+  const invoice: Invoice = {
+    id: newInvoiceId(),
+    customer: fields.customer,
+    customerId: fields.customerId,
+    number: fields.number,
+    amount: fields.amount,
+    due: fields.due,
+    email: fields.email,
+    phone: fields.phone,
+    desc: fields.desc,
+    paid: false,
+  };
+  return persistInvoice(invoice);
 }
 
 /**

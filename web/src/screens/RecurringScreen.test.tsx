@@ -15,6 +15,7 @@ const writes = vi.hoisted(() => ({
   updateRecurringInvoiceRule: vi.fn(),
   updateRecurringJobRule: vi.fn(),
   createRecurringInvoice: vi.fn(),
+  createRecurringJob: vi.fn(),
   deleteRecurringJob: vi.fn(),
   deleteRecurringInvoice: vi.fn(),
 }));
@@ -95,6 +96,7 @@ beforeEach(() => {
   writes.updateRecurringInvoiceRule.mockReset().mockResolvedValue(plan());
   writes.updateRecurringJobRule.mockReset().mockResolvedValue(job());
   writes.createRecurringInvoice.mockReset().mockResolvedValue(plan());
+  writes.createRecurringJob.mockReset().mockResolvedValue(job());
   writes.deleteRecurringJob.mockReset().mockResolvedValue(undefined);
   writes.deleteRecurringInvoice.mockReset().mockResolvedValue(undefined);
   retry.mockReset();
@@ -287,6 +289,30 @@ describe('RecurringScreen — recurring job rule editing', () => {
     );
     expect(writes.updateRecurringJobRule).not.toHaveBeenCalled();
   });
+
+  it('seeds the materials editor from the rule and writes edited materials', async () => {
+    store.recurringJobs = [
+      job({ materials: [{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }] }),
+    ];
+    render(<RecurringScreen />);
+    const row = rowFor('Gutter clean');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    // Existing material seeded into the editor.
+    expect(within(row).getByDisplayValue('Filter')).toBeInTheDocument();
+    // Add a second material.
+    await userEvent.click(within(row).getByRole('button', { name: '+ Add material' }));
+    const names = within(row).getAllByLabelText('Material name');
+    await userEvent.type(names[names.length - 1], 'Bracket');
+    await userEvent.click(within(row).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(writes.updateRecurringJobRule).toHaveBeenCalledTimes(1),
+    );
+    const edit = writes.updateRecurringJobRule.mock.calls[0][1];
+    expect(edit.materials).toHaveLength(2);
+    expect(edit.materials.map((m: { name: string }) => m.name)).toEqual(['Filter', 'Bracket']);
+  });
 });
 
 describe('RecurringScreen — create maintenance plan', () => {
@@ -346,5 +372,80 @@ describe('RecurringScreen — create maintenance plan', () => {
 
     expect(screen.getByText(/add a customer first/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create plan' })).not.toBeInTheDocument();
+  });
+});
+
+describe('RecurringScreen — create recurring job', () => {
+  it('creates a fresh series for a picked customer with a recomputed total', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'c1');
+    await userEvent.type(screen.getByLabelText('Title'), 'Quarterly gutter clean');
+    const hours = screen.getByLabelText('Labor hours');
+    await userEvent.clear(hours);
+    await userEvent.type(hours, '2');
+    await userEvent.click(screen.getByRole('button', { name: 'Create recurring job' }));
+
+    await waitFor(() => expect(writes.createRecurringJob).toHaveBeenCalledTimes(1));
+    const arg = writes.createRecurringJob.mock.calls[0][0];
+    expect(arg).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Beta LLC',
+      title: 'Quarterly gutter clean',
+      laborHours: 2,
+      cadence: 'monthly',
+      endCondition: 'never',
+    });
+    // estimateTotal is recomputed (derived), not left unset.
+    expect(typeof arg.estimateTotal).toBe('number');
+    expect(arg.estimateTotal).toBeGreaterThan(0);
+    expect(retry).toHaveBeenCalledWith(['recurringJobs']);
+  });
+
+  it('authors a material on create and includes it in the payload', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'c1');
+    await userEvent.type(screen.getByLabelText('Title'), 'Gutter clean');
+    await userEvent.click(screen.getByRole('button', { name: '+ Add material' }));
+    await userEvent.type(screen.getByLabelText('Material name'), 'Sealant');
+    const cost = screen.getByLabelText('Material unit cost');
+    await userEvent.clear(cost);
+    await userEvent.type(cost, '12'); // qty defaults to 1
+    await userEvent.click(screen.getByRole('button', { name: 'Create recurring job' }));
+
+    await waitFor(() => expect(writes.createRecurringJob).toHaveBeenCalledTimes(1));
+    const arg = writes.createRecurringJob.mock.calls[0][0];
+    expect(arg.materials).toHaveLength(1);
+    expect(arg.materials[0]).toMatchObject({ name: 'Sealant', quantity: 1, unitCost: 12 });
+  });
+
+  it('requires a customer and a title', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create recurring job' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/choose a customer/i),
+    );
+    expect(writes.createRecurringJob).not.toHaveBeenCalled();
+
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'c1');
+    await userEvent.click(screen.getByRole('button', { name: 'Create recurring job' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/title is required/i),
+    );
+    expect(writes.createRecurringJob).not.toHaveBeenCalled();
+  });
+
+  it('prompts to add a customer first when none exist', async () => {
+    store.customers = [];
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    expect(screen.getByText(/add a customer first/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create recurring job' })).not.toBeInTheDocument();
   });
 });
