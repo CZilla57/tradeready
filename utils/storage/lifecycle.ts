@@ -123,6 +123,8 @@ export async function clearAllUserData(): Promise<void> {
     // mute leaking into the next account would silently hide its insights.
     INSIGHT_MUTES_STORAGE_KEY,
     "__syncQueue",
+    // v2 keeps the existing key but changes its value to a versioned,
+    // database-clock cursor. Clearing it remains part of the account boundary.
     "__lastSyncedAt",
     "__dataOwner",
     "onboardingComplete",
