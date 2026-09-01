@@ -885,7 +885,26 @@ export interface RecurringJobRuleEdit {
   endCondition: RecurrenceEndCondition;
   endCount?: number;
   endDate?: DateString;
+  /** Date shown when the editor opened, used to distinguish an intentional
+   * schedule change from stale form state after generation advances the row. */
+  originalNextDueDate: DateString;
   nextDueDate: DateString;
+}
+
+/**
+ * Preserve generation's freshly advanced date unless the user actually edited
+ * the date field. Comparing against the editor's original value avoids rolling
+ * the server cursor backward when an occurrence is generated while the form is
+ * open, without preventing an intentional schedule reset.
+ */
+function resolveNextDueDate(
+  serverNextDueDate: DateString,
+  originalNextDueDate: DateString,
+  editedNextDueDate: DateString,
+): DateString {
+  return editedNextDueDate === originalNextDueDate
+    ? serverNextDueDate
+    : editedNextDueDate;
 }
 
 /**
@@ -919,7 +938,11 @@ export async function updateRecurringJobRule(
     endCondition: edit.endCondition,
     endCount: edit.endCondition === 'count' ? edit.endCount : undefined,
     endDate: edit.endCondition === 'date' ? edit.endDate : undefined,
-    nextDueDate: edit.nextDueDate,
+    nextDueDate: resolveNextDueDate(
+      server.nextDueDate,
+      edit.originalNextDueDate,
+      edit.nextDueDate,
+    ),
   };
   await upsertBlobRow('recurringJobs', id, next);
   return next;
@@ -1095,6 +1118,8 @@ export interface RecurringInvoiceRuleEdit {
   endCondition: RecurrenceEndCondition;
   endCount?: number;
   endDate?: DateString;
+  /** Date shown when the editor opened; see `resolveNextDueDate`. */
+  originalNextDueDate: DateString;
   nextDueDate: DateString;
   autoSendEnabled: boolean;
 }
@@ -1127,7 +1152,11 @@ export async function updateRecurringInvoiceRule(
     endCondition: edit.endCondition,
     endCount: edit.endCondition === 'count' ? edit.endCount : undefined,
     endDate: edit.endCondition === 'date' ? edit.endDate : undefined,
-    nextDueDate: edit.nextDueDate,
+    nextDueDate: resolveNextDueDate(
+      server.nextDueDate,
+      edit.originalNextDueDate,
+      edit.nextDueDate,
+    ),
     autoSendEnabled: edit.autoSendEnabled,
   };
   await upsertBlobRow('recurringInvoices', id, next);

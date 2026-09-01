@@ -195,6 +195,7 @@ describe('RecurringScreen — maintenance plan rule editing', () => {
       endCondition: 'never',
       endCount: undefined,
       endDate: undefined,
+      originalNextDueDate: '2026-09-01',
       nextDueDate: '2026-09-01',
       autoSendEnabled: false,
     });
@@ -257,6 +258,7 @@ describe('RecurringScreen — recurring job rule editing', () => {
       estimateTotal: 200,
       cadence: 'monthly',
       endCondition: 'never',
+      originalNextDueDate: '2026-09-01',
       nextDueDate: '2026-09-01',
     });
     expect(retry).toHaveBeenCalledWith(['recurringJobs']);

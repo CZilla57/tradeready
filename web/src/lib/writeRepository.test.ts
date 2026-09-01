@@ -917,6 +917,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       dueDays: 15,
       cadence: 'quarterly',
       endCondition: 'never',
+      originalNextDueDate: '2026-09-01',
       nextDueDate: '2026-10-01',
       autoSendEnabled: true,
     });
@@ -966,6 +967,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       cadence: 'quarterly',
       endCondition: 'count',
       endCount: 8,
+      originalNextDueDate: '2026-09-01',
       nextDueDate: '2026-12-01',
     });
 
@@ -985,6 +987,110 @@ describe('recurring pause/resume — preserve generation state', () => {
     expect(written.customerId).toBe('c1');
     // …while the edited materials REPLACE the server list (Filter → Brush).
     expect(written.materials).toEqual([{ id: 'm2', name: 'Brush', quantity: 2, unitCost: 5 }]);
+  });
+
+  it('preserves a recurring job date advanced while its editor was open', async () => {
+    state.serverRow = {
+      data: recJob({
+        occurrenceCount: 4,
+        lastGeneratedDate: '2026-09-01',
+        nextDueDate: '2026-10-01',
+      }),
+      deleted: false,
+    };
+
+    await updateRecurringJobRule('rj1', {
+      title: 'Gutter clean',
+      description: '',
+      laborHours: 2,
+      laborRate: 90,
+      materials: [],
+      materialMarkup: 0,
+      overhead: 0,
+      margin: 0,
+      estimateTotal: 300,
+      cadence: 'monthly',
+      endCondition: 'never',
+      originalNextDueDate: '2026-09-01',
+      nextDueDate: '2026-09-01',
+    });
+
+    const written = state.lastUpsert!.data as RecurringJob;
+    expect(written.nextDueDate).toBe('2026-10-01');
+    expect(written.occurrenceCount).toBe(4);
+    expect(written.lastGeneratedDate).toBe('2026-09-01');
+  });
+
+  it('applies an explicitly edited recurring job date', async () => {
+    state.serverRow = {
+      data: recJob({ nextDueDate: '2026-10-01' }),
+      deleted: false,
+    };
+
+    await updateRecurringJobRule('rj1', {
+      title: 'Gutter clean',
+      description: '',
+      laborHours: 2,
+      laborRate: 90,
+      materials: [],
+      materialMarkup: 0,
+      overhead: 0,
+      margin: 0,
+      estimateTotal: 300,
+      cadence: 'monthly',
+      endCondition: 'never',
+      originalNextDueDate: '2026-09-01',
+      nextDueDate: '2026-11-15',
+    });
+
+    expect((state.lastUpsert!.data as RecurringJob).nextDueDate).toBe('2026-11-15');
+  });
+
+  it('preserves a maintenance-plan date advanced while its editor was open', async () => {
+    state.serverRow = {
+      data: recPlan({
+        occurrenceCount: 6,
+        lastGeneratedDate: '2026-09-01',
+        nextDueDate: '2026-10-01',
+      }),
+      deleted: false,
+    };
+
+    await updateRecurringInvoiceRule('ri1', {
+      description: 'Monthly service',
+      amount: 150,
+      dueDays: 30,
+      cadence: 'monthly',
+      endCondition: 'never',
+      originalNextDueDate: '2026-09-01',
+      nextDueDate: '2026-09-01',
+      autoSendEnabled: false,
+    });
+
+    const written = state.lastUpsert!.data as RecurringInvoice;
+    expect(written.nextDueDate).toBe('2026-10-01');
+    expect(written.occurrenceCount).toBe(6);
+    expect(written.lastGeneratedDate).toBe('2026-09-01');
+  });
+
+  it('applies an explicitly edited maintenance-plan date', async () => {
+    state.serverRow = {
+      data: recPlan({ nextDueDate: '2026-10-01' }),
+      deleted: false,
+    };
+
+    await updateRecurringInvoiceRule('ri1', {
+      description: 'Monthly service',
+      amount: 150,
+      dueDays: 30,
+      cadence: 'monthly',
+      endCondition: 'never',
+      originalNextDueDate: '2026-09-01',
+      nextDueDate: '2026-11-15',
+      autoSendEnabled: false,
+    });
+
+    expect((state.lastUpsert!.data as RecurringInvoice).nextDueDate).toBe('2026-11-15');
   });
 
   it('createRecurringInvoice inits a fresh series with a mobile-format id', async () => {
@@ -1109,6 +1215,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       cadence: 'monthly',
       endCondition: 'date',
       endDate: '2027-01-01',
+      originalNextDueDate: '2026-09-01',
       nextDueDate: '2026-10-01',
       autoSendEnabled: false,
     });
