@@ -8,6 +8,7 @@ import {
   deleteInvoice,
   deleteJob,
   saveSettings,
+  saveSchedule,
   saveCustomer,
   updateJobDetails,
   setJobArchived,
@@ -349,6 +350,59 @@ describe('saveSettings — P0.5 strip secure fields, keep the rest', () => {
     await expect(saveSettings({ phone: '1' })).rejects.toMatchObject({
       message: 'rls denied',
     });
+  });
+});
+
+describe('saveSchedule — nested deep-merge, booking fields preserved', () => {
+  it('merges the patch onto the server schedule, keeping fields the portal never sets', async () => {
+    state.settingsRow = {
+      data: {
+        businessName: 'Co',
+        schedule: {
+          // Booking fields the mobile Booking screen owns — the portal must not drop these.
+          bookableSlotsEnabled: true,
+          slotLeadHours: 12,
+          slotWindowDays: 30,
+          timeZone: 'America/Chicago',
+          // A working-pattern field the portal DOES edit.
+          workDayStart: '08:00',
+          workDayEnd: '17:00',
+        },
+      },
+    };
+
+    await saveSchedule({ workDayStart: '07:00', workDayEnd: '16:00', workDays: [1, 2, 3] });
+
+    const schedule = (writtenSettings().schedule ?? {}) as Record<string, unknown>;
+    // Edited fields applied…
+    expect(schedule.workDayStart).toBe('07:00');
+    expect(schedule.workDayEnd).toBe('16:00');
+    expect(schedule.workDays).toEqual([1, 2, 3]);
+    // …and the booking fields the portal never touched survived (P0.2, one level down).
+    expect(schedule.bookableSlotsEnabled).toBe(true);
+    expect(schedule.slotLeadHours).toBe(12);
+    expect(schedule.slotWindowDays).toBe(30);
+    expect(schedule.timeZone).toBe('America/Chicago');
+  });
+
+  it('keeps sibling top-level settings and still strips secrets', async () => {
+    state.settingsRow = {
+      data: { businessName: 'Co', laborRate: 90, groqKey: 'leak', schedule: {} },
+    };
+    await saveSchedule({ bufferMinutes: 15 });
+    const written = writtenSettings();
+    expect(written.businessName).toBe('Co');
+    expect(written.laborRate).toBe(90);
+    expect(written).not.toHaveProperty('groqKey');
+    expect((written.schedule as Record<string, unknown>).bufferMinutes).toBe(15);
+  });
+
+  it('creates the schedule object when the settings blob has none', async () => {
+    state.settingsRow = { data: { businessName: 'Co' } };
+    await saveSchedule({ workDays: [1, 2, 3, 4, 5] });
+    expect((writtenSettings().schedule as Record<string, unknown>).workDays).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
   });
 });
 

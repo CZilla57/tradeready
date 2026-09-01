@@ -1,13 +1,23 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useData, useResources } from '../lib/DataContext';
 import { Card, PageHead, Empty, KV, Badge, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 import { resolveSchedule } from '@shared/utils/scheduleConfig';
-import type { Settings } from '@shared/types/models';
-import { saveSettings } from '../lib/writeRepository';
+import { formatDisplayDate, getTodayDateString } from '@shared/utils/dateHelpers';
+import type { ScheduleBlackout, Settings } from '@shared/types/models';
+import { saveSettings, saveSchedule } from '../lib/writeRepository';
 
 const DOW = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const EMPTY_SETTINGS = {} as Settings;
+/** ISO weekday chips (Mon=1 … Sun=7), the order resolveSchedule stores. */
+const DAY_CHIPS: { iso: number; letter: string; name: string }[] = [
+  { iso: 1, letter: 'M', name: 'Monday' },
+  { iso: 2, letter: 'T', name: 'Tuesday' },
+  { iso: 3, letter: 'W', name: 'Wednesday' },
+  { iso: 4, letter: 'T', name: 'Thursday' },
+  { iso: 5, letter: 'F', name: 'Friday' },
+  { iso: 6, letter: 'S', name: 'Saturday' },
+  { iso: 7, letter: 'S', name: 'Sunday' },
+];
 
 function yesNo(v: unknown): string {
   return v ? 'On' : 'Off';
@@ -536,13 +546,251 @@ function AutomationEditor({ settings }: { settings: Settings }) {
   );
 }
 
+/**
+ * The editable Schedule card (roadmap P3 stage 4). Edits the working pattern
+ * behind the calendar and conflict math: work days, work hours, appointment
+ * length, buffer, and time-off blackouts — the same fields the mobile Settings →
+ * Schedule screen owns. Saves through the typed `saveSchedule`, which deep-merges
+ * onto the server `schedule` so the slot-booking fields (managed by the mobile
+ * Booking screen) are never dropped. Values are normalised the way
+ * `resolveSchedule` expects; display reads through `resolveSchedule`, so an
+ * absent/partial blob shows its effective defaults and saving persists them.
+ */
+function ScheduleEditor({ settings }: { settings: Settings }) {
+  const { retry } = useData();
+  const resolved = resolveSchedule(settings);
+  const [open, setOpen] = useState(false);
+  const [workDays, setWorkDays] = useState<number[]>(resolved.workDays);
+  const [start, setStart] = useState(resolved.workDayStart);
+  const [end, setEnd] = useState(resolved.workDayEnd);
+  const [duration, setDuration] = useState(String(resolved.defaultDurationMinutes));
+  const [buffer, setBuffer] = useState(String(resolved.bufferMinutes));
+  const [blackouts, setBlackouts] = useState<ScheduleBlackout[]>(resolved.blackouts);
+  const [boStart, setBoStart] = useState(getTodayDateString());
+  const [boEnd, setBoEnd] = useState(getTodayDateString());
+  const [boReason, setBoReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openEditor() {
+    const r = resolveSchedule(settings);
+    setWorkDays(r.workDays);
+    setStart(r.workDayStart);
+    setEnd(r.workDayEnd);
+    setDuration(String(r.defaultDurationMinutes));
+    setBuffer(String(r.bufferMinutes));
+    setBlackouts(r.blackouts);
+    setBoStart(getTodayDateString());
+    setBoEnd(getTodayDateString());
+    setBoReason('');
+    setError(null);
+    setOpen(true);
+  }
+
+  function toggleDay(iso: number) {
+    setWorkDays((days) =>
+      days.includes(iso)
+        ? days.filter((d) => d !== iso)
+        : [...days, iso].sort((a, b) => a - b),
+    );
+  }
+
+  function addBlackout() {
+    if (!boStart || !boEnd) return;
+    const s = boStart;
+    const e = boEnd < s ? s : boEnd; // clamp, matching the mobile add form
+    setBlackouts((list) => [
+      ...list,
+      { id: `bo${Date.now()}`, start: s, end: e, reason: boReason.trim() || undefined },
+    ]);
+    setBoStart(getTodayDateString());
+    setBoEnd(getTodayDateString());
+    setBoReason('');
+  }
+
+  function removeBlackout(id: string) {
+    setBlackouts((list) => list.filter((b) => b.id !== id));
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (workDays.length === 0) {
+      setError('Choose at least one working day.');
+      return;
+    }
+    if (!(start < end)) {
+      setError('Work day must start before it ends.');
+      return;
+    }
+    const durationMin = Number(duration.trim());
+    if (!Number.isInteger(durationMin) || durationMin <= 0) {
+      setError('Appointment length must be a whole number of minutes.');
+      return;
+    }
+    const bufferMin = Number(buffer.trim());
+    if (!Number.isInteger(bufferMin) || bufferMin < 0) {
+      setError('Buffer must be zero or a positive whole number of minutes.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await saveSchedule({
+        workDays,
+        workDayStart: start,
+        workDayEnd: end,
+        defaultDurationMinutes: durationMin,
+        bufferMinutes: bufferMin,
+        blackouts,
+      });
+      retry(['settings']);
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Card pad>
+        <div className="btn-row" style={{ justifyContent: 'space-between' }}>
+          <div className="section-label" style={{ padding: 0 }}>
+            Schedule
+          </div>
+          <button type="button" className="btn sm" onClick={openEditor}>
+            Edit
+          </button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <KV k="Work days" v={resolved.workDays.map((d) => DOW[d]).join(', ')} />
+          <KV k="Hours" v={`${resolved.workDayStart} – ${resolved.workDayEnd}`} />
+          <KV k="Appointment length" v={`${resolved.defaultDurationMinutes} min`} />
+          <KV k="Buffer" v={`${resolved.bufferMinutes} min`} />
+          {resolved.timeZone && <KV k="Time zone" v={resolved.timeZone} />}
+          <KV k="Online booking" v={yesNo(resolved.bookableSlotsEnabled)} />
+          {resolved.blackouts.length > 0 && (
+            <KV k="Time off periods" v={String(resolved.blackouts.length)} />
+          )}
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        Schedule
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <div className="field">
+          <span>Work days</span>
+          <div className="day-chips" role="group" aria-label="Work days">
+            {DAY_CHIPS.map((d) => {
+              const selected = workDays.includes(d.iso);
+              return (
+                <button
+                  key={d.iso}
+                  type="button"
+                  className={`day-chip${selected ? ' selected' : ''}`}
+                  aria-pressed={selected}
+                  aria-label={d.name}
+                  onClick={() => toggleDay(d.iso)}
+                >
+                  {d.letter}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="btn-row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Start</span>
+            <input className="field-input" type="time" value={start} onChange={(e) => setStart(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>End</span>
+            <input className="field-input" type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
+          </label>
+        </div>
+        <div className="btn-row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Appointment length (min)</span>
+            <input className="field-input" type="number" step="1" min="1" inputMode="numeric" value={duration} onChange={(e) => setDuration(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Buffer between jobs (min)</span>
+            <input className="field-input" type="number" step="1" min="0" inputMode="numeric" value={buffer} onChange={(e) => setBuffer(e.target.value)} />
+          </label>
+        </div>
+
+        <div className="field">
+          <span>Time off</span>
+          {blackouts.length === 0 ? (
+            <div className="muted" style={{ fontSize: 13, fontWeight: 400 }}>No time off planned.</div>
+          ) : (
+            <div className="list" style={{ margin: 0 }}>
+              {blackouts.map((b) => (
+                <div key={b.id} className="row">
+                  <div className="grow">
+                    <div className="title">
+                      {b.start === b.end
+                        ? formatDisplayDate(b.start)
+                        : `${formatDisplayDate(b.start)} – ${formatDisplayDate(b.end)}`}
+                    </div>
+                    {b.reason && <div className="meta">{b.reason}</div>}
+                  </div>
+                  <button type="button" className="btn ghost sm" aria-label={`Remove time off ${b.reason || b.start}`} onClick={() => removeBlackout(b.id)}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="btn-row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>First day</span>
+            <input className="field-input" type="date" value={boStart} onChange={(e) => setBoStart(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Last day</span>
+            <input className="field-input" type="date" value={boEnd} onChange={(e) => setBoEnd(e.target.value)} />
+          </label>
+        </div>
+        <label className="field">
+          <span>Reason (optional)</span>
+          <input className="field-input" type="text" value={boReason} onChange={(e) => setBoReason(e.target.value)} />
+        </label>
+        <div className="btn-row">
+          <button type="button" className="btn sm" onClick={addBlackout}>
+            Add time off
+          </button>
+        </div>
+
+        <div className="btn-row" style={{ marginTop: 4 }}>
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 export default function SettingsScreen() {
   const { settings } = useData();
   const state = useResources('settings');
-  const schedule = useMemo(
-    () => resolveSchedule(settings ?? EMPTY_SETTINGS),
-    [settings],
-  );
 
   if (state.loading) return <Empty>Loading settings…</Empty>;
   if (state.error)
@@ -571,32 +819,7 @@ export default function SettingsScreen() {
         </div>
 
         <div className="stack">
-          <Card pad>
-            <div className="section-label" style={{ padding: '0 0 8px' }}>
-              Schedule
-            </div>
-            <KV
-              k="Work days"
-              v={schedule.workDays.map((d) => DOW[d]).join(', ')}
-            />
-            <KV
-              k="Hours"
-              v={`${schedule.workDayStart} – ${schedule.workDayEnd}`}
-            />
-            <KV
-              k="Appointment length"
-              v={`${schedule.defaultDurationMinutes} min`}
-            />
-            <KV k="Buffer" v={`${schedule.bufferMinutes} min`} />
-            {schedule.timeZone && <KV k="Time zone" v={schedule.timeZone} />}
-            <KV
-              k="Online booking"
-              v={yesNo(schedule.bookableSlotsEnabled)}
-            />
-            {schedule.blackouts.length > 0 && (
-              <KV k="Time off periods" v={String(schedule.blackouts.length)} />
-            )}
-          </Card>
+          <ScheduleEditor settings={s} />
 
           <Card pad>
             <div className="section-label" style={{ padding: '0 0 8px' }}>
@@ -620,9 +843,9 @@ export default function SettingsScreen() {
       </div>
 
       <div className="muted" style={{ marginTop: 16, fontSize: 13 }}>
-        You can update your business profile, pricing defaults, invoicing, and
-        automation settings here. Schedule and payment-processor settings are
-        edited in the TradeReady mobile app.
+        You can update your business profile, pricing defaults, invoicing,
+        schedule, and automation settings here. Payment-processor and online-
+        booking settings are edited in the TradeReady mobile app.
       </div>
     </>
   );

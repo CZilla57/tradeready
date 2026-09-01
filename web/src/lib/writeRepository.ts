@@ -8,6 +8,7 @@ import type {
   Payment,
   PaymentDraft,
   PricebookEntry,
+  ScheduleConfig,
   Settings,
   TimeString,
 } from '@shared/types/models';
@@ -236,6 +237,22 @@ function stripSecureFields(settings: Settings): Settings {
   return safe as unknown as Settings;
 }
 
+/** Strip credentials and upsert a fully-merged settings blob. The single write
+ *  point both settings ops share, so the P0.5 invariants live in one place. */
+async function persistSettings(merged: Settings): Promise<Settings> {
+  const safe = stripSecureFields(merged);
+  const user_id = await currentUserId();
+  // The settings row has no `id` / `deleted` — upsert conflicts on user_id,
+  // exactly as the mobile push does (../../utils/sync.ts).
+  const { error } = await supabase.from('settings').upsert({
+    user_id,
+    data: safe,
+    updated_at: writeTimestamp(),
+  });
+  if (error) throw error;
+  return safe;
+}
+
 /**
  * Apply a patch to the user's settings.
  *
@@ -248,17 +265,31 @@ function stripSecureFields(settings: Settings): Settings {
  */
 export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
   const current = (await loadSettings()) ?? ({} as Settings);
-  const merged = stripSecureFields({ ...current, ...patch });
-  const user_id = await currentUserId();
-  // The settings row has no `id` / `deleted` — upsert conflicts on user_id,
-  // exactly as the mobile push does (../../utils/sync.ts).
-  const { error } = await supabase.from('settings').upsert({
-    user_id,
-    data: merged,
-    updated_at: writeTimestamp(),
+  return persistSettings({ ...current, ...patch });
+}
+
+/**
+ * Apply a patch to the owner's schedule config (roadmap P3 stage 4).
+ *
+ * `settings.schedule` is a NESTED sub-blob, and its slot-booking fields
+ * (`bookableSlotsEnabled`, `slotLeadHours`, `slotWindowDays`, `timeZone`) are
+ * written by a DIFFERENT surface — the mobile Booking screen — than the working
+ * hours / days / appointment / time-off fields the portal edits. A flat
+ * `saveSettings({ schedule })` would replace the whole sub-object and drop those
+ * booking fields. So this deep-merges the patch onto the FRESHLY-loaded server
+ * `schedule` (P0.2 applied one level down): every schedule field the portal
+ * doesn't set is preserved from the authoritative server copy. Callers should
+ * pass values already normalised the way `resolveSchedule` expects (explicit
+ * `workDayStart < workDayEnd`, ≥1 work day, non-negative minutes).
+ */
+export async function saveSchedule(
+  patch: Partial<ScheduleConfig>,
+): Promise<Settings> {
+  const current = (await loadSettings()) ?? ({} as Settings);
+  return persistSettings({
+    ...current,
+    schedule: { ...(current.schedule ?? {}), ...patch },
   });
-  if (error) throw error;
-  return merged;
 }
 
 // ---------------------------------------------------------------------------

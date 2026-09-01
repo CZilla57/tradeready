@@ -306,11 +306,22 @@ five):
      `estimateFollowUpsEnabled` uses the REVERSE convention — ABSENT means ON
      (read as `!== false`, an explicit owner decision, types/models.ts) — so the
      editor reads it with `!== false` (the plain-`yesNo` read-only card was wrong
-     for a pre-field blob) and always writes an explicit boolean. Remaining
-     settings sections (schedule/payments) follow the same `saveSettings(patch)`
-     pattern — additive later; schedule is nested config (`resolveSchedule`) and
-     payments couples with Stripe onboarding (provider selection), so both carry
-     more than the direct-value sections above.
+     for a pre-field blob) and always writes an explicit boolean.
+     `ScheduleEditor` (also LANDED) edits the working pattern behind the calendar
+     — work days, work hours, appointment length, buffer, and time-off blackouts,
+     matching the mobile Settings → Schedule screen. Schedule is a NESTED sub-blob
+     whose slot-booking fields (`bookableSlotsEnabled`, `slotLeadHours`,
+     `slotWindowDays`, `timeZone`) are written by a DIFFERENT surface (the mobile
+     Booking screen), so a flat `saveSettings({schedule})` would drop them; it
+     therefore uses a dedicated typed op `saveSchedule(patch)` that deep-merges
+     onto the freshly-loaded server `schedule` (P0.2 one level down). Values are
+     normalised the way `resolveSchedule` expects (start < end, ≥1 work day,
+     non-negative minutes) and validated before send; display reads through
+     `resolveSchedule` so an absent/partial blob shows its effective defaults.
+     Remaining settings: online-booking (slot fields) stays on the mobile Booking
+     screen; Payments couples with Stripe onboarding (provider selection) so it
+     stays read-only in the portal — `paymentNotes` alone could become a
+     direct-value edit later.
    - **Pricebook → metadata. ✅ LANDED.** `PricebookEditor` on
      `PricebookDetailScreen` edits name/category/description via
      `savePricebookEntry` (whole-blob; bumps the blob's `updatedAt`) and deletes

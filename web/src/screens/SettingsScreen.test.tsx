@@ -4,7 +4,10 @@ import userEvent from '@testing-library/user-event';
 import type { Settings } from '@shared/types/models';
 import SettingsScreen from './SettingsScreen';
 
-const writes = vi.hoisted(() => ({ saveSettings: vi.fn() }));
+const writes = vi.hoisted(() => ({
+  saveSettings: vi.fn(),
+  saveSchedule: vi.fn(),
+}));
 vi.mock('../lib/writeRepository', () => writes);
 
 const retry = vi.hoisted(() => vi.fn());
@@ -41,6 +44,7 @@ async function openSection(label: string) {
 
 beforeEach(() => {
   writes.saveSettings.mockReset().mockResolvedValue(settings());
+  writes.saveSchedule.mockReset().mockResolvedValue(settings());
   retry.mockReset();
   store.settings = settings();
 });
@@ -230,6 +234,88 @@ describe('SettingsScreen — automation edit', () => {
     await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
     expect(writes.saveSettings.mock.calls[0][0]).toMatchObject({
       estimateFollowUpsEnabled: false,
+    });
+  });
+});
+
+describe('SettingsScreen — schedule edit', () => {
+  it('saves work pattern via saveSchedule and refreshes', async () => {
+    render(<SettingsScreen />);
+    await openSection('Schedule');
+
+    // Absent schedule → resolved defaults: Mon–Sat selected, Sunday off.
+    await userEvent.click(screen.getByRole('button', { name: 'Sunday' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSchedule).toHaveBeenCalledTimes(1));
+    const patch = writes.saveSchedule.mock.calls[0][0];
+    expect(patch).toMatchObject({
+      workDays: [1, 2, 3, 4, 5, 6, 7],
+      workDayStart: '08:00',
+      workDayEnd: '17:00',
+      defaultDurationMinutes: 60,
+      bufferMinutes: 0,
+      blackouts: [],
+    });
+    expect(retry).toHaveBeenCalledWith(['settings']);
+    // Schedule uses the dedicated nested-merge op, never the flat one.
+    expect(writes.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('rejects a start that is not before the end', async () => {
+    render(<SettingsScreen />);
+    await openSection('Schedule');
+
+    const start = screen.getByDisplayValue('08:00');
+    await userEvent.clear(start);
+    await userEvent.type(start, '18:00');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/start before it ends/i),
+    );
+    expect(writes.saveSchedule).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('rejects deselecting every working day', async () => {
+    render(<SettingsScreen />);
+    await openSection('Schedule');
+
+    for (const name of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']) {
+      await userEvent.click(screen.getByRole('button', { name }));
+    }
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/at least one working day/i),
+    );
+    expect(writes.saveSchedule).not.toHaveBeenCalled();
+  });
+
+  it('adds and persists a time-off blackout', async () => {
+    render(<SettingsScreen />);
+    await openSection('Schedule');
+
+    const [firstDay, lastDay] = screen.getAllByDisplayValue(/^\d{4}-\d{2}-\d{2}$/);
+    await userEvent.clear(firstDay);
+    await userEvent.type(firstDay, '2026-12-24');
+    await userEvent.clear(lastDay);
+    await userEvent.type(lastDay, '2026-12-26');
+    await userEvent.type(screen.getByLabelText('Reason (optional)'), 'Holiday');
+    await userEvent.click(screen.getByRole('button', { name: 'Add time off' }));
+
+    // The added period shows in the list, then persists on save.
+    expect(screen.getByText('Holiday')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSchedule).toHaveBeenCalledTimes(1));
+    const patch = writes.saveSchedule.mock.calls[0][0];
+    expect(patch.blackouts).toHaveLength(1);
+    expect(patch.blackouts[0]).toMatchObject({
+      start: '2026-12-24',
+      end: '2026-12-26',
+      reason: 'Holiday',
     });
   });
 });
