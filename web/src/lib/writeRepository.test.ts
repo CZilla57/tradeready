@@ -14,6 +14,8 @@ import {
   setJobArchived,
   savePricebookEntry,
   saveExpense,
+  setRecurringJobActive,
+  setRecurringInvoiceActive,
   InvoiceNotFoundError,
   JobNotFoundError,
   PaymentValidationError,
@@ -23,6 +25,8 @@ import type {
   Expense,
   Job,
   PricebookEntry,
+  RecurringInvoice,
+  RecurringJob,
 } from '@shared/types/models';
 
 // A controllable supabase mock. `select(...).eq(...).maybeSingle()` resolves the
@@ -403,6 +407,112 @@ describe('saveSchedule — nested deep-merge, booking fields preserved', () => {
     expect((writtenSettings().schedule as Record<string, unknown>).workDays).toEqual([
       1, 2, 3, 4, 5,
     ]);
+  });
+});
+
+describe('recurring pause/resume — preserve generation state', () => {
+  function recJob(over: Partial<RecurringJob> = {}): RecurringJob {
+    return {
+      id: 'rj1',
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Gutter clean',
+      description: '',
+      address: '',
+      notes: '',
+      estimateTotal: 300,
+      laborHours: 2,
+      laborRate: 90,
+      materials: [],
+      materialMarkup: 0,
+      overhead: 0,
+      margin: 0,
+      cadence: 'monthly',
+      endCondition: 'never',
+      occurrenceCount: 3,
+      lastGeneratedDate: '2026-08-01',
+      nextDueDate: '2026-09-01',
+      isActive: true,
+      createdAt: '2026-01-01',
+      ...over,
+    };
+  }
+
+  function recPlan(over: Partial<RecurringInvoice> = {}): RecurringInvoice {
+    return {
+      id: 'ri1',
+      customerId: 'c1',
+      customerName: 'Beta LLC',
+      description: 'Monthly service',
+      amount: 150,
+      dueDays: 30,
+      cadence: 'monthly',
+      endCondition: 'never',
+      occurrenceCount: 5,
+      lastGeneratedDate: '2026-08-01',
+      nextDueDate: '2026-09-01',
+      isActive: true,
+      createdAt: '2026-01-01',
+      ...over,
+    };
+  }
+
+  it('flips only isActive on a recurring job, keeping advancing generation state', async () => {
+    state.serverRow = { data: recJob(), deleted: false };
+    await setRecurringJobActive('rj1', false);
+
+    const written = state.lastUpsert!.data as RecurringJob;
+    expect(state.lastTable).toBe('recurringJobs');
+    expect(written.isActive).toBe(false);
+    // Generation state carried forward from the server row (P0.2).
+    expect(written.occurrenceCount).toBe(3);
+    expect(written.lastGeneratedDate).toBe('2026-08-01');
+    expect(written.nextDueDate).toBe('2026-09-01'); // jobs keep back-fill (no fast-forward)
+  });
+
+  it('job resume does NOT fast-forward nextDueDate (back-fill kept)', async () => {
+    state.serverRow = { data: recJob({ isActive: false, nextDueDate: '2020-01-01' }), deleted: false };
+    await setRecurringJobActive('rj1', true);
+    const written = state.lastUpsert!.data as RecurringJob;
+    expect(written.isActive).toBe(true);
+    expect(written.nextDueDate).toBe('2020-01-01');
+  });
+
+  it('plan resume fast-forwards a stale nextDueDate past today (no back-billing)', async () => {
+    state.serverRow = { data: recPlan({ isActive: false, nextDueDate: '2020-01-01' }), deleted: false };
+    await setRecurringInvoiceActive('ri1', true);
+
+    const written = state.lastUpsert!.data as RecurringInvoice;
+    expect(state.lastTable).toBe('recurringInvoices');
+    expect(written.isActive).toBe(true);
+    const today = new Date().toISOString().split('T')[0];
+    expect(written.nextDueDate > today).toBe(true); // advanced strictly past today
+    expect(written.occurrenceCount).toBe(5); // skipped periods don't count
+  });
+
+  it('plan pause only flips the flag, leaving nextDueDate alone', async () => {
+    state.serverRow = { data: recPlan({ nextDueDate: '2026-09-01' }), deleted: false };
+    await setRecurringInvoiceActive('ri1', false);
+    const written = state.lastUpsert!.data as RecurringInvoice;
+    expect(written.isActive).toBe(false);
+    expect(written.nextDueDate).toBe('2026-09-01');
+  });
+
+  it('plan resume on an ended plan leaves nextDueDate unchanged', async () => {
+    // endCount already met → isEndConditionMet true → no fast-forward.
+    state.serverRow = {
+      data: recPlan({
+        isActive: false,
+        endCondition: 'count',
+        endCount: 5,
+        occurrenceCount: 5,
+        nextDueDate: '2020-01-01',
+      }),
+      deleted: false,
+    };
+    await setRecurringInvoiceActive('ri1', true);
+    const written = state.lastUpsert!.data as RecurringInvoice;
+    expect(written.nextDueDate).toBe('2020-01-01');
   });
 });
 

@@ -8,6 +8,8 @@ import type {
   Payment,
   PaymentDraft,
   PricebookEntry,
+  RecurringInvoice,
+  RecurringJob,
   ScheduleConfig,
   Settings,
   TimeString,
@@ -15,6 +17,7 @@ import type {
 import { SECURE_FIELDS } from '@shared/utils/storage/keys';
 import { withArchived } from '@shared/utils/archive';
 import { getTodayDateString } from '@shared/utils/dateHelpers';
+import { calculateNextDate, isEndConditionMet } from '@shared/utils/recurrence';
 import {
   applyPayment,
   mergePaymentLedgers,
@@ -130,7 +133,14 @@ async function tryLoadInvoice(id: string): Promise<Invoice | null> {
  * The single low-level write primitive the typed operations build on.
  */
 async function upsertBlobRow(
-  collection: 'invoices' | 'customers' | 'jobs' | 'pricebook' | 'expenses',
+  collection:
+    | 'invoices'
+    | 'customers'
+    | 'jobs'
+    | 'pricebook'
+    | 'expenses'
+    | 'recurringJobs'
+    | 'recurringInvoices',
   id: string,
   data: unknown,
 ): Promise<void> {
@@ -426,6 +436,101 @@ export async function savePricebookEntry(
 export async function saveExpense(expense: Expense): Promise<Expense> {
   await upsertBlobRow('expenses', expense.id, expense);
   return expense;
+}
+
+// ---------------------------------------------------------------------------
+// Recurring rules (roadmap P3 stage 5)
+//
+// RecurringJob / RecurringInvoice blobs carry ADVANCING generation state —
+// lastGeneratedDate, occurrenceCount, nextDueDate — stamped by the generation
+// engines (utils/recurringJobs.ts / recurringInvoices.ts) as occurrences are
+// created. A whole-blob web write built from stale in-memory state would roll
+// that back. So pause/resume re-fetches the current server row (P0.2) and
+// changes ONLY isActive (plus, on invoice resume, the nextDueDate fast-forward
+// the mobile Resume performs), preserving every generation field.
+//
+// Resume asymmetry — do NOT "unify" the two: a recurring INVOICE fast-forwards
+// nextDueDate past today so a paused plan never back-bills the occurrences that
+// elapsed while paused (utils/recurringInvoices.ts, owner decision 2026-08-01).
+// A recurring JOB deliberately KEEPS back-fill on resume (a job card is a to-do,
+// not a receivable), so its resume just flips the flag.
+//
+// Editing the rule itself (cadence, amounts, end condition, nextDueDate) is
+// deferred — it recomputes generation state and belongs with a later guarded
+// step, like job status transitions (3b). Hard delete goes through
+// deleteRecurringJob / deleteRecurringInvoice (soft-delete tombstones) above.
+// ---------------------------------------------------------------------------
+
+/** The engine's own `today` frame (UTC), matched exactly so the invoice resume
+ *  fast-forward can't land off-by-one from checkAndGenerateRecurringInvoices. */
+function engineToday(): DateString {
+  return new Date().toISOString().split('T')[0] as DateString;
+}
+
+/**
+ * A plan's nextDueDate advanced past `today`, for Resume — a web-safe copy of
+ * utils/recurringInvoices.ts `fastForwardedNextDueDate` (that module pulls the
+ * storage/network layer and isn't importable here). An already-ended plan is
+ * returned unchanged, exactly as the shared helper does.
+ */
+function fastForwardedNextDueDate(
+  rule: RecurringInvoice,
+  today: DateString,
+): DateString {
+  if (isEndConditionMet(rule)) return rule.nextDueDate;
+  let next = rule.nextDueDate;
+  while (next <= today) next = calculateNextDate(next, rule.cadence);
+  return next;
+}
+
+async function loadRecurringJob(id: string): Promise<RecurringJob> {
+  const { data, error } = await supabase
+    .from('recurringJobs')
+    .select('data, deleted')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.deleted || !data.data)
+    throw new Error(`Recurring job not found: ${id}`);
+  return data.data as RecurringJob;
+}
+
+async function loadRecurringInvoice(id: string): Promise<RecurringInvoice> {
+  const { data, error } = await supabase
+    .from('recurringInvoices')
+    .select('data, deleted')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.deleted || !data.data)
+    throw new Error(`Recurring plan not found: ${id}`);
+  return data.data as RecurringInvoice;
+}
+
+/** Pause or resume a recurring job. Resume keeps back-fill (no fast-forward),
+ *  matching the mobile Pause/Resume; both operate on the fresh server row. */
+export async function setRecurringJobActive(
+  id: string,
+  active: boolean,
+): Promise<RecurringJob> {
+  const server = await loadRecurringJob(id);
+  const next: RecurringJob = { ...server, isActive: active };
+  await upsertBlobRow('recurringJobs', id, next);
+  return next;
+}
+
+/** Pause or resume a maintenance plan. Resume fast-forwards nextDueDate past
+ *  today so elapsed occurrences aren't back-billed; pause only flips the flag. */
+export async function setRecurringInvoiceActive(
+  id: string,
+  active: boolean,
+): Promise<RecurringInvoice> {
+  const server = await loadRecurringInvoice(id);
+  const next: RecurringInvoice = active
+    ? { ...server, isActive: true, nextDueDate: fastForwardedNextDueDate(server, engineToday()) }
+    : { ...server, isActive: false };
+  await upsertBlobRow('recurringInvoices', id, next);
+  return next;
 }
 
 function validatePaymentDraft(draft: PaymentDraft): void {

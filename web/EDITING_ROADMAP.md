@@ -345,7 +345,24 @@ five):
 5. **Recurring, Calendar scheduling, and creation flows.** Recurring rules +
    maintenance plans, drag/assign-to-schedule (a `saveJob`), and net-new record
    creation (new client-generated ids, heavier validation). Last because
-   creation and scheduling add the most new surface and validation.
+   creation and scheduling add the most new surface and validation. In progress:
+   - **5a — Recurring pause/resume + delete. ✅ LANDED.** `RecurringScreen` rows
+     now pause/resume via `setRecurringJobActive` / `setRecurringInvoiceActive`
+     and hard-delete via the existing `deleteRecurring*` tombstone ops, behind an
+     inline confirm, with per-row in-flight disable + error surfacing (P2.2) and a
+     `retry([...])` re-pull on success. CRITICAL: both rule types carry ADVANCING
+     generation state (`lastGeneratedDate`, `occurrenceCount`, `nextDueDate`)
+     stamped by the mobile generation engines, so the toggle ops re-fetch the
+     server row and change ONLY `isActive`. Resume asymmetry preserved (NOT
+     unified): a maintenance-plan resume fast-forwards `nextDueDate` past today so
+     elapsed occurrences aren't back-billed (a web-safe copy of
+     `utils/recurringInvoices.ts` `fastForwardedNextDueDate` over the pure
+     `utils/recurrence.ts` helpers), while a recurring-job resume keeps back-fill.
+     Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
+   - **5b — Recurring rule editing (cadence/amounts/end condition/nextDueDate),
+     calendar drag/assign scheduling, and net-new creation. OPEN.** These
+     recompute generation state and add the most new surface + validation, so
+     they follow 5a like 3b followed 3a.
 
 ### Stays read-only / out of scope
 
