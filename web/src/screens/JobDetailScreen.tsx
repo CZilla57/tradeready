@@ -2,7 +2,11 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useData, useResources } from '../lib/DataContext';
 import { Card, Empty, Badge, KV, ErrorState } from '../ui/components';
-import { jobStatusBadge, JOB_PIPELINE } from '../ui/status';
+import {
+  jobStatusBadge,
+  JOB_PIPELINE,
+  nextOperationalStatus,
+} from '../ui/status';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate, formatTimeRange } from '@shared/utils/dateHelpers';
 import { isArchived } from '@shared/utils/archive';
@@ -11,10 +15,64 @@ import {
   updateJobDetails,
   setJobArchived,
   deleteJob,
+  advanceJobStatus,
 } from '../lib/writeRepository';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
+}
+
+/**
+ * Advance a job one operational step (scheduled → in progress → complete) via
+ * `advanceJobStatus` (roadmap P3 stage 3b). Only the two consent-free,
+ * invoice-free transitions are offered; everything else (approval, invoicing,
+ * payment) is reflected from its own domain, not driven here. Follows the
+ * established edit pattern: the button disables while in flight, a failed write
+ * stays visible as an error, and success re-pulls jobs from the server.
+ */
+function StatusAdvance({ job }: { job: Job }) {
+  const { retry } = useData();
+  const transition = nextOperationalStatus(job.status);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!transition || isArchived(job)) return null;
+
+  async function onAdvance() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await advanceJobStatus(job.id);
+      retry(['jobs']);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <button
+        type="button"
+        className="btn primary sm"
+        onClick={onAdvance}
+        disabled={busy}
+      >
+        {busy ? 'Saving…' : transition.label}
+      </button>
+      {error && (
+        <div
+          className="inline-alert error"
+          role="alert"
+          style={{ marginTop: 10, marginBottom: 0 }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -345,6 +403,7 @@ export default function JobDetailScreen() {
                 );
               })}
             </div>
+            <StatusAdvance job={job} />
           </Card>
 
           {materials.length > 0 && (

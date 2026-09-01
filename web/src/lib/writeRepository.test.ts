@@ -12,6 +12,7 @@ import {
   saveCustomer,
   updateJobDetails,
   setJobArchived,
+  advanceJobStatus,
   savePricebookEntry,
   saveExpense,
   createCustomer,
@@ -24,6 +25,7 @@ import {
   createRecurringInvoice,
   InvoiceNotFoundError,
   JobNotFoundError,
+  JobStatusTransitionError,
   PaymentValidationError,
 } from './writeRepository';
 import type {
@@ -327,6 +329,56 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
     const written = state.lastUpsert!.data as Job;
     expect(written.scheduledDate).toBeNull();
     expect(written.status).toBe('scheduled'); // no regress on unschedule
+  });
+
+  describe('advanceJobStatus — operational subset, fresh-row guarded', () => {
+    it('advances scheduled → in_progress and preserves server-authored fields', async () => {
+      const approval = { decision: 'approved', signerName: 'Jane' };
+      state.serverRow = {
+        data: job({ status: 'scheduled', approval, invoiceId: 'inv-9' } as Partial<Job>),
+        deleted: false,
+      };
+      await advanceJobStatus('job-1');
+      const written = state.lastUpsert!.data as Job;
+      expect(state.lastTable).toBe('jobs');
+      expect(written.status).toBe('in_progress');
+      // Everything the advance doesn't touch rides through from the server copy.
+      expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
+      expect(written.invoiceId).toBe('inv-9');
+    });
+
+    it('advances in_progress → complete', async () => {
+      state.serverRow = { data: job({ status: 'in_progress' }), deleted: false };
+      await advanceJobStatus('job-1');
+      expect((state.lastUpsert!.data as Job).status).toBe('complete');
+    });
+
+    it('rejects a status with no sanctioned operational transition, writing nothing', async () => {
+      // complete → invoiced is invoice-coupled; the portal must not drive it.
+      state.serverRow = { data: job({ status: 'complete' }), deleted: false };
+      await expect(advanceJobStatus('job-1')).rejects.toBeInstanceOf(
+        JobStatusTransitionError,
+      );
+      expect(state.lastUpsert).toBeNull();
+    });
+
+    it('guards on the FRESH server status, not the caller — a raced-ahead job is rejected', async () => {
+      // The screen still shows "scheduled", but the server row already moved to
+      // invoiced (a phone/invoice flow). The re-check rejects rather than
+      // clobbering the further-along state.
+      state.serverRow = { data: job({ status: 'invoiced' }), deleted: false };
+      await expect(advanceJobStatus('job-1')).rejects.toBeInstanceOf(
+        JobStatusTransitionError,
+      );
+      expect(state.lastUpsert).toBeNull();
+    });
+
+    it('throws JobNotFoundError when the row is missing', async () => {
+      state.serverRow = null;
+      await expect(advanceJobStatus('job-1')).rejects.toBeInstanceOf(
+        JobNotFoundError,
+      );
+    });
   });
 });
 

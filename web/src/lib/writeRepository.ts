@@ -16,6 +16,7 @@ import type {
   Settings,
   TimeString,
 } from '@shared/types/models';
+import { OPERATIONAL_STATUS_ADVANCE } from '../ui/status';
 import { SECURE_FIELDS } from '@shared/utils/storage/keys';
 import { withArchived } from '@shared/utils/archive';
 import { getTodayDateString } from '@shared/utils/dateHelpers';
@@ -62,6 +63,19 @@ export class JobNotFoundError extends Error {
   constructor(public readonly jobId: string) {
     super(`Job not found: ${jobId}`);
     this.name = 'JobNotFoundError';
+  }
+}
+
+/**
+ * Raised when a status advance is attempted from a status the portal isn't
+ * allowed to advance from — either a status with no sanctioned operational
+ * transition, or one that raced ahead on the server between the screen render
+ * and the write (the fresh-row re-check below catches that too).
+ */
+export class JobStatusTransitionError extends Error {
+  constructor(public readonly status: string) {
+    super(`No operational status advance is available from "${status}"`);
+    this.name = 'JobStatusTransitionError';
   }
 }
 
@@ -493,6 +507,39 @@ export async function setJobArchived(
 ): Promise<Job> {
   const server = await loadJob(jobId);
   const next = withArchived(server, archived, getTodayDateString());
+  await upsertBlobRow('jobs', jobId, next);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Job status advance (roadmap P3 stage 3b — operational subset)
+//
+// The portal may fire ONLY the two purely-operational forward transitions that
+// couple to nothing it doesn't own — scheduled→in_progress and
+// in_progress→complete (`OPERATIONAL_STATUS_ADVANCE`, mirrored from the mobile
+// pipeline `JOB_STATUSES[...].next`). Estimate approval (a customer-consent
+// step), invoice creation (complete→invoiced), and payment (invoiced→paid) are
+// deliberately excluded: the portal reflects those from the invoice ledger and
+// the approval/change-order flows, it does not drive them here.
+//
+// The guard is authoritative on the FRESH server row, not the client's stale
+// status: if the job already advanced elsewhere (a phone marked it complete, an
+// invoice moved it to invoiced) the re-fetched status no longer maps and the
+// write is rejected with JobStatusTransitionError rather than clobbering the
+// further-along state — a concrete instance of the roadmap's refetch-before-
+// write concurrency rule (P2.1). Every other field (approval, changeOrders,
+// timeSessions, invoiceId, pricing) rides through untouched from the server copy.
+//
+// Unlike the mobile "mark complete", this does NOT run the opt-in auto-invoice
+// or schedule a review request — those are separate flows the portal doesn't
+// surface. The bare status change is safe and internally consistent on its own.
+// ---------------------------------------------------------------------------
+
+export async function advanceJobStatus(jobId: string): Promise<Job> {
+  const server = await loadJob(jobId);
+  const transition = OPERATIONAL_STATUS_ADVANCE[server.status];
+  if (!transition) throw new JobStatusTransitionError(server.status);
+  const next: Job = { ...server, status: transition.next };
   await upsertBlobRow('jobs', jobId, next);
   return next;
 }

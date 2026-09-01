@@ -5,7 +5,11 @@ import {
   invoiceStatusBadge,
   estimateStatusBadge,
   isEstimateJob,
+  nextOperationalStatus,
+  OPERATIONAL_STATUS_ADVANCE,
+  JOB_PIPELINE,
 } from './status';
+import type { JobStatus } from '@shared/types/models';
 
 function inv(partial: Partial<Invoice> = {}): Invoice {
   return {
@@ -86,5 +90,40 @@ describe('estimateStatusBadge / isEstimateJob', () => {
   });
   it('treats a plain paid job as not an estimate', () => {
     expect(isEstimateJob(job({ status: 'paid', estimateTotal: 0 }))).toBe(false);
+  });
+});
+
+describe('nextOperationalStatus / OPERATIONAL_STATUS_ADVANCE', () => {
+  it('offers only the two consent- and invoice-free forward transitions', () => {
+    expect(nextOperationalStatus('scheduled')).toEqual({
+      next: 'in_progress',
+      label: 'Start job',
+    });
+    expect(nextOperationalStatus('in_progress')).toEqual({
+      next: 'complete',
+      label: 'Mark complete',
+    });
+  });
+
+  it('offers nothing for statuses the portal must not drive', () => {
+    // Estimate/approval, invoicing, payment, and endpoint statuses are excluded.
+    const excluded: JobStatus[] = [
+      'lead',
+      'estimate_sent',
+      'approved',
+      'complete',
+      'invoiced',
+      'paid',
+      'declined',
+    ];
+    for (const s of excluded) expect(nextOperationalStatus(s)).toBeNull();
+  });
+
+  it('stays adjacent to the canonical pipeline — each advance is the next step', () => {
+    for (const [from, { next }] of Object.entries(OPERATIONAL_STATUS_ADVANCE)) {
+      const i = JOB_PIPELINE.indexOf(from as JobStatus);
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(JOB_PIPELINE[i + 1]).toBe(next);
+    }
   });
 });

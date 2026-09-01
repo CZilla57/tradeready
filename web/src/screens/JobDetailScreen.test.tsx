@@ -9,6 +9,7 @@ const writes = vi.hoisted(() => ({
   updateJobDetails: vi.fn(),
   setJobArchived: vi.fn(),
   deleteJob: vi.fn(),
+  advanceJobStatus: vi.fn(),
 }));
 vi.mock('../lib/writeRepository', () => writes);
 
@@ -65,6 +66,7 @@ beforeEach(() => {
   writes.updateJobDetails.mockReset().mockResolvedValue(job());
   writes.setJobArchived.mockReset().mockResolvedValue(job());
   writes.deleteJob.mockReset().mockResolvedValue(undefined);
+  writes.advanceJobStatus.mockReset().mockResolvedValue(job());
   retry.mockReset();
   navigate.mockReset();
   store.jobs = [job()];
@@ -125,5 +127,49 @@ describe('JobDetailScreen — archive & delete', () => {
 
     await waitFor(() => expect(writes.deleteJob).toHaveBeenCalledWith('job-1'));
     expect(navigate).toHaveBeenCalledWith('/jobs');
+  });
+});
+
+describe('JobDetailScreen — status advance', () => {
+  it('shows "Start job" for a scheduled job and advances via advanceJobStatus', async () => {
+    store.jobs = [job({ status: 'scheduled' })];
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Start job' }));
+
+    await waitFor(() =>
+      expect(writes.advanceJobStatus).toHaveBeenCalledWith('job-1'),
+    );
+    expect(retry).toHaveBeenCalledWith(['jobs']);
+  });
+
+  it('shows "Mark complete" for an in-progress job', () => {
+    store.jobs = [job({ status: 'in_progress' })];
+    renderScreen();
+    expect(
+      screen.getByRole('button', { name: 'Mark complete' }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no advance control for a status the portal must not drive', () => {
+    store.jobs = [job({ status: 'complete' })];
+    renderScreen();
+    expect(screen.queryByRole('button', { name: 'Start job' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Mark complete' })).toBeNull();
+  });
+
+  it('offers no advance control for an archived job', () => {
+    store.jobs = [job({ status: 'scheduled', archivedAt: '2026-08-01' })];
+    renderScreen();
+    expect(screen.queryByRole('button', { name: 'Start job' })).toBeNull();
+  });
+
+  it('keeps the error visible when the advance fails', async () => {
+    store.jobs = [job({ status: 'scheduled' })];
+    writes.advanceJobStatus.mockRejectedValueOnce(new Error('rls denied'));
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Start job' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('rls denied');
+    expect(retry).not.toHaveBeenCalled();
   });
 });

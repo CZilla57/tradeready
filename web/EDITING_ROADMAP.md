@@ -281,10 +281,31 @@ five):
      status, invoiceId, pricing) is preserved from the authoritative server copy
      and can't be clobbered. Covered by `JobDetailScreen.test.tsx` +
      `writeRepository.test.ts` (server-authored fields survive an edit).
-   - **3b — Job status transitions & estimate editing. OPEN.** Free status
-     changes (status ↔ invoice/approval coupling), estimate/pricing/materials
-     authoring, and approval/change-order handling. These need P0.6 derived-field
-     work and guarded transitions, so they're deliberately deferred from 3a.
+   - **3b — Job status transitions & estimate editing. PARTIAL.**
+     - **Operational status advance. ✅ LANDED.** `StatusAdvance` on
+       `JobDetailScreen` fires the two purely-operational forward transitions —
+       `scheduled → in_progress` ("Start job") and `in_progress → complete`
+       ("Mark complete") — via `advanceJobStatus`. The sanctioned set lives in
+       `web/src/ui/status.ts` (`OPERATIONAL_STATUS_ADVANCE`), mirrored from the
+       mobile pipeline `JOB_STATUSES[...].next` and asserted adjacent to
+       `JOB_PIPELINE` so it can't drift; it is a small map rather than a
+       pricingEngine import (`ui/pricingMath.ts` ports only that engine's
+       estimate math, not its status table). The guard is authoritative on a
+       FRESHLY re-fetched server row, so a job that raced ahead elsewhere (a
+       phone marked it complete, an invoice moved it to `invoiced`) is rejected
+       with `JobStatusTransitionError` rather than clobbered (P2.1 refetch-
+       before-write); every other field (approval, changeOrders, timeSessions,
+       invoiceId, pricing) rides through untouched. Unlike mobile's "mark
+       complete", the portal does NOT run the opt-in auto-invoice or schedule a
+       review — those are separate flows it doesn't surface; the bare status
+       change is internally consistent on its own. Covered by
+       `writeRepository.test.ts`, `status.test.ts`, `JobDetailScreen.test.tsx`.
+     - **Still OPEN.** The consent-/invoice-coupled transitions
+       (`estimate_sent → approved`, `complete → invoiced`, `invoiced → paid` —
+       the portal reflects the last two from the invoice ledger, it doesn't
+       drive them), plus estimate/materials authoring and approval/change-order
+       handling. These need guarded, cross-entity transitions, so they stay
+       deferred.
 4. **Pricebook, Expenses, Settings. ✅ LANDED.** Catalog/config maintenance.
    Every editable surface below is in; the only things left read-only are
    deliberate (Pricebook pricing fields — deferred pending a web-safe estimate
