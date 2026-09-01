@@ -8,6 +8,8 @@ import type {
   Payment,
   PaymentDraft,
   PricebookEntry,
+  RecurrenceCadence,
+  RecurrenceEndCondition,
   RecurringInvoice,
   RecurringJob,
   ScheduleConfig,
@@ -577,6 +579,56 @@ export async function setRecurringInvoiceActive(
   const next: RecurringInvoice = active
     ? { ...server, isActive: true, nextDueDate: fastForwardedNextDueDate(server, engineToday()) }
     : { ...server, isActive: false };
+  await upsertBlobRow('recurringInvoices', id, next);
+  return next;
+}
+
+/** The maintenance-plan rule fields the portal edits. Excludes customer
+ *  re-linking (customerId/customerName — a customer-domain concern, deferred
+ *  like invoice customer editing) and every generation-state field. */
+export interface RecurringInvoiceRuleEdit {
+  description: string;
+  amount: number;
+  dueDays: number;
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+  nextDueDate: DateString;
+  autoSendEnabled: boolean;
+}
+
+/**
+ * Edit a maintenance plan's rule (roadmap P3 stage 5b).
+ *
+ * Applies the edited rule fields onto a FRESHLY re-fetched server row, so the
+ * plan's history — id, customerId/customerName, occurrenceCount,
+ * lastGeneratedDate, isActive, createdAt — is preserved exactly as the mobile
+ * edit does (`{ ...r, ...shared }`), never rolled back by a stale whole-blob
+ * write. endCount/endDate are normalised to the chosen endCondition so a stale
+ * bound can't linger (e.g. switching 'count' → 'never' clears endCount). Unlike
+ * a RecurringJob, the plan's `amount` is a flat entered value (no pricingEngine
+ * estimate), so there is no derived pricing to recompute. autoSend gating on a
+ * valid customer email is enforced at GENERATION time (Phase 6), so enabling it
+ * here without an email is harmless — it simply won't send until one exists.
+ */
+export async function updateRecurringInvoiceRule(
+  id: string,
+  edit: RecurringInvoiceRuleEdit,
+): Promise<RecurringInvoice> {
+  const server = await loadRecurringInvoice(id);
+  const next: RecurringInvoice = {
+    ...server,
+    description: edit.description,
+    amount: edit.amount,
+    dueDays: edit.dueDays,
+    cadence: edit.cadence,
+    endCondition: edit.endCondition,
+    endCount: edit.endCondition === 'count' ? edit.endCount : undefined,
+    endDate: edit.endCondition === 'date' ? edit.endDate : undefined,
+    nextDueDate: edit.nextDueDate,
+    autoSendEnabled: edit.autoSendEnabled,
+  };
   await upsertBlobRow('recurringInvoices', id, next);
   return next;
 }

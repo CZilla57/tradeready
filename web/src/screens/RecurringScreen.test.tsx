@@ -7,6 +7,7 @@ import RecurringScreen from './RecurringScreen';
 const writes = vi.hoisted(() => ({
   setRecurringJobActive: vi.fn(),
   setRecurringInvoiceActive: vi.fn(),
+  updateRecurringInvoiceRule: vi.fn(),
   deleteRecurringJob: vi.fn(),
   deleteRecurringInvoice: vi.fn(),
 }));
@@ -80,6 +81,7 @@ function rowFor(title: string): HTMLElement {
 beforeEach(() => {
   writes.setRecurringJobActive.mockReset().mockResolvedValue(job());
   writes.setRecurringInvoiceActive.mockReset().mockResolvedValue(plan());
+  writes.updateRecurringInvoiceRule.mockReset().mockResolvedValue(plan());
   writes.deleteRecurringJob.mockReset().mockResolvedValue(undefined);
   writes.deleteRecurringInvoice.mockReset().mockResolvedValue(undefined);
   retry.mockReset();
@@ -149,5 +151,73 @@ describe('RecurringScreen — delete', () => {
 
     expect(within(row).getByRole('button', { name: 'Pause' })).toBeInTheDocument();
     expect(writes.deleteRecurringJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('RecurringScreen — maintenance plan rule editing', () => {
+  it('edits plan fields via updateRecurringInvoiceRule and refreshes', async () => {
+    render(<RecurringScreen />);
+    const row = rowFor('Beta LLC');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    const amount = within(row).getByDisplayValue('150');
+    await userEvent.clear(amount);
+    await userEvent.type(amount, '200');
+    await userEvent.click(within(row).getByRole('button', { name: 'Quarterly' }));
+    await userEvent.click(within(row).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(writes.updateRecurringInvoiceRule).toHaveBeenCalledTimes(1),
+    );
+    expect(writes.updateRecurringInvoiceRule).toHaveBeenCalledWith('ri1', {
+      description: 'Monthly service',
+      amount: 200,
+      dueDays: 30,
+      cadence: 'quarterly',
+      endCondition: 'never',
+      endCount: undefined,
+      endDate: undefined,
+      nextDueDate: '2026-09-01',
+      autoSendEnabled: false,
+    });
+    expect(retry).toHaveBeenCalledWith(['recurringInvoices']);
+  });
+
+  it('requires an end count when the plan ends after N invoices', async () => {
+    render(<RecurringScreen />);
+    const row = rowFor('Beta LLC');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    await userEvent.click(within(row).getByRole('button', { name: 'After N' }));
+    // Leave the (now-visible) count blank and save.
+    await userEvent.click(within(row).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(within(row).getByRole('alert')).toHaveTextContent(/greater than zero/i),
+    );
+    expect(writes.updateRecurringInvoiceRule).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-positive amount', async () => {
+    render(<RecurringScreen />);
+    const row = rowFor('Beta LLC');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    const amount = within(row).getByDisplayValue('150');
+    await userEvent.clear(amount);
+    await userEvent.type(amount, '0');
+    await userEvent.click(within(row).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(within(row).getByRole('alert')).toHaveTextContent(/greater than zero/i),
+    );
+    expect(writes.updateRecurringInvoiceRule).not.toHaveBeenCalled();
+  });
+
+  it('does not offer Edit on recurring jobs (pricing deferred)', () => {
+    render(<RecurringScreen />);
+    const row = rowFor('Gutter clean');
+    expect(within(row).queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 });

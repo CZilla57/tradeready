@@ -376,10 +376,25 @@ five):
      `JobEditor`/`updateJobDetails` on the detail screen; grid drag-and-drop was
      deliberately not built (cramped, and the inline assign covers the desk task).
      Covered by `CalendarScreen.test.tsx` + `writeRepository.test.ts`.
-   - **5b (remaining) — Recurring rule editing (cadence/amounts/end
-     condition/nextDueDate) and net-new record creation. OPEN.** These recompute
-     generation state / mint new client-generated ids with heavier validation, so
-     they stay last.
+   - **5b — Maintenance-plan rule editing. ✅ LANDED.** `RecurringScreen`'s plan
+     rows now have an inline `PlanEditor` (description, amount, net terms,
+     cadence, end condition + count/date, next date, auto-send) saved through a
+     new typed op `updateRecurringInvoiceRule`. It applies the edited rule fields
+     onto a FRESHLY re-fetched server row, preserving the plan's history (id,
+     customerId/customerName, occurrenceCount, lastGeneratedDate, isActive,
+     createdAt) exactly as the mobile edit's `{ ...r, ...shared }` does, and
+     normalises endCount/endDate to the chosen endCondition. Validation mirrors
+     mobile (amount > 0, net ≥ 0, positive end count, end date when required). A
+     maintenance plan's `amount` is a flat entered value (no pricingEngine
+     estimate), which is why THIS rule type is editable while RECURRING-JOB rule
+     editing is deferred: a RecurringJob's `estimateTotal` is a
+     `pricingEngine.calculateEstimate` derivation (not web-importable — same
+     blocker as Pricebook pricing), so its rows still expose only pause/resume +
+     delete, no Edit. Customer re-linking is out of scope here (customer domain).
+     Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
+   - **5b (remaining) — Recurring-JOB rule editing (blocked on the web-safe
+     estimate recompute) and net-new record creation (new client-generated ids,
+     heavier validation). OPEN.**
 
 ### Stays read-only / out of scope
 

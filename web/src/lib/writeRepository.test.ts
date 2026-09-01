@@ -17,6 +17,7 @@ import {
   scheduleJob,
   setRecurringJobActive,
   setRecurringInvoiceActive,
+  updateRecurringInvoiceRule,
   InvoiceNotFoundError,
   JobNotFoundError,
   PaymentValidationError,
@@ -561,6 +562,69 @@ describe('recurring pause/resume — preserve generation state', () => {
     await setRecurringInvoiceActive('ri1', true);
     const written = state.lastUpsert!.data as RecurringInvoice;
     expect(written.nextDueDate).toBe('2020-01-01');
+  });
+
+  it('updateRecurringInvoiceRule applies edits but preserves the plan history', async () => {
+    state.serverRow = {
+      data: recPlan({
+        occurrenceCount: 7,
+        lastGeneratedDate: '2026-08-01',
+        isActive: true,
+        createdAt: '2026-01-01',
+        customerId: 'c1',
+        customerName: 'Beta LLC',
+      }),
+      deleted: false,
+    };
+
+    await updateRecurringInvoiceRule('ri1', {
+      description: 'Quarterly deep clean',
+      amount: 275,
+      dueDays: 15,
+      cadence: 'quarterly',
+      endCondition: 'never',
+      nextDueDate: '2026-10-01',
+      autoSendEnabled: true,
+    });
+
+    const written = state.lastUpsert!.data as RecurringInvoice;
+    expect(state.lastTable).toBe('recurringInvoices');
+    // Edited fields applied…
+    expect(written.description).toBe('Quarterly deep clean');
+    expect(written.amount).toBe(275);
+    expect(written.dueDays).toBe(15);
+    expect(written.cadence).toBe('quarterly');
+    expect(written.nextDueDate).toBe('2026-10-01');
+    expect(written.autoSendEnabled).toBe(true);
+    // …history preserved from the server row (never rolled back).
+    expect(written.occurrenceCount).toBe(7);
+    expect(written.lastGeneratedDate).toBe('2026-08-01');
+    expect(written.isActive).toBe(true);
+    expect(written.createdAt).toBe('2026-01-01');
+    expect(written.customerId).toBe('c1');
+    expect(written.customerName).toBe('Beta LLC');
+  });
+
+  it('updateRecurringInvoiceRule normalises end bounds to the chosen condition', async () => {
+    // Server carried an endCount; switching to endCondition:'date' must drop it.
+    state.serverRow = {
+      data: recPlan({ endCondition: 'count', endCount: 12 }),
+      deleted: false,
+    };
+    await updateRecurringInvoiceRule('ri1', {
+      description: 'x',
+      amount: 100,
+      dueDays: 30,
+      cadence: 'monthly',
+      endCondition: 'date',
+      endDate: '2027-01-01',
+      nextDueDate: '2026-10-01',
+      autoSendEnabled: false,
+    });
+    const written = state.lastUpsert!.data as RecurringInvoice;
+    expect(written.endCondition).toBe('date');
+    expect(written.endDate).toBe('2027-01-01');
+    expect(written.endCount).toBeUndefined();
   });
 });
 
