@@ -936,6 +936,88 @@ export async function createRecurringInvoice(
   return rule;
 }
 
+// Mobile mints a recurring-job id as `rj_<Date.now()>` (screens/AddJobScreen.tsx).
+// Same shape, monotonic-guarded so a same-ms burst can't collide. P1.4.
+let _rjLastMs = 0;
+function newRecurringJobId(): string {
+  let ms = Date.now();
+  if (ms <= _rjLastMs) ms = _rjLastMs + 1;
+  _rjLastMs = ms;
+  return `rj_${ms}`;
+}
+
+/** The fields a new recurring-job rule is created from. `estimateTotal` is
+ *  DERIVED — the caller recomputes it with the pricingMath port (P0.6), like the
+ *  rule edit. New series start with no materials/jobCosts (line-item authoring is
+ *  deferred). The customer is picked from existing records, so both id and
+ *  denormalized name are supplied. */
+export interface NewRecurringJobFields {
+  customerId: string;
+  customerName: string;
+  title: string;
+  description: string;
+  laborHours: number;
+  laborRate: number;
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  estimateTotal: number;
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+  nextDueDate: DateString;
+}
+
+/**
+ * Create a new recurring-job rule (roadmap P3 stage 5c — creation flows).
+ *
+ * DECISION — fresh series, no eager first occurrence. Mobile's recurring-job
+ * create spawns a first Job (occurrenceNumber 1) alongside the rule. The portal
+ * instead initialises a FRESH series (occurrenceCount 0, lastGeneratedDate null,
+ * isActive true) and lets the generation engine (utils/recurringJobs.ts) emit
+ * the first occurrence on its next run from `nextDueDate` — exactly the choice
+ * `createRecurringInvoice` already made for maintenance plans. This keeps the op
+ * a single-entity insert (no coupled two-blob write that could half-fail) and
+ * keeps both recurring creates consistent.
+ *
+ * Mirrors the rule shape `updateRecurringJobRule` writes: the pricing inputs plus
+ * the caller-recomputed `estimateTotal`, with endCount/endDate normalised to the
+ * chosen condition. `address`/`notes` start blank — they aren't in the portal's
+ * recurring-job editable surface (matching `RecurringJobRuleEdit`).
+ */
+export async function createRecurringJob(
+  fields: NewRecurringJobFields,
+): Promise<RecurringJob> {
+  const rule: RecurringJob = {
+    id: newRecurringJobId(),
+    customerId: fields.customerId,
+    customerName: fields.customerName,
+    title: fields.title,
+    description: fields.description,
+    address: '',
+    notes: '',
+    estimateTotal: fields.estimateTotal,
+    laborHours: fields.laborHours,
+    laborRate: fields.laborRate,
+    materials: [],
+    materialMarkup: fields.materialMarkup,
+    overhead: fields.overhead,
+    margin: fields.margin,
+    cadence: fields.cadence,
+    endCondition: fields.endCondition,
+    endCount: fields.endCondition === 'count' ? fields.endCount : undefined,
+    endDate: fields.endCondition === 'date' ? fields.endDate : undefined,
+    occurrenceCount: 0,
+    lastGeneratedDate: null,
+    nextDueDate: fields.nextDueDate,
+    isActive: true,
+    createdAt: getTodayDateString(),
+  };
+  await upsertBlobRow('recurringJobs', rule.id, rule);
+  return rule;
+}
+
 /** The maintenance-plan rule fields the portal edits. Excludes customer
  *  re-linking (customerId/customerName — a customer-domain concern, deferred
  *  like invoice customer editing) and every generation-state field. */

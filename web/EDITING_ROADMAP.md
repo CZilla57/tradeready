@@ -500,12 +500,27 @@ five):
        (amount > 0, a due date, a number). Line-item authoring stays deferred (an
        estimate-snapshot concern). Covered by `InvoicesScreen.test.tsx` +
        `writeRepository.test.ts`.
-     - **Remaining creation: new recurring JOB, new estimate (pricing). OPEN.**
-       Recurring-JOB creation is coupled — the mobile create also spawns a first
-       Job occurrence (occurrenceNumber 1, status lead) with job pricing/materials.
-       Authoring a new job's estimate (line items, materials, priced total) is the
-       same deferred 3b estimate surface. These stay grouped as the heavy
-       remaining flows.
+     - **New recurring job. ✅ LANDED.** `RecurringScreen` has a "New job" form
+       (`NewJobRuleForm`) creating a recurring-JOB rule via a new typed op
+       `createRecurringJob`, which mints a mobile-format id (`rj_<Date.now()>`,
+       monotonic-guarded, P1.4). DECISION — fresh series, NOT mobile's coupled
+       spawn: mobile's create also writes a first Job occurrence (occurrenceNumber
+       1), but the portal instead initialises a fresh series (occurrenceCount 0,
+       lastGeneratedDate null, isActive true) and lets the generation engine emit
+       the first occurrence on its next run — exactly the choice
+       `createRecurringInvoice` already made for plans, keeping the op a
+       single-entity insert (no two-blob write that could half-fail). The customer
+       is PICKED from existing records; the derived `estimateTotal` is recomputed
+       the mobile way via the `estimateTotalFromPricing` port over the five pricing
+       inputs (seeded from the business defaults) with an empty material set —
+       line-item/materials authoring stays deferred, so `address`/`notes`/materials
+       start blank, matching the recurring-job editable surface
+       (`RecurringJobRuleEdit`). Covered by `RecurringScreen.test.tsx` +
+       `writeRepository.test.ts`.
+     - **Remaining creation: new estimate (pricing/line-item authoring). OPEN.**
+       Authoring a new job's estimate — line items, materials, the priced total on
+       a plain Job — is the same deferred 3b estimate surface (approval/change-
+       order handling lives there too). It is the last remaining editable surface.
 
 ### Stays read-only / out of scope
 

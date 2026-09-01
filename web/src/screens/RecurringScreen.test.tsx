@@ -15,6 +15,7 @@ const writes = vi.hoisted(() => ({
   updateRecurringInvoiceRule: vi.fn(),
   updateRecurringJobRule: vi.fn(),
   createRecurringInvoice: vi.fn(),
+  createRecurringJob: vi.fn(),
   deleteRecurringJob: vi.fn(),
   deleteRecurringInvoice: vi.fn(),
 }));
@@ -95,6 +96,7 @@ beforeEach(() => {
   writes.updateRecurringInvoiceRule.mockReset().mockResolvedValue(plan());
   writes.updateRecurringJobRule.mockReset().mockResolvedValue(job());
   writes.createRecurringInvoice.mockReset().mockResolvedValue(plan());
+  writes.createRecurringJob.mockReset().mockResolvedValue(job());
   writes.deleteRecurringJob.mockReset().mockResolvedValue(undefined);
   writes.deleteRecurringInvoice.mockReset().mockResolvedValue(undefined);
   retry.mockReset();
@@ -346,5 +348,61 @@ describe('RecurringScreen — create maintenance plan', () => {
 
     expect(screen.getByText(/add a customer first/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create plan' })).not.toBeInTheDocument();
+  });
+});
+
+describe('RecurringScreen — create recurring job', () => {
+  it('creates a fresh series for a picked customer with a recomputed total', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'c1');
+    await userEvent.type(screen.getByLabelText('Title'), 'Quarterly gutter clean');
+    const hours = screen.getByLabelText('Labor hours');
+    await userEvent.clear(hours);
+    await userEvent.type(hours, '2');
+    await userEvent.click(screen.getByRole('button', { name: 'Create recurring job' }));
+
+    await waitFor(() => expect(writes.createRecurringJob).toHaveBeenCalledTimes(1));
+    const arg = writes.createRecurringJob.mock.calls[0][0];
+    expect(arg).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Beta LLC',
+      title: 'Quarterly gutter clean',
+      laborHours: 2,
+      cadence: 'monthly',
+      endCondition: 'never',
+    });
+    // estimateTotal is recomputed (derived), not left unset.
+    expect(typeof arg.estimateTotal).toBe('number');
+    expect(arg.estimateTotal).toBeGreaterThan(0);
+    expect(retry).toHaveBeenCalledWith(['recurringJobs']);
+  });
+
+  it('requires a customer and a title', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create recurring job' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/choose a customer/i),
+    );
+    expect(writes.createRecurringJob).not.toHaveBeenCalled();
+
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'c1');
+    await userEvent.click(screen.getByRole('button', { name: 'Create recurring job' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/title is required/i),
+    );
+    expect(writes.createRecurringJob).not.toHaveBeenCalled();
+  });
+
+  it('prompts to add a customer first when none exist', async () => {
+    store.customers = [];
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    expect(screen.getByText(/add a customer first/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create recurring job' })).not.toBeInTheDocument();
   });
 });

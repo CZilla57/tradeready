@@ -25,6 +25,7 @@ import {
   updateRecurringInvoiceRule,
   updateRecurringJobRule,
   createRecurringInvoice,
+  createRecurringJob,
   InvoiceNotFoundError,
   JobNotFoundError,
   JobStatusTransitionError,
@@ -960,6 +961,63 @@ describe('recurring pause/resume — preserve generation state', () => {
       customerId: 'c2', customerName: 'B', description: '', amount: 10, dueDays: 30,
       cadence: 'monthly', endCondition: 'never', nextDueDate: '2026-10-01', autoSendEnabled: false,
     });
+    expect(a.endCount).toBeUndefined();
+    expect(a.endDate).toBe('2027-01-01');
+    expect(b.endDate).toBeUndefined();
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('createRecurringJob inits a fresh series with a rj_<ms> id and no first occurrence', async () => {
+    const created = await createRecurringJob({
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Gutter clean',
+      description: 'Quarterly',
+      laborHours: 2,
+      laborRate: 90,
+      materialMarkup: 20,
+      overhead: 15,
+      margin: 20,
+      estimateTotal: 320,
+      cadence: 'quarterly',
+      endCondition: 'count',
+      endCount: 8,
+      nextDueDate: '2026-10-01',
+    });
+
+    expect(state.lastTable).toBe('recurringJobs');
+    expect(created.id).toMatch(/^rj_\d+$/); // mobile id format rj_<Date.now()>
+    const data = state.lastUpsert!.data as RecurringJob;
+    expect(data).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Gutter clean',
+      estimateTotal: 320,
+      cadence: 'quarterly',
+      endCondition: 'count',
+      endCount: 8,
+      nextDueDate: '2026-10-01',
+      // fresh generation state — the engine emits the first occurrence later
+      occurrenceCount: 0,
+      lastGeneratedDate: null,
+      isActive: true,
+    });
+    // No materials/jobCosts authored here; address/notes start blank.
+    expect(data.materials).toEqual([]);
+    expect(data.address).toBe('');
+    expect(data.notes).toBe('');
+    expect(data.endDate).toBeUndefined();
+    expect(data.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('createRecurringJob normalises end bounds and mints unique ids', async () => {
+    const base = {
+      customerId: 'c1', customerName: 'A', title: 'T', description: '',
+      laborHours: 1, laborRate: 80, materialMarkup: 0, overhead: 0, margin: 0,
+      estimateTotal: 80, cadence: 'monthly' as const, nextDueDate: '2026-10-01' as const,
+    };
+    const a = await createRecurringJob({ ...base, endCondition: 'date', endDate: '2027-01-01' });
+    const b = await createRecurringJob({ ...base, endCondition: 'never' });
     expect(a.endCount).toBeUndefined();
     expect(a.endDate).toBe('2027-01-01');
     expect(b.endDate).toBeUndefined();
