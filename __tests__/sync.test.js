@@ -30,7 +30,7 @@ function buildFromMock({ countResult = 0 } = {}) {
     });
 
     // When this is the count query, eq() resolves to { count: countResult }.
-    // Otherwise it returns the chain so further calls (.gt, .maybeSingle) work.
+    // Otherwise it returns the chain so further pull modifiers work.
     chain.eq = jest.fn(() =>
       chain._isCount
         ? Promise.resolve({ count: countResult, data: [], error: null })
@@ -38,6 +38,9 @@ function buildFromMock({ countResult = 0 } = {}) {
     );
 
     chain.gt = jest.fn().mockResolvedValue({ data: [], error: null });
+    chain.gte = jest.fn(() => chain);
+    chain.order = jest.fn(() => chain);
+    chain.range = jest.fn().mockResolvedValue({ data: [], error: null });
     chain.maybeSingle = jest.fn().mockResolvedValue({ data: null });
     chain.upsert = mockUpsert;
     chain.update = jest.fn(() => ({
@@ -164,7 +167,7 @@ describe("initialSync ownership guard", () => {
     // The last-synced timestamp should be reset to trigger a full pull.
     expect(AsyncStorage.setItem).toHaveBeenCalledWith(
       "__lastSyncedAt",
-      JSON.stringify({})
+      JSON.stringify({ version: 2, tables: {} })
     );
   });
 
@@ -248,9 +251,11 @@ describe("pullRemote merges invoice payment ledgers", () => {
       const chain = {};
       chain.select = jest.fn(() => chain);
       chain.eq = jest.fn(() => chain);
-      chain.gt = jest.fn().mockResolvedValue({
+      chain.gte = jest.fn(() => chain);
+      chain.order = jest.fn(() => chain);
+      chain.range = jest.fn().mockResolvedValue({
         data: table === "invoices"
-          ? [{ id: "i1", data: remoteInvoice, deleted: false }]
+          ? [{ id: "i1", data: remoteInvoice, deleted: false, updated_at: "2026-07-20T12:00:00.000Z" }]
           : [],
         error: null,
       });
@@ -283,8 +288,12 @@ describe("pullRemote merges invoice payment ledgers", () => {
       const chain = {};
       chain.select = jest.fn(() => chain);
       chain.eq = jest.fn(() => chain);
-      chain.gt = jest.fn().mockResolvedValue({
-        data: table === "jobs" ? [{ id: "j1", data: remoteJob, deleted: false }] : [],
+      chain.gte = jest.fn(() => chain);
+      chain.order = jest.fn(() => chain);
+      chain.range = jest.fn().mockResolvedValue({
+        data: table === "jobs"
+          ? [{ id: "j1", data: remoteJob, deleted: false, updated_at: "2026-07-20T12:00:00.000Z" }]
+          : [],
         error: null,
       });
       chain.maybeSingle = jest.fn().mockResolvedValue({ data: null });
@@ -306,6 +315,149 @@ describe("pullRemote merges invoice payment ledgers", () => {
     // non-invoice records. A pure replace would not. If this field exists,
     // the record went through a merge — which is exactly what must not happen for jobs.
     expect(stored[0].payments).toBeUndefined();
+  });
+});
+
+// ── pullRemote database-clock cursor ─────────────────────────────────────────
+
+describe("pullRemote uses a paged database-clock cursor", () => {
+  function buildPagedPullMock(rowsByTable) {
+    const gteCalls = [];
+    const rangeCalls = [];
+
+    supabase.from.mockImplementation((table) => {
+      const chain = {};
+      chain.select = jest.fn(() => chain);
+      chain.eq = jest.fn(() => chain);
+      chain.gte = jest.fn((column, value) => {
+        gteCalls.push({ table, column, value });
+        return chain;
+      });
+      chain.order = jest.fn(() => chain);
+      chain.range = jest.fn((from, to) => {
+        rangeCalls.push({ table, from, to });
+        return Promise.resolve({
+          data: (rowsByTable[table] ?? []).slice(from, to + 1),
+          error: null,
+        });
+      });
+      chain.maybeSingle = jest.fn().mockResolvedValue({ data: null });
+      chain.upsert = jest.fn().mockResolvedValue({ error: null });
+      return chain;
+    });
+
+    return { gteCalls, rangeCalls };
+  }
+
+  test("a fast device clock cannot move the cursor past the server timestamp", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
+    buildPagedPullMock({
+      jobs: [{
+        id: "j1",
+        data: { id: "j1", title: "server job" },
+        deleted: false,
+        updated_at: "2026-09-01T12:00:00.000Z",
+      }],
+    });
+
+    try {
+      await syncIfOnline("user-a");
+    } finally {
+      jest.useRealTimers();
+    }
+
+    const cursorWrite = AsyncStorage.setItem.mock.calls
+      .filter(([key]) => key === "__lastSyncedAt")
+      .at(-1);
+    const cursor = JSON.parse(cursorWrite[1]);
+    expect(cursor).toEqual({
+      version: 2,
+      tables: { jobs: "2026-09-01T12:00:00.000Z" },
+    });
+  });
+
+  test("a legacy future device watermark is discarded and recovered by a full pull", async () => {
+    const { gteCalls } = buildPagedPullMock({
+      jobs: [{
+        id: "j1",
+        data: { id: "j1", title: "previously stranded" },
+        deleted: false,
+        updated_at: "2026-09-01T12:00:00.000Z",
+      }],
+    });
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "__lastSyncedAt") {
+        return Promise.resolve(JSON.stringify({ jobs: "2099-01-01T00:00:00.000Z" }));
+      }
+      return Promise.resolve(null);
+    });
+
+    await syncIfOnline("user-a");
+
+    expect(gteCalls.find((call) => call.table === "jobs")).toMatchObject({
+      column: "updated_at",
+      value: "1970-01-01T00:00:00.000Z",
+    });
+    const jobsWrite = AsyncStorage.setItem.mock.calls.find(([key]) => key === "jobs");
+    expect(JSON.parse(jobsWrite[1])).toEqual([
+      { id: "j1", title: "previously stranded" },
+    ]);
+  });
+
+  test("the overlap replays a late commit without moving the high-water mark backward", async () => {
+    const { gteCalls } = buildPagedPullMock({
+      jobs: [{
+        id: "j-late",
+        data: { id: "j-late", title: "late commit" },
+        deleted: false,
+        updated_at: "2026-09-01T11:58:00.000Z",
+      }],
+    });
+    AsyncStorage.getItem.mockImplementation((key) => {
+      if (key === "__lastSyncedAt") {
+        return Promise.resolve(JSON.stringify({
+          version: 2,
+          tables: { jobs: "2026-09-01T12:00:00.000Z" },
+        }));
+      }
+      return Promise.resolve(null);
+    });
+
+    await syncIfOnline("user-a");
+
+    expect(gteCalls.find((call) => call.table === "jobs").value)
+      .toBe("2026-09-01T11:55:00.000Z");
+    const cursorWrite = AsyncStorage.setItem.mock.calls
+      .filter(([key]) => key === "__lastSyncedAt")
+      .at(-1);
+    expect(JSON.parse(cursorWrite[1]).tables.jobs)
+      .toBe("2026-09-01T12:00:00.000Z");
+    const jobsWrite = AsyncStorage.setItem.mock.calls.find(([key]) => key === "jobs");
+    expect(JSON.parse(jobsWrite[1])[0].id).toBe("j-late");
+  });
+
+  test("drains every ordered page before advancing the cursor", async () => {
+    const rows = Array.from({ length: 501 }, (_, index) => ({
+      id: `j${String(index).padStart(3, "0")}`,
+      data: { id: `j${String(index).padStart(3, "0")}`, title: `Job ${index}` },
+      deleted: false,
+      updated_at: `2026-09-01T12:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+    }));
+    const { rangeCalls } = buildPagedPullMock({ jobs: rows });
+
+    await syncIfOnline("user-a");
+
+    expect(rangeCalls.filter((call) => call.table === "jobs")).toEqual([
+      { table: "jobs", from: 0, to: 499 },
+      { table: "jobs", from: 500, to: 999 },
+    ]);
+    const jobsWrite = AsyncStorage.setItem.mock.calls.find(([key]) => key === "jobs");
+    expect(JSON.parse(jobsWrite[1])).toHaveLength(501);
+    const cursorWrite = AsyncStorage.setItem.mock.calls
+      .filter(([key]) => key === "__lastSyncedAt")
+      .at(-1);
+    expect(JSON.parse(cursorWrite[1]).tables.jobs).toBe(rows.at(-1).updated_at);
   });
 });
 
@@ -335,7 +487,9 @@ describe("pushQueue stamps updated_at with push time, not the queued item's ts",
       const chain = {};
       chain.select = jest.fn(() => chain);
       chain.eq = jest.fn(() => chain);
-      chain.gt = jest.fn().mockResolvedValue({ data: [], error: null });
+      chain.gte = jest.fn(() => chain);
+      chain.order = jest.fn(() => chain);
+      chain.range = jest.fn().mockResolvedValue({ data: [], error: null });
       chain.maybeSingle = jest.fn().mockResolvedValue({ data: null });
       chain.upsert = jest.fn((payload) => {
         upsertCalls.push({ table, payload });

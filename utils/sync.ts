@@ -13,6 +13,67 @@ const LAST_SYNCED_KEY = '__lastSyncedAt';
 const INIT_DONE_KEY   = '__initDone_';
 const DATA_OWNER_KEY  = '__dataOwner';
 
+// Pull cursor v2 stores DATABASE timestamps returned by Supabase, never the
+// device clock. Versioning is load-bearing: v1 stored `new Date()` from the
+// phone, so an ahead-of-time device may already have a poisoned future cursor.
+// Treat every pre-v2 value as empty and perform one safe full pull after upgrade.
+const SYNC_CURSOR_VERSION = 2 as const;
+const PULL_PAGE_SIZE = 500;
+const PULL_OVERLAP_MS = 5 * 60 * 1000;
+const EPOCH = '1970-01-01T00:00:00.000Z';
+
+type ServerWatermarks = Record<string, string>;
+
+interface PersistedSyncCursor {
+  version: typeof SYNC_CURSOR_VERSION;
+  tables: ServerWatermarks;
+}
+
+interface RemoteSyncRow {
+  id: string;
+  data: SyncRecord;
+  deleted: boolean;
+  updated_at: string;
+}
+
+function emptySyncCursor(): PersistedSyncCursor {
+  return { version: SYNC_CURSOR_VERSION, tables: {} };
+}
+
+function parseSyncCursor(raw: string | null): PersistedSyncCursor {
+  if (!raw) return emptySyncCursor();
+  try {
+    const parsed = JSON.parse(raw) as Partial<PersistedSyncCursor>;
+    if (
+      parsed.version === SYNC_CURSOR_VERSION &&
+      parsed.tables &&
+      typeof parsed.tables === 'object' &&
+      !Array.isArray(parsed.tables)
+    ) {
+      return { version: SYNC_CURSOR_VERSION, tables: parsed.tables };
+    }
+  } catch {
+    // Corrupt or legacy cursor: recover with a full, idempotent pull.
+  }
+  return emptySyncCursor();
+}
+
+function pullStart(watermark: string | undefined): string {
+  if (!watermark) return EPOCH;
+  const ms = Date.parse(watermark);
+  if (!Number.isFinite(ms)) return EPOCH;
+  return new Date(Math.max(0, ms - PULL_OVERLAP_MS)).toISOString();
+}
+
+function laterTimestamp(current: string | undefined, candidate: string): string {
+  if (!current) return candidate;
+  const currentMs = Date.parse(current);
+  const candidateMs = Date.parse(candidate);
+  if (!Number.isFinite(candidateMs)) return current;
+  if (!Number.isFinite(currentMs) || candidateMs > currentMs) return candidate;
+  return current;
+}
+
 const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses', 'pricebook', 'recurringJobs', 'recurringInvoices', 'trips', 'bookingRequests', 'jobPhotos'] as const;
 
 // Tables added to COLLECTION_TABLES after their collections already existed
@@ -155,41 +216,73 @@ async function pushQueue(userId: string): Promise<void> {
 async function pullRemote(userId: string): Promise<void> {
   try {
     const lastRaw = await AsyncStorage.getItem(LAST_SYNCED_KEY);
-    const lastSynced: Record<string, string> = lastRaw ? JSON.parse(lastRaw) : {};
-    const now = new Date().toISOString();
+    const cursor = parseSyncCursor(lastRaw);
 
     for (const table of COLLECTION_TABLES) {
-      const since = lastSynced[table] || '1970-01-01T00:00:00.000Z';
-      const { data, error } = await supabase
-        .from(table)
-        .select('id, data, deleted')
-        .eq('user_id', userId)
-        .gt('updated_at', since);
+      const since = pullStart(cursor.tables[table]);
+      let offset = 0;
+      let local: SyncRecord[] | null = null;
+      let tableWatermark = cursor.tables[table];
+      let failed = false;
 
-      if (error || !data?.length) continue;
+      // Supabase projects cap select responses (commonly 1,000 rows). Pull in a
+      // deterministic order and drain every page before committing the local
+      // collection or advancing its cursor. The overlap makes a late-committing
+      // transaction visible on the next pass even if its transaction timestamp
+      // sorts just behind the previous high-water mark.
+      while (true) {
+        const { data, error } = await supabase
+          .from(table)
+          .select('id, data, deleted, updated_at')
+          .eq('user_id', userId)
+          .gte('updated_at', since)
+          .order('updated_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(offset, offset + PULL_PAGE_SIZE - 1);
 
-      const localRaw = await AsyncStorage.getItem(table);
-      let local: SyncRecord[] = localRaw ? JSON.parse(localRaw) : [];
+        if (error) {
+          failed = true;
+          break;
+        }
 
-      for (const remote of data) {
-        if (remote.deleted) {
-          local = local.filter(r => r.id !== remote.id);
-        } else {
-          const idx = local.findIndex(r => r.id === remote.id);
-          if (idx >= 0) {
-            // invoices union their payment ledgers instead of replacing —
-            // see utils/syncMerge.ts. Every other table replaces as before.
-            local[idx] = mergeRemoteRecord(table, local[idx], remote.data);
+        const page = (data ?? []) as RemoteSyncRow[];
+        if (!page.length) break;
+
+        if (local === null) {
+          const localRaw = await AsyncStorage.getItem(table);
+          local = localRaw ? JSON.parse(localRaw) : [];
+        }
+        let pageLocal: SyncRecord[] = local ?? [];
+
+        for (const remote of page) {
+          tableWatermark = laterTimestamp(tableWatermark, remote.updated_at);
+          if (remote.deleted) {
+            pageLocal = pageLocal.filter(r => r.id !== remote.id);
           } else {
-            // Route new records through the dispatcher too — otherwise an
-            // invoice arriving on a device that has never seen it keeps
-            // whatever `paid` its blob cached.
-            local.push(mergeRemoteRecord(table, undefined, remote.data));
+            const idx = pageLocal.findIndex(r => r.id === remote.id);
+            if (idx >= 0) {
+              // invoices union their payment ledgers instead of replacing —
+              // see utils/syncMerge.ts. Every other table replaces as before.
+              pageLocal[idx] = mergeRemoteRecord(table, pageLocal[idx], remote.data);
+            } else {
+              // Route new records through the dispatcher too — otherwise an
+              // invoice arriving on a device that has never seen it keeps
+              // whatever `paid` its blob cached.
+              pageLocal.push(mergeRemoteRecord(table, undefined, remote.data));
+            }
           }
         }
+        local = pageLocal;
+
+        offset += page.length;
+        if (page.length < PULL_PAGE_SIZE) break;
       }
+
+      // A later-page error must not leave a partial local apply paired with an
+      // advanced cursor. Discard the in-memory pages and retry the table in full.
+      if (failed || local === null) continue;
       await AsyncStorage.setItem(table, JSON.stringify(local));
-      lastSynced[table] = now;
+      if (tableWatermark) cursor.tables[table] = tableWatermark;
     }
 
     const { data: settingsRow } = await supabase
@@ -213,7 +306,7 @@ async function pullRemote(userId: string): Promise<void> {
       await AsyncStorage.setItem('customerNotes', JSON.stringify(map));
     }
 
-    await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify(lastSynced));
+    await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify(cursor));
   } catch (e: unknown) {
     console.warn('Sync pull failed:', (e as Error).message);
     reportError(e, { context: 'pullRemote' });
@@ -301,7 +394,7 @@ export async function initialSync(userId: string): Promise<void> {
         await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', REVIEW_REQUESTS_STORAGE_KEY]);
         await AsyncStorage.removeItem(QUEUE_KEY);
       }
-      await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify({}));
+      await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify(emptySyncCursor()));
       await pullRemote(userId);
       // Same-user reinstall / pre-sync device: local-only records in the
       // backfilled tables aren't in the cloud yet — enqueue them once. (After

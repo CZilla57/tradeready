@@ -44,8 +44,12 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
 - **P0.3 — APPLIED (2026-08-31).** The server-side `set_updated_at` trigger
   (`supabase/migrations/20260831_updated_at_server_authority.sql`) is live on all
   twelve sync tables — confirmed present on every one. Every write now gets an
-  authoritative DB-clock `updated_at`, closing the clock-skew propagation trap
-  for the web portal, all mobile versions, and the backend webhooks at once.
+  authoritative DB-clock `updated_at`. **Client cursor half landed 2026-09-01:**
+  `utils/sync.ts` cursor v2 now advances only from returned database timestamps,
+  resets legacy device-clock cursors once, overlaps five minutes for late commits,
+  and drains deterministic 500-row pages. The trigger and cursor together close
+  the clock-skew propagation trap; the trigger alone did not remove the reader's
+  device clock from the old watermark.
   Optional remaining cleanup (no correctness impact, no coordination needed):
   clients may stop sending `updated_at` — web via the single `writeTimestamp()`
   in `writeRepository.ts`, mobile via `pushQueue` in `utils/sync.ts`.
@@ -116,16 +120,16 @@ code; a write that ignores any one can silently lose data.
   full blob; never reconstruct a partial blob.
 
 ### P0.3 `updated_at` freshness / clock trust
-- **Why:** device pulls filter on `gt('updated_at', since)`
-  (`utils/sync.ts:166`). Mobile stamps `pushedAt = new Date()` at push time
-  precisely so edits aren't invisible. A web write that omits or **backdates**
-  `updated_at` never reaches phones; a browser with a skewed clock breaks
-  propagation both directions.
-- **Do:** choose the timestamp source deliberately. Prefer the DB
-  `default now()` over the browser clock where possible (the browser is less
-  trustworthy than a device). Document the choice.
+- **Why:** the original device pull filtered on `gt('updated_at', since)` and
+  then saved the phone's `new Date()` as `since`. Making writes DB-authoritative
+  fixed writer skew but not reader skew: an ahead-of-time phone could persist a
+  future cursor and strand every later DB-stamped row below it.
+- **Do:** keep both halves authoritative. The trigger owns write timestamps;
+  cursor v2 advances only from `updated_at` values returned by Supabase. It uses
+  an overlap plus deterministic pagination so equal timestamps, late commits,
+  and the Data API response cap cannot silently skip rows.
 
-- **Migration drafted — awaiting owner apply.**
+- **Server half applied; client half landed.**
   `supabase/migrations/20260831_updated_at_server_authority.sql` adds a
   `set_updated_at` BEFORE INSERT OR UPDATE trigger that stamps `now()` (the DB
   clock) on every write to the twelve sync tables, **overriding** whatever the
@@ -134,19 +138,20 @@ code; a write that ignores any one can silently lose data.
   server-side Stripe / subscription / booking / estimate writers — and only an
   unconditional override collapses them to one authoritative clock.
 
-  #### Cutover plan
+  #### Cutover record
   1. **Apply the migration** in the Supabase SQL editor (idempotent; safe to
-     re-run). This is the whole correctness fix and requires **no app release**:
-     the trigger is backward-compatible, so every shipped mobile build, the
-     current web bundle, and the backends keep working — their `updated_at` is
-     simply replaced server-side.
+     re-run). The trigger is backward-compatible, so every shipped client and
+     backend keeps working — its `updated_at` is simply replaced server-side.
   2. **Verify** with the psql script (NOT the SQL editor — it needs one
      transaction):
      `psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f supabase/migrations/verify/20260831_updated_at_server_authority_verify.sql`
      — expect "ALL CHECKS PASSED" (trigger present on all 12 tables; INSERT /
      UPDATE / on-conflict-upsert all override a backdated value; coexists with
      the invoice payment-merge trigger).
-  3. **Optional cleanup (later, no coordination needed).** Once the trigger is
+  3. **Ship cursor v2 in mobile.** Its versioned storage intentionally rejects
+     every legacy `{table: deviceTimestamp}` value and performs one idempotent
+     full pull, which recovers devices whose old cursor is already in the future.
+  4. **Optional cleanup (later, no coordination needed).** Once the trigger is
      confirmed in production, clients may stop sending `updated_at` entirely —
      web via the single `writeTimestamp()` in `writeRepository.ts`, mobile via
      `pushQueue` in `utils/sync.ts`. Purely cosmetic/bandwidth; not required for
@@ -600,7 +605,7 @@ definition of done.
 
 | File | Why it matters to editing |
 | --- | --- |
-| `utils/sync.ts` | Push (whole-blob replace, soft delete, `updated_at` at push time) + pull (`gt('updated_at', since)` watermark). |
+| `utils/sync.ts` | Push (whole-blob replace, soft delete) + paged pull with a versioned DB-timestamp cursor and late-commit overlap. |
 | `utils/syncMerge.ts` | Invoice ledger + booking history unions — the merge the push side does **not** do. |
 | `utils/storage/keys.ts` | `SECURE_FIELDS` that must never reach a blob. |
 | `web/src/lib/repository.ts` | Read layer; writes go in a sibling module, not here. |
