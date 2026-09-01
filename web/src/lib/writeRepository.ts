@@ -5,6 +5,7 @@ import type {
   Expense,
   Invoice,
   Job,
+  JobCost,
   Material,
   Payment,
   PaymentDraft,
@@ -558,8 +559,8 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 // `updateJobDetails`).
 //
 // `estimateTotal` is DERIVED: the caller recomputes it with the pricingMath port
-// over the edited inputs + materials AND the job's EXISTING `jobCosts` (which the
-// portal doesn't author), matching the mobile save, and hands it in.
+// over the edited inputs, materials, and direct-cost lines, matching the mobile
+// save, and hands it in.
 //
 // CONSENT GATE (P0.1 spirit): once a customer has made a frozen approval decision
 // (`job.approval.decision`), the estimate is the price they signed — re-pricing it
@@ -569,13 +570,14 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 // survives regardless.
 // ---------------------------------------------------------------------------
 
-/** The pricing fields the portal authors on a job. `jobCosts`/`laborBreakdown`
- *  are preserved from the server row (not authored here); `estimateTotal` is the
- *  caller's pricingMath recompute over the inputs + materials + existing jobCosts. */
+/** The pricing fields the portal authors on a job. `laborBreakdown` is preserved
+ *  from the server row (not authored here); `estimateTotal` is the caller's
+ *  pricingMath recompute over the inputs + materials + jobCosts. */
 export interface JobPricingEdit {
   laborHours: number;
   laborRate: number;
   materials: Material[];
+  jobCosts: JobCost[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -592,6 +594,7 @@ export async function updateJobPricing(
     laborHours: edit.laborHours,
     laborRate: edit.laborRate,
     materials: edit.materials,
+    jobCosts: edit.jobCosts,
     materialMarkup: edit.materialMarkup,
     overhead: edit.overhead,
     margin: edit.margin,

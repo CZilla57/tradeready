@@ -302,28 +302,45 @@ five):
        `writeRepository.test.ts`, `status.test.ts`, `JobDetailScreen.test.tsx`.
      - **Estimate / pricing authoring. ✅ LANDED.** `JobPricingEditor` on
        `JobDetailScreen` edits a job's pricing inputs (labor hours/rate, material
-       markup, overhead, margin) and its MATERIALS (via the shared
-       `MaterialsEditor`), recomputing the derived `estimateTotal` with the
-       `estimateTotalFromPricing` port over the edited inputs + materials AND the
-       job's existing `jobCosts` — matching the mobile PricingCalculator's
-       `saveToJob` (P0.6). The write op `updateJobPricing` spreads the FRESHLY
-       re-fetched server row and overwrites ONLY the pricing fields, so status,
-       approval, invoiceId, changeOrders, timeSessions, jobCosts, and
-       laborBreakdown survive untouched (same fresh-row guarantee as
-       `updateJobDetails`). CONSENT GATE: `canAuthorEstimate(job)` hides the editor
-       once the customer has a FROZEN `approval.decision` (approved/declined) —
-       re-pricing a signed estimate is the deferred change-order surface — and the
+       markup, overhead, margin), its MATERIALS (via the shared `MaterialsEditor`),
+       and its DIRECT-COST lines (via the shared `JobCostsEditor` — permits,
+       disposal, subcontractors…), recomputing the derived `estimateTotal` with the
+       `estimateTotalFromPricing` port over the edited inputs + materials + jobCosts
+       — matching the mobile PricingCalculator's `saveToJob` (P0.6). The write op
+       `updateJobPricing` spreads the FRESHLY re-fetched server row and overwrites
+       ONLY the pricing fields, so status, approval, invoiceId, changeOrders,
+       timeSessions, and laborBreakdown survive untouched (same fresh-row guarantee
+       as `updateJobDetails`). CONSENT GATE: `canAuthorEstimate(job)` hides the
+       editor once the customer has a FROZEN `approval.decision` (approved/declined)
+       — re-pricing a signed estimate is the deferred change-order surface — and the
        card shows a "locked" note instead; gating on the decision (not status)
        keeps a tradesperson-marked "approved" job with no signature editable.
        Covered by `writeRepository.test.ts`, `status.test.ts`,
        `JobDetailScreen.test.tsx`.
-     - **Still OPEN.** The consent-/invoice-coupled STATUS transitions
-       (`estimate_sent → approved`, `complete → invoiced`, `invoiced → paid` —
-       the portal reflects the last two from the invoice ledger, it doesn't
-       drive them), plus approval/change-order handling (send an estimate, record
-       a change order). These need guarded, cross-entity transitions and the
-       backend approval flow, so they stay deferred. `jobCosts` (direct-cost line)
-       authoring is likewise still a separate surface.
+     - **Direct-cost (jobCosts) authoring. ✅ LANDED.** `JobCostsEditor`
+       (`web/src/ui/JobCostsEditor.tsx` + pure helpers in `jobCostsDraft.ts`)
+       edits label / category / quantity / unit cost per line, DERIVING the markup
+       policy from the category (permits pass through at cost, everything else is
+       priced into the margin, via the ported `defaultMarkupPolicyForCategory`).
+       The advanced per-line knobs — handling `markupPercent`, `taxable`,
+       `customerVisible`, `notes` — are PRESERVED from an existing line (P0.2) and
+       default to 0 / false / visible / none on a new line (authored on mobile).
+       Wired into `JobPricingEditor`; feeds the same recompute. New ids match the
+       mobile `jc<timestamp>_<counter>` format (P1.4). Covered by
+       `jobCostsDraft.test.ts`, `JobDetailScreen.test.tsx`, `writeRepository.test.ts`.
+     - **Still OPEN — backend-gated, not an editing surface.** The remaining work
+       is WORKFLOW that needs the Cloudflare Worker approval backend, which the
+       portal (Supabase-only, no Worker reach) cannot drive: sending an estimate /
+       minting a customer approval link, recording a change order, and the
+       consent-/invoice-coupled STATUS transitions (`estimate_sent → approved`,
+       `complete → invoiced`, `invoiced → paid` — the portal reflects the invoiced/
+       paid ones from the invoice ledger rather than driving them). A faithful
+       "create invoice from a job" is also deferred: its billable-breakdown / line-
+       item math (`utils/autoInvoice.ts` `computeBillableBreakdown`) pulls tracked
+       time, change orders, and the RN-only pricing engine, so it needs a web port
+       first (like pricingMath). `jobCosts` line-item authoring on Pricebook /
+       recurring-job entries (they carry the field too) can reuse `JobCostsEditor`
+       when wanted — additive, not blocking.
 4. **Pricebook, Expenses, Settings. ✅ LANDED.** Catalog/config maintenance.
    Every editable surface below is in; the only things left read-only are
    deliberate (Pricebook pricing fields — deferred pending a web-safe estimate

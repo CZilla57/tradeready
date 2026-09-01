@@ -221,6 +221,67 @@ describe('JobDetailScreen — estimate/pricing editing', () => {
     expect(writes.updateJobPricing).not.toHaveBeenCalled();
   });
 
+  it('authors a direct-cost line and writes it as a passthrough permit', async () => {
+    store.jobs = [job({ status: 'lead' })];
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit estimate' }));
+
+    await userEvent.click(screen.getByRole('button', { name: '+ Add cost' }));
+    await userEvent.type(screen.getByLabelText('Cost description'), 'City permit');
+    // Category defaults to "other" (priced in); switch to Permit → passthrough.
+    await userEvent.selectOptions(screen.getByLabelText('Cost category'), 'permit');
+    const cost = screen.getByLabelText('Cost unit cost');
+    await userEvent.clear(cost);
+    await userEvent.type(cost, '120');
+    await userEvent.click(screen.getByRole('button', { name: 'Save estimate' }));
+
+    await waitFor(() => expect(writes.updateJobPricing).toHaveBeenCalledTimes(1));
+    const edit = writes.updateJobPricing.mock.calls[0][1];
+    expect(edit.jobCosts).toHaveLength(1);
+    expect(edit.jobCosts[0]).toMatchObject({
+      label: 'City permit',
+      category: 'permit',
+      unitCost: 120,
+      markupPolicy: 'passthrough', // re-derived from the category
+    });
+    // A passthrough permit is added on top at cost, so the total grew by 120.
+    // job(): labor 4×90=360, no materials/markup/overhead/margin → 360; + 120 = 480.
+    expect(edit.estimateTotal).toBeCloseTo(480, 2);
+  });
+
+  it('seeds the direct-cost editor from the job and round-trips hidden knobs', async () => {
+    store.jobs = [
+      job({
+        status: 'lead',
+        jobCosts: [
+          {
+            id: 'jc1',
+            label: 'Sub',
+            category: 'subcontractor',
+            quantity: 1,
+            unitCost: 500,
+            markupPercent: 15,
+            markupPolicy: 'in_margin_base',
+            taxable: true,
+            customerVisible: false,
+          },
+        ],
+      } as Partial<Job>),
+    ];
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit estimate' }));
+    expect(screen.getByDisplayValue('Sub')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Save estimate' }));
+
+    await waitFor(() => expect(writes.updateJobPricing).toHaveBeenCalledTimes(1));
+    // The unshown knobs (markupPercent / taxable / customerVisible) round-trip.
+    expect(writes.updateJobPricing.mock.calls[0][1].jobCosts[0]).toMatchObject({
+      markupPercent: 15,
+      taxable: true,
+      customerVisible: false,
+    });
+  });
+
   it('locks the estimate once the customer has decided', () => {
     store.jobs = [
       job({ status: 'approved', approval: { decision: 'approved' } } as Partial<Job>),

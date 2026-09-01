@@ -499,28 +499,40 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
   });
 
   describe('updateJobPricing — author the estimate onto a fresh server copy', () => {
+    const editedJobCost = {
+      id: 'jc2',
+      label: 'Dumpster',
+      category: 'disposal' as const,
+      quantity: 1,
+      unitCost: 200,
+      markupPercent: 0,
+      markupPolicy: 'in_margin_base' as const,
+      taxable: false,
+      customerVisible: true,
+    };
     const pricing = {
       laborHours: 3,
       laborRate: 100,
       materials: [{ id: 'm1', name: 'Pipe', quantity: 2, unitCost: 15 }],
+      jobCosts: [editedJobCost],
       materialMarkup: 20,
       overhead: 10,
       margin: 20,
       estimateTotal: 456,
     };
 
-    it('overwrites only pricing fields, preserving status/approval/invoiceId/changeOrders', async () => {
+    it('overwrites only the pricing fields, preserving status/approval/invoiceId/changeOrders', async () => {
       const approval = { decision: 'approved', token: 't' };
       const changeOrders = [{ id: 'co1' }];
       const timeSessions = [{ start: '2026-09-01T09:00:00Z', end: null }];
       state.serverRow = {
         data: job({
+          title: 'Deck rebuild',
           status: 'scheduled',
           invoiceId: 'inv-9',
           approval,
           changeOrders,
           timeSessions,
-          jobCosts: [{ id: 'jc1', category: 'permit', quantity: 1, unitCost: 50 }],
         } as Partial<Job>),
         deleted: false,
       };
@@ -529,18 +541,18 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
 
       const written = state.lastUpsert!.data as Job;
       expect(state.lastTable).toBe('jobs');
-      // Pricing fields written…
+      // Pricing fields written (materials AND direct-cost lines)…
       expect(written.laborRate).toBe(100);
       expect(written.materials).toEqual(pricing.materials);
+      expect(written.jobCosts).toEqual([editedJobCost]);
       expect(written.estimateTotal).toBe(456);
       // …everything else preserved from the server row.
+      expect(written.title).toBe('Deck rebuild');
       expect(written.status).toBe('scheduled');
       expect(written.invoiceId).toBe('inv-9');
       expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
       expect(written.changeOrders).toEqual(changeOrders);
       expect(written.timeSessions).toEqual(timeSessions);
-      // jobCosts are not authored here — preserved from the server row.
-      expect(written.jobCosts).toEqual([{ id: 'jc1', category: 'permit', quantity: 1, unitCost: 50 }]);
     });
 
     it('throws JobNotFoundError when the row is missing', async () => {

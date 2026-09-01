@@ -26,6 +26,12 @@ import {
   parseMaterialDrafts,
   type MaterialDraft,
 } from '../ui/materialsDraft';
+import { JobCostsEditor } from '../ui/JobCostsEditor';
+import {
+  jobCostsToDrafts,
+  parseJobCostDrafts,
+  type JobCostDraft,
+} from '../ui/jobCostsDraft';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
@@ -114,6 +120,9 @@ function JobPricingEditor({ job }: { job: Job }) {
   const [materials, setMaterials] = useState<MaterialDraft[]>(
     materialsToDrafts(job.materials),
   );
+  const [jobCosts, setJobCosts] = useState<JobCostDraft[]>(
+    jobCostsToDrafts(job.jobCosts),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -124,6 +133,7 @@ function JobPricingEditor({ job }: { job: Job }) {
     setOverhead(String(job.overhead ?? 0));
     setMargin(String(job.margin ?? 0));
     setMaterials(materialsToDrafts(job.materials));
+    setJobCosts(jobCostsToDrafts(job.jobCosts));
     setError(null);
     setOpen(true);
   }
@@ -147,18 +157,23 @@ function JobPricingEditor({ job }: { job: Job }) {
       setError(parsedMaterials.error);
       return;
     }
+    const parsedJobCosts = parseJobCostDrafts(jobCosts);
+    if (!parsedJobCosts.ok) {
+      setError(parsedJobCosts.error);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
-      // minimumJobFee from settings) over the edited inputs + materials AND the
-      // job's existing jobCosts (which the portal doesn't author).
+      // minimumJobFee from settings) over the edited inputs + materials +
+      // direct-cost lines.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
-        jobCosts: job.jobCosts,
+        jobCosts: parsedJobCosts.jobCosts,
         overheadPercent: pricing.overhead!,
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
@@ -167,6 +182,7 @@ function JobPricingEditor({ job }: { job: Job }) {
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
+        jobCosts: parsedJobCosts.jobCosts,
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
@@ -237,6 +253,7 @@ function JobPricingEditor({ job }: { job: Job }) {
         </div>
         <div className="meta">The total is recalculated from these.</div>
         <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
+        <JobCostsEditor drafts={jobCosts} onChange={setJobCosts} disabled={busy} />
         <div className="btn-row">
           <button type="submit" className="btn primary" disabled={busy}>
             {busy ? 'Saving…' : 'Save estimate'}
