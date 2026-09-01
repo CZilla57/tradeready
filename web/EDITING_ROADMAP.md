@@ -326,13 +326,21 @@ five):
      `paymentNotes` — a plain direct-value string — is editable through
      `saveSettings`. Only online-booking (slot fields / `timeZone`) remains on the
      mobile Booking screen, by design.
-   - **Pricebook → metadata. ✅ LANDED.** `PricebookEditor` on
-     `PricebookDetailScreen` edits name/category/description via
+   - **Pricebook → metadata + pricing. ✅ LANDED.** `PricebookEditor` on
+     `PricebookDetailScreen` edits name/category/description AND the pricing
+     inputs (labor hours/rate, material markup, overhead, margin) via
      `savePricebookEntry` (whole-blob; bumps the blob's `updatedAt`) and deletes
-     via `deletePricebookEntry`. Pricing-field editing is DEFERRED: `estimateTotal`
-     is derived by `pricingEngine.calculateEstimate`, which isn't cleanly
-     web-importable (it pulls a type from an RN component module) — needs a
-     web-safe recompute first (like the invoiceMath reimplementation).
+     via `deletePricebookEntry`. `estimateTotal` is a DERIVED field, recomputed on
+     save by `web/src/ui/pricingMath.ts` — the web port of
+     `pricingEngine.calculateEstimate` (the mobile engine isn't web-importable: it
+     pulls `BadgeColor` from an RN component module, breaking typecheck
+     resolution; the pure math is reimplemented web-side and pinned to the mobile
+     engine's own test values, exactly like invoiceMath/changeOrderMath). The
+     recompute matches the mobile PricebookEntryScreen save path
+     (buildEstimateInput→calculateEstimate: travel/tax 0, non-emergency,
+     `minimumJobFee` from settings), so a service priced in the portal equals one
+     priced on the phone (P0.6). Material LINE-ITEM editing is still deferred — the
+     entry's materials/jobCosts round-trip untouched and feed the recompute.
    - **Expenses. ✅ LANDED.** An `ExpensesSection` on `MoneyScreen` lists
      expenses and adds/edits/deletes them: `saveExpense` (whole-blob upsert; new
      records stamped with the shared `stampExpense` so ids match the mobile app)
@@ -423,5 +431,5 @@ definition of done.
 | `web/src/lib/repository.ts` | Read layer; writes go in a sibling module, not here. |
 | `web/src/lib/readOnly.arch.test.ts` | The guard to re-scope, not delete. |
 | `web/src/lib/DataContext.tsx` | `reload()` / `retry()` for post-write refresh. |
-| `web/src/ui/invoiceMath.ts`, `changeOrderMath.ts` | Shared derived-field math to reuse on write. |
+| `web/src/ui/invoiceMath.ts`, `changeOrderMath.ts`, `pricingMath.ts` | Shared derived-field math reimplemented web-side (the mobile modules pull RN); reuse on write. `pricingMath.ts` is the `pricingEngine.calculateEstimate` port that unblocks Pricebook pricing and (still open) recurring-JOB estimate editing. |
 | `supabase/migrations/20260803_local_collections_sync.sql` | RLS `for all` — writes are already authorized. |

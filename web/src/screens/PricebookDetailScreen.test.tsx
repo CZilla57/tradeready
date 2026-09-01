@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import type { PricebookEntry } from '@shared/types/models';
+import type { PricebookEntry, Settings } from '@shared/types/models';
 import PricebookDetailScreen from './PricebookDetailScreen';
 
 const writes = vi.hoisted(() => ({
@@ -18,9 +18,12 @@ vi.mock('react-router-dom', async (importOriginal) => ({
 }));
 
 const retry = vi.hoisted(() => vi.fn());
-const store = vi.hoisted(() => ({ pricebook: [] as PricebookEntry[] }));
+const store = vi.hoisted(() => ({
+  pricebook: [] as PricebookEntry[],
+  settings: { minimumJobFee: 0 } as Settings,
+}));
 vi.mock('../lib/DataContext', () => ({
-  useData: () => ({ pricebook: store.pricebook, retry }),
+  useData: () => ({ pricebook: store.pricebook, settings: store.settings, retry }),
   useResources: () => ({ loading: false, error: null, refreshing: false, retry }),
 }));
 
@@ -76,6 +79,33 @@ describe('PricebookDetailScreen — edit', () => {
       name: 'Drain clearing',
     });
     expect(retry).toHaveBeenCalledWith(['pricebook']);
+  });
+
+  it('recomputes estimateTotal from edited pricing inputs', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit service' }));
+
+    const rate = screen.getByDisplayValue('90');
+    await userEvent.clear(rate);
+    await userEvent.type(rate, '100');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.savePricebookEntry).toHaveBeenCalledTimes(1));
+    // labor 2×100=200; overhead 10% → 220; margin 20% → 220/0.8 = 275.
+    expect(writes.savePricebookEntry.mock.calls[0][0]).toMatchObject({
+      laborRate: 100,
+      estimateTotal: 275,
+    });
+  });
+
+  it('rejects a blank pricing field', async () => {
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit service' }));
+    await userEvent.clear(screen.getByDisplayValue('90')); // labor rate
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/non-negative number/i);
+    expect(writes.savePricebookEntry).not.toHaveBeenCalled();
   });
 
   it('requires a name', async () => {
