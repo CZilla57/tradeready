@@ -454,7 +454,12 @@ five):
      onto a FRESHLY re-fetched server row, preserving the plan's history (id,
      customerId/customerName, occurrenceCount, lastGeneratedDate, isActive,
      createdAt) exactly as the mobile edit's `{ ...r, ...shared }` does, and
-     normalises endCount/endDate to the chosen endCondition. Validation mirrors
+     normalises endCount/endDate to the chosen endCondition. The editor also
+     sends the originally displayed next date: if generation advances
+     `nextDueDate` while the form is open and the user did not edit that field,
+     the fresh server date wins; an explicit date edit still wins. This prevents
+     a stale form from rolling the generation cursor backward and duplicating an
+     invoice. Validation mirrors
      mobile (amount > 0, net ≥ 0, positive end count, end date when required). A
      maintenance plan's `amount` is a flat entered value (no pricingEngine
      estimate), which is why THIS rule type is editable while RECURRING-JOB rule
@@ -474,7 +479,9 @@ five):
      `estimateTotal` recomputed on save via `estimateTotalFromPricing` (the port)
      over the edited materials + settings `minimumJobFee`, matching the mobile
      save. The edited materials replace the server list; `jobCosts` (direct-cost
-     lines) stay preserved from the fresh row. Covered by `RecurringScreen.test.tsx`
+     lines) stay preserved from the fresh row. It uses the same original-date
+     comparison as maintenance plans, so an unchanged stale form cannot restore
+     a pre-generation `nextDueDate` and duplicate a job. Covered by `RecurringScreen.test.tsx`
      + `writeRepository.test.ts`.
    - **5c — Creation flows. IN PROGRESS.**
      - **New customer. ✅ LANDED.** `CustomersScreen` has a "New customer" form

@@ -192,7 +192,10 @@ function PlanEditor({
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>(plan.endCondition);
   const [endCount, setEndCount] = useState(plan.endCount != null ? String(plan.endCount) : '');
   const [endDate, setEndDate] = useState(plan.endDate ?? '');
-  const [nextDueDate, setNextDueDate] = useState(plan.nextDueDate || getTodayDateString());
+  const [originalNextDueDate] = useState(
+    plan.nextDueDate || getTodayDateString(),
+  );
+  const [nextDueDate, setNextDueDate] = useState(originalNextDueDate);
   const [autoSend, setAutoSend] = useState(!!plan.autoSendEnabled);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -237,6 +240,7 @@ function PlanEditor({
         endCondition,
         endCount: endCountValue,
         endDate: endCondition === 'date' ? endDate : undefined,
+        originalNextDueDate,
         nextDueDate,
         autoSendEnabled: autoSend,
       });
@@ -370,7 +374,10 @@ function JobRuleEditor({
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>(rule.endCondition);
   const [endCount, setEndCount] = useState(rule.endCount != null ? String(rule.endCount) : '');
   const [endDate, setEndDate] = useState(rule.endDate ?? '');
-  const [nextDueDate, setNextDueDate] = useState(rule.nextDueDate || getTodayDateString());
+  const [originalNextDueDate] = useState(
+    rule.nextDueDate || getTodayDateString(),
+  );
+  const [nextDueDate, setNextDueDate] = useState(originalNextDueDate);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -443,6 +450,7 @@ function JobRuleEditor({
         endCondition,
         endCount: endCountValue,
         endDate: endCondition === 'date' ? endDate : undefined,
+        originalNextDueDate,
         nextDueDate,
       });
       onSaved();
