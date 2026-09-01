@@ -422,9 +422,22 @@ five):
        `upsertCustomerInList` dedupe key) rather than silently merged, so the
        portal never creates a hidden duplicate. Covered by `CustomersScreen.test
        .tsx` + `writeRepository.test.ts`.
-     - **Remaining creation: new job/estimate, invoice, expense, pricebook entry,
-       recurring rule. OPEN** — each mints its own client-generated id (confirm
-       the mobile format per entity) with per-domain validation.
+     - **New expense. ✅ ALREADY LANDED (stage 4).** `MoneyScreen`'s
+       `ExpensesSection` add flow stamps the mobile-format id via the shared
+       `stampExpense` and saves through `saveExpense`.
+     - **New pricebook entry. ✅ LANDED.** `PricebookScreen` has a "New service"
+       form (`NewServiceForm`) creating a record via a new typed op
+       `createPricebookEntry`, which mints a mobile-format id (`pb-<Date.now()>`,
+       monotonic-guarded for burst uniqueness, matching PricebookEntryScreen,
+       P1.4), stamps created/updatedAt, and upserts. The derived `estimateTotal`
+       is computed with the pricingMath port over the entered pricing inputs (no
+       materials) + settings `minimumJobFee`, matching the mobile save;
+       blank category/description collapse to `undefined`. Navigates to the new
+       record on success. Covered by `PricebookScreen.test.tsx` + `writeRepository
+       .test.ts`.
+     - **Remaining creation: new job/estimate, invoice, recurring rule. OPEN** —
+       each mints its own client-generated id (confirm the mobile format per
+       entity) with per-domain validation (customer linking, line items, status).
 
 ### Stays read-only / out of scope
 

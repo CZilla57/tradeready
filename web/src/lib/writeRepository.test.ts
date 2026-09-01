@@ -15,6 +15,7 @@ import {
   savePricebookEntry,
   saveExpense,
   createCustomer,
+  createPricebookEntry,
   scheduleJob,
   setRecurringJobActive,
   setRecurringInvoiceActive,
@@ -357,6 +358,65 @@ describe('savePricebookEntry — metadata edit, pricing preserved', () => {
     expect(data.margin).toBe(20);
     // The blob's own updatedAt is refreshed.
     expect(data.updatedAt).not.toBe('2026-08-01');
+  });
+});
+
+describe('createPricebookEntry — new service with a mobile-format id', () => {
+  it('mints a pb-<ms> id, stamps created/updatedAt, and upserts the record', async () => {
+    const before = Date.now();
+    const created = await createPricebookEntry({
+      name: 'Water heater flush',
+      category: 'Plumbing',
+      description: 'Annual maintenance',
+      laborHours: 1.5,
+      laborRate: 100,
+      materialMarkup: 20,
+      overhead: 15,
+      margin: 20,
+      estimateTotal: 215.63,
+    });
+
+    expect(state.lastTable).toBe('pricebook');
+    expect(created.id).toMatch(/^pb-\d+$/);
+    expect(Date.parse(created.createdAt)).toBeGreaterThanOrEqual(before);
+    expect(created.updatedAt).toBe(created.createdAt);
+    const data = state.lastUpsert!.data as PricebookEntry;
+    expect(data).toMatchObject({
+      name: 'Water heater flush',
+      category: 'Plumbing',
+      description: 'Annual maintenance',
+      laborRate: 100,
+      estimateTotal: 215.63,
+      materials: [],
+    });
+  });
+
+  it('collapses blank category/description to undefined', async () => {
+    const created = await createPricebookEntry({
+      name: 'Basic call-out',
+      category: '',
+      description: '',
+      laborHours: 1,
+      laborRate: 90,
+      materialMarkup: 0,
+      overhead: 0,
+      margin: 0,
+      estimateTotal: 90,
+    });
+    expect(created.category).toBeUndefined();
+    expect(created.description).toBeUndefined();
+  });
+
+  it('mints a unique id on each call within the same millisecond', async () => {
+    const a = await createPricebookEntry({
+      name: 'A', category: '', description: '', laborHours: 1, laborRate: 1,
+      materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+    });
+    const b = await createPricebookEntry({
+      name: 'B', category: '', description: '', laborHours: 1, laborRate: 1,
+      materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+    });
+    expect(a.id).not.toBe(b.id);
   });
 });
 

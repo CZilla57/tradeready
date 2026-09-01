@@ -520,6 +520,63 @@ export async function savePricebookEntry(
   return next;
 }
 
+// Mobile mints a pricebook id as `pb-<Date.now()>` (screens/PricebookEntryScreen
+// .tsx). We keep that exact shape but bump a monotonic guard so two creates in
+// the same millisecond can't collide on the id (the mobile screen creates one at
+// a time and doesn't guard; the portal shouldn't regress on uniqueness). P1.4.
+let _pbLastMs = 0;
+function newPricebookId(): string {
+  let ms = Date.now();
+  if (ms <= _pbLastMs) ms = _pbLastMs + 1;
+  _pbLastMs = ms;
+  return `pb-${ms}`;
+}
+
+/** The fields a new saved service is created from. `estimateTotal` is DERIVED —
+ *  the caller recomputes it with the pricingMath port (P0.6), like the edit. New
+ *  entries start with no materials/jobCosts (line-item authoring is deferred). */
+export interface NewPricebookFields {
+  name: string;
+  category: string;
+  description: string;
+  laborHours: number;
+  laborRate: number;
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+  estimateTotal: number;
+}
+
+/**
+ * Create a new saved service (roadmap P3 stage 5 — creation flows).
+ *
+ * Mints a mobile-format id and stamps createdAt/updatedAt, producing the same
+ * fresh-record shape the mobile PricebookEntryScreen writes, then upserts. Blank
+ * category/description collapse to `undefined` (mobile stores them that way).
+ */
+export async function createPricebookEntry(
+  fields: NewPricebookFields,
+): Promise<PricebookEntry> {
+  const now = new Date().toISOString();
+  const entry: PricebookEntry = {
+    id: newPricebookId(),
+    name: fields.name,
+    category: fields.category || undefined,
+    description: fields.description || undefined,
+    laborHours: fields.laborHours,
+    laborRate: fields.laborRate,
+    materials: [],
+    materialMarkup: fields.materialMarkup,
+    overhead: fields.overhead,
+    margin: fields.margin,
+    estimateTotal: fields.estimateTotal,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await upsertBlobRow('pricebook', entry.id, entry);
+  return entry;
+}
+
 // ---------------------------------------------------------------------------
 // Expenses (roadmap P3 stage 4)
 //
