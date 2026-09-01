@@ -238,6 +238,39 @@ describe('SettingsScreen — automation edit', () => {
   });
 });
 
+describe('SettingsScreen — payments edit', () => {
+  it('saves trimmed payment notes and keeps the processor read-only', async () => {
+    store.settings = { ...settings(), provider: 'stripe' } as Settings;
+    render(<SettingsScreen />);
+    await openSection('Payments');
+
+    // Provider stays visible but has no input — only notes are editable.
+    expect(screen.getByText('stripe')).toBeInTheDocument();
+    const notes = screen.getByLabelText('Payment notes');
+    await userEvent.type(notes, '  Checks payable to Acme  ');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toEqual({
+      paymentNotes: 'Checks payable to Acme',
+    });
+    expect(retry).toHaveBeenCalledWith(['settings']);
+  });
+
+  it('surfaces a save error without closing the form', async () => {
+    writes.saveSettings.mockRejectedValue(new Error('rls denied'));
+    render(<SettingsScreen />);
+    await openSection('Payments');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('rls denied'),
+    );
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument();
+    expect(retry).not.toHaveBeenCalled();
+  });
+});
+
 describe('SettingsScreen — schedule edit', () => {
   it('saves work pattern via saveSchedule and refreshes', async () => {
     render(<SettingsScreen />);

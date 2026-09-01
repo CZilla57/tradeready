@@ -285,8 +285,11 @@ five):
      changes (status ↔ invoice/approval coupling), estimate/pricing/materials
      authoring, and approval/change-order handling. These need P0.6 derived-field
      work and guarded transitions, so they're deliberately deferred from 3a.
-4. **Pricebook, Expenses, Settings.** Catalog/config maintenance. Partially
-   landed:
+4. **Pricebook, Expenses, Settings. ✅ LANDED.** Catalog/config maintenance.
+   Every editable surface below is in; the only things left read-only are
+   deliberate (Pricebook pricing fields — deferred pending a web-safe estimate
+   recompute; the payment processor and online-booking config — Stripe/booking
+   flows that stay on mobile):
    - **Settings → Business profile, Pricing defaults, Invoicing. ✅ LANDED.**
      `ProfileEditor` edits businessName/contactName/phone/email/address/region;
      `PricingEditor` edits the seven direct-value pricing inputs (laborRate,
@@ -318,10 +321,11 @@ five):
      normalised the way `resolveSchedule` expects (start < end, ≥1 work day,
      non-negative minutes) and validated before send; display reads through
      `resolveSchedule` so an absent/partial blob shows its effective defaults.
-     Remaining settings: online-booking (slot fields) stays on the mobile Booking
-     screen; Payments couples with Stripe onboarding (provider selection) so it
-     stays read-only in the portal — `paymentNotes` alone could become a
-     direct-value edit later.
+     `PaymentsEditor` (also LANDED) closes the section out: the processor
+     (`provider`) is Stripe-onboarding-coupled and stays read-only, but
+     `paymentNotes` — a plain direct-value string — is editable through
+     `saveSettings`. Only online-booking (slot fields / `timeZone`) remains on the
+     mobile Booking screen, by design.
    - **Pricebook → metadata. ✅ LANDED.** `PricebookEditor` on
      `PricebookDetailScreen` edits name/category/description via
      `savePricebookEntry` (whole-blob; bumps the blob's `updatedAt`) and deletes

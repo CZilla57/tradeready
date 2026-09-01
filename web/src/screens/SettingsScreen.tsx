@@ -788,6 +788,107 @@ function ScheduleEditor({ settings }: { settings: Settings }) {
   );
 }
 
+/**
+ * The Payments card (roadmap P3 stage 4). The processor (`provider`) is set up
+ * through Stripe onboarding — a coupled flow that stays on mobile — so it is
+ * shown read-only here. Only `paymentNotes` is editable: a plain direct-value
+ * string (e.g. "Checks payable to …", accepted methods) saved through the same
+ * `saveSettings` patch path.
+ */
+function PaymentsEditor({ settings }: { settings: Settings }) {
+  const { retry } = useData();
+  const [open, setOpen] = useState(false);
+  const [notes, setNotes] = useState(settings.paymentNotes ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openEditor() {
+    setNotes(settings.paymentNotes ?? '');
+    setError(null);
+    setOpen(true);
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await saveSettings({ paymentNotes: notes.trim() });
+      retry(['settings']);
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Card pad>
+        <div className="btn-row" style={{ justifyContent: 'space-between' }}>
+          <div className="section-label" style={{ padding: 0 }}>
+            Payments
+          </div>
+          <button type="button" className="btn sm" onClick={openEditor}>
+            Edit
+          </button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <KV
+            k="Processor"
+            v={settings.provider ? <Badge color="blue">{settings.provider}</Badge> : 'Not set'}
+          />
+          {settings.paymentNotes && <KV k="Payment notes" v={settings.paymentNotes} />}
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        Payments
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      <div style={{ marginBottom: 4 }}>
+        <KV
+          k="Processor"
+          v={settings.provider ? <Badge color="blue">{settings.provider}</Badge> : 'Not set'}
+        />
+      </div>
+      <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <label className="field">
+          <span>Payment notes</span>
+          <textarea
+            className="field-input"
+            rows={3}
+            value={notes}
+            placeholder="Shown to customers on invoices — e.g. accepted methods or where to send a check."
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </label>
+        <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+          The payment processor is set up in the TradeReady mobile app.
+        </div>
+        <div className="btn-row">
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 export default function SettingsScreen() {
   const { settings } = useData();
   const state = useResources('settings');
@@ -821,22 +922,7 @@ export default function SettingsScreen() {
         <div className="stack">
           <ScheduleEditor settings={s} />
 
-          <Card pad>
-            <div className="section-label" style={{ padding: '0 0 8px' }}>
-              Payments
-            </div>
-            <KV
-              k="Processor"
-              v={
-                s.provider ? (
-                  <Badge color="blue">{s.provider}</Badge>
-                ) : (
-                  'Not set'
-                )
-              }
-            />
-            {s.paymentNotes && <KV k="Payment notes" v={s.paymentNotes} />}
-          </Card>
+          <PaymentsEditor settings={s} />
 
           <AutomationEditor settings={s} />
         </div>
@@ -844,8 +930,9 @@ export default function SettingsScreen() {
 
       <div className="muted" style={{ marginTop: 16, fontSize: 13 }}>
         You can update your business profile, pricing defaults, invoicing,
-        schedule, and automation settings here. Payment-processor and online-
-        booking settings are edited in the TradeReady mobile app.
+        schedule, payment notes, and automation settings here. The payment
+        processor and online-booking settings are set up in the TradeReady mobile
+        app.
       </div>
     </>
   );
