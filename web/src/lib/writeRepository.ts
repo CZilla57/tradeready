@@ -743,6 +743,68 @@ export async function setRecurringInvoiceActive(
   return next;
 }
 
+// Mobile mints a maintenance-plan id as `ri<Date.now()>` (AddRecurringInvoice
+// Screen). Same shape, monotonic-guarded so a same-ms burst can't collide. P1.4.
+let _riLastMs = 0;
+function newRecurringInvoiceId(): string {
+  let ms = Date.now();
+  if (ms <= _riLastMs) ms = _riLastMs + 1;
+  _riLastMs = ms;
+  return `ri${ms}`;
+}
+
+/** The fields a new maintenance plan is created from. The customer must be an
+ *  existing record (the portal picks one), so both id and denormalized name are
+ *  supplied — no inline customer creation here. */
+export interface NewRecurringInvoiceFields {
+  customerId: string;
+  customerName: string;
+  description: string;
+  amount: number;
+  dueDays: number;
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+  nextDueDate: DateString;
+  autoSendEnabled: boolean;
+}
+
+/**
+ * Create a new maintenance plan (roadmap P3 stage 5 — creation flows).
+ *
+ * A standalone insert: unlike a recurring JOB (whose creation also spawns a
+ * first job occurrence), a plan creates no invoice — the generation engine emits
+ * on its next run from `nextDueDate`. Initialises the generation state to a fresh
+ * series (occurrenceCount 0, lastGeneratedDate null, isActive true), matching the
+ * mobile AddRecurringInvoiceScreen create, and normalises endCount/endDate to the
+ * chosen condition.
+ */
+export async function createRecurringInvoice(
+  fields: NewRecurringInvoiceFields,
+): Promise<RecurringInvoice> {
+  const rule: RecurringInvoice = {
+    id: newRecurringInvoiceId(),
+    customerId: fields.customerId,
+    customerName: fields.customerName,
+    description: fields.description,
+    amount: fields.amount,
+    dueDays: fields.dueDays,
+    cadence: fields.cadence,
+    endCondition: fields.endCondition,
+    endCount: fields.endCondition === 'count' ? fields.endCount : undefined,
+    endDate: fields.endCondition === 'date' ? fields.endDate : undefined,
+    occurrenceCount: 0,
+    lastGeneratedDate: null,
+    nextDueDate: fields.nextDueDate,
+    isActive: true,
+    createdAt: getTodayDateString(),
+    autoSendEnabled: fields.autoSendEnabled,
+  };
+  await upsertBlobRow('recurringInvoices', rule.id, rule);
+  return rule;
+}
+
 /** The maintenance-plan rule fields the portal edits. Excludes customer
  *  re-linking (customerId/customerName — a customer-domain concern, deferred
  *  like invoice customer editing) and every generation-state field. */

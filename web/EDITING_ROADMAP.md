@@ -435,9 +435,24 @@ five):
        blank category/description collapse to `undefined`. Navigates to the new
        record on success. Covered by `PricebookScreen.test.tsx` + `writeRepository
        .test.ts`.
-     - **Remaining creation: new job/estimate, invoice, recurring rule. OPEN** —
-       each mints its own client-generated id (confirm the mobile format per
-       entity) with per-domain validation (customer linking, line items, status).
+     - **New maintenance plan (recurring invoice). ✅ LANDED.** `RecurringScreen`
+       has a "New plan" form (`NewPlanForm`) creating a standalone plan via a new
+       typed op `createRecurringInvoice`, which mints a mobile-format id
+       (`ri<Date.now()>`, monotonic-guarded, P1.4), initialises a FRESH series
+       (occurrenceCount 0, lastGeneratedDate null, isActive true), and normalises
+       endCount/endDate — matching the mobile AddRecurringInvoiceScreen create
+       (no first invoice is generated; the engine emits on its next run). The
+       customer is PICKED from existing records (a plan needs id + denormalized
+       name; inline customer creation belongs to the customer screen — the form
+       prompts to add a customer first when none exist). Validation mirrors mobile
+       (customer, amount > 0, net ≥ 0, positive end count, end date when required).
+       Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
+     - **Remaining creation: new recurring JOB, new invoice, new job/estimate.
+       OPEN.** Recurring-JOB creation is coupled — the mobile create also spawns a
+       first Job occurrence (occurrenceNumber 1, status lead) with job
+       pricing/materials — so it goes with the heavy new-job/new-invoice flows
+       (customer linking, line items, status/ledger init), not with the standalone
+       plan create.
 
 ### Stays read-only / out of scope
 

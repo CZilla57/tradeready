@@ -5,6 +5,7 @@ import { Card, PageHead, Empty, Badge, ErrorState } from '../ui/components';
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate, getTodayDateString } from '@shared/utils/dateHelpers';
 import type {
+  Customer,
   RecurrenceCadence,
   RecurrenceEndCondition,
   RecurringInvoice,
@@ -15,6 +16,7 @@ import {
   setRecurringInvoiceActive,
   updateRecurringInvoiceRule,
   updateRecurringJobRule,
+  createRecurringInvoice,
   deleteRecurringJob,
   deleteRecurringInvoice,
 } from '../lib/writeRepository';
@@ -539,9 +541,212 @@ function JobRuleEditor({
   );
 }
 
+/**
+ * The "New maintenance plan" form (roadmap P3 stage 5 — creation flows). Creates
+ * a standalone plan via `createRecurringInvoice`; the customer is picked from
+ * existing records (a plan needs both id and denormalized name, and inline
+ * customer creation belongs to the customer screen). Validation mirrors the
+ * mobile AddRecurringInvoiceScreen (a customer, amount > 0, net ≥ 0, a positive
+ * end count, an end date when required). Follows the house UX.
+ */
+function NewPlanForm({
+  customers,
+  onClose,
+  onCreated,
+}: {
+  customers: Customer[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const pickable = customers
+    .filter((c) => !c.archivedAt)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const [customerId, setCustomerId] = useState('');
+  const [description, setDescription] = useState('');
+  const [amount, setAmount] = useState('');
+  const [dueDays, setDueDays] = useState('30');
+  const [cad, setCad] = useState<RecurrenceCadence>('monthly');
+  const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>('never');
+  const [endCount, setEndCount] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [nextDueDate, setNextDueDate] = useState(getTodayDateString());
+  const [autoSend, setAutoSend] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const customer = pickable.find((c) => c.id === customerId);
+    if (!customer) {
+      setError('Choose a customer.');
+      return;
+    }
+    const amt = Number(amount.trim());
+    if (!(amt > 0)) {
+      setError('Enter an invoice amount greater than zero.');
+      return;
+    }
+    const net = Number(dueDays.trim());
+    if (!Number.isInteger(net) || net < 0) {
+      setError('Net terms must be zero or a positive whole number of days.');
+      return;
+    }
+    let endCountValue: number | undefined;
+    if (endCondition === 'count') {
+      endCountValue = Number(endCount.trim());
+      if (!Number.isInteger(endCountValue) || endCountValue < 1) {
+        setError('Enter a number of invoices greater than zero.');
+        return;
+      }
+    }
+    if (endCondition === 'date' && !endDate) {
+      setError('Pick an end date for the plan.');
+      return;
+    }
+    if (!nextDueDate) {
+      setError('Pick the first invoice date.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await createRecurringInvoice({
+        customerId: customer.id,
+        customerName: customer.name,
+        description: description.trim(),
+        amount: amt,
+        dueDays: net,
+        cadence: cad,
+        endCondition,
+        endCount: endCountValue,
+        endDate: endCondition === 'date' ? endDate : undefined,
+        nextDueDate,
+        autoSendEnabled: autoSend,
+      });
+      onCreated();
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card pad style={{ marginTop: 12 }}>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        New maintenance plan
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      {pickable.length === 0 ? (
+        <div className="muted" style={{ fontSize: 13 }}>
+          Add a customer first — a plan bills an existing customer.
+          <div className="btn-row" style={{ marginTop: 10 }}>
+            <button type="button" className="btn ghost sm" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+          <label className="field">
+            <span>Customer</span>
+            <select className="field-input" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+              <option value="">Select a customer…</option>
+              {pickable.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name || 'Unnamed'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Description</span>
+            <input className="field-input" type="text" value={description} onChange={(e) => setDescription(e.target.value)} />
+          </label>
+          <div className="btn-row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>Amount ($)</span>
+              <input className="field-input" type="number" step="0.01" min="0" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            </label>
+            <label className="field" style={{ flex: 1 }}>
+              <span>Net (days)</span>
+              <input className="field-input" type="number" step="1" min="0" inputMode="numeric" value={dueDays} onChange={(e) => setDueDays(e.target.value)} />
+            </label>
+          </div>
+          <div className="field">
+            <span>Repeats</span>
+            <div className="chip-row" role="group" aria-label="Repeats">
+              {CADENCES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={`chip${cad === c ? ' selected' : ''}`}
+                  aria-pressed={cad === c}
+                  onClick={() => setCad(c)}
+                >
+                  {CADENCE_LABEL[c]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="field">
+            <span>First invoice date</span>
+            <input className="field-input" type="date" value={nextDueDate} onChange={(e) => setNextDueDate(e.target.value)} />
+          </label>
+          <div className="field">
+            <span>Ends</span>
+            <div className="chip-row" role="group" aria-label="Ends">
+              {END_CONDITIONS.map((ec) => (
+                <button
+                  key={ec}
+                  type="button"
+                  className={`chip${endCondition === ec ? ' selected' : ''}`}
+                  aria-pressed={endCondition === ec}
+                  onClick={() => setEndCondition(ec)}
+                >
+                  {END_LABEL[ec]}
+                </button>
+              ))}
+            </div>
+          </div>
+          {endCondition === 'count' && (
+            <label className="field">
+              <span>Number of invoices</span>
+              <input className="field-input" type="number" step="1" min="1" inputMode="numeric" value={endCount} onChange={(e) => setEndCount(e.target.value)} />
+            </label>
+          )}
+          {endCondition === 'date' && (
+            <label className="field">
+              <span>End date</span>
+              <input className="field-input" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </label>
+          )}
+          <label className="field checkbox-field">
+            <input type="checkbox" checked={autoSend} onChange={(e) => setAutoSend(e.target.checked)} />
+            <span>Auto-send each invoice by email</span>
+          </label>
+          <div className="btn-row">
+            <button type="submit" className="btn primary" disabled={busy}>
+              {busy ? 'Creating…' : 'Create plan'}
+            </button>
+            <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </Card>
+  );
+}
+
 export default function RecurringScreen() {
-  const { recurringJobs, recurringInvoices, retry } = useData();
+  const { recurringJobs, recurringInvoices, customers, retry } = useData();
   const state = useResources('recurringJobs', 'recurringInvoices');
+  const [creatingPlan, setCreatingPlan] = useState(false);
 
   if (state.loading) return <Empty>Loading recurring work…</Empty>;
   if (state.error)
@@ -608,9 +813,27 @@ export default function RecurringScreen() {
         )}
       </Card>
 
+      {creatingPlan && (
+        <NewPlanForm
+          customers={customers}
+          onClose={() => setCreatingPlan(false)}
+          onCreated={() => {
+            retry(['recurringInvoices']);
+            setCreatingPlan(false);
+          }}
+        />
+      )}
+
       <Card style={{ marginTop: 16 }}>
-        <div className="section-label">
-          Maintenance plans ({plans.length})
+        <div className="btn-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="section-label" style={{ padding: 0 }}>
+            Maintenance plans ({plans.length})
+          </div>
+          {!creatingPlan && (
+            <button type="button" className="btn sm" onClick={() => setCreatingPlan(true)}>
+              New plan
+            </button>
+          )}
         </div>
         {plans.length === 0 ? (
           <Empty>No maintenance plans.</Empty>

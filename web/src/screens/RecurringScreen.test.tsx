@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { RecurringInvoice, RecurringJob, Settings } from '@shared/types/models';
+import type {
+  Customer,
+  RecurringInvoice,
+  RecurringJob,
+  Settings,
+} from '@shared/types/models';
 import RecurringScreen from './RecurringScreen';
 
 const writes = vi.hoisted(() => ({
@@ -9,6 +14,7 @@ const writes = vi.hoisted(() => ({
   setRecurringInvoiceActive: vi.fn(),
   updateRecurringInvoiceRule: vi.fn(),
   updateRecurringJobRule: vi.fn(),
+  createRecurringInvoice: vi.fn(),
   deleteRecurringJob: vi.fn(),
   deleteRecurringInvoice: vi.fn(),
 }));
@@ -18,12 +24,14 @@ const retry = vi.hoisted(() => vi.fn());
 const store = vi.hoisted(() => ({
   recurringJobs: [] as RecurringJob[],
   recurringInvoices: [] as RecurringInvoice[],
+  customers: [] as Customer[],
   settings: { minimumJobFee: 0 } as Settings,
 }));
 vi.mock('../lib/DataContext', () => ({
   useData: () => ({
     recurringJobs: store.recurringJobs,
     recurringInvoices: store.recurringInvoices,
+    customers: store.customers,
     settings: store.settings,
     retry,
   }),
@@ -86,11 +94,15 @@ beforeEach(() => {
   writes.setRecurringInvoiceActive.mockReset().mockResolvedValue(plan());
   writes.updateRecurringInvoiceRule.mockReset().mockResolvedValue(plan());
   writes.updateRecurringJobRule.mockReset().mockResolvedValue(job());
+  writes.createRecurringInvoice.mockReset().mockResolvedValue(plan());
   writes.deleteRecurringJob.mockReset().mockResolvedValue(undefined);
   writes.deleteRecurringInvoice.mockReset().mockResolvedValue(undefined);
   retry.mockReset();
   store.recurringJobs = [job()];
   store.recurringInvoices = [plan()];
+  store.customers = [
+    { id: 'c1', name: 'Beta LLC', email: '', phone: '', address: '', notes: '' },
+  ];
 });
 
 describe('RecurringScreen — pause/resume', () => {
@@ -274,5 +286,65 @@ describe('RecurringScreen — recurring job rule editing', () => {
       expect(within(row).getByRole('alert')).toHaveTextContent(/non-negative number/i),
     );
     expect(writes.updateRecurringJobRule).not.toHaveBeenCalled();
+  });
+});
+
+describe('RecurringScreen — create maintenance plan', () => {
+  it('creates a plan for a picked customer and refreshes', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New plan' }));
+
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'c1');
+    await userEvent.type(screen.getByLabelText('Amount ($)'), '150');
+    await userEvent.type(screen.getByLabelText('Description'), 'Monthly service');
+    await userEvent.click(screen.getByRole('button', { name: 'Create plan' }));
+
+    await waitFor(() => expect(writes.createRecurringInvoice).toHaveBeenCalledTimes(1));
+    expect(writes.createRecurringInvoice.mock.calls[0][0]).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Beta LLC',
+      description: 'Monthly service',
+      amount: 150,
+      dueDays: 30,
+      cadence: 'monthly',
+      endCondition: 'never',
+      autoSendEnabled: false,
+    });
+    expect(retry).toHaveBeenCalledWith(['recurringInvoices']);
+  });
+
+  it('requires a customer to be chosen', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New plan' }));
+
+    await userEvent.type(screen.getByLabelText('Amount ($)'), '150');
+    await userEvent.click(screen.getByRole('button', { name: 'Create plan' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/choose a customer/i),
+    );
+    expect(writes.createRecurringInvoice).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-positive amount', async () => {
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New plan' }));
+
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'c1');
+    await userEvent.click(screen.getByRole('button', { name: 'Create plan' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/greater than zero/i),
+    );
+    expect(writes.createRecurringInvoice).not.toHaveBeenCalled();
+  });
+
+  it('prompts to add a customer first when none exist', async () => {
+    store.customers = [];
+    render(<RecurringScreen />);
+    await userEvent.click(screen.getByRole('button', { name: 'New plan' }));
+
+    expect(screen.getByText(/add a customer first/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create plan' })).not.toBeInTheDocument();
   });
 });

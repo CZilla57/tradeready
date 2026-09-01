@@ -21,6 +21,7 @@ import {
   setRecurringInvoiceActive,
   updateRecurringInvoiceRule,
   updateRecurringJobRule,
+  createRecurringInvoice,
   InvoiceNotFoundError,
   JobNotFoundError,
   PaymentValidationError,
@@ -745,6 +746,57 @@ describe('recurring pause/resume — preserve generation state', () => {
     expect(written.isActive).toBe(true);
     expect(written.customerId).toBe('c1');
     expect(written.materials).toEqual([{ id: 'm1', name: 'Filter', quantity: 1, unitCost: 20 }]);
+  });
+
+  it('createRecurringInvoice inits a fresh series with a mobile-format id', async () => {
+    const created = await createRecurringInvoice({
+      customerId: 'c1',
+      customerName: 'Beta LLC',
+      description: 'Monthly service',
+      amount: 150,
+      dueDays: 30,
+      cadence: 'monthly',
+      endCondition: 'count',
+      endCount: 12,
+      nextDueDate: '2026-10-01',
+      autoSendEnabled: true,
+    });
+
+    expect(state.lastTable).toBe('recurringInvoices');
+    expect(created.id).toMatch(/^ri\d+$/);
+    const data = state.lastUpsert!.data as RecurringInvoice;
+    expect(data).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Beta LLC',
+      amount: 150,
+      cadence: 'monthly',
+      endCondition: 'count',
+      endCount: 12,
+      nextDueDate: '2026-10-01',
+      autoSendEnabled: true,
+      // fresh generation state
+      occurrenceCount: 0,
+      lastGeneratedDate: null,
+      isActive: true,
+    });
+    expect(data.endDate).toBeUndefined();
+    expect(data.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('createRecurringInvoice normalises end bounds and mints unique ids', async () => {
+    const a = await createRecurringInvoice({
+      customerId: 'c1', customerName: 'A', description: '', amount: 10, dueDays: 30,
+      cadence: 'monthly', endCondition: 'date', endDate: '2027-01-01',
+      nextDueDate: '2026-10-01', autoSendEnabled: false,
+    });
+    const b = await createRecurringInvoice({
+      customerId: 'c2', customerName: 'B', description: '', amount: 10, dueDays: 30,
+      cadence: 'monthly', endCondition: 'never', nextDueDate: '2026-10-01', autoSendEnabled: false,
+    });
+    expect(a.endCount).toBeUndefined();
+    expect(a.endDate).toBe('2027-01-01');
+    expect(b.endDate).toBeUndefined();
+    expect(a.id).not.toBe(b.id);
   });
 
   it('updateRecurringInvoiceRule normalises end bounds to the chosen condition', async () => {
