@@ -484,13 +484,28 @@ five):
        part of 3b, so creation stops at the operational shell. Navigates to the
        new record on success. Covered by `JobsScreen.test.tsx` +
        `writeRepository.test.ts`.
-     - **Remaining creation: new recurring JOB, new invoice, new estimate
-       (pricing). OPEN.** Recurring-JOB creation is coupled — the mobile create
-       also spawns a first Job occurrence (occurrenceNumber 1, status lead) with
-       job pricing/materials. A standalone new invoice needs ledger/number init
-       (an invoice is normally created FROM a job on mobile). Authoring a new
-       job's estimate (line items, materials, priced total) is the same deferred
-       3b estimate surface. These stay grouped as the heavy remaining flows.
+     - **New invoice (manual). ✅ LANDED.** `InvoicesScreen` has a "New invoice"
+       form (`NewInvoiceForm`) creating a standalone MANUAL invoice via a new
+       typed op `createInvoice` — the AddInvoiceScreen analog, NOT the
+       create-from-job path (which snapshots the estimate's line items). It mints
+       a mobile-format id (`String(Date.now())`, monotonic-guarded, P1.4) and
+       writes the fresh-record shape mobile writes: `paid: false`, no ledger, no
+       `lineItems`/`jobId` (a pure insert — no server row to merge). The number
+       defaults to the shared `nextInvoiceNumber(invoices, settings)` (honouring
+       the Settings prefix/start), overridable — keeping the numbering rule
+       single-sourced. The customer is PICKED from existing records, setting both
+       the denormalized `customer` name and the `customerId` link and adopting the
+       customer's contact snapshot (editable), mirroring mobile's
+       getOrCreateCustomer denormalization. Validation mirrors the InvoiceEditor
+       (amount > 0, a due date, a number). Line-item authoring stays deferred (an
+       estimate-snapshot concern). Covered by `InvoicesScreen.test.tsx` +
+       `writeRepository.test.ts`.
+     - **Remaining creation: new recurring JOB, new estimate (pricing). OPEN.**
+       Recurring-JOB creation is coupled — the mobile create also spawns a first
+       Job occurrence (occurrenceNumber 1, status lead) with job pricing/materials.
+       Authoring a new job's estimate (line items, materials, priced total) is the
+       same deferred 3b estimate surface. These stay grouped as the heavy
+       remaining flows.
 
 ### Stays read-only / out of scope
 

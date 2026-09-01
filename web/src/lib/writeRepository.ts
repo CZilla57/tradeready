@@ -1018,6 +1018,70 @@ export async function saveInvoice(edited: Invoice): Promise<Invoice> {
   return persistInvoice(next);
 }
 
+// ---------------------------------------------------------------------------
+// New invoice (roadmap P3 stage 5c — creation flows)
+//
+// A standalone MANUAL invoice, matching mobile's AddInvoiceScreen (NOT the
+// create-from-job path, which snapshots the estimate's line items). It is a pure
+// insert with a fresh client id, so there is no server ledger to preserve — a
+// brand-new invoice starts with no payments and `paid: false`. `lineItems` and
+// `jobId` are deliberately absent: manual invoices carry neither (line items are
+// an estimate snapshot, authored with the deferred estimate surface).
+//
+// The `number` is resolved by the CALLER via the shared `nextInvoiceNumber`
+// (max existing digit + 1, honouring the Settings prefix/start), with an
+// optional user override — exactly as the mobile screen does — so the numbering
+// rule stays single-sourced. The customer is picked from existing records, so
+// both the denormalised `customer` name and the `customerId` link are set (the
+// invoice keys off the name; the id link mirrors mobile's getOrCreateCustomer).
+// ---------------------------------------------------------------------------
+
+// Mobile mints a manual invoice id as `String(Date.now())` (AddInvoiceScreen).
+// Same bare-numeric shape, monotonic-guarded so a same-ms burst can't collide. P1.4.
+let _invLastMs = 0;
+function newInvoiceId(): string {
+  let ms = Date.now();
+  if (ms <= _invLastMs) ms = _invLastMs + 1;
+  _invLastMs = ms;
+  return String(ms);
+}
+
+/** The fields a new manual invoice is created from. `number` is pre-resolved by
+ *  the caller (shared `nextInvoiceNumber`, or a user override). */
+export interface NewInvoiceFields {
+  customer: string;
+  customerId: string;
+  number: string;
+  amount: number;
+  due: DateString;
+  email: string;
+  phone: string;
+  desc: string;
+}
+
+/**
+ * Create a new manual invoice (roadmap P3 stage 5c — creation flows).
+ *
+ * Mints a mobile-format id and writes the fresh-record shape AddInvoiceScreen
+ * writes: `paid: false`, no ledger, no line items. A brand-new id means a pure
+ * insert — no server row to merge.
+ */
+export async function createInvoice(fields: NewInvoiceFields): Promise<Invoice> {
+  const invoice: Invoice = {
+    id: newInvoiceId(),
+    customer: fields.customer,
+    customerId: fields.customerId,
+    number: fields.number,
+    amount: fields.amount,
+    due: fields.due,
+    email: fields.email,
+    phone: fields.phone,
+    desc: fields.desc,
+    paid: false,
+  };
+  return persistInvoice(invoice);
+}
+
 /**
  * Record a payment against an invoice.
  *

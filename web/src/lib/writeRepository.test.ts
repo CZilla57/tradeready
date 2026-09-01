@@ -17,6 +17,7 @@ import {
   saveExpense,
   createCustomer,
   createJob,
+  createInvoice,
   createPricebookEntry,
   scheduleJob,
   setRecurringJobActive,
@@ -265,6 +266,57 @@ describe('createJob — new unpriced lead with a mobile-format id', () => {
   it('surfaces a write error rather than reporting success', async () => {
     state.upsertError = { message: 'rls denied' };
     await expect(createJob(fields)).rejects.toMatchObject({ message: 'rls denied' });
+  });
+});
+
+describe('createInvoice — new manual invoice with a mobile-format id', () => {
+  const fields = {
+    customer: 'Acme',
+    customerId: 'c1',
+    number: 'INV-0007',
+    amount: 450,
+    due: '2026-09-30' as const,
+    email: 'a@b.co',
+    phone: '555',
+    desc: 'Repair work',
+  };
+
+  it('mints a bare-numeric id and writes the fresh manual-invoice shape', async () => {
+    const created = await createInvoice(fields);
+
+    expect(state.lastTable).toBe('invoices');
+    // Mobile manual id format: String(Date.now()) — digits only.
+    expect(created.id).toMatch(/^\d+$/);
+    const row = state.lastUpsert!;
+    expect(row.id).toBe(created.id);
+    expect(row.deleted).toBe(false);
+    const written = row.data as Invoice;
+    // Fresh manual invoice: unpaid, no ledger, no line items / jobId.
+    expect(written.paid).toBe(false);
+    expect(written.payments).toBeUndefined();
+    expect(written.lineItems).toBeUndefined();
+    expect(written.jobId).toBeUndefined();
+    expect(written).toMatchObject({
+      customer: 'Acme',
+      customerId: 'c1',
+      number: 'INV-0007',
+      amount: 450,
+      due: '2026-09-30',
+      email: 'a@b.co',
+      phone: '555',
+      desc: 'Repair work',
+    });
+  });
+
+  it('mints a unique id on each call within the same millisecond', async () => {
+    const a = await createInvoice(fields);
+    const b = await createInvoice(fields);
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('surfaces a write error rather than reporting success', async () => {
+    state.upsertError = { message: 'rls denied' };
+    await expect(createInvoice(fields)).rejects.toMatchObject({ message: 'rls denied' });
   });
 });
 
