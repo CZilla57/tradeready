@@ -468,12 +468,29 @@ five):
        prompts to add a customer first when none exist). Validation mirrors mobile
        (customer, amount > 0, net ≥ 0, positive end count, end date when required).
        Covered by `RecurringScreen.test.tsx` + `writeRepository.test.ts`.
-     - **Remaining creation: new recurring JOB, new invoice, new job/estimate.
-       OPEN.** Recurring-JOB creation is coupled — the mobile create also spawns a
-       first Job occurrence (occurrenceNumber 1, status lead) with job
-       pricing/materials — so it goes with the heavy new-job/new-invoice flows
-       (customer linking, line items, status/ledger init), not with the standalone
-       plan create.
+     - **New job (unpriced lead). ✅ LANDED.** `JobsScreen` has a "New job" form
+       (`NewJobForm`) creating a record via a new typed op `createJob`, which
+       mints a mobile-format id (`j<Date.now()>`, monotonic-guarded, matching
+       AddJobScreen, P1.4) and writes the exact fresh-record shape mobile's
+       unpriced-job path writes: `status: 'lead'`, estimateTotal 0, laborHours 0,
+       empty materials, `invoiceId: null`, `createdAt` today. A brand-new id
+       means a pure insert (no server row to preserve). The customer is PICKED
+       from existing records (a job needs id + denormalized name; inline customer
+       creation stays on the Customers screen) and a title is required; the four
+       rate fields (laborRate/materialMarkup/overhead/margin) are SEEDED from the
+       Settings business defaults (mobile's `settings.overheadPercent`/
+       `marginPercent` → job `overhead`/`margin`), so the eventual estimate uses
+       the owner's rates. Estimate/pricing/materials authoring is the deferred
+       part of 3b, so creation stops at the operational shell. Navigates to the
+       new record on success. Covered by `JobsScreen.test.tsx` +
+       `writeRepository.test.ts`.
+     - **Remaining creation: new recurring JOB, new invoice, new estimate
+       (pricing). OPEN.** Recurring-JOB creation is coupled — the mobile create
+       also spawns a first Job occurrence (occurrenceNumber 1, status lead) with
+       job pricing/materials. A standalone new invoice needs ledger/number init
+       (an invoice is normally created FROM a job on mobile). Authoring a new
+       job's estimate (line items, materials, priced total) is the same deferred
+       3b estimate surface. These stay grouped as the heavy remaining flows.
 
 ### Stays read-only / out of scope
 

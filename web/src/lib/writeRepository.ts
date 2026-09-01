@@ -545,6 +545,90 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 }
 
 // ---------------------------------------------------------------------------
+// New job (roadmap P3 stage 5c — creation flows)
+//
+// A net-new job is a pure INSERT (fresh client id, no server row to preserve),
+// so none of the fresh-row merge machinery the edit path needs applies here.
+// The portal creates only an UNPRICED LEAD — status `lead`, estimateTotal 0, no
+// materials, no invoice — exactly the shape mobile's AddJobScreen writes for a
+// plain new job. The estimate/pricing inputs (labor hours, materials, the priced
+// total) are authored later; that surface is the still-deferred part of 3b, so
+// creation stops at the operational shell (customer link, title, schedule, …).
+//
+// The four rate fields (laborRate/materialMarkup/overhead/margin) are SEEDED
+// from the owner's business defaults so the eventual estimate uses the right
+// rates; the caller reads them from Settings and passes them in (like
+// createPricebookEntry), keeping this op a pure builder. Mobile maps
+// settings.overheadPercent/marginPercent onto the job's overhead/margin — the
+// caller does the same before calling.
+// ---------------------------------------------------------------------------
+
+// Mobile mints a job id as `j<Date.now()>` (screens/AddJobScreen.tsx). Same
+// shape, monotonic-guarded so a same-ms burst can't collide on the id. P1.4.
+let _jobLastMs = 0;
+function newJobId(): string {
+  let ms = Date.now();
+  if (ms <= _jobLastMs) ms = _jobLastMs + 1;
+  _jobLastMs = ms;
+  return `j${ms}`;
+}
+
+/** The fields a new lead job is created from. The four rate fields are the
+ *  Settings-seeded pricing defaults (estimate authoring is deferred, so the job
+ *  starts unpriced with these rates ready for a later estimate). */
+export interface NewJobFields {
+  customerId: string;
+  customerName: string;
+  title: string;
+  description: string;
+  address: string;
+  scheduledDate: DateString | null;
+  scheduledStartTime: TimeString | null;
+  scheduledEndTime: TimeString | null;
+  notes: string;
+  laborRate: number;
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+}
+
+/**
+ * Create a new unpriced lead job (roadmap P3 stage 5c — creation flows).
+ *
+ * Mints a mobile-format id and stamps `status: 'lead'`, `createdAt` (today),
+ * `invoiceId: null`, and the unpriced seed (estimateTotal 0, laborHours 0, empty
+ * materials) — the exact fresh-record shape mobile's AddJobScreen writes for a
+ * plain new job. A brand-new id means this is a pure insert, no server row to
+ * preserve.
+ */
+export async function createJob(fields: NewJobFields): Promise<Job> {
+  const job: Job = {
+    id: newJobId(),
+    customerId: fields.customerId,
+    customerName: fields.customerName,
+    title: fields.title,
+    description: fields.description,
+    status: 'lead',
+    scheduledDate: fields.scheduledDate,
+    scheduledStartTime: fields.scheduledStartTime,
+    scheduledEndTime: fields.scheduledEndTime,
+    address: fields.address,
+    estimateTotal: 0,
+    laborHours: 0,
+    laborRate: fields.laborRate,
+    materials: [],
+    materialMarkup: fields.materialMarkup,
+    overhead: fields.overhead,
+    margin: fields.margin,
+    notes: fields.notes,
+    invoiceId: null,
+    createdAt: getTodayDateString(),
+  };
+  await upsertBlobRow('jobs', job.id, job);
+  return job;
+}
+
+// ---------------------------------------------------------------------------
 // Pricebook (roadmap P3 stage 4)
 //
 // A saved service is a plain last-write-wins blob. NOTE: `estimateTotal` is a

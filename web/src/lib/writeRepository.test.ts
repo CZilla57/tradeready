@@ -16,6 +16,7 @@ import {
   savePricebookEntry,
   saveExpense,
   createCustomer,
+  createJob,
   createPricebookEntry,
   scheduleJob,
   setRecurringJobActive,
@@ -202,6 +203,68 @@ describe('createCustomer — new record with a mobile-format id', () => {
     const a = await createCustomer({ name: 'A', email: '', phone: '', address: '', notes: '' });
     const b = await createCustomer({ name: 'B', email: '', phone: '', address: '', notes: '' });
     expect(a.id).not.toBe(b.id);
+  });
+});
+
+describe('createJob — new unpriced lead with a mobile-format id', () => {
+  const fields = {
+    customerId: 'c1',
+    customerName: 'Acme',
+    title: 'Deck rebuild',
+    description: 'Replace rotten boards',
+    address: '5 Main',
+    scheduledDate: '2026-09-10' as const,
+    scheduledStartTime: '09:00' as const,
+    scheduledEndTime: '11:00' as const,
+    notes: 'bring saw',
+    laborRate: 120,
+    materialMarkup: 25,
+    overhead: 18,
+    margin: 22,
+  };
+
+  it('mints a j<ms> id and writes the unpriced lead shape mobile creates', async () => {
+    const before = Date.now();
+    const created = await createJob(fields);
+
+    expect(state.lastTable).toBe('jobs');
+    expect(created.id).toMatch(/^j\d+$/); // mobile id format j<Date.now()>
+    const row = state.lastUpsert!;
+    expect(row.id).toBe(created.id);
+    expect(row.deleted).toBe(false);
+    const written = row.data as Job;
+    // Unpriced lead invariants.
+    expect(written.status).toBe('lead');
+    expect(written.estimateTotal).toBe(0);
+    expect(written.laborHours).toBe(0);
+    expect(written.materials).toEqual([]);
+    expect(written.invoiceId).toBeNull();
+    expect(/^\d{4}-\d{2}-\d{2}$/.test(written.createdAt as string)).toBe(true);
+    // Customer link, operational fields, and the seeded rates all carried.
+    expect(written).toMatchObject({
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Deck rebuild',
+      address: '5 Main',
+      scheduledDate: '2026-09-10',
+      laborRate: 120,
+      materialMarkup: 25,
+      overhead: 18,
+      margin: 22,
+    });
+    // Row stamp is fresh (P0.3).
+    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+  });
+
+  it('mints a unique id on each call within the same millisecond', async () => {
+    const a = await createJob(fields);
+    const b = await createJob(fields);
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('surfaces a write error rather than reporting success', async () => {
+    state.upsertError = { message: 'rls denied' };
+    await expect(createJob(fields)).rejects.toMatchObject({ message: 'rls denied' });
   });
 });
 
