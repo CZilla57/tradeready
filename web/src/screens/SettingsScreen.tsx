@@ -414,6 +414,128 @@ function InvoicingEditor({ settings }: { settings: Settings }) {
   );
 }
 
+/**
+ * The editable Automation card (roadmap P3 stage 4). Five opt-in/out boolean
+ * flags, saved through the same `saveSettings` patch path — no coupling to any
+ * other entity; the backend sweeps and on-device notifications that ACT on these
+ * flags read them, the portal only stores them.
+ *
+ * ⚠️ `estimateFollowUpsEnabled` uses the REVERSE convention of the others:
+ * ABSENT means ON (read as `!== false`), an explicit owner decision — see the
+ * field comment in types/models.ts. So it is read with `!== false` here (the
+ * plain-`yesNo` read-only card was wrong for a settings blob that predates the
+ * field), and always written as an explicit boolean so the meaning is preserved.
+ */
+function AutomationEditor({ settings }: { settings: Settings }) {
+  const { retry } = useData();
+  const [open, setOpen] = useState(false);
+  const [autoOutreach, setAutoOutreach] = useState(false);
+  const [autoSendEmail, setAutoSendEmail] = useState(false);
+  const [appointmentReminders, setAppointmentReminders] = useState(false);
+  const [estimateFollowUps, setEstimateFollowUps] = useState(true);
+  const [reviewRequest, setReviewRequest] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openEditor() {
+    setAutoOutreach(!!settings.autoOutreachEnabled);
+    setAutoSendEmail(!!settings.autoSendEmailEnabled);
+    setAppointmentReminders(!!settings.appointmentRemindersEnabled);
+    // Reverse convention: absent → ON.
+    setEstimateFollowUps(settings.estimateFollowUpsEnabled !== false);
+    setReviewRequest(!!settings.reviewRequestEnabled);
+    setError(null);
+    setOpen(true);
+  }
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await saveSettings({
+        autoOutreachEnabled: autoOutreach,
+        autoSendEmailEnabled: autoSendEmail,
+        appointmentRemindersEnabled: appointmentReminders,
+        estimateFollowUpsEnabled: estimateFollowUps,
+        reviewRequestEnabled: reviewRequest,
+      });
+      retry(['settings']);
+      setOpen(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Card pad>
+        <div className="btn-row" style={{ justifyContent: 'space-between' }}>
+          <div className="section-label" style={{ padding: 0 }}>
+            Automation
+          </div>
+          <button type="button" className="btn sm" onClick={openEditor}>
+            Edit
+          </button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <KV k="Overdue auto-outreach" v={yesNo(settings.autoOutreachEnabled)} />
+          <KV k="Reminder auto-email" v={yesNo(settings.autoSendEmailEnabled)} />
+          <KV k="Appointment reminders" v={yesNo(settings.appointmentRemindersEnabled)} />
+          <KV k="Estimate follow-ups" v={yesNo(settings.estimateFollowUpsEnabled !== false)} />
+          <KV k="Review requests" v={yesNo(settings.reviewRequestEnabled)} />
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 10px' }}>
+        Automation
+      </div>
+      {error && (
+        <div className="inline-alert error" role="alert">
+          {error}
+        </div>
+      )}
+      <form className="pay-form" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }} onSubmit={onSave}>
+        <label className="field checkbox-field">
+          <input type="checkbox" checked={autoOutreach} onChange={(e) => setAutoOutreach(e.target.checked)} />
+          <span>Overdue-invoice auto-outreach</span>
+        </label>
+        <label className="field checkbox-field">
+          <input type="checkbox" checked={autoSendEmail} onChange={(e) => setAutoSendEmail(e.target.checked)} />
+          <span>Auto-email overdue payment reminders</span>
+        </label>
+        <label className="field checkbox-field">
+          <input type="checkbox" checked={appointmentReminders} onChange={(e) => setAppointmentReminders(e.target.checked)} />
+          <span>Appointment (day-before) reminders</span>
+        </label>
+        <label className="field checkbox-field">
+          <input type="checkbox" checked={estimateFollowUps} onChange={(e) => setEstimateFollowUps(e.target.checked)} />
+          <span>Estimate follow-up nudges</span>
+        </label>
+        <label className="field checkbox-field">
+          <input type="checkbox" checked={reviewRequest} onChange={(e) => setReviewRequest(e.target.checked)} />
+          <span>Review requests after job completion</span>
+        </label>
+        <div className="btn-row">
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 export default function SettingsScreen() {
   const { settings } = useData();
   const state = useResources('settings');
@@ -493,29 +615,14 @@ export default function SettingsScreen() {
             {s.paymentNotes && <KV k="Payment notes" v={s.paymentNotes} />}
           </Card>
 
-          <Card pad>
-            <div className="section-label" style={{ padding: '0 0 8px' }}>
-              Automation
-            </div>
-            <KV k="Overdue auto-outreach" v={yesNo(s.autoOutreachEnabled)} />
-            <KV k="Reminder auto-email" v={yesNo(s.autoSendEmailEnabled)} />
-            <KV
-              k="Appointment reminders"
-              v={yesNo(s.appointmentRemindersEnabled)}
-            />
-            <KV
-              k="Estimate follow-ups"
-              v={yesNo(s.estimateFollowUpsEnabled)}
-            />
-            <KV k="Review requests" v={yesNo(s.reviewRequestEnabled)} />
-          </Card>
+          <AutomationEditor settings={s} />
         </div>
       </div>
 
       <div className="muted" style={{ marginTop: 16, fontSize: 13 }}>
-        You can update your business profile, pricing defaults, and invoicing
-        settings here. Schedule, payments, and automation settings are edited in
-        the TradeReady mobile app.
+        You can update your business profile, pricing defaults, invoicing, and
+        automation settings here. Schedule and payment-processor settings are
+        edited in the TradeReady mobile app.
       </div>
     </>
   );

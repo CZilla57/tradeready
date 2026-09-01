@@ -299,11 +299,18 @@ five):
      go through the existing `saveSettings` (merges onto the full blob, strips
      secrets) — none is a derived or cross-entity-coupled field, so no new write
      op is needed. The estimate math and auto-invoice workflow that CONSUME these
-     values run on-device; the portal only stores the inputs. Remaining settings
-     sections (schedule/payments/automation) follow the same
-     `saveSettings(patch)` pattern — additive later; schedule is nested config
-     (`resolveSchedule`) and payments couples with Stripe onboarding, so both
-     carry more than the direct-value sections above.
+     values run on-device; the portal only stores the inputs.
+     `AutomationEditor` (also LANDED) edits the five opt-in/out flags
+     (autoOutreachEnabled, autoSendEmailEnabled, appointmentRemindersEnabled,
+     estimateFollowUpsEnabled, reviewRequestEnabled) the same way. ⚠️ Note:
+     `estimateFollowUpsEnabled` uses the REVERSE convention — ABSENT means ON
+     (read as `!== false`, an explicit owner decision, types/models.ts) — so the
+     editor reads it with `!== false` (the plain-`yesNo` read-only card was wrong
+     for a pre-field blob) and always writes an explicit boolean. Remaining
+     settings sections (schedule/payments) follow the same `saveSettings(patch)`
+     pattern — additive later; schedule is nested config (`resolveSchedule`) and
+     payments couples with Stripe onboarding (provider selection), so both carry
+     more than the direct-value sections above.
    - **Pricebook → metadata. ✅ LANDED.** `PricebookEditor` on
      `PricebookDetailScreen` edits name/category/description via
      `savePricebookEntry` (whole-blob; bumps the blob's `updatedAt`) and deletes

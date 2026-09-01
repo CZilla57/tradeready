@@ -173,3 +173,63 @@ describe('SettingsScreen — invoicing edit', () => {
     );
   });
 });
+
+describe('SettingsScreen — automation edit', () => {
+  it('saves the five automation flags as explicit booleans', async () => {
+    render(<SettingsScreen />);
+    await openSection('Automation');
+
+    await userEvent.click(
+      screen.getByRole('checkbox', { name: /review requests/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toMatchObject({
+      autoOutreachEnabled: false,
+      autoSendEmailEnabled: false,
+      appointmentRemindersEnabled: false,
+      estimateFollowUpsEnabled: true,
+      reviewRequestEnabled: true,
+    });
+    expect(retry).toHaveBeenCalledWith(['settings']);
+  });
+
+  it('treats an absent estimateFollowUpsEnabled as ON (reverse convention)', async () => {
+    // A settings blob predating the field: the flag is absent entirely.
+    store.settings = { businessName: 'Acme Plumbing' } as Settings;
+    render(<SettingsScreen />);
+    await openSection('Automation');
+
+    const followUps = screen.getByRole('checkbox', {
+      name: /estimate follow-up/i,
+    });
+    expect(followUps).toBeChecked();
+
+    // Saving without touching it must persist the default-on state explicitly.
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toMatchObject({
+      estimateFollowUpsEnabled: true,
+    });
+  });
+
+  it('persists estimate follow-ups OFF when unchecked', async () => {
+    store.settings = {
+      ...settings(),
+      estimateFollowUpsEnabled: true,
+    } as Settings;
+    render(<SettingsScreen />);
+    await openSection('Automation');
+
+    await userEvent.click(
+      screen.getByRole('checkbox', { name: /estimate follow-up/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(writes.saveSettings).toHaveBeenCalledTimes(1));
+    expect(writes.saveSettings.mock.calls[0][0]).toMatchObject({
+      estimateFollowUpsEnabled: false,
+    });
+  });
+});
