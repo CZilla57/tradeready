@@ -368,6 +368,19 @@ function requireMaterials(materials: Material[]): void {
   }
 }
 
+/** Every direct-cost line's quantity, unit cost, and handling markup must be
+ *  non-negative numbers — the same inputs `computeDirectCosts` prices from, so a
+ *  malformed value would corrupt the derived `estimateTotal`. Authored via the
+ *  shared JobCostsEditor across jobs, pricebook entries, and recurring jobs. */
+function requireJobCosts(jobCosts: JobCost[] = []): void {
+  for (const c of jobCosts) {
+    const name = c.label || c.category || c.id;
+    requireNonNegative(c.quantity, `Cost "${name}" quantity`);
+    requireNonNegative(c.unitCost, `Cost "${name}" unit cost`);
+    requireNonNegative(c.markupPercent, `Cost "${name}" markup`);
+  }
+}
+
 const RECURRENCE_CADENCES: readonly RecurrenceCadence[] = [
   'daily',
   'weekly',
@@ -1012,6 +1025,7 @@ export async function updateJobPricing(
 ): Promise<Job> {
   requirePricingInputs(edit); // P1.3
   requireMaterials(edit.materials);
+  requireJobCosts(edit.jobCosts);
   const server = await loadJob(jobId);
   if (server.approval?.decision) {
     throw new JobEstimateApprovalLockedError(server.approval.decision);
@@ -1169,6 +1183,7 @@ export async function savePricebookEntry(
   requireNonEmpty(entry.name, 'Service name'); // P1.3
   requirePricingInputs(entry);
   requireMaterials(entry.materials);
+  requireJobCosts(entry.jobCosts);
   // Bump the blob's own updatedAt, matching the mobile save (distinct from the
   // row's server-authoritative updated_at column).
   const next: PricebookEntry = { ...entry, updatedAt: new Date().toISOString() };
@@ -1183,6 +1198,7 @@ export async function savePricebookEntry(
     'laborHours',
     'laborRate',
     'materials',
+    'jobCosts',
     'materialMarkup',
     'overhead',
     'margin',
@@ -1205,8 +1221,8 @@ function newPricebookId(): string {
 
 /** The fields a new saved service is created from. `estimateTotal` is DERIVED —
  *  the caller recomputes it with the pricingMath port (P0.6), like the edit.
- *  `materials` are authored via the shared MaterialsEditor (default none);
- *  jobCosts (direct-cost lines) are still not authored on creation. */
+ *  `materials` and `jobCosts` (direct-cost lines) are authored via the shared
+ *  MaterialsEditor / JobCostsEditor (default none). */
 export interface NewPricebookFields {
   name: string;
   category: string;
@@ -1214,6 +1230,7 @@ export interface NewPricebookFields {
   laborHours: number;
   laborRate: number;
   materials: Material[];
+  jobCosts: JobCost[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -1233,6 +1250,7 @@ export async function createPricebookEntry(
   requireNonEmpty(fields.name, 'Service name'); // P1.3
   requirePricingInputs(fields);
   requireMaterials(fields.materials);
+  requireJobCosts(fields.jobCosts);
   const now = new Date().toISOString();
   const entry: PricebookEntry = {
     id: newPricebookId(),
@@ -1242,6 +1260,8 @@ export async function createPricebookEntry(
     laborHours: fields.laborHours,
     laborRate: fields.laborRate,
     materials: fields.materials,
+    // Omit an empty direct-cost list, matching the mobile fresh-record shape.
+    ...(fields.jobCosts.length > 0 ? { jobCosts: fields.jobCosts } : {}),
     materialMarkup: fields.materialMarkup,
     overhead: fields.overhead,
     margin: fields.margin,
@@ -1369,16 +1389,16 @@ export async function setRecurringJobActive(
 
 /** The recurring-job rule fields the portal edits. `estimateTotal` is DERIVED
  *  (recomputed by the caller via `web/src/ui/pricingMath.ts` from the pricing
- *  inputs + materials, P0.6). Customer re-linking is out of scope, like the plan
- *  editor. `materials` are authored via the shared MaterialsEditor and replace
- *  the server list; `jobCosts` (direct-cost lines) stay preserved from the fresh
- *  server row (a separate authoring surface). */
+ *  inputs + materials + jobCosts, P0.6). Customer re-linking is out of scope, like
+ *  the plan editor. `materials` and `jobCosts` (direct-cost lines) are authored
+ *  via the shared MaterialsEditor / JobCostsEditor and replace the server lists. */
 export interface RecurringJobRuleEdit {
   title: string;
   description: string;
   laborHours: number;
   laborRate: number;
   materials: Material[];
+  jobCosts: JobCost[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -1428,6 +1448,7 @@ export async function updateRecurringJobRule(
   requireNonEmpty(edit.title, 'Job title'); // P1.3
   requirePricingInputs(edit);
   requireMaterials(edit.materials);
+  requireJobCosts(edit.jobCosts);
   requireRecurrenceBounds(edit);
   requireDate(edit.nextDueDate, 'Next date');
   const server = await loadRecurringJob(id);
@@ -1440,6 +1461,7 @@ export async function updateRecurringJobRule(
     'laborHours',
     'laborRate',
     'materials',
+    'jobCosts',
     'materialMarkup',
     'overhead',
     'margin',
@@ -1453,6 +1475,7 @@ export async function updateRecurringJobRule(
     laborHours: edit.laborHours,
     laborRate: edit.laborRate,
     materials: edit.materials,
+    jobCosts: edit.jobCosts,
     materialMarkup: edit.materialMarkup,
     overhead: edit.overhead,
     margin: edit.margin,
@@ -1564,9 +1587,9 @@ function newRecurringJobId(): string {
 
 /** The fields a new recurring-job rule is created from. `estimateTotal` is
  *  DERIVED — the caller recomputes it with the pricingMath port (P0.6), like the
- *  rule edit. `materials` are authored via the shared MaterialsEditor (default
- *  none); jobCosts still aren't authored on creation. The customer is picked from
- *  existing records, so both id and denormalized name are supplied. */
+ *  rule edit. `materials` and `jobCosts` (direct-cost lines) are authored via the
+ *  shared MaterialsEditor / JobCostsEditor (default none). The customer is picked
+ *  from existing records, so both id and denormalized name are supplied. */
 export interface NewRecurringJobFields {
   customerId: string;
   customerName: string;
@@ -1575,6 +1598,7 @@ export interface NewRecurringJobFields {
   laborHours: number;
   laborRate: number;
   materials: Material[];
+  jobCosts: JobCost[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -1610,6 +1634,7 @@ export async function createRecurringJob(
   requireNonEmpty(fields.title, 'Job title');
   requirePricingInputs(fields);
   requireMaterials(fields.materials);
+  requireJobCosts(fields.jobCosts);
   requireRecurrenceBounds(fields);
   requireDate(fields.nextDueDate, 'First date');
   const rule: RecurringJob = {
@@ -1624,6 +1649,8 @@ export async function createRecurringJob(
     laborHours: fields.laborHours,
     laborRate: fields.laborRate,
     materials: fields.materials,
+    // Omit an empty direct-cost list, matching the mobile fresh-record shape.
+    ...(fields.jobCosts.length > 0 ? { jobCosts: fields.jobCosts } : {}),
     materialMarkup: fields.materialMarkup,
     overhead: fields.overhead,
     margin: fields.margin,

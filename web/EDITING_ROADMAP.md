@@ -45,11 +45,11 @@ The editing rollout is complete for the planned browser-first scope:
 | Job status | Start a scheduled job; mark an in-progress job complete | The portal does not run mobile auto-invoice or review-request side effects |
 | Estimate pricing | Edit labor, materials, direct costs, markup, overhead, and margin | Editing stops after a customer approval decision exists |
 | Calendar | Assign a date and optional time range to an unscheduled job | No drag-and-drop calendar editor |
-| Pricebook | Create, edit, or delete services; author materials and pricing | Direct-cost authoring remains limited to job estimates |
+| Pricebook | Create, edit, or delete services; author materials, direct-cost lines, and pricing | Advanced per-line cost knobs (handling markup %, taxable, hidden) round-trip but are authored on mobile |
 | Expenses | Create, edit, or delete | Receipt and import metadata round-trip without a web editor |
 | Settings | Edit profile, pricing, invoicing, automation, schedule, blackouts, and payment notes | Stripe provider setup and booking configuration remain mobile-owned |
 | Maintenance plans | Create; edit recurrence and invoice settings; pause; resume; delete | Customer relinking is not supported |
-| Recurring jobs | Create; edit pricing, materials, and recurrence; pause; resume; delete | Direct-cost lines round-trip but are not editable here |
+| Recurring jobs | Create; edit pricing, materials, direct-cost lines, and recurrence; pause; resume; delete | Advanced per-line cost knobs round-trip but are authored on mobile |
 
 Today remains a derived dashboard. Money totals are derived, while expense records are editable.
 
@@ -161,7 +161,6 @@ The following items improve resilience but do not block the current editing surf
 
 - Add stronger atomic database conditions to any domain where field-scoped client checks are insufficient
 - Stop sending client-generated `updated_at` values from mobile now that the database trigger owns timestamps
-- Add direct-cost authoring to pricebook and recurring-job editors if owners need it
 - Add multi-tab or Realtime refresh if stale open tabs become a support issue
 
 ## Files that constrain future work

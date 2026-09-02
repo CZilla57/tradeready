@@ -12,6 +12,12 @@ import {
   parseMaterialDrafts,
   type MaterialDraft,
 } from '../ui/materialsDraft';
+import { JobCostsEditor } from '../ui/JobCostsEditor';
+import {
+  jobCostsToDrafts,
+  parseJobCostDrafts,
+  type JobCostDraft,
+} from '../ui/jobCostsDraft';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
@@ -34,10 +40,10 @@ function parseNonNeg(s: string): number | null {
  * existing materials/jobCosts, using the owner's `minimumJobFee` from settings —
  * exactly the buildEstimateInput→calculateEstimate path the mobile
  * PricebookEntryScreen saves through (travel/tax 0, non-emergency), so a service
- * priced here matches one priced on the phone (P0.6). Material LINE ITEMS are now
- * editable via the shared `MaterialsEditor`; the edited list feeds the recompute
- * and is written on the entry. `jobCosts` (direct-cost lines) still round-trip
- * untouched and feed the recompute — authoring those is a separate surface.
+ * priced here matches one priced on the phone (P0.6). Material line items and
+ * direct-cost lines are both editable via the shared `MaterialsEditor` /
+ * `JobCostsEditor`; the edited lists feed the recompute and are written on the
+ * entry.
  */
 function PricebookEditor({ entry }: { entry: PricebookEntry }) {
   const { retry, settings } = useData();
@@ -55,6 +61,9 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
   const [materials, setMaterials] = useState<MaterialDraft[]>(
     materialsToDrafts(entry.materials),
   );
+  const [jobCosts, setJobCosts] = useState<JobCostDraft[]>(
+    jobCostsToDrafts(entry.jobCosts),
+  );
   const [busy, setBusy] = useState<'save' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -69,6 +78,7 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
     setOverhead(String(entry.overhead ?? 0));
     setMargin(String(entry.margin ?? 0));
     setMaterials(materialsToDrafts(entry.materials));
+    setJobCosts(jobCostsToDrafts(entry.jobCosts));
     setError(null);
     setConfirmDelete(false);
     setOpen(true);
@@ -97,18 +107,23 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
       setError(parsedMaterials.error);
       return;
     }
+    const parsedJobCosts = parseJobCostDrafts(jobCosts);
+    if (!parsedJobCosts.ok) {
+      setError(parsedJobCosts.error);
+      return;
+    }
     setBusy('save');
     setError(null);
     try {
       // Recompute the derived total the same way the mobile save does
       // (travel/tax 0, non-emergency; minimumJobFee from the owner's settings),
-      // now over the EDITED materials.
+      // now over the EDITED materials and direct-cost lines.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
-        jobCosts: entry.jobCosts,
+        jobCosts: parsedJobCosts.jobCosts,
         overheadPercent: pricing.overhead!,
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
@@ -125,6 +140,7 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
           overhead: pricing.overhead!,
           margin: pricing.margin!,
           materials: parsedMaterials.materials,
+          jobCosts: parsedJobCosts.jobCosts,
           estimateTotal,
         },
         entry,
@@ -235,6 +251,11 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
         <MaterialsEditor
           drafts={materials}
           onChange={setMaterials}
+          disabled={busy !== null}
+        />
+        <JobCostsEditor
+          drafts={jobCosts}
+          onChange={setJobCosts}
           disabled={busy !== null}
         />
         <div className="btn-row">
