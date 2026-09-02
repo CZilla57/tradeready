@@ -1,184 +1,135 @@
-# TradeReady Web Portal
+# TradeReady web portal
 
-A standalone web portal that lets a TradeReady user sign in from a browser
-(target: **app.gettradereadyapp.com**) and work the same business data they see
-in the mobile app.
+The TradeReady web portal gives a business owner browser access to the same account and business records used by the mobile app. The target production origin is `https://app.gettradereadyapp.com`.
 
-It is a Vite + React + TypeScript single-page app that authenticates against the
-**same Supabase project** as the mobile app and reads the same row-level-secured
-tables. It does **not** run the React Native code — it reuses the mobile app's
-canonical model types (`../types/models.ts`) and its react-native-free pure
-utility helpers (`../utils/*`) through the `@shared` path alias.
+The portal is a Vite, React, and TypeScript single-page application (SPA). It does not run the React Native app. It reuses the canonical models in `../types/models.ts` and browser-safe utilities in `../utils/*` through the `@shared` alias.
 
-## How it shares data with the app
+## How the portal shares data with mobile
 
-Every synced table in Supabase is an owner-scoped blob:
+The portal authenticates against the same Supabase project as the mobile app. Each synced collection uses owner-scoped rows:
 
-```
-{ id, user_id, data jsonb, updated_at, deleted }   -- RLS: auth.uid() = user_id
+```text
+{ id, user_id, data jsonb, updated_at, deleted }
 ```
 
-(plus `settings` keyed by `user_id`, and `customer_notes`). The portal signs the
-user in with `@supabase/supabase-js`, then reads `data` from each table exactly
-as the mobile sync layer does (`../utils/sync.ts`). RLS guarantees a session
-only ever sees its own account's rows — the anon key is public by design (it
-already ships inside the distributed mobile app bundle).
+The `settings` table uses `user_id` as its key. Supabase row-level security (RLS) restricts every read and write to `auth.uid() = user_id`. The public Supabase publishable key identifies the project; the authenticated session and RLS policies enforce ownership.
 
-## Scope
+Browser and mobile sessions are separate. Both clients read and write the same cloud records after they authenticate.
 
-Read-first portal:
+## Current product surface
 
-- **Login** — email/password, Google OAuth, password reset
-- **Reset password** (`/reset-password`) — the one place a signed-in-via-recovery
-  user sets a new password (the only write to auth this portal performs)
-- **Today** — today's scheduled jobs + earnings/outstanding summary
-- **Calendar** — week view of scheduled jobs with work-day/blackout shading (via
-  `resolveSchedule`) + a "needs scheduling" queue; week navigation
-- **Jobs** — filterable list + job detail (status timeline, materials, customer, invoice)
-- **Estimates** — estimate-stage jobs + detail (as-sent line items, approval
-  status/signer, change orders, billable total)
-- **Invoices** — list with status badges + detail (payments ledger, line items)
-- **Customers** — list + detail (job & invoice history, revenue/owed)
-- **Money** — collected / expenses / net / outstanding + 6-month revenue chart
-- **Recurring** — recurring jobs + maintenance plans (cadence, next due, active)
-- **Pricebook** — saved services + detail (materials, labor, margins)
-- **Settings** — read-only business profile, pricing, invoicing, schedule,
-  payments, and automation toggles (secret keys are never rendered)
+The portal supports these routes and actions:
 
-Editing is intentionally out of scope. `src/lib/repository.ts` exposes
-owner-scoped `fetch*` readers only — it carries **no** business-data write path
-(no insert / update / upsert / delete). A read-only architecture guard
-(`src/lib/readOnly.arch.test.ts`) fails the build if a Supabase business-data
-mutation is added to any web source file, so the read-only contract can't
-regress silently. (This is a static/source-graph guard, not a security
-boundary — the security boundary is Supabase RLS; see below.)
+| Area | Read surface | Editing surface |
+| --- | --- | --- |
+| Authentication | Existing session and recovery state | Email signup, email/password sign-in, Google OAuth, Apple OAuth, password reset |
+| Today | Scheduled work, collected revenue, and outstanding totals | Derived dashboard only |
+| Calendar | Weekly schedule, work-day shading, blackouts, and unscheduled jobs | Assign a date and optional time range to an unscheduled job |
+| Jobs | Filters, status timeline, customer, invoice, materials, direct costs, and pricing | Create a lead; edit operational details, schedule, pricing, materials, and direct costs; advance supported statuses; archive or delete |
+| Estimates | Estimate-stage jobs, sent line items, approval state, signer, change orders, and billable total | Edit pricing before a customer approval decision exists |
+| Invoices | Filters, status, payment ledger, and line items | Create a manual invoice; edit invoice details; record, void, or complete payments; delete |
+| Customers | Contact details, notes, job history, invoice history, revenue, and amount owed | Create, edit, archive, or delete |
+| Money | Collected revenue, expenses, net income, outstanding balances, and a six-month chart | Create, edit, or delete expenses |
+| Recurring | Recurring jobs and maintenance plans with cadence, generation state, and next due date | Create, edit, pause, resume, or delete |
+| Pricebook | Services, materials, labor, pricing, and margins | Create, edit, or delete services |
+| Settings | Business profile, pricing, invoicing, schedule, payments, and automation | Edit profile, pricing defaults, invoicing options, payment notes, work schedule, blackouts, and automation toggles |
 
-#### A note on the future editing surface
+The authenticated route map lives in `src/App.tsx`. All business-data mutations live in `src/lib/writeRepository.ts`.
 
-See [`EDITING_ROADMAP.md`](./EDITING_ROADMAP.md) for the full phased plan
-(data-integrity prerequisites, write architecture, concurrency, and scope).
+## Data-integrity rules for editing
 
-When editing is introduced, it should follow this shape rather than a generic
-`write(table, id, data)` helper:
+The mobile sync model replaces complete JSON blobs. A browser edit built from stale state could overwrite data created by another device or a backend process. The portal uses these rules to reduce that risk:
 
-- **Separate write module.** Keep reads (`repository.ts`) and writes in
-  distinct modules so read-only screens never import a write path.
-- **Typed, domain-specific operations.** Expose operations like
-  `saveInvoice(invoice)` / `updateJobStatus(...)` — not an arbitrary table name
-  — so the callable surface is the domain model, not raw table access.
-- **Validate payloads** before they are sent (shape and invariants), so the
-  client never writes malformed blobs.
-- **RLS stays the ownership boundary.** Continue to enforce ownership through
-  Supabase row-level security (`auth.uid() = user_id`); client code is never a
-  substitute for it.
-- **Mutation-specific tests.** Add tests covering the write operations (and
-  their validation/failure paths) when the editing surface lands.
+- **Typed operations**: screens call domain functions such as `updateInvoiceDetails` and `scheduleJob`; there is no generic table writer
+- **Separate read and write modules**: `repository.ts` contains reads, while `writeRepository.ts` is the only allowed Supabase business-data mutation module
+- **Write-boundary validation**: every create and edit operation validates runtime values before it fetches or writes data
+- **Owner-scoped writes**: every operation includes both the record ID and the authenticated owner ID
+- **Server-row refreshes**: high-risk invoice, job, recurring, schedule, and settings operations load the current row before applying owned fields
+- **Field-scoped conflict detection**: edits reject a same-field lost update while preserving unrelated server changes
+- **Ledger preservation**: invoice writes merge payment activity and reconcile `paid` and `paidAt`
+- **Consent protection**: estimate pricing checks the current approval decision and applies an atomic database condition before writing
+- **Recurring cursor protection**: an unchanged form cannot restore an older `nextDueDate` after generation advances it
+- **Derived-value reconciliation**: invoice totals, estimate totals, schedule-coupled status, and labor breakdown state are updated with their source inputs
+- **Soft deletion**: deletes write a `deleted: true` tombstone so mobile sync can remove the record without resurrecting it later
+- **Secret stripping**: settings writes preserve unknown fields and remove every field listed in `SECURE_FIELDS`
+- **Database-owned timestamps**: web writes omit `updated_at`; the Supabase trigger stamps the authoritative value
 
-### Password recovery flow
+The architecture test in `src/lib/readOnly.arch.test.ts` enforces the single-write-module boundary. Mutation behavior is covered in `src/lib/writeRepository.test.ts` and the related screen tests.
 
-The portal is otherwise read-only with respect to business data; the sole
-mutation it performs is changing the signed-in user's own password.
+### Current concurrency boundary
 
-1. From **Login → Forgot password?**, `resetPassword` calls
-   `supabase.auth.resetPasswordForEmail(email, { redirectTo:
-   <origin>/reset-password })`.
-2. The emailed link returns to `/reset-password`. `detectSessionInUrl`
-   establishes a short-lived recovery session and fires a one-shot
-   `PASSWORD_RECOVERY` event.
-3. `AuthContext` records that event in React state **and** a `localStorage`
-   flag (`tradeready.passwordRecovery`) so recovery mode survives the re-render,
-   a manual reload, **and a second/reopened tab** — the one-shot event fires
-   only in the tab that consumed the link, but the flag lives in the same
-   `localStorage` the Supabase session is persisted in, so every tab holding the
-   recovery session stays in recovery mode. (A stale flag left with no live
-   session is dropped on init.) While the flag is set, `App` routes every path
-   to the password-update screen, so a recovery session can **not** fall through
-   into the authenticated portal before the user finishes.
-4. `ResetPasswordScreen` collects and validates a new password (min length +
-   matching confirmation), calls `supabase.auth.updateUser({ password })`,
-   then clears recovery, signs out, and redirects to `/login`.
-5. Invalid, expired, or already-used links produce no session (Supabase encodes
-   the reason in the URL fragment). The screen detects the absence of a recovery
-   session, shows the reason, and offers a path back to request another reset
-   email.
+The portal does not have the mobile app's durable offline mutation queue. Web writes require a connection, disable repeat submission while saving, show failures, and reload the affected collection after success.
 
-Not available on the web: mileage/**Trips** and the AI Coach — Trips are a
-Supabase collection but not surfaced here yet; the AI Coach needs the
-Cloudflare Worker backend rather than Supabase alone.
+Edit operations use field-scoped optimistic concurrency. The write layer compares the baseline displayed by the screen with the submitted values and the current server row. It rejects the write when another client changed the same field to a different value, while unrelated server changes continue through the fresh-row merge.
 
-## Develop
+The portal does not use a row-level version lock or live multi-tab updates. Pure creates and boolean toggles also do not use the three-way field guard. See `EDITING_ROADMAP.md` for the exact boundary and remaining hardening work.
 
-```bash
-cd web
-npm install
-npm run dev        # http://localhost:5173
+## Password recovery
+
+The recovery flow prevents a password-recovery session from entering the business portal before the password changes:
+
+1. **Forgot password?** calls `resetPasswordForEmail` with `<origin>/reset-password`
+2. Supabase returns the browser to `/reset-password` and creates a recovery session
+3. `AuthContext` stores recovery state in React state and `localStorage` so reloads and reopened tabs remain in recovery mode
+4. `App` routes every path to the password screen until the password changes or the session ends
+5. A successful update signs the account out and redirects to `/login`
+
+Invalid or expired recovery links show an error and direct the visitor back to the reset request form.
+
+## Features not available on the web
+
+The current portal does not surface these mobile or backend-dependent areas:
+
+- Mileage and Trips
+- AI Coach
+- Job photos
+- Booking requests
+- Sending an estimate or creating its customer approval link
+- Authoring change orders
+- Creating an invoice from a job's full billable breakdown
+- Mobile automations that run when a job is marked complete, including auto-invoice and review scheduling
+
+Manual invoices are available. They do not replace the mobile create-from-job workflow because that workflow snapshots tracked time, estimate lines, and approved change orders.
+
+## Run the portal locally
+
+Install the standalone web dependencies and start Vite:
+
+```powershell
+npm.cmd --prefix web install
+npm.cmd --prefix web run dev
 ```
 
-Sign in with a real TradeReady account. Other scripts:
+Vite serves the portal at `http://localhost:5173`. Sign in with a TradeReady account that has synced data.
 
-```bash
-npm run lint       # eslint (flat config: React + TS + browser)
-npm run typecheck  # tsc, no emit
-npm run test       # vitest run (jsdom + Testing Library)
-npm run build      # typecheck + production build to web/dist
-npm run preview    # serve the production build locally
+Use these commands to verify a change:
+
+```powershell
+npm.cmd --prefix web run lint
+npm.cmd --prefix web test
+npm.cmd --prefix web run typecheck
+npm.cmd --prefix web run build
 ```
 
-### Lint, test, and CI gates
+The `web` package has its own ESLint, Vitest, TypeScript, and Vite configuration. The repository gate runs these checks independently from the Expo and React Native checks.
 
-This package is a standalone workspace with its **own** lint and test gates —
-the repo root's `.eslintrc.js` and Jest config deliberately ignore `web/`
-because its browser/React toolchain doesn't fit the Expo/React-Native rules.
+### Data-loading behavior
 
-- **Lint** — `npm run lint` uses `web/eslint.config.js` (ESLint flat config:
-  `@eslint/js` + `typescript-eslint` + `react-hooks` + `react-refresh`, browser
-  globals), and fails on any warning (`--max-warnings=0`).
-- **Tests** — [Vitest] + React Testing Library (`jsdom`). Coverage focuses on
-  data-loading resilience (`src/lib/DataContext.test.tsx`), routing/not-found
-  (`src/App.test.tsx`), auth (`src/lib/AuthContext.test.tsx`), the invoice and
-  change-order math (`src/ui/*.test.ts`), and status/filter behavior
-  (`src/ui/status.test.ts`, `src/screens/JobsScreen.test.tsx`).
-- **CI** — the `web` job in `.github/workflows/gate.yml` runs `npm ci` then
-  lint → tests → typecheck → build from `web/`, independently of the root RN
-  gate.
+`DataContext` loads each Supabase collection independently. A failed pricebook request, for example, does not block a screen that only needs jobs or invoices.
 
-[Vitest]: https://vitest.dev
+Each screen declares the resources it needs through `useResources`. Initial failures show a scoped retry action. Refresh failures keep previously loaded data visible. Signing out clears all account data and invalidates requests started under the previous session.
 
-### Data-loading resilience
+`vite.config.ts` supplies `esbuild.tsconfigRaw` as a string. This prevents Vite from resolving the Expo root TypeScript configuration while compiling browser-safe shared utilities.
 
-`DataContext` loads each Supabase collection **independently** (not through a
-single `Promise.all`), tracking loading/`loaded`/error state per resource key.
-One collection failing (say `pricebook`) never blanks a screen that only needs
-another (Jobs, Money, Today…). Screens scope themselves to the resources they
-use via `useResources(...keys)`, which reports a blocking `loading`, a scoped
-`error` (with a retry action), or `refreshing` while already-loaded data stays
-on screen during a manual retry. When the authenticated user changes or signs
-out, all user-owned state is cleared and any in-flight request from the prior
-session is ignored — one account's rows are never shown under another's.
+## Deploy the portal
 
-> Build note: `vite.config.ts` sets `esbuild.tsconfigRaw` to a string so Vite
-> skips its per-file tsconfig lookup. Without it, esbuild walks up from the
-> imported `../utils/*.ts` files to the Expo project's root `tsconfig.json`
-> (which `extends "expo/tsconfig.base"`) and fails because that base config is
-> not installed in this standalone workspace.
+`npm.cmd --prefix web run build` creates the static SPA in `web/dist`. The host must serve `index.html` for unknown paths so client-side routes and `/reset-password` work on a fresh visit.
 
-## Deploy (owner operations)
+Configure these external services before production use:
 
-The build output in `web/dist` is a static SPA — host it anywhere (Cloudflare
-Pages, Vercel, Netlify, or a Workers static asset binding). Because it uses
-client-side routing, configure a **SPA fallback** so unknown paths serve
-`index.html`.
+1. Point `app.gettradereadyapp.com` to the host that serves `web/dist`
+2. Add `https://app.gettradereadyapp.com` and `https://app.gettradereadyapp.com/reset-password` to the Supabase Auth redirect allowlist
+3. Configure the Google and Apple OAuth providers in Supabase and their provider dashboards for the production origin and Supabase callback URL
+4. Verify email/password sign-in, both OAuth providers, password recovery, one read flow, and one write flow against a test account
 
-1. **DNS / hosting** — point `app.gettradereadyapp.com` at the host serving
-   `web/dist`, with the SPA fallback above.
-2. **Supabase Auth → URL Configuration** — add the web origin
-   (`https://app.gettradereadyapp.com`) **and** the recovery return path
-   (`https://app.gettradereadyapp.com/reset-password`) to **Redirect URLs** so
-   the Google OAuth and password-reset return handshakes are accepted. (The SPA
-   fallback above is what lets `/reset-password` load on a fresh visit.)
-3. **Google Cloud OAuth client** — add `https://app.gettradereadyapp.com` to
-   **Authorized JavaScript origins** (and the Supabase callback URL to
-   **Authorized redirect URIs** if not already present).
-
-No new secrets are required — the portal uses only the public Supabase URL and
-anon key.
+The portal needs only the public Supabase project URL and publishable key in its browser bundle. Never add a service-role key or provider secret to `web/src`.
