@@ -129,26 +129,21 @@ async function currentUserId(): Promise<string> {
   return id;
 }
 
-// P0.3 — the single source of a write's `updated_at`.
+// P0.3 — `updated_at` is DB-authoritative; the portal never sends it.
 //
-// Device pulls filter on `gt('updated_at', since)` (../../utils/sync.ts). A
-// write that omits `updated_at` leaves the column untouched on the UPDATE side
-// of the upsert, so the edit would never cross the watermark and never reach a
-// phone; a backdated stamp is invisible the same way. We stamp the client clock
-// here, matching mobile's `pushedAt = new Date()`, so web and mobile behave
-// identically today.
+// Device pulls filter on `gt('updated_at', since)` (../../utils/sync.ts), so the
+// column has to be monotonic and comparable across every writer. The server-side
+// `set_updated_at` trigger
+// (supabase/migrations/20260831_updated_at_server_authority.sql) — a BEFORE
+// INSERT OR UPDATE trigger on all sync tables — stamps `now()` (the DB clock) on
+// every write, overriding whatever a client sends. So a client-sent `updated_at`
+// is redundant: it is replaced server-side on both the insert and update paths.
 //
-// Residual (roadmap P0.3): this trusts the browser clock, which is less
-// reliable than a device's. The durable fix is the server-side `set_updated_at`
-// trigger in supabase/migrations/20260831_updated_at_server_authority.sql, which
-// overrides `updated_at` with the DB clock on every write. That trigger is
-// backward-compatible — this stamp is simply replaced server-side — so once it
-// is confirmed applied in production, sending `updated_at` here becomes optional
-// cleanup rather than a correctness requirement. Centralised here so that swap
-// is one edit.
-function writeTimestamp(): string {
-  return new Date().toISOString();
-}
+// This module therefore OMITS `updated_at` from its writes entirely (the P0.3
+// optional cleanup), letting the one authoritative clock own it and keeping the
+// browser clock out of the watermark. Do not reintroduce an `updated_at` field
+// to any write below: it would be silently overwritten, and sending it invites
+// the false impression that the client clock matters here.
 
 // ---------------------------------------------------------------------------
 // Field-scoped optimistic-concurrency guard (roadmap P2.1)
@@ -473,9 +468,9 @@ async function tryLoadInvoice(id: string): Promise<Invoice | null> {
 }
 
 /**
- * Whole-blob upsert of one owner-scoped collection row, stamped exactly as the
- * mobile push does: fresh `updated_at`, `deleted: false`, `user_id = auth.uid()`.
- * The single low-level write primitive the typed operations build on.
+ * Whole-blob upsert of one owner-scoped collection row: `deleted: false`,
+ * `user_id = auth.uid()`. `updated_at` is left to the DB trigger (P0.3). The
+ * single low-level write primitive the typed operations build on.
  */
 async function upsertBlobRow(
   collection:
@@ -494,7 +489,6 @@ async function upsertBlobRow(
     id,
     user_id,
     data,
-    updated_at: writeTimestamp(),
     deleted: false,
   });
   if (error) throw error;
@@ -508,12 +502,12 @@ async function persistInvoice(invoice: Invoice): Promise<Invoice> {
 // ---------------------------------------------------------------------------
 // Soft-delete (roadmap P0.4)
 //
-// Deletes are recorded as a TOMBSTONE — `deleted: true` plus a fresh
-// `updated_at` — never a row removal, exactly as the mobile push does
-// (../../utils/sync.ts → the `op === 'delete'` branch). A hard `DELETE` would
-// leave every other device with no record that the row is gone, so the next
-// pull that predates the delete would treat the row as new and resurrect it.
-// The fresh `updated_at` is what carries the tombstone across each device's
+// Deletes are recorded as a TOMBSTONE — `deleted: true`, never a row removal,
+// exactly as the mobile push does (../../utils/sync.ts → the `op === 'delete'`
+// branch). A hard `DELETE` would leave every other device with no record that the
+// row is gone, so the next pull that predates the delete would treat the row as
+// new and resurrect it. The DB trigger stamps a fresh `updated_at` on this UPDATE
+// (P0.3), which is what carries the tombstone across each device's
 // `gt('updated_at', since)` pull filter.
 //
 // This is only the persistence primitive: cross-entity consequences (an invoice
@@ -542,7 +536,7 @@ async function softDelete(
   // restricts this to the owner's rows, so the user_id filter is belt-and-braces.
   const { error } = await supabase
     .from(collection)
-    .update({ deleted: true, updated_at: writeTimestamp() })
+    .update({ deleted: true })
     .eq('id', id)
     .eq('user_id', user_id);
   if (error) throw error;
@@ -598,11 +592,11 @@ async function persistSettings(merged: Settings): Promise<Settings> {
   const safe = stripSecureFields(merged);
   const user_id = await currentUserId();
   // The settings row has no `id` / `deleted` — upsert conflicts on user_id,
-  // exactly as the mobile push does (../../utils/sync.ts).
+  // exactly as the mobile push does (../../utils/sync.ts). `updated_at` is left
+  // to the DB trigger (P0.3); `settings` is one of its covered tables.
   const { error } = await supabase.from('settings').upsert({
     user_id,
     data: safe,
-    updated_at: writeTimestamp(),
   });
   if (error) throw error;
   return safe;
@@ -1044,7 +1038,6 @@ export async function updateJobPricing(
     .from('jobs')
     .update({
       data: next,
-      updated_at: writeTimestamp(),
       deleted: false,
     })
     .eq('id', jobId)

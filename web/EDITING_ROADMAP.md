@@ -62,9 +62,11 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   and drains deterministic 500-row pages. The trigger and cursor together close
   the clock-skew propagation trap; the trigger alone did not remove the reader's
   device clock from the old watermark.
-  Optional remaining cleanup (no correctness impact, no coordination needed):
-  clients may stop sending `updated_at` — web via the single `writeTimestamp()`
-  in `writeRepository.ts`, mobile via `pushQueue` in `utils/sync.ts`.
+  Optional client cleanup — **web half DONE**: `writeRepository.ts` no longer
+  sends `updated_at` on any write (the `writeTimestamp()` helper is removed);
+  every insert/update/tombstone lets the DB trigger own the column. Mobile may
+  still drop its `pushQueue` send in `utils/sync.ts` independently — no
+  correctness impact, no coordination needed.
 - **P0.5 — landed (primitive).** `saveSettings(patch)` merges a patch onto the
   full current settings blob (preserving unrendered fields, P0.2) and strips
   every credential field by iterating `SECURE_FIELDS` (never hand-named), so a
@@ -109,8 +111,9 @@ design: a patch op still rewrites the operational fields it owns as a unit, so a
 concurrent server change to an operational field the user did NOT edit is
 overwritten (pre-existing behavior — the form owns those fields together); the
 guard closes the both-edited-the-same-field case, which is the lost update that
-matters. P0.3's optional client cleanup (dropping the now-redundant `updated_at`
-sends) is not required for correctness.
+matters. P0.3's optional client cleanup is DONE on the web side (the portal no
+longer sends `updated_at`; the DB trigger owns it); the equivalent mobile cleanup
+remains optional and is not required for correctness.
 
 ## Context in one paragraph
 
@@ -191,11 +194,13 @@ code; a write that ignores any one can silently lose data.
   3. **Ship cursor v2 in mobile.** Its versioned storage intentionally rejects
      every legacy `{table: deviceTimestamp}` value and performs one idempotent
      full pull, which recovers devices whose old cursor is already in the future.
-  4. **Optional cleanup (later, no coordination needed).** Once the trigger is
-     confirmed in production, clients may stop sending `updated_at` entirely —
-     web via the single `writeTimestamp()` in `writeRepository.ts`, mobile via
-     `pushQueue` in `utils/sync.ts`. Purely cosmetic/bandwidth; not required for
-     correctness, and either surface can change independently.
+  4. **Optional cleanup (no coordination needed).** With the trigger confirmed in
+     production, clients may stop sending `updated_at` entirely. **Web: DONE** —
+     `writeRepository.ts` sends no `updated_at` on any write and the
+     `writeTimestamp()` helper is gone; the trigger owns the column on every
+     insert/update/tombstone. Mobile may still drop its `pushQueue` send in
+     `utils/sync.ts`. Purely cosmetic/bandwidth; not required for correctness, and
+     either surface can change independently.
 
   - **Caution:** the override is unconditional, so a future backfill that
     intentionally sets a historical `updated_at` must disable the trigger for

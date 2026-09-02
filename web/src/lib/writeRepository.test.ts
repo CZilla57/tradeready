@@ -170,7 +170,6 @@ describe('saveCustomer — whole-blob upsert', () => {
   }
 
   it('upserts the full customer blob to the customers table with stamps', async () => {
-    const before = Date.now();
     // Include a field the portal never renders to prove it round-trips (P0.2).
     const c = customer({ portal: { token: 'tok', enabled: true } });
     await saveCustomer(c, customer());
@@ -181,7 +180,8 @@ describe('saveCustomer — whole-blob upsert', () => {
     expect(row.user_id).toBe('user-1');
     expect(row.deleted).toBe(false);
     expect((row.data as Customer).portal).toEqual({ token: 'tok', enabled: true });
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client no longer sends `updated_at` — the DB trigger owns it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('surfaces a write error rather than reporting success', async () => {
@@ -244,7 +244,6 @@ describe('createJob — new unpriced lead with a mobile-format id', () => {
   };
 
   it('mints a j<ms> id and writes the unpriced lead shape mobile creates', async () => {
-    const before = Date.now();
     const created = await createJob(fields);
 
     expect(state.lastTable).toBe('jobs');
@@ -272,8 +271,8 @@ describe('createJob — new unpriced lead with a mobile-format id', () => {
       overhead: 18,
       margin: 22,
     });
-    // Row stamp is fresh (P0.3).
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client omits `updated_at`; the DB trigger stamps it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('mints a unique id on each call within the same millisecond', async () => {
@@ -743,7 +742,6 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
 
 describe('saveExpense — whole-blob upsert', () => {
   it('upserts the expense to the expenses table with stamps', async () => {
-    const before = Date.now();
     const expense: Expense = {
       id: 'e1',
       createdAt: '2026-08-01',
@@ -759,7 +757,8 @@ describe('saveExpense — whole-blob upsert', () => {
     expect(state.lastTable).toBe('expenses');
     expect(row.id).toBe('e1');
     expect((row.data as Expense).amount).toBe(42);
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client omits `updated_at`; the DB trigger stamps it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 });
 
@@ -801,9 +800,8 @@ describe('saveSettings — P0.5 strip secure fields, keep the rest', () => {
     expect(writtenSettings()).not.toHaveProperty('groqKey');
   });
 
-  it('upserts by user_id with a fresh updated_at and no id/deleted column', async () => {
+  it('upserts by user_id with no id/deleted/updated_at columns', async () => {
     state.settingsRow = { data: { businessName: 'Co' } };
-    const before = Date.now();
     await saveSettings(
       { phone: '555' },
       { businessName: 'Co' } as Parameters<typeof saveSettings>[1],
@@ -814,7 +812,8 @@ describe('saveSettings — P0.5 strip secure fields, keep the rest', () => {
     expect(row.user_id).toBe('user-1');
     expect(row).not.toHaveProperty('id');
     expect(row).not.toHaveProperty('deleted');
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client omits `updated_at`; the DB trigger stamps it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('creates a settings row when none exists yet', async () => {
@@ -1340,19 +1339,19 @@ describe('recurring pause/resume — preserve generation state', () => {
 });
 
 describe('persist stamping', () => {
-  it('stamps user_id, a fresh updated_at, and deleted:false', async () => {
+  it('stamps user_id and deleted:false, and omits updated_at (DB-owned, P0.3)', async () => {
     state.serverRow = { data: invoice(), deleted: false };
-    const before = Date.now();
     await markInvoicePaid('inv-1', '2026-08-02');
 
     const row = state.lastUpsert!;
     expect(row.id).toBe('inv-1');
     expect(row.user_id).toBe('user-1');
     expect(row.deleted).toBe(false);
-    // updated_at must be a fresh, forward stamp so device pulls (gt updated_at)
-    // actually see the edit — never omitted, never backdated.
-    const stamped = Date.parse(row.updated_at as string);
-    expect(stamped).toBeGreaterThanOrEqual(before);
+    // P0.3: `updated_at` is no longer sent by the client — the server-side
+    // set_updated_at trigger stamps the DB clock on every write, so a
+    // client-sent value would only be overwritten. The device pull watermark
+    // (gt updated_at) is fed by that authoritative stamp, not the browser clock.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('surfaces a write error rather than reporting success', async () => {
@@ -1506,16 +1505,15 @@ describe('updateInvoiceDetails — patch owned fields onto the server invoice', 
 });
 
 describe('soft-delete — P0.4 tombstones, never row removal', () => {
-  it('writes a deleted:true tombstone with a fresh updated_at, scoped to id+user', async () => {
-    const before = Date.now();
+  it('writes a deleted:true tombstone scoped to id+user, updated_at DB-owned', async () => {
     await deleteInvoice('inv-1');
 
     expect(state.lastTable).toBe('invoices');
     expect(state.lastUpdate!.deleted).toBe(true);
-    // The fresh stamp is what carries the tombstone across device pull filters.
-    expect(Date.parse(state.lastUpdate!.updated_at as string)).toBeGreaterThanOrEqual(
-      before,
-    );
+    // P0.3: the tombstone UPDATE omits `updated_at`; the set_updated_at trigger
+    // stamps the DB clock, which is what carries the tombstone across each
+    // device's `gt('updated_at', since)` pull filter.
+    expect(state.lastUpdate).not.toHaveProperty('updated_at');
     expect(state.updateFilters).toEqual({ id: 'inv-1', user_id: 'user-1' });
     // A tombstone is an UPDATE, never a hard delete (no upsert either).
     expect(state.lastUpsert).toBeNull();
