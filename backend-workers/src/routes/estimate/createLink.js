@@ -5,7 +5,7 @@
 // create-payment-link. The device never needs a secure RNG.
 
 import { randomBytes } from 'node:crypto';
-import { fetchJobForUser, upsertJob, planApprovalWrite } from '../../../lib/estimateStore.js';
+import { fetchJobForUserVersioned, updateJobConditionally, planApprovalWrite } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { jsonBody } from '../../appCors.js';
 
@@ -70,52 +70,65 @@ export async function estimateCreateLinkHandler(c) {
     return c.json({ error: 'changeOrderId must be a string' }, 400);
   }
 
-  let row;
-  try {
-    row = await fetchJobForUser(c.env, jobId, userId);
-  } catch (err) {
-    console.error('[estimate/create-link] fetch failed:', err.message);
-    return c.json({ error: 'Database error' }, 500);
-  }
-  if (!row) {
-    return c.json({ error: 'Estimate not synced yet. Open the app while online and try again.' }, 422);
-  }
-
   const sentAt = new Date().toISOString();
+  // Mint once and reuse across retries: a conflicting attempt wrote nothing, so
+  // re-planning on the fresh row must not leak a fresh token each pass.
+  let cachedToken;
+  const mint = () => (cachedToken || (cachedToken = randomBytes(24).toString('hex')));
+  const fetchRow = () => fetchJobForUserVersioned(c.env, jobId, userId);
 
   if (changeOrderId) {
-    const plan = planChangeOrderLink(row.data?.changeOrders, changeOrderId, snapshot, sentAt,
-      () => randomBytes(24).toString('hex'));
-    if (plan.error === 'not-found') {
-      return c.json({ error: 'Change order not synced yet. Open the app while online and try again.' }, 422);
-    }
-    if (plan.error === 'decided') {
-      return c.json({ error: 'This change was already decided.' }, 409);
-    }
-    if (plan.changed) {
-      try {
-        await upsertJob(c.env, jobId, userId, { ...row.data, changeOrders: plan.changeOrders });
-      } catch (err) {
-        console.error('[estimate/create-link] upsert failed:', err.message);
-        return c.json({ error: 'Database error' }, 500);
-      }
-    }
-    const url = `${CHANGE_PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&co=${encodeURIComponent(changeOrderId)}&t=${encodeURIComponent(plan.token)}`;
-    return c.json({ url, token: plan.token, sentAt: plan.sentAt }, 200);
-  }
-
-  const existing = row.data?.approval || {};
-  const plan = planApprovalWrite(existing, snapshot, sentAt, () => randomBytes(24).toString('hex'));
-
-  if (plan.changed) {
+    // Mint a link on ONE change order. The pure planner re-runs against the
+    // freshest version each attempt; a decided/absent CO on the fresh row is a
+    // terminal conflict (no retry), matching its prior single-shot behavior.
+    let result;
     try {
-      await upsertJob(c.env, jobId, userId, { ...row.data, approval: plan.approval });
+      result = await updateJobConditionally(c.env, jobId, fetchRow, (row) => {
+        const p = planChangeOrderLink(row.data?.changeOrders, changeOrderId, snapshot, sentAt, mint);
+        if (p.error) return { conflict: true, reason: p.error };
+        if (!p.changed) return { skip: true }; // frozen (already approved) — return its link
+        return { data: { ...row.data, changeOrders: p.changeOrders } };
+      });
     } catch (err) {
-      console.error('[estimate/create-link] upsert failed:', err.message);
+      console.error('[estimate/create-link] write failed:', err.message);
       return c.json({ error: 'Database error' }, 500);
     }
+    if (result.notFound) {
+      return c.json({ error: 'Estimate not synced yet. Open the app while online and try again.' }, 422);
+    }
+    if (result.conflict && result.reason === 'not-found') {
+      return c.json({ error: 'Change order not synced yet. Open the app while online and try again.' }, 422);
+    }
+    if (result.conflict && result.reason === 'decided') {
+      return c.json({ error: 'This change was already decided.' }, 409);
+    }
+    if (result.conflict) {
+      return c.json({ error: 'This estimate changed. Please reload and try again.' }, 409);
+    }
+    const co = result.row.data.changeOrders.find((x) => x && x.id === changeOrderId);
+    const { token, sentAt: coSentAt } = co.approval;
+    const url = `${CHANGE_PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&co=${encodeURIComponent(changeOrderId)}&t=${encodeURIComponent(token)}`;
+    return c.json({ url, token, sentAt: coSentAt }, 200);
   }
 
-  const url = `${PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&t=${encodeURIComponent(plan.token)}`;
-  return c.json({ url, token: plan.token, sentAt: plan.sentAt }, 200);
+  let result;
+  try {
+    result = await updateJobConditionally(c.env, jobId, fetchRow, (row) => {
+      const p = planApprovalWrite(row.data?.approval || {}, snapshot, sentAt, mint);
+      if (!p.changed) return { skip: true }; // approved snapshot is frozen — return its link
+      return { data: { ...row.data, approval: p.approval } };
+    });
+  } catch (err) {
+    console.error('[estimate/create-link] write failed:', err.message);
+    return c.json({ error: 'Database error' }, 500);
+  }
+  if (result.notFound) {
+    return c.json({ error: 'Estimate not synced yet. Open the app while online and try again.' }, 422);
+  }
+  if (result.conflict) {
+    return c.json({ error: 'This estimate changed. Please reload and try again.' }, 409);
+  }
+  const approval = result.row.data.approval;
+  const url = `${PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&t=${encodeURIComponent(approval.token)}`;
+  return c.json({ url, token: approval.token, sentAt: approval.sentAt }, 200);
 }

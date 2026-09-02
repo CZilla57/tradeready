@@ -37,10 +37,10 @@ async function fetchJobForUser(env, jobId, userId) {
 
 // --- Optimistic-concurrency helpers (ESTIMATE_WORKFLOW_ROADMAP.md, Phase 0) ---
 //
-// The unconditional fetch -> modify -> upsertJob sequence above races when more
-// than one writer (mobile, the Worker's own customer endpoints, and — soon —
-// the web portal) touches the same job blob. These helpers add the versioned
-// read + conditional write the workflow needs before that third writer lands.
+// The old unconditional fetch -> modify -> write sequence raced when more than
+// one writer (mobile, the Worker's own customer endpoints, and — soon — the web
+// portal) touched the same job blob. These helpers add the versioned read +
+// conditional write the workflow needs before that third writer lands.
 //
 // The database is the sole authority for `updated_at`: `set_updated_at_trg`
 // (migration 20260831) stamps `now()` on every jobs insert/update, so the
@@ -131,20 +131,10 @@ async function updateJobConditionally(env, jobId, fetchRow, plan, { tries = 3 } 
   return { ok: false, conflict: true, reason: 'max-retries' };
 }
 
-async function upsertJob(env, id, userId, data) {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/jobs`, {
-    method: 'POST',
-    headers: { ...headers(env), 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
-    body: JSON.stringify({
-      id,
-      user_id: userId,
-      data,
-      updated_at: new Date().toISOString(),
-      deleted: false,
-    }),
-  });
-  if (!res.ok) throw new Error(`Supabase upsert ${res.status}: ${await res.text()}`);
-}
+// The former unconditional `upsertJob` (POST + resolution=merge-duplicates) was
+// removed once every approval mutation moved onto conditionalUpdateJob — the
+// roadmap forbids keeping an unconditional upsert for these writes, since it is
+// exactly the last-writer-wins path that loses a concurrent customer decision.
 
 // constantTimeEqual moved to ./constantTime.js (shared with the RevenueCat
 // subscription webhook); re-exported below so existing importers keep working.
@@ -170,7 +160,6 @@ function planApprovalWrite(existing, snapshot, sentAt, mintToken) {
 module.exports = {
   fetchJob,
   fetchJobForUser,
-  upsertJob,
   constantTimeEqual,
   planApprovalWrite,
   fetchJobVersioned,

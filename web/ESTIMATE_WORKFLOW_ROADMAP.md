@@ -352,8 +352,17 @@ validation.
    operation-specific safe-reapply decision to a caller `plan` (behaviors #4,
    #5). The DB-trigger prerequisite (`set_updated_at_trg`, migration 20260831)
    is already in place. Covered by `__tests__/estimateStoreConditional.test.js`.
-4. Convert create/respond/change-respond to the conditional contract. Wire the
-   helpers from task 3 into each route with an operation-specific `plan`.
+4. Convert create/respond/change-respond to the conditional contract. **Done
+   (2026-09-02):** all three Workers routes now write through
+   `updateJobConditionally` with an operation-specific `plan` — customer
+   estimate/change decisions re-check the token on the freshest version and hold
+   the terminal lock; link minting reuses one token across retries and freezes
+   an already-approved snapshot. Status codes and response shapes are unchanged;
+   the now-unused unconditional `upsertJob` was removed. Covered by
+   `__tests__/estimateRouteConditionalWorkers.test.js`, whose concurrency cases
+   prove an owner edit + customer decision both survive, a racing manual decision
+   beats a stale customer link (loser gets 409), and a customer approval landing
+   before a re-send wins (no second token, snapshot not regressed).
 
 **Gate:** all Worker tests pass, including the complete concurrency matrix. Do
 not begin portal mutations until customer decisions are proven lossless.
