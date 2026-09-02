@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Invoice, Payment } from '@shared/types/models';
 import {
-  saveInvoice,
+  updateInvoiceDetails,
   recordInvoicePayment,
   markInvoicePaid,
   voidInvoicePayment,
@@ -540,6 +540,12 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
       const approval = { token: 't' };
       const changeOrders = [{ id: 'co1' }];
       const timeSessions = [{ start: '2026-09-01T09:00:00Z', end: null }];
+      const laborBreakdown = {
+        onSiteHours: 3,
+        driveHours: 0.5,
+        supplyRunHours: 0.25,
+        setupCleanupHours: 0.25,
+      };
       state.serverRow = {
         data: job({
           title: 'Deck rebuild',
@@ -548,6 +554,7 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
           approval,
           changeOrders,
           timeSessions,
+          laborBreakdown,
         } as Partial<Job>),
         deleted: false,
       };
@@ -569,12 +576,33 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
       expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
       expect(written.changeOrders).toEqual(changeOrders);
       expect(written.timeSessions).toEqual(timeSessions);
+      // The edited 3-hour total cannot retain the old 4-hour component split.
+      expect(written).not.toHaveProperty('laborBreakdown');
       expect(state.updateFilters).toEqual({
         id: 'job-1',
         user_id: 'user-1',
         deleted: false,
         'data->approval->>decision': null,
       });
+    });
+
+    it('preserves the component split when labor hours are unchanged', async () => {
+      const laborBreakdown = {
+        onSiteHours: 3,
+        driveHours: 0.5,
+        supplyRunHours: 0.25,
+        setupCleanupHours: 0.25,
+      };
+      state.serverRow = {
+        data: job({ laborHours: 4, laborBreakdown }),
+        deleted: false,
+      };
+      state.updateResult = { id: 'job-1' };
+
+      await updateJobPricing('job-1', { ...pricing, laborHours: 4 });
+
+      const written = state.lastUpdate!.data as Job;
+      expect(written.laborBreakdown).toEqual(laborBreakdown);
     });
 
     it('rejects pricing when the freshly loaded job already has a decision', async () => {
@@ -1363,30 +1391,81 @@ describe('recordInvoicePayment — P0.1 ledger preservation', () => {
   });
 });
 
-describe('saveInvoice — edit scalars, keep the server ledger', () => {
-  it('keeps edited scalar fields while unioning the server ledger', async () => {
+describe('updateInvoiceDetails — patch owned fields onto the server invoice', () => {
+  it('updates editor fields while preserving concurrent server-owned fields', async () => {
     state.serverRow = {
       data: invoice({
         desc: 'old',
         payments: [payment({ id: 'stripe_abc', amount: 600, method: 'stripe' })],
+        depositRequest: { amount: 500, percent: 50, requestedAt: '2026-08-20' },
+        paymentLinkUrl: 'https://buy.stripe.com/server-link',
+        paymentLinkAmount: 400,
+        autoEmailRequestedAt: '2026-08-20T12:00:00.000Z',
+        lineItems: [{ description: 'Labor', amount: 1000, category: 'labor' }],
+        jobId: 'job-server',
+        recurringInvoiceId: 'ri-server',
+        occurrenceNumber: 4,
+        importBatchId: 'batch-server',
       }),
       deleted: false,
     };
 
-    // Editor changed the description; its in-memory copy predates the webhook so
-    // its ledger is empty.
-    await saveInvoice(invoice({ desc: 'new', payments: [] }));
+    // Simulate an untyped/dynamic caller carrying stale hidden fields. The
+    // repository must copy only its six approved fields, never spread these.
+    const editWithStaleHiddenFields = {
+      number: '001-A',
+      amount: 1200,
+      due: '2026-09-15',
+      desc: 'new',
+      email: 'billing@acme.test',
+      phone: '555-0100',
+      depositRequest: undefined,
+      paymentLinkUrl: undefined,
+      lineItems: [],
+      autoEmailRequestedAt: undefined,
+    };
+    await updateInvoiceDetails('inv-1', editWithStaleHiddenFields);
 
     const written = writtenInvoice();
-    expect(written.desc).toBe('new'); // edited scalar wins
-    expect(written.payments!.map((p) => p.id)).toContain('stripe_abc'); // ledger kept
+    expect(written).toMatchObject({
+      number: '001-A',
+      amount: 1200,
+      due: '2026-09-15',
+      desc: 'new',
+      email: 'billing@acme.test',
+      phone: '555-0100',
+    });
+    expect(written.payments!.map((p) => p.id)).toContain('stripe_abc');
+    expect(written.depositRequest).toEqual({
+      amount: 500,
+      percent: 50,
+      requestedAt: '2026-08-20',
+    });
+    expect(written.paymentLinkUrl).toBe('https://buy.stripe.com/server-link');
+    expect(written.paymentLinkAmount).toBe(400);
+    expect(written.autoEmailRequestedAt).toBe('2026-08-20T12:00:00.000Z');
+    expect(written.lineItems).toEqual([
+      { description: 'Labor', amount: 1000, category: 'labor' },
+    ]);
+    expect(written.jobId).toBe('job-server');
+    expect(written.recurringInvoiceId).toBe('ri-server');
+    expect(written.occurrenceNumber).toBe(4);
+    expect(written.importBatchId).toBe('batch-server');
   });
 
-  it('creates a new invoice when no server row exists', async () => {
+  it('rejects an edit when the invoice no longer exists', async () => {
     state.serverRow = null;
-    await saveInvoice(invoice({ id: 'inv-new' }));
-    expect(state.lastUpsert!.id).toBe('inv-new');
-    expect(state.lastUpsert!.deleted).toBe(false);
+    await expect(
+      updateInvoiceDetails('inv-missing', {
+        number: '001',
+        amount: 1000,
+        due: '2026-08-01',
+        desc: '',
+        email: '',
+        phone: '',
+      }),
+    ).rejects.toBeInstanceOf(InvoiceNotFoundError);
+    expect(state.lastUpsert).toBeNull();
   });
 });
 

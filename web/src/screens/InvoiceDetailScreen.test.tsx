@@ -13,7 +13,7 @@ const writes = vi.hoisted(() => ({
   recordInvoicePayment: vi.fn(),
   markInvoicePaid: vi.fn(),
   voidInvoicePayment: vi.fn(),
-  saveInvoice: vi.fn(),
+  updateInvoiceDetails: vi.fn(),
   deleteInvoice: vi.fn(),
 }));
 vi.mock('../lib/writeRepository', () => writes);
@@ -60,7 +60,7 @@ beforeEach(() => {
   writes.recordInvoicePayment.mockReset().mockResolvedValue(invoice());
   writes.markInvoicePaid.mockReset().mockResolvedValue(invoice());
   writes.voidInvoicePayment.mockReset().mockResolvedValue(invoice());
-  writes.saveInvoice.mockReset().mockResolvedValue(invoice());
+  writes.updateInvoiceDetails.mockReset().mockResolvedValue(invoice());
   writes.deleteInvoice.mockReset().mockResolvedValue(undefined);
   retry.mockReset();
   navigate.mockReset();
@@ -138,7 +138,7 @@ describe('InvoiceDetailScreen — mark paid', () => {
 });
 
 describe('InvoiceDetailScreen — edit details', () => {
-  it('saves edited scalar fields via saveInvoice and refreshes', async () => {
+  it('saves a typed details patch and refreshes', async () => {
     renderScreen();
     await userEvent.click(screen.getByRole('button', { name: 'Edit details' }));
 
@@ -147,13 +147,20 @@ describe('InvoiceDetailScreen — edit details', () => {
     await userEvent.type(amount, '1500');
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
-    await waitFor(() => expect(writes.saveInvoice).toHaveBeenCalledTimes(1));
-    const arg = writes.saveInvoice.mock.calls[0][0];
-    expect(arg).toMatchObject({ id: 'inv-1', amount: 1500, number: '001' });
+    await waitFor(() =>
+      expect(writes.updateInvoiceDetails).toHaveBeenCalledWith('inv-1', {
+        number: '001',
+        amount: 1500,
+        due: '2026-08-01',
+        desc: '',
+        email: '',
+        phone: '',
+      }),
+    );
     expect(retry).toHaveBeenCalledWith(['invoices']);
   });
 
-  it('blocks a non-positive amount without calling saveInvoice', async () => {
+  it('blocks a non-positive amount without calling updateInvoiceDetails', async () => {
     renderScreen();
     await userEvent.click(screen.getByRole('button', { name: 'Edit details' }));
     await userEvent.clear(screen.getByRole('spinbutton'));
@@ -161,7 +168,7 @@ describe('InvoiceDetailScreen — edit details', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent(/greater than zero/i);
-    expect(writes.saveInvoice).not.toHaveBeenCalled();
+    expect(writes.updateInvoiceDetails).not.toHaveBeenCalled();
   });
 
   it('deletes the invoice after confirmation and navigates to the list', async () => {
