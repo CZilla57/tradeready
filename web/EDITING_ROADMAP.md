@@ -137,14 +137,21 @@ The remaining work is primarily backend-dependent workflow or a new product surf
 
 The portal now bridges a job into an invoice across all three of the mobile screen's modes — the browser-safe port of the billable-breakdown rules lives in `web/src/ui/billableMath.ts`, pinned to the mobile engine's own values so it preserves the same accounting snapshot. `createInvoiceFromJob` handles the two creation modes (a completed job's final bill, which advances it to invoiced, and an up-front deposit request, which holds its status); `finalizeInvoiceFromJob` handles the edit-existing mode, re-billing a completed job's deposit invoice up to the full total on the authoritative row so the deposit already paid carries over through `reconcilePaidFields` and the job advances to paid or invoiced accordingly. All three derive the amount server-side from the fresh job rather than exposing an editable amount that could diverge from the line items.
 
-It cannot yet complete these Cloudflare Worker-backed actions:
+It cannot yet complete these consent and change-order workflow actions:
 
 - Send an estimate and create its customer approval link
-- Record a change order
-- Revise pricing after a declined or approved decision
+- Create and manage a change order
+- Preserve history while revising a declined estimate
+- Document post-approval scope changes without editing the signed estimate
 - Drive consent-coupled status transitions
 
-These are scoped in `web/ESTIMATE_WORKFLOW_ROADMAP.md`, which finds that most are reachable from the browser (the estimate endpoints are JWT-authed HTTP; the snapshot math is already ported) and that the only true backend change is widening the `create-link` CORS allowlist to the portal origin.
+These are scoped in `web/ESTIMATE_WORKFLOW_ROADMAP.md`. The estimate endpoints
+are JWT-authed HTTP and the snapshot math is already ported, but the expanded
+workflow also requires concurrency-safe conditional Job writes before the web
+portal adds another writer to the nested approval/change-order state. The
+roadmap covers that prerequisite, portal-origin CORS, authoritative snapshot
+review, approval-history preservation, and the distinction between creating a
+link and confirming that it was sent.
 
 ### Mobile-only and unsurfaced areas
 
