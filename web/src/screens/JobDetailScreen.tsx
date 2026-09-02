@@ -11,6 +11,7 @@ import {
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate, formatTimeRange } from '@shared/utils/dateHelpers';
 import { isArchived } from '@shared/utils/archive';
+import { nextInvoiceNumber } from '@shared/utils/invoiceNumber';
 import type { Job } from '@shared/types/models';
 import {
   updateJobDetails,
@@ -18,8 +19,14 @@ import {
   deleteJob,
   advanceJobStatus,
   updateJobPricing,
+  createInvoiceFromJob,
 } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
+import {
+  computeBillableBreakdown,
+  invoiceFromJobMode,
+  invoiceFromJobCopy,
+} from '../ui/billableMath';
 import { MaterialsEditor } from '../ui/MaterialsEditor';
 import {
   materialsToDrafts,
@@ -267,6 +274,93 @@ function JobPricingEditor({ job }: { job: Job }) {
           </button>
         </div>
       </form>
+    </Card>
+  );
+}
+
+/**
+ * Turn a job into an invoice — the final bill for a completed job ("create",
+ * which advances it to invoiced) or an up-front deposit for an
+ * approved/scheduled/in-progress one ("requestDeposit", which holds its status).
+ * Mirrors the mobile CreateInvoiceFromJobScreen's two creation modes; the amount
+ * and line items are derived server-side from the fresh job (tracked timer hours
+ * on finished jobs, estimate lines, approved change orders) via
+ * `createInvoiceFromJob`, so the number shown here is exactly what persists.
+ *
+ * Renders nothing when the job can't be invoiced yet (still a lead/quoted, or its
+ * estimate is unapproved), when it already has an invoice (the "Linked invoice"
+ * card covers that), or when it's archived.
+ */
+function CreateInvoiceFromJob({ job }: { job: Job }) {
+  const { retry, invoices, customers, settings } = useData();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mode = invoiceFromJobMode(job.status, !!job.invoiceId);
+  if (isArchived(job) || (mode !== 'create' && mode !== 'requestDeposit')) {
+    return null;
+  }
+
+  const breakdown = computeBillableBreakdown(job);
+  const copy = invoiceFromJobCopy(mode);
+
+  async function onCreate() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const customer = customers.find((c) => c.id === job.customerId);
+      const created = await createInvoiceFromJob(job.id, {
+        number: nextInvoiceNumber(invoices, settings ?? undefined),
+        email: customer?.email ?? '',
+        phone: customer?.phone ?? '',
+      });
+      // Both the job (status/invoiceId) and the invoice list changed.
+      retry(['jobs', 'invoices']);
+      navigate(`/invoices/${created.id}`);
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 8px' }}>
+        {copy.title}
+      </div>
+      <KV k="Amount" v={formatMoney(breakdown.total)} />
+      <div className="meta" style={{ marginTop: 8 }}>
+        {mode === 'requestDeposit'
+          ? 'Bills the approved estimate up front; the job keeps its current status.'
+          : breakdown.usedTrackedTime
+            ? `Billed from ${breakdown.laborHours} tracked hours; the job moves to invoiced.`
+            : 'Bills the estimate and approved change orders; the job moves to invoiced.'}
+      </div>
+      <button
+        type="button"
+        className="btn primary"
+        style={{ marginTop: 12 }}
+        onClick={onCreate}
+        disabled={busy || !(breakdown.total > 0)}
+      >
+        {busy ? 'Creating…' : copy.cta}
+      </button>
+      {!(breakdown.total > 0) && (
+        <div className="meta" style={{ marginTop: 8 }}>
+          This job has no billable amount yet — price the estimate first.
+        </div>
+      )}
+      {error && (
+        <div
+          className="inline-alert error"
+          role="alert"
+          style={{ marginTop: 12, marginBottom: 0 }}
+        >
+          {error}
+        </div>
+      )}
     </Card>
   );
 }
@@ -677,6 +771,8 @@ export default function JobDetailScreen() {
               {customer.email && <div className="meta">{customer.email}</div>}
             </Card>
           )}
+
+          <CreateInvoiceFromJob job={job} />
 
           {invoice && (
             <Card pad>

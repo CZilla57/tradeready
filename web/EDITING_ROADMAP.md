@@ -39,9 +39,9 @@ The editing rollout is complete for the planned browser-first scope:
 
 | Domain | Shipped operations | Important boundary |
 | --- | --- | --- |
-| Invoices | Create manual invoice; edit six invoice-owned fields; record payment; mark balance paid; void payment; delete | Manual invoices do not include the mobile create-from-job billable snapshot |
+| Invoices | Create manual invoice; create from a job (final bill or deposit); edit six invoice-owned fields; record payment; mark balance paid; void payment; delete | Editing an existing deposit invoice in place (finalize) stays mobile-owned |
 | Customers | Create; edit contact details and notes; archive; delete | Jobs and invoices keep their denormalized customer data after deletion |
-| Jobs | Create unpriced lead; edit operational details and schedule; archive; delete | New jobs start as leads and use pricing defaults from Settings |
+| Jobs | Create unpriced lead; edit operational details and schedule; invoice a completed job (advances it to invoiced) or request a deposit up front; archive; delete | New jobs start as leads and use pricing defaults from Settings |
 | Job status | Start a scheduled job; mark an in-progress job complete | The portal does not run mobile auto-invoice or review-request side effects |
 | Estimate pricing | Edit labor, materials, direct costs, markup, overhead, and margin | Editing stops after a customer approval decision exists |
 | Calendar | Assign a date and optional time range to an unscheduled job | No drag-and-drop calendar editor |
@@ -133,15 +133,15 @@ The remaining work is primarily backend-dependent workflow or a new product surf
 
 ### Estimate and invoice workflow
 
-The portal can author an estimate before a customer decision, but it cannot complete these Cloudflare Worker-backed actions:
+The portal now creates an invoice from a job's tracked time, estimate lines, and approved change orders — the browser-safe port of the billable-breakdown rules lives in `web/src/ui/billableMath.ts`, pinned to the mobile engine's own values so it preserves the same accounting snapshot. `createInvoiceFromJob` covers the two creation modes (a completed job's final bill, which advances it to invoiced, and an up-front deposit request, which holds its status) and deliberately derives the amount server-side from the fresh job rather than exposing an editable amount that could diverge from the line items.
+
+It cannot yet complete these Cloudflare Worker-backed actions, or the one edit-existing path:
 
 - Send an estimate and create its customer approval link
 - Record a change order
 - Revise pricing after a declined or approved decision
 - Drive consent-coupled status transitions
-- Create an invoice from a job's tracked time, estimate lines, and approved change orders
-
-A create-from-job invoice needs a browser-safe port of the billable-breakdown rules in `utils/autoInvoice.ts`. It must preserve the same accounting snapshot as mobile.
+- Finalize (edit in place) an existing deposit invoice once its job completes — the create path refuses that job and points the owner to the mobile app; a web finalize needs the ledger-reconcile of `reconcilePaidFields`, not a fresh insert
 
 ### Mobile-only and unsurfaced areas
 
@@ -180,5 +180,6 @@ The following items improve resilience but do not block the current editing surf
 | `web/src/ui/invoiceMath.ts` | Invoice payment and paid-state reconciliation |
 | `web/src/ui/pricingMath.ts` | Browser-safe estimate calculations |
 | `web/src/ui/changeOrderMath.ts` | Change-order amount calculations for display |
+| `web/src/ui/billableMath.ts` | Browser-safe port of the invoice-from-job billable breakdown (`utils/autoInvoice.ts`) |
 | `supabase/migrations/20260803_local_collections_sync.sql` | Synced tables and owner RLS policies |
 | `supabase/migrations/20260831_updated_at_server_authority.sql` | Database-owned `updated_at` trigger |

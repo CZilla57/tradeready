@@ -6,6 +6,7 @@ import type {
   Invoice,
   Job,
   JobCost,
+  JobStatus,
   Material,
   Payment,
   PaymentDraft,
@@ -19,6 +20,12 @@ import type {
   TimeString,
 } from '@shared/types/models';
 import { OPERATIONAL_STATUS_ADVANCE } from '../ui/status';
+import {
+  buildInvoiceLineItems,
+  computeBillableBreakdown,
+  defaultDueDate,
+  invoiceFromJobMode,
+} from '../ui/billableMath';
 import { SECURE_FIELDS } from '@shared/utils/storage/keys';
 import { withArchived } from '@shared/utils/archive';
 import { getTodayDateString } from '@shared/utils/dateHelpers';
@@ -1888,4 +1895,115 @@ export async function voidInvoicePayment(
 ): Promise<Invoice> {
   const server = await loadInvoice(invoiceId);
   return persistInvoice(voidPaymentEntry(server, paymentId, voidedAt));
+}
+
+// ---------------------------------------------------------------------------
+// Create an invoice from a job (roadmap: estimate & invoice workflow —
+// create-from-job)
+//
+// Ports the manual create/requestDeposit paths of the mobile
+// CreateInvoiceFromJobScreen (utils/autoInvoice derivation via
+// web/src/ui/billableMath). It bills the job's estimate lines, its tracked
+// timer hours (finished jobs only, hourly-priced only), and its approved change
+// orders, then advances the job the same way mobile does.
+//
+// Deliberately NARROWER than mobile:
+//   * No editable amount — the amount and line items are derived from the FRESH
+//     server job so what persists always reconciles with the review the screen
+//     showed. (Mobile lets the owner hand-edit the amount; that can diverge from
+//     the derived line items, a foot-gun we don't reproduce here.)
+//   * "finalize" (a job that already has a deposit invoice) is refused. That is
+//     an edit-existing-invoice flow with its own ledger reconcile; it is not a
+//     creation and stays out of this op. The mobile app still handles it.
+//   * No getOrCreateCustomer side effect — the job already carries its
+//     denormalized `customerName` and `customerId`; contact fields are prefilled
+//     by the caller from the loaded customer record (email/phone stay editable
+//     on the invoice afterwards).
+// ---------------------------------------------------------------------------
+
+/** Raised when a job can't be turned into an invoice in its current state
+ *  (still a lead/quoted, its estimate unapproved, or it already has an invoice).
+ *  Distinct from `ValidationError` so the screen can message the state clearly. */
+export class InvoiceFromJobStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvoiceFromJobStateError';
+  }
+}
+
+/** Contact/number prefill the caller resolves from its loaded data. `number` is
+ *  the shared `nextInvoiceNumber` (or a user override), exactly as the manual
+ *  `createInvoice` path expects; `email`/`phone` come from the job's customer
+ *  record; `due` defaults to 30 days out when omitted. */
+export interface InvoiceFromJobDraft {
+  number: string;
+  email?: string;
+  phone?: string;
+  due?: DateString;
+}
+
+/**
+ * Create a new invoice from a job's estimate, tracked time, and approved change
+ * orders, then advance the job.
+ *
+ * Loads the AUTHORITATIVE server job (not the screen's snapshot) and derives the
+ * amount + line items from it, so a concurrent estimate edit or a landed timer
+ * session is billed correctly. Refuses a job whose status can't be invoiced yet
+ * and a job that already has an invoice. A brand-new invoice id means the invoice
+ * write is a pure insert; the job write assigns only the two fields this action
+ * owns (`invoiceId`, and `status` for the final-bill path) onto the fresh row, so
+ * pricing/approval/time-sessions/change-orders survive.
+ */
+export async function createInvoiceFromJob(
+  jobId: string,
+  draft: InvoiceFromJobDraft,
+): Promise<Invoice> {
+  requireNonEmpty(draft.number, 'Invoice number'); // P1.3
+  const due = draft.due ?? defaultDueDate();
+  requireDate(due, 'Due date');
+
+  const job = await loadJob(jobId);
+  const mode = invoiceFromJobMode(job.status, !!job.invoiceId);
+  if (mode === 'finalize') {
+    throw new InvoiceFromJobStateError(
+      'This job already has an invoice. Open it from the Invoices tab to finalize it.',
+    );
+  }
+  if (mode === null) {
+    throw new InvoiceFromJobStateError(
+      "This job can't be invoiced yet — it needs an approved estimate first.",
+    );
+  }
+
+  const amount = computeBillableBreakdown(job).total;
+  requirePositive(amount, 'Invoice amount'); // nothing billable → nothing to invoice
+  const lineItems = buildInvoiceLineItems(job);
+
+  const invoice: Invoice = {
+    id: newInvoiceId(),
+    customer: (job.customerName || '').trim(),
+    customerId: job.customerId ?? '',
+    number: draft.number.trim(),
+    amount,
+    due,
+    email: (draft.email ?? '').trim(),
+    phone: (draft.phone ?? '').trim(),
+    desc: (job.title || '').trim(),
+    paid: false,
+    jobId,
+    ...(lineItems.length > 0 ? { lineItems } : {}),
+  };
+  await persistInvoice(invoice);
+
+  // Advance the job the same way jobStatus.jobChangesAfterInvoiceSave does: the
+  // final bill ("create") moves complete → invoiced; a deposit request holds the
+  // job's status and only links the invoice. Only these owned fields change; the
+  // rest of the freshly-loaded blob is preserved.
+  const jobChanges =
+    mode === 'create'
+      ? { status: 'invoiced' as JobStatus, invoiceId: invoice.id }
+      : { invoiceId: invoice.id };
+  await upsertBlobRow('jobs', jobId, { ...job, ...jobChanges });
+
+  return invoice;
 }
