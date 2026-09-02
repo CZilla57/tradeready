@@ -30,6 +30,12 @@ import {
   fetchRecurringInvoices,
 } from './repository';
 import { useAuth } from './AuthContext';
+import { publishDataChange, subscribeDataChange } from './dataSync';
+
+// After a backgrounded tab comes forward, ignore focus/visibility events that
+// arrive within this window of the last refresh — rapid app/tab switching would
+// otherwise re-pull every collection several times a second.
+const FOCUS_REFRESH_THROTTLE_MS = 3000;
 
 // Each independently-loadable resource has a stable key. Loading, error, and
 // "ever loaded" state are all tracked per key, so one collection failing (say
@@ -185,7 +191,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const reload = useCallback(() => load(RESOURCE_KEYS), [load]);
-  const retry = useCallback((keys: ResourceKey[]) => load(keys), [load]);
+  // A targeted reload is what a screen calls right after it writes, so it is also
+  // the moment to tell sibling tabs which collections changed. Reloads that are
+  // NOT app-driven writes — the focus refresh and an incoming cross-tab notice
+  // (both call `load` directly) — deliberately do not re-broadcast, so tabs can't
+  // ping-pong reloads at each other.
+  const retry = useCallback(
+    (keys: ResourceKey[]) => {
+      load(keys);
+      publishDataChange(keys);
+    },
+    [load],
+  );
 
   // React to the authenticated user changing (including signing out, userId ->
   // null). Clearing here is what guarantees user A's rows are gone the instant
@@ -202,6 +219,42 @@ export function DataProvider({ children }: { children: ReactNode }) {
     } else {
       setLoading(fill(false));
     }
+  }, [userId, load]);
+
+  // Freshen a tab that was left open. A background tab misses every write made
+  // elsewhere — another portal tab, the mobile app, a Stripe webhook — so when
+  // it comes forward we silently re-pull from the server (loaded rows stay
+  // visible; screens report `refreshing`, not a blocking `loading`). Throttled so
+  // rapid app/tab switching doesn't stack redundant refreshes. Signed-out tabs
+  // don't refresh — there is nothing to show.
+  const lastFocusRefreshRef = useRef(0);
+  useEffect(() => {
+    if (!userId) return;
+    function refreshIfStale() {
+      if (document.visibilityState === 'hidden') return; // a blur, not a return
+      const now = Date.now();
+      if (now - lastFocusRefreshRef.current < FOCUS_REFRESH_THROTTLE_MS) return;
+      lastFocusRefreshRef.current = now;
+      load(RESOURCE_KEYS);
+    }
+    document.addEventListener('visibilitychange', refreshIfStale);
+    window.addEventListener('focus', refreshIfStale);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshIfStale);
+      window.removeEventListener('focus', refreshIfStale);
+    };
+  }, [userId, load]);
+
+  // React to a sibling tab announcing a write. Reload exactly the collections it
+  // named (via `load`, not `retry`, so this tab doesn't re-broadcast). Guarded by
+  // sign-in and by the current keys, so a stale message can't refetch under the
+  // wrong session.
+  useEffect(() => {
+    if (!userId) return;
+    return subscribeDataChange((keys) => {
+      const known = keys.filter((k) => RESOURCE_KEYS.includes(k));
+      if (known.length > 0) load(known);
+    });
   }, [userId, load]);
 
   return (

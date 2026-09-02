@@ -113,7 +113,9 @@ Changing `laborHours` clears a stale `laborBreakdown`. Schedule assignment advan
 
 The portal has no offline write queue or row-level version lock. A failed browser request remains failed until the owner retries it.
 
-Field-scoped optimistic concurrency now detects the primary lost-update case: another writer changes a field that the owner also changed. Server-only changes to unrelated fields continue through the fresh-row merge. Operations that intentionally own a group of fields can still replace server changes within that owned group, and open tabs do not update through Supabase Realtime.
+Field-scoped optimistic concurrency now detects the primary lost-update case: another writer changes a field that the owner also changed. Server-only changes to unrelated fields continue through the fresh-row merge. Operations that intentionally own a group of fields can still replace server changes within that owned group.
+
+Open tabs stay reasonably fresh without a Supabase Realtime subscription. `web/src/lib/DataContext.tsx` re-pulls the affected collections when a backgrounded tab returns to the foreground (a throttled `visibilitychange`/`focus` refresh), which catches writes from any client — another portal tab, the mobile app, a Stripe webhook. `web/src/lib/dataSync.ts` adds a `BroadcastChannel` ping so a write in one portal tab reaches its siblings immediately rather than only on their next focus; it degrades to focus-only refresh where `BroadcastChannel` is unavailable. Neither is a live row subscription — two side-by-side visible tabs still rely on the broadcast, and a non-portal write reaches a focused-but-idle tab only on its next foregrounding.
 
 Do not add a generic `write(table, id, data)` helper. New mutations must meet this definition of done:
 
@@ -161,7 +163,7 @@ The following items improve resilience but do not block the current editing surf
 
 - Add stronger atomic database conditions to any domain where field-scoped client checks are insufficient
 - Stop sending client-generated `updated_at` values from mobile now that the database trigger owns timestamps
-- Add multi-tab or Realtime refresh if stale open tabs become a support issue
+- Upgrade the multi-tab freshness (focus refresh + cross-tab broadcast, shipped) to a live Supabase Realtime row subscription if side-by-side or idle-but-focused staleness becomes a support issue
 
 ## Files that constrain future work
 
@@ -174,7 +176,8 @@ The following items improve resilience but do not block the current editing surf
 | `web/src/lib/repository.ts` | Read-only Supabase access |
 | `web/src/lib/writeRepository.ts` | Validation, conflict detection, and all web business-data mutations |
 | `web/src/lib/readOnly.arch.test.ts` | Static enforcement of the read/write boundary |
-| `web/src/lib/DataContext.tsx` | Scoped loading and post-write refresh |
+| `web/src/lib/DataContext.tsx` | Scoped loading, post-write refresh, and focus/cross-tab freshening |
+| `web/src/lib/dataSync.ts` | Same-origin cross-tab change broadcast (`BroadcastChannel`) |
 | `web/src/ui/invoiceMath.ts` | Invoice payment and paid-state reconciliation |
 | `web/src/ui/pricingMath.ts` | Browser-safe estimate calculations |
 | `web/src/ui/changeOrderMath.ts` | Change-order amount calculations for display |
