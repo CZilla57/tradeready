@@ -1,7 +1,10 @@
 # Web portal: estimate and change-order workflow
 
-Status: **revised scope, not started** (companion to
-`web/EDITING_ROADMAP.md`).
+Status: **Phase 0 complete (backend authority); Phases 1–5 not started**
+(companion to `web/EDITING_ROADMAP.md`). Phase 0 landed the Workers-canonical
+decision, the additive model fields, and the concurrency-safe conditional-write
+contract with a passing concurrency matrix — the gate for beginning portal
+mutations.
 
 This document scopes the remaining estimate-consent and change-order work in
 the web portal. Read `web/EDITING_ROADMAP.md` first for the existing write
@@ -108,9 +111,15 @@ the number of Job-blob writers.
 ### Backend and configuration
 
 - Cloudflare Workers is the canonical production backend for this workflow.
-  Confirm whether the parallel Vercel implementation is still routed before
-  coding. Retire it if unused; if it remains live, the same conditional-write
-  and CORS tests must run against both implementations.
+  **Resolved (2026-09-02):** the Vercel copy (`backend/`) is dormant and
+  unrouted — every client points at `tradeready-backend.tradeready.workers.dev`
+  (`app.json`, `jest.setup.js`; the web portal calls no estimate mutation yet),
+  and the docs record it as a rollback target held since the 2026-08-06 cutover.
+  Therefore all Phase 0 conditional-write and CORS work targets
+  `backend-workers/` only; there is no dual-backend test matrix. `backend/` stays
+  frozen as-is. Remaining action: confirm the Vercel project's reminder cron is
+  disabled (or the project paused) so it cannot double-send, then formally mark
+  `backend/` decommissioned.
 - The web client reads `VITE_BACKEND_URL`, with the Workers production URL as a
   documented production default. Production builds reject non-HTTPS values;
   local development may use `http://localhost`.
@@ -330,11 +339,41 @@ validation.
 
 ### Phase 0 — decisions and backend authority
 
-1. Confirm Workers as canonical and resolve the Vercel copy.
+1. Confirm Workers as canonical and resolve the Vercel copy. **Done
+   (2026-09-02):** Workers is canonical; the Vercel `backend/` is dormant and
+   unrouted, so tasks 3–4 target `backend-workers/` only. Follow-up before
+   decommission: verify the dormant Vercel reminder cron cannot double-send. See
+   the Backend and configuration decision above.
 2. Add `approvalHistory` plus approval `sharedAt` / `withdrawnAt` to the shared
-   model and parity tests.
-3. Implement versioned reads and conditional Job writes in the Worker.
-4. Convert create/respond/change-respond to the conditional contract.
+   model and parity tests. **Done (2026-09-02):** `types/models.ts` gains
+   `EstimateApproval.sharedAt` / `.withdrawnAt` (server-stamped delivery /
+   withdrawal, reused by change-order links) and `Job.approvalHistory` (append-
+   only, additive-optional). No runtime schema strips job-blob fields, so the
+   additive keys ride through; preservation is pinned by
+   `__tests__/approvalHistoryModel.test.ts` (the client reconciler keeps them)
+   and `__tests__/estimateRouteConditionalWorkers.test.js` (a Worker decision
+   write preserves `approvalHistory` + `sharedAt`, and the customer view
+   endpoint never exposes them).
+3. Implement versioned reads and conditional Job writes in the Worker. **Done
+   (2026-09-02):** `backend-workers/lib/estimateStore.js` gains
+   `fetchJobVersioned` / `fetchJobForUserVersioned` (behavior #1),
+   `conditionalUpdateJob` (an `updated_at=eq` guarded PATCH that treats a
+   zero-row write as a conflict and sends no client timestamp — behaviors #2,
+   #3, #6), and `updateJobConditionally`, a bounded retry loop that delegates the
+   operation-specific safe-reapply decision to a caller `plan` (behaviors #4,
+   #5). The DB-trigger prerequisite (`set_updated_at_trg`, migration 20260831)
+   is already in place. Covered by `__tests__/estimateStoreConditional.test.js`.
+4. Convert create/respond/change-respond to the conditional contract. **Done
+   (2026-09-02):** all three Workers routes now write through
+   `updateJobConditionally` with an operation-specific `plan` — customer
+   estimate/change decisions re-check the token on the freshest version and hold
+   the terminal lock; link minting reuses one token across retries and freezes
+   an already-approved snapshot. Status codes and response shapes are unchanged;
+   the now-unused unconditional `upsertJob` was removed. Covered by
+   `__tests__/estimateRouteConditionalWorkers.test.js`, whose concurrency cases
+   prove an owner edit + customer decision both survive, a racing manual decision
+   beats a stale customer link (loser gets 409), and a customer approval landing
+   before a re-send wins (no second token, snapshot not regressed).
 
 **Gate:** all Worker tests pass, including the complete concurrency matrix. Do
 not begin portal mutations until customer decisions are proven lossless.
