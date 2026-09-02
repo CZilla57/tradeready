@@ -367,6 +367,15 @@ context/
   SubscriptionContext.tsx        ← RevenueCat subscription state
   SyncStatusContext.tsx          ← Sync queue status (pending count, last sync)
 
+web/                             ← Browser owner portal (Vite + React + TypeScript)
+  README.md                      ← Current web capabilities, limits, local setup, deployment
+  EDITING_ROADMAP.md             ← Shipped safeguards and remaining web workflow
+  src/App.tsx                    ← Authenticated route map
+  src/lib/repository.ts          ← Owner-scoped Supabase reads
+  src/lib/writeRepository.ts     ← Sole web business-data mutation module
+  src/screens/                   ← Today, Calendar, Jobs, Estimates, Invoices,
+                                   Customers, Money, Recurring, Pricebook, Settings
+
 backend/                         ← Vercel serverless functions — DORMANT since the
                                    2026-08-06 cutover to backend-workers/ (kept
                                    deployed as a rollback target, not the live backend)

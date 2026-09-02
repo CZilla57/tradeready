@@ -43,6 +43,12 @@ See the "Sync model" section of README.md for how the local-first queue works �
 including the one place sync merges rather than replaces (an invoice's payment
 ledger, unioned by payment id).
 
+**The owner web portal is implemented in the repository:** `web/` is a standalone Vite,
+React, and TypeScript app for browser access to the same Supabase account. It
+supports broad editing across jobs, estimates, invoices, customers, expenses,
+recurring work, pricebook, calendar, and settings. See `web/README.md` for the
+current capability boundary and `web/EDITING_ROADMAP.md` for concurrency rules.
+
 For the authoritative data shapes, see `types/models.ts`. The Data Models section below
 is a simplified overview.
 
@@ -599,12 +605,20 @@ target — see the migration notes. A single Worker also removes the Vercel Hobb
 - PDF generation for proposals and invoices
 - ⚠️ Google Maps Directions API: planned for route optimization; not yet wired up
 
+### Owner web portal
+
+- **Vite 6 / React 19 / TypeScript**: standalone browser single-page application in `web/`
+- **Supabase Auth**: email/password, Google OAuth, Apple OAuth, and password recovery
+- **Supabase data access**: reads and typed domain writes against the same owner-scoped rows as mobile
+- **Shared contracts**: imports canonical models and browser-safe utilities through the `@shared` alias
+- **Vitest and React Testing Library**: repository, screen, authentication, routing, and calculation coverage
+- **Static deployment**: `web/dist` requires a single-page application fallback for client-side routes
+
 ### Observability
 - **PostHog** — 51 business events as of 2026-08-08 (sign_up, job_created, invoice_paid, insight_shown/tapped/dismissed, etc. — grep `track(` in screens/utils/hooks/components for the full set)
 - **Sentry** — error reporting via `reportError()` in all critical catch blocks
 
 ### Future (multi-user / scale)
-- Web dashboard
 - Team / subcontractor accounts
 
 ---
@@ -645,7 +659,7 @@ Build in this sequence so you always have something shippable:
 
 **Phase 5 — Scale**
 ✅ Cloud sync (Supabase — local-first)
-⬜ Web dashboard
+✅ Owner web portal (shared Supabase account with broad browser editing)
 ⬜ Team / subcontractor support
 ✅ Customer self-booking portal (bookable slots on the booking link +
    per-customer portal with appointments, change orders, photos and
