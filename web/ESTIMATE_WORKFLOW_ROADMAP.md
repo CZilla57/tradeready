@@ -1,7 +1,10 @@
 # Web portal: estimate and change-order workflow
 
-Status: **revised scope, not started** (companion to
-`web/EDITING_ROADMAP.md`).
+Status: **Phase 0 complete (backend authority); Phases 1–5 not started**
+(companion to `web/EDITING_ROADMAP.md`). Phase 0 landed the Workers-canonical
+decision, the additive model fields, and the concurrency-safe conditional-write
+contract with a passing concurrency matrix — the gate for beginning portal
+mutations.
 
 This document scopes the remaining estimate-consent and change-order work in
 the web portal. Read `web/EDITING_ROADMAP.md` first for the existing write
@@ -342,7 +345,15 @@ validation.
    decommission: verify the dormant Vercel reminder cron cannot double-send. See
    the Backend and configuration decision above.
 2. Add `approvalHistory` plus approval `sharedAt` / `withdrawnAt` to the shared
-   model and parity tests.
+   model and parity tests. **Done (2026-09-02):** `types/models.ts` gains
+   `EstimateApproval.sharedAt` / `.withdrawnAt` (server-stamped delivery /
+   withdrawal, reused by change-order links) and `Job.approvalHistory` (append-
+   only, additive-optional). No runtime schema strips job-blob fields, so the
+   additive keys ride through; preservation is pinned by
+   `__tests__/approvalHistoryModel.test.ts` (the client reconciler keeps them)
+   and `__tests__/estimateRouteConditionalWorkers.test.js` (a Worker decision
+   write preserves `approvalHistory` + `sharedAt`, and the customer view
+   endpoint never exposes them).
 3. Implement versioned reads and conditional Job writes in the Worker. **Done
    (2026-09-02):** `backend-workers/lib/estimateStore.js` gains
    `fetchJobVersioned` / `fetchJobForUserVersioned` (behavior #1),

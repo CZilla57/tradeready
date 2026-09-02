@@ -12,6 +12,7 @@
 import { estimateCreateLinkHandler } from '../backend-workers/src/routes/estimate/createLink.js';
 import { estimateRespondHandler } from '../backend-workers/src/routes/estimate/respond.js';
 import { changeRespondHandler } from '../backend-workers/src/routes/estimate/changeRespond.js';
+import { estimateViewHandler } from '../backend-workers/src/routes/estimate/view.js';
 
 const ENV = {
   SUPABASE_URL: 'https://supa.test',
@@ -79,7 +80,7 @@ function createSupabaseSim({ job, user = { id: 'u1' }, afterRead = null }) {
 
 // ---- Hono-context fake ---------------------------------------------------
 
-function makeCtx({ method = 'POST', headers = {}, body }) {
+function makeCtx({ method = 'POST', headers = {}, body, query = {} }) {
   const lower = {};
   for (const [k, v] of Object.entries(headers)) lower[k.toLowerCase()] = v;
   const resHeaders = {};
@@ -89,6 +90,7 @@ function makeCtx({ method = 'POST', headers = {}, body }) {
     req: {
       method,
       header: (name) => lower[String(name).toLowerCase()],
+      query: (name) => query[name],
       json: async () => body,
     },
     header: (k, v) => { resHeaders[k] = v; },
@@ -321,5 +323,60 @@ describe('estimateCreateLinkHandler (conditional)', () => {
     expect(res.body.token).toBe('PRE'); // reused the approved link, no new token
     expect(sim.get('j1').data.approval.decision).toBe('approved'); // decision preserved
     expect(sim.get('j1').data.approval.snapshot).toEqual({ total: 500 }); // NOT re-snapshotted to 999
+  });
+});
+
+// =========================================================================
+// Additive-field preservation (Phase 0 task 2): approvalHistory + the
+// approval sharedAt/withdrawnAt stamps ride the job blob. Every Worker write
+// must preserve them, and the customer endpoint must never expose them.
+// =========================================================================
+describe('approvalHistory / delivery-stamp preservation', () => {
+  it('a customer decision write preserves an existing approvalHistory and the active sharedAt', async () => {
+    const sim = createSupabaseSim({
+      job: {
+        id: 'j1', user_id: 'u1', updated_at: 'v1',
+        data: {
+          estimateTotal: 2400,
+          approval: { token: 'TOK', sentAt: 's', sharedAt: 'd1', snapshot: {} },
+          approvalHistory: [
+            { token: 'OLD', sentAt: 's0', snapshot: {}, decision: 'declined', consentAt: 'c0', withdrawnAt: 'w0' },
+          ],
+        },
+      },
+    });
+    global.fetch = sim.fetchImpl;
+    const res = await estimateRespondHandler(makeCtx({
+      headers: CUSTOMER_HEADERS,
+      body: { jobId: 'j1', token: 'TOK', decision: 'approved', signerName: 'Sam' },
+    }));
+    expect(res.status).toBe(200);
+    const saved = sim.get('j1').data;
+    expect(saved.approval.decision).toBe('approved');
+    expect(saved.approval.sharedAt).toBe('d1'); // delivery stamp untouched by the decision
+    expect(saved.approvalHistory).toHaveLength(1); // append-only archive preserved
+    expect(saved.approvalHistory[0]).toMatchObject({ token: 'OLD', decision: 'declined', withdrawnAt: 'w0' });
+  });
+
+  it('the customer view endpoint never leaks approvalHistory (or the raw approval object)', async () => {
+    const sim = createSupabaseSim({
+      job: {
+        id: 'j1', user_id: 'u1', updated_at: 'v1',
+        data: {
+          approval: { token: 'TOK', sentAt: 's', sharedAt: 'd1', snapshot: { total: 500, businessName: 'Acme' } },
+          approvalHistory: [{ token: 'SECRET_OLD', sentAt: 's0', snapshot: { total: 9 }, decision: 'declined' }],
+        },
+      },
+    });
+    global.fetch = sim.fetchImpl;
+    const res = await estimateViewHandler(makeCtx({
+      method: 'GET', headers: CUSTOMER_HEADERS, query: { j: 'j1', t: 'TOK' },
+    }));
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('approvalHistory');
+    expect(res.body).not.toHaveProperty('token');
+    expect(res.body).not.toHaveProperty('sharedAt');
+    expect(JSON.stringify(res.body)).not.toContain('SECRET_OLD');
+    expect(res.body).toMatchObject({ total: 500, businessName: 'Acme' }); // only the frozen snapshot
   });
 });

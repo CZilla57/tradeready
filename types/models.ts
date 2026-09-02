@@ -216,6 +216,26 @@ export interface EstimateApproval {
   declineReason?: string;
   ip?: string;
   userAgent?: string;
+  /**
+   * Owner-confirmed DELIVERY stamp (server-written; 2026-09 estimate-workflow
+   * spec). Minting a link only creates the frozen review artifact — `sharedAt`
+   * records that the owner confirmed they actually shared it ("Mark estimate as
+   * sent"). It gates the link's derived state: a token with no `sharedAt` is
+   * `ready`; `sharedAt` with no `decision` is `awaiting`. Automated follow-up
+   * timing starts here, not at token creation. The portal only REQUESTS the
+   * stamp; the conditional server write owns its clock value. Applies equally to
+   * a change-order link (ChangeOrder.approval reuses this type). ADDITIVE-
+   * OPTIONAL: absent on every pre-feature artifact.
+   */
+  sharedAt?: DateString;
+  /**
+   * One-way WITHDRAWAL stamp (server-written): set when the owner withdraws an
+   * UNDECIDED link to revise an open estimate. Its presence invalidates the link
+   * (the token stops resolving) and the artifact is archived to
+   * Job.approvalHistory. Never set once a decision landed — a customer decision
+   * racing the withdrawal wins. Server owns the clock value. ADDITIVE-OPTIONAL.
+   */
+  withdrawnAt?: DateString;
 }
 
 /** Device-written record of an on-site (verbal) change-order decision. */
@@ -316,6 +336,17 @@ export interface Job {
    */
   estimateSentAt?: DateString;
   approval?: EstimateApproval;
+  /**
+   * Append-only archive of superseded approval artifacts (2026-09 estimate-
+   * workflow spec). A declined estimate that is revised, or an undecided link
+   * that is withdrawn, has its exact `approval` pushed here UNCHANGED before the
+   * active `approval` is cleared — so prior consent/decline metadata and the old
+   * snapshot stay visible to the owner while the old token stops resolving.
+   * OPTIONAL and additive (absent means no prior attempts). Never mutated in
+   * place, never exposed to the customer approval endpoint, and preserved by
+   * every client and Worker write of the job blob.
+   */
+  approvalHistory?: EstimateApproval[];
   /**
    * Scope changes (2026-08-05 spec). OPTIONAL and additive — ABSENT on every
    * pre-feature job, deliberate; utils/changeOrders.ts treats absent as [].
