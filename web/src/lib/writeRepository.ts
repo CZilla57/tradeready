@@ -551,8 +551,10 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 // The portal authors a job's estimate — the pricing inputs, its materials, and
 // the derived `estimateTotal` — exactly as the mobile PricingCalculator's
 // `saveToJob` does: spread the CURRENT job and overwrite ONLY the pricing fields,
-// leaving status, approval, invoiceId, changeOrders, timeSessions, jobCosts, and
-// laborBreakdown untouched. Applied onto a FRESHLY re-fetched server row
+// leaving status, approval, invoiceId, changeOrders, and timeSessions untouched.
+// `laborBreakdown` is preserved only while its canonical
+// `laborHours` total is unchanged; changing the total clears the now-stale split.
+// Applied onto a FRESHLY re-fetched server row
 // (`loadJob`), so a customer's estimate action or a mobile workflow write landing
 // between page load and save is never clobbered (same guarantee as
 // `updateJobDetails`).
@@ -570,8 +572,9 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 // ---------------------------------------------------------------------------
 
 /** The pricing fields the portal authors on a job. `laborBreakdown` is preserved
- *  from the server row (not authored here); `estimateTotal` is the caller's
- *  pricingMath recompute over the inputs + materials + jobCosts. */
+ *  from the server row only when `laborHours` is unchanged (the portal does not
+ *  author the split); `estimateTotal` is the caller's pricingMath recompute over
+ *  the inputs + materials + jobCosts. */
 export interface JobPricingEdit {
   laborHours: number;
   laborRate: number;
@@ -599,6 +602,7 @@ export async function updateJobPricing(
     margin: edit.margin,
     estimateTotal: edit.estimateTotal,
   };
+  if (edit.laborHours !== server.laborHours) delete next.laborBreakdown;
   await upsertBlobRow('jobs', jobId, next);
   return next;
 }

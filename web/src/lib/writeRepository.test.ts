@@ -525,6 +525,12 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
       const approval = { decision: 'approved', token: 't' };
       const changeOrders = [{ id: 'co1' }];
       const timeSessions = [{ start: '2026-09-01T09:00:00Z', end: null }];
+      const laborBreakdown = {
+        onSiteHours: 3,
+        driveHours: 0.5,
+        supplyRunHours: 0.25,
+        setupCleanupHours: 0.25,
+      };
       state.serverRow = {
         data: job({
           title: 'Deck rebuild',
@@ -533,6 +539,7 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
           approval,
           changeOrders,
           timeSessions,
+          laborBreakdown,
         } as Partial<Job>),
         deleted: false,
       };
@@ -553,6 +560,26 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
       expect((written as unknown as { approval: unknown }).approval).toEqual(approval);
       expect(written.changeOrders).toEqual(changeOrders);
       expect(written.timeSessions).toEqual(timeSessions);
+      // The edited 3-hour total cannot retain the old 4-hour component split.
+      expect(written).not.toHaveProperty('laborBreakdown');
+    });
+
+    it('preserves the component split when labor hours are unchanged', async () => {
+      const laborBreakdown = {
+        onSiteHours: 3,
+        driveHours: 0.5,
+        supplyRunHours: 0.25,
+        setupCleanupHours: 0.25,
+      };
+      state.serverRow = {
+        data: job({ laborHours: 4, laborBreakdown }),
+        deleted: false,
+      };
+
+      await updateJobPricing('job-1', { ...pricing, laborHours: 4 });
+
+      const written = state.lastUpsert!.data as Job;
+      expect(written.laborBreakdown).toEqual(laborBreakdown);
     });
 
     it('throws JobNotFoundError when the row is missing', async () => {

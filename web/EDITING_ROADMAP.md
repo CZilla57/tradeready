@@ -315,9 +315,11 @@ five):
        `estimateTotalFromPricing` port over the edited inputs + materials + jobCosts
        — matching the mobile PricingCalculator's `saveToJob` (P0.6). The write op
        `updateJobPricing` spreads the FRESHLY re-fetched server row and overwrites
-       ONLY the pricing fields, so status, approval, invoiceId, changeOrders,
-       timeSessions, and laborBreakdown survive untouched (same fresh-row guarantee
-       as `updateJobDetails`). CONSENT GATE: `canAuthorEstimate(job)` hides the
+       ONLY the pricing fields, so status, approval, invoiceId, changeOrders, and
+       timeSessions survive untouched; `laborBreakdown` survives only when
+       `laborHours` is unchanged, otherwise the stale split is cleared (same
+       fresh-row guarantee as `updateJobDetails`). CONSENT GATE:
+       `canAuthorEstimate(job)` hides the
        editor once the customer has a FROZEN `approval.decision` (approved/declined)
        — re-pricing a signed estimate is the deferred change-order surface — and the
        card shows a "locked" note instead; gating on the decision (not status)
