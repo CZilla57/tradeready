@@ -39,17 +39,17 @@ The editing rollout is complete for the planned browser-first scope:
 
 | Domain | Shipped operations | Important boundary |
 | --- | --- | --- |
-| Invoices | Create manual invoice; edit six invoice-owned fields; record payment; mark balance paid; void payment; delete | Manual invoices do not include the mobile create-from-job billable snapshot |
+| Invoices | Create manual invoice; create from a job (final bill or deposit); finalize a deposit invoice into the full job bill; edit six invoice-owned fields; record payment; mark balance paid; void payment; delete | Finalize re-derives the full total server-side rather than exposing an editable amount |
 | Customers | Create; edit contact details and notes; archive; delete | Jobs and invoices keep their denormalized customer data after deletion |
-| Jobs | Create unpriced lead; edit operational details and schedule; archive; delete | New jobs start as leads and use pricing defaults from Settings |
+| Jobs | Create unpriced lead; edit operational details and schedule; invoice a completed job (advances it to invoiced) or request a deposit up front; archive; delete | New jobs start as leads and use pricing defaults from Settings |
 | Job status | Start a scheduled job; mark an in-progress job complete | The portal does not run mobile auto-invoice or review-request side effects |
 | Estimate pricing | Edit labor, materials, direct costs, markup, overhead, and margin | Editing stops after a customer approval decision exists |
 | Calendar | Assign a date and optional time range to an unscheduled job | No drag-and-drop calendar editor |
-| Pricebook | Create, edit, or delete services; author materials and pricing | Direct-cost authoring remains limited to job estimates |
+| Pricebook | Create, edit, or delete services; author materials, direct-cost lines, and pricing | Advanced per-line cost knobs (handling markup %, taxable, hidden) round-trip but are authored on mobile |
 | Expenses | Create, edit, or delete | Receipt and import metadata round-trip without a web editor |
 | Settings | Edit profile, pricing, invoicing, automation, schedule, blackouts, and payment notes | Stripe provider setup and booking configuration remain mobile-owned |
 | Maintenance plans | Create; edit recurrence and invoice settings; pause; resume; delete | Customer relinking is not supported |
-| Recurring jobs | Create; edit pricing, materials, and recurrence; pause; resume; delete | Direct-cost lines round-trip but are not editable here |
+| Recurring jobs | Create; edit pricing, materials, direct-cost lines, and recurrence; pause; resume; delete | Advanced per-line cost knobs round-trip but are authored on mobile |
 
 Today remains a derived dashboard. Money totals are derived, while expense records are editable.
 
@@ -133,15 +133,14 @@ The remaining work is primarily backend-dependent workflow or a new product surf
 
 ### Estimate and invoice workflow
 
-The portal can author an estimate before a customer decision, but it cannot complete these Cloudflare Worker-backed actions:
+The portal now bridges a job into an invoice across all three of the mobile screen's modes — the browser-safe port of the billable-breakdown rules lives in `web/src/ui/billableMath.ts`, pinned to the mobile engine's own values so it preserves the same accounting snapshot. `createInvoiceFromJob` handles the two creation modes (a completed job's final bill, which advances it to invoiced, and an up-front deposit request, which holds its status); `finalizeInvoiceFromJob` handles the edit-existing mode, re-billing a completed job's deposit invoice up to the full total on the authoritative row so the deposit already paid carries over through `reconcilePaidFields` and the job advances to paid or invoiced accordingly. All three derive the amount server-side from the fresh job rather than exposing an editable amount that could diverge from the line items.
+
+It cannot yet complete these Cloudflare Worker-backed actions:
 
 - Send an estimate and create its customer approval link
 - Record a change order
 - Revise pricing after a declined or approved decision
 - Drive consent-coupled status transitions
-- Create an invoice from a job's tracked time, estimate lines, and approved change orders
-
-A create-from-job invoice needs a browser-safe port of the billable-breakdown rules in `utils/autoInvoice.ts`. It must preserve the same accounting snapshot as mobile.
 
 ### Mobile-only and unsurfaced areas
 
@@ -162,7 +161,6 @@ The following items improve resilience but do not block the current editing surf
 
 - Add stronger atomic database conditions to any domain where field-scoped client checks are insufficient
 - Stop sending client-generated `updated_at` values from mobile now that the database trigger owns timestamps
-- Add direct-cost authoring to pricebook and recurring-job editors if owners need it
 - Add multi-tab or Realtime refresh if stale open tabs become a support issue
 
 ## Files that constrain future work
@@ -180,5 +178,6 @@ The following items improve resilience but do not block the current editing surf
 | `web/src/ui/invoiceMath.ts` | Invoice payment and paid-state reconciliation |
 | `web/src/ui/pricingMath.ts` | Browser-safe estimate calculations |
 | `web/src/ui/changeOrderMath.ts` | Change-order amount calculations for display |
+| `web/src/ui/billableMath.ts` | Browser-safe port of the invoice-from-job billable breakdown (`utils/autoInvoice.ts`) |
 | `supabase/migrations/20260803_local_collections_sync.sql` | Synced tables and owner RLS policies |
 | `supabase/migrations/20260831_updated_at_server_authority.sql` | Database-owned `updated_at` trigger |

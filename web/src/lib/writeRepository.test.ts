@@ -676,6 +676,44 @@ describe('savePricebookEntry — metadata edit, pricing preserved', () => {
     // The blob's own updatedAt is refreshed.
     expect(data.updatedAt).not.toBe('2026-08-01');
   });
+
+  it('writes edited direct-cost lines onto the entry', async () => {
+    // Server matches the baseline, so the field is unchanged server-side and the
+    // guard lets the edit through, then merges it onto the fresh row.
+    state.serverRow = { data: entry(), deleted: false };
+    const line = {
+      id: 'jc1',
+      label: 'Dumpster',
+      category: 'disposal' as const,
+      quantity: 1,
+      unitCost: 120,
+      markupPercent: 0,
+      markupPolicy: 'passthrough' as const,
+      taxable: false,
+      customerVisible: true,
+    };
+    await savePricebookEntry(entry({ jobCosts: [line] }), entry());
+    const data = state.lastUpsert!.data as PricebookEntry;
+    expect(data.jobCosts).toEqual([line]);
+  });
+
+  it('rejects a direct-cost line with a negative unit cost', async () => {
+    const bad = {
+      id: 'jc1',
+      label: 'Bad',
+      category: 'other' as const,
+      quantity: 1,
+      unitCost: -5,
+      markupPercent: 0,
+      markupPolicy: 'in_margin_base' as const,
+      taxable: false,
+      customerVisible: true,
+    };
+    await expect(
+      savePricebookEntry(entry({ jobCosts: [bad] }), entry()),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(state.lastUpsert).toBeNull();
+  });
 });
 
 describe('createPricebookEntry — new service with a mobile-format id', () => {
@@ -688,6 +726,7 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       laborHours: 1.5,
       laborRate: 100,
       materials: [{ id: 'm1', name: 'Anode rod', quantity: 1, unitCost: 40 }],
+      jobCosts: [],
       materialMarkup: 20,
       overhead: 15,
       margin: 20,
@@ -710,6 +749,32 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
     });
   });
 
+  it('persists authored direct-cost lines; omits an empty list', async () => {
+    const line = {
+      id: 'jc1',
+      label: 'Permit',
+      category: 'permit' as const,
+      quantity: 1,
+      unitCost: 75,
+      markupPercent: 0,
+      markupPolicy: 'passthrough' as const,
+      taxable: false,
+      customerVisible: true,
+    };
+    const withCosts = await createPricebookEntry({
+      name: 'Panel swap', category: '', description: '', laborHours: 4, laborRate: 100,
+      materials: [], jobCosts: [line], materialMarkup: 0, overhead: 15, margin: 20, estimateTotal: 600,
+    });
+    expect(withCosts.jobCosts).toEqual([line]);
+
+    const withoutCosts = await createPricebookEntry({
+      name: 'Basic', category: '', description: '', laborHours: 1, laborRate: 90,
+      materials: [], jobCosts: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 90,
+    });
+    // A fresh record with no direct costs omits the key (mobile fresh shape).
+    expect(withoutCosts.jobCosts).toBeUndefined();
+  });
+
   it('collapses blank category/description to undefined', async () => {
     const created = await createPricebookEntry({
       name: 'Basic call-out',
@@ -718,6 +783,7 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
       laborHours: 1,
       laborRate: 90,
       materials: [],
+      jobCosts: [],
       materialMarkup: 0,
       overhead: 0,
       margin: 0,
@@ -730,11 +796,11 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
   it('mints a unique id on each call within the same millisecond', async () => {
     const a = await createPricebookEntry({
       name: 'A', category: '', description: '', laborHours: 1, laborRate: 1,
-      materials: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+      materials: [], jobCosts: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
     });
     const b = await createPricebookEntry({
       name: 'B', category: '', description: '', laborHours: 1, laborRate: 1,
-      materials: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
+      materials: [], jobCosts: [], materialMarkup: 0, overhead: 0, margin: 0, estimateTotal: 1,
     });
     expect(a.id).not.toBe(b.id);
   });
@@ -1070,6 +1136,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       laborHours: 3,
       laborRate: 100,
       materials: [{ id: 'm2', name: 'Brush', quantity: 2, unitCost: 5 }],
+      jobCosts: [],
       materialMarkup: 10,
       overhead: 15,
       margin: 20,
@@ -1101,6 +1168,42 @@ describe('recurring pause/resume — preserve generation state', () => {
     expect(written.materials).toEqual([{ id: 'm2', name: 'Brush', quantity: 2, unitCost: 5 }]);
   });
 
+  it('writes edited direct-cost lines onto the rule', async () => {
+    state.serverRow = { data: recJob(), deleted: false };
+    const line = {
+      id: 'jc1',
+      label: 'Disposal',
+      category: 'disposal' as const,
+      quantity: 1,
+      unitCost: 60,
+      markupPercent: 0,
+      markupPolicy: 'passthrough' as const,
+      taxable: false,
+      customerVisible: true,
+    };
+    await updateRecurringJobRule(
+      'rj1',
+      {
+        title: 'Gutter clean',
+        description: '',
+        laborHours: 2,
+        laborRate: 90,
+        materials: [],
+        jobCosts: [line],
+        materialMarkup: 0,
+        overhead: 0,
+        margin: 0,
+        estimateTotal: 400,
+        cadence: 'monthly',
+        endCondition: 'never',
+        originalNextDueDate: '2026-09-01',
+        nextDueDate: '2026-09-01',
+      },
+      recJob(),
+    );
+    expect((state.lastUpsert!.data as RecurringJob).jobCosts).toEqual([line]);
+  });
+
   it('preserves a recurring job date advanced while its editor was open', async () => {
     state.serverRow = {
       data: recJob({
@@ -1117,6 +1220,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       laborHours: 2,
       laborRate: 90,
       materials: [],
+      jobCosts: [],
       materialMarkup: 0,
       overhead: 0,
       margin: 0,
@@ -1145,6 +1249,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       laborHours: 2,
       laborRate: 90,
       materials: [],
+      jobCosts: [],
       materialMarkup: 0,
       overhead: 0,
       margin: 0,
@@ -1265,6 +1370,7 @@ describe('recurring pause/resume — preserve generation state', () => {
       laborHours: 2,
       laborRate: 90,
       materials: [{ id: 'm1', name: 'Sealant', quantity: 1, unitCost: 12 }],
+      jobCosts: [],
       materialMarkup: 20,
       overhead: 15,
       margin: 20,
@@ -1300,10 +1406,39 @@ describe('recurring pause/resume — preserve generation state', () => {
     expect(data.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
+  it('createRecurringJob persists authored direct-cost lines; omits an empty list', async () => {
+    const line = {
+      id: 'jc1',
+      label: 'Subcontractor',
+      category: 'subcontractor' as const,
+      quantity: 1,
+      unitCost: 200,
+      markupPercent: 10,
+      markupPolicy: 'in_margin_base' as const,
+      taxable: false,
+      customerVisible: true,
+    };
+    const withCosts = await createRecurringJob({
+      customerId: 'c1', customerName: 'Acme', title: 'Reno', description: '',
+      laborHours: 2, laborRate: 90, materials: [], jobCosts: [line], materialMarkup: 0,
+      overhead: 0, margin: 0, estimateTotal: 500, cadence: 'monthly',
+      endCondition: 'never', nextDueDate: '2026-10-01',
+    });
+    expect(withCosts.jobCosts).toEqual([line]);
+
+    const withoutCosts = await createRecurringJob({
+      customerId: 'c1', customerName: 'Acme', title: 'Plain', description: '',
+      laborHours: 1, laborRate: 90, materials: [], jobCosts: [], materialMarkup: 0,
+      overhead: 0, margin: 0, estimateTotal: 90, cadence: 'monthly',
+      endCondition: 'never', nextDueDate: '2026-10-01',
+    });
+    expect(withoutCosts.jobCosts).toBeUndefined();
+  });
+
   it('createRecurringJob normalises end bounds and mints unique ids', async () => {
     const base = {
       customerId: 'c1', customerName: 'A', title: 'T', description: '',
-      laborHours: 1, laborRate: 80, materials: [], materialMarkup: 0, overhead: 0, margin: 0,
+      laborHours: 1, laborRate: 80, materials: [], jobCosts: [], materialMarkup: 0, overhead: 0, margin: 0,
       estimateTotal: 80, cadence: 'monthly' as const, nextDueDate: '2026-10-01' as const,
     };
     const a = await createRecurringJob({ ...base, endCondition: 'date', endDate: '2027-01-01' });
@@ -1796,6 +1931,7 @@ describe('P1.3 — write-layer payload validation', () => {
     laborHours: 1,
     laborRate: 90,
     materials: [],
+    jobCosts: [],
     materialMarkup: 10,
     overhead: 10,
     margin: 20,

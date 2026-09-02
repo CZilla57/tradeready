@@ -7,6 +7,8 @@ import { createPricebookEntry } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
 import { MaterialsEditor } from '../ui/MaterialsEditor';
 import { parseMaterialDrafts, type MaterialDraft } from '../ui/materialsDraft';
+import { JobCostsEditor } from '../ui/JobCostsEditor';
+import { parseJobCostDrafts, type JobCostDraft } from '../ui/jobCostsDraft';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
@@ -25,8 +27,8 @@ function parseNonNeg(s: string): number | null {
  * service through `createPricebookEntry` (mobile-format id + createdAt/updatedAt)
  * and navigates to it. The derived `estimateTotal` is computed with the
  * pricingMath port over the entered pricing inputs and any authored materials
- * (via the shared MaterialsEditor) + the owner's `minimumJobFee`, matching the
- * mobile save. Follows the house UX:
+ * and direct-cost lines (via the shared MaterialsEditor / JobCostsEditor) + the
+ * owner's `minimumJobFee`, matching the mobile save. Follows the house UX:
  * in-flight disable, a failed write that stays open with the error.
  */
 function NewServiceForm({ onClose }: { onClose: () => void }) {
@@ -41,6 +43,7 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
   const [overhead, setOverhead] = useState(String(settings?.overheadPercent ?? 15));
   const [margin, setMargin] = useState(String(settings?.marginPercent ?? 20));
   const [materials, setMaterials] = useState<MaterialDraft[]>([]);
+  const [jobCosts, setJobCosts] = useState<JobCostDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,6 +70,11 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
       setError(parsedMaterials.error);
       return;
     }
+    const parsedJobCosts = parseJobCostDrafts(jobCosts);
+    if (!parsedJobCosts.ok) {
+      setError(parsedJobCosts.error);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -75,6 +83,7 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
+        jobCosts: parsedJobCosts.jobCosts,
         overheadPercent: pricing.overhead!,
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
@@ -86,6 +95,7 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
+        jobCosts: parsedJobCosts.jobCosts,
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
@@ -149,6 +159,7 @@ function NewServiceForm({ onClose }: { onClose: () => void }) {
           The total is calculated from these.
         </div>
         <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
+        <JobCostsEditor drafts={jobCosts} onChange={setJobCosts} disabled={busy} />
         <div className="btn-row">
           <button type="submit" className="btn primary" disabled={busy}>
             {busy ? 'Creating…' : 'Create service'}

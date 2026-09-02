@@ -28,6 +28,12 @@ import {
   parseMaterialDrafts,
   type MaterialDraft,
 } from '../ui/materialsDraft';
+import { JobCostsEditor } from '../ui/JobCostsEditor';
+import {
+  jobCostsToDrafts,
+  parseJobCostDrafts,
+  type JobCostDraft,
+} from '../ui/jobCostsDraft';
 
 const CADENCES: RecurrenceCadence[] = [
   'daily',
@@ -348,11 +354,10 @@ function PlanEditor({
  * but for a job series, with one extra concern: the DERIVED `estimateTotal`.
  * Editing the pricing inputs (labor hours/rate, material markup, overhead,
  * margin) recomputes the total on save via `estimateTotalFromPricing` (the
- * pricingMath port), over the rule's existing materials/jobCosts and the owner's
- * `minimumJobFee` — matching the mobile save path — so the series stays priced
- * exactly as it would on the phone. `updateRecurringJobRule` preserves the
- * series' generation history; customer re-linking and material line-item editing
- * are out of scope.
+ * pricingMath port), over the rule's edited materials/direct-cost lines and the
+ * owner's `minimumJobFee` — matching the mobile save path — so the series stays
+ * priced exactly as it would on the phone. `updateRecurringJobRule` preserves the
+ * series' generation history; customer re-linking is out of scope.
  */
 function JobRuleEditor({
   rule,
@@ -373,6 +378,9 @@ function JobRuleEditor({
   const [margin, setMargin] = useState(String(rule.margin ?? 0));
   const [materials, setMaterials] = useState<MaterialDraft[]>(
     materialsToDrafts(rule.materials),
+  );
+  const [jobCosts, setJobCosts] = useState<JobCostDraft[]>(
+    jobCostsToDrafts(rule.jobCosts),
   );
   const [cad, setCad] = useState<RecurrenceCadence>(rule.cadence);
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>(rule.endCondition);
@@ -408,6 +416,11 @@ function JobRuleEditor({
       setError(parsedMaterials.error);
       return;
     }
+    const parsedJobCosts = parseJobCostDrafts(jobCosts);
+    if (!parsedJobCosts.ok) {
+      setError(parsedJobCosts.error);
+      return;
+    }
     let endCountValue: number | undefined;
     if (endCondition === 'count') {
       endCountValue = Number(endCount.trim());
@@ -428,14 +441,13 @@ function JobRuleEditor({
     setError(null);
     try {
       // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
-      // minimumJobFee from settings), over the EDITED materials + the rule's
-      // existing jobCosts.
+      // minimumJobFee from settings), over the EDITED materials + direct-cost lines.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
-        jobCosts: rule.jobCosts,
+        jobCosts: parsedJobCosts.jobCosts,
         overheadPercent: pricing.overhead!,
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
@@ -448,6 +460,7 @@ function JobRuleEditor({
           laborHours: pricing.laborHours!,
           laborRate: pricing.laborRate!,
           materials: parsedMaterials.materials,
+          jobCosts: parsedJobCosts.jobCosts,
           materialMarkup: pricing.materialMarkup!,
           overhead: pricing.overhead!,
           margin: pricing.margin!,
@@ -513,6 +526,7 @@ function JobRuleEditor({
           The total is recalculated from these.
         </div>
         <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
+        <JobCostsEditor drafts={jobCosts} onChange={setJobCosts} disabled={busy} />
         <div className="field">
           <span>Repeats</span>
           <div className="chip-row" role="group" aria-label="Repeats">
@@ -580,9 +594,10 @@ function JobRuleEditor({
  * engine emits the first occurrence on its next run, matching the plan create).
  * The customer is picked from existing records (id + denormalized name; inline
  * customer creation stays on the Customers screen). The derived `estimateTotal`
- * is recomputed the mobile way via `estimateTotalFromPricing` over the five
- * pricing inputs (materials are not authored here — line items stay deferred).
- * Pricing inputs seed from the business defaults. Follows the house UX.
+ * is recomputed the mobile way via `estimateTotalFromPricing` over the pricing
+ * inputs plus any authored materials and direct-cost lines (via the shared
+ * MaterialsEditor / JobCostsEditor). Pricing inputs seed from the business
+ * defaults. Follows the house UX.
  */
 function NewJobRuleForm({
   customers,
@@ -606,6 +621,7 @@ function NewJobRuleForm({
   const [overhead, setOverhead] = useState(String(settings?.overheadPercent ?? 15));
   const [margin, setMargin] = useState(String(settings?.marginPercent ?? 20));
   const [materials, setMaterials] = useState<MaterialDraft[]>([]);
+  const [jobCosts, setJobCosts] = useState<JobCostDraft[]>([]);
   const [cad, setCad] = useState<RecurrenceCadence>('monthly');
   const [endCondition, setEndCondition] = useState<RecurrenceEndCondition>('never');
   const [endCount, setEndCount] = useState('');
@@ -642,6 +658,11 @@ function NewJobRuleForm({
       setError(parsedMaterials.error);
       return;
     }
+    const parsedJobCosts = parseJobCostDrafts(jobCosts);
+    if (!parsedJobCosts.ok) {
+      setError(parsedJobCosts.error);
+      return;
+    }
     let endCountValue: number | undefined;
     if (endCondition === 'count') {
       endCountValue = Number(endCount.trim());
@@ -662,12 +683,13 @@ function NewJobRuleForm({
     setError(null);
     try {
       // Recompute the derived total the mobile way (travel/tax 0, non-emergency;
-      // minimumJobFee from settings) over the authored materials.
+      // minimumJobFee from settings) over the authored materials + direct-cost lines.
       const estimateTotal = estimateTotalFromPricing({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
         materialMarkup: pricing.materialMarkup!,
+        jobCosts: parsedJobCosts.jobCosts,
         overheadPercent: pricing.overhead!,
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
@@ -680,6 +702,7 @@ function NewJobRuleForm({
         laborHours: pricing.laborHours!,
         laborRate: pricing.laborRate!,
         materials: parsedMaterials.materials,
+        jobCosts: parsedJobCosts.jobCosts,
         materialMarkup: pricing.materialMarkup!,
         overhead: pricing.overhead!,
         margin: pricing.margin!,
@@ -765,6 +788,7 @@ function NewJobRuleForm({
             The total is calculated from these.
           </div>
           <MaterialsEditor drafts={materials} onChange={setMaterials} disabled={busy} />
+          <JobCostsEditor drafts={jobCosts} onChange={setJobCosts} disabled={busy} />
           <div className="field">
             <span>Repeats</span>
             <div className="chip-row" role="group" aria-label="Repeats">

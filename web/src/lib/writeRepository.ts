@@ -6,6 +6,7 @@ import type {
   Invoice,
   Job,
   JobCost,
+  JobStatus,
   Material,
   Payment,
   PaymentDraft,
@@ -19,6 +20,12 @@ import type {
   TimeString,
 } from '@shared/types/models';
 import { OPERATIONAL_STATUS_ADVANCE } from '../ui/status';
+import {
+  buildInvoiceLineItems,
+  computeBillableBreakdown,
+  defaultDueDate,
+  invoiceFromJobMode,
+} from '../ui/billableMath';
 import { SECURE_FIELDS } from '@shared/utils/storage/keys';
 import { withArchived } from '@shared/utils/archive';
 import { getTodayDateString } from '@shared/utils/dateHelpers';
@@ -27,6 +34,7 @@ import {
   applyPayment,
   mergePaymentLedgers,
   newPaymentId,
+  reconcilePaidFields,
   settleRemaining,
   toAmount,
   voidPayment as voidPaymentEntry,
@@ -357,6 +365,19 @@ function requireMaterials(materials: Material[]): void {
   for (const m of materials) {
     requireNonNegative(m.quantity, `Material "${m.name || m.id}" quantity`);
     requireNonNegative(m.unitCost, `Material "${m.name || m.id}" unit cost`);
+  }
+}
+
+/** Every direct-cost line's quantity, unit cost, and handling markup must be
+ *  non-negative numbers — the same inputs `computeDirectCosts` prices from, so a
+ *  malformed value would corrupt the derived `estimateTotal`. Authored via the
+ *  shared JobCostsEditor across jobs, pricebook entries, and recurring jobs. */
+function requireJobCosts(jobCosts: JobCost[] = []): void {
+  for (const c of jobCosts) {
+    const name = c.label || c.category || c.id;
+    requireNonNegative(c.quantity, `Cost "${name}" quantity`);
+    requireNonNegative(c.unitCost, `Cost "${name}" unit cost`);
+    requireNonNegative(c.markupPercent, `Cost "${name}" markup`);
   }
 }
 
@@ -1004,6 +1025,7 @@ export async function updateJobPricing(
 ): Promise<Job> {
   requirePricingInputs(edit); // P1.3
   requireMaterials(edit.materials);
+  requireJobCosts(edit.jobCosts);
   const server = await loadJob(jobId);
   if (server.approval?.decision) {
     throw new JobEstimateApprovalLockedError(server.approval.decision);
@@ -1161,6 +1183,7 @@ export async function savePricebookEntry(
   requireNonEmpty(entry.name, 'Service name'); // P1.3
   requirePricingInputs(entry);
   requireMaterials(entry.materials);
+  requireJobCosts(entry.jobCosts);
   // Bump the blob's own updatedAt, matching the mobile save (distinct from the
   // row's server-authoritative updated_at column).
   const next: PricebookEntry = { ...entry, updatedAt: new Date().toISOString() };
@@ -1175,6 +1198,7 @@ export async function savePricebookEntry(
     'laborHours',
     'laborRate',
     'materials',
+    'jobCosts',
     'materialMarkup',
     'overhead',
     'margin',
@@ -1197,8 +1221,8 @@ function newPricebookId(): string {
 
 /** The fields a new saved service is created from. `estimateTotal` is DERIVED —
  *  the caller recomputes it with the pricingMath port (P0.6), like the edit.
- *  `materials` are authored via the shared MaterialsEditor (default none);
- *  jobCosts (direct-cost lines) are still not authored on creation. */
+ *  `materials` and `jobCosts` (direct-cost lines) are authored via the shared
+ *  MaterialsEditor / JobCostsEditor (default none). */
 export interface NewPricebookFields {
   name: string;
   category: string;
@@ -1206,6 +1230,7 @@ export interface NewPricebookFields {
   laborHours: number;
   laborRate: number;
   materials: Material[];
+  jobCosts: JobCost[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -1225,6 +1250,7 @@ export async function createPricebookEntry(
   requireNonEmpty(fields.name, 'Service name'); // P1.3
   requirePricingInputs(fields);
   requireMaterials(fields.materials);
+  requireJobCosts(fields.jobCosts);
   const now = new Date().toISOString();
   const entry: PricebookEntry = {
     id: newPricebookId(),
@@ -1234,6 +1260,8 @@ export async function createPricebookEntry(
     laborHours: fields.laborHours,
     laborRate: fields.laborRate,
     materials: fields.materials,
+    // Omit an empty direct-cost list, matching the mobile fresh-record shape.
+    ...(fields.jobCosts.length > 0 ? { jobCosts: fields.jobCosts } : {}),
     materialMarkup: fields.materialMarkup,
     overhead: fields.overhead,
     margin: fields.margin,
@@ -1361,16 +1389,16 @@ export async function setRecurringJobActive(
 
 /** The recurring-job rule fields the portal edits. `estimateTotal` is DERIVED
  *  (recomputed by the caller via `web/src/ui/pricingMath.ts` from the pricing
- *  inputs + materials, P0.6). Customer re-linking is out of scope, like the plan
- *  editor. `materials` are authored via the shared MaterialsEditor and replace
- *  the server list; `jobCosts` (direct-cost lines) stay preserved from the fresh
- *  server row (a separate authoring surface). */
+ *  inputs + materials + jobCosts, P0.6). Customer re-linking is out of scope, like
+ *  the plan editor. `materials` and `jobCosts` (direct-cost lines) are authored
+ *  via the shared MaterialsEditor / JobCostsEditor and replace the server lists. */
 export interface RecurringJobRuleEdit {
   title: string;
   description: string;
   laborHours: number;
   laborRate: number;
   materials: Material[];
+  jobCosts: JobCost[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -1420,6 +1448,7 @@ export async function updateRecurringJobRule(
   requireNonEmpty(edit.title, 'Job title'); // P1.3
   requirePricingInputs(edit);
   requireMaterials(edit.materials);
+  requireJobCosts(edit.jobCosts);
   requireRecurrenceBounds(edit);
   requireDate(edit.nextDueDate, 'Next date');
   const server = await loadRecurringJob(id);
@@ -1432,6 +1461,7 @@ export async function updateRecurringJobRule(
     'laborHours',
     'laborRate',
     'materials',
+    'jobCosts',
     'materialMarkup',
     'overhead',
     'margin',
@@ -1445,6 +1475,7 @@ export async function updateRecurringJobRule(
     laborHours: edit.laborHours,
     laborRate: edit.laborRate,
     materials: edit.materials,
+    jobCosts: edit.jobCosts,
     materialMarkup: edit.materialMarkup,
     overhead: edit.overhead,
     margin: edit.margin,
@@ -1556,9 +1587,9 @@ function newRecurringJobId(): string {
 
 /** The fields a new recurring-job rule is created from. `estimateTotal` is
  *  DERIVED — the caller recomputes it with the pricingMath port (P0.6), like the
- *  rule edit. `materials` are authored via the shared MaterialsEditor (default
- *  none); jobCosts still aren't authored on creation. The customer is picked from
- *  existing records, so both id and denormalized name are supplied. */
+ *  rule edit. `materials` and `jobCosts` (direct-cost lines) are authored via the
+ *  shared MaterialsEditor / JobCostsEditor (default none). The customer is picked
+ *  from existing records, so both id and denormalized name are supplied. */
 export interface NewRecurringJobFields {
   customerId: string;
   customerName: string;
@@ -1567,6 +1598,7 @@ export interface NewRecurringJobFields {
   laborHours: number;
   laborRate: number;
   materials: Material[];
+  jobCosts: JobCost[];
   materialMarkup: number;
   overhead: number;
   margin: number;
@@ -1602,6 +1634,7 @@ export async function createRecurringJob(
   requireNonEmpty(fields.title, 'Job title');
   requirePricingInputs(fields);
   requireMaterials(fields.materials);
+  requireJobCosts(fields.jobCosts);
   requireRecurrenceBounds(fields);
   requireDate(fields.nextDueDate, 'First date');
   const rule: RecurringJob = {
@@ -1616,6 +1649,8 @@ export async function createRecurringJob(
     laborHours: fields.laborHours,
     laborRate: fields.laborRate,
     materials: fields.materials,
+    // Omit an empty direct-cost list, matching the mobile fresh-record shape.
+    ...(fields.jobCosts.length > 0 ? { jobCosts: fields.jobCosts } : {}),
     materialMarkup: fields.materialMarkup,
     overhead: fields.overhead,
     margin: fields.margin,
@@ -1888,4 +1923,181 @@ export async function voidInvoicePayment(
 ): Promise<Invoice> {
   const server = await loadInvoice(invoiceId);
   return persistInvoice(voidPaymentEntry(server, paymentId, voidedAt));
+}
+
+// ---------------------------------------------------------------------------
+// Create an invoice from a job (roadmap: estimate & invoice workflow —
+// create-from-job)
+//
+// Ports the manual create/requestDeposit paths of the mobile
+// CreateInvoiceFromJobScreen (utils/autoInvoice derivation via
+// web/src/ui/billableMath). It bills the job's estimate lines, its tracked
+// timer hours (finished jobs only, hourly-priced only), and its approved change
+// orders, then advances the job the same way mobile does.
+//
+// Deliberately NARROWER than mobile:
+//   * No editable amount — the amount and line items are derived from the FRESH
+//     server job so what persists always reconciles with the review the screen
+//     showed. (Mobile lets the owner hand-edit the amount; that can diverge from
+//     the derived line items, a foot-gun we don't reproduce here.)
+//   * "finalize" (a job that already has a deposit invoice) is refused. That is
+//     an edit-existing-invoice flow with its own ledger reconcile; it is not a
+//     creation and stays out of this op. The mobile app still handles it.
+//   * No getOrCreateCustomer side effect — the job already carries its
+//     denormalized `customerName` and `customerId`; contact fields are prefilled
+//     by the caller from the loaded customer record (email/phone stay editable
+//     on the invoice afterwards).
+// ---------------------------------------------------------------------------
+
+/** Raised when a job can't be turned into an invoice in its current state
+ *  (still a lead/quoted, its estimate unapproved, or it already has an invoice).
+ *  Distinct from `ValidationError` so the screen can message the state clearly. */
+export class InvoiceFromJobStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvoiceFromJobStateError';
+  }
+}
+
+/** Contact/number prefill the caller resolves from its loaded data. `number` is
+ *  the shared `nextInvoiceNumber` (or a user override), exactly as the manual
+ *  `createInvoice` path expects; `email`/`phone` come from the job's customer
+ *  record; `due` defaults to 30 days out when omitted. */
+export interface InvoiceFromJobDraft {
+  number: string;
+  email?: string;
+  phone?: string;
+  due?: DateString;
+}
+
+/**
+ * Create a new invoice from a job's estimate, tracked time, and approved change
+ * orders, then advance the job.
+ *
+ * Loads the AUTHORITATIVE server job (not the screen's snapshot) and derives the
+ * amount + line items from it, so a concurrent estimate edit or a landed timer
+ * session is billed correctly. Refuses a job whose status can't be invoiced yet
+ * and a job that already has an invoice. A brand-new invoice id means the invoice
+ * write is a pure insert; the job write assigns only the two fields this action
+ * owns (`invoiceId`, and `status` for the final-bill path) onto the fresh row, so
+ * pricing/approval/time-sessions/change-orders survive.
+ */
+export async function createInvoiceFromJob(
+  jobId: string,
+  draft: InvoiceFromJobDraft,
+): Promise<Invoice> {
+  requireNonEmpty(draft.number, 'Invoice number'); // P1.3
+  const due = draft.due ?? defaultDueDate();
+  requireDate(due, 'Due date');
+
+  const job = await loadJob(jobId);
+  const mode = invoiceFromJobMode(job.status, !!job.invoiceId);
+  if (mode === 'finalize') {
+    throw new InvoiceFromJobStateError(
+      'This job already has an invoice. Open it from the Invoices tab to finalize it.',
+    );
+  }
+  if (mode === null) {
+    throw new InvoiceFromJobStateError(
+      "This job can't be invoiced yet — it needs an approved estimate first.",
+    );
+  }
+
+  const amount = computeBillableBreakdown(job).total;
+  requirePositive(amount, 'Invoice amount'); // nothing billable → nothing to invoice
+  const lineItems = buildInvoiceLineItems(job);
+
+  const invoice: Invoice = {
+    id: newInvoiceId(),
+    customer: (job.customerName || '').trim(),
+    customerId: job.customerId ?? '',
+    number: draft.number.trim(),
+    amount,
+    due,
+    email: (draft.email ?? '').trim(),
+    phone: (draft.phone ?? '').trim(),
+    desc: (job.title || '').trim(),
+    paid: false,
+    jobId,
+    ...(lineItems.length > 0 ? { lineItems } : {}),
+  };
+  await persistInvoice(invoice);
+
+  // Advance the job the same way jobStatus.jobChangesAfterInvoiceSave does: the
+  // final bill ("create") moves complete → invoiced; a deposit request holds the
+  // job's status and only links the invoice. Only these owned fields change; the
+  // rest of the freshly-loaded blob is preserved.
+  const jobChanges =
+    mode === 'create'
+      ? { status: 'invoiced' as JobStatus, invoiceId: invoice.id }
+      : { invoiceId: invoice.id };
+  await upsertBlobRow('jobs', jobId, { ...job, ...jobChanges });
+
+  return invoice;
+}
+
+/** Optional overrides for a finalize. `due` restarts payment terms (defaults to
+ *  30 days out, the way mobile reissues the bill); the rest of the invoice's
+ *  identity is kept from the existing deposit record. */
+export interface FinalizeInvoiceFromJobDraft {
+  due?: DateString;
+}
+
+/**
+ * Finalize a completed job's deposit invoice — the "finalize" mode of the mobile
+ * CreateInvoiceFromJobScreen. A deposit was requested earlier (the job is
+ * `complete` and already carries an `invoiceId`); this turns that invoice into
+ * the full job bill and advances the job.
+ *
+ * Unlike `createInvoiceFromJob`, this EDITS an existing invoice, so it starts
+ * from the authoritative server row and merges — a deposit payment recorded on
+ * it (a Stripe webhook, another device) is carried forward, never clobbered. The
+ * amount and line items are re-derived from the fresh job (full billable total,
+ * including tracked time and approved change orders); the invoice's own identity
+ * fields (number, customer, contact, description) and its payment ledger are
+ * preserved. `reconcilePaidFields` re-derives paid/paidAt because the amount just
+ * changed, and the job advances to `paid` when the ledger already covers the new
+ * total, else to `invoiced` — mirroring `jobStatus.jobChangesAfterInvoiceSave`.
+ *
+ * Refuses a job that is not awaiting finalize: a completed job with no invoice
+ * belongs to `createInvoiceFromJob`, and any other status can't be finalized.
+ */
+export async function finalizeInvoiceFromJob(
+  jobId: string,
+  draft: FinalizeInvoiceFromJobDraft = {},
+): Promise<Invoice> {
+  const job = await loadJob(jobId);
+  if (invoiceFromJobMode(job.status, !!job.invoiceId) !== 'finalize') {
+    throw new InvoiceFromJobStateError(
+      job.status === 'complete'
+        ? "This job has no deposit invoice to finalize — create its invoice instead."
+        : "This job isn't ready to finalize — only a completed job with a deposit invoice can be.",
+    );
+  }
+  const due = draft.due ?? defaultDueDate();
+  requireDate(due, 'Due date');
+
+  // `invoiceId` is present (the mode check proves it); load the authoritative row.
+  const existing = await loadInvoice(job.invoiceId as string);
+
+  const amount = computeBillableBreakdown(job).total;
+  requirePositive(amount, 'Invoice amount');
+  const lineItems = buildInvoiceLineItems(job);
+
+  const updated = reconcilePaidFields({
+    ...existing,
+    amount,
+    due,
+    lineItems: lineItems.length > 0 ? lineItems : existing.lineItems,
+  });
+  await persistInvoice(updated);
+
+  const nextStatus: JobStatus = updated.paid ? 'paid' : 'invoiced';
+  await upsertBlobRow('jobs', jobId, {
+    ...job,
+    status: nextStatus,
+    invoiceId: updated.id,
+  });
+
+  return updated;
 }

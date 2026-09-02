@@ -11,6 +11,8 @@ import {
 import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate, formatTimeRange } from '@shared/utils/dateHelpers';
 import { isArchived } from '@shared/utils/archive';
+import { nextInvoiceNumber } from '@shared/utils/invoiceNumber';
+import { amountPaid } from '@shared/utils/invoicePayments';
 import type { Job } from '@shared/types/models';
 import {
   updateJobDetails,
@@ -18,8 +20,15 @@ import {
   deleteJob,
   advanceJobStatus,
   updateJobPricing,
+  createInvoiceFromJob,
+  finalizeInvoiceFromJob,
 } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
+import {
+  computeBillableBreakdown,
+  invoiceFromJobMode,
+  invoiceFromJobCopy,
+} from '../ui/billableMath';
 import { MaterialsEditor } from '../ui/MaterialsEditor';
 import {
   materialsToDrafts,
@@ -267,6 +276,167 @@ function JobPricingEditor({ job }: { job: Job }) {
           </button>
         </div>
       </form>
+    </Card>
+  );
+}
+
+/**
+ * Turn a job into an invoice — the final bill for a completed job ("create",
+ * which advances it to invoiced) or an up-front deposit for an
+ * approved/scheduled/in-progress one ("requestDeposit", which holds its status).
+ * Mirrors the mobile CreateInvoiceFromJobScreen's two creation modes; the amount
+ * and line items are derived server-side from the fresh job (tracked timer hours
+ * on finished jobs, estimate lines, approved change orders) via
+ * `createInvoiceFromJob`, so the number shown here is exactly what persists.
+ *
+ * Renders nothing when the job can't be invoiced yet (still a lead/quoted, or its
+ * estimate is unapproved), when it already has an invoice (the "Linked invoice"
+ * card covers that), or when it's archived.
+ */
+function CreateInvoiceFromJob({ job }: { job: Job }) {
+  const { retry, invoices, customers, settings } = useData();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mode = invoiceFromJobMode(job.status, !!job.invoiceId);
+  if (isArchived(job) || (mode !== 'create' && mode !== 'requestDeposit')) {
+    return null;
+  }
+
+  const breakdown = computeBillableBreakdown(job);
+  const copy = invoiceFromJobCopy(mode);
+
+  async function onCreate() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const customer = customers.find((c) => c.id === job.customerId);
+      const created = await createInvoiceFromJob(job.id, {
+        number: nextInvoiceNumber(invoices, settings ?? undefined),
+        email: customer?.email ?? '',
+        phone: customer?.phone ?? '',
+      });
+      // Both the job (status/invoiceId) and the invoice list changed.
+      retry(['jobs', 'invoices']);
+      navigate(`/invoices/${created.id}`);
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 8px' }}>
+        {copy.title}
+      </div>
+      <KV k="Amount" v={formatMoney(breakdown.total)} />
+      <div className="meta" style={{ marginTop: 8 }}>
+        {mode === 'requestDeposit'
+          ? 'Bills the approved estimate up front; the job keeps its current status.'
+          : breakdown.usedTrackedTime
+            ? `Billed from ${breakdown.laborHours} tracked hours; the job moves to invoiced.`
+            : 'Bills the estimate and approved change orders; the job moves to invoiced.'}
+      </div>
+      <button
+        type="button"
+        className="btn primary"
+        style={{ marginTop: 12 }}
+        onClick={onCreate}
+        disabled={busy || !(breakdown.total > 0)}
+      >
+        {busy ? 'Creating…' : copy.cta}
+      </button>
+      {!(breakdown.total > 0) && (
+        <div className="meta" style={{ marginTop: 8 }}>
+          This job has no billable amount yet — price the estimate first.
+        </div>
+      )}
+      {error && (
+        <div
+          className="inline-alert error"
+          role="alert"
+          style={{ marginTop: 12, marginBottom: 0 }}
+        >
+          {error}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Finalize a completed job's deposit invoice into its full bill (the "finalize"
+ * mode of the mobile CreateInvoiceFromJobScreen). Shows only when the job is
+ * complete and already carries a deposit invoice; re-derives the full total from
+ * the job (tracked time, estimate lines, approved change orders), keeps whatever
+ * deposit was already paid, and advances the job (to paid when the deposit covers
+ * the new total, else invoiced) via `finalizeInvoiceFromJob`.
+ */
+function FinalizeInvoiceFromJob({ job }: { job: Job }) {
+  const { retry, invoices } = useData();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mode = invoiceFromJobMode(job.status, !!job.invoiceId);
+  const deposit = job.invoiceId
+    ? invoices.find((i) => i.id === job.invoiceId)
+    : undefined;
+  // Wait for the deposit invoice to be loaded before offering the action, so the
+  // preview numbers are real rather than a flash of zeros.
+  if (isArchived(job) || mode !== 'finalize' || !deposit) return null;
+
+  const total = computeBillableBreakdown(job).total;
+  const paid = amountPaid(deposit);
+  const balance = Math.max(total - paid, 0);
+
+  async function onFinalize() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await finalizeInvoiceFromJob(job.id);
+      retry(['jobs', 'invoices']);
+      navigate(`/invoices/${updated.id}`);
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 8px' }}>
+        Finalize invoice
+      </div>
+      <KV k="Full job total" v={formatMoney(total)} />
+      {paid > 0 && <KV k="Deposit received" v={formatMoney(paid)} />}
+      <KV k="Balance due" v={formatMoney(balance)} />
+      <div className="meta" style={{ marginTop: 8 }}>
+        Bills the whole job on the existing deposit invoice; the deposit already
+        paid carries over, and the job moves to {balance > 0 ? 'invoiced' : 'paid'}.
+      </div>
+      <button
+        type="button"
+        className="btn primary"
+        style={{ marginTop: 12 }}
+        onClick={onFinalize}
+        disabled={busy || !(total > 0)}
+      >
+        {busy ? 'Finalizing…' : 'Finalize invoice'}
+      </button>
+      {error && (
+        <div
+          className="inline-alert error"
+          role="alert"
+          style={{ marginTop: 12, marginBottom: 0 }}
+        >
+          {error}
+        </div>
+      )}
     </Card>
   );
 }
@@ -677,6 +847,9 @@ export default function JobDetailScreen() {
               {customer.email && <div className="meta">{customer.email}</div>}
             </Card>
           )}
+
+          <CreateInvoiceFromJob job={job} />
+          <FinalizeInvoiceFromJob job={job} />
 
           {invoice && (
             <Card pad>
