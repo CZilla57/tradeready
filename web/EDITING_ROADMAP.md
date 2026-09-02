@@ -12,7 +12,7 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
 
 - **P0.1 — landed (write layer).** `web/src/lib/writeRepository.ts` is the
   portal's single, typed write module. It implements ledger-preserving invoice
-  writes — `saveInvoice`, `recordInvoicePayment`, `markInvoicePaid`,
+  writes — `updateInvoiceDetails`, `recordInvoicePayment`, `markInvoicePaid`,
   `voidInvoicePayment` — each starting from the authoritative server row and
   reusing the shared ledger math (`@shared/utils/invoicePayments`), so a
   concurrently-appended payment (Stripe webhook, another device) is never
@@ -29,8 +29,9 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   shows the error, never looks saved) and re-pulls invoices from the server on
   success (P2.3 via `retry(['invoices'])`). Covered by
   `InvoiceDetailScreen.test.tsx`.
-- **`saveInvoice` not yet surfaced.** Editing scalar invoice fields (amount,
-  description, line items) needs its own edit form — a later step.
+- **Invoice detail editing — landed.** The editor sends a typed six-field patch
+  to `updateInvoiceDetails`; the operation applies it to the fresh server invoice
+  so unrendered fields cannot be replaced by stale browser state.
 - **P0.4 — landed (primitive).** `writeRepository.ts` exposes typed soft-delete
   ops (`deleteInvoice`, `deleteJob`, `deleteCustomer`, `deleteExpense`,
   `deletePricebookEntry`, `deleteRecurringJob`, `deleteRecurringInvoice`). Each
@@ -90,7 +91,7 @@ falls out of that design.
 
 Reads (`web/src/lib/repository.ts`) and writes must stay in **separate
 modules**, exposing **typed, domain-specific** operations
-(`saveInvoice(...)`, `updateJobStatus(...)`) — never a generic
+(`updateInvoiceDetails(...)`, `updateJobStatus(...)`) — never a generic
 `write(table, id, data)`. Client code validates payloads; **Supabase RLS stays
 the ownership boundary.** This mirrors `web/README.md`.
 
@@ -254,8 +255,9 @@ five):
 1. **Invoices — complete it. ✅ LANDED.** Payments already shipped; the
    `InvoiceEditor` on `InvoiceDetailScreen` now edits the invoice-local scalar
    fields (number, amount, due, description, contact email/phone) via
-   `saveInvoice` — which preserves the server ledger and re-derives paid/paidAt
-   from the new amount, matching the mobile edit's `reconcilePaidFields` — and
+   `updateInvoiceDetails` — which patches only those owned fields onto a fresh
+   server invoice, preserves all unrendered fields and the payment ledger, and
+   re-derives paid/paidAt from the new amount — and
    deletes via `deleteInvoice` behind an inline confirm (then navigates to the
    list). Line-item editing is deliberately DEFERRED: line items are an immutable
    snapshot from the job estimate (mobile's Edit Invoice doesn't touch them

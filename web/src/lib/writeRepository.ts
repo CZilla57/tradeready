@@ -27,7 +27,6 @@ import {
   applyPayment,
   mergePaymentLedgers,
   newPaymentId,
-  reconcilePaidFields,
   settleRemaining,
   toAmount,
   voidPayment as voidPaymentEntry,
@@ -1173,26 +1172,44 @@ function validatePaymentDraft(draft: PaymentDraft): void {
   }
 }
 
+/** The invoice-local scalar fields owned by the portal's detail editor. */
+export interface InvoiceDetailsEdit {
+  number: string;
+  amount: number;
+  due: DateString;
+  desc: string;
+  email: string;
+  phone: string;
+}
+
 /**
- * Save an edited invoice, preserving the server-side payment ledger (P0.1/P0.2).
+ * Update only the detail editor's owned fields on the authoritative server
+ * invoice, preserving every unrendered/server-owned field (P0.1/P0.2).
  *
- * The caller's `edited` blob may carry a ledger that is already stale relative
- * to the cloud, so we re-fetch the current row and union the two ledgers while
- * keeping the caller's scalar edits. `mergePaymentLedgers(server, edited)` does
- * exactly that: it takes the REMOTE (here: `edited`) scalars, unions payments by
- * id, then re-derives `paid`/`paidAt` from the union — so an edit to `amount`
- * can never leave the paid flag drifting from the money actually collected.
- *
- * A brand-new invoice (no server row yet) has no ledger to preserve;
- * `reconcilePaidFields` normalises its paid/paidAt without re-entering the
- * legacy fallback.
+ * Deposit requests, payment links, delivery state, line items, job/recurrence
+ * links, import metadata, and customer identity can all change after the page
+ * renders. Accepting a typed patch instead of a stale full Invoice prevents the
+ * editor from replacing any of them. `mergePaymentLedgers` then preserves the
+ * ledger and re-derives paid/paidAt against a possibly edited amount.
  */
-export async function saveInvoice(edited: Invoice): Promise<Invoice> {
-  const server = await tryLoadInvoice(edited.id);
-  const next = server
-    ? mergePaymentLedgers(server, edited)
-    : reconcilePaidFields(edited);
-  return persistInvoice(next);
+export async function updateInvoiceDetails(
+  id: string,
+  edit: InvoiceDetailsEdit,
+): Promise<Invoice> {
+  const server = await loadInvoice(id);
+  // Assign every owned field explicitly. TypeScript's excess-property checks
+  // are compile-time only; spreading `edit` would let an untyped/dynamic caller
+  // smuggle stale hidden fields into the blob at runtime.
+  const patched: Invoice = {
+    ...server,
+    number: edit.number,
+    amount: edit.amount,
+    due: edit.due,
+    desc: edit.desc,
+    email: edit.email,
+    phone: edit.phone,
+  };
+  return persistInvoice(mergePaymentLedgers(server, patched));
 }
 
 // ---------------------------------------------------------------------------

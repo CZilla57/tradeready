@@ -16,7 +16,7 @@ import {
   recordInvoicePayment,
   markInvoicePaid,
   voidInvoicePayment,
-  saveInvoice,
+  updateInvoiceDetails,
   deleteInvoice,
 } from '../lib/writeRepository';
 
@@ -217,9 +217,9 @@ function PaymentActions({ invoice }: { invoice: Invoice }) {
  * number, amount, due, description, contact email/phone. It intentionally does
  * NOT edit line items (an immutable snapshot from the job estimate) or the
  * customer name/link (a customer-domain concern, roadmap stage 2). The write
- * goes through `saveInvoice`, which preserves the server payment ledger and
- * re-derives paid/paidAt from the (possibly new) amount — the same reconcile the
- * mobile edit does.
+ * goes through `updateInvoiceDetails`, which patches only these owned fields
+ * onto the fresh server invoice, preserves its payment ledger and all unrendered
+ * fields, and re-derives paid/paidAt from the (possibly new) amount.
  */
 function InvoiceEditor({ invoice }: { invoice: Invoice }) {
   const { retry } = useData();
@@ -269,8 +269,7 @@ function InvoiceEditor({ invoice }: { invoice: Invoice }) {
     setBusy('save');
     setError(null);
     try {
-      await saveInvoice({
-        ...invoice,
+      await updateInvoiceDetails(invoice.id, {
         number: number.trim(),
         amount: parsed,
         due,
