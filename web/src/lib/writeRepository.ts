@@ -68,6 +68,18 @@ export class JobNotFoundError extends Error {
   }
 }
 
+/** Raised when estimate pricing is changed after the customer has responded. */
+export class JobEstimateApprovalLockedError extends Error {
+  constructor(public readonly decision?: string) {
+    super(
+      decision
+        ? `Estimate pricing is locked because the customer has ${decision} it.`
+        : 'Estimate pricing is locked because the customer has already responded.',
+    );
+    this.name = 'JobEstimateApprovalLockedError';
+  }
+}
+
 /**
  * Raised when a status advance is attempted from a status the portal isn't
  * allowed to advance from — either a status with no sanctioned operational
@@ -564,10 +576,10 @@ export async function advanceJobStatus(jobId: string): Promise<Job> {
 //
 // CONSENT GATE (P0.1 spirit): once a customer has made a frozen approval decision
 // (`job.approval.decision`), the estimate is the price they signed — re-pricing it
-// silently would diverge from that consent. The UI hides the editor in that case
-// (post-approval changes are the deferred change-order surface); this op does not
-// itself enforce it, but the fresh-row spread means the approval snapshot always
-// survives regardless.
+// silently would diverge from that consent. The UI hides the editor in that case,
+// but this operation also checks the fresh row and makes the UPDATE conditional on
+// the JSON decision still being null. That database-side predicate closes the
+// remaining race if the customer responds after `loadJob` but before the write.
 // ---------------------------------------------------------------------------
 
 /** The pricing fields the portal authors on a job. `laborBreakdown` is preserved
@@ -589,6 +601,9 @@ export async function updateJobPricing(
   edit: JobPricingEdit,
 ): Promise<Job> {
   const server = await loadJob(jobId);
+  if (server.approval?.decision) {
+    throw new JobEstimateApprovalLockedError(server.approval.decision);
+  }
   const next: Job = {
     ...server,
     laborHours: edit.laborHours,
@@ -600,7 +615,22 @@ export async function updateJobPricing(
     margin: edit.margin,
     estimateTotal: edit.estimateTotal,
   };
-  await upsertBlobRow('jobs', jobId, next);
+  const user_id = await currentUserId();
+  const { data, error } = await supabase
+    .from('jobs')
+    .update({
+      data: next,
+      updated_at: writeTimestamp(),
+      deleted: false,
+    })
+    .eq('id', jobId)
+    .eq('user_id', user_id)
+    .eq('deleted', false)
+    .is('data->approval->>decision', null)
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new JobEstimateApprovalLockedError();
   return next;
 }
 
