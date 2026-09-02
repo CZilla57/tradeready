@@ -12,6 +12,7 @@ import { formatMoney } from '@shared/utils/format';
 import { formatDisplayDate, formatTimeRange } from '@shared/utils/dateHelpers';
 import { isArchived } from '@shared/utils/archive';
 import { nextInvoiceNumber } from '@shared/utils/invoiceNumber';
+import { amountPaid } from '@shared/utils/invoicePayments';
 import type { Job } from '@shared/types/models';
 import {
   updateJobDetails,
@@ -20,6 +21,7 @@ import {
   advanceJobStatus,
   updateJobPricing,
   createInvoiceFromJob,
+  finalizeInvoiceFromJob,
 } from '../lib/writeRepository';
 import { estimateTotalFromPricing } from '../ui/pricingMath';
 import {
@@ -352,6 +354,80 @@ function CreateInvoiceFromJob({ job }: { job: Job }) {
           This job has no billable amount yet — price the estimate first.
         </div>
       )}
+      {error && (
+        <div
+          className="inline-alert error"
+          role="alert"
+          style={{ marginTop: 12, marginBottom: 0 }}
+        >
+          {error}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Finalize a completed job's deposit invoice into its full bill (the "finalize"
+ * mode of the mobile CreateInvoiceFromJobScreen). Shows only when the job is
+ * complete and already carries a deposit invoice; re-derives the full total from
+ * the job (tracked time, estimate lines, approved change orders), keeps whatever
+ * deposit was already paid, and advances the job (to paid when the deposit covers
+ * the new total, else invoiced) via `finalizeInvoiceFromJob`.
+ */
+function FinalizeInvoiceFromJob({ job }: { job: Job }) {
+  const { retry, invoices } = useData();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mode = invoiceFromJobMode(job.status, !!job.invoiceId);
+  const deposit = job.invoiceId
+    ? invoices.find((i) => i.id === job.invoiceId)
+    : undefined;
+  // Wait for the deposit invoice to be loaded before offering the action, so the
+  // preview numbers are real rather than a flash of zeros.
+  if (isArchived(job) || mode !== 'finalize' || !deposit) return null;
+
+  const total = computeBillableBreakdown(job).total;
+  const paid = amountPaid(deposit);
+  const balance = Math.max(total - paid, 0);
+
+  async function onFinalize() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await finalizeInvoiceFromJob(job.id);
+      retry(['jobs', 'invoices']);
+      navigate(`/invoices/${updated.id}`);
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card pad>
+      <div className="section-label" style={{ padding: '0 0 8px' }}>
+        Finalize invoice
+      </div>
+      <KV k="Full job total" v={formatMoney(total)} />
+      {paid > 0 && <KV k="Deposit received" v={formatMoney(paid)} />}
+      <KV k="Balance due" v={formatMoney(balance)} />
+      <div className="meta" style={{ marginTop: 8 }}>
+        Bills the whole job on the existing deposit invoice; the deposit already
+        paid carries over, and the job moves to {balance > 0 ? 'invoiced' : 'paid'}.
+      </div>
+      <button
+        type="button"
+        className="btn primary"
+        style={{ marginTop: 12 }}
+        onClick={onFinalize}
+        disabled={busy || !(total > 0)}
+      >
+        {busy ? 'Finalizing…' : 'Finalize invoice'}
+      </button>
       {error && (
         <div
           className="inline-alert error"
@@ -773,6 +849,7 @@ export default function JobDetailScreen() {
           )}
 
           <CreateInvoiceFromJob job={job} />
+          <FinalizeInvoiceFromJob job={job} />
 
           {invoice && (
             <Card pad>

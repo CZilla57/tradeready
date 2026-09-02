@@ -34,6 +34,7 @@ import {
   applyPayment,
   mergePaymentLedgers,
   newPaymentId,
+  reconcilePaidFields,
   settleRemaining,
   toAmount,
   voidPayment as voidPaymentEntry,
@@ -2006,4 +2007,70 @@ export async function createInvoiceFromJob(
   await upsertBlobRow('jobs', jobId, { ...job, ...jobChanges });
 
   return invoice;
+}
+
+/** Optional overrides for a finalize. `due` restarts payment terms (defaults to
+ *  30 days out, the way mobile reissues the bill); the rest of the invoice's
+ *  identity is kept from the existing deposit record. */
+export interface FinalizeInvoiceFromJobDraft {
+  due?: DateString;
+}
+
+/**
+ * Finalize a completed job's deposit invoice — the "finalize" mode of the mobile
+ * CreateInvoiceFromJobScreen. A deposit was requested earlier (the job is
+ * `complete` and already carries an `invoiceId`); this turns that invoice into
+ * the full job bill and advances the job.
+ *
+ * Unlike `createInvoiceFromJob`, this EDITS an existing invoice, so it starts
+ * from the authoritative server row and merges — a deposit payment recorded on
+ * it (a Stripe webhook, another device) is carried forward, never clobbered. The
+ * amount and line items are re-derived from the fresh job (full billable total,
+ * including tracked time and approved change orders); the invoice's own identity
+ * fields (number, customer, contact, description) and its payment ledger are
+ * preserved. `reconcilePaidFields` re-derives paid/paidAt because the amount just
+ * changed, and the job advances to `paid` when the ledger already covers the new
+ * total, else to `invoiced` — mirroring `jobStatus.jobChangesAfterInvoiceSave`.
+ *
+ * Refuses a job that is not awaiting finalize: a completed job with no invoice
+ * belongs to `createInvoiceFromJob`, and any other status can't be finalized.
+ */
+export async function finalizeInvoiceFromJob(
+  jobId: string,
+  draft: FinalizeInvoiceFromJobDraft = {},
+): Promise<Invoice> {
+  const job = await loadJob(jobId);
+  if (invoiceFromJobMode(job.status, !!job.invoiceId) !== 'finalize') {
+    throw new InvoiceFromJobStateError(
+      job.status === 'complete'
+        ? "This job has no deposit invoice to finalize — create its invoice instead."
+        : "This job isn't ready to finalize — only a completed job with a deposit invoice can be.",
+    );
+  }
+  const due = draft.due ?? defaultDueDate();
+  requireDate(due, 'Due date');
+
+  // `invoiceId` is present (the mode check proves it); load the authoritative row.
+  const existing = await loadInvoice(job.invoiceId as string);
+
+  const amount = computeBillableBreakdown(job).total;
+  requirePositive(amount, 'Invoice amount');
+  const lineItems = buildInvoiceLineItems(job);
+
+  const updated = reconcilePaidFields({
+    ...existing,
+    amount,
+    due,
+    lineItems: lineItems.length > 0 ? lineItems : existing.lineItems,
+  });
+  await persistInvoice(updated);
+
+  const nextStatus: JobStatus = updated.paid ? 'paid' : 'invoiced';
+  await upsertBlobRow('jobs', jobId, {
+    ...job,
+    status: nextStatus,
+    invoiceId: updated.id,
+  });
+
+  return updated;
 }

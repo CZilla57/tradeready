@@ -39,7 +39,7 @@ The editing rollout is complete for the planned browser-first scope:
 
 | Domain | Shipped operations | Important boundary |
 | --- | --- | --- |
-| Invoices | Create manual invoice; create from a job (final bill or deposit); edit six invoice-owned fields; record payment; mark balance paid; void payment; delete | Editing an existing deposit invoice in place (finalize) stays mobile-owned |
+| Invoices | Create manual invoice; create from a job (final bill or deposit); finalize a deposit invoice into the full job bill; edit six invoice-owned fields; record payment; mark balance paid; void payment; delete | Finalize re-derives the full total server-side rather than exposing an editable amount |
 | Customers | Create; edit contact details and notes; archive; delete | Jobs and invoices keep their denormalized customer data after deletion |
 | Jobs | Create unpriced lead; edit operational details and schedule; invoice a completed job (advances it to invoiced) or request a deposit up front; archive; delete | New jobs start as leads and use pricing defaults from Settings |
 | Job status | Start a scheduled job; mark an in-progress job complete | The portal does not run mobile auto-invoice or review-request side effects |
@@ -133,15 +133,14 @@ The remaining work is primarily backend-dependent workflow or a new product surf
 
 ### Estimate and invoice workflow
 
-The portal now creates an invoice from a job's tracked time, estimate lines, and approved change orders — the browser-safe port of the billable-breakdown rules lives in `web/src/ui/billableMath.ts`, pinned to the mobile engine's own values so it preserves the same accounting snapshot. `createInvoiceFromJob` covers the two creation modes (a completed job's final bill, which advances it to invoiced, and an up-front deposit request, which holds its status) and deliberately derives the amount server-side from the fresh job rather than exposing an editable amount that could diverge from the line items.
+The portal now bridges a job into an invoice across all three of the mobile screen's modes — the browser-safe port of the billable-breakdown rules lives in `web/src/ui/billableMath.ts`, pinned to the mobile engine's own values so it preserves the same accounting snapshot. `createInvoiceFromJob` handles the two creation modes (a completed job's final bill, which advances it to invoiced, and an up-front deposit request, which holds its status); `finalizeInvoiceFromJob` handles the edit-existing mode, re-billing a completed job's deposit invoice up to the full total on the authoritative row so the deposit already paid carries over through `reconcilePaidFields` and the job advances to paid or invoiced accordingly. All three derive the amount server-side from the fresh job rather than exposing an editable amount that could diverge from the line items.
 
-It cannot yet complete these Cloudflare Worker-backed actions, or the one edit-existing path:
+It cannot yet complete these Cloudflare Worker-backed actions:
 
 - Send an estimate and create its customer approval link
 - Record a change order
 - Revise pricing after a declined or approved decision
 - Drive consent-coupled status transitions
-- Finalize (edit in place) an existing deposit invoice once its job completes — the create path refuses that job and points the owner to the mobile app; a web finalize needs the ledger-reconcile of `reconcilePaidFields`, not a fresh insert
 
 ### Mobile-only and unsurfaced areas
 

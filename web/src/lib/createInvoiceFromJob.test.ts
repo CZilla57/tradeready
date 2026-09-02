@@ -2,23 +2,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Invoice, Job } from '@shared/types/models';
 import {
   createInvoiceFromJob,
+  finalizeInvoiceFromJob,
   InvoiceFromJobStateError,
+  InvoiceNotFoundError,
   ValidationError,
   JobNotFoundError,
 } from './writeRepository';
 
-// A supabase mock that records EVERY upsert (the op writes twice: the invoice,
-// then the advanced job), keyed by table, plus the current job server row the
-// op reads back with `.select(...).eq('id', …).maybeSingle()`.
+// A supabase mock that records EVERY upsert (each op writes twice: the invoice,
+// then the advanced job), keyed by table, plus the current server rows the op
+// reads back with `.select(...).eq('id', …).maybeSingle()` — per table, so
+// finalize can read both the job and its existing deposit invoice.
 const state = vi.hoisted(() => ({
   jobRow: null as { data: unknown; deleted: boolean } | null,
+  invoiceRow: null as { data: unknown; deleted: boolean } | null,
   upserts: [] as { table: string; row: Record<string, unknown> }[],
   upsertError: null as { message: string } | null,
 }));
 
 vi.mock('./supabase', () => {
   const from = (table: string) => {
-    const maybeSingle = async () => ({ data: state.jobRow, error: null });
+    const maybeSingle = async () => ({
+      data: table === 'invoices' ? state.invoiceRow : state.jobRow,
+      error: null,
+    });
     return {
       select: () => ({ maybeSingle, eq: () => ({ maybeSingle }) }),
       upsert: async (row: Record<string, unknown>) => {
@@ -58,6 +65,9 @@ function makeJob(over: Partial<Job> = {}): Job {
 function setJob(job: Job | null) {
   state.jobRow = job ? { data: job, deleted: false } : null;
 }
+function setInvoice(inv: Invoice | null) {
+  state.invoiceRow = inv ? { data: inv, deleted: false } : null;
+}
 
 function upsertTo(table: string) {
   return state.upserts.find((u) => u.table === table);
@@ -71,6 +81,7 @@ function writtenJob(): Job {
 
 beforeEach(() => {
   state.jobRow = null;
+  state.invoiceRow = null;
   state.upserts = [];
   state.upsertError = null;
 });
@@ -137,7 +148,7 @@ describe('createInvoiceFromJob', () => {
   });
 
   it('refuses a job whose estimate is not yet approved', async () => {
-    setJob(makeJob({ status: 'quoted' }));
+    setJob(makeJob({ status: 'estimate_sent' }));
     await expect(createInvoiceFromJob('j1', { number: 'INV-1' })).rejects.toBeInstanceOf(
       InvoiceFromJobStateError,
     );
@@ -171,5 +182,104 @@ describe('createInvoiceFromJob', () => {
     setJob(makeJob());
     const created = await createInvoiceFromJob('j1', { number: 'INV-2' });
     expect(created.due).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('finalizeInvoiceFromJob', () => {
+  // A completed job whose deposit invoice already exists and links back.
+  function depositJob(over: Partial<Job> = {}): Job {
+    return makeJob({ invoiceId: 'inv-dep', ...over });
+  }
+  function depositInvoice(over: Partial<Invoice> = {}): Invoice {
+    return {
+      id: 'inv-dep',
+      customer: 'Jane Smith',
+      customerId: 'c1',
+      number: 'INV-DEP',
+      amount: 483, // a 50% deposit of the $966 job
+      due: '2026-07-01',
+      email: 'jane@example.com',
+      phone: '555-1000',
+      desc: 'Deposit',
+      paid: false,
+      jobId: 'j1',
+      depositRequest: { amount: 483, percent: 50 },
+      ...over,
+    } as Invoice;
+  }
+
+  it('rebills the full job total on the deposit invoice and carries its ledger', async () => {
+    setJob(depositJob());
+    setInvoice(
+      depositInvoice({
+        payments: [{ id: 'p1', amount: 483, date: '2026-07-02', method: 'card' }],
+      }),
+    );
+
+    const updated = await finalizeInvoiceFromJob('j1');
+
+    // The deposit invoice becomes the full bill, same id, ledger preserved.
+    expect(updated.id).toBe('inv-dep');
+    expect(updated.amount).toBe(966);
+    expect(updated.payments).toHaveLength(1);
+    expect(updated.paid).toBe(false); // 483 paid of 966 → balance remains
+    // Identity fields kept from the deposit record.
+    expect(updated.number).toBe('INV-DEP');
+    expect(updated.email).toBe('jane@example.com');
+    expect(updated.lineItems?.map((l) => l.category)).toEqual(['labor', 'materials', 'overhead']);
+
+    // Job advanced complete → invoiced (balance remains), everything else kept.
+    const job = writtenJob();
+    expect(job.status).toBe('invoiced');
+    expect(job.invoiceId).toBe('inv-dep');
+    expect(job.approval).toEqual({ decision: 'approved', signedAt: '2026-08-01' });
+  });
+
+  it('advances the job to paid when the deposit already covers the full total', async () => {
+    setJob(depositJob());
+    setInvoice(
+      depositInvoice({
+        amount: 966,
+        payments: [{ id: 'p1', amount: 966, date: '2026-07-02', method: 'card' }],
+      }),
+    );
+
+    const updated = await finalizeInvoiceFromJob('j1');
+    expect(updated.paid).toBe(true);
+    expect(writtenJob().status).toBe('paid');
+  });
+
+  it('picks up approved change orders in the finalized total', async () => {
+    setJob(
+      depositJob({
+        changeOrders: [
+          { id: 'co1', title: 'Extra', amount: 100, createdAt: '2026-08-01', approval: { decision: 'approved' } } as never,
+        ],
+      }),
+    );
+    setInvoice(depositInvoice());
+
+    const updated = await finalizeInvoiceFromJob('j1');
+    expect(updated.amount).toBe(1066); // 966 + 100
+  });
+
+  it('refuses a completed job that has no deposit invoice (that is a create)', async () => {
+    setJob(makeJob()); // complete, no invoiceId
+    await expect(finalizeInvoiceFromJob('j1')).rejects.toBeInstanceOf(InvoiceFromJobStateError);
+    expect(state.upserts).toHaveLength(0);
+  });
+
+  it('refuses a job that is not complete', async () => {
+    setJob(makeJob({ status: 'scheduled', invoiceId: 'inv-dep' }));
+    await expect(finalizeInvoiceFromJob('j1')).rejects.toBeInstanceOf(InvoiceFromJobStateError);
+    expect(state.upserts).toHaveLength(0);
+  });
+
+  it('throws when the linked deposit invoice is missing', async () => {
+    setJob(depositJob());
+    setInvoice(null);
+    await expect(finalizeInvoiceFromJob('j1')).rejects.toBeInstanceOf(InvoiceNotFoundError);
+    // The invoice was never written (the read failed first).
+    expect(state.upserts.find((u) => u.table === 'invoices')).toBeUndefined();
   });
 });

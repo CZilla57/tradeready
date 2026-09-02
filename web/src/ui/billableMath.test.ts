@@ -83,7 +83,17 @@ describe('computeEstimateBreakdown', () => {
   it('a customer-visible direct cost bills as its own line; overhead absorbs the rest', () => {
     const job = makeJob({
       jobCosts: [
-        { id: 'k1', label: 'Dumpster', category: 'disposal', quantity: 1, unitCost: 100, markupPolicy: 'passthrough', customerVisible: true },
+        {
+          id: 'k1',
+          label: 'Dumpster',
+          category: 'disposal',
+          quantity: 1,
+          unitCost: 100,
+          markupPercent: 0,
+          markupPolicy: 'passthrough',
+          taxable: false,
+          customerVisible: true,
+        },
       ],
       estimateTotal: 1066,
     });
@@ -221,7 +231,7 @@ describe('buildInvoiceLineItems', () => {
 
   it('names a single material by its name and multiples by count', () => {
     expect(buildInvoiceLineItems(makeJob())[1].description).toBe('Materials (2 items)');
-    const single = makeJob({ materials: [{ name: 'Heater', quantity: 1, unitCost: 300 }] });
+    const single = makeJob({ materials: [{ id: 'm1', name: 'Heater', quantity: 1, unitCost: 300 }] });
     expect(buildInvoiceLineItems(single)[1].description).toBe('Heater');
   });
 });
@@ -240,7 +250,7 @@ describe('invoiceFromJobMode', () => {
   });
   it('returns null when the estimate is unapproved or the job is not billable', () => {
     expect(invoiceFromJobMode('lead', false)).toBeNull();
-    expect(invoiceFromJobMode('quoted', false)).toBeNull();
+    expect(invoiceFromJobMode('estimate_sent', false)).toBeNull();
     // A deposit-eligible status that already has an invoice can't create another.
     expect(invoiceFromJobMode('scheduled', true)).toBeNull();
   });
