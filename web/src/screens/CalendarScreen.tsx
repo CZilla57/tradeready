@@ -82,11 +82,15 @@ function NeedsSchedulingRow({
     setBusy(true);
     setError(null);
     try {
-      await scheduleJob(job.id, {
-        scheduledDate: date,
-        scheduledStartTime: start || null,
-        scheduledEndTime: end || null,
-      });
+      await scheduleJob(
+        job.id,
+        {
+          scheduledDate: date,
+          scheduledStartTime: start || null,
+          scheduledEndTime: end || null,
+        },
+        job,
+      );
       onScheduled();
       setOpen(false);
     } catch (err) {

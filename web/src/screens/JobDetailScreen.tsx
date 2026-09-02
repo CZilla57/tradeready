@@ -178,16 +178,20 @@ function JobPricingEditor({ job }: { job: Job }) {
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
       });
-      await updateJobPricing(job.id, {
-        laborHours: pricing.laborHours!,
-        laborRate: pricing.laborRate!,
-        materials: parsedMaterials.materials,
-        jobCosts: parsedJobCosts.jobCosts,
-        materialMarkup: pricing.materialMarkup!,
-        overhead: pricing.overhead!,
-        margin: pricing.margin!,
-        estimateTotal,
-      });
+      await updateJobPricing(
+        job.id,
+        {
+          laborHours: pricing.laborHours!,
+          laborRate: pricing.laborRate!,
+          materials: parsedMaterials.materials,
+          jobCosts: parsedJobCosts.jobCosts,
+          materialMarkup: pricing.materialMarkup!,
+          overhead: pricing.overhead!,
+          margin: pricing.margin!,
+          estimateTotal,
+        },
+        job,
+      );
       retry(['jobs']);
       setOpen(false);
     } catch (err) {
@@ -314,15 +318,19 @@ function JobEditor({ job }: { job: Job }) {
     setBusy('save');
     setError(null);
     try {
-      await updateJobDetails(job.id, {
-        title: title.trim(),
-        description: description.trim(),
-        address: address.trim(),
-        scheduledDate: date || null,
-        scheduledStartTime: start || null,
-        scheduledEndTime: end || null,
-        notes: notes.trim(),
-      });
+      await updateJobDetails(
+        job.id,
+        {
+          title: title.trim(),
+          description: description.trim(),
+          address: address.trim(),
+          scheduledDate: date || null,
+          scheduledStartTime: start || null,
+          scheduledEndTime: end || null,
+          notes: notes.trim(),
+        },
+        job,
+      );
       retry(['jobs']);
       setOpen(false);
     } catch (err) {

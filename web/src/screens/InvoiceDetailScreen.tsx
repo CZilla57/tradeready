@@ -269,14 +269,18 @@ function InvoiceEditor({ invoice }: { invoice: Invoice }) {
     setBusy('save');
     setError(null);
     try {
-      await updateInvoiceDetails(invoice.id, {
-        number: number.trim(),
-        amount: parsed,
-        due,
-        desc: desc.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
-      });
+      await updateInvoiceDetails(
+        invoice.id,
+        {
+          number: number.trim(),
+          amount: parsed,
+          due,
+          desc: desc.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+        },
+        invoice,
+      );
       retry(['invoices']);
       setOpen(false);
     } catch (err) {

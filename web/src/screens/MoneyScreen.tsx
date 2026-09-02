@@ -141,14 +141,17 @@ function ExpensesSection({ expenses }: { expenses: Expense[] }) {
       } else {
         const existing = expenses.find((e) => e.id === mode);
         if (!existing) throw new Error('Expense no longer exists');
-        await saveExpense({
-          ...existing,
-          description: description.trim(),
-          amount: parsed,
-          category,
-          date,
-          notes: notes.trim(),
-        });
+        await saveExpense(
+          {
+            ...existing,
+            description: description.trim(),
+            amount: parsed,
+            category,
+            date,
+            notes: notes.trim(),
+          },
+          existing,
+        );
       }
       retry(['expenses']);
       setMode(null);

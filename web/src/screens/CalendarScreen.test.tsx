@@ -63,11 +63,15 @@ describe('CalendarScreen — schedule a job that needs a date', () => {
     await userEvent.click(within(row).getByRole('button', { name: 'Schedule job' }));
 
     await waitFor(() => expect(writes.scheduleJob).toHaveBeenCalledTimes(1));
-    expect(writes.scheduleJob).toHaveBeenCalledWith('j1', {
-      scheduledDate: '2026-09-10',
-      scheduledStartTime: '09:00',
-      scheduledEndTime: '11:00',
-    });
+    expect(writes.scheduleJob).toHaveBeenCalledWith(
+      'j1',
+      {
+        scheduledDate: '2026-09-10',
+        scheduledStartTime: '09:00',
+        scheduledEndTime: '11:00',
+      },
+      job(),
+    );
     expect(retry).toHaveBeenCalledWith(['jobs']);
   });
 
@@ -82,11 +86,15 @@ describe('CalendarScreen — schedule a job that needs a date', () => {
     await userEvent.click(within(row).getByRole('button', { name: 'Schedule job' }));
 
     await waitFor(() => expect(writes.scheduleJob).toHaveBeenCalledTimes(1));
-    expect(writes.scheduleJob).toHaveBeenCalledWith('j1', {
-      scheduledDate: '2026-09-10',
-      scheduledStartTime: null,
-      scheduledEndTime: null,
-    });
+    expect(writes.scheduleJob).toHaveBeenCalledWith(
+      'j1',
+      {
+        scheduledDate: '2026-09-10',
+        scheduledStartTime: null,
+        scheduledEndTime: null,
+      },
+      job(),
+    );
   });
 
   it('rejects an end time before the start without writing', async () => {

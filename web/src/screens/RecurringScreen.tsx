@@ -232,18 +232,22 @@ function PlanEditor({
     setBusy(true);
     setError(null);
     try {
-      await updateRecurringInvoiceRule(plan.id, {
-        description: description.trim(),
-        amount: amt,
-        dueDays: net,
-        cadence: cad,
-        endCondition,
-        endCount: endCountValue,
-        endDate: endCondition === 'date' ? endDate : undefined,
-        originalNextDueDate,
-        nextDueDate,
-        autoSendEnabled: autoSend,
-      });
+      await updateRecurringInvoiceRule(
+        plan.id,
+        {
+          description: description.trim(),
+          amount: amt,
+          dueDays: net,
+          cadence: cad,
+          endCondition,
+          endCount: endCountValue,
+          endDate: endCondition === 'date' ? endDate : undefined,
+          originalNextDueDate,
+          nextDueDate,
+          autoSendEnabled: autoSend,
+        },
+        plan,
+      );
       onSaved();
     } catch (err) {
       setError(errorMessage(err));
@@ -436,23 +440,27 @@ function JobRuleEditor({
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
       });
-      await updateRecurringJobRule(rule.id, {
-        title: title.trim(),
-        description: description.trim(),
-        laborHours: pricing.laborHours!,
-        laborRate: pricing.laborRate!,
-        materials: parsedMaterials.materials,
-        materialMarkup: pricing.materialMarkup!,
-        overhead: pricing.overhead!,
-        margin: pricing.margin!,
-        estimateTotal,
-        cadence: cad,
-        endCondition,
-        endCount: endCountValue,
-        endDate: endCondition === 'date' ? endDate : undefined,
-        originalNextDueDate,
-        nextDueDate,
-      });
+      await updateRecurringJobRule(
+        rule.id,
+        {
+          title: title.trim(),
+          description: description.trim(),
+          laborHours: pricing.laborHours!,
+          laborRate: pricing.laborRate!,
+          materials: parsedMaterials.materials,
+          materialMarkup: pricing.materialMarkup!,
+          overhead: pricing.overhead!,
+          margin: pricing.margin!,
+          estimateTotal,
+          cadence: cad,
+          endCondition,
+          endCount: endCountValue,
+          endDate: endCondition === 'date' ? endDate : undefined,
+          originalNextDueDate,
+          nextDueDate,
+        },
+        rule,
+      );
       onSaved();
     } catch (err) {
       setError(errorMessage(err));

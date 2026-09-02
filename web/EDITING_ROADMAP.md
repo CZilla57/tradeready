@@ -68,10 +68,38 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   and Money staying read-only dashboards and Trips/Coach/photos/bookings out of
   scope. Each stage carries a five-point definition of done.
 
+- **P2.1 — landed (field-scoped optimistic guard).** Every edit op already
+  refetched-before-write (the P2.1 minimum); it now also detects a genuine LOST
+  UPDATE. Each edit op takes the `baseline` entity the screen rendered from and,
+  against the freshly re-fetched server row, runs a three-way compare
+  (`guardConcurrentEdit` in `writeRepository.ts`): it rejects with a typed
+  `StaleWriteError` ONLY when a field the user actually changed
+  (`submitted != baseline`) was ALSO moved on the server to a different value
+  (`server != baseline`, `server != submitted`). A field only the server changed
+  keeps merging; a field only the user changed applies; both-to-the-same is no
+  conflict — so a benign concurrent append (a Stripe payment on the invoice
+  ledger, a customer's estimate approval, a recurring rule's generation-cursor
+  advance) never trips it, and the deliberate refetch+merge of server-appended
+  fields is preserved intact (that was the whole reason to choose field-scoped
+  over a row-level `updated_at` guard). The three whole-blob ops
+  (`saveCustomer`/`saveExpense`/`savePricebookEntry`) additionally MERGE the
+  user's changed fields onto the fresh server row (`guardedBlobMerge`), so a
+  field only another client changed survives a whole-blob save. Boolean toggles
+  (archive, pause/resume) and pure creates carry no guard — a boolean can't
+  three-way-conflict, and a create has no baseline. Screens surface
+  `StaleWriteError.message` through their existing error path (a failed write
+  stays open, P2.2). Covered by `writeRepository.test.ts`
+  ("P2.1 — field-scoped optimistic-concurrency guard") and the screen tests that
+  assert the baseline is threaded.
+
 Still open below: P0.6 (derived-field invariants, handled per domain as each
-editable surface lands), P2 (concurrency/resilience). P0.3's optional client
-cleanup (dropping the now-redundant `updated_at` sends) is not required for
-correctness.
+editable surface lands — all shipped domains carry it). P2.1's residual, by
+design: a patch op still rewrites the operational fields it owns as a unit, so a
+concurrent server change to an operational field the user did NOT edit is
+overwritten (pre-existing behavior — the form owns those fields together); the
+guard closes the both-edited-the-same-field case, which is the lost update that
+matters. P0.3's optional client cleanup (dropping the now-redundant `updated_at`
+sends) is not required for correctness.
 
 ## Context in one paragraph
 
@@ -213,10 +241,20 @@ code; a write that ignores any one can silently lose data.
 
 ## Phase 2 — Concurrency & resilience
 
-### P2.1 Concurrency is last-write-wins with no detection
-- There is no optimistic-concurrency check anywhere today. Editing multiplies
-  web-vs-mobile races. Minimum: refetch-before-write. Better: an `updated_at`
-  optimistic guard so a stale save is rejected, not silently clobbered.
+### P2.1 Concurrency detection — ✅ LANDED (field-scoped)
+- Editing multiplies web-vs-mobile races. The **minimum**, refetch-before-write,
+  has shipped with every op. The **better** guard is now in too, but NOT the
+  row-level `updated_at` form first sketched here: because nearly every domain
+  has a concurrent server writer and the code deliberately MERGES (Stripe ledger
+  P0.1, job consent/`timeSessions`, recurring generation cursor, schedule slot
+  fields), a "reject if `updated_at` changed at all" would fire on benign appends
+  and regress that merge. So the guard is **field-scoped** — a three-way compare
+  (baseline the editor rendered, the user's submission, the fresh server row)
+  that rejects with `StaleWriteError` only when a field the user changed was also
+  moved on the server. It catches the real lost update (both edited the same
+  field) with zero regression to the append merges. See the P2.1 progress bullet
+  above for the mechanism (`guardConcurrentEdit` / `guardedBlobMerge`), what's
+  intentionally unguarded (boolean toggles, creates), and the residual.
 
 ### P2.2 No offline queue on the web
 - Mobile has a durable retry queue; the browser won't. Web writes are
