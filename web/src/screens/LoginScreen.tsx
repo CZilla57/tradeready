@@ -61,13 +61,38 @@ export default function LoginScreen() {
   }
 
   return (
-    <div className="login-wrap">
-      <div className="login-card">
-        <div className="login-brand">
-          <img className="dot" src={logo} alt="TradeReady logo" />
-          <span>TradeReady</span>
+    <main className="login-wrap login-split">
+      <section className="login-story" aria-label="TradeReady overview">
+        <div className="login-story-inner">
+          <div className="login-story-brand">
+            <img src={logo} alt="" width="48" height="48" />
+            <span>TradeReady</span>
+          </div>
+          <p className="login-eyebrow">Built for the work between jobs</p>
+          <p className="login-story-title">
+            Your business, ready for the next job.
+          </p>
+          <p className="login-story-copy">
+            Plan the day, price the work, and keep every dollar moving from
+            estimate to paid.
+          </p>
+          <ul className="login-benefits">
+            <li>See today’s work at a glance</li>
+            <li>Build estimates from real job costs</li>
+            <li>Track invoices, expenses, and recurring work</li>
+          </ul>
         </div>
-        <h1 className="login-title">
+        <div className="login-story-foot">Straightforward tools for solo trades.</div>
+      </section>
+      <section className="login-card" aria-labelledby="login-title">
+        <div className="login-brand">
+          <img className="dot" src={logo} alt="" width="36" height="36" />
+          <span>
+            TradeReady
+            <small>Owner workspace</small>
+          </span>
+        </div>
+        <h1 className="login-title" id="login-title">
           {mode === 'signin'
             ? 'Sign in to your portal'
             : mode === 'signup'
@@ -78,15 +103,17 @@ export default function LoginScreen() {
           The same account you use in the TradeReady app.
         </p>
 
-        {error && <div className="login-alert error">{error}</div>}
-        {notice && <div className="login-alert notice">{notice}</div>}
+        {error && <div className="login-alert error" role="alert">{error}</div>}
+        {notice && <div className="login-alert notice" role="status">{notice}</div>}
 
         <form onSubmit={submit} className="login-form">
           <label className="login-label">
             Email
             <input
               type="email"
+              name="email"
               autoComplete="email"
+              spellCheck={false}
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -98,6 +125,7 @@ export default function LoginScreen() {
               Password
               <input
                 type="password"
+                name="password"
                 autoComplete={
                   mode === 'signup' ? 'new-password' : 'current-password'
                 }
@@ -161,7 +189,7 @@ export default function LoginScreen() {
             </button>
           )}
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }

@@ -11,6 +11,7 @@ import {
   formatDisplayDate,
 } from '@shared/utils/dateHelpers';
 import type { Job } from '@shared/types/models';
+import { Icon } from '../ui/Icon';
 
 function timeKey(j: Job): string {
   return j.scheduledStartTime ?? '99:99';
@@ -55,31 +56,59 @@ export default function TodayScreen() {
       <PageHead
         title={`${getGreeting()}${name ? `, ${name.split(' ')[0]}` : ''}`}
         sub={formatDisplayDate(today)}
+        right={
+          <Link className="btn primary" to="/calendar">
+            Plan the day
+          </Link>
+        }
       />
 
-      <div className="grid grid-3" style={{ marginBottom: 16 }}>
+      <div className="grid grid-3 stats-grid">
         <Stat
           label="Jobs today"
           value={String(todaysJobs.length)}
           hint={todaysJobs.length === 1 ? '1 scheduled' : 'scheduled'}
+          icon="hammer"
         />
         <Stat
           label="Expected today"
           value={formatMoney(expectedEarnings)}
           hint="from scheduled jobs"
+          icon="cash"
         />
         <Stat
           label="Outstanding"
           value={formatMoney(outstanding)}
           tone={outstanding > 0 ? 'neg' : undefined}
           hint={`${openInvoices.length} open invoice${openInvoices.length === 1 ? '' : 's'}`}
+          icon="receipt"
         />
       </div>
 
       <Card>
-        <div className="section-label">Today’s schedule</div>
+        <div className="section-head">
+          <div>
+            <div className="section-kicker">Your workday</div>
+            <h2>Today’s schedule</h2>
+          </div>
+          <Link className="section-action" to="/calendar">
+            Open calendar
+          </Link>
+        </div>
         {todaysJobs.length === 0 ? (
-          <Empty>Nothing scheduled for today.</Empty>
+          <div className="today-empty">
+            <span className="today-empty-icon" aria-hidden="true">
+              <Icon name="calendar" size={28} />
+            </span>
+            <div>
+              <h3>Your day is wide open</h3>
+              <p>Schedule a job or review upcoming work while you have room.</p>
+            </div>
+            <div className="today-empty-actions">
+              <Link className="btn primary" to="/calendar">Open calendar</Link>
+              <Link className="btn" to="/jobs">View jobs</Link>
+            </div>
+          </div>
         ) : (
           <div className="list">
             {todaysJobs.map((j) => {
@@ -107,6 +136,24 @@ export default function TodayScreen() {
           </div>
         )}
       </Card>
+
+      <div className="quick-actions" aria-label="Quick links">
+        <Link to="/jobs">
+          <span className="quick-action-icon" aria-hidden="true"><Icon name="hammer" size={20} /></span>
+          <span className="quick-action-copy"><small>Jobs</small><strong>Keep work moving</strong></span>
+          <b aria-hidden="true">›</b>
+        </Link>
+        <Link to="/invoices">
+          <span className="quick-action-icon" aria-hidden="true"><Icon name="receipt" size={20} /></span>
+          <span className="quick-action-copy"><small>Invoices</small><strong>Follow up & get paid</strong></span>
+          <b aria-hidden="true">›</b>
+        </Link>
+        <Link to="/customers">
+          <span className="quick-action-icon" aria-hidden="true"><Icon name="people" size={20} /></span>
+          <span className="quick-action-copy"><small>Customers</small><strong>Open customer records</strong></span>
+          <b aria-hidden="true">›</b>
+        </Link>
+      </div>
     </>
   );
 }

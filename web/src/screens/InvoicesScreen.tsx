@@ -260,9 +260,10 @@ export default function InvoicesScreen() {
           label="Outstanding"
           value={formatMoney(summary.outstanding)}
           tone={summary.outstanding > 0 ? 'neg' : undefined}
+          icon="document-text"
         />
-        <Stat label="Collected" value={formatMoney(summary.collected)} tone="pos" />
-        <Stat label="Overdue" value={String(summary.overdueCount)} />
+        <Stat label="Collected" value={formatMoney(summary.collected)} tone="pos" icon="cash" />
+        <Stat label="Overdue" value={String(summary.overdueCount)} icon="receipt" />
       </div>
 
       <input
