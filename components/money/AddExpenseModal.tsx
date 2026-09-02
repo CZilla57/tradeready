@@ -318,7 +318,7 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
                   weekday: 'long', month: 'long', day: 'numeric',
                 })}
               </Text>
-              <Text>📅</Text>
+              <Ionicons name="calendar-outline" size={18} color={colors.textSecondary} />
             </TouchableOpacity>
 
             <DateTimePickerSheet
@@ -429,11 +429,14 @@ export const AddExpenseModal = React.memo(function AddExpenseModal({ visible, on
                       </>
                     )}
                     {scanState === 'filled' && (
-                      <Text style={styles.scanBannerTextAccent}>
-                        {scanLooksBlurry
-                          ? '✨ Filled from receipt — the photo looks blurry, double-check the details'
-                          : '✨ Filled from receipt — double-check the details'}
-                      </Text>
+                      <>
+                        <Ionicons name="sparkles" size={14} color={colors.accent} />
+                        <Text style={styles.scanBannerTextAccent}>
+                          {scanLooksBlurry
+                            ? 'Filled from receipt — the photo looks blurry, double-check the details'
+                            : 'Filled from receipt — double-check the details'}
+                        </Text>
+                      </>
                     )}
                     {scanState === 'empty' && (
                       <Text style={styles.scanBannerText}>Receipt read — nothing new to fill in</Text>
@@ -663,6 +666,7 @@ function createStyles(colors: ColorScheme, shadow: ShadowScheme) {
       color: colors.accent,
       fontSize: fontSize.sm,
       textAlign: 'center',
+      flexShrink: 1,
     },
     receiptRemoveRow: {
       flexDirection: 'row',

@@ -1,193 +1,458 @@
-# Web portal: estimate & change-order workflow
+# Web portal: estimate and change-order workflow
 
-Status: **scoped, not started** (companion to `web/EDITING_ROADMAP.md`).
+Status: **revised scope, not started** (companion to
+`web/EDITING_ROADMAP.md`).
 
-This document scopes the remaining "Estimate and invoice workflow" items from
-`web/EDITING_ROADMAP.md` — the ones that were deferred as "Cloudflare
-Worker-backed." Read `web/EDITING_ROADMAP.md` first for the write-boundary rules
-and the definition of done every new mutation must meet; this doc adds only what
-is specific to the estimate/consent flow.
+This document scopes the remaining estimate-consent and change-order work in
+the web portal. Read `web/EDITING_ROADMAP.md` first for the existing write
+boundary and its nine-point definition of done. This document adds the
+workflow-specific data-integrity, delivery, refresh, and rollout requirements.
 
-## The key finding
+The target outcome is not merely feature parity with mobile. The portal must
+preserve the exact estimate or change the customer reviewed, retain prior
+decisions, and avoid losing a customer response when the portal, mobile app,
+and Cloudflare Worker touch the same Job blob concurrently.
 
-Most of this is more reachable from the browser than "Worker-backed" implies.
-The estimate endpoints are plain **JWT-authed HTTP**: the mobile app calls
-`POST /api/estimate/create-link` with a native `fetch` and the user's Supabase
-access token, and the portal already holds that same token. The Worker mints the
-approval token and writes it into the job blob with the service role; the caller
-just supplies `{ jobId, snapshot }` (plus `changeOrderId` for a change order) and
-receives a customer-facing URL.
+## Current implementation boundary
 
-Two things make the port cheap:
+The browser can call `POST /api/estimate/create-link` with the user's Supabase
+access token. The Worker verifies that session, mints the capability token, and
+writes the approval object into the owner-scoped job. The existing customer
+pages and `respond` / `change-respond` endpoints remain the customer side of
+the flow.
 
-- The snapshot builders (`buildEstimateSnapshot`, `buildChangeOrderSnapshot` in
-  `utils/`) are pure and depend only on `computeEstimateBreakdown` and
-  `directCostLabel` — both already ported browser-safe into
-  `web/src/ui/billableMath.ts` for the invoice-from-job work.
-- The consent/change-order helpers (`applyEstimateDecision`,
-  `applyManualDecision`, `validateChangeOrderInput`, `canAddChangeOrder`,
-  `newChangeOrderId`, `cancelChangeOrder`) are pure. Recording a change order is
-  a normal owner-scoped blob write — no Worker involved at all.
+Much of the domain logic is already reusable:
 
-The **only** true backend change is CORS (below). Everything else is a browser
-port plus new typed write operations and JobDetail UI.
+- `buildEstimateSnapshot` and `buildChangeOrderSnapshot` are pure. Their
+  pricing dependencies already have browser-safe equivalents in
+  `web/src/ui/billableMath.ts`.
+- `applyEstimateDecision`, `validateChangeOrderInput`, `canAddChangeOrder`,
+  `applyManualDecision`, `cancelChangeOrder`, and the change-order rollups are
+  pure and can be ported without React Native dependencies.
+- The portal already has a typed write boundary, fresh-row reads,
+  field-scoped conflict handling, post-write refresh, and screen/repository
+  tests to extend.
 
-## Decisions taken
+Two existing properties are not sufficient for this workflow:
 
-- **CORS scope**: update the Worker's `create-link` endpoint to accept the
-  portal origins — `https://app.gettradereadyapp.com` (production, per
-  `web/README.md`) and `http://localhost:5173` (local dev) — so link-sending
-  works from the portal and can be exercised locally against the live Worker.
-- **Status reconciliation**: **derive for display, write on action.** The portal
-  computes the reconciled status (a customer's `approval.decision` advancing an
-  `estimate_sent` job to `approved`/`declined`) at read time so it never shows a
-  stale status, but only writes the advanced status back to Supabase when the
-  owner takes an explicit action. No mutation-on-load.
+1. A fresh-row spread preserves unrelated top-level fields, but it does not
+   merge two concurrent edits to `job.changeOrders`. The Worker and clients
+   currently replace the complete JSON blob after a read.
+2. A status derived from `approval.decision` is correct only after the portal
+   has fetched that Worker-written decision. The current focus refresh and
+   same-origin `BroadcastChannel` do not make a focused tab aware of a
+   customer's response immediately.
 
-## The one backend change: CORS on `create-link`
+Therefore CORS is required, but it is not the only backend work. A
+concurrency-safe conditional-write contract is a prerequisite for expanding
+the number of Job-blob writers.
 
-`backend-workers/src/routes/estimate/createLink.js` hardcodes
-`Access-Control-Allow-Origin: https://gettradereadyapp.com` with a comment that
-"CORS never applies to this endpoint (the app calls it with a native fetch)."
-A browser POST from the portal is blocked by preflight until that endpoint
-echoes the portal origin instead.
+## Product and architecture decisions
 
-Scope of the change (createLink only — the shared `lib/estimate/cors.js`
-allowlist is for the *customer approval page* origins, a different concern):
+### Consent and revision history
 
-- Echo the caller's `Origin` when it is one of the portal origins above, else
-  keep today's static fallback; add `Vary: Origin`.
-- The endpoint already returns 200 for `OPTIONS` and already allows the
-  `Authorization` and `Content-Type` request headers, so no other preflight work
-  is needed.
-- There is a parallel Vercel copy at `backend/lib/estimate/createLink.js`. The
-  mobile app's `backendUrl` points at the Workers host
-  (`https://tradeready-backend.tradeready.workers.dev`), so the portal targets
-  the Workers copy; keep the two in parity if the Vercel one is still live.
+- An approved base estimate is immutable. Post-approval scope or price changes
+  are new change orders; they do not rewrite the estimate the customer signed.
+- A declined estimate may be revised, but its approval record is first appended
+  unchanged to `job.approvalHistory`. The active `job.approval` is then cleared
+  atomically so its old token stops resolving and a later send mints a new
+  token and snapshot.
+- `approvalHistory?: EstimateApproval[]` is additive on the Job blob. It is
+  append-only, is never exposed to the customer approval endpoint, and must be
+  preserved by every client and Worker write.
+- Any active approval artifact locks snapshot-affecting estimate fields, even
+  before a decision. An owner who needs to change an open estimate must use an
+  explicit **Withdraw link and revise** action. That action stamps
+  `withdrawnAt`, archives the attempt, clears the active approval, and
+  invalidates its token before the editor unlocks.
+- The portal labels this action **Revise declined estimate**. It never offers
+  the action for an approved estimate.
 
-This ships as its own small backend PR, ahead of the portal link-sending work.
+### Link creation is not delivery
 
-## Web config prerequisite
+- Minting an estimate link creates a frozen review artifact; it does not prove
+  the owner delivered it. A successful mint leaves the stored job status
+  unchanged and presents the URL as **Link ready**.
+- The owner explicitly confirms **Mark estimate as sent** after sharing it.
+  That action stamps `approval.sharedAt`, `status: estimate_sent`, and
+  `estimateSentAt` on the authoritative job. Automated follow-up timing starts
+  from that confirmation, not token creation.
+- A change-order link follows the same distinction. Add optional server-stamped
+  `sharedAt?: DateString` and `withdrawnAt?: DateString` fields to the reusable
+  `EstimateApproval` artifact. The portal owns only the request to stamp these
+  fields; the conditional server mutation owns their clock values. Its derived
+  states are `pending`, `ready`,
+  `awaiting`, `approved`, `declined`, and `cancelled`: an approval token without
+  `approval.sharedAt` is `ready`; `approval.sharedAt` without a decision is
+  `awaiting`.
+- Copying a link is not itself proof of delivery. The UI keeps **Copy link** and
+  **Mark sent** as separate actions and explains that distinction.
 
-The web bundle currently hardcodes only the Supabase URL/key (`web/src/lib/
-supabase.ts`); there is no backend base URL. Add the Workers base URL the same
-way (a hardcoded public constant — it is not a secret), consumed by a new
-`web/src/lib/estimateApi.ts` that owns the authed `fetch` to `create-link`.
+### Status reconciliation and freshness
 
-The `estimateApi.ts` call is a mutation *by proxy* but not a
-`supabase.from(...).insert|update|upsert|delete`, so it does not trip the
-read-only architecture guard (`readOnly.arch.test.ts`). Keep the actual token
-write where it belongs — the Worker — and treat the portal's post-mint local
-reconciliation (status stamp) as a normal `writeRepository` operation.
+- Add one browser-safe `effectiveJobStatus(job)` helper that applies a frozen
+  estimate decision without mutating the record or regressing
+  `scheduled` through `paid`.
+- All web badges, estimate filters, pipeline rendering, and action eligibility
+  use the effective status. Raw `job.status` remains the stored synchronization
+  field.
+- While a visible Job or Estimate detail screen has an awaiting decision, poll
+  the `jobs` collection at a modest interval (start with 15 seconds), stop when
+  the tab is hidden or the decision lands, and provide an explicit Refresh
+  action. Do not claim live freshness outside those conditions.
+- Every owner mutation reloads the authoritative job, derives its effective
+  status, applies the requested action against that state, and persists any
+  necessary status reconciliation in the same conditional write. Do not issue
+  a preliminary “reconcile status” write followed by a second business write.
 
-## Workstreams
+### Backend and configuration
 
-### 1. Consent-coupled status reconciliation (foundation)
+- Cloudflare Workers is the canonical production backend for this workflow.
+  Confirm whether the parallel Vercel implementation is still routed before
+  coding. Retire it if unused; if it remains live, the same conditional-write
+  and CORS tests must run against both implementations.
+- The web client reads `VITE_BACKEND_URL`, with the Workers production URL as a
+  documented production default. Production builds reject non-HTTPS values;
+  local development may use `http://localhost`.
+- `web/src/lib/estimateApi.ts` is the only web module allowed to call
+  business-mutation HTTP endpoints. Extend the architecture test so moving
+  such calls into an arbitrary screen fails the repository gate.
 
-**Browser-only.** Port `applyEstimateDecision` (and the change-order
-`changeOrderStatus`/`manualDecision` reading already in
-`web/src/ui/changeOrderMath.ts`) so the portal can derive the true status from a
-frozen decision. Surface it in `web/src/ui/status.ts` for display, and add a
-`writeRepository` op that advances the stored status only when the owner acts.
+## Prerequisite: concurrency-safe Job writes
 
-Why first: it is pure, independently valuable, and fixes a latent bug — today a
-job a customer already approved keeps showing "Estimate Sent" in the portal
-until the mobile app next syncs and advances it. Every other item below is
-incomplete until the portal can reflect the customer's answer.
+The existing Worker sequence is fetch Job -> modify nested approval data ->
+replace the Job blob. The portal's planned change-order writes would add more
+read-modify-write races. Before adding those operations, introduce a shared
+conditional-write contract based on the authoritative database `updated_at`.
 
-### 2. Record a change order (+ manual decision)
+Required behavior:
 
-**Browser-only.** A change order is an object appended to `job.changeOrders`;
-recording one is an owner-scoped blob write, exactly like the invoice-from-job
-op. Needs:
+1. Job reads used for a mutation return `data` and `updated_at`.
+2. The write supplies the exact version it read and updates only when that
+   version is still current.
+3. A zero-row update is a conflict, never a success.
+4. On conflict, refetch and perform a bounded retry only when the requested
+   operation can be safely reapplied by stable change-order ID.
+5. If the same approval, decision, cancellation, revision, or editable field
+   changed, stop and return a typed conflict for owner review.
+6. The database trigger remains the sole authority for the new `updated_at`.
+   Worker writes must stop supplying their own timestamp.
 
-- Port `newChangeOrderId`, `validateChangeOrderInput`, `canAddChangeOrder`,
-  `applyManualDecision`, `cancelChangeOrder` into `changeOrderMath.ts` (all
-  pure).
-- New `writeRepository` ops: `addChangeOrder` (guarded by `canAddChangeOrder`
-  and the approval-lock semantics, fresh-row-merged so it preserves
-  server-owned `approval`/history), `recordChangeOrderDecision` (manual on-site
-  approve/decline), `cancelChangeOrder`.
-- JobDetail UI to add, list (with derived status), decide, and cancel change
-  orders.
+The same contract applies to portal writes and these Worker actions:
 
-This also delivers the "revise pricing after an approved decision" item: once a
-customer has signed, re-pricing legitimately goes *through* a change order, not
-by editing the locked estimate.
+- mint an estimate link;
+- mint a change-order link;
+- record an estimate decision;
+- record a change-order decision.
 
-### 3. Send an estimate + create its approval link
+The merge rules are operation-specific:
 
-**Needs the CORS change.** Port `buildEstimateSnapshot` (deps already in
-`billableMath.ts`). Flow: build snapshot → `estimateApi` POST to `create-link`
-with the session token → the Worker writes `approval` and returns the URL → a
-`writeRepository` op stamps `estimate_sent` on the fresh row (preserving the
-`approval` the Worker just wrote) → refetch (`retry(['jobs'])`) → surface the URL
-for the owner to copy/share. MVP is mint-and-copy; actually emailing the
-customer is a separate action (mobile mints and emails independently).
+| Operation | Safe retry after unrelated conflict | Same-target conflict |
+| --- | --- | --- |
+| Add change order | Reappend if its stable ID is absent | Duplicate ID is an error |
+| Edit pending change order | Reapply when target is still pending and unchanged from baseline | Show conflict |
+| Delete pending change order | Reapply when target is still pending and unchanged | Show conflict |
+| Cancel change order | Reapply when still undecided | Existing decision wins |
+| Manual decision | Reapply when no link decision/manual decision/cancellation landed | Existing outcome wins |
+| Mint approval link | Rebuild from fresh data; retry only while target remains eligible | Decision/cancellation wins |
+| Customer decision | Retry only while token still matches and no terminal outcome landed | Existing terminal outcome wins |
+| Withdraw undecided estimate link | Archive once when the token still matches | Decision wins |
+| Archive declined estimate approval | Append the exact active approval once | Changed active approval is a conflict |
 
-Order matters: mint first (Worker writes `approval`), then stamp status locally,
-so the local write builds on the row that already carries the token.
+Tests must interleave every portal operation with a Worker decision and prove
+that neither side is silently lost.
 
-### 4. Send a change-order approval link
+## Backend work
 
-**Needs the CORS change.** Same shape as (3) with `buildChangeOrderSnapshot` and
-`changeOrderId` in the body; the Worker writes the token into that CO's
-`approval`. Builds directly on (2).
+### Conditional persistence
 
-### 5. Declined "revise & re-send"
+Extend `backend-workers/lib/estimateStore.js` with versioned fetch and
+conditional update helpers, and use them from `createLink`, `respond`, and
+`changeRespond`. Do not keep an unconditional upsert for approval mutations.
 
-**Browser-only + reuses (3).** A `writeRepository` op resets a declined estimate's
-frozen `approval` so the pricing editor unlocks (`canAuthorEstimate` in
-`status.ts` gates on `approval.decision`), then the owner re-prices with the
-existing editor and re-sends via (3). Care point: this deliberately clears a
-frozen consent artifact, so it is an explicit, confirmed owner action.
+Return `409 Conflict` when a bounded retry cannot safely resolve a race. Error
+responses must not reveal whether a different user's job exists.
 
-## Recommended sequencing
+### CORS on `create-link`
 
-1. **Foundation** — workstream 1 (pure, safe, fixes the stale-status bug).
-2. **Change orders** — workstream 2 (fully browser-side, no CORS dependency;
-   also delivers "revise after approval").
-3. **Link-sending** — the CORS backend PR, then workstreams 3, 4, and 5.
+`backend-workers/src/routes/estimate/createLink.js` currently emits a static
+`Access-Control-Allow-Origin`. For browser calls:
 
-Effort: (1) small; (2) medium, comparable to invoice-from-job; the CORS PR
-small; (3)/(4)/(5) medium together and gated on the CORS change.
+- Echo `Origin` only when it is in the explicit allowlist:
+  `https://app.gettradereadyapp.com` and `http://localhost:5173`, plus any
+  separately documented staging origin.
+- Keep the current marketing-site origin only if a real caller still needs it.
+- Add `Vary: Origin` to preflight and POST responses.
+- Keep `POST, OPTIONS` and the `Authorization, Content-Type` request headers.
+- Do not use `*` and do not add credentialed-cookie CORS; authorization remains
+  the bearer token.
+- Test allowed, disallowed, absent, production, local, and staging origins on
+  success and error responses.
 
-## Cross-cutting concerns
+### Approval request contract
 
-- **Preserve server-owned `approval`.** The Worker writes `approval` via the
-  service role. Portal writes must never clobber it — the existing fresh-row
-  merges (`updateJobDetails`, `updateJobPricing`) already spread the server row
-  and overwrite only their own fields, so `approval`/`changeOrders` survive; new
-  ops must keep that discipline.
-- **Definition of done.** Every new mutation meets the nine-point contract in
-  `web/EDITING_ROADMAP.md` (typed op, boundary validation, fresh-row load,
-  owned-field assignment, derived-value reconciliation, tombstone/owner scoping,
-  disabled repeat submit, post-write refresh, repository + screen tests).
-- **Concurrency.** The mint + status-stamp is two writes; a mint that succeeds
-  but a stamp that fails leaves a job with a token but no `estimate_sent` — the
-  next send is idempotent (`planApprovalWrite` returns the existing link), so the
-  failure is recoverable, matching mobile.
+`POST /api/estimate/create-link` gains `expectedUpdatedAt`. The caller must
+have freshly loaded the target version. The Worker verifies ownership and
+eligibility, then conditionally writes the approval artifact.
+
+For an estimate, the Worker rejects minting when:
+
+- the job is deleted or not owned by the authenticated user;
+- the estimate total is not positive;
+- a terminal approved decision exists;
+- the expected version is stale.
+
+If an identical undecided active artifact already exists, the endpoint returns
+its existing link idempotently. If an active artifact exists but its snapshot
+does not match the requested fresh snapshot, it returns `409`; the owner must
+withdraw that artifact before revising. The pricing editor is unavailable
+while any active approval artifact exists.
+
+For a change order, it additionally verifies that the stable ID exists, the
+order is neither decided nor cancelled, and its title/amount still match the
+submitted frozen snapshot.
+
+The response remains `{ url, token, sentAt }`. It never returns another user's
+data or logs the bearer token, capability token, or complete approval URL.
+
+## Web workstreams
+
+### 1. Effective status and approval refresh
+
+Port `applyEstimateDecision` and add `effectiveJobStatus(job)`. Update all job
+and estimate badges, filters, timelines, and action gates to use it. Add the
+visible-awaiting polling and explicit Refresh behavior described above.
+
+Add a typed conditional Job mutation helper inside `writeRepository.ts` so
+each later operation can act on effective status and persist reconciliation in
+one write.
+
+### 2. Complete change-order authoring
+
+Port the browser-safe helpers into `changeOrderMath.ts`, including the new
+`ready` state. Add typed operations:
+
+- `addChangeOrder`;
+- `updatePendingChangeOrder`;
+- `deletePendingChangeOrder`;
+- `recordChangeOrderDecision`;
+- `cancelChangeOrder`;
+- `markChangeOrderSent`.
+
+The create/edit form includes title, optional description, and signed amount.
+Negative credits are allowed only when the authoritative billable total cannot
+fall below zero. Use a collision-resistant ID suitable across tabs and devices
+(`crypto.randomUUID()` with a supported fallback), not a process-local counter.
+
+The UI action matrix is:
+
+| Derived state | Allowed actions |
+| --- | --- |
+| Pending | Edit, delete, create link, manually approve/decline, cancel |
+| Ready | Copy link, mark sent, manually approve/decline, cancel |
+| Awaiting | Copy/re-send link, manually approve/decline, cancel, refresh |
+| Approved | View immutable consent details |
+| Declined | View immutable decision details |
+| Cancelled | View immutable cancellation details |
+
+Every destructive or consent-bearing action requires clear confirmation,
+disables repeat submission, preserves the form on failure, and is keyboard and
+screen-reader accessible.
+
+### 3. Authoritative estimate-link creation
+
+Add `estimateApi.ts` with session acquisition immediately before each request,
+runtime response validation, an abort/timeout path, and typed handling for
+`401`, `409`, `422`, `429`, malformed JSON, and network failures.
+
+The screen passes its rendered baseline to the operation. At action time:
+
+1. Reload the authoritative job, customer, and settings.
+2. Compare all snapshot-affecting job fields with the displayed baseline.
+3. If they differ, refresh the review and require the owner to confirm again.
+4. Build the snapshot from the fresh values.
+5. Call `create-link` with `expectedUpdatedAt`.
+6. Refetch the job and display **Link ready** with Copy and Mark sent actions.
+
+The Worker-written `approval` is never mirrored from the HTTP response into a
+stale browser Job object. Refetching the authoritative row is the only local
+reconciliation after minting.
+
+### 4. Change-order approval links
+
+Reuse the API contract and freshness checks for one stable change-order ID.
+Before building the snapshot, verify that the fresh entry matches the displayed
+title and amount and is still pending or ready. A changed, decided, deleted, or
+cancelled entry requires a refresh rather than a send.
+
+Minting creates the ready state. `markChangeOrderSent` stamps the matching
+`approval.sharedAt` through the conditional Job mutation boundary and advances
+the derived state to awaiting.
+
+### 5. Revision-preserving declined estimate flow
+
+Add `beginDeclinedEstimateRevision`, restricted to an effective declined state.
+In one conditional write it:
+
+- appends the exact active approval to `approvalHistory` if not already there;
+- clears the active `approval` so the old capability token becomes invalid;
+- returns the job to `lead` and clears the current `estimateSentAt`;
+- leaves the archived approval snapshot and consent metadata unchanged.
+
+The owner then edits pricing with the existing editor and creates a completely
+new link through workstream 3. Repeated clicks are idempotent and cannot append
+the same approval twice.
+
+Add the sibling `withdrawOpenEstimateForRevision`, restricted to an active
+undecided approval. It stamps `withdrawnAt` with server time, appends that exact
+artifact to `approvalHistory`, clears the active approval, and invalidates the
+old link in one conditional write. If a customer decision lands first, the
+withdrawal fails with a conflict and the decision remains authoritative.
+
+## Architecture guard and API safety
+
+The current source scan catches direct Supabase mutations outside
+`writeRepository.ts`, but it cannot recognize a mutating HTTP fetch. Extend it
+so:
+
+- `estimateApi.ts` is the only source file allowed to call the configured
+  backend's business-mutation routes;
+- screens cannot call `/api/estimate/create-link` directly;
+- the allowlist test fails if the designated API module disappears or no longer
+  contains a mutation call;
+- no service-role credential or provider secret can enter `web/src`.
+
+Unit tests for `estimateApi.ts` cover session expiry, token refresh, timeouts,
+non-JSON error bodies, every documented HTTP status, and response shape
+validation.
+
+## Recommended sequencing and gates
+
+### Phase 0 — decisions and backend authority
+
+1. Confirm Workers as canonical and resolve the Vercel copy.
+2. Add `approvalHistory` plus approval `sharedAt` / `withdrawnAt` to the shared
+   model and parity tests.
+3. Implement versioned reads and conditional Job writes in the Worker.
+4. Convert create/respond/change-respond to the conditional contract.
+
+**Gate:** all Worker tests pass, including the complete concurrency matrix. Do
+not begin portal mutations until customer decisions are proven lossless.
+
+### Phase 1 — read-side truth
+
+Implement effective status, ready/awaiting change-order states, polling,
+explicit refresh, and read-only UI updates.
+
+**Gate:** a customer response made in another browser appears without a tab
+focus cycle; no read path mutates Supabase; later pipeline statuses never
+regress.
+
+### Phase 2 — change-order authoring and manual outcomes
+
+Implement the full pending lifecycle and conditional manual/cancel/send
+operations.
+
+**Gate:** repository and screen race tests pass; the first conditional terminal
+outcome wins and a racing manual decision, customer decision, or cancellation
+receives a conflict instead of overwriting it; pending edit/delete rules and
+negative-credit validation are covered.
+
+### Phase 3 — link APIs and CORS
+
+Ship configuration, the guarded HTTP API module, CORS, authoritative snapshot
+review, estimate links, and change-order links.
+
+**Gate:** lint, typecheck, unit tests, production build, Worker tests, and a
+browser-to-live-Worker smoke test all pass. Verify production and localhost
+preflight behavior before exposing the UI.
+
+### Phase 4 — declined revisions
+
+Implement immutable approval history and revise/re-send.
+
+**Gate:** the old link is invalid, the old snapshot and decision remain visible
+to the owner, the new link has a new token and snapshot, and repeated revision
+actions do not duplicate history. The same assertions cover withdrawing an
+undecided link, including a customer-decision race.
+
+### Phase 5 — cross-client release verification
+
+Run these end-to-end scenarios with a test account:
+
+1. Web creates link -> owner marks sent -> customer approves -> focused web
+   screen refreshes -> owner schedules the job.
+2. Web creates change -> customer approves while another web tab edits an
+   unrelated job field -> both changes survive.
+3. Web starts a manual decision while customer decides -> exactly one terminal
+   outcome survives and the loser receives a conflict.
+4. Customer declines -> owner archives and revises -> old link fails -> new
+   snapshot can be approved.
+5. Mobile syncs after each web path and preserves approval history,
+   approval delivery/withdrawal stamps, status, and change orders.
+
+Record telemetry for link minted, link copied, owner-confirmed sent, approved,
+declined, conflict, and failure. Do not record capability URLs or tokens.
+
+**Gate:** update `web/README.md`, `web/EDITING_ROADMAP.md`, architecture notes,
+and shipped-feature claims only after the live Worker/customer-page/mobile-sync
+smoke tests pass.
 
 ## Non-goals
 
-- The customer-facing approval pages (`estimate.html` / `change.html` on the
-  Pages host) and the `respond` / `change-respond` endpoints are the customer's
-  side — the portal only reflects their outcome, never reimplements them.
-- Emailing the customer directly from the portal. MVP produces the link; the
-  owner sends it. Portal-driven email can follow if wanted.
+- Reimplementing the public estimate or change-order customer pages in React.
+- Sending email or SMS directly from the portal in this release. The portal
+  creates and copies links and records an explicit owner delivery confirmation.
+- Editing an approved estimate. All post-approval scope changes are separate
+  change orders.
+- An offline web mutation queue. Failed browser writes remain visible and
+  retryable, but require a connection.
+- A generic Job writer or generic conflict merger. Every mutation keeps a typed
+  domain contract and operation-specific conflict rules.
+
+## Definition of done
+
+In addition to the nine-point mutation contract in `EDITING_ROADMAP.md`, this
+project is complete only when:
+
+1. No portal or Worker action can silently overwrite a concurrent approval,
+   manual decision, cancellation, revision, or separate change order.
+2. Every approval snapshot is built from an authoritative version reviewed by
+   the owner and conditionally frozen against that same version.
+3. Link creation and owner-confirmed delivery are distinct in data, UI, and
+   telemetry.
+4. An active approval artifact locks snapshot-affecting estimate fields;
+   declined and withdrawn revisions preserve immutable prior snapshots and
+   metadata and invalidate old links.
+5. Focused awaiting screens refresh customer outcomes without a focus cycle and
+   expose a manual refresh fallback.
+6. Pending change orders support title, description, signed amount, edit, and
+   delete; all later states are immutable except the specifically allowed
+   manual/cancel/send actions above.
+7. CORS and API error behavior are tested for all configured environments.
+8. Repository, screen, architecture, Worker, cross-tab, and cross-client tests
+   pass, followed by lint, typecheck, and the production web build.
+9. Documentation describes only behavior that passed the live release smoke
+   test.
 
 ## Files that constrain this work
 
 | File | Contract |
 | --- | --- |
-| `backend-workers/src/routes/estimate/createLink.js` | Token mint + `approval` write; the CORS change lives here |
-| `backend-workers/lib/estimateStore.js` | `planApprovalWrite` freeze/idempotency semantics |
-| `utils/estimateSnapshot.ts` | `buildEstimateSnapshot` — port target |
-| `utils/changeOrders.ts` | Change-order helpers + `buildChangeOrderSnapshot` — port targets (skip the `escapeHtml`-bound message builders) |
-| `utils/jobStatus.ts` | `applyEstimateDecision` and the consent-coupled transition rules |
-| `utils/storage/estimateApprovals.ts` | How the device reconciles status from a server-written decision |
-| `web/src/ui/billableMath.ts` | Already-ported `computeEstimateBreakdown` / `directCostLabel` the snapshots need |
-| `web/src/ui/changeOrderMath.ts` | Existing browser-safe CO status/rollups to extend |
-| `web/src/ui/status.ts` | `canAuthorEstimate` approval gate + pipeline the reconciliation feeds |
-| `web/src/lib/writeRepository.ts` | Home of every new typed mutation |
-| `web/README.md` | Portal production origin (`app.gettradereadyapp.com`) for the CORS allowlist |
+| `backend-workers/src/routes/estimate/createLink.js` | Authenticated token minting, eligibility, conditional write, and portal CORS |
+| `backend-workers/src/routes/estimate/respond.js` | Estimate decision freeze and conditional persistence |
+| `backend-workers/src/routes/estimate/changeRespond.js` | Per-change decision freeze and race handling |
+| `backend-workers/lib/estimateStore.js` | Versioned reads and conditional Job persistence |
+| `utils/estimateSnapshot.ts` | Canonical estimate snapshot shape |
+| `utils/changeOrders.ts` | Change-order validation, status, decisions, cancellation, and snapshot rules |
+| `utils/jobStatus.ts` | Consent-coupled transition and no-regression rules |
+| `utils/storage/estimateApprovals.ts` | Current mobile reconciliation behavior to keep compatible |
+| `types/models.ts` | Additive approval-history and approval delivery/withdrawal fields |
+| `web/src/ui/billableMath.ts` | Browser-safe estimate breakdown dependencies |
+| `web/src/ui/changeOrderMath.ts` | Browser-safe status and rollups to extend |
+| `web/src/ui/status.ts` | Effective status, action gates, badges, and pipeline |
+| `web/src/lib/writeRepository.ts` | Typed conditional owner mutations |
+| `web/src/lib/estimateApi.ts` | Sole browser HTTP mutation client |
+| `web/src/lib/readOnly.arch.test.ts` | Direct-Supabase and backend-mutation source guard |
+| `web/src/lib/DataContext.tsx` | Scoped refresh and awaiting-decision polling |
+| `web/README.md` | Environment, deployment, and shipped-product documentation |
