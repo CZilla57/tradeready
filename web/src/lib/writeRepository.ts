@@ -286,6 +286,165 @@ async function guardedBlobMerge<T extends object>(
   return merged as T;
 }
 
+// ---------------------------------------------------------------------------
+// Payload validation (roadmap P1.3)
+//
+// The screens validate their inputs and give inline UX, but the write module is
+// the SINGLE mutation boundary (readOnly.arch.test.ts), so it is also the last
+// line that keeps a malformed blob out of the cloud — where a bad value would
+// sync to every device and corrupt derived math (an NaN `estimateTotal`, a
+// negative amount) or break the generation engine (an unknown cadence, a
+// count-ended rule with no count). These helpers re-assert each op's invariants
+// on the already-typed values it receives, so a buggy or non-screen caller can't
+// bypass the screen checks. Payment drafts keep their own `PaymentValidationError`
+// (already shipped); everything else raises `ValidationError`.
+// ---------------------------------------------------------------------------
+
+/** Raised when an op's payload violates a data-integrity invariant (P1.3). */
+export class ValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+/** A finite number (rejects NaN/Infinity — either would corrupt derived math). */
+function requireFinite(n: number, label: string): void {
+  if (typeof n !== 'number' || !Number.isFinite(n)) {
+    throw new ValidationError(`${label} must be a number.`);
+  }
+}
+
+/** Finite and >= 0. */
+function requireNonNegative(n: number, label: string): void {
+  requireFinite(n, label);
+  if (n < 0) throw new ValidationError(`${label} must be zero or greater.`);
+}
+
+/** Finite and > 0. */
+function requirePositive(n: number, label: string): void {
+  requireFinite(n, label);
+  if (!(n > 0)) throw new ValidationError(`${label} must be greater than zero.`);
+}
+
+/** A non-blank string (after trimming). */
+function requireNonEmpty(s: string, label: string): void {
+  if (typeof s !== 'string' || s.trim() === '') {
+    throw new ValidationError(`${label} is required.`);
+  }
+}
+
+/** A `YYYY-MM-DD` date string. */
+function requireDate(s: string, label: string): void {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    throw new ValidationError(`${label} must be a valid date.`);
+  }
+}
+
+/** The five pricing inputs shared by jobs, pricebook entries, and recurring
+ *  jobs — each must be a non-negative number or the estimate math breaks. */
+function requirePricingInputs(p: {
+  laborHours: number;
+  laborRate: number;
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+}): void {
+  requireNonNegative(p.laborHours, 'Labor hours');
+  requireNonNegative(p.laborRate, 'Labor rate');
+  requireNonNegative(p.materialMarkup, 'Material markup');
+  requireNonNegative(p.overhead, 'Overhead');
+  requireNonNegative(p.margin, 'Margin');
+}
+
+/** Every material line's quantity and unit cost must be non-negative numbers. */
+function requireMaterials(materials: Material[]): void {
+  for (const m of materials) {
+    requireNonNegative(m.quantity, `Material "${m.name || m.id}" quantity`);
+    requireNonNegative(m.unitCost, `Material "${m.name || m.id}" unit cost`);
+  }
+}
+
+const RECURRENCE_CADENCES: readonly RecurrenceCadence[] = [
+  'daily',
+  'weekly',
+  'monthly',
+  'quarterly',
+  'annually',
+];
+
+/** A recurring rule's cadence and end bounds — the generation engine relies on
+ *  a known cadence and, for a bounded rule, a present count/date. */
+function requireRecurrenceBounds(rule: {
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+}): void {
+  if (!RECURRENCE_CADENCES.includes(rule.cadence)) {
+    throw new ValidationError(`Unknown cadence "${rule.cadence}".`);
+  }
+  if (rule.endCondition === 'count') {
+    if (rule.endCount === undefined || !Number.isInteger(rule.endCount) || rule.endCount < 1) {
+      throw new ValidationError('End after a whole number of occurrences greater than zero.');
+    }
+  } else if (rule.endCondition === 'date') {
+    if (rule.endDate === undefined) throw new ValidationError('Pick an end date.');
+    requireDate(rule.endDate, 'End date');
+  } else if (rule.endCondition !== 'never') {
+    throw new ValidationError(`Unknown end condition "${rule.endCondition}".`);
+  }
+}
+
+// The numeric settings fields the portal edits — each must be non-negative if
+// the patch carries it (an absent key is untouched, so it isn't checked).
+const NON_NEGATIVE_SETTINGS_KEYS: readonly (keyof Settings)[] = [
+  'laborRate',
+  'materialMarkup',
+  'overheadPercent',
+  'marginPercent',
+  'minimumJobFee',
+  'travelFeePerMile',
+  'mileageRate',
+];
+
+/** Validate a settings patch (P1.3): every numeric pricing field it carries must
+ *  be non-negative, and an invoice start number (when set) a whole number >= 1. */
+function requireSettingsPatch(patch: Partial<Settings>): void {
+  for (const key of NON_NEGATIVE_SETTINGS_KEYS) {
+    const value = patch[key];
+    if (value !== undefined) requireNonNegative(value as number, key);
+  }
+  const start = patch.invoiceStartNumber;
+  if (start !== undefined && start !== null) {
+    if (!Number.isInteger(start) || start < 1) {
+      throw new ValidationError('Invoice start number must be a whole number of 1 or more.');
+    }
+  }
+}
+
+/** Validate a schedule patch (P1.3): a working window that opens before it
+ *  closes, at least one work day, and non-negative minute durations — the shape
+ *  `resolveSchedule` expects. Only the fields the patch carries are checked. */
+function requireSchedulePatch(patch: Partial<ScheduleConfig>): void {
+  if (patch.workDays !== undefined && patch.workDays.length === 0) {
+    throw new ValidationError('Choose at least one working day.');
+  }
+  if (
+    patch.workDayStart !== undefined &&
+    patch.workDayEnd !== undefined &&
+    patch.workDayStart >= patch.workDayEnd
+  ) {
+    throw new ValidationError('The work day must start before it ends.');
+  }
+  if (patch.defaultDurationMinutes !== undefined) {
+    requireNonNegative(patch.defaultDurationMinutes, 'Appointment length');
+  }
+  if (patch.bufferMinutes !== undefined) {
+    requireNonNegative(patch.bufferMinutes, 'Buffer');
+  }
+}
+
 /**
  * Load the current server copy of an invoice by id.
  *
@@ -463,6 +622,7 @@ export async function saveSettings(
   patch: Partial<Settings>,
   baseline: Settings,
 ): Promise<Settings> {
+  requireSettingsPatch(patch); // P1.3
   const current = await loadSettings();
   // P2.1: reject only if a settings field this editor's patch touches was
   // changed on the server since the editor opened (another surface — or another
@@ -499,6 +659,7 @@ export async function saveSchedule(
   patch: Partial<ScheduleConfig>,
   baseline: Settings,
 ): Promise<Settings> {
+  requireSchedulePatch(patch); // P1.3
   const current = await loadSettings();
   // P2.1: reject only if a schedule field this patch touches moved on the server
   // since the editor opened. The compare is one level down, on the schedule
@@ -542,6 +703,7 @@ export async function saveCustomer(
   customer: Customer,
   baseline: Customer,
 ): Promise<Customer> {
+  requireNonEmpty(customer.name, 'Customer name'); // P1.3
   // P2.1: refetch and reject a lost update on any field the CustomerEditor
   // edits, then merge the user's changed fields onto the fresh server row.
   // `archivedAt` is deliberately NOT guarded: archive/unarchive is a boolean
@@ -593,6 +755,7 @@ export interface NewCustomerFields {
 export async function createCustomer(
   fields: NewCustomerFields,
 ): Promise<Customer> {
+  requireNonEmpty(fields.name, 'Customer name'); // P1.3
   const customer: Customer = {
     id: newCustomerId(),
     name: fields.name,
@@ -665,6 +828,7 @@ export async function updateJobDetails(
   edit: JobDetailsEdit,
   baseline: Job,
 ): Promise<Job> {
+  requireNonEmpty(edit.title, 'Job title'); // P1.3
   const server = await loadJob(jobId);
   // P2.1: reject only if an operational field the user edited was changed on the
   // server since the editor opened. Consent/workflow fields (approval,
@@ -722,6 +886,19 @@ export async function scheduleJob(
   edit: JobScheduleEdit,
   baseline: Job,
 ): Promise<Job> {
+  // P1.3: a set date must be well-formed; an end time needs a start and must
+  // follow it (a null date is a valid "unschedule").
+  if (edit.scheduledDate !== null) requireDate(edit.scheduledDate, 'Scheduled date');
+  if (edit.scheduledEndTime && !edit.scheduledStartTime) {
+    throw new ValidationError('Set a start time as well as an end time.');
+  }
+  if (
+    edit.scheduledStartTime &&
+    edit.scheduledEndTime &&
+    edit.scheduledEndTime <= edit.scheduledStartTime
+  ) {
+    throw new ValidationError('End time must be after the start time.');
+  }
   const server = await loadJob(jobId);
   // P2.1: reject only if the schedule the user is assigning was changed on the
   // server since the row rendered (e.g. a phone scheduled it meanwhile) — don't
@@ -831,6 +1008,8 @@ export async function updateJobPricing(
   edit: JobPricingEdit,
   baseline: Job,
 ): Promise<Job> {
+  requirePricingInputs(edit); // P1.3
+  requireMaterials(edit.materials);
   const server = await loadJob(jobId);
   if (server.approval?.decision) {
     throw new JobEstimateApprovalLockedError(server.approval.decision);
@@ -937,6 +1116,12 @@ export interface NewJobFields {
  * preserve.
  */
 export async function createJob(fields: NewJobFields): Promise<Job> {
+  requireNonEmpty(fields.title, 'Job title'); // P1.3
+  requireNonEmpty(fields.customerId, 'Customer');
+  requireNonNegative(fields.laborRate, 'Labor rate');
+  requireNonNegative(fields.materialMarkup, 'Material markup');
+  requireNonNegative(fields.overhead, 'Overhead');
+  requireNonNegative(fields.margin, 'Margin');
   const job: Job = {
     id: newJobId(),
     customerId: fields.customerId,
@@ -980,6 +1165,9 @@ export async function savePricebookEntry(
   entry: PricebookEntry,
   baseline: PricebookEntry,
 ): Promise<PricebookEntry> {
+  requireNonEmpty(entry.name, 'Service name'); // P1.3
+  requirePricingInputs(entry);
+  requireMaterials(entry.materials);
   // Bump the blob's own updatedAt, matching the mobile save (distinct from the
   // row's server-authoritative updated_at column).
   const next: PricebookEntry = { ...entry, updatedAt: new Date().toISOString() };
@@ -1041,6 +1229,9 @@ export interface NewPricebookFields {
 export async function createPricebookEntry(
   fields: NewPricebookFields,
 ): Promise<PricebookEntry> {
+  requireNonEmpty(fields.name, 'Service name'); // P1.3
+  requirePricingInputs(fields);
+  requireMaterials(fields.materials);
   const now = new Date().toISOString();
   const entry: PricebookEntry = {
     id: newPricebookId(),
@@ -1074,6 +1265,8 @@ export async function saveExpense(
   expense: Expense,
   baseline?: Expense,
 ): Promise<Expense> {
+  requireNonEmpty(expense.description, 'Description'); // P1.3
+  requirePositive(expense.amount, 'Amount');
   // saveExpense doubles as create (add mode) and edit. A create passes no
   // baseline — there is nothing to conflict with — and writes straight through.
   // An edit passes the record it started from, so P2.1 refetches and rejects a
@@ -1231,6 +1424,11 @@ export async function updateRecurringJobRule(
   edit: RecurringJobRuleEdit,
   baseline: RecurringJob,
 ): Promise<RecurringJob> {
+  requireNonEmpty(edit.title, 'Job title'); // P1.3
+  requirePricingInputs(edit);
+  requireMaterials(edit.materials);
+  requireRecurrenceBounds(edit);
+  requireDate(edit.nextDueDate, 'Next date');
   const server = await loadRecurringJob(id);
   // P2.1: reject only if a rule field the user edited moved on the server since
   // the editor opened. `estimateTotal` is DERIVED and `nextDueDate` has its own
@@ -1326,6 +1524,11 @@ export interface NewRecurringInvoiceFields {
 export async function createRecurringInvoice(
   fields: NewRecurringInvoiceFields,
 ): Promise<RecurringInvoice> {
+  requireNonEmpty(fields.customerId, 'Customer'); // P1.3
+  requirePositive(fields.amount, 'Amount');
+  requireNonNegative(fields.dueDays, 'Net terms');
+  requireRecurrenceBounds(fields);
+  requireDate(fields.nextDueDate, 'First date');
   const rule: RecurringInvoice = {
     id: newRecurringInvoiceId(),
     customerId: fields.customerId,
@@ -1402,6 +1605,12 @@ export interface NewRecurringJobFields {
 export async function createRecurringJob(
   fields: NewRecurringJobFields,
 ): Promise<RecurringJob> {
+  requireNonEmpty(fields.customerId, 'Customer'); // P1.3
+  requireNonEmpty(fields.title, 'Job title');
+  requirePricingInputs(fields);
+  requireMaterials(fields.materials);
+  requireRecurrenceBounds(fields);
+  requireDate(fields.nextDueDate, 'First date');
   const rule: RecurringJob = {
     id: newRecurringJobId(),
     customerId: fields.customerId,
@@ -1467,6 +1676,11 @@ export async function updateRecurringInvoiceRule(
   edit: RecurringInvoiceRuleEdit,
   baseline: RecurringInvoice,
 ): Promise<RecurringInvoice> {
+  // P1.3 — a plan's description is optional in the UI, so it isn't required here.
+  requirePositive(edit.amount, 'Amount');
+  requireNonNegative(edit.dueDays, 'Net terms');
+  requireRecurrenceBounds(edit);
+  requireDate(edit.nextDueDate, 'Next date');
   const server = await loadRecurringInvoice(id);
   // P2.1: reject only if a rule field the user edited moved on the server since
   // the editor opened. `nextDueDate` has its own generation-race handling
@@ -1534,6 +1748,9 @@ export async function updateInvoiceDetails(
   edit: InvoiceDetailsEdit,
   baseline: Invoice,
 ): Promise<Invoice> {
+  requireNonEmpty(edit.number, 'Invoice number'); // P1.3
+  requirePositive(edit.amount, 'Amount');
+  requireDate(edit.due, 'Due date');
   const server = await loadInvoice(id);
   // P2.1: reject only if a scalar the user edited was changed on the server
   // since the editor opened. The payment ledger is preserved by
@@ -1611,6 +1828,10 @@ export interface NewInvoiceFields {
  * insert — no server row to merge.
  */
 export async function createInvoice(fields: NewInvoiceFields): Promise<Invoice> {
+  requireNonEmpty(fields.customer, 'Customer'); // P1.3
+  requireNonEmpty(fields.number, 'Invoice number');
+  requirePositive(fields.amount, 'Amount');
+  requireDate(fields.due, 'Due date');
   const invoice: Invoice = {
     id: newInvoiceId(),
     customer: fields.customer,

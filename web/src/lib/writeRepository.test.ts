@@ -33,6 +33,7 @@ import {
   JobStatusTransitionError,
   PaymentValidationError,
   StaleWriteError,
+  ValidationError,
 } from './writeRepository';
 import type {
   Customer,
@@ -1770,5 +1771,277 @@ describe('P2.1 — field-scoped optimistic-concurrency guard', () => {
       );
       expect(writtenSettings().laborRate).toBe(120);
     });
+  });
+});
+
+describe('P1.3 — write-layer payload validation', () => {
+  // Validation runs FIRST in each op, before any fetch/guard, so these cases
+  // reject without a server row and never reach a write. The baseline args are
+  // therefore unreachable — a minimal cast is enough.
+  const anyInvoice = {} as Invoice;
+  const anyJob = {} as Job;
+  const anyCustomer = {} as Customer;
+  const anyPlan = {} as RecurringInvoice;
+  const anyRecJob = {} as RecurringJob;
+
+  const invoiceEdit = (over: Partial<Record<string, unknown>> = {}) => ({
+    number: '001',
+    amount: 1000,
+    due: '2026-09-01' as const,
+    desc: '',
+    email: '',
+    phone: '',
+    ...over,
+  });
+
+  const pricingFields = {
+    laborHours: 1,
+    laborRate: 90,
+    materials: [],
+    materialMarkup: 10,
+    overhead: 10,
+    margin: 20,
+  };
+
+  async function rejectsValidation(p: Promise<unknown>) {
+    await expect(p).rejects.toBeInstanceOf(ValidationError);
+    // No op that fails validation ever writes.
+    expect(state.lastUpsert).toBeNull();
+    expect(state.lastUpdate).toBeNull();
+  }
+
+  it('rejects an invoice amount that is not greater than zero', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ amount: 0 }), anyInvoice),
+    );
+  });
+
+  it('rejects a NaN amount (would corrupt derived math)', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ amount: Number.NaN }), anyInvoice),
+    );
+  });
+
+  it('rejects a blank invoice number', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ number: '  ' }), anyInvoice),
+    );
+  });
+
+  it('rejects a malformed due date', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ due: '2026/09/01' }), anyInvoice),
+    );
+  });
+
+  it('rejects a manual invoice with no customer', async () => {
+    await rejectsValidation(
+      createInvoice({
+        customer: '',
+        customerId: 'c1',
+        number: '002',
+        amount: 100,
+        due: '2026-09-01',
+        email: '',
+        phone: '',
+        desc: '',
+      }),
+    );
+  });
+
+  it('rejects an expense with a blank description or non-positive amount', async () => {
+    await rejectsValidation(
+      saveExpense({
+        id: 'e1',
+        createdAt: '2026-08-01',
+        description: '',
+        amount: 10,
+        category: 'materials',
+        date: '2026-08-01',
+        notes: '',
+        receiptUri: null,
+      }),
+    );
+  });
+
+  it('rejects a negative pricing input on a job estimate', async () => {
+    await rejectsValidation(
+      updateJobPricing(
+        'job-1',
+        { ...pricingFields, margin: -5, jobCosts: [], estimateTotal: 100 },
+        anyJob,
+      ),
+    );
+  });
+
+  it('rejects a material line with a negative unit cost', async () => {
+    await rejectsValidation(
+      updateJobPricing(
+        'job-1',
+        {
+          ...pricingFields,
+          materials: [{ id: 'm1', name: 'Pipe', quantity: 1, unitCost: -3 }],
+          jobCosts: [],
+          estimateTotal: 100,
+        },
+        anyJob,
+      ),
+    );
+  });
+
+  it('rejects a blank customer name on save and create', async () => {
+    await rejectsValidation(saveCustomer({ ...anyCustomer, id: 'c1', name: '  ' } as Customer, anyCustomer));
+    await rejectsValidation(
+      createCustomer({ name: '', email: '', phone: '', address: '', notes: '' }),
+    );
+  });
+
+  it('rejects a new job with no title or no customer', async () => {
+    const base = {
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Fix',
+      description: '',
+      address: '',
+      scheduledDate: null,
+      scheduledStartTime: null,
+      scheduledEndTime: null,
+      notes: '',
+      laborRate: 90,
+      materialMarkup: 10,
+      overhead: 10,
+      margin: 20,
+    };
+    await rejectsValidation(createJob({ ...base, title: '' }));
+    await rejectsValidation(createJob({ ...base, customerId: '' }));
+    await rejectsValidation(createJob({ ...base, margin: -1 }));
+  });
+
+  it('rejects a pricebook entry with a blank name or negative pricing', async () => {
+    await rejectsValidation(
+      createPricebookEntry({
+        name: '',
+        category: '',
+        description: '',
+        ...pricingFields,
+        estimateTotal: 90,
+      }),
+    );
+  });
+
+  it('rejects a maintenance plan whose amount is not positive', async () => {
+    await rejectsValidation(
+      updateRecurringInvoiceRule(
+        'ri1',
+        {
+          description: 'x',
+          amount: 0,
+          dueDays: 30,
+          cadence: 'monthly',
+          endCondition: 'never',
+          originalNextDueDate: '2026-09-01',
+          nextDueDate: '2026-09-01',
+          autoSendEnabled: false,
+        },
+        anyPlan,
+      ),
+    );
+  });
+
+  it('rejects a count-ended rule with no end count', async () => {
+    await rejectsValidation(
+      updateRecurringInvoiceRule(
+        'ri1',
+        {
+          description: 'x',
+          amount: 100,
+          dueDays: 30,
+          cadence: 'monthly',
+          endCondition: 'count',
+          endCount: undefined,
+          originalNextDueDate: '2026-09-01',
+          nextDueDate: '2026-09-01',
+          autoSendEnabled: false,
+        },
+        anyPlan,
+      ),
+    );
+  });
+
+  it('rejects a recurring job rule with a negative pricing input', async () => {
+    await rejectsValidation(
+      updateRecurringJobRule(
+        'rj1',
+        {
+          title: 'Gutter clean',
+          description: '',
+          ...pricingFields,
+          laborRate: -1,
+          estimateTotal: 100,
+          cadence: 'monthly',
+          endCondition: 'never',
+          originalNextDueDate: '2026-09-01',
+          nextDueDate: '2026-09-01',
+        },
+        anyRecJob,
+      ),
+    );
+  });
+
+  it('rejects settings with a negative pricing field or a bad invoice start number', async () => {
+    await rejectsValidation(
+      saveSettings(
+        { laborRate: -5 },
+        { laborRate: -5 } as Parameters<typeof saveSettings>[1],
+      ),
+    );
+    await rejectsValidation(
+      saveSettings(
+        { invoiceStartNumber: 0 },
+        {} as Parameters<typeof saveSettings>[1],
+      ),
+    );
+  });
+
+  it('rejects a schedule with no work days or an inverted work window', async () => {
+    await rejectsValidation(
+      saveSchedule(
+        { workDays: [] },
+        {} as Parameters<typeof saveSchedule>[1],
+      ),
+    );
+    await rejectsValidation(
+      saveSchedule(
+        { workDayStart: '17:00', workDayEnd: '08:00' },
+        {} as Parameters<typeof saveSchedule>[1],
+      ),
+    );
+  });
+
+  it('rejects scheduling with an end time but no start', async () => {
+    await rejectsValidation(
+      scheduleJob(
+        'job-1',
+        { scheduledDate: '2026-09-01', scheduledStartTime: null, scheduledEndTime: '11:00' },
+        anyJob,
+      ),
+    );
+  });
+
+  it('accepts unscheduling (a null date is valid)', async () => {
+    state.serverRow = { data: { id: 'job-1', status: 'scheduled', scheduledDate: '2026-09-01' }, deleted: false };
+    await scheduleJob(
+      'job-1',
+      { scheduledDate: null, scheduledStartTime: null, scheduledEndTime: null },
+      { id: 'job-1', status: 'scheduled', scheduledDate: '2026-09-01' } as Job,
+    );
+    expect(state.lastUpsert!.data as Job).toMatchObject({ scheduledDate: null });
+  });
+
+  it('surfaces the payment validator as before (unchanged by P1.3)', async () => {
+    state.serverRow = { data: invoice(), deleted: false };
+    await expect(
+      recordInvoicePayment('inv-1', { amount: 0, date: '2026-08-01', method: 'cash' }),
+    ).rejects.toBeInstanceOf(PaymentValidationError);
   });
 });

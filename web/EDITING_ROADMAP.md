@@ -20,8 +20,19 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
 - **P1.1 / P1.2 — landed.** Reads and writes are in distinct modules, and
   `readOnly.arch.test.ts` now allow-lists exactly `writeRepository.ts` (and
   asserts it is genuinely the sole mutation site).
-- **P1.3 — partial.** Payment drafts are validated; other domains' validation
-  arrives with their operations.
+- **P1.3 — landed.** Validation now lives at the single write boundary, not only
+  in the screens. `writeRepository.ts` has a P1.3 section (`ValidationError` plus
+  `requireNonNegative`/`requirePositive`/`requireNonEmpty`/`requireDate`,
+  `requirePricingInputs`, `requireMaterials`, `requireRecurrenceBounds`,
+  `requireSettingsPatch`, `requireSchedulePatch`) and every create/edit op
+  re-asserts its data-integrity invariants on the already-typed values it
+  receives BEFORE any fetch or write — so a buggy or non-screen caller cannot land
+  a malformed blob that would sync to every device and corrupt derived math (an
+  NaN `estimateTotal`, a negative amount) or break the generation engine (an
+  unknown cadence, a count-ended rule with no count). The screens keep their
+  inline UX; this is the authoritative last line. Payment drafts keep their
+  existing `PaymentValidationError`. Covered by `writeRepository.test.ts`
+  ("P1.3 — write-layer payload validation").
 - **First editing surface — landed.** `InvoiceDetailScreen` wires the three
   money ops: record a payment (inline validated form), mark the balance paid,
   and void a payment (with confirm). Each disables its control while in flight
@@ -226,9 +237,11 @@ code; a write that ignores any one can silently lose data.
   `.from().insert|update|upsert|delete`. Reframe to "only the write module may
   mutate" so read-only screens still can't import a write path.
 
-### P1.3 Payload validation
+### P1.3 Payload validation — ✅ LANDED
 - Validate shape + invariants before send, so the client never writes a
-  malformed blob.
+  malformed blob. Done at the write boundary (`writeRepository.ts` P1.3 section):
+  every create/edit op re-asserts its invariants on its typed inputs before any
+  fetch/write. See the P1.3 progress bullet above for the helper set and coverage.
 
 ### P1.4 `id` generation matches mobile
 - New records use the same id format mobile generates (`id text primary key`,
