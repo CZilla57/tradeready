@@ -144,6 +144,8 @@ It cannot yet complete these Cloudflare Worker-backed actions:
 - Revise pricing after a declined or approved decision
 - Drive consent-coupled status transitions
 
+These are scoped in `web/ESTIMATE_WORKFLOW_ROADMAP.md`, which finds that most are reachable from the browser (the estimate endpoints are JWT-authed HTTP; the snapshot math is already ported) and that the only true backend change is widening the `create-link` CORS allowlist to the portal origin.
+
 ### Mobile-only and unsurfaced areas
 
 The current web portal does not show or edit these areas:
