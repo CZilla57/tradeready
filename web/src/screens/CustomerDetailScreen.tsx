@@ -59,14 +59,17 @@ function CustomerEditor({ customer }: { customer: Customer }) {
     setBusy('save');
     setError(null);
     try {
-      await saveCustomer({
-        ...customer,
-        name: name.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
-        address: address.trim(),
-        notes: notes.trim(),
-      });
+      await saveCustomer(
+        {
+          ...customer,
+          name: name.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          address: address.trim(),
+          notes: notes.trim(),
+        },
+        customer,
+      );
       retry(['customers']);
       setOpen(false);
     } catch (err) {
@@ -81,7 +84,10 @@ function CustomerEditor({ customer }: { customer: Customer }) {
     setBusy('archive');
     setError(null);
     try {
-      await saveCustomer(withArchived(customer, !archived, getTodayDateString()));
+      await saveCustomer(
+        withArchived(customer, !archived, getTodayDateString()),
+        customer,
+      );
       retry(['customers']);
       // Archiving removes the customer from the active list — leave the detail
       // view. Unarchiving keeps them here.

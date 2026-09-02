@@ -42,14 +42,17 @@ The mobile sync model replaces complete JSON blobs. A browser edit built from st
 
 - **Typed operations**: screens call domain functions such as `updateInvoiceDetails` and `scheduleJob`; there is no generic table writer
 - **Separate read and write modules**: `repository.ts` contains reads, while `writeRepository.ts` is the only allowed Supabase business-data mutation module
+- **Write-boundary validation**: every create and edit operation validates runtime values before it fetches or writes data
 - **Owner-scoped writes**: every operation includes both the record ID and the authenticated owner ID
 - **Server-row refreshes**: high-risk invoice, job, recurring, schedule, and settings operations load the current row before applying owned fields
+- **Field-scoped conflict detection**: edits reject a same-field lost update while preserving unrelated server changes
 - **Ledger preservation**: invoice writes merge payment activity and reconcile `paid` and `paidAt`
 - **Consent protection**: estimate pricing checks the current approval decision and applies an atomic database condition before writing
 - **Recurring cursor protection**: an unchanged form cannot restore an older `nextDueDate` after generation advances it
 - **Derived-value reconciliation**: invoice totals, estimate totals, schedule-coupled status, and labor breakdown state are updated with their source inputs
 - **Soft deletion**: deletes write a `deleted: true` tombstone so mobile sync can remove the record without resurrecting it later
 - **Secret stripping**: settings writes preserve unknown fields and remove every field listed in `SECURE_FIELDS`
+- **Database-owned timestamps**: web writes omit `updated_at`; the Supabase trigger stamps the authoritative value
 
 The architecture test in `src/lib/readOnly.arch.test.ts` enforces the single-write-module boundary. Mutation behavior is covered in `src/lib/writeRepository.test.ts` and the related screen tests.
 
@@ -57,7 +60,9 @@ The architecture test in `src/lib/readOnly.arch.test.ts` enforces the single-wri
 
 The portal does not have the mobile app's durable offline mutation queue. Web writes require a connection, disable repeat submission while saving, show failures, and reload the affected collection after success.
 
-The portal also does not have universal optimistic concurrency control. High-risk operations refresh the server row, and estimate pricing adds an atomic approval guard. Lower-risk whole-record edits can still use last-write-wins behavior when two clients edit the same record at the same time. See `EDITING_ROADMAP.md` for the remaining hardening work.
+Edit operations use field-scoped optimistic concurrency. The write layer compares the baseline displayed by the screen with the submitted values and the current server row. It rejects the write when another client changed the same field to a different value, while unrelated server changes continue through the fresh-row merge.
+
+The portal does not use a row-level version lock or live multi-tab updates. Pure creates and boolean toggles also do not use the three-way field guard. See `EDITING_ROADMAP.md` for the exact boundary and remaining hardening work.
 
 ## Password recovery
 

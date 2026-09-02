@@ -20,15 +20,18 @@ The current implementation includes these foundations:
 
 - **Dedicated write module**: `web/src/lib/writeRepository.ts` is the only web module allowed to mutate business tables
 - **Domain operations**: the module exports named operations instead of a generic table writer
+- **Write-boundary validation**: every create and edit operation checks its invariants before it fetches or writes data
 - **Server timestamps**: the `set_updated_at` database trigger stamps all twelve synced tables with the database clock
 - **Database-based pull cursor**: mobile cursor version 2 advances from returned database timestamps, overlaps five minutes, and drains deterministic 500-row pages
+- **Field-scoped conflict detection**: edit operations compare the rendered baseline, submitted fields, and current server row before writing
+- **Fresh-row blob merges**: customer, expense, and pricebook saves apply user-changed fields to the current server row
 - **Owner checks**: writes include the authenticated `user_id` in their filters
 - **Tombstones**: deletion sets `deleted: true` instead of issuing a database `DELETE`
 - **Post-write refresh**: screens reload affected collections after successful mutations
-- **Failure visibility**: forms remain open and display an error when a write fails
-- **Mutation tests**: repository and screen tests cover validation, failure paths, preservation rules, and derived values
+- **Failure visibility**: forms remain open and display an error when validation or a write fails
+- **Mutation tests**: repository and screen tests cover validation, failure paths, preservation rules, concurrency, and derived values
 
-The database trigger makes client-supplied `updated_at` values redundant. Removing those values from web and mobile writes remains optional cleanup.
+Web writes no longer send `updated_at`; the database trigger owns the column for inserts, updates, and tombstones. Mobile can stop sending its redundant timestamp later without coordinating with the web portal.
 
 ## Shipped product surfaces
 
@@ -53,6 +56,20 @@ Today remains a derived dashboard. Money totals are derived, while expense recor
 ## Shipped data-integrity safeguards
 
 The portal applies stronger controls where server or mobile processes also edit a record.
+
+### Validate every mutation at the write boundary
+
+Screens provide inline validation for the owner, but `writeRepository.ts` is the authoritative boundary. Its validation helpers reject invalid amounts, pricing inputs, materials, recurrence limits, settings patches, and schedules before any fetch or write.
+
+Typed inputs do not replace runtime validation. A future caller cannot persist malformed values by bypassing a screen.
+
+### Detect field-level editing conflicts
+
+Each edit receives the baseline entity displayed by the screen. The write layer compares that baseline with the submitted values and a freshly fetched server row.
+
+`StaleWriteError` rejects the operation only when both the owner and another writer changed the same field to different values. Server-only changes continue through the existing merge behavior. Customer, expense, and pricebook saves also merge user-changed fields onto the fresh row instead of replacing it with the stale form snapshot.
+
+Pure creates and boolean toggles do not use the three-way guard. A create has no baseline, and the current toggle operations apply their explicit target state to a fresh row.
 
 ### Preserve invoice payment history
 
@@ -86,7 +103,7 @@ This rule prevents an open browser form from restoring an older generation curso
 
 Web-safe pricing utilities recalculate estimate totals for jobs, recurring jobs, and pricebook services. Invoice utilities reconcile payment-derived fields.
 
-Changing `laborHours` clears a stale `laborBreakdown` unless the stored breakdown still matches. Schedule assignment advances an approved job to scheduled without regressing later statuses.
+Changing `laborHours` clears a stale `laborBreakdown`. Schedule assignment advances an approved job to scheduled without regressing later statuses.
 
 ### Preserve settings and secrets
 
@@ -94,19 +111,21 @@ Changing `laborHours` clears a stale `laborBreakdown` unless the stored breakdow
 
 ## Current concurrency boundary
 
-The portal has no offline write queue and no universal optimistic concurrency token. A failed browser request remains failed until the owner retries it.
+The portal has no offline write queue or row-level version lock. A failed browser request remains failed until the owner retries it.
 
-High-risk operations use a current server row, and estimate pricing has an atomic approval condition. Other whole-record edits can still be last-write-wins when two clients change the same record at nearly the same time. Future hardening should add an `updated_at` precondition or a server-side patch function where a domain needs conflict detection.
+Field-scoped optimistic concurrency now detects the primary lost-update case: another writer changes a field that the owner also changed. Server-only changes to unrelated fields continue through the fresh-row merge. Operations that intentionally own a group of fields can still replace server changes within that owned group, and open tabs do not update through Supabase Realtime.
 
 Do not add a generic `write(table, id, data)` helper. New mutations must meet this definition of done:
 
 1. Add a typed domain operation in `writeRepository.ts`
-2. Load the current row when another client or backend can update fields on that record
-3. Assign only the fields owned by the form
-4. Reconcile derived values and append-only history
-5. Preserve tombstone and owner-scoping semantics
-6. Disable repeat submission, show failures, and refresh after success
-7. Add repository and screen tests for validation, races, and hidden-field preservation
+2. Validate runtime values before fetching or writing
+3. Accept the rendered baseline for an edit and detect same-field conflicts
+4. Load the current row when another client or backend can update the record
+5. Assign only the fields owned by the form
+6. Reconcile derived values and append-only history
+7. Preserve tombstone and owner-scoping semantics
+8. Disable repeat submission, show failures, and refresh after success
+9. Add repository and screen tests for validation, races, and hidden-field preservation
 
 ## Remaining product work
 
@@ -141,10 +160,10 @@ If booking requests become editable, treat their history like the invoice paymen
 
 The following items improve resilience but do not block the current editing surface:
 
-- Add optimistic concurrency checks to domains that still use last-write-wins saves
-- Stop sending client-generated `updated_at` values now that the database trigger owns timestamps
+- Add stronger atomic database conditions to any domain where field-scoped client checks are insufficient
+- Stop sending client-generated `updated_at` values from mobile now that the database trigger owns timestamps
 - Add direct-cost authoring to pricebook and recurring-job editors if owners need it
-- Add multi-tab or realtime refresh if stale open tabs become a support issue
+- Add multi-tab or Realtime refresh if stale open tabs become a support issue
 
 ## Files that constrain future work
 
@@ -155,7 +174,7 @@ The following items improve resilience but do not block the current editing surf
 | `utils/storage/keys.ts` | Credential fields that must never enter synced settings |
 | `utils/autoInvoice.ts` | Mobile create-from-job billable-breakdown rules |
 | `web/src/lib/repository.ts` | Read-only Supabase access |
-| `web/src/lib/writeRepository.ts` | Only allowed web business-data mutation module |
+| `web/src/lib/writeRepository.ts` | Validation, conflict detection, and all web business-data mutations |
 | `web/src/lib/readOnly.arch.test.ts` | Static enforcement of the read/write boundary |
 | `web/src/lib/DataContext.tsx` | Scoped loading and post-write refresh |
 | `web/src/ui/invoiceMath.ts` | Invoice payment and paid-state reconciliation |

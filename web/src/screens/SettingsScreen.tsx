@@ -84,7 +84,7 @@ function ProfileEditor({ settings }: { settings: Settings }) {
         email: email.trim(),
         address: address.trim(),
         region: region.trim(),
-      });
+      }, settings);
       retry(['settings']);
       setOpen(false);
     } catch (err) {
@@ -217,7 +217,7 @@ function PricingEditor({ settings }: { settings: Settings }) {
     setBusy(true);
     setError(null);
     try {
-      await saveSettings(values as Partial<Settings>);
+      await saveSettings(values as Partial<Settings>, settings);
       retry(['settings']);
       setOpen(false);
     } catch (err) {
@@ -353,7 +353,7 @@ function InvoicingEditor({ settings }: { settings: Settings }) {
         autoInvoiceOnComplete: autoInvoice,
         // Auto-email only makes sense alongside auto-create; keep them consistent.
         autoEmailInvoiceOnComplete: autoInvoice && autoEmail,
-      });
+      }, settings);
       retry(['settings']);
       setOpen(false);
     } catch (err) {
@@ -470,7 +470,7 @@ function AutomationEditor({ settings }: { settings: Settings }) {
         appointmentRemindersEnabled: appointmentReminders,
         estimateFollowUpsEnabled: estimateFollowUps,
         reviewRequestEnabled: reviewRequest,
-      });
+      }, settings);
       retry(['settings']);
       setOpen(false);
     } catch (err) {
@@ -643,7 +643,7 @@ function ScheduleEditor({ settings }: { settings: Settings }) {
         defaultDurationMinutes: durationMin,
         bufferMinutes: bufferMin,
         blackouts,
-      });
+      }, settings);
       retry(['settings']);
       setOpen(false);
     } catch (err) {
@@ -814,7 +814,7 @@ function PaymentsEditor({ settings }: { settings: Settings }) {
     setBusy(true);
     setError(null);
     try {
-      await saveSettings({ paymentNotes: notes.trim() });
+      await saveSettings({ paymentNotes: notes.trim() }, settings);
       retry(['settings']);
       setOpen(false);
     } catch (err) {

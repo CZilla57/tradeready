@@ -113,19 +113,22 @@ function PricebookEditor({ entry }: { entry: PricebookEntry }) {
         marginPercent: pricing.margin!,
         minimumJobFee: settings?.minimumJobFee ?? 75,
       });
-      await savePricebookEntry({
-        ...entry,
-        name: name.trim(),
-        category: category.trim(),
-        description: description.trim(),
-        laborHours: pricing.laborHours!,
-        laborRate: pricing.laborRate!,
-        materialMarkup: pricing.materialMarkup!,
-        overhead: pricing.overhead!,
-        margin: pricing.margin!,
-        materials: parsedMaterials.materials,
-        estimateTotal,
-      });
+      await savePricebookEntry(
+        {
+          ...entry,
+          name: name.trim(),
+          category: category.trim(),
+          description: description.trim(),
+          laborHours: pricing.laborHours!,
+          laborRate: pricing.laborRate!,
+          materialMarkup: pricing.materialMarkup!,
+          overhead: pricing.overhead!,
+          margin: pricing.margin!,
+          materials: parsedMaterials.materials,
+          estimateTotal,
+        },
+        entry,
+      );
       retry(['pricebook']);
       setOpen(false);
     } catch (err) {

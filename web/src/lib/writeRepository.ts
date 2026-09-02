@@ -100,6 +100,27 @@ export class PaymentValidationError extends Error {
   }
 }
 
+/**
+ * Raised by the field-scoped optimistic-concurrency guard (roadmap P2.1) when a
+ * field the user actually edited was ALSO changed on the server since the editor
+ * opened. The message is user-facing — the edit screens surface `err.message`
+ * directly, so it tells the user their view is stale and what to do about it.
+ */
+export class StaleWriteError extends Error {
+  constructor(
+    public readonly collection: string,
+    public readonly id: string,
+    /** The first conflicting field, for diagnostics/tests. */
+    public readonly field: string,
+  ) {
+    super(
+      'This record was changed somewhere else while you were editing it. ' +
+        'Reload to see the latest version, then reapply your change.',
+    );
+    this.name = 'StaleWriteError';
+  }
+}
+
 async function currentUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getUser();
   if (error) throw error;
@@ -108,25 +129,315 @@ async function currentUserId(): Promise<string> {
   return id;
 }
 
-// P0.3 — the single source of a write's `updated_at`.
+// P0.3 — `updated_at` is DB-authoritative; the portal never sends it.
 //
-// Device pulls filter on `gt('updated_at', since)` (../../utils/sync.ts). A
-// write that omits `updated_at` leaves the column untouched on the UPDATE side
-// of the upsert, so the edit would never cross the watermark and never reach a
-// phone; a backdated stamp is invisible the same way. We stamp the client clock
-// here, matching mobile's `pushedAt = new Date()`, so web and mobile behave
-// identically today.
+// Device pulls filter on `gt('updated_at', since)` (../../utils/sync.ts), so the
+// column has to be monotonic and comparable across every writer. The server-side
+// `set_updated_at` trigger
+// (supabase/migrations/20260831_updated_at_server_authority.sql) — a BEFORE
+// INSERT OR UPDATE trigger on all sync tables — stamps `now()` (the DB clock) on
+// every write, overriding whatever a client sends. So a client-sent `updated_at`
+// is redundant: it is replaced server-side on both the insert and update paths.
 //
-// Residual (roadmap P0.3): this trusts the browser clock, which is less
-// reliable than a device's. The durable fix is the server-side `set_updated_at`
-// trigger in supabase/migrations/20260831_updated_at_server_authority.sql, which
-// overrides `updated_at` with the DB clock on every write. That trigger is
-// backward-compatible — this stamp is simply replaced server-side — so once it
-// is confirmed applied in production, sending `updated_at` here becomes optional
-// cleanup rather than a correctness requirement. Centralised here so that swap
-// is one edit.
-function writeTimestamp(): string {
-  return new Date().toISOString();
+// This module therefore OMITS `updated_at` from its writes entirely (the P0.3
+// optional cleanup), letting the one authoritative clock own it and keeping the
+// browser clock out of the watermark. Do not reintroduce an `updated_at` field
+// to any write below: it would be silently overwritten, and sending it invites
+// the false impression that the client clock matters here.
+
+// ---------------------------------------------------------------------------
+// Field-scoped optimistic-concurrency guard (roadmap P2.1)
+//
+// Every edit op already refetches the authoritative server row before writing
+// and merges the user's change onto it, so a field the portal never touches —
+// including one a concurrent server writer appended (the Stripe payment ledger,
+// a customer's estimate approval, a recurring rule's advancing generation
+// cursor) — is preserved, never clobbered. That is the "refetch-before-write"
+// minimum. What refetch+merge alone does NOT catch is a LOST UPDATE: the user
+// opens an editor showing a field, someone else changes that same field, and the
+// user saves their now-stale value over the change without ever seeing it.
+//
+// The guard closes that gap without regressing the merge. It is a three-way
+// compare — the classic merge triangle:
+//
+//   * baseline  — the field as the editor rendered it (the common ancestor),
+//   * submitted — the field the user is about to write,
+//   * server    — the field on the freshly re-fetched row.
+//
+// A conflict exists ONLY when the user changed a field (submitted != baseline)
+// that the server also moved to a different value (server != baseline, and
+// server != submitted). A field only the server changed keeps merging; a field
+// only the user changed applies; a field both changed to the SAME value is no
+// conflict. So a benign concurrent append (which never touches a field the user
+// is editing) never trips the guard — only a genuine collision does.
+// ---------------------------------------------------------------------------
+
+/** Structural equality for the JSON-shaped values a blob field can hold
+ *  (scalars, arrays, plain objects). Enough for comparing edited fields; the
+ *  blobs are plain JSON with no class instances, cycles, or functions. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return a === b;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((v, i) => deepEqual(v, b[i]));
+  }
+  if (typeof a === 'object' && typeof b === 'object') {
+    const ak = Object.keys(a as object);
+    const bk = Object.keys(b as object);
+    if (ak.length !== bk.length) return false;
+    return ak.every((k) =>
+      deepEqual(
+        (a as Record<string, unknown>)[k],
+        (b as Record<string, unknown>)[k],
+      ),
+    );
+  }
+  return false;
+}
+
+/**
+ * Reject the write if any of `fields` is a lost update — changed by the user AND
+ * moved on the server to a different value since the editor rendered `baseline`.
+ * Fields the user didn't touch, and fields only the server changed, pass through
+ * (the caller's refetch+merge handles them). Throws `StaleWriteError` on the
+ * first conflict; returns normally when the edit is safe to apply.
+ */
+function guardConcurrentEdit<
+  B,
+  S extends Partial<Record<keyof B, unknown>>,
+  U extends Partial<Record<keyof B, unknown>>,
+>(
+  collection: string,
+  id: string,
+  baseline: B,
+  server: S,
+  submitted: U,
+  fields: (keyof B)[],
+): void {
+  for (const f of fields) {
+    const base = baseline[f];
+    const next = (submitted as Record<keyof B, unknown>)[f];
+    const now = (server as Record<keyof B, unknown>)[f];
+    const userChanged = !deepEqual(next, base);
+    if (!userChanged) continue;
+    const serverMoved = !deepEqual(now, base);
+    if (serverMoved && !deepEqual(next, now)) {
+      throw new StaleWriteError(collection, id, String(f));
+    }
+  }
+}
+
+/** Load one owner-scoped blob row's `data` by id, or null for a missing/deleted
+ *  row. The read half of the whole-blob guard below. */
+async function loadBlobRow<T>(
+  collection: string,
+  id: string,
+): Promise<T | null> {
+  const { data, error } = await supabase
+    .from(collection)
+    .select('data, deleted')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.deleted || !data.data) return null;
+  return data.data as T;
+}
+
+/**
+ * Guard + merge for the whole-blob edit ops (customers, pricebook, expenses).
+ *
+ * Unlike the patch ops — which carry only the user's fields and spread them onto
+ * a fresh server row — a whole-blob op is handed the entire edited record. So
+ * this refetches the current server blob, rejects a lost update on any
+ * `guardedFields` (P2.1), then rebuilds the write by applying ONLY the fields the
+ * user actually changed (submitted != baseline) onto the fresh server row — so a
+ * field another client changed but this user didn't touch survives, and derived
+ * fields the caller recomputed (e.g. a pricebook `estimateTotal`) and the blob's
+ * own `updatedAt` bump ride along because they, too, differ from baseline.
+ *
+ * If the row is gone (deleted or never existed), there's nothing to conflict
+ * with; the submitted blob is written as-is, matching the ops' prior upsert.
+ */
+async function guardedBlobMerge<T extends object>(
+  collection: string,
+  id: string,
+  baseline: T,
+  submitted: T,
+  guardedFields: (keyof T)[],
+): Promise<T> {
+  const server = await loadBlobRow<T>(collection, id);
+  if (!server) return submitted;
+  guardConcurrentEdit(collection, id, baseline, server, submitted, guardedFields);
+  const merged = { ...server } as Record<string, unknown>;
+  const sub = submitted as Record<string, unknown>;
+  const base = baseline as Record<string, unknown>;
+  for (const k of Object.keys(sub)) {
+    if (!deepEqual(sub[k], base[k])) merged[k] = sub[k];
+  }
+  return merged as T;
+}
+
+// ---------------------------------------------------------------------------
+// Payload validation (roadmap P1.3)
+//
+// The screens validate their inputs and give inline UX, but the write module is
+// the SINGLE mutation boundary (readOnly.arch.test.ts), so it is also the last
+// line that keeps a malformed blob out of the cloud — where a bad value would
+// sync to every device and corrupt derived math (an NaN `estimateTotal`, a
+// negative amount) or break the generation engine (an unknown cadence, a
+// count-ended rule with no count). These helpers re-assert each op's invariants
+// on the already-typed values it receives, so a buggy or non-screen caller can't
+// bypass the screen checks. Payment drafts keep their own `PaymentValidationError`
+// (already shipped); everything else raises `ValidationError`.
+// ---------------------------------------------------------------------------
+
+/** Raised when an op's payload violates a data-integrity invariant (P1.3). */
+export class ValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+/** A finite number (rejects NaN/Infinity — either would corrupt derived math). */
+function requireFinite(n: number, label: string): void {
+  if (typeof n !== 'number' || !Number.isFinite(n)) {
+    throw new ValidationError(`${label} must be a number.`);
+  }
+}
+
+/** Finite and >= 0. */
+function requireNonNegative(n: number, label: string): void {
+  requireFinite(n, label);
+  if (n < 0) throw new ValidationError(`${label} must be zero or greater.`);
+}
+
+/** Finite and > 0. */
+function requirePositive(n: number, label: string): void {
+  requireFinite(n, label);
+  if (!(n > 0)) throw new ValidationError(`${label} must be greater than zero.`);
+}
+
+/** A non-blank string (after trimming). */
+function requireNonEmpty(s: string, label: string): void {
+  if (typeof s !== 'string' || s.trim() === '') {
+    throw new ValidationError(`${label} is required.`);
+  }
+}
+
+/** A `YYYY-MM-DD` date string. */
+function requireDate(s: string, label: string): void {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    throw new ValidationError(`${label} must be a valid date.`);
+  }
+}
+
+/** The five pricing inputs shared by jobs, pricebook entries, and recurring
+ *  jobs — each must be a non-negative number or the estimate math breaks. */
+function requirePricingInputs(p: {
+  laborHours: number;
+  laborRate: number;
+  materialMarkup: number;
+  overhead: number;
+  margin: number;
+}): void {
+  requireNonNegative(p.laborHours, 'Labor hours');
+  requireNonNegative(p.laborRate, 'Labor rate');
+  requireNonNegative(p.materialMarkup, 'Material markup');
+  requireNonNegative(p.overhead, 'Overhead');
+  requireNonNegative(p.margin, 'Margin');
+}
+
+/** Every material line's quantity and unit cost must be non-negative numbers. */
+function requireMaterials(materials: Material[]): void {
+  for (const m of materials) {
+    requireNonNegative(m.quantity, `Material "${m.name || m.id}" quantity`);
+    requireNonNegative(m.unitCost, `Material "${m.name || m.id}" unit cost`);
+  }
+}
+
+const RECURRENCE_CADENCES: readonly RecurrenceCadence[] = [
+  'daily',
+  'weekly',
+  'monthly',
+  'quarterly',
+  'annually',
+];
+
+/** A recurring rule's cadence and end bounds — the generation engine relies on
+ *  a known cadence and, for a bounded rule, a present count/date. */
+function requireRecurrenceBounds(rule: {
+  cadence: RecurrenceCadence;
+  endCondition: RecurrenceEndCondition;
+  endCount?: number;
+  endDate?: DateString;
+}): void {
+  if (!RECURRENCE_CADENCES.includes(rule.cadence)) {
+    throw new ValidationError(`Unknown cadence "${rule.cadence}".`);
+  }
+  if (rule.endCondition === 'count') {
+    if (rule.endCount === undefined || !Number.isInteger(rule.endCount) || rule.endCount < 1) {
+      throw new ValidationError('End after a whole number of occurrences greater than zero.');
+    }
+  } else if (rule.endCondition === 'date') {
+    if (rule.endDate === undefined) throw new ValidationError('Pick an end date.');
+    requireDate(rule.endDate, 'End date');
+  } else if (rule.endCondition !== 'never') {
+    throw new ValidationError(`Unknown end condition "${rule.endCondition}".`);
+  }
+}
+
+// The numeric settings fields the portal edits — each must be non-negative if
+// the patch carries it (an absent key is untouched, so it isn't checked).
+const NON_NEGATIVE_SETTINGS_KEYS: readonly (keyof Settings)[] = [
+  'laborRate',
+  'materialMarkup',
+  'overheadPercent',
+  'marginPercent',
+  'minimumJobFee',
+  'travelFeePerMile',
+  'mileageRate',
+];
+
+/** Validate a settings patch (P1.3): every numeric pricing field it carries must
+ *  be non-negative, and an invoice start number (when set) a whole number >= 1. */
+function requireSettingsPatch(patch: Partial<Settings>): void {
+  for (const key of NON_NEGATIVE_SETTINGS_KEYS) {
+    const value = patch[key];
+    if (value !== undefined) requireNonNegative(value as number, key);
+  }
+  const start = patch.invoiceStartNumber;
+  if (start !== undefined && start !== null) {
+    if (!Number.isInteger(start) || start < 1) {
+      throw new ValidationError('Invoice start number must be a whole number of 1 or more.');
+    }
+  }
+}
+
+/** Validate a schedule patch (P1.3): a working window that opens before it
+ *  closes, at least one work day, and non-negative minute durations — the shape
+ *  `resolveSchedule` expects. Only the fields the patch carries are checked. */
+function requireSchedulePatch(patch: Partial<ScheduleConfig>): void {
+  if (patch.workDays !== undefined && patch.workDays.length === 0) {
+    throw new ValidationError('Choose at least one working day.');
+  }
+  if (
+    patch.workDayStart !== undefined &&
+    patch.workDayEnd !== undefined &&
+    patch.workDayStart >= patch.workDayEnd
+  ) {
+    throw new ValidationError('The work day must start before it ends.');
+  }
+  if (patch.defaultDurationMinutes !== undefined) {
+    requireNonNegative(patch.defaultDurationMinutes, 'Appointment length');
+  }
+  if (patch.bufferMinutes !== undefined) {
+    requireNonNegative(patch.bufferMinutes, 'Buffer');
+  }
 }
 
 /**
@@ -157,9 +468,9 @@ async function tryLoadInvoice(id: string): Promise<Invoice | null> {
 }
 
 /**
- * Whole-blob upsert of one owner-scoped collection row, stamped exactly as the
- * mobile push does: fresh `updated_at`, `deleted: false`, `user_id = auth.uid()`.
- * The single low-level write primitive the typed operations build on.
+ * Whole-blob upsert of one owner-scoped collection row: `deleted: false`,
+ * `user_id = auth.uid()`. `updated_at` is left to the DB trigger (P0.3). The
+ * single low-level write primitive the typed operations build on.
  */
 async function upsertBlobRow(
   collection:
@@ -178,7 +489,6 @@ async function upsertBlobRow(
     id,
     user_id,
     data,
-    updated_at: writeTimestamp(),
     deleted: false,
   });
   if (error) throw error;
@@ -192,12 +502,12 @@ async function persistInvoice(invoice: Invoice): Promise<Invoice> {
 // ---------------------------------------------------------------------------
 // Soft-delete (roadmap P0.4)
 //
-// Deletes are recorded as a TOMBSTONE — `deleted: true` plus a fresh
-// `updated_at` — never a row removal, exactly as the mobile push does
-// (../../utils/sync.ts → the `op === 'delete'` branch). A hard `DELETE` would
-// leave every other device with no record that the row is gone, so the next
-// pull that predates the delete would treat the row as new and resurrect it.
-// The fresh `updated_at` is what carries the tombstone across each device's
+// Deletes are recorded as a TOMBSTONE — `deleted: true`, never a row removal,
+// exactly as the mobile push does (../../utils/sync.ts → the `op === 'delete'`
+// branch). A hard `DELETE` would leave every other device with no record that the
+// row is gone, so the next pull that predates the delete would treat the row as
+// new and resurrect it. The DB trigger stamps a fresh `updated_at` on this UPDATE
+// (P0.3), which is what carries the tombstone across each device's
 // `gt('updated_at', since)` pull filter.
 //
 // This is only the persistence primitive: cross-entity consequences (an invoice
@@ -226,7 +536,7 @@ async function softDelete(
   // restricts this to the owner's rows, so the user_id filter is belt-and-braces.
   const { error } = await supabase
     .from(collection)
-    .update({ deleted: true, updated_at: writeTimestamp() })
+    .update({ deleted: true })
     .eq('id', id)
     .eq('user_id', user_id);
   if (error) throw error;
@@ -282,11 +592,11 @@ async function persistSettings(merged: Settings): Promise<Settings> {
   const safe = stripSecureFields(merged);
   const user_id = await currentUserId();
   // The settings row has no `id` / `deleted` — upsert conflicts on user_id,
-  // exactly as the mobile push does (../../utils/sync.ts).
+  // exactly as the mobile push does (../../utils/sync.ts). `updated_at` is left
+  // to the DB trigger (P0.3); `settings` is one of its covered tables.
   const { error } = await supabase.from('settings').upsert({
     user_id,
     data: safe,
-    updated_at: writeTimestamp(),
   });
   if (error) throw error;
   return safe;
@@ -302,9 +612,27 @@ async function persistSettings(merged: Settings): Promise<Settings> {
  * settings edit UI defines its sections; the two invariants live here so every
  * such wrapper inherits them.
  */
-export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
-  const current = (await loadSettings()) ?? ({} as Settings);
-  return persistSettings({ ...current, ...patch });
+export async function saveSettings(
+  patch: Partial<Settings>,
+  baseline: Settings,
+): Promise<Settings> {
+  requireSettingsPatch(patch); // P1.3
+  const current = await loadSettings();
+  // P2.1: reject only if a settings field this editor's patch touches was
+  // changed on the server since the editor opened (another surface — or another
+  // tab — saved meanwhile). Fields outside the patch keep merging via
+  // persistSettings. Skipped when no row exists yet (a first write can't race).
+  if (current) {
+    guardConcurrentEdit(
+      'settings',
+      'settings',
+      baseline,
+      current,
+      patch,
+      Object.keys(patch) as (keyof Settings)[],
+    );
+  }
+  return persistSettings({ ...(current ?? ({} as Settings)), ...patch });
 }
 
 /**
@@ -323,11 +651,27 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
  */
 export async function saveSchedule(
   patch: Partial<ScheduleConfig>,
+  baseline: Settings,
 ): Promise<Settings> {
-  const current = (await loadSettings()) ?? ({} as Settings);
+  requireSchedulePatch(patch); // P1.3
+  const current = await loadSettings();
+  // P2.1: reject only if a schedule field this patch touches moved on the server
+  // since the editor opened. The compare is one level down, on the schedule
+  // sub-blob — the same level persistSettings deep-merges — so the booking-only
+  // slot fields (written by the mobile Booking screen) never enter this compare.
+  if (current) {
+    guardConcurrentEdit(
+      'schedule',
+      'schedule',
+      baseline.schedule ?? {},
+      current.schedule ?? {},
+      patch,
+      Object.keys(patch) as (keyof ScheduleConfig)[],
+    );
+  }
   return persistSettings({
-    ...current,
-    schedule: { ...(current.schedule ?? {}), ...patch },
+    ...(current ?? ({} as Settings)),
+    schedule: { ...((current ?? ({} as Settings)).schedule ?? {}), ...patch },
   });
 }
 
@@ -349,9 +693,27 @@ export async function saveSchedule(
  * applied, so fields the portal doesn't render (portal token, archivedAt,
  * importBatchId, …) are preserved (P0.2).
  */
-export async function saveCustomer(customer: Customer): Promise<Customer> {
-  await upsertBlobRow('customers', customer.id, customer);
-  return customer;
+export async function saveCustomer(
+  customer: Customer,
+  baseline: Customer,
+): Promise<Customer> {
+  requireNonEmpty(customer.name, 'Customer name'); // P1.3
+  // P2.1: refetch and reject a lost update on any field the CustomerEditor
+  // edits, then merge the user's changed fields onto the fresh server row.
+  // `archivedAt` is deliberately NOT guarded: archive/unarchive is a boolean
+  // toggle whose timestamp legitimately differs per client, so comparing it
+  // would flag a false conflict when two clients archive. It still merges (it's
+  // a changed field), so the toggle applies while a concurrent name/email edit
+  // on the same row survives.
+  const merged = await guardedBlobMerge('customers', customer.id, baseline, customer, [
+    'name',
+    'email',
+    'phone',
+    'address',
+    'notes',
+  ]);
+  await upsertBlobRow('customers', customer.id, merged);
+  return merged;
 }
 
 // New client-generated ids must match the format mobile creates (P1.4). The
@@ -387,6 +749,7 @@ export interface NewCustomerFields {
 export async function createCustomer(
   fields: NewCustomerFields,
 ): Promise<Customer> {
+  requireNonEmpty(fields.name, 'Customer name'); // P1.3
   const customer: Customer = {
     id: newCustomerId(),
     name: fields.name,
@@ -457,8 +820,22 @@ async function loadJob(id: string): Promise<Job> {
 export async function updateJobDetails(
   jobId: string,
   edit: JobDetailsEdit,
+  baseline: Job,
 ): Promise<Job> {
+  requireNonEmpty(edit.title, 'Job title'); // P1.3
   const server = await loadJob(jobId);
+  // P2.1: reject only if an operational field the user edited was changed on the
+  // server since the editor opened. Consent/workflow fields (approval,
+  // changeOrders, timeSessions, …) are preserved by the spread below either way.
+  guardConcurrentEdit('jobs', jobId, baseline, server, edit, [
+    'title',
+    'description',
+    'address',
+    'scheduledDate',
+    'scheduledStartTime',
+    'scheduledEndTime',
+    'notes',
+  ]);
   const next: Job = { ...server, ...edit };
   await upsertBlobRow('jobs', jobId, next);
   return next;
@@ -501,8 +878,30 @@ function advanceStatusForSchedule(
 export async function scheduleJob(
   jobId: string,
   edit: JobScheduleEdit,
+  baseline: Job,
 ): Promise<Job> {
+  // P1.3: a set date must be well-formed; an end time needs a start and must
+  // follow it (a null date is a valid "unschedule").
+  if (edit.scheduledDate !== null) requireDate(edit.scheduledDate, 'Scheduled date');
+  if (edit.scheduledEndTime && !edit.scheduledStartTime) {
+    throw new ValidationError('Set a start time as well as an end time.');
+  }
+  if (
+    edit.scheduledStartTime &&
+    edit.scheduledEndTime &&
+    edit.scheduledEndTime <= edit.scheduledStartTime
+  ) {
+    throw new ValidationError('End time must be after the start time.');
+  }
   const server = await loadJob(jobId);
+  // P2.1: reject only if the schedule the user is assigning was changed on the
+  // server since the row rendered (e.g. a phone scheduled it meanwhile) — don't
+  // silently move an appointment someone else already set.
+  guardConcurrentEdit('jobs', jobId, baseline, server, edit, [
+    'scheduledDate',
+    'scheduledStartTime',
+    'scheduledEndTime',
+  ]);
   const next: Job = {
     ...server,
     ...edit,
@@ -601,11 +1000,27 @@ export interface JobPricingEdit {
 export async function updateJobPricing(
   jobId: string,
   edit: JobPricingEdit,
+  baseline: Job,
 ): Promise<Job> {
+  requirePricingInputs(edit); // P1.3
+  requireMaterials(edit.materials);
   const server = await loadJob(jobId);
   if (server.approval?.decision) {
     throw new JobEstimateApprovalLockedError(server.approval.decision);
   }
+  // P2.1: reject only if a pricing input the user edited was changed on the
+  // server since the editor opened (someone re-priced the estimate meanwhile).
+  // `estimateTotal` is DERIVED, not compared. The approval lock above and its
+  // atomic DB predicate below guard the distinct consent race.
+  guardConcurrentEdit('jobs', jobId, baseline, server, edit, [
+    'laborHours',
+    'laborRate',
+    'materials',
+    'jobCosts',
+    'materialMarkup',
+    'overhead',
+    'margin',
+  ]);
   const next: Job = {
     ...server,
     laborHours: edit.laborHours,
@@ -623,7 +1038,6 @@ export async function updateJobPricing(
     .from('jobs')
     .update({
       data: next,
-      updated_at: writeTimestamp(),
       deleted: false,
     })
     .eq('id', jobId)
@@ -695,6 +1109,12 @@ export interface NewJobFields {
  * preserve.
  */
 export async function createJob(fields: NewJobFields): Promise<Job> {
+  requireNonEmpty(fields.title, 'Job title'); // P1.3
+  requireNonEmpty(fields.customerId, 'Customer');
+  requireNonNegative(fields.laborRate, 'Labor rate');
+  requireNonNegative(fields.materialMarkup, 'Material markup');
+  requireNonNegative(fields.overhead, 'Overhead');
+  requireNonNegative(fields.margin, 'Margin');
   const job: Job = {
     id: newJobId(),
     customerId: fields.customerId,
@@ -736,12 +1156,31 @@ export async function createJob(fields: NewJobFields): Promise<Job> {
 
 export async function savePricebookEntry(
   entry: PricebookEntry,
+  baseline: PricebookEntry,
 ): Promise<PricebookEntry> {
+  requireNonEmpty(entry.name, 'Service name'); // P1.3
+  requirePricingInputs(entry);
+  requireMaterials(entry.materials);
   // Bump the blob's own updatedAt, matching the mobile save (distinct from the
   // row's server-authoritative updated_at column).
   const next: PricebookEntry = { ...entry, updatedAt: new Date().toISOString() };
-  await upsertBlobRow('pricebook', entry.id, next);
-  return next;
+  // P2.1: refetch and reject a lost update on any field the PricebookEditor
+  // edits, then merge the user's changed fields onto the fresh server row. The
+  // recomputed `estimateTotal` and the `updatedAt` bump ride along (they differ
+  // from baseline); a `estimateTotal` is not guarded — it's derived, not edited.
+  const merged = await guardedBlobMerge('pricebook', entry.id, baseline, next, [
+    'name',
+    'category',
+    'description',
+    'laborHours',
+    'laborRate',
+    'materials',
+    'materialMarkup',
+    'overhead',
+    'margin',
+  ]);
+  await upsertBlobRow('pricebook', entry.id, merged);
+  return merged;
 }
 
 // Mobile mints a pricebook id as `pb-<Date.now()>` (screens/PricebookEntryScreen
@@ -783,6 +1222,9 @@ export interface NewPricebookFields {
 export async function createPricebookEntry(
   fields: NewPricebookFields,
 ): Promise<PricebookEntry> {
+  requireNonEmpty(fields.name, 'Service name'); // P1.3
+  requirePricingInputs(fields);
+  requireMaterials(fields.materials);
   const now = new Date().toISOString();
   const entry: PricebookEntry = {
     id: newPricebookId(),
@@ -812,9 +1254,28 @@ export async function createPricebookEntry(
 // through `deleteExpense` (soft-delete tombstone) above.
 // ---------------------------------------------------------------------------
 
-export async function saveExpense(expense: Expense): Promise<Expense> {
-  await upsertBlobRow('expenses', expense.id, expense);
-  return expense;
+export async function saveExpense(
+  expense: Expense,
+  baseline?: Expense,
+): Promise<Expense> {
+  requireNonEmpty(expense.description, 'Description'); // P1.3
+  requirePositive(expense.amount, 'Amount');
+  // saveExpense doubles as create (add mode) and edit. A create passes no
+  // baseline — there is nothing to conflict with — and writes straight through.
+  // An edit passes the record it started from, so P2.1 refetches and rejects a
+  // lost update on any field the editor touches, then merges the user's changes
+  // onto the fresh server row.
+  const merged = baseline
+    ? await guardedBlobMerge('expenses', expense.id, baseline, expense, [
+        'description',
+        'amount',
+        'category',
+        'date',
+        'notes',
+      ])
+    : expense;
+  await upsertBlobRow('expenses', expense.id, merged);
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -954,8 +1415,29 @@ function resolveNextDueDate(
 export async function updateRecurringJobRule(
   id: string,
   edit: RecurringJobRuleEdit,
+  baseline: RecurringJob,
 ): Promise<RecurringJob> {
+  requireNonEmpty(edit.title, 'Job title'); // P1.3
+  requirePricingInputs(edit);
+  requireMaterials(edit.materials);
+  requireRecurrenceBounds(edit);
+  requireDate(edit.nextDueDate, 'Next date');
   const server = await loadRecurringJob(id);
+  // P2.1: reject only if a rule field the user edited moved on the server since
+  // the editor opened. `estimateTotal` is DERIVED and `nextDueDate` has its own
+  // generation-race handling (`resolveNextDueDate`), so neither is compared here.
+  guardConcurrentEdit('recurringJobs', id, baseline, server, edit, [
+    'title',
+    'description',
+    'laborHours',
+    'laborRate',
+    'materials',
+    'materialMarkup',
+    'overhead',
+    'margin',
+    'cadence',
+    'endCondition',
+  ]);
   const next: RecurringJob = {
     ...server,
     title: edit.title,
@@ -1035,6 +1517,11 @@ export interface NewRecurringInvoiceFields {
 export async function createRecurringInvoice(
   fields: NewRecurringInvoiceFields,
 ): Promise<RecurringInvoice> {
+  requireNonEmpty(fields.customerId, 'Customer'); // P1.3
+  requirePositive(fields.amount, 'Amount');
+  requireNonNegative(fields.dueDays, 'Net terms');
+  requireRecurrenceBounds(fields);
+  requireDate(fields.nextDueDate, 'First date');
   const rule: RecurringInvoice = {
     id: newRecurringInvoiceId(),
     customerId: fields.customerId,
@@ -1111,6 +1598,12 @@ export interface NewRecurringJobFields {
 export async function createRecurringJob(
   fields: NewRecurringJobFields,
 ): Promise<RecurringJob> {
+  requireNonEmpty(fields.customerId, 'Customer'); // P1.3
+  requireNonEmpty(fields.title, 'Job title');
+  requirePricingInputs(fields);
+  requireMaterials(fields.materials);
+  requireRecurrenceBounds(fields);
+  requireDate(fields.nextDueDate, 'First date');
   const rule: RecurringJob = {
     id: newRecurringJobId(),
     customerId: fields.customerId,
@@ -1174,8 +1667,25 @@ export interface RecurringInvoiceRuleEdit {
 export async function updateRecurringInvoiceRule(
   id: string,
   edit: RecurringInvoiceRuleEdit,
+  baseline: RecurringInvoice,
 ): Promise<RecurringInvoice> {
+  // P1.3 — a plan's description is optional in the UI, so it isn't required here.
+  requirePositive(edit.amount, 'Amount');
+  requireNonNegative(edit.dueDays, 'Net terms');
+  requireRecurrenceBounds(edit);
+  requireDate(edit.nextDueDate, 'Next date');
   const server = await loadRecurringInvoice(id);
+  // P2.1: reject only if a rule field the user edited moved on the server since
+  // the editor opened. `nextDueDate` has its own generation-race handling
+  // (`resolveNextDueDate`), so it is not compared here.
+  guardConcurrentEdit('recurringInvoices', id, baseline, server, edit, [
+    'description',
+    'amount',
+    'dueDays',
+    'cadence',
+    'endCondition',
+    'autoSendEnabled',
+  ]);
   const next: RecurringInvoice = {
     ...server,
     description: edit.description,
@@ -1229,8 +1739,24 @@ export interface InvoiceDetailsEdit {
 export async function updateInvoiceDetails(
   id: string,
   edit: InvoiceDetailsEdit,
+  baseline: Invoice,
 ): Promise<Invoice> {
+  requireNonEmpty(edit.number, 'Invoice number'); // P1.3
+  requirePositive(edit.amount, 'Amount');
+  requireDate(edit.due, 'Due date');
   const server = await loadInvoice(id);
+  // P2.1: reject only if a scalar the user edited was changed on the server
+  // since the editor opened. The payment ledger is preserved by
+  // `mergePaymentLedgers` below regardless, so a concurrent Stripe payment never
+  // trips this — only a real collision on an owned field does.
+  guardConcurrentEdit('invoices', id, baseline, server, edit, [
+    'number',
+    'amount',
+    'due',
+    'desc',
+    'email',
+    'phone',
+  ]);
   // Assign every owned field explicitly. TypeScript's excess-property checks
   // are compile-time only; spreading `edit` would let an untyped/dynamic caller
   // smuggle stale hidden fields into the blob at runtime.
@@ -1295,6 +1821,10 @@ export interface NewInvoiceFields {
  * insert — no server row to merge.
  */
 export async function createInvoice(fields: NewInvoiceFields): Promise<Invoice> {
+  requireNonEmpty(fields.customer, 'Customer'); // P1.3
+  requireNonEmpty(fields.number, 'Invoice number');
+  requirePositive(fields.amount, 'Amount');
+  requireDate(fields.due, 'Due date');
   const invoice: Invoice = {
     id: newInvoiceId(),
     customer: fields.customer,

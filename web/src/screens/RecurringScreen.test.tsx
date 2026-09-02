@@ -187,18 +187,22 @@ describe('RecurringScreen — maintenance plan rule editing', () => {
     await waitFor(() =>
       expect(writes.updateRecurringInvoiceRule).toHaveBeenCalledTimes(1),
     );
-    expect(writes.updateRecurringInvoiceRule).toHaveBeenCalledWith('ri1', {
-      description: 'Monthly service',
-      amount: 200,
-      dueDays: 30,
-      cadence: 'quarterly',
-      endCondition: 'never',
-      endCount: undefined,
-      endDate: undefined,
-      originalNextDueDate: '2026-09-01',
-      nextDueDate: '2026-09-01',
-      autoSendEnabled: false,
-    });
+    expect(writes.updateRecurringInvoiceRule).toHaveBeenCalledWith(
+      'ri1',
+      {
+        description: 'Monthly service',
+        amount: 200,
+        dueDays: 30,
+        cadence: 'quarterly',
+        endCondition: 'never',
+        endCount: undefined,
+        endDate: undefined,
+        originalNextDueDate: '2026-09-01',
+        nextDueDate: '2026-09-01',
+        autoSendEnabled: false,
+      },
+      plan(),
+    );
     expect(retry).toHaveBeenCalledWith(['recurringInvoices']);
   });
 
