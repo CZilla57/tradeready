@@ -148,14 +148,18 @@ describe('InvoiceDetailScreen — edit details', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() =>
-      expect(writes.updateInvoiceDetails).toHaveBeenCalledWith('inv-1', {
-        number: '001',
-        amount: 1500,
-        due: '2026-08-01',
-        desc: '',
-        email: '',
-        phone: '',
-      }),
+      expect(writes.updateInvoiceDetails).toHaveBeenCalledWith(
+        'inv-1',
+        {
+          number: '001',
+          amount: 1500,
+          due: '2026-08-01',
+          desc: '',
+          email: '',
+          phone: '',
+        },
+        invoice(),
+      ),
     );
     expect(retry).toHaveBeenCalledWith(['invoices']);
   });
