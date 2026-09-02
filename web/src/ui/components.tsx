@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { BadgeColor } from './status';
+import { Icon, type IconName } from './Icon';
 
 export function Card({
   children,
@@ -37,15 +38,25 @@ export function Stat({
   value,
   hint,
   tone,
+  icon,
 }: {
   label: string;
   value: string;
   hint?: string;
   tone?: 'pos' | 'neg';
+  icon?: IconName;
 }) {
   return (
-    <Card className="stat">
-      <div className="label">{label}</div>
+    <Card className={`stat ${tone ? `stat-${tone}` : ''}`.trim()}>
+      <span className="stat-rule" aria-hidden="true" />
+      <div className="stat-topline">
+        <div className="label">{label}</div>
+        {icon && (
+          <span className="stat-icon" aria-hidden="true">
+            <Icon name={icon} size={18} />
+          </span>
+        )}
+      </div>
       <div className={`value ${tone ?? ''}`.trim()}>{value}</div>
       {hint && <div className="hint">{hint}</div>}
     </Card>
@@ -62,18 +73,19 @@ export function PageHead({
   right?: ReactNode;
 }) {
   return (
-    <div className="page-head">
-      <div>
+    <header className="page-head">
+      <div className="page-head-copy">
         <h1>{title}</h1>
         {sub && <div className="sub">{sub}</div>}
       </div>
       {right}
-    </div>
+    </header>
   );
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <div className="empty">{children}</div>;
+  const loading = typeof children === 'string' && children.startsWith('Loading');
+  return <div className={`empty${loading ? ' loading-state' : ''}`}>{children}</div>;
 }
 
 /**
@@ -89,7 +101,7 @@ export function ErrorState({
   onRetry: () => void;
 }) {
   return (
-    <div className="error-state" role="alert">
+    <div className="error-state" role="alert" aria-live="polite">
       <div className="error-state-msg">{message}</div>
       <button type="button" className="retry-btn" onClick={onRetry}>
         Retry

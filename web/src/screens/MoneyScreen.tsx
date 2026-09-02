@@ -322,22 +322,26 @@ export default function MoneyScreen() {
           label="Collected (mo)"
           value={formatMoney(revThisMonth)}
           tone="pos"
+          icon="cash"
         />
         <Stat
           label="Expenses (mo)"
           value={formatMoney(expThisMonth)}
           tone={expThisMonth > 0 ? 'neg' : undefined}
+          icon="receipt"
         />
         <Stat
           label="Net (mo)"
           value={formatMoney(revThisMonth - expThisMonth)}
           tone={revThisMonth - expThisMonth >= 0 ? 'pos' : 'neg'}
+          icon="cash"
         />
         <Stat
           label="Outstanding"
           value={formatMoney(summary.outstanding)}
           tone={summary.outstanding > 0 ? 'neg' : undefined}
           hint={`${summary.overdueCount} overdue`}
+          icon="document-text"
         />
       </div>
 

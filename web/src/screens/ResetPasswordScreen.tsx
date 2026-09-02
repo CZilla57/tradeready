@@ -89,7 +89,7 @@ export default function ResetPasswordScreen() {
     <div className="login-wrap">
       <div className="login-card">
         <div className="login-brand">
-          <img className="dot" src={logo} alt="TradeReady logo" />
+          <img className="dot" src={logo} alt="" width="36" height="36" />
           <span>TradeReady</span>
         </div>
         <h1 className="login-title">Choose a new password</h1>

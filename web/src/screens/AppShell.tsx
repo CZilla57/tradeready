@@ -26,55 +26,79 @@ export default function AppShell() {
   const { session, signOut } = useAuth();
   const { settings } = useData();
   const business = settings?.businessName?.trim();
+  const accountLabel = business || session?.user?.email || 'TradeReady account';
+  const accountInitial = accountLabel.charAt(0).toUpperCase();
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
       <aside className="sidebar">
-        <div className="brand">
-          <img className="dot" src={logo} alt="TradeReady logo" />
-          <span>TradeReady</span>
-        </div>
-        {NAV.map((n) => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            end={n.end}
-            className={({ isActive }) =>
-              `nav-link ${isActive ? 'active' : ''}`.trim()
-            }
-          >
-            <span className="ico">
-              <Icon name={n.ico} size={18} />
-            </span>
-            <span>{n.label}</span>
-          </NavLink>
-        ))}
-        <div className="nav-sep" />
-        {NAV_MORE.map((n) => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            end={n.end}
-            className={({ isActive }) =>
-              `nav-link ${isActive ? 'active' : ''}`.trim()
-            }
-          >
-            <span className="ico">
-              <Icon name={n.ico} size={18} />
-            </span>
-            <span>{n.label}</span>
-          </NavLink>
-        ))}
+        <NavLink className="brand" to="/" aria-label="TradeReady home">
+          <img className="dot" src={logo} alt="" width="40" height="40" />
+          <span className="brand-copy">
+            <strong>TradeReady</strong>
+            <small>Owner workspace</small>
+          </span>
+        </NavLink>
+        <nav className="portal-nav" aria-label="Portal navigation">
+          <div className="nav-group">
+            <div className="nav-group-label">Work</div>
+            {NAV.map((n) => (
+              <NavLink
+                key={n.to}
+                to={n.to}
+                end={n.end}
+                className={({ isActive }) =>
+                  `nav-link ${isActive ? 'active' : ''}`.trim()
+                }
+              >
+                <span className="ico" aria-hidden="true">
+                  <Icon name={n.ico} size={19} />
+                </span>
+                <span>{n.label}</span>
+              </NavLink>
+            ))}
+          </div>
+          <div className="nav-group">
+            <div className="nav-group-label">Business</div>
+            {NAV_MORE.map((n) => (
+              <NavLink
+                key={n.to}
+                to={n.to}
+                end={n.end}
+                className={({ isActive }) =>
+                  `nav-link ${isActive ? 'active' : ''}`.trim()
+                }
+              >
+                <span className="ico" aria-hidden="true">
+                  <Icon name={n.ico} size={19} />
+                </span>
+                <span>{n.label}</span>
+              </NavLink>
+            ))}
+          </div>
+        </nav>
         <div className="spacer" />
-        <div className="userline">
-          {business ? `${business} · ` : ''}
-          {session?.user?.email}
+        <div className="account-card">
+          <span className="account-avatar" aria-hidden="true">
+            {accountInitial}
+          </span>
+          <span className="account-copy">
+            <strong>{business || 'Your business'}</strong>
+            <small>{session?.user?.email}</small>
+          </span>
+          <button
+            type="button"
+            className="signout"
+            onClick={() => void signOut()}
+          >
+            Sign out
+          </button>
         </div>
-        <button className="signout" onClick={() => void signOut()}>
-          Sign out
-        </button>
       </aside>
-      <main className="main">
+      <main className="main" id="main-content" tabIndex={-1}>
         <div className="page">
           <Outlet />
         </div>
