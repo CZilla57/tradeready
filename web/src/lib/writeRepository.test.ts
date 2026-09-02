@@ -29,6 +29,7 @@ import {
   createRecurringJob,
   InvoiceNotFoundError,
   JobNotFoundError,
+  JobEstimateApprovalLockedError,
   JobStatusTransitionError,
   PaymentValidationError,
 } from './writeRepository';
@@ -53,6 +54,7 @@ const state = vi.hoisted(() => ({
   lastUpdate: null as Record<string, unknown> | null,
   updateFilters: {} as Record<string, unknown>,
   updateError: null as { message: string } | null,
+  updateResult: null as { id: string } | null,
 }));
 
 vi.mock('./supabase', () => {
@@ -80,6 +82,18 @@ vi.mock('./supabase', () => {
           eq(col: string, val: unknown) {
             state.updateFilters[col] = val;
             return builder;
+          },
+          is(col: string, val: unknown) {
+            state.updateFilters[col] = val;
+            return builder;
+          },
+          select() {
+            return {
+              maybeSingle: async () => ({
+                data: state.updateResult,
+                error: state.updateError,
+              }),
+            };
           },
           then(resolve: (r: { error: unknown }) => unknown) {
             return Promise.resolve({ error: state.updateError }).then(resolve);
@@ -132,6 +146,7 @@ beforeEach(() => {
   state.lastUpdate = null;
   state.updateFilters = {};
   state.updateError = null;
+  state.updateResult = null;
 });
 
 /** The blob that would have been written in the last settings upsert. */
@@ -521,8 +536,8 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
       estimateTotal: 456,
     };
 
-    it('overwrites only the pricing fields, preserving status/approval/invoiceId/changeOrders', async () => {
-      const approval = { decision: 'approved', token: 't' };
+    it('atomically overwrites only pricing while the server estimate remains undecided', async () => {
+      const approval = { token: 't' };
       const changeOrders = [{ id: 'co1' }];
       const timeSessions = [{ start: '2026-09-01T09:00:00Z', end: null }];
       const laborBreakdown = {
@@ -543,10 +558,11 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
         } as Partial<Job>),
         deleted: false,
       };
+      state.updateResult = { id: 'job-1' };
 
       await updateJobPricing('job-1', pricing);
 
-      const written = state.lastUpsert!.data as Job;
+      const written = state.lastUpdate!.data as Job;
       expect(state.lastTable).toBe('jobs');
       // Pricing fields written (materials AND direct-cost lines)…
       expect(written.laborRate).toBe(100);
@@ -562,6 +578,12 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
       expect(written.timeSessions).toEqual(timeSessions);
       // The edited 3-hour total cannot retain the old 4-hour component split.
       expect(written).not.toHaveProperty('laborBreakdown');
+      expect(state.updateFilters).toEqual({
+        id: 'job-1',
+        user_id: 'user-1',
+        deleted: false,
+        'data->approval->>decision': null,
+      });
     });
 
     it('preserves the component split when labor hours are unchanged', async () => {
@@ -575,11 +597,43 @@ describe('updateJobDetails — edit onto a fresh server copy', () => {
         data: job({ laborHours: 4, laborBreakdown }),
         deleted: false,
       };
+      state.updateResult = { id: 'job-1' };
 
       await updateJobPricing('job-1', { ...pricing, laborHours: 4 });
 
-      const written = state.lastUpsert!.data as Job;
+      const written = state.lastUpdate!.data as Job;
       expect(written.laborBreakdown).toEqual(laborBreakdown);
+    });
+
+    it('rejects pricing when the freshly loaded job already has a decision', async () => {
+      state.serverRow = {
+        data: job({ approval: { decision: 'approved', token: 't' } } as Partial<Job>),
+        deleted: false,
+      };
+
+      await expect(updateJobPricing('job-1', pricing)).rejects.toEqual(
+        expect.objectContaining({
+          name: 'JobEstimateApprovalLockedError',
+          decision: 'approved',
+        }),
+      );
+      expect(state.lastUpdate).toBeNull();
+      expect(state.lastUpsert).toBeNull();
+    });
+
+    it('rejects the write when approval lands between the reload and update', async () => {
+      state.serverRow = {
+        data: job({ approval: { token: 't' } } as Partial<Job>),
+        deleted: false,
+      };
+      // A null UPDATE result means the database-side approval predicate no
+      // longer matched by the time Postgres acquired the row for the write.
+      state.updateResult = null;
+
+      await expect(updateJobPricing('job-1', pricing)).rejects.toBeInstanceOf(
+        JobEstimateApprovalLockedError,
+      );
+      expect(state.updateFilters['data->approval->>decision']).toBeNull();
     });
 
     it('throws JobNotFoundError when the row is missing', async () => {
