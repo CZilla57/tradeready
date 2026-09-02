@@ -33,6 +33,7 @@ import {
   JobStatusTransitionError,
   PaymentValidationError,
   StaleWriteError,
+  ValidationError,
 } from './writeRepository';
 import type {
   Customer,
@@ -169,7 +170,6 @@ describe('saveCustomer — whole-blob upsert', () => {
   }
 
   it('upserts the full customer blob to the customers table with stamps', async () => {
-    const before = Date.now();
     // Include a field the portal never renders to prove it round-trips (P0.2).
     const c = customer({ portal: { token: 'tok', enabled: true } });
     await saveCustomer(c, customer());
@@ -180,7 +180,8 @@ describe('saveCustomer — whole-blob upsert', () => {
     expect(row.user_id).toBe('user-1');
     expect(row.deleted).toBe(false);
     expect((row.data as Customer).portal).toEqual({ token: 'tok', enabled: true });
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client no longer sends `updated_at` — the DB trigger owns it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('surfaces a write error rather than reporting success', async () => {
@@ -243,7 +244,6 @@ describe('createJob — new unpriced lead with a mobile-format id', () => {
   };
 
   it('mints a j<ms> id and writes the unpriced lead shape mobile creates', async () => {
-    const before = Date.now();
     const created = await createJob(fields);
 
     expect(state.lastTable).toBe('jobs');
@@ -271,8 +271,8 @@ describe('createJob — new unpriced lead with a mobile-format id', () => {
       overhead: 18,
       margin: 22,
     });
-    // Row stamp is fresh (P0.3).
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client omits `updated_at`; the DB trigger stamps it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('mints a unique id on each call within the same millisecond', async () => {
@@ -742,7 +742,6 @@ describe('createPricebookEntry — new service with a mobile-format id', () => {
 
 describe('saveExpense — whole-blob upsert', () => {
   it('upserts the expense to the expenses table with stamps', async () => {
-    const before = Date.now();
     const expense: Expense = {
       id: 'e1',
       createdAt: '2026-08-01',
@@ -758,7 +757,8 @@ describe('saveExpense — whole-blob upsert', () => {
     expect(state.lastTable).toBe('expenses');
     expect(row.id).toBe('e1');
     expect((row.data as Expense).amount).toBe(42);
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client omits `updated_at`; the DB trigger stamps it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 });
 
@@ -800,9 +800,8 @@ describe('saveSettings — P0.5 strip secure fields, keep the rest', () => {
     expect(writtenSettings()).not.toHaveProperty('groqKey');
   });
 
-  it('upserts by user_id with a fresh updated_at and no id/deleted column', async () => {
+  it('upserts by user_id with no id/deleted/updated_at columns', async () => {
     state.settingsRow = { data: { businessName: 'Co' } };
-    const before = Date.now();
     await saveSettings(
       { phone: '555' },
       { businessName: 'Co' } as Parameters<typeof saveSettings>[1],
@@ -813,7 +812,8 @@ describe('saveSettings — P0.5 strip secure fields, keep the rest', () => {
     expect(row.user_id).toBe('user-1');
     expect(row).not.toHaveProperty('id');
     expect(row).not.toHaveProperty('deleted');
-    expect(Date.parse(row.updated_at as string)).toBeGreaterThanOrEqual(before);
+    // P0.3: the client omits `updated_at`; the DB trigger stamps it.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('creates a settings row when none exists yet', async () => {
@@ -1339,19 +1339,19 @@ describe('recurring pause/resume — preserve generation state', () => {
 });
 
 describe('persist stamping', () => {
-  it('stamps user_id, a fresh updated_at, and deleted:false', async () => {
+  it('stamps user_id and deleted:false, and omits updated_at (DB-owned, P0.3)', async () => {
     state.serverRow = { data: invoice(), deleted: false };
-    const before = Date.now();
     await markInvoicePaid('inv-1', '2026-08-02');
 
     const row = state.lastUpsert!;
     expect(row.id).toBe('inv-1');
     expect(row.user_id).toBe('user-1');
     expect(row.deleted).toBe(false);
-    // updated_at must be a fresh, forward stamp so device pulls (gt updated_at)
-    // actually see the edit — never omitted, never backdated.
-    const stamped = Date.parse(row.updated_at as string);
-    expect(stamped).toBeGreaterThanOrEqual(before);
+    // P0.3: `updated_at` is no longer sent by the client — the server-side
+    // set_updated_at trigger stamps the DB clock on every write, so a
+    // client-sent value would only be overwritten. The device pull watermark
+    // (gt updated_at) is fed by that authoritative stamp, not the browser clock.
+    expect(row).not.toHaveProperty('updated_at');
   });
 
   it('surfaces a write error rather than reporting success', async () => {
@@ -1505,16 +1505,15 @@ describe('updateInvoiceDetails — patch owned fields onto the server invoice', 
 });
 
 describe('soft-delete — P0.4 tombstones, never row removal', () => {
-  it('writes a deleted:true tombstone with a fresh updated_at, scoped to id+user', async () => {
-    const before = Date.now();
+  it('writes a deleted:true tombstone scoped to id+user, updated_at DB-owned', async () => {
     await deleteInvoice('inv-1');
 
     expect(state.lastTable).toBe('invoices');
     expect(state.lastUpdate!.deleted).toBe(true);
-    // The fresh stamp is what carries the tombstone across device pull filters.
-    expect(Date.parse(state.lastUpdate!.updated_at as string)).toBeGreaterThanOrEqual(
-      before,
-    );
+    // P0.3: the tombstone UPDATE omits `updated_at`; the set_updated_at trigger
+    // stamps the DB clock, which is what carries the tombstone across each
+    // device's `gt('updated_at', since)` pull filter.
+    expect(state.lastUpdate).not.toHaveProperty('updated_at');
     expect(state.updateFilters).toEqual({ id: 'inv-1', user_id: 'user-1' });
     // A tombstone is an UPDATE, never a hard delete (no upsert either).
     expect(state.lastUpsert).toBeNull();
@@ -1770,5 +1769,277 @@ describe('P2.1 — field-scoped optimistic-concurrency guard', () => {
       );
       expect(writtenSettings().laborRate).toBe(120);
     });
+  });
+});
+
+describe('P1.3 — write-layer payload validation', () => {
+  // Validation runs FIRST in each op, before any fetch/guard, so these cases
+  // reject without a server row and never reach a write. The baseline args are
+  // therefore unreachable — a minimal cast is enough.
+  const anyInvoice = {} as Invoice;
+  const anyJob = {} as Job;
+  const anyCustomer = {} as Customer;
+  const anyPlan = {} as RecurringInvoice;
+  const anyRecJob = {} as RecurringJob;
+
+  const invoiceEdit = (over: Partial<Record<string, unknown>> = {}) => ({
+    number: '001',
+    amount: 1000,
+    due: '2026-09-01' as const,
+    desc: '',
+    email: '',
+    phone: '',
+    ...over,
+  });
+
+  const pricingFields = {
+    laborHours: 1,
+    laborRate: 90,
+    materials: [],
+    materialMarkup: 10,
+    overhead: 10,
+    margin: 20,
+  };
+
+  async function rejectsValidation(p: Promise<unknown>) {
+    await expect(p).rejects.toBeInstanceOf(ValidationError);
+    // No op that fails validation ever writes.
+    expect(state.lastUpsert).toBeNull();
+    expect(state.lastUpdate).toBeNull();
+  }
+
+  it('rejects an invoice amount that is not greater than zero', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ amount: 0 }), anyInvoice),
+    );
+  });
+
+  it('rejects a NaN amount (would corrupt derived math)', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ amount: Number.NaN }), anyInvoice),
+    );
+  });
+
+  it('rejects a blank invoice number', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ number: '  ' }), anyInvoice),
+    );
+  });
+
+  it('rejects a malformed due date', async () => {
+    await rejectsValidation(
+      updateInvoiceDetails('inv-1', invoiceEdit({ due: '2026/09/01' }), anyInvoice),
+    );
+  });
+
+  it('rejects a manual invoice with no customer', async () => {
+    await rejectsValidation(
+      createInvoice({
+        customer: '',
+        customerId: 'c1',
+        number: '002',
+        amount: 100,
+        due: '2026-09-01',
+        email: '',
+        phone: '',
+        desc: '',
+      }),
+    );
+  });
+
+  it('rejects an expense with a blank description or non-positive amount', async () => {
+    await rejectsValidation(
+      saveExpense({
+        id: 'e1',
+        createdAt: '2026-08-01',
+        description: '',
+        amount: 10,
+        category: 'materials',
+        date: '2026-08-01',
+        notes: '',
+        receiptUri: null,
+      }),
+    );
+  });
+
+  it('rejects a negative pricing input on a job estimate', async () => {
+    await rejectsValidation(
+      updateJobPricing(
+        'job-1',
+        { ...pricingFields, margin: -5, jobCosts: [], estimateTotal: 100 },
+        anyJob,
+      ),
+    );
+  });
+
+  it('rejects a material line with a negative unit cost', async () => {
+    await rejectsValidation(
+      updateJobPricing(
+        'job-1',
+        {
+          ...pricingFields,
+          materials: [{ id: 'm1', name: 'Pipe', quantity: 1, unitCost: -3 }],
+          jobCosts: [],
+          estimateTotal: 100,
+        },
+        anyJob,
+      ),
+    );
+  });
+
+  it('rejects a blank customer name on save and create', async () => {
+    await rejectsValidation(saveCustomer({ ...anyCustomer, id: 'c1', name: '  ' } as Customer, anyCustomer));
+    await rejectsValidation(
+      createCustomer({ name: '', email: '', phone: '', address: '', notes: '' }),
+    );
+  });
+
+  it('rejects a new job with no title or no customer', async () => {
+    const base = {
+      customerId: 'c1',
+      customerName: 'Acme',
+      title: 'Fix',
+      description: '',
+      address: '',
+      scheduledDate: null,
+      scheduledStartTime: null,
+      scheduledEndTime: null,
+      notes: '',
+      laborRate: 90,
+      materialMarkup: 10,
+      overhead: 10,
+      margin: 20,
+    };
+    await rejectsValidation(createJob({ ...base, title: '' }));
+    await rejectsValidation(createJob({ ...base, customerId: '' }));
+    await rejectsValidation(createJob({ ...base, margin: -1 }));
+  });
+
+  it('rejects a pricebook entry with a blank name or negative pricing', async () => {
+    await rejectsValidation(
+      createPricebookEntry({
+        name: '',
+        category: '',
+        description: '',
+        ...pricingFields,
+        estimateTotal: 90,
+      }),
+    );
+  });
+
+  it('rejects a maintenance plan whose amount is not positive', async () => {
+    await rejectsValidation(
+      updateRecurringInvoiceRule(
+        'ri1',
+        {
+          description: 'x',
+          amount: 0,
+          dueDays: 30,
+          cadence: 'monthly',
+          endCondition: 'never',
+          originalNextDueDate: '2026-09-01',
+          nextDueDate: '2026-09-01',
+          autoSendEnabled: false,
+        },
+        anyPlan,
+      ),
+    );
+  });
+
+  it('rejects a count-ended rule with no end count', async () => {
+    await rejectsValidation(
+      updateRecurringInvoiceRule(
+        'ri1',
+        {
+          description: 'x',
+          amount: 100,
+          dueDays: 30,
+          cadence: 'monthly',
+          endCondition: 'count',
+          endCount: undefined,
+          originalNextDueDate: '2026-09-01',
+          nextDueDate: '2026-09-01',
+          autoSendEnabled: false,
+        },
+        anyPlan,
+      ),
+    );
+  });
+
+  it('rejects a recurring job rule with a negative pricing input', async () => {
+    await rejectsValidation(
+      updateRecurringJobRule(
+        'rj1',
+        {
+          title: 'Gutter clean',
+          description: '',
+          ...pricingFields,
+          laborRate: -1,
+          estimateTotal: 100,
+          cadence: 'monthly',
+          endCondition: 'never',
+          originalNextDueDate: '2026-09-01',
+          nextDueDate: '2026-09-01',
+        },
+        anyRecJob,
+      ),
+    );
+  });
+
+  it('rejects settings with a negative pricing field or a bad invoice start number', async () => {
+    await rejectsValidation(
+      saveSettings(
+        { laborRate: -5 },
+        { laborRate: -5 } as Parameters<typeof saveSettings>[1],
+      ),
+    );
+    await rejectsValidation(
+      saveSettings(
+        { invoiceStartNumber: 0 },
+        {} as Parameters<typeof saveSettings>[1],
+      ),
+    );
+  });
+
+  it('rejects a schedule with no work days or an inverted work window', async () => {
+    await rejectsValidation(
+      saveSchedule(
+        { workDays: [] },
+        {} as Parameters<typeof saveSchedule>[1],
+      ),
+    );
+    await rejectsValidation(
+      saveSchedule(
+        { workDayStart: '17:00', workDayEnd: '08:00' },
+        {} as Parameters<typeof saveSchedule>[1],
+      ),
+    );
+  });
+
+  it('rejects scheduling with an end time but no start', async () => {
+    await rejectsValidation(
+      scheduleJob(
+        'job-1',
+        { scheduledDate: '2026-09-01', scheduledStartTime: null, scheduledEndTime: '11:00' },
+        anyJob,
+      ),
+    );
+  });
+
+  it('accepts unscheduling (a null date is valid)', async () => {
+    state.serverRow = { data: { id: 'job-1', status: 'scheduled', scheduledDate: '2026-09-01' }, deleted: false };
+    await scheduleJob(
+      'job-1',
+      { scheduledDate: null, scheduledStartTime: null, scheduledEndTime: null },
+      { id: 'job-1', status: 'scheduled', scheduledDate: '2026-09-01' } as Job,
+    );
+    expect(state.lastUpsert!.data as Job).toMatchObject({ scheduledDate: null });
+  });
+
+  it('surfaces the payment validator as before (unchanged by P1.3)', async () => {
+    state.serverRow = { data: invoice(), deleted: false };
+    await expect(
+      recordInvoicePayment('inv-1', { amount: 0, date: '2026-08-01', method: 'cash' }),
+    ).rejects.toBeInstanceOf(PaymentValidationError);
   });
 });

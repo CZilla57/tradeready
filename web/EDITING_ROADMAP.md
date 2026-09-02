@@ -20,8 +20,19 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
 - **P1.1 / P1.2 — landed.** Reads and writes are in distinct modules, and
   `readOnly.arch.test.ts` now allow-lists exactly `writeRepository.ts` (and
   asserts it is genuinely the sole mutation site).
-- **P1.3 — partial.** Payment drafts are validated; other domains' validation
-  arrives with their operations.
+- **P1.3 — landed.** Validation now lives at the single write boundary, not only
+  in the screens. `writeRepository.ts` has a P1.3 section (`ValidationError` plus
+  `requireNonNegative`/`requirePositive`/`requireNonEmpty`/`requireDate`,
+  `requirePricingInputs`, `requireMaterials`, `requireRecurrenceBounds`,
+  `requireSettingsPatch`, `requireSchedulePatch`) and every create/edit op
+  re-asserts its data-integrity invariants on the already-typed values it
+  receives BEFORE any fetch or write — so a buggy or non-screen caller cannot land
+  a malformed blob that would sync to every device and corrupt derived math (an
+  NaN `estimateTotal`, a negative amount) or break the generation engine (an
+  unknown cadence, a count-ended rule with no count). The screens keep their
+  inline UX; this is the authoritative last line. Payment drafts keep their
+  existing `PaymentValidationError`. Covered by `writeRepository.test.ts`
+  ("P1.3 — write-layer payload validation").
 - **First editing surface — landed.** `InvoiceDetailScreen` wires the three
   money ops: record a payment (inline validated form), mark the balance paid,
   and void a payment (with confirm). Each disables its control while in flight
@@ -51,9 +62,11 @@ sync engine in `utils/sync.ts` + `utils/syncMerge.ts`.
   and drains deterministic 500-row pages. The trigger and cursor together close
   the clock-skew propagation trap; the trigger alone did not remove the reader's
   device clock from the old watermark.
-  Optional remaining cleanup (no correctness impact, no coordination needed):
-  clients may stop sending `updated_at` — web via the single `writeTimestamp()`
-  in `writeRepository.ts`, mobile via `pushQueue` in `utils/sync.ts`.
+  Optional client cleanup — **web half DONE**: `writeRepository.ts` no longer
+  sends `updated_at` on any write (the `writeTimestamp()` helper is removed);
+  every insert/update/tombstone lets the DB trigger own the column. Mobile may
+  still drop its `pushQueue` send in `utils/sync.ts` independently — no
+  correctness impact, no coordination needed.
 - **P0.5 — landed (primitive).** `saveSettings(patch)` merges a patch onto the
   full current settings blob (preserving unrendered fields, P0.2) and strips
   every credential field by iterating `SECURE_FIELDS` (never hand-named), so a
@@ -98,8 +111,9 @@ design: a patch op still rewrites the operational fields it owns as a unit, so a
 concurrent server change to an operational field the user did NOT edit is
 overwritten (pre-existing behavior — the form owns those fields together); the
 guard closes the both-edited-the-same-field case, which is the lost update that
-matters. P0.3's optional client cleanup (dropping the now-redundant `updated_at`
-sends) is not required for correctness.
+matters. P0.3's optional client cleanup is DONE on the web side (the portal no
+longer sends `updated_at`; the DB trigger owns it); the equivalent mobile cleanup
+remains optional and is not required for correctness.
 
 ## Context in one paragraph
 
@@ -180,11 +194,13 @@ code; a write that ignores any one can silently lose data.
   3. **Ship cursor v2 in mobile.** Its versioned storage intentionally rejects
      every legacy `{table: deviceTimestamp}` value and performs one idempotent
      full pull, which recovers devices whose old cursor is already in the future.
-  4. **Optional cleanup (later, no coordination needed).** Once the trigger is
-     confirmed in production, clients may stop sending `updated_at` entirely —
-     web via the single `writeTimestamp()` in `writeRepository.ts`, mobile via
-     `pushQueue` in `utils/sync.ts`. Purely cosmetic/bandwidth; not required for
-     correctness, and either surface can change independently.
+  4. **Optional cleanup (no coordination needed).** With the trigger confirmed in
+     production, clients may stop sending `updated_at` entirely. **Web: DONE** —
+     `writeRepository.ts` sends no `updated_at` on any write and the
+     `writeTimestamp()` helper is gone; the trigger owns the column on every
+     insert/update/tombstone. Mobile may still drop its `pushQueue` send in
+     `utils/sync.ts`. Purely cosmetic/bandwidth; not required for correctness, and
+     either surface can change independently.
 
   - **Caution:** the override is unconditional, so a future backfill that
     intentionally sets a historical `updated_at` must disable the trigger for
@@ -226,9 +242,11 @@ code; a write that ignores any one can silently lose data.
   `.from().insert|update|upsert|delete`. Reframe to "only the write module may
   mutate" so read-only screens still can't import a write path.
 
-### P1.3 Payload validation
+### P1.3 Payload validation — ✅ LANDED
 - Validate shape + invariants before send, so the client never writes a
-  malformed blob.
+  malformed blob. Done at the write boundary (`writeRepository.ts` P1.3 section):
+  every create/edit op re-asserts its invariants on its typed inputs before any
+  fetch/write. See the P1.3 progress bullet above for the helper set and coverage.
 
 ### P1.4 `id` generation matches mobile
 - New records use the same id format mobile generates (`id text primary key`,
