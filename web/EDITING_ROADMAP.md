@@ -316,10 +316,14 @@ five):
        ONLY the pricing fields, so status, approval, invoiceId, changeOrders,
        timeSessions, and laborBreakdown survive untouched (same fresh-row guarantee
        as `updateJobDetails`). CONSENT GATE: `canAuthorEstimate(job)` hides the
-       editor once the customer has a FROZEN `approval.decision` (approved/declined)
-       — re-pricing a signed estimate is the deferred change-order surface — and the
-       card shows a "locked" note instead; gating on the decision (not status)
-       keeps a tradesperson-marked "approved" job with no signature editable.
+       editor once the customer has a FROZEN `approval.decision` (approved/declined),
+       while `updateJobPricing` independently rejects a decision found on its fresh
+       reload. Its final UPDATE also includes an atomic JSON-path `decision IS NULL`
+       condition, closing the race where customer consent lands between that reload
+       and the whole-blob write. Re-pricing a signed estimate is the deferred
+       change-order surface; the card shows a "locked" note instead. Gating on the
+       decision (not status) keeps a tradesperson-marked "approved" job with no
+       signature editable.
        Covered by `writeRepository.test.ts`, `status.test.ts`,
        `JobDetailScreen.test.tsx`.
      - **Direct-cost (jobCosts) authoring. ✅ LANDED.** `JobCostsEditor`
