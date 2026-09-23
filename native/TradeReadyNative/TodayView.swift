@@ -26,23 +26,6 @@ struct TodayView: View {
     @State private var bookingAlertRow: NativeBookingAttention.Row?
     @State private var busyBookingRequestIDs: Set<String> = []
 
-    /// `NativeContentState` (reused, not re-derived) for Today's one genuine
-    /// full-screen gap: `store.todayHero` already renders the empty-account
-    /// affordance ("Add Your First Customer" / "Create Your First Job") at
-    /// RN's exact position for every case where it applies (10.04's `hero`
-    /// returns non-nil whenever there are no real jobs yet). The one edge
-    /// hero cannot cover — sample-tour job(s) present, a real customer
-    /// exists, and the sample tour is already marked done, so `hero` returns
-    /// `nil` even though there is still no real job/customer/invoice data —
-    /// falls back to this generic empty state rather than an otherwise blank
-    /// dashboard. `.loading`/`.noMatches`/`.error` are not wired: see the
-    /// 10.11 fix-round-1 report for why each has no Today equivalent.
-    private var contentState: NativeContentState {
-        guard store.todayHero == nil else { return .content }
-        let total = store.jobs.count + store.customers.count + store.invoices.count
-        return NativeContentState.collection(visibleCount: total, totalCount: total)
-    }
-
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -93,14 +76,6 @@ struct TodayView: View {
                 .padding()
             }
             .background(Color.tradeCanvas)
-            .overlay {
-                NativeContentStateView(
-                    state: contentState,
-                    emptyTitle: "Nothing here yet",
-                    emptyMessage: "Add a customer or job to get started.",
-                    symbol: "sparkles"
-                )
-            }
             .navigationTitle(store.settings.businessName)
             .refreshable { await store.performPullToRefresh() }
             .sheet(isPresented: $showingGlobalSearch) { NativeGlobalSearchView() }

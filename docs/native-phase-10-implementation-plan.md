@@ -2096,41 +2096,40 @@ Exit criteria traceability (roadmap Phase 10):
   through existing infrastructure, not a same-vs-silent shortcut.
 - Corrected the `selectedTab` claim: it already existed on `AppStore` before
   this task; only `todaySelectedDate` is new published state.
-- Wired `NativeContentState`/`NativeContentStateView` into `TodayView` for
-  the one genuine full-screen gap the first-action hero does not already
-  cover: `NativeTodayBriefing.hero(...)` returns non-nil for every "no real
-  jobs yet" state (rendering "Add Your First Customer"/"Create Your First
-  Job" at RN's exact position), *except* when sample-tour job(s) exist, a
-  real customer exists, and the sample tour is already marked done — there
-  `hero` returns `nil` even though no real job/customer/invoice data exists
-  yet. `TodayView.contentState` now falls back to `NativeContentStateView`'s
-  `.empty` state in exactly that residual case (`store.todayHero == nil` and
-  `jobs.count + customers.count + invoices.count == 0`), rather than leaving
-  the dashboard looking blank.
-  The other three `NativeContentState` cases do not apply to Today, recorded
-  here rather than force-fit:
-  - `.loading` — `RootView` already gates the entire tab bar behind
-    `.initialSyncLoading`/`.initialSyncUnavailable` before `TodayView` ever
-    mounts (confirmed during the original 10.11 implementation), so Today's
-    data is always synchronously available from the canonical snapshot at
-    render time — unlike RN's per-focus async `Promise.all` in
-    `fetchTodayData`, there is no in-view loading window to represent.
-  - `.noMatches` — Today has no search/filter surface of its own; search
-    lives entirely behind the separate Global Search sheet (`.search`
-    destination), which has its own `NativeContentState` handling. This case
-    cannot occur on Today.
-  - `.error` — RN's own `fetchTodayData` catch block only calls
-    `console.error`/`reportError`; it never renders an error UI, so there is
-    no RN behavior to port. Native's Today data comes from the synchronous
-    canonical snapshot, not an async multi-source fetch, so it has no
-    equivalent failure mode to represent either. Background sync failures
-    are already surfaced app-wide by `NativeSyncBanner` (`RootView.swift`,
-    rendered above the tab bar on every tab including Today); per
-    `NativeInteractionState.swift`'s own documented contract ("Existing
-    local content always wins over transient loading or sync errors;
-    background failures belong in the sync banner and must not blank usable
-    data"), adding a second, Today-local error overlay for the same signal
-    would fight that contract for no RN-parity benefit.
+- Fix round 1 wired `NativeContentState`/`NativeContentStateView` into
+  `TodayView` for what was believed to be a residual gap in the first-action
+  hero. **Fix round 2 removed this wiring**: the review correctly found it
+  was dead code. `NativeTodayBriefing.hero(jobs:customers:sampleTourDone:)`
+  (`Domain/NativeTodayBriefing.swift`) opens with
+  `let realJobs = jobs.filter { !isSampleId($0.id) }; guard realJobs.isEmpty
+  else { return nil }` — so `hero` is `nil` if and only if at least one real
+  job already exists, which makes `jobs.count + customers.count +
+  invoices.count == 0` impossible whenever `hero == nil` (a real job is one
+  of those jobs). There is no residual case; the overlay's `.empty` branch
+  could never render, and the doc comment describing a "sample-tour-done"
+  edge case was simply wrong about which side of the `guard` returns `nil`.
+  Removed `TodayView.contentState`, the `.overlay { NativeContentStateView(...) }`
+  modifier, and the explanatory comment.
+  **Controller ruling, recorded here per instruction:** Today has exactly two
+  empty states, both already covered without `NativeContentState`:
+  - **No jobs anywhere (fresh account):** the first-action hero
+    (`NativeTodayHeroCardView`, driven by `store.todayHero`) — "Add Your
+    First Customer" / "Create Your First Job" / the sample-tour card — at
+    RN's exact screen position. This is Today's only account-wide empty
+    state, and it already has a purpose-built, RN-matching presentation.
+  - **Selected day has no jobs:** `NativeTodayEmptySchedule`, rendered by
+    `scheduleSection` when `store.todaySelectedDaySchedule.isEmpty` — RN's
+    own `EmptySchedule` component, ported directly.
+  No `NativeContentState` case maps onto either: `.empty`/`.noMatches` are
+  built for a single filtered list (JobsView/CustomersView/InvoicesView's
+  pattern), and Today is a composite dashboard whose sections each already
+  own their empty presentation; `.loading` cannot occur post-`RootView`
+  initial-sync gate; `.error` has no RN behavior to port (RN's
+  `fetchTodayData` catch only logs) and would duplicate the app-wide
+  `NativeSyncBanner`, which `NativeInteractionState.swift`'s own doc comment
+  says already owns background-failure surfacing. `NativeContentState` has
+  no reachable Today state; its reuse item from the brief is satisfied by
+  confirming this rather than by wiring in dead code.
 - Commands / results (fix round 1):
   `TZ=America/Phoenix sh native/run-store-integration-tests.sh` —
   `PASS: canonical AppStore integration tests` (includes the new archived/
@@ -2142,3 +2141,14 @@ Exit criteria traceability (roadmap Phase 10):
   references checked: 0 missing, 59 planned (not yet created)`. No runner
   `swiftc` file list changed in this round, so `run-all-domain-tests.sh` was
   not re-run.
+
+**Fix round 2** (re-review — the one open finding): `TZ=America/Phoenix sh
+native/run-store-integration-tests.sh` — `PASS: canonical AppStore
+integration tests`. `TZ=America/Phoenix sh native/run-today-briefing-tests.sh`
+— `All NativeTodayBriefing tests passed` (both unaffected by a
+`TodayView.swift`-only removal; re-run to confirm no regression).
+`xcodebuild … Release … CODE_SIGNING_ALLOWED=NO build` — **BUILD SUCCEEDED**.
+`sh native/run-doc-reference-check.sh` — `939 path references checked: 0
+missing, 59 planned (not yet created)`. No test file or runner file list
+changed in this round (the fix was a deletion in `TodayView.swift` only), so
+no new test coverage was added and `run-all-domain-tests.sh` was not re-run.
