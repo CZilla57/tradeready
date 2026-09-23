@@ -19,7 +19,8 @@ import Foundation
 /// contract 10.11 executes against the existing one-shot exact-ID routing
 /// pattern (`NativeGlobalSearch`/`AppStore.routeToGlobalSearchResult`) —
 /// verify the local id, change tab, install a single-use request, fail
-/// closed on missing/archived.
+/// closed on a missing record (archived jobs route normally — final-review
+/// I1, contract §9.6).
 ///
 /// Local-frame date semantics throughout (FA-039): every `YYYY-MM-DD` is
 /// walked with `NativeSchedule`'s DST-immune epoch-day arithmetic, never
@@ -350,12 +351,11 @@ public enum NativeTodayBriefing {
     /// (10.03's checklist store owns persistence); this performs no
     /// analytics/tracking and no store writes — 10.12 owns those on tap.
     ///
-    /// Ported exactly from `TodayScreen.tsx`'s NESTED conditional (not the
-    /// contract's flattened pseudocode in §1.5, which collapses to the same
-    /// result in every case except one: when `sampleJobs.count > 0` AND
+    /// Ported exactly from `TodayScreen.tsx`'s NESTED conditional, which the
+    /// contract §1.5 now states verbatim (final-review I5 corrected the
+    /// earlier flattened pseudocode): when `sampleJobs.count > 0` AND
     /// (`realCustomers.count > 0` OR `sampleTourDone`), RN shows NO hero at
-    /// all — it does not fall through to "Create Your First Job". See the
-    /// task report for this discrepancy.
+    /// all — it does not fall through to "Create Your First Job".
     public static func hero(
         jobs: [Canonical.Job],
         customers: [Canonical.Customer],

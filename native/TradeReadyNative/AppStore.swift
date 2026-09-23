@@ -723,8 +723,12 @@ final class AppStore: ObservableObject {
     /// already calls `synchronize()` explicitly afterward.
     var estimateFollowUpNotificationScheduleKey: String {
         guard let binding = exactSignedInWorkspaceNotificationBinding else { return "inactive" }
+        // Final-review m3: `uniquingKeysWith` (first record wins), never
+        // `uniqueKeysWithValues` — this key is evaluated on every root body
+        // render, so one duplicate job id in a pulled/corrupt snapshot would
+        // otherwise trap the app in a crash loop.
         let jobStatusByID = Dictionary(
-            uniqueKeysWithValues: (snapshot.payload.jobs ?? []).map { ($0.id, $0.status) })
+            (snapshot.payload.jobs ?? []).map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
         // est_: title uses customerName, body uses job title.
         let rows = (snapshot.payload.jobs ?? []).compactMap { job -> String? in
             guard job.status == "estimate_sent" else { return nil }
@@ -745,7 +749,7 @@ final class AppStore: ObservableObject {
         // rebuilt fire date depends on reviewRequestDelayHours (folded into
         // the shared toggle prefix below).
         let jobTitleByID = Dictionary(
-            uniqueKeysWithValues: (snapshot.payload.jobs ?? []).map { ($0.id, $0.title) })
+            (snapshot.payload.jobs ?? []).map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
         let reviews = reviewRequestRecords.map {
             let sentAt = $0.sentAt ?? ""
             let title = jobTitleByID[$0.jobId] ?? ""
@@ -843,9 +847,10 @@ final class AppStore: ObservableObject {
     /// payment ledger, not the stored flag.
     func invoiceReminderNotifications(now: Date = .now) -> [NativeNotificationPlanItem] {
         guard hasExactSignedInWorkspace else { return [] }
-        let paidByID = Dictionary(uniqueKeysWithValues: invoices.map { ($0.id, $0.isPaid) })
+        // Final-review m3: duplicate ids must not trap (first record wins).
+        let paidByID = Dictionary(invoices.map { ($0.id, $0.isPaid) }, uniquingKeysWith: { first, _ in first })
         let jobStatusByID = Dictionary(
-            uniqueKeysWithValues: (snapshot.payload.jobs ?? []).map { ($0.id, $0.status) })
+            (snapshot.payload.jobs ?? []).map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
         let items = NativeInvoiceNotifications.reminders(
             invoices: (snapshot.payload.invoices ?? []).map { record in
                 NativeInvoiceNotificationInvoice(
@@ -4726,7 +4731,12 @@ final class AppStore: ObservableObject {
                 // binding inside `derivedStatePublisher.publish`, so it
                 // safely no-ops if the account changed between the gate
                 // finishing and this line running.
-                if let binding = self.verifiedAccountBinding, subject == self.authenticatedUserSubject {
+                // Final-review I6: `derivedStatePublishBinding`, not the bare
+                // `verifiedAccountBinding` — `advancePastInitialSync` may have
+                // just ended in `.accountMismatch`/`.unavailable`, where
+                // `snapshot` is pulled data merged into another owner's
+                // workspace and must never reach an observer.
+                if let binding = self.derivedStatePublishBinding, subject == self.authenticatedUserSubject {
                     await self.derivedStatePublisher.publish(
                         canonical: self.snapshot, expectedOwnerBinding: binding
                     )
@@ -5226,14 +5236,16 @@ final class AppStore: ObservableObject {
         pendingAppointmentConfirmationJobID = jobID
     }
 
-    /// Task 10.08 (N6) fix: an archived job now fails closed here too,
-    /// matching the estimate/appointment routes — a stale `review_` payload
-    /// for a job the owner has since archived must not invent a destination.
+    /// Fails closed only for a missing job or a non-exact (foreign/signed-out)
+    /// workspace, or when no draft can be built. Final-review I1 (RN parity,
+    /// contract §9.6): an archived job routes normally — `review_` requests
+    /// are still scheduled for archived jobs (RN `utils/archive.ts` keeps
+    /// notifications seeing them) and RN's `review_request` tap navigates
+    /// with no archive check, so a delivered notification is never a dead tap.
     func requestReviewRequestReview(jobID: String) {
         guard hasExactSignedInWorkspace,
               isSignedIn,
-              let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
-              (job.archivedAt ?? "").isEmpty,
+              snapshot.payload.jobs?.contains(where: { $0.id == jobID }) == true,
               reviewRequestDraft(jobID: jobID) != nil else { return }
         selectedTab = .jobs
         deepLinkedJobID = jobID
@@ -5272,6 +5284,12 @@ final class AppStore: ObservableObject {
         let latest = generated.max { ($0.occurrenceNumber ?? 0) < ($1.occurrenceNumber ?? 0) }
         if let latest {
             deepLinkedInvoiceID = latest.id
+            deepLinkedOutreachInvoiceID = nil
+        } else {
+            // Final-review m5: the plain-Invoices fallback must not leave an
+            // earlier one-shot invoice/outreach target armed, or the Invoices
+            // tab would open that unrelated invoice instead of its list.
+            deepLinkedInvoiceID = nil
             deepLinkedOutreachInvoiceID = nil
         }
     }
@@ -5556,32 +5574,81 @@ final class AppStore: ObservableObject {
             guard let self else { throw NativeDerivedStatePublisherOwnerUnavailable() }
             return self.makeCachedBusinessSnapshot(from: canonical, now: now)
         },
-        ownerBinding: { [weak self] in self?.verifiedAccountBinding }
+        // Final-review I6: the publisher's owner check (before and after
+        // every await, and on every cache read) uses the exact-workspace
+        // binding, not the bare verified binding — so an account mismatch
+        // or unavailable gate that lands mid-publish also stops every output.
+        ownerBinding: { [weak self] in self?.derivedStatePublishBinding }
     )
 
-    /// Task 10.09 output (c): the cached business snapshot for coach cold
-    /// start (10.13 reads this). Refreshed after every real committed sync
-    /// pass; cleared at the account boundary.
+    /// Final-review I6: the ONE predicate every derived-state publish site
+    /// (`beginInitialSyncGate`'s initial full sync, `pullDeltaIfPossible`,
+    /// the booking-intake commit) and the publisher's own owner re-check use.
+    /// Returns the verified binding only for an exact workspace: the local
+    /// workspace is proven to belong to that binding (migrated-owner
+    /// verification or a completed onboarding document bound to it) and the
+    /// gate is not in a failed/signed-out state. In particular
+    /// `.accountMismatch` (the snapshot is pulled data merged into ANOTHER
+    /// owner's local workspace) and `.unavailable` never publish, so the
+    /// 11.01 widget mirror can never write a mixed-owner snapshot into the
+    /// App Group. The gate switch is exhaustive on purpose: a new gate state
+    /// must decide here whether it may publish. The post-sign-in gates
+    /// (`.subscriptionLoading`, `.paywall`, `.startingPoint`, `.onboarding`)
+    /// are allowed because the initial-sync publish runs right after
+    /// `advancePastInitialSync` moves the gate there; the workspace-ownership
+    /// check still has to hold.
+    var derivedStatePublishBinding: String? {
+        guard let binding = verifiedAccountBinding else { return nil }
+        switch authenticationGateState {
+        case .signedIn, .subscriptionLoading, .paywall, .startingPoint, .onboarding:
+            break
+        case .accountMismatch, .unavailable, .signedOut, .loading, .initialSyncLoading,
+             .initialSyncUnavailable, .passwordRecovery, .invalidPasswordRecovery:
+            return nil
+        }
+        guard isMigratedLocalOwnerVerified || hasCompletedPersistedWorkspace(binding: binding) else { return nil }
+        return binding
+    }
+
+    /// Task 10.09 output (c): the cached business snapshot, refreshed after
+    /// every real committed sync pass for an exact workspace and cleared at
+    /// the account boundary. Final-review I2: the coach no longer reads it
+    /// (see `coachBusinessSnapshot()`); it stays for the derived-state
+    /// observers (the 11.01 widget mirror) and diagnostics.
     var cachedBusinessSnapshot: NativeBusinessSnapshot? { derivedStatePublisher.cachedSnapshot }
 
-    /// Task 10.13 / 10.09 ruling: `cachedBusinessSnapshot` is populated only
-    /// after a committed sync pass this session — coach cold start (before
-    /// any pass has completed) would otherwise show no quick prompts and no
-    /// business-data block in the system prompt. Builds the snapshot on
-    /// demand from the current in-memory canonical snapshot instead, through
-    /// the same 10.01 builder `derivedStatePublisher` itself uses. Fails
-    /// closed to `nil` with no verified owner — `NativeCoachQuickPrompts`
-    /// and `NativeCoachPrompt` both already treat `nil` as their documented
-    /// "no data yet" fallback, never a crash.
-    func coachBusinessSnapshot() -> NativeBusinessSnapshot? {
-        if let cached = cachedBusinessSnapshot { return cached }
+    /// Final-review I2 (RN parity: `screens/ChatScreen.tsx` recomputes
+    /// `getBusinessSnapshot()` from local storage on every focus): ALWAYS
+    /// builds from the live in-memory canonical `snapshot`, through the same
+    /// 10.01 builder `derivedStatePublisher` uses — never the sync-time
+    /// cache, which only refreshes after a committed pull and would cite
+    /// stale revenue/outstanding/overdue figures after a local edit (mark
+    /// paid, new job) or while offline/in backoff. `asOf` and "this month"
+    /// are therefore always the current time, too. Fails closed to `nil`
+    /// with no verified owner — `NativeCoachQuickPrompts` and
+    /// `NativeCoachPrompt` both treat `nil` as their documented "no data
+    /// yet" fallback.
+    func coachBusinessSnapshot(now: Date = Date()) -> NativeBusinessSnapshot? {
         guard verifiedAccountBinding != nil else { return nil }
-        return makeCachedBusinessSnapshot(from: snapshot, now: Date())
+        return makeCachedBusinessSnapshot(from: snapshot, now: now)
     }
 
     /// Task 10.09 output (b): the registration point the Phase 11 widget
     /// mirror (11.01) plugs into. No widget code lives here — this is only
     /// the seam. Returns a token for `unregisterDerivedStateObserver`.
+    ///
+    /// Owner contract (final-review I6, an explicit 11.01 entry
+    /// precondition): observers fire ONLY for an exact owner workspace
+    /// (verified binding + local workspace bound to it + a gate past sign-in
+    /// that is not failed) — every publish site gates on
+    /// `derivedStatePublishBinding`,
+    /// and the publisher re-checks that same binding after each await before
+    /// calling any observer. An observer is never called while the gate is
+    /// `.accountMismatch`, `.unavailable`, signed out, or in recovery, and
+    /// never with a snapshot built for a different binding than the one
+    /// current when it runs. Observers survive `reset()` (app lifetime), so
+    /// an observer that persists output (the widget mirror) must still key
+    /// or clear that output at the account boundary itself.
     @discardableResult
     func registerDerivedStateObserver(
         _ observer: @escaping (NativeBusinessSnapshot) throws -> Void
@@ -5749,7 +5816,10 @@ final class AppStore: ObservableObject {
         // separately. The owner binding is the one verified for this exact
         // pass, just above; the seam re-verifies it again before touching
         // each output and after its own awaits.
-        if let binding = verifiedAccountBinding, subject == authenticatedUserSubject {
+        // Final-review I6: exact-workspace binding only (see
+        // `derivedStatePublishBinding`); a gate that moved to
+        // `.accountMismatch`/`.unavailable` during the pull await skips it.
+        if let binding = derivedStatePublishBinding, subject == authenticatedUserSubject {
             await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
         }
         if !outcome.failedTables.isEmpty {
@@ -6846,7 +6916,7 @@ extension AppStore {
         // notifications/cache/widget mirror see the converted data, not the
         // stale pre-intake one. `commitScheduleBookingLocal` is synchronous,
         // so no suspension occurred since the owner was last verified above.
-        if let binding = verifiedAccountBinding {
+        if let binding = derivedStatePublishBinding {
             await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
         }
         return .applied(convertedRequestIDs: rechecked.convertedRequestIDs)
@@ -8374,16 +8444,20 @@ extension AppStore {
     /// 'anthropic' : settings?.groqKey ? 'groq' : 'backend'` via 10.10's own
     /// provider-precedence rule, so the two can never disagree.
     func trackCoachMessageSent(sourceIsInsightPrefill: Bool) {
-        let provider: String
-        switch NativeCoachTransport.provider(anthropicKey: effectiveAdvisoryAnthropicKey ?? "", groqKey: effectiveAdvisoryGroqKey ?? "") {
-        case .anthropic: provider = "anthropic"
-        case .groq: provider = "groq"
-        case .backend: provider = "backend"
-        }
         analytics.track("ai_chat_sent", [
             "source": sourceIsInsightPrefill ? "insight_prefill" : "organic",
-            "provider": provider,
+            "provider": coachProviderSummary.analyticsName,
         ])
+    }
+
+    /// Final-review I4: the provider the coach will actually route to right
+    /// now, for Settings › AI Assistant — the same key inputs
+    /// `sendCoachMessage` passes to `NativeCoachTransport.provider(...)`, so
+    /// the label can never disagree with the real routing. Key-free.
+    var coachProviderSummary: NativeCoachProviderSummary {
+        NativeCoachProviderSummary(provider: NativeCoachTransport.provider(
+            anthropicKey: effectiveAdvisoryAnthropicKey ?? "",
+            groqKey: effectiveAdvisoryGroqKey ?? ""))
     }
 
     /// Task 10.13 fix round 1: call on every "New chat" tap so a reply
@@ -8474,8 +8548,12 @@ extension AppStore {
     /// another tab, so they hand the view a typed instruction to present the
     /// editor directly from Today — the same thing `NativeGlobalSearchView`'s
     /// inline action sheet already does for "New job"/"New customer"/"New
-    /// invoice". `.none` is the fail-closed case: a missing or archived
-    /// record, or a malformed date, produces no destination.
+    /// invoice". `.none` is the fail-closed case: a missing job/invoice, an
+    /// archived customer (insights never target one), or a malformed date,
+    /// produces no destination. Archived JOBS route normally (final-review
+    /// I1, contract §9.6): RN `utils/archive.ts` keeps archived records on
+    /// Today and in notifications, and RN's Today taps open JobDetail for
+    /// them, so a shown row must never be a dead tap.
     enum NativeTodayRouteResult: Equatable {
         case handled
         case presentJobEditor(jobID: String)
@@ -8489,31 +8567,35 @@ extension AppStore {
         case none
     }
 
-    /// True when `jobID` names a job that currently exists and is not
-    /// archived. The single fail-closed check every job-based
-    /// `NativeTodayDestination` case below uses, so "exists but archived"
-    /// cannot slip through on some cases and not others.
-    private func isLiveTodayJob(_ jobID: String) -> Bool {
-        jobs.contains(where: { $0.id == jobID && ($0.archivedAt ?? "").isEmpty })
+    /// True when `jobID` names a job that currently exists in this
+    /// workspace's snapshot, archived or not. The single fail-closed check
+    /// every job-based `NativeTodayDestination` case below uses. Final-review
+    /// I1 (RN parity, contract §9.6): archiving does not hide a job from
+    /// Today (`NativeTodayBriefing.scheduleRows`/`leadJobs` keep it, exactly
+    /// like RN `utils/archive.ts`), so the tap must route too — only a
+    /// missing record fails closed. `JobsView` opens an archived job through
+    /// `deepLinkedJobID` like any other.
+    private func todayJobExists(_ jobID: String) -> Bool {
+        jobs.contains(where: { $0.id == jobID })
     }
 
     /// Executes a Today destination against the live snapshot. Reuses the
     /// exact one-shot exact-ID pattern from `routeToGlobalSearchResult`:
     /// clears every prior deep-link target first, verifies the CURRENT
-    /// record exists and is not archived, and only then publishes the new
-    /// target — a stale insight/booking-row/hero target for a since-deleted
-    /// or since-archived record is a no-op, never an invented destination.
+    /// record exists, and only then publishes the new target — a stale
+    /// insight/booking-row/hero target for a since-deleted record is a no-op,
+    /// never an invented destination. Archived jobs route normally (I1).
     @discardableResult
     func routeToToday(_ destination: NativeTodayDestination) -> NativeTodayRouteResult {
         switch destination {
         case .job(let id):
-            guard isLiveTodayJob(id) else { return .none }
+            guard todayJobExists(id) else { return .none }
             resetTodayDeepLinkTargets()
             deepLinkedJobID = id
             selectedTab = .jobs
             return .handled
         case .createInvoice(let jobID):
-            guard isLiveTodayJob(jobID) else { return .none }
+            guard todayJobExists(jobID) else { return .none }
             return .presentInvoiceFromJob(jobID: jobID)
         case .invoice(let id):
             guard invoices.contains(where: { $0.id == id }) else { return .none }
@@ -8528,7 +8610,7 @@ extension AppStore {
             selectedTab = .jobs
             return .handled
         case .schedule(let jobID):
-            guard isLiveTodayJob(jobID) else { return .none }
+            guard todayJobExists(jobID) else { return .none }
             return .presentJobEditor(jobID: jobID)
         case .selectDate(let date):
             guard NativeSchedule.parseDateComponents(date) != nil else { return .none }
@@ -8563,7 +8645,7 @@ extension AppStore {
             // notification-tap path already uses (`requestOnMyWayReview`)
             // rather than duplicating that composer-launch logic — both
             // paths still require the owner to review and send.
-            guard isLiveTodayJob(jobID) else { return .none }
+            guard todayJobExists(jobID) else { return .none }
             requestOnMyWayReview(jobID: jobID)
             return .handled
         case .newJob:
@@ -8847,6 +8929,14 @@ extension AppStore {
     /// Production never calls this directly.
     func testApplyCompletedSignOutState() {
         applyCompletedSignOutState()
+    }
+
+    /// Test-only (final-review I6): forces the auth gate to a given state
+    /// (e.g. `.accountMismatch`) while a real pull is suspended, so the
+    /// exact-workspace publish guard can be driven through the real
+    /// `pullDeltaIfPossible` commit path. Production never calls this.
+    func testSetAuthenticationGateState(_ state: NativeAuthenticationGateState) {
+        authenticationGateState = state
     }
 
     /// Test-only: clears the seeded owner identity (simulates sign-out for

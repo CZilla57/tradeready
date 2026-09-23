@@ -38,8 +38,16 @@ import Foundation
 ///  (b) `register`/`unregister`: the registration point the Phase 11 widget
 ///      mirror (11.01) plugs into. No widget code lives here; a registered
 ///      observer receives the same `Output` snapshot built for (c).
-///  (c) `cachedSnapshot`: the refreshed cached business snapshot for coach
-///      cold start (10.13 reads `AppStore.cachedBusinessSnapshot`).
+///  (c) `cachedSnapshot`: the refreshed cached business snapshot
+///      (`AppStore.cachedBusinessSnapshot`). Final-review I2: the coach no
+///      longer reads it — it builds from live canonical data on demand — so
+///      the cache's consumers are observers/diagnostics only.
+///
+/// Owner contract (final-review I6): `ownerBinding` is wired by `AppStore`
+/// to `derivedStatePublishBinding`, which is non-nil only for an exact
+/// owner workspace (verified binding, local workspace bound to it, gate past
+/// sign-in and not failed), so observers never fire on an account mismatch,
+/// an unavailable workspace, in recovery, or after sign-out.
 @MainActor
 final class NativeDerivedStatePublisher<Input, Output> {
     typealias SnapshotObserver = (Output) throws -> Void

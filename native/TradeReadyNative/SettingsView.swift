@@ -516,13 +516,24 @@ struct AppearanceSettings: View {
     }) }
 }
 
+/// Final-review I4: the former "Use business context" toggle was an
+/// unpersisted `@State` nothing read (RN's SettingsAIScreen has no such
+/// control) while the coach always sends the business summary — a false
+/// privacy control, so it is removed and the privacy copy says what is sent.
+/// The provider rows come from `AppStore.coachProviderSummary`, the same
+/// precedence the coach transport routes by.
 struct AISettings: View {
-    @State private var includeBusinessData = true
-    var body: some View { SettingsPage(title: "AI Assistant", content: Group {
-        Section { Toggle("Use business context", isOn: $includeBusinessData); Text("Allows the coach to summarize totals, job status, and overdue invoices in its answers.").font(.caption).foregroundStyle(.secondary) }
-        Section("PROVIDER") { LabeledContent("Service", value: "TradeReady AI"); LabeledContent("Connection", value: "Backend managed") }
-        Section("PRIVACY") { Text("Review a prompt before sending. Secure provider credentials are never written to the local business-data file.").font(.caption).foregroundStyle(.secondary) }
-    }) }
+    @EnvironmentObject private var store: AppStore
+    var body: some View {
+        let provider = store.coachProviderSummary
+        SettingsPage(title: "AI Assistant", content: Group {
+            Section("PROVIDER") { LabeledContent("Service", value: provider.service); LabeledContent("Connection", value: provider.connection) }
+            Section("PRIVACY") {
+                Text("Each coach message includes a summary of your business data (revenue, outstanding and overdue invoices, active jobs, top customers, tax estimate) so the coach can answer questions about your business. It is sent to the provider above.").font(.caption).foregroundStyle(.secondary)
+                Text("Secure provider credentials are never written to the local business-data file.").font(.caption).foregroundStyle(.secondary)
+            }
+        })
+    }
 }
 
 struct NotificationSettings: View {

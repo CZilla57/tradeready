@@ -3,6 +3,27 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
+# Registration guard (Phase 10 final review I3): every native/run-*-tests.sh
+# runner must be invoked below, or this aggregate fails before running
+# anything. A runner only counts when an uncommented line invokes it.
+# Helpers that are not runners (run-appstore-sources-common.sh,
+# run-import-tests-common.sh, run-doc-reference-check.sh and the
+# run-phase-N-device-preflight.sh wrappers) do not match *-tests.sh.
+AGGREGATE="$ROOT_DIR/native/run-all-domain-tests.sh"
+UNREGISTERED=""
+for RUNNER in "$ROOT_DIR"/native/run-*-tests.sh; do
+  NAME=$(basename "$RUNNER")
+  [ "$NAME" = "run-all-domain-tests.sh" ] && continue
+  if ! grep -Eq "^[[:space:]]*(sh[[:space:]]+)?\"\\\$ROOT_DIR/native/$NAME\"" "$AGGREGATE"; then
+    UNREGISTERED="$UNREGISTERED $NAME"
+  fi
+done
+if [ -n "$UNREGISTERED" ]; then
+  echo "run-all-domain-tests.sh: unregistered runner(s):$UNREGISTERED" >&2
+  echo "Register each one below (or rename a non-runner helper so it does not end in -tests.sh)." >&2
+  exit 1
+fi
+
 "$ROOT_DIR/native/run-domain-tests.sh"
 sh "$ROOT_DIR/native/run-canonical-tests.sh"
 "$ROOT_DIR/native/run-snapshot-tests.sh"
@@ -76,6 +97,40 @@ sh "$ROOT_DIR/native/run-coach-prompt-tests.sh"
 sh "$ROOT_DIR/native/run-chat-markdown-tests.sh"
 sh "$ROOT_DIR/native/run-notification-permission-tests.sh"
 sh "$ROOT_DIR/native/run-phase10-qualification-tests.sh"
+# Phase 10 final review I3: 10.01/10.03 suites, the notification coordinator
+# (60-cap / foreign-family / cleanup) and the two AppStore-closure runners.
+sh "$ROOT_DIR/native/run-business-snapshot-tests.sh"
+sh "$ROOT_DIR/native/run-insight-mute-tests.sh"
+sh "$ROOT_DIR/native/run-setup-checklist-tests.sh"
+sh "$ROOT_DIR/native/run-notification-coordinator-tests.sh"
+sh "$ROOT_DIR/native/run-schedule-booking-settings-tests.sh"
+sh "$ROOT_DIR/native/run-calendar-editor-tests.sh"
+# Pre-existing runners found unregistered by the guard above (all passing
+# when registered in the Phase 10 final fix wave).
+sh "$ROOT_DIR/native/run-accounting-package-tests.sh"
+sh "$ROOT_DIR/native/run-availability-tests.sh"
+sh "$ROOT_DIR/native/run-booking-administration-tests.sh"
+sh "$ROOT_DIR/native/run-booking-attention-tests.sh"
+sh "$ROOT_DIR/native/run-booking-intake-tests.sh"
+sh "$ROOT_DIR/native/run-booking-response-tests.sh"
+sh "$ROOT_DIR/native/run-calendar-tests.sh"
+sh "$ROOT_DIR/native/run-csv-export-tests.sh"
+sh "$ROOT_DIR/native/run-csv-import-tests.sh"
+sh "$ROOT_DIR/native/run-import-engine-tests.sh"
+sh "$ROOT_DIR/native/run-import-history-tests.sh"
+sh "$ROOT_DIR/native/run-import-mapping-tests.sh"
+sh "$ROOT_DIR/native/run-job-photo-mutation-tests.sh"
+sh "$ROOT_DIR/native/run-mileage-tests.sh"
+sh "$ROOT_DIR/native/run-money-report-tests.sh"
+sh "$ROOT_DIR/native/run-portal-administration-tests.sh"
+sh "$ROOT_DIR/native/run-pricebook-ai-tests.sh"
+sh "$ROOT_DIR/native/run-pricebook-tests.sh"
+sh "$ROOT_DIR/native/run-receipt-ocr-tests.sh"
+sh "$ROOT_DIR/native/run-route-planning-tests.sh"
+sh "$ROOT_DIR/native/run-schedule-tests.sh"
+sh "$ROOT_DIR/native/run-tax-settings-tests.sh"
+sh "$ROOT_DIR/native/run-trade-template-tests.sh"
+sh "$ROOT_DIR/native/run-zip-archive-tests.sh"
 "$ROOT_DIR/native/run-phase-3-device-preflight-tests.sh"
 "$ROOT_DIR/native/run-phase-4-device-preflight-tests.sh"
 (cd "$ROOT_DIR/backend-workers" && npm test)

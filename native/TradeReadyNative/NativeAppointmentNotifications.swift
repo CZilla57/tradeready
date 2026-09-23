@@ -91,17 +91,21 @@ enum NativeAppointmentNotifications {
 
     /// Notification taps may still open a job after its visible appointment
     /// button has disappeared. Only the exact signed-in job is required here;
-    /// the review screen performs the current contact/draft check. Task 10.08
-    /// (N6) fix: an archived job fails closed here too, matching
-    /// `NativeEstimateFollowUp.canOpenNotification` — a stale payload for a
-    /// job the owner has since archived must not invent a destination.
+    /// the review screen performs the current contact/draft check. Fails
+    /// closed only for a missing job or a non-exact (foreign/signed-out)
+    /// workspace. Final-review I1 (RN parity, contract §9.6): an archived job
+    /// opens normally — `reminders` above still schedules `appt_` for it (RN
+    /// `utils/archive.ts`: notifications deliberately still see archived
+    /// records) and RN's `appointment_confirm` tap navigates to JobDetail
+    /// with no archive check. (The `est_` route keeps its own recorded
+    /// estimate_sent + not-archived rule in `NativeEstimateFollowUp`.)
     static func canOpenNotification(
         exactOwnerWorkspace: Bool,
         signedIn: Bool,
         job: Canonical.Job?
     ) -> Bool {
-        guard exactOwnerWorkspace, signedIn, let job else { return false }
-        return (job.archivedAt ?? "").isEmpty
+        guard exactOwnerWorkspace, signedIn, job != nil else { return false }
+        return true
     }
 
     private static func resolveCustomer(

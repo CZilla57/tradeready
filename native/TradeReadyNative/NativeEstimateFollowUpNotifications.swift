@@ -27,6 +27,10 @@ enum NativeInvoiceReminderPromptOutcome: Equatable, Sendable {
     /// `confirmInvoiceReminderPrompt()`, `dismissInvoiceReminderPrompt()`. No
     /// OS permission dialog fires yet.
     case pendingUserChoice
+    /// Final-review m2: the exact workspace changed (sign-out / account
+    /// switch) during the permission-state await; nothing was stamped for
+    /// either account and no soft-ask is pending.
+    case ownerChanged
 }
 
 @MainActor
@@ -580,6 +584,11 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
         guard let binding = exactWorkspaceBinding() else { return .noWorkspace }
         guard !wasReminderPromptShown() else { return .alreadyShown }
         await refreshPermissionState()
+        // Final-review m2: `markReminderPromptShown` stamps through the
+        // store's CURRENT binding, so an account switch during the await
+        // above would otherwise stamp (and pend the alert for) the NEW
+        // account. Re-check the exact owner captured before the await.
+        guard exactWorkspaceBinding() == binding else { return .ownerChanged }
         // Stamp before any request/alert, regardless of the outcome below —
         // an already-settled permission is marked shown too, exactly like RN.
         markReminderPromptShown()

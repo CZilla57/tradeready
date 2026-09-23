@@ -2812,11 +2812,17 @@ struct StoreIntegrationTests {
                    "10.07 marking the request sent removes it from every subsequent sweep")
         }
 
-        // Task 10.08 (N6) — appt_/review_ tap routing must fail closed for an
-        // archived job too, exactly like est_ already does (the carried-
-        // forward 10.06 finding: appt_/review_/rinv_ lacked fail-closed
-        // coverage, and requestRecurringInvoiceReview had a shallower guard
-        // than requestInvoiceReminderReview).
+        // Task 10.08 (N6), DELIBERATELY REVERSED by the final-review fix
+        // wave (I1, RN parity option (a), contract §9.6): 10.08 made the
+        // appt_/review_ taps fail closed for an archived job, but the
+        // selectors still schedule appt_/review_ for archived jobs (RN
+        // `utils/archive.ts`: notifications deliberately still see archived
+        // records) and RN's `appointment_confirm`/`review_request` taps
+        // navigate with no archive check — so every delivered notification
+        // for an archived job was a dead tap. Now: an archived job's
+        // notification is SCHEDULED and its tap ROUTES; only a missing job
+        // or a non-exact workspace fails closed. (est_ keeps its own recorded
+        // estimate_sent + not-archived rule.)
         do {
             let archivedDirectory = directory.appendingPathComponent("ArchivedRouting10_08", isDirectory: true)
             let archivedURL = archivedDirectory.appendingPathComponent("store.json")
@@ -2842,20 +2848,50 @@ struct StoreIntegrationTests {
                    "10.08 review tap succeeds for a live job before archiving")
             archivedStore.dismissPendingReviewRequest(jobID: archivedJob.id)
 
-            // Archive the job (same record id, archivedAt now stamped) and
-            // confirm both owned-namespace tap routes fail closed.
+            // Archive the job (same record id, archivedAt now stamped).
             var archivedRecord = archivedJob
             archivedRecord.archivedAt = "2026-09-23T00:00:00.000Z"
             expect(archivedStore.upsert(archivedRecord), "10.08 archiving the job saves")
 
+            // Final-review I1: the archived job still routes for both taps.
+            archivedStore.selectedTab = .today
+            archivedStore.deepLinkedJobID = nil
+            archivedStore.requestAppointmentConfirmationReview(jobID: archivedJob.id)
+            expect(archivedStore.selectedTab == .jobs
+                       && archivedStore.deepLinkedJobID == archivedJob.id
+                       && archivedStore.pendingAppointmentConfirmationJobID == archivedJob.id,
+                   "I1: an archived job's appointment tap routes to the job (RN parity), not a dead tap")
+            archivedStore.dismissPendingAppointmentConfirmation(jobID: archivedJob.id)
+
+            archivedStore.selectedTab = .today
+            archivedStore.deepLinkedJobID = nil
+            archivedStore.requestReviewRequestReview(jobID: archivedJob.id)
+            expect(archivedStore.selectedTab == .jobs
+                       && archivedStore.deepLinkedJobID == archivedJob.id
+                       && archivedStore.pendingReviewRequestJobID == archivedJob.id,
+                   "I1: an archived job's review tap routes to the review draft (RN parity), not a dead tap")
+            archivedStore.dismissPendingReviewRequest(jobID: archivedJob.id)
+
+            // Missing record still fails closed for both taps.
+            archivedStore.selectedTab = .today
+            archivedStore.requestAppointmentConfirmationReview(jobID: "job-does-not-exist")
+            archivedStore.requestReviewRequestReview(jobID: "job-does-not-exist")
+            expect(archivedStore.selectedTab == .today
+                       && archivedStore.pendingAppointmentConfirmationJobID == nil
+                       && archivedStore.pendingReviewRequestJobID == nil,
+                   "I1: a missing job id still fails closed for the appointment and review taps")
+
+            // Foreign / non-exact workspace still fails closed: the same
+            // archived job id under a signed-out (non-owner) session routes
+            // nowhere.
+            archivedStore.scheduleBookingTestClearOwner()
             archivedStore.selectedTab = .today
             archivedStore.requestAppointmentConfirmationReview(jobID: archivedJob.id)
-            expect(archivedStore.selectedTab == .today && archivedStore.pendingAppointmentConfirmationJobID == nil,
-                   "10.08 an archived job fails closed for the appointment tap instead of opening a stale confirmation")
-
             archivedStore.requestReviewRequestReview(jobID: archivedJob.id)
-            expect(archivedStore.selectedTab == .today && archivedStore.pendingReviewRequestJobID == nil,
-                   "10.08 an archived job fails closed for the review tap instead of opening a stale draft")
+            expect(archivedStore.selectedTab == .today
+                       && archivedStore.pendingAppointmentConfirmationJobID == nil
+                       && archivedStore.pendingReviewRequestJobID == nil,
+                   "I1: without the exact owner workspace the archived job's taps still fail closed")
         }
 
         // Task 10.08 (N6) — rinv_ tap routing had NO coverage at all before
@@ -3395,9 +3431,12 @@ struct StoreIntegrationTests {
             expect(store.deepLinkedJobID == job.id,
                    "10.11 router: a failed-closed route leaves the prior one-shot target untouched")
 
-            // .job: archived id fails closed even though the record exists.
-            expect(store.routeToToday(.job(jobId: archivedJob.id)) == .none,
-                   "10.11 router: .job(archived) fails closed")
+            // .job: an archived job ROUTES (final-review I1, RN parity —
+            // Today still shows archived jobs, so the tap must not be dead).
+            // Deliberately reverses the 10.11 "archived fails closed" pin.
+            expect(store.routeToToday(.job(jobId: archivedJob.id)) == .handled
+                       && store.deepLinkedJobID == archivedJob.id && store.selectedTab == .jobs,
+                   "I1 router: .job(archived) routes to the job like RN's JobDetail navigation")
 
             // .invoice: one-shot semantics clear the PRIOR job target.
             expect(store.routeToToday(.invoice(invoiceId: invoice.id)) == .handled,
@@ -3445,14 +3484,14 @@ struct StoreIntegrationTests {
                    "10.11 router: .createInvoice(existing) presents the invoice-from-job sheet")
             expect(store.routeToToday(.createInvoice(jobId: "missing")) == .none,
                    "10.11 router: .createInvoice(missing) fails closed")
-            expect(store.routeToToday(.createInvoice(jobId: archivedJob.id)) == .none,
-                   "10.11 router: .createInvoice(archived) fails closed — a since-archived job never presents the invoice-from-job sheet")
+            expect(store.routeToToday(.createInvoice(jobId: archivedJob.id)) == .presentInvoiceFromJob(jobID: archivedJob.id),
+                   "I1 router: .createInvoice(archived) presents the invoice-from-job sheet (RN parity; reverses the 10.11 pin)")
             expect(store.routeToToday(.schedule(jobId: job.id)) == .presentJobEditor(jobID: job.id),
                    "10.11 router: .schedule(existing) presents the job editor")
             expect(store.routeToToday(.schedule(jobId: "missing")) == .none,
                    "10.11 router: .schedule(missing) fails closed")
-            expect(store.routeToToday(.schedule(jobId: archivedJob.id)) == .none,
-                   "10.11 router: .schedule(archived) fails closed — a since-archived job never presents the job editor")
+            expect(store.routeToToday(.schedule(jobId: archivedJob.id)) == .presentJobEditor(jobID: archivedJob.id),
+                   "I1 router: .schedule(archived) presents the job editor (RN parity; reverses the 10.11 pin)")
             expect(store.routeToToday(.newJob) == .presentNewJobEditor,
                    "10.11 router: .newJob presents a blank job editor")
             expect(store.routeToToday(.newCustomer) == .presentNewCustomerEditor,
@@ -3470,11 +3509,14 @@ struct StoreIntegrationTests {
                    "10.11 router: .onMyWay(existing) stages the same on-my-way review sheet the notification-tap path uses")
             expect(store.routeToToday(.onMyWay(jobId: "missing")) == .none,
                    "10.11 router: .onMyWay(missing) fails closed")
-            let pendingBeforeArchivedOnMyWay = store.pendingOnMyWayJobID
-            expect(store.routeToToday(.onMyWay(jobId: archivedJob.id)) == .none,
-                   "10.11 router: .onMyWay(archived) fails closed — a since-archived job never stages a review sheet")
-            expect(store.pendingOnMyWayJobID == pendingBeforeArchivedOnMyWay,
+            let pendingBeforeMissingOnMyWay = store.pendingOnMyWayJobID
+            expect(store.routeToToday(.onMyWay(jobId: "missing-2")) == .none,
+                   "10.11 router: .onMyWay(missing) fails closed")
+            expect(store.pendingOnMyWayJobID == pendingBeforeMissingOnMyWay,
                    "10.11 router: a failed-closed .onMyWay leaves pendingOnMyWayJobID untouched")
+            expect(store.routeToToday(.onMyWay(jobId: archivedJob.id)) == .handled
+                       && store.pendingOnMyWayJobID == archivedJob.id,
+                   "I1 router: .onMyWay(archived) stages the review sheet (RN parity; reverses the 10.11 pin)")
 
             // Selected-day/week navigation (RN's setSelectedDate/prevWeek/nextWeek).
             store.selectTodayDate("2026-09-10")
@@ -4345,6 +4387,258 @@ struct StoreIntegrationTests {
             store.scheduleBookingTestSeedSignedInOwner(subject: "user-guard-2", binding: "bind-guard-b")
             expect(!store.coachReplyStillValid(bindingTicket),
                    "10.13 fix1: an account-binding change invalidates an in-flight reply's ticket")
+        }
+
+        // MARK: - Phase 10 final-review fix wave
+
+        // I1 (RN parity option (a), contract §9.6): an ARCHIVED job is still
+        // shown on Today and still gets appt_/review_ notifications (RN
+        // `utils/archive.ts`), so every one of those surfaces must route on
+        // tap. Pairs "row shown / notification scheduled" with "tap routes"
+        // on the same store, then proves missing/foreign still fail closed.
+        do {
+            let dirI1 = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-fw-i1-\(UUID().uuidString)", isDirectory: true)
+            let store = AppStore(fileURL: dirI1.appendingPathComponent("store.json"), seedIfMissing: false)
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-fw-i1", binding: String(repeating: "f", count: 64))
+            store.settings.appointmentRemindersEnabled = true
+            store.settings.reviewRequestEnabled = true
+            store.settings.reviewRequestDelayHours = 2
+
+            let customer = Customer(name: "Archie Vance", email: "archie@example.test", phone: "555-0142")
+            expect(store.upsert(customer), "I1 fixture customer saves")
+            let now = Date()
+            var scheduled = Job(customerId: customer.id, customerName: customer.name,
+                                title: "Archived panel swap", status: .scheduled, laborRate: 95)
+            scheduled.scheduledAt = Calendar.current.date(byAdding: .day, value: 3, to: now)
+            expect(store.upsert(scheduled), "I1 fixture scheduled job saves")
+            expect(store.setJobArchived(id: scheduled.id, archived: true), "I1 archiving the scheduled job commits")
+            let canonicalScheduled = store.canonicalJobs.first(where: { $0.id == scheduled.id })
+            expect(!(canonicalScheduled?.archivedAt ?? "").isEmpty, "I1 sanity: the job is archived in canonical truth")
+
+            // Row shown ...
+            if let date = canonicalScheduled?.scheduledDate { store.selectTodayDate(date) }
+            expect(store.todaySelectedDaySchedule.contains(where: { $0.id == scheduled.id }),
+                   "I1 an archived scheduled job is still a Today schedule row (RN archive.ts: Today still sees archived)")
+            // ... and its tap routes.
+            store.selectedTab = .today
+            expect(store.routeToToday(.job(jobId: scheduled.id)) == .handled
+                       && store.selectedTab == .jobs && store.deepLinkedJobID == scheduled.id,
+                   "I1 tapping the archived job's Today row routes to the job, never a dead tap")
+
+            // Notification scheduled ...
+            expect(store.appointmentConfirmationNotifications(now: now)
+                       .contains(where: { $0.identifier == "appt_\(scheduled.id)" }),
+                   "I1 an archived scheduled job still gets its appt_ notification")
+            // ... and its tap routes.
+            store.selectedTab = .today
+            store.deepLinkedJobID = nil
+            store.requestAppointmentConfirmationReview(jobID: scheduled.id)
+            expect(store.selectedTab == .jobs && store.pendingAppointmentConfirmationJobID == scheduled.id,
+                   "I1 tapping the archived job's appt_ notification opens the confirmation review")
+            store.dismissPendingAppointmentConfirmation(jobID: scheduled.id)
+
+            // review_: complete a job (arms the one-shot), archive it, and
+            // pair the scheduled request with a routing tap.
+            var working = Job(customerId: customer.id, customerName: customer.name,
+                              title: "Archived water heater", status: .inProgress, laborRate: 95)
+            working.scheduledAt = now
+            expect(store.upsert(working), "I1 fixture in-progress job saves")
+            expect(store.completeJob(id: working.id, from: .inProgress, on: now) == .completed,
+                   "I1 completing the job arms review_")
+            expect(store.setJobArchived(id: working.id, archived: true), "I1 archiving the completed job commits")
+            expect(store.reviewRequestNotifications(now: now)
+                       .contains(where: { $0.identifier == "review_\(working.id)" }),
+                   "I1 an archived completed job still has its review_ notification scheduled")
+            store.selectedTab = .today
+            store.requestReviewRequestReview(jobID: working.id)
+            expect(store.selectedTab == .jobs && store.pendingReviewRequestJobID == working.id,
+                   "I1 tapping the archived job's review_ notification opens the review draft")
+            store.dismissPendingReviewRequest(jobID: working.id)
+
+            // Missing id: every route still fails closed.
+            store.selectedTab = .today
+            expect(store.routeToToday(.job(jobId: "missing-i1")) == .none, "I1 a missing job id still fails closed on Today")
+            store.requestAppointmentConfirmationReview(jobID: "missing-i1")
+            store.requestReviewRequestReview(jobID: "missing-i1")
+            expect(store.selectedTab == .today, "I1 a missing job id still fails closed for appt_/review_ taps")
+
+            // Foreign / non-owned: a signed-in gate with no verified owner
+            // binding is not an exact workspace, so the same archived job's
+            // notification taps must not route.
+            store.scheduleBookingTestClearOwner()
+            store.testSetAuthenticationGateState(.signedIn(email: nil))
+            store.selectedTab = .today
+            store.requestAppointmentConfirmationReview(jobID: scheduled.id)
+            store.requestReviewRequestReview(jobID: working.id)
+            expect(store.selectedTab == .today
+                       && store.pendingAppointmentConfirmationJobID == nil
+                       && store.pendingReviewRequestJobID == nil,
+                   "I1 a foreign/non-exact workspace still fails closed for the archived job's taps")
+        }
+
+        // I2: the coach snapshot is always built from LIVE canonical data.
+        // Publish once through a real committed pull (so the sync-time cache
+        // exists), then make a LOCAL edit with no pull — mark the invoice
+        // paid — and prove the coach sees it while the cache is still stale.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(customers: [customer1012(id: "cust-fw-i2", name: "Paid Later Co")],
+                                             settings: settings08(), delta: delta, tag: "fw-i2")
+            seed08Owner(store, subject: "user-fw-i2", binding: "bind-fw-i2")
+            let invoice = Invoice(customerId: "cust-fw-i2", customer: "Paid Later Co", number: "INV-FW-I2", amount: 250)
+            store.upsert(invoice)
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(store.cachedBusinessSnapshot?.outstandingTotal == 250,
+                   "I2 sanity: the committed pull published a cache with $250 outstanding")
+            expect(store.coachBusinessSnapshot()?.outstandingTotal == 250,
+                   "I2 sanity: before the edit the coach also sees $250 outstanding")
+
+            _ = store.settleInvoice(invoiceID: invoice.id, paymentID: "payment-fw-i2")
+            expect(store.cachedBusinessSnapshot?.outstandingTotal == 250,
+                   "I2 sanity: with no pull the sync-time cache is still stale ($250)")
+            expect(store.coachBusinessSnapshot()?.outstandingTotal == 0,
+                   "I2 after marking the invoice paid locally (no pull) the coach snapshot shows $0 outstanding")
+            expect(store.coachTestSystemPrompt()?.contains("Outstanding: $0") == true,
+                   "I2 the coach system prompt sendCoachMessage builds cites the live $0 outstanding, not the stale cache")
+        }
+
+        // I4: Settings › AI Assistant shows the provider the coach actually
+        // routes to, from the same precedence sendCoachMessage uses.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "fw-i4")
+            seed08Owner(store, subject: "user-fw-i4", binding: "bind-fw-i4")
+            store.coachAdvisoryAnthropicKeyOverride = ""
+            store.coachAdvisoryGroqKeyOverride = ""
+            expect(store.coachProviderSummary.service == "TradeReady AI"
+                       && store.coachProviderSummary.connection == "Backend managed",
+                   "I4 no client key: Settings shows the backend-managed TradeReady AI provider")
+            store.coachAdvisoryGroqKeyOverride = "test-groq-key"
+            expect(store.coachProviderSummary.service == "Groq" && store.coachProviderSummary.analyticsName == "groq",
+                   "I4 a Groq key: Settings shows Groq")
+            store.coachAdvisoryAnthropicKeyOverride = "test-anthropic-key"
+            expect(store.coachProviderSummary.service == "Anthropic (Claude)"
+                       && store.coachProviderSummary.analyticsName == "anthropic",
+                   "I4 an Anthropic key wins precedence: Settings shows Anthropic, matching the transport routing")
+            expect(!store.coachProviderSummary.service.contains("test-anthropic-key")
+                       && !store.coachProviderSummary.connection.contains("test-anthropic-key"),
+                   "I4 the provider summary never carries the key")
+        }
+
+        // I6: a gate that lands in `.accountMismatch` / `.unavailable` while
+        // a real pull is suspended must not publish — no notification
+        // synchronize, no observer call, no cache write — through the real
+        // `pullDeltaIfPossible` commit path. Positive control first.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "fw-i6-control")
+            seed08Owner(store, subject: "user-fw-i6", binding: "bind-fw-i6")
+            var notifyCalls = 0
+            var observed = 0
+            store.notificationSynchronizeHook = { _ in notifyCalls += 1 }
+            store.registerDerivedStateObserver { _ in observed += 1 }
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(notifyCalls == 1 && observed == 1 && store.cachedBusinessSnapshot != nil,
+                   "I6 control: an exact signed-in workspace publishes once from the committed pull")
+        }
+        for (label, gate) in [("accountMismatch", NativeAuthenticationGateState.accountMismatch),
+                              ("unavailable", NativeAuthenticationGateState.unavailable)] {
+            let delta = ScheduleBookingTestDelta()
+            delta.gatePull = true
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "fw-i6-\(label)")
+            seed08Owner(store, subject: "user-fw-i6", binding: "bind-fw-i6")
+            var notifyCalls = 0
+            var observed = 0
+            store.notificationSynchronizeHook = { _ in notifyCalls += 1 }
+            store.registerDerivedStateObserver { _ in observed += 1 }
+            let run = Task { await store.runBookingIntakeAfterVerifiedPull() }
+            await wait08For(delta.enteredPull)
+            expect(delta.enteredPull, "I6 \(label): sanity — the real pull is suspended in flight")
+            // Same subject, so `pullDeltaIfPossible` still commits; only the
+            // gate moved (exactly what `advancePastInitialSync` does).
+            store.testSetAuthenticationGateState(gate)
+            delta.resumePull?.resume(returning: NativeDeltaPullOutcome(
+                snapshot: Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings08())),
+                cursor: Canonical.NativeSyncCursor(version: 2, tables: [:]), failedTables: [], lastDiagnosticCode: nil))
+            _ = await run.value
+            expect(store.derivedStatePublishBinding == nil,
+                   "I6 \(label): the exact-workspace publish predicate is nil")
+            expect(notifyCalls == 0, "I6 \(label): the committed pull does NOT reach notification synchronize")
+            expect(observed == 0, "I6 \(label): no registered observer (the 11.01 widget mirror) is called")
+            expect(store.cachedBusinessSnapshot == nil, "I6 \(label): no cache write")
+        }
+        // A cache published for the exact workspace is unreadable once the
+        // gate falls to `.accountMismatch` (the publisher's owner re-check
+        // uses the same predicate).
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "fw-i6-read")
+            seed08Owner(store, subject: "user-fw-i6r", binding: "bind-fw-i6r")
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(store.cachedBusinessSnapshot != nil, "I6 sanity: the exact workspace cached a snapshot")
+            store.testSetAuthenticationGateState(.accountMismatch)
+            expect(store.cachedBusinessSnapshot == nil,
+                   "I6 the cache read fails closed once the gate is .accountMismatch")
+        }
+
+        // m3: a duplicate job id in the persisted snapshot must not trap the
+        // schedule key (evaluated on every root render) or the inv_ selector.
+        do {
+            let dirM3 = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-fw-m3-\(UUID().uuidString)", isDirectory: true)
+            let urlM3 = dirM3.appendingPathComponent("store.json")
+            let seeded = AppStore(fileURL: urlM3, seedIfMissing: false)
+            let dupJob = Job(customerId: "c-m3", customerName: "Dup Co", title: "Duplicated", status: .scheduled, laborRate: 95)
+            expect(seeded.upsert(dupJob), "m3 fixture job saves")
+            var persisted = try Canonical.SnapshotRepository(primaryURL: urlM3).load()!.snapshot
+            let original = persisted.payload.jobs!.first(where: { $0.id == dupJob.id })!
+            var shadow = original
+            shadow.title = "Duplicated (second copy)"
+            persisted.payload.jobs!.append(shadow)
+            try Canonical.SnapshotRepository(primaryURL: urlM3).save(persisted)
+
+            let relaunched = AppStore(fileURL: urlM3, seedIfMissing: false)
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-fw-m3", binding: String(repeating: "3", count: 64))
+            expect(relaunched.canonicalJobs.filter { $0.id == dupJob.id }.count == 2,
+                   "m3 sanity: the relaunched store really holds two jobs with the same id")
+            let key = relaunched.estimateFollowUpNotificationScheduleKey
+            expect(key != "inactive" && key.contains(dupJob.id),
+                   "m3 the schedule key builds (no trap) with a duplicate job id")
+            _ = relaunched.invoiceReminderNotifications()
+            expect(true, "m3 the inv_ selector builds (no trap) with a duplicate job id")
+        }
+
+        // m5: a recurring-rule tap with nothing generated yet must clear an
+        // earlier one-shot invoice/outreach target so the Invoices tab opens
+        // its list, not an unrelated invoice.
+        do {
+            let dirM5 = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-fw-m5-\(UUID().uuidString)", isDirectory: true)
+            let store = AppStore(fileURL: dirM5.appendingPathComponent("store.json"), seedIfMissing: false)
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-fw-m5", binding: String(repeating: "5", count: 64))
+            let customer = Customer(name: "Stale Link Co", email: "stale@example.test")
+            expect(store.upsert(customer), "m5 fixture customer saves")
+            let unrelated = Invoice(customerId: customer.id, customer: customer.name, number: "INV-M5", amount: 90)
+            store.upsert(unrelated)
+            let rule = Canonical.RecurringInvoice(
+                id: "rinv-fw-m5", customerId: customer.id, customerName: customer.name,
+                description: "Monthly service", amount: 120, dueDays: 30,
+                cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+                occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+            expect(store.createRecurringInvoice(rule), "m5 fixture plan creates")
+            expect(store.scheduleBookingTestLatestGeneratedInvoiceID(ruleID: rule.id) == nil,
+                   "m5 sanity: nothing has generated for the rule yet")
+
+            // An earlier inv_ tap left a one-shot outreach target armed.
+            store.requestInvoiceReminderReview(invoiceID: unrelated.id, opensOutreach: true)
+            expect(store.deepLinkedInvoiceID == unrelated.id && store.deepLinkedOutreachInvoiceID == unrelated.id,
+                   "m5 sanity: the earlier invoice/outreach target is armed")
+            store.selectedTab = .today
+            store.requestRecurringInvoiceReview(ruleID: rule.id)
+            expect(store.selectedTab == .invoices
+                       && store.deepLinkedInvoiceID == nil && store.deepLinkedOutreachInvoiceID == nil,
+                   "m5 the rinv_ fallback clears the stale invoice/outreach target and opens the plain Invoices list")
         }
 
         if failures == 0 { print("PASS: canonical AppStore integration tests") }

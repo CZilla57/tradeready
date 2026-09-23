@@ -52,6 +52,35 @@ enum NativeCoachProvider: Equatable, Sendable {
     case backend
 }
 
+/// Final-review I4: key-free, display-safe description of the provider the
+/// coach will actually route to (Settings › AI Assistant, analytics). Built
+/// only from `NativeCoachTransport.provider(...)`'s precedence so the label,
+/// the `ai_chat_sent` provider value and the real routing can never disagree.
+/// Never carries the key itself.
+struct NativeCoachProviderSummary: Equatable, Sendable {
+    /// RN `ai_chat_sent` provider value: "anthropic" | "groq" | "backend".
+    let analyticsName: String
+    let service: String
+    let connection: String
+
+    init(provider: NativeCoachProvider) {
+        switch provider {
+        case .anthropic:
+            analyticsName = "anthropic"
+            service = "Anthropic (Claude)"
+            connection = "Your API key on this device"
+        case .groq:
+            analyticsName = "groq"
+            service = "Groq"
+            connection = "Your API key on this device"
+        case .backend:
+            analyticsName = "backend"
+            service = "TradeReady AI"
+            connection = "Backend managed"
+        }
+    }
+}
+
 /// Typed failures mirroring RN's thrown `Error` messages exactly, so the UI's
 /// `Something went wrong: \(error.message)` bubble reads identically. Provider
 /// keys never appear in any case's message.

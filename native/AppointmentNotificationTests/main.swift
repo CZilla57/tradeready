@@ -154,6 +154,19 @@ struct AppointmentNotificationTests {
         expect(NativeAppointmentNotifications.canOpenNotification(exactOwnerWorkspace: true, signedIn: false, job: makeJob()) == false, "requires an active signed-in session")
         expect(NativeAppointmentNotifications.canOpenNotification(exactOwnerWorkspace: true, signedIn: true, job: makeJob()), "opens when the exact job, workspace, and session all line up")
 
+        // Final-review I1 (RN parity, contract §9.6): an archived job keeps
+        // its appt_ notification AND its tap opens — never a dead tap.
+        var archived = makeJob(id: "j-archived")
+        archived.archivedAt = "2026-07-10"
+        let archivedPlan = NativeAppointmentNotifications.notificationPlan(
+            jobs: [archived], customers: customers, enabled: true, now: now, calendar: calendar)
+        expect(archivedPlan.map(\.identifier) == ["appt_j-archived"],
+               "I1 an archived scheduled job still gets its appt_ notification (RN archive.ts parity)")
+        expect(NativeAppointmentNotifications.canOpenNotification(exactOwnerWorkspace: true, signedIn: true, job: archived),
+               "I1 the archived job's appt_ tap opens (paired with the scheduled notification above)")
+        expect(NativeAppointmentNotifications.canOpenNotification(exactOwnerWorkspace: false, signedIn: true, job: archived) == false,
+               "I1 a foreign/non-exact workspace still fails closed for an archived job")
+
         if failures == 0 { print("PASS: appointment notification tests") } else { exit(1) }
     }
 }

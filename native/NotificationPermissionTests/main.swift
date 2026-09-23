@@ -48,8 +48,13 @@ private final class FakeNotificationCenter: NativeEstimateFollowUpNotificationCe
         delegateInstalled = true
     }
 
+    /// Runs inside the `authorizationState()` await — lets a test simulate
+    /// an account switch landing mid-suspension (final-review m2).
+    var onAuthorizationState: (() -> Void)?
+
     func authorizationState() async -> NativeNotificationPermissionState {
-        permission
+        onAuthorizationState?()
+        return permission
     }
 
     func requestAuthorization() async throws {
@@ -373,6 +378,42 @@ enum NotificationPermissionTests {
             expect(outcome == .alreadyShown, "the fail-safe default never prompts when no store is injected")
             expect(!coordinator.pendingInvoiceReminderPrompt, "no pending alert is ever raised")
             expect(center.requestAuthorizationCallCount == 0, "no OS request is ever made")
+        }
+
+        // 12. Final-review m2: an account switch that lands DURING the
+        // permission-state await must not stamp the flag (the store stamps
+        // through its current binding, i.e. the NEW account) nor pend the
+        // soft-ask. Positive control first: with no switch the same setup
+        // stamps and pends.
+        do {
+            let center = FakeNotificationCenter(permission: .notRequested)
+            let flag = FakeReminderPromptFlag()
+            var currentOwner: String? = "owner-a"
+            let coordinator = makeCoordinator(center: center, binding: { currentOwner }, flag: flag)
+            center.onAuthorizationState = { currentOwner = "owner-b" }
+            let outcome = await coordinator.promptForInvoiceRemindersIfNeeded()
+            expect(outcome == .ownerChanged, "m2: an owner switch during the await reports .ownerChanged")
+            expect(flag.markCallCount == 0, "m2: nothing is stamped for the new owner after an owner switch mid-await")
+            expect(!coordinator.pendingInvoiceReminderPrompt, "m2: no soft-ask is pended after an owner switch mid-await")
+            expect(center.requestAuthorizationCallCount == 0, "m2: no OS request after an owner switch mid-await")
+
+            let signedOutCenter = FakeNotificationCenter(permission: .notRequested)
+            let signedOutFlag = FakeReminderPromptFlag()
+            var signedOutOwner: String? = "owner-a"
+            let signedOutCoordinator = makeCoordinator(
+                center: signedOutCenter, binding: { signedOutOwner }, flag: signedOutFlag)
+            signedOutCenter.onAuthorizationState = { signedOutOwner = nil }
+            let signedOutOutcome = await signedOutCoordinator.promptForInvoiceRemindersIfNeeded()
+            expect(signedOutOutcome == .ownerChanged && signedOutFlag.markCallCount == 0,
+                   "m2: a sign-out during the await stamps nothing")
+
+            let controlCenter = FakeNotificationCenter(permission: .notRequested)
+            let controlFlag = FakeReminderPromptFlag()
+            let control = makeCoordinator(center: controlCenter, binding: { "owner-a" }, flag: controlFlag)
+            controlCenter.onAuthorizationState = {}
+            let controlOutcome = await control.promptForInvoiceRemindersIfNeeded()
+            expect(controlOutcome == .pendingUserChoice && controlFlag.markCallCount == 1,
+                   "m2 control: with a stable owner the same path stamps once and pends the soft-ask")
         }
 
         if failures == 0 {
