@@ -910,7 +910,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.10 | C1, C2, C3, C4 | **Code complete** | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
 | 10.11 | D1, D2, D3, D6 | **Code complete** | 10.04 | Today UI |
 | 10.12 | D4, D5, S5 | **Code complete** | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
-| 10.13 | C3, C4, C5 | Pending | 10.10, 10.12 | Coach UI + prefill |
+| 10.13 | C3, C4, C5 | **Code complete** | 10.10, 10.12 | Coach UI + prefill |
 | 10.14 | all | Pending | 10.01-10.13 | Cross-client qualification |
 | 10.15 | all | Pending | 10.14 | Aggregate verification + closeout |
 
@@ -2319,3 +2319,174 @@ no new test coverage was added and `run-all-domain-tests.sh` was not re-run.
 - Next-ready: **10.13** (Coach UI and contextual prefill) — `pendingCoachPrefill`/
   `installPendingCoachPrefill` are the exact one-shot handoff API it consumes
   and clears; 10.14 (cross-client qualification) once 10.13 lands.
+
+### 10.13 — Coach UI and contextual prefill
+
+- Status: **Code complete**. Requirements C3, C4, C5.
+- Files: new `native/TradeReadyNative/Domain/NativeCoachTranscript.swift`
+  (pure module: the transcript message shape, RN's `TextInput
+  maxLength={2000}` input-length guard as `NativeCoachInputLimit.clamp`, the
+  `Something went wrong: <message>` error-bubble copy as
+  `NativeCoachErrorBubble`, and the "AI reply gets `formatChatText`, the
+  user's own words stay verbatim" display-text rule plus the "New chat"
+  visibility gate as `NativeCoachTranscriptDisplay` — kept out of the
+  SwiftUI-importing view files for the same reason 10.12's
+  `NativeInsightsCardPolicy` is separate: `AppStore.swift` is compiled
+  standalone by several `swiftc` host-test runners with no SwiftUI files in
+  their list); new `native/TradeReadyNative/NativeCoachComponents.swift`
+  (presentation-only SwiftUI views — `NativeCoachQuickPromptGrid`,
+  `NativeCoachMessageBubble`, `NativeCoachTypingIndicator` — with an
+  Ionicons→SF-Symbol name mapping for the four quick-prompt icons, since SF
+  Symbols has no matching catalog); rewrote
+  `native/TradeReadyNative/CoachView.swift` (replaces the prototype
+  backend-only `enum CoachService`/one-line system prompt/static prompts
+  entirely — now routes through 10.10's `NativeCoachTransport`/
+  `NativeCoachPrompt`/`NativeChatMarkdown`/`NativeCoachQuickPrompts` plus this
+  task's own `NativeCoachTranscript`, all via new `AppStore` methods; adds a
+  `ScrollViewReader` auto-pin-to-latest-message so the plain top-to-bottom
+  `LazyVStack` reproduces RN's inverted-`FlatList`-over-reversed-data visual
+  result — see "Deviations" below); modified `AppStore.swift` (new
+  `private let coachTransport: NativeCoachTransport`, constructed once in
+  `init` — mirrors `NativeInvoiceDeliveryService`'s injectable-per-instance
+  shape — with a new `coachTransport:` init parameter for test injection;
+  `advisoryGroqKey` computed property mirroring the pre-existing
+  `advisoryAnthropicKey`; `coachBusinessSnapshot()` — the 10.09-ruling
+  on-demand-build fallback for `cachedBusinessSnapshot == nil`, reusing the
+  existing private `makeCachedBusinessSnapshot`, fails closed to `nil` with
+  no verified owner; `consumePendingCoachPrefill()` — the atomic
+  read-and-clear ruling R4 calls for, safe to call from both
+  `CoachView.onAppear` and `.onChange(of: pendingCoachPrefill)`;
+  `sendCoachMessage(history:)` — the one network-call seam, threading the
+  live canonical settings (falling back to `CanonicalUIAdapters.canonical(from:)`
+  of the published `BusinessSettings` only if the canonical snapshot has
+  never carried a settings record) and `coachBusinessSnapshot()` into
+  `NativeCoachPrompt.buildSystemPrompt`, and reusing the pre-existing
+  `scheduleBookingSessionBytes(explicit:)` seam (not a direct Keychain read)
+  for the session bytes so host tests never depend on live system Keychain
+  state; `coachTestSystemPrompt()` — test-only, proves the settings/snapshot
+  wiring without a network call; `trackCoachMessageSent(sourceIsInsightPrefill:)`
+  — RN's `ai_chat_sent` event, `source`/`provider` computed from the same
+  `NativeCoachTransport.provider(anthropicKey:groqKey:)` precedence rule
+  `sendCoachMessage` itself uses, so the two can never disagree;
+  `coachAdvisoryAnthropicKeyOverride`/`coachAdvisoryGroqKeyOverride` test
+  seams, mirroring `scheduleBookingSessionOverride`, consumed through new
+  private `effectiveAdvisoryAnthropicKey`/`effectiveAdvisoryGroqKey`
+  properties); modified `native/StoreIntegrationTests/main.swift` (new
+  `CoachTestLoader` fake — same shape as 10.10's `CoachTransportTests.FakeLoader`
+  — plus a full "Task 10.13" test section, see below); modified
+  `native/run-appstore-sources-common.sh` (added
+  `Domain/NativeCoachPrompt.swift`, `Domain/NativeCoachQuickPrompts.swift`,
+  `Domain/NativeChatMarkdown.swift`, `Domain/NativeCoachTranscript.swift`,
+  and `NativeCoachTransport.swift` to the shared source list — `AppStore.swift`
+  now depends on all five, and every runner that sources this shared list
+  compiles `AppStore.swift`).
+- Account-boundary note (no code change needed): `CoachView` keeps its
+  transcript entirely in `@State` — no coach text is ever stored on
+  `AppStore`. `RootView`'s top-level `switch` swaps `mainTabs` (which hosts
+  `CoachView`) out of the view tree whenever `authenticationGateState` leaves
+  `.signedIn`, and every real boundary (`applyCompletedSignOutState`,
+  `useAnotherAccount`, `applyRecoverySignedOutState`) sets it to `.signedOut`
+  — this deallocates `CoachView` and its transcript along with it, so the
+  next signed-in account gets a freshly constructed, empty `CoachView`. This
+  is the same mechanism every other per-account view-local `@State` in the
+  app already relies on; `resetTodayOwnerState()` (10.12) already clears
+  `pendingCoachPrefill` at all three boundaries, which this task reuses
+  unchanged.
+- Deviations from RN (recorded, not defects):
+  1. **Visual-parity-preserving rendering strategy, not a literal port.** RN
+     renders an inverted `FlatList` over `[...messages].reverse()` — a
+     scroll-anchoring/performance trick whose NET VISUAL RESULT is a plain
+     oldest-at-top, newest-at-bottom, auto-pinned-to-bottom chat list.
+     SwiftUI has no inverted-list primitive, so this renders `messages` in
+     plain chronological order inside a `LazyVStack` and reproduces the
+     auto-pin-to-bottom behavior with `ScrollViewReader.scrollTo(_:anchor:.bottom)`
+     on every message-count/sending change — the same thing the user sees,
+     built the idiomatic SwiftUI way instead of literally inverting a list.
+  2. **Ionicons→SF Symbol icon mapping is a new native addition.**
+     `NativeCoachQuickPrompt.icon` carries RN's Ionicons name string
+     (`"trending-up-outline"`, etc., from 10.10); SF Symbols has no matching
+     catalog, so `NativeCoachQuickPromptGrid.symbol(for:)` maps each of the
+     four known icon names to the closest SF Symbol once, with a `"sparkles"`
+     fallback for anything unmapped, rather than leaving the raw Ionicons
+     string to reach a SwiftUI `Label` and render nothing.
+  3. **Copy affordance uses a native `.alert`, not a toast.** RN's
+     `Alert.alert("Copied", "Message copied to clipboard.")` on long-press
+     maps directly to a SwiftUI `.alert("Copied", isPresented:)` — same
+     copy, same trigger (long-press, `onLongPressGesture(minimumDuration: 0.3)`
+     vs RN's `delayLongPress={300}`), platform-idiomatic presentation.
+  4. **`NativeCoachInputLimit.clamp` counts Swift grapheme clusters, not
+     UTF-16 code units.** RN's `TextInput maxLength={2000}` counts UTF-16
+     code units; no RN oracle test pins this specific limit (it isn't in the
+     brief's verification-commands list), so the small divergence for
+     multi-code-unit characters (emoji, some CJK) is accepted rather than
+     hand-rolling UTF-16 counting for an untested edge.
+  5. **Live-provider network calls remain deferred to Phase 12** per the
+     roadmap verification-deferral decision — `sendCoachMessage`'s provider
+     routing and request/response shapes are proven against an injected fake
+     loader (`CoachTestLoader`), never a live endpoint.
+- Tests: `native/StoreIntegrationTests/main.swift`'s new "Task 10.13" section
+  covers: `consumePendingCoachPrefill` fill-once-and-clear (including a
+  second consume, simulating both `.onAppear` and `.onChange` firing,
+  returning `nil` — never re-fires); `coachBusinessSnapshot()` fails closed
+  to `nil` with no verified owner and builds a real on-demand snapshot
+  (reflecting actually-seeded canonical data, not a static shell) for a
+  verified owner with no committed sync pass yet; `coachTestSystemPrompt()`
+  threading the live canonical settings/snapshot into 10.10's
+  `NativeCoachPrompt`; `sendCoachMessage` end to end through an injected
+  `CoachTestLoader` for BOTH the backend-proxy branch (session-bearer auth,
+  `api/ai-chat` path, reply text passthrough) and the Anthropic-key branch
+  (via `coachAdvisoryAnthropicKeyOverride`, hits `api.anthropic.com`, not the
+  backend) — proving `AppStore` actually reaches 10.10's transport with the
+  provider precedence rule correctly applied, not re-deriving the
+  already-fixture-pinned request/response formats; `trackCoachMessageSent`
+  firing `ai_chat_sent` with the exact `source`/`provider` properties for
+  both an insight-prefill and an organic send; and the pure
+  `NativeCoachTranscript` policy directly (`clamp` truncation at 2000,
+  under-limit passthrough, `NativeCoachErrorBubble` copy for two error
+  cases, user-text-stays-verbatim vs assistant-gets-`formatChatText`
+  display-text, and `shouldShowNewChat`'s empty/non-empty gate).
+- Commands / results:
+  - `TZ=America/Phoenix sh native/run-store-integration-tests.sh` —
+    `PASS: canonical AppStore integration tests` (includes the new 10.13
+    section).
+  - `TZ=America/Phoenix sh native/run-coach-transport-tests.sh` —
+    `CoachTransportTests: all checks passed` (10.10 regression, unaffected).
+  - `TZ=America/Phoenix sh native/run-coach-prompt-tests.sh` —
+    `CoachPromptTests: all checks passed` (10.10 regression, unaffected).
+  - `TZ=America/Phoenix sh native/run-chat-markdown-tests.sh` —
+    `ChatMarkdownTests: all checks passed` (10.10 regression, unaffected).
+  - `TZ=America/Phoenix sh native/run-all-domain-tests.sh` — every Swift
+    host-test runner passed, plus the 26 backend-workers tests it chains (0
+    failures).
+  - `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme
+    TradeReadyNative -configuration Release -destination
+    'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` — **BUILD
+    SUCCEEDED**, 0 `error:` lines.
+  - `sh native/run-doc-reference-check.sh` — `945 path references checked: 0
+    missing, 54 planned (not yet created).`
+- Self-review: confirmed the staged file set (`git status --short`) matches
+  only files this task touched — three new files
+  (`NativeCoachTranscript.swift`, `NativeCoachComponents.swift`, and the
+  `StoreIntegrationTests`/`run-appstore-sources-common.sh` edits are
+  modifications, not new files), the rewritten `CoachView.swift`, the
+  `AppStore.swift` additions, and this doc; no unrelated in-flight work
+  (backend-workers/backend/supabase changes visible in `git status` at
+  session start) was touched. Confirmed via `git diff --stat` on
+  `native/run-appstore-sources-common.sh` before editing that no other
+  concurrent agent had already modified it (per the coordinator's
+  in-session heads-up about another session touching `NativeImportHistory`
+  in `run-*.sh` files) — it was clean, and the diff after my edit is a
+  single five-line addition.
+- Concerns / limitations: `NativeCoachInputLimit.clamp`'s grapheme-cluster
+  (not UTF-16 code-unit) counting is a known, accepted small divergence from
+  RN's `TextInput maxLength` for multi-code-unit characters (deviation 4
+  above). The Ionicons→SF-Symbol icon map (deviation 2) only covers the four
+  icon names 10.10's `NativeCoachQuickPrompts` currently emits; a future
+  fifth quick-prompt icon would silently fall back to `"sparkles"` rather
+  than fail to compile — acceptable for a presentation-only mapping, but
+  worth a grep if `NativeCoachQuickPrompts` ever grows a new icon. Device,
+  permission, and live-AI-provider proof remain deferred to Phase 12 per the
+  roadmap's verification-deferral decision, unchanged by this task.
+- Next-ready: **10.14** (cross-client and hosted-contract qualification) —
+  Coach UI now has a real transport/prompt/prefill path to qualify against
+  the RN oracle end to end.

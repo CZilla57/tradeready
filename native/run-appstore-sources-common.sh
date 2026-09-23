@@ -93,6 +93,11 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeReceiptMedia.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativePricebook.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTaxSettings.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeBusinessSnapshot.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCoachPrompt.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCoachQuickPrompts.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeChatMarkdown.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCoachTranscript.swift
+$ROOT_DIR/native/TradeReadyNative/NativeCoachTransport.swift
 $ROOT_DIR/native/TradeReadyNative/NativeReceiptOCR.swift
 $ROOT_DIR/native/TradeReadyNative/NativePricebookAI.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAITransport.swift

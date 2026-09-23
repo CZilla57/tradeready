@@ -4133,6 +4133,175 @@ struct StoreIntegrationTests {
                    "10.12 fix1 minor: the notifications task also fires setup_checklist_task_opened, matching RN")
         }
 
+        // MARK: - Task 10.13: Coach UI and contextual prefill.
+
+        // Prefill fill-and-clear (ruling R4): one atomic read-and-clear that
+        // both call sites (`.onAppear`, `.onChange`) can call unconditionally.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "1013-prefill")
+            expect(store.consumePendingCoachPrefill() == nil,
+                   "10.13 consumePendingCoachPrefill returns nil when nothing is pending")
+            store.installPendingCoachPrefill("Why is this job low margin?")
+            expect(store.pendingCoachPrefill == "Why is this job low margin?",
+                   "10.13 sanity: installPendingCoachPrefill (10.12) still sets the published value")
+            let consumed = store.consumePendingCoachPrefill()
+            expect(consumed == "Why is this job low margin?",
+                   "10.13 consumePendingCoachPrefill returns the installed prompt")
+            expect(store.pendingCoachPrefill == nil,
+                   "10.13 consumePendingCoachPrefill clears the one-shot value immediately")
+            expect(store.consumePendingCoachPrefill() == nil,
+                   "10.13 a second consume (simulating both .onAppear AND .onChange firing) returns nil — it never re-fires")
+        }
+
+        // Business-snapshot cold start (10.09 ruling): fails closed to nil
+        // with no verified owner; builds one on demand — reflecting the
+        // ACTUAL seeded canonical data, not a static empty shell — when an
+        // owner exists but no sync pass has published `cachedBusinessSnapshot`
+        // yet.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "1013-snapshot-noowner")
+            expect(store.cachedBusinessSnapshot == nil,
+                   "10.13 sanity: no committed sync pass has published a cached snapshot yet")
+            expect(store.coachBusinessSnapshot() == nil,
+                   "10.13 coachBusinessSnapshot fails closed to nil with no verified owner, rather than building on demand for an unauthenticated session")
+
+            let (ownedStore, _) = try seed08Store(
+                customers: [customer1012(id: "cust-1013", name: "Snapshot Co")],
+                settings: settings08(), tag: "1013-snapshot-owner"
+            )
+            seed08Owner(ownedStore, subject: "user-1013", binding: "bind-1013")
+            expect(ownedStore.cachedBusinessSnapshot == nil,
+                   "10.13 sanity: still no committed sync pass on the owned store")
+            let onDemand = ownedStore.coachBusinessSnapshot()
+            expect(onDemand != nil,
+                   "10.13 coachBusinessSnapshot builds one on demand for a verified owner instead of showing no quick prompts")
+            expect(onDemand?.aggregate.totalCustomers == 1,
+                   "10.13 the on-demand snapshot reflects the ACTUAL seeded canonical data (1 customer), not a static empty shell")
+        }
+
+        // System-prompt wiring: `coachTestSystemPrompt()` proves
+        // `sendCoachMessage` actually threads the live canonical settings +
+        // on-demand snapshot into 10.10's `NativeCoachPrompt` — the format
+        // itself is 10.10's own pinned fixture, not re-verified here.
+        do {
+            let (store, _) = try seed08Store(
+                customers: [customer1012(id: "cust-prompt", name: "Prompt Co")],
+                settings: settings08(), tag: "1013-system-prompt"
+            )
+            seed08Owner(store, subject: "user-prompt", binding: "bind-prompt")
+            let prompt = store.coachTestSystemPrompt()
+            expect(prompt?.contains("Ada Electric") == true,
+                   "10.13 coachTestSystemPrompt threads the live canonical businessName into NativeCoachPrompt")
+            expect(prompt?.contains("BUSINESS DATA") == true,
+                   "10.13 coachTestSystemPrompt passes a non-nil on-demand snapshot, so the BUSINESS DATA block is present")
+        }
+
+        // Provider-routing + transport wiring end to end through
+        // `sendCoachMessage`, using the coach-key/session TEST OVERRIDES
+        // (never the real Keychain) and an injected fake loader — 10.10
+        // already pins the per-provider request/response fixtures; this
+        // proves `AppStore` actually reaches that transport with the right
+        // provider selected, not a re-derivation of the format rules.
+        do {
+            let loader = CoachTestLoader()
+            loader.responseData = Data(#"{"text":"Backend reply"}"#.utf8)
+            let coachTransport = NativeCoachTransport(
+                backendBaseURL: URL(string: "https://backend.invalid")!, loader: loader
+            )
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1013-backend-\(UUID().uuidString)", isDirectory: true)
+            let url = dir.appendingPathComponent("store.json")
+            try Canonical.SnapshotRepository(primaryURL: url).save(
+                Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings08()))
+            )
+            let recorder = RecordingAnalytics()
+            let store = AppStore(fileURL: url, seedIfMissing: false,
+                                 subscriptionService: StoreSubscriptionServiceStub(),
+                                 coachTransport: coachTransport, analytics: recorder)
+            seed08Owner(store, subject: "user-backend", binding: "bind-backend")
+            // Force the backend branch deterministically regardless of what
+            // (if anything) the real Keychain holds on the machine running
+            // this test.
+            store.coachAdvisoryAnthropicKeyOverride = ""
+            store.coachAdvisoryGroqKeyOverride = ""
+
+            let reply = try await store.sendCoachMessage(
+                history: [NativeCoachMessage(role: .user, text: "How's my month?")]
+            )
+            expect(reply == "Backend reply", "10.13 sendCoachMessage returns the backend transport's reply verbatim")
+            expect(loader.lastRequest?.url?.path.contains("api/ai-chat") == true,
+                   "10.13 sendCoachMessage routes to the backend proxy when no client key is set")
+            expect(loader.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer test-session-token",
+                   "10.13 sendCoachMessage authenticates the backend call with the current session bearer token")
+
+            store.trackCoachMessageSent(sourceIsInsightPrefill: true)
+            expect(recorder.calls.contains {
+                $0.event == "ai_chat_sent" && $0.properties["source"] == "insight_prefill" && $0.properties["provider"] == "backend"
+            }, "10.13 trackCoachMessageSent(sourceIsInsightPrefill: true) fires ai_chat_sent with source=insight_prefill and the exact routed provider")
+
+            store.trackCoachMessageSent(sourceIsInsightPrefill: false)
+            expect(recorder.calls.contains {
+                $0.event == "ai_chat_sent" && $0.properties["source"] == "organic" && $0.properties["provider"] == "backend"
+            }, "10.13 trackCoachMessageSent(sourceIsInsightPrefill: false) fires ai_chat_sent with source=organic")
+        }
+
+        // The Anthropic-key branch, still through the same `sendCoachMessage`
+        // seam — proves the override actually changes which provider is
+        // selected, not just that the backend path works.
+        do {
+            let loader = CoachTestLoader()
+            loader.responseData = Data(#"{"content":[{"type":"text","text":"Hello from Claude"}]}"#.utf8)
+            let coachTransport = NativeCoachTransport(backendBaseURL: nil, loader: loader)
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1013-anthropic-\(UUID().uuidString)", isDirectory: true)
+            let url = dir.appendingPathComponent("store.json")
+            try Canonical.SnapshotRepository(primaryURL: url).save(
+                Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings08()))
+            )
+            let anthropicStore = AppStore(fileURL: url, seedIfMissing: false,
+                                          subscriptionService: StoreSubscriptionServiceStub(),
+                                          coachTransport: coachTransport)
+            anthropicStore.scheduleBookingTestSeedSignedInOwner(subject: "user-anthropic", binding: "bind-anthropic")
+            anthropicStore.coachAdvisoryAnthropicKeyOverride = "test-anthropic-key"
+            anthropicStore.coachAdvisoryGroqKeyOverride = ""
+
+            let reply = try await anthropicStore.sendCoachMessage(
+                history: [NativeCoachMessage(role: .user, text: "Help me price a job")]
+            )
+            expect(reply == "Hello from Claude", "10.13 sendCoachMessage routes to Anthropic when an Anthropic key override is set")
+            expect(loader.lastRequest?.url?.host == "api.anthropic.com",
+                   "10.13 sendCoachMessage's Anthropic branch hits the Anthropic endpoint, not the backend proxy")
+        }
+
+        // Pure transcript/limit/error-bubble policy (this task's own module,
+        // `NativeCoachTranscript.swift`) — no AppStore/network involvement.
+        do {
+            let longInput = String(repeating: "a", count: 2500)
+            expect(NativeCoachInputLimit.clamp(longInput).count == 2000,
+                   "10.13 NativeCoachInputLimit.clamp truncates to RN's TextInput maxLength={2000}")
+            let shortInput = "hi there"
+            expect(NativeCoachInputLimit.clamp(shortInput) == shortInput,
+                   "10.13 NativeCoachInputLimit.clamp leaves input under the limit untouched")
+
+            expect(NativeCoachErrorBubble.text(for: .missingAnthropicKey)
+                   == "Something went wrong: No AI key set. Add your Anthropic API key in Settings → AI Assistant.",
+                   "10.13 NativeCoachErrorBubble mirrors RN's `Something went wrong: ${msg}` catch-block copy exactly")
+            expect(NativeCoachErrorBubble.text(for: .unavailable) == "Something went wrong: AI error",
+                   "10.13 NativeCoachErrorBubble covers the transport-level .unavailable case too")
+
+            let userMessage = NativeCoachTranscriptMessage(id: "1", role: .user, text: "**not bold for me**")
+            expect(NativeCoachTranscriptDisplay.displayText(for: userMessage) == "**not bold for me**",
+                   "10.13 the user's own words are rendered verbatim, never markdown-formatted")
+            let aiMessage = NativeCoachTranscriptMessage(id: "2", role: .assistant, text: "**bold** and\n- a bullet")
+            expect(NativeCoachTranscriptDisplay.displayText(for: aiMessage) == "bold and\n\u{2022} a bullet",
+                   "10.13 an assistant reply is rendered through NativeChatMarkdown.formatChatText (10.10) — bold stripped, and a LINE-LEADING bullet becomes \u{2022}")
+
+            expect(NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: 0) == false,
+                   "10.13 New chat stays hidden with an empty transcript")
+            expect(NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: 1) == true,
+                   "10.13 New chat appears once any message exists, matching RN's messages.length > 0")
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }
@@ -4165,6 +4334,24 @@ private final class ScheduleBookingTestDelta: NativeInitialSyncServing, NativeDe
         if let handler { return handler(localSnapshot, cursor) }
         return NativeDeltaPullOutcome(snapshot: localSnapshot, cursor: cursor,
                                       failedTables: [], lastDiagnosticCode: nil)
+    }
+}
+
+/// Records the last request it served and returns a canned (data, status) —
+/// task 10.13's `AppStore.sendCoachMessage` wiring tests inject this in
+/// place of the live `URLSession` loader (same shape as 10.10's
+/// `CoachTransportTests.FakeLoader`).
+private final class CoachTestLoader: NativeCoachHTTPDataLoading, @unchecked Sendable {
+    var responseData: Data = Data()
+    var status: Int = 200
+    private(set) var lastRequest: URLRequest?
+    private(set) var requestCount = 0
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        lastRequest = request
+        requestCount += 1
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        return (responseData, response)
     }
 }
 

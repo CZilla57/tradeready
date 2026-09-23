@@ -1,87 +1,185 @@
 import SwiftUI
 
-struct CoachMessage: Identifiable { let id = UUID(); let role: Role; let text: String; enum Role { case user, assistant } }
-
+// MARK: - Coach UI and contextual prefill (task 10.13, requirements C3/C4/C5)
+//
+// Port of `screens/ChatScreen.tsx`. All policy lives elsewhere — 10.10's
+// `NativeCoachTransport`/`NativeCoachPrompt`/`NativeChatMarkdown`/
+// `NativeCoachQuickPrompts`, this task's own pure `NativeCoachTranscript`,
+// and `AppStore.sendCoachMessage`/`consumePendingCoachPrefill`/
+// `coachBusinessSnapshot`/`trackCoachMessageSent` — this view only renders
+// and wires callbacks.
+//
+// Account-boundary note: this view carries NO AppStore-persisted transcript
+// state. `RootView`'s top-level switch swaps `mainTabs` (which hosts this
+// view) out entirely whenever `authenticationGateState` leaves `.signedIn`
+// (every real sign-out/account-switch path sets it to `.signedOut` via
+// `applyCompletedSignOutState`/`useAnotherAccount`/
+// `applyRecoverySignedOutState`), which deallocates this view and its
+// `@State` transcript along with it — the next signed-in account gets a
+// freshly constructed `CoachView` with an empty transcript. No transcript
+// text can leak across accounts because none of it is ever stored on
+// `AppStore`.
 struct CoachView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var messages: [CoachMessage] = []
+    @State private var messages: [NativeCoachTranscriptMessage] = []
     @State private var input = ""
     @State private var sending = false
+    /// RN's `prefillPending` ref: marks the NEXT send as insight-originated
+    /// for the `ai_chat_sent` `source` property. Reset the instant a send
+    /// starts, exactly like RN's `prefillPending.current = false`.
+    @State private var prefillIsInsightOriginated = false
+    @State private var copiedAlertText: String?
+
+    private var quickPrompts: [NativeCoachQuickPrompt] {
+        NativeCoachQuickPrompts.quickPrompts(snapshot: store.coachBusinessSnapshot())
+    }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 if messages.isEmpty {
-                    VStack(spacing: 24) {
-                        Spacer()
-                        VStack(spacing: 10) {
-                            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.secondary)
-                            Text("Your business coach").font(.title2.bold())
-                            Text("Ask about pricing, overdue invoices, or what to focus on next.")
-                                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        }
-                        VStack(spacing: 10) {
-                            prompt("How’s my business doing?", "chart.line.uptrend.xyaxis")
-                            prompt("Who should I follow up with?", "person.crop.circle.badge.questionmark")
-                            prompt("Help me price a job", "tag")
-                        }
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 24)
+                    emptyState
                 } else {
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(messages) { message in
-                                HStack {
-                                    if message.role == .assistant {
-                                        bubble(message, color: Color(.secondarySystemBackground))
-                                        Spacer(minLength: 42)
-                                    } else {
-                                        Spacer(minLength: 42)
-                                        bubble(message, color: .tradeReady.opacity(0.18))
-                                    }
-                                }
-                            }
-                        }
-                        .padding()
-                    }
+                    transcript
                 }
-                Spacer(minLength: 0)
-                HStack(alignment: .bottom) { TextField("Ask your coach", text: $input, axis: .vertical).lineLimit(1...5).textFieldStyle(.roundedBorder); Button { send() } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending) }.padding().background(.bar)
+                composer
             }
             .navigationTitle("Coach")
-            .toolbar { if !messages.isEmpty { Button("New chat") { messages = [] } } }
+            .toolbar {
+                if NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: messages.count) {
+                    Button("New chat") { messages = [] }
+                }
+            }
+            .onAppear { consumePrefillIfNeeded() }
+            .onChange(of: store.pendingCoachPrefill) { _, _ in consumePrefillIfNeeded() }
+            .alert("Copied", isPresented: Binding(
+                get: { copiedAlertText != nil },
+                set: { if !$0 { copiedAlertText = nil } }
+            )) {
+                Button("OK", role: .cancel) { copiedAlertText = nil }
+            } message: {
+                Text("Message copied to clipboard.")
+            }
         }
     }
 
-    private func prompt(_ text: String, _ symbol: String) -> some View { Button { input = text; send(text) } label: { Label(text, systemImage: symbol).frame(maxWidth: .infinity, alignment: .leading).padding().background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14)) }.buttonStyle(.plain) }
-    private func bubble(_ message: CoachMessage, color: Color) -> some View { Text(message.text).textSelection(.enabled).padding(12).background(color, in: RoundedRectangle(cornerRadius: 16)) }
+    private var emptyState: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                VStack(spacing: 10) {
+                    Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("AI Business Advisor").font(.title2.bold())
+                    Text("Ask about your revenue, jobs, customers, or anything else about running your business.")
+                        .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                NativeCoachQuickPromptGrid(prompts: quickPrompts) { prompt in
+                    send(override: prompt.text)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 48)
+        }
+    }
 
-    private func send(_ override: String? = nil) {
-        let text = (override ?? input).trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }
-        input = ""; messages.append(CoachMessage(role: .user, text: text)); sending = true
+    /// RN uses an inverted `FlatList` over the reversed message array purely
+    /// as a scroll-anchoring/performance trick — visually it reads exactly
+    /// like a plain oldest-at-top, newest-at-bottom, auto-pinned-to-bottom
+    /// chat list. This renders `messages` in that same natural chronological
+    /// order and reproduces the auto-pin with `ScrollViewReader` instead.
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(messages) { message in
+                        NativeCoachMessageBubble(message: message) { copiedText in
+                            UIPasteboard.general.string = copiedText
+                            copiedAlertText = copiedText
+                        }
+                        .id(message.id)
+                    }
+                    if sending {
+                        NativeCoachTypingIndicator().id("typing")
+                    }
+                }
+                .padding()
+            }
+            .onChange(of: messages.count) { _, _ in scrollToLatest(proxy) }
+            .onChange(of: sending) { _, _ in scrollToLatest(proxy) }
+            .onAppear { scrollToLatest(proxy) }
+        }
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        let target = sending ? "typing" : messages.last?.id
+        guard let target else { return }
+        withAnimation { proxy.scrollTo(target, anchor: .bottom) }
+    }
+
+    private var composer: some View {
+        HStack(alignment: .bottom) {
+            TextField("Ask anything...", text: $input, axis: .vertical)
+                .lineLimit(1...5)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Chat message input")
+                .onChange(of: input) { _, newValue in
+                    let clamped = NativeCoachInputLimit.clamp(newValue)
+                    if clamped != newValue { input = clamped }
+                }
+            Button { send() } label: {
+                Image(systemName: "arrow.up.circle.fill").font(.title)
+            }
+            .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
+            .accessibilityLabel("Send message")
+        }
+        .padding()
+        .background(.bar)
+    }
+
+    /// RN's prefill `useEffect`: fill the input once and clear the pending
+    /// value so it can never re-fire. Called from BOTH `.onAppear` (the view
+    /// mounts after `AppStore.installPendingCoachPrefill` already ran — the
+    /// common "Ask coach" path, which switches tabs before this view even
+    /// exists) and `.onChange(of: store.pendingCoachPrefill)` (this view is
+    /// already on screen when a prefill is installed). `consumePendingCoachPrefill`
+    /// is safe to call from both: it returns `nil` on the second call.
+    private func consumePrefillIfNeeded() {
+        guard let prompt = store.consumePendingCoachPrefill() else { return }
+        input = NativeCoachInputLimit.clamp(prompt)
+        prefillIsInsightOriginated = true
+    }
+
+    private func send(override: String? = nil) {
+        let text = NativeCoachInputLimit.clamp((override ?? input).trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !text.isEmpty, !sending else { return }
+
+        store.trackCoachMessageSent(sourceIsInsightPrefill: prefillIsInsightOriginated)
+        prefillIsInsightOriginated = false
+        input = ""
+
+        let userMessage = NativeCoachTranscriptMessage(id: UUID().uuidString, role: .user, text: text)
+        var history = messages
+        history.append(userMessage)
+        messages = history
+        sending = true
+
         Task {
-            do { let reply = try await CoachService.reply(to: text, history: messages, store: store); messages.append(CoachMessage(role: .assistant, text: reply)) }
-            catch { messages.append(CoachMessage(role: .assistant, text: "I couldn’t reach the coach right now. \(error.localizedDescription)")) }
+            do {
+                let reply = try await store.sendCoachMessage(
+                    history: history.map { NativeCoachMessage(role: $0.role == .user ? .user : .assistant, text: $0.text) }
+                )
+                messages.append(NativeCoachTranscriptMessage(id: UUID().uuidString, role: .assistant, text: reply))
+            } catch let error as NativeCoachTransportError {
+                messages.append(NativeCoachTranscriptMessage(
+                    id: UUID().uuidString, role: .assistant,
+                    text: NativeCoachErrorBubble.text(for: error), isError: true
+                ))
+            } catch {
+                messages.append(NativeCoachTranscriptMessage(
+                    id: UUID().uuidString, role: .assistant,
+                    text: NativeCoachErrorBubble.text(forUntyped: error), isError: true
+                ))
+            }
             sending = false
         }
-    }
-}
-
-enum CoachService {
-    @MainActor
-    static func reply(to text: String, history: [CoachMessage], store: AppStore) async throws -> String {
-        let url = try BuildEnvironment.endpoint("api/ai-chat", sendsUserData: true)
-        var request = URLRequest(url: url); request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let outstanding = store.invoices.reduce(0) { $0 + $1.balance }
-        let system = "Assistant for \(store.settings.businessName), a \(store.settings.trade) business. Labor is \(store.settings.laborRate.currency)/hr. Outstanding invoices: \(outstanding.currency). Be brief and practical."
-        let body: [String: Any] = ["messages": history.map { ["role": $0.role == .user ? "user" : "assistant", "text": $0.text] }, "systemPrompt": system]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw URLError(.badServerResponse) }
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let reply = (json?["reply"] ?? json?["message"] ?? json?["content"]) as? String else { throw URLError(.cannotParseResponse) }
-        return reply
     }
 }

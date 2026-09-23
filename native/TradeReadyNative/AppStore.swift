@@ -297,6 +297,11 @@ final class AppStore: ObservableObject {
     /// and previews never touch the network; defaults to the live client-key +
     /// backend-bearer implementation.
     private let advisoryAITransport: any NativeAdvisoryAITransport
+    /// Task 10.13 (C1): the coach transport, constructed once (mirrors
+    /// `NativeInvoiceDeliveryService`'s injectable-per-instance shape).
+    /// Injectable so host tests exercise `sendCoachMessage` without a live
+    /// network call.
+    private let coachTransport: NativeCoachTransport
     private var jobPhotoTransferInFlight = false
     private var initialSyncGateGeneration: UInt64 = 0
     private var initialSyncCompletedSubject: String?
@@ -315,6 +320,13 @@ final class AppStore: ObservableObject {
     /// Task 8.08 test seam: explicit sync credentials so the verified-pull
     /// half of intake exercises without a live Keychain session.
     var scheduleBookingTestCredentials: NativeSyncCredentials?
+    /// Task 10.13 test seam: overrides for the coach provider keys so host
+    /// tests can force each provider-precedence branch deterministically,
+    /// the same way `scheduleBookingSessionOverride` avoids the real
+    /// Keychain for the session bytes. `nil` (the default) falls through to
+    /// `advisoryAnthropicKey`/`advisoryGroqKey`.
+    var coachAdvisoryAnthropicKeyOverride: String?
+    var coachAdvisoryGroqKeyOverride: String?
 
     private enum PostSubscriptionDestination {
         case startingPoint(NativeTypedAccountState.Trade)
@@ -360,6 +372,7 @@ final class AppStore: ObservableObject {
         changeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)? = nil,
         invoiceDeliveryService: (any NativeInvoiceDelivering)? = nil,
         advisoryAITransport: (any NativeAdvisoryAITransport)? = nil,
+        coachTransport: NativeCoachTransport? = nil,
         analytics: NativeAnalytics = NativeNoOpAnalytics()
     ) {
         self.analytics = analytics
@@ -374,6 +387,7 @@ final class AppStore: ObservableObject {
         self.injectedChangeOrderApprovalLinkService = changeOrderApprovalLinkService
         self.injectedInvoiceDeliveryService = invoiceDeliveryService
         self.advisoryAITransport = advisoryAITransport ?? NativeAITransport.live()
+        self.coachTransport = coachTransport ?? NativeCoachTransport(backendBaseURL: BuildEnvironment.backendBaseURL)
         self.migrationJournal = Canonical.MigrationJournal(
             fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("migration-journal.json")
         )
@@ -5535,6 +5549,21 @@ final class AppStore: ObservableObject {
     /// pass; cleared at the account boundary.
     var cachedBusinessSnapshot: NativeBusinessSnapshot? { derivedStatePublisher.cachedSnapshot }
 
+    /// Task 10.13 / 10.09 ruling: `cachedBusinessSnapshot` is populated only
+    /// after a committed sync pass this session — coach cold start (before
+    /// any pass has completed) would otherwise show no quick prompts and no
+    /// business-data block in the system prompt. Builds the snapshot on
+    /// demand from the current in-memory canonical snapshot instead, through
+    /// the same 10.01 builder `derivedStatePublisher` itself uses. Fails
+    /// closed to `nil` with no verified owner — `NativeCoachQuickPrompts`
+    /// and `NativeCoachPrompt` both already treat `nil` as their documented
+    /// "no data yet" fallback, never a crash.
+    func coachBusinessSnapshot() -> NativeBusinessSnapshot? {
+        if let cached = cachedBusinessSnapshot { return cached }
+        guard verifiedAccountBinding != nil else { return nil }
+        return makeCachedBusinessSnapshot(from: snapshot, now: Date())
+    }
+
     /// Task 10.09 output (b): the registration point the Phase 11 widget
     /// mirror (11.01) plugs into. No widget code lives here — this is only
     /// the seam. Returns a token for `unregisterDerivedStateObserver`.
@@ -7680,6 +7709,16 @@ extension AppStore {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// The user's own Groq key, read from the secure store — mirrors
+    /// `advisoryAnthropicKey` exactly (task 10.13, coach provider routing).
+    var advisoryGroqKey: String? {
+        guard let bytes = try? NativeKeychainSecureSettingsStore().backend.read(key: "groqKey"),
+              let value = String(data: bytes, encoding: .utf8)
+        else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Advisory receipt extraction. NEVER throws and never writes: nil means the
     /// editor keeps manual entry untouched. The blocking transport call runs off
     /// the main actor so a slow network cannot freeze the sheet.
@@ -8249,6 +8288,87 @@ extension AppStore {
     func installPendingCoachPrefill(_ prompt: String) {
         pendingCoachPrefill = prompt
         selectedTab = .coach
+    }
+
+    /// Task 10.13 (ruling R4): atomically reads and clears the one-shot
+    /// coach prefill so `CoachView` can call this from BOTH `.onAppear`
+    /// (view mounts after the prefill was already installed) and
+    /// `.onChange(of: pendingCoachPrefill)` (view is already on screen when
+    /// an insight installs one) without ever filling the input twice or
+    /// re-firing after the first consume. Returns `nil` when nothing is
+    /// pending — safe to call unconditionally from both call sites.
+    @discardableResult
+    func consumePendingCoachPrefill() -> String? {
+        guard let prompt = pendingCoachPrefill else { return nil }
+        pendingCoachPrefill = nil
+        return prompt
+    }
+
+    /// Task 10.13 (C1/C2): one coach turn, routed through 10.10's transport.
+    /// `history` must already include the just-appended user message —
+    /// `MAX_HISTORY` slicing happens inside `NativeCoachTransport`, so this
+    /// method does not re-slice or otherwise touch the transcript.
+    func sendCoachMessage(history: [NativeCoachMessage]) async throws -> String {
+        guard let canonicalSettings = coachCanonicalSettings() else {
+            throw NativeCoachTransportError.unavailable
+        }
+        let systemPrompt = NativeCoachPrompt.buildSystemPrompt(
+            settings: canonicalSettings, snapshot: coachBusinessSnapshot()
+        )
+        // Reuses the same test-only override seam `scheduleBookingSessionBytes`
+        // already established (falls back to the real Keychain read when no
+        // override is set) rather than reading the Keychain directly, so host
+        // tests never depend on live system Keychain state.
+        let sessionBytes = scheduleBookingSessionBytes(explicit: nil)
+        return try await coachTransport.sendMessage(
+            messages: history,
+            systemPrompt: systemPrompt,
+            anthropicKey: effectiveAdvisoryAnthropicKey ?? "",
+            groqKey: effectiveAdvisoryGroqKey ?? "",
+            sessionBytes: sessionBytes
+        )
+    }
+
+    /// Test-only (task 10.13): the exact system prompt `sendCoachMessage`
+    /// would build for the current canonical settings + business snapshot,
+    /// without making a network call — proves the wiring (which settings,
+    /// which snapshot) independently of 10.10's own `NativeCoachPrompt`
+    /// format fixtures.
+    func coachTestSystemPrompt() -> String? {
+        guard let canonicalSettings = coachCanonicalSettings() else { return nil }
+        return NativeCoachPrompt.buildSystemPrompt(settings: canonicalSettings, snapshot: coachBusinessSnapshot())
+    }
+
+    private var effectiveAdvisoryAnthropicKey: String? { coachAdvisoryAnthropicKeyOverride ?? advisoryAnthropicKey }
+    private var effectiveAdvisoryGroqKey: String? { coachAdvisoryGroqKeyOverride ?? advisoryGroqKey }
+
+    /// The canonical settings for the coach system prompt. Prefers the live
+    /// in-memory canonical snapshot (so the exact trade id / rate values
+    /// match what the rest of the app just synced); falls back to converting
+    /// the published `BusinessSettings` projection only in the rare case the
+    /// canonical snapshot has never carried a settings record (e.g.
+    /// `applyEmptySnapshot()`'s bootstrap state before onboarding completes).
+    private func coachCanonicalSettings() -> Canonical.Settings? {
+        if let existing = snapshot.payload.settings { return existing }
+        return try? CanonicalUIAdapters.canonical(from: settings)
+    }
+
+    /// RN's `ai_chat_sent` event (`screens/ChatScreen.tsx#send`). `source`
+    /// distinguishes an insight-originated prefill from an organic send
+    /// (ruling R4); `provider` mirrors RN's `settings?.anthropicKey ?
+    /// 'anthropic' : settings?.groqKey ? 'groq' : 'backend'` via 10.10's own
+    /// provider-precedence rule, so the two can never disagree.
+    func trackCoachMessageSent(sourceIsInsightPrefill: Bool) {
+        let provider: String
+        switch NativeCoachTransport.provider(anthropicKey: effectiveAdvisoryAnthropicKey ?? "", groqKey: effectiveAdvisoryGroqKey ?? "") {
+        case .anthropic: provider = "anthropic"
+        case .groq: provider = "groq"
+        case .backend: provider = "backend"
+        }
+        analytics.track("ai_chat_sent", [
+            "source": sourceIsInsightPrefill ? "insight_prefill" : "organic",
+            "provider": provider,
+        ])
     }
 
     /// Installs a one-shot settings deep-link (the checklist card's task tap)
