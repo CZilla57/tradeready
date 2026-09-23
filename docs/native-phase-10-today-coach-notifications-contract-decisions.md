@@ -700,6 +700,29 @@ Insight kinds not re-exercised in the new fixture (`labor_overrun`,
 against the RN oracle exhaustively in `TodayInsightsTests` (task 10.02);
 10.14 references that coverage rather than duplicating it, per the brief.
 
+**REFERENCED, not exercised fresh — post-sync-commit derived-state seam
+(task 10.09, requirement B1).** `NativeDerivedStatePublisher` firing the
+notification-reconcile hook, the widget-mirror observer notification, and
+the cached business-snapshot refresh **exactly once per committed canonical
+sync commit** (never on `.alreadyRunning`, offline, signed-out, or a
+pre-commit failure) is not re-derived by this fixture. The publisher's own
+contract — failure isolation, owner-identity re-verification, the
+stale-resume generation guard, the register/cache surface — is unit-tested
+in `native/BackgroundRefreshTests/main.swift` ("Task 10.09 (B1):
+NativeDerivedStatePublisher seam matrix", run via
+`native/run-background-refresh-tests.sh`). The higher-level "exactly once
+per committed commit" guarantee across AppStore's actual commit call sites
+(`pullDeltaIfPossible`, `runBookingIntakeAfterVerifiedPull`'s local commit,
+and the initial-sync commit in `beginInitialSyncGate`) is
+integration-tested in `native/StoreIntegrationTests/main.swift` ("Task
+10.09 (B1): AppStore's derived-state seam wiring", plus its "fix round 1:
+real call-site coverage" and "fix round 2: initial-sync publish ordering"
+sections), run via `native/run-store-integration-tests.sh`. Both runner
+scripts exist and pass as of this task; `Phase10QualificationTests`'s
+business-snapshot and coach seam tests (§S1/S2) exercise the *data* this
+hook refreshes, not the hook's own firing discipline, which is why this is
+recorded as REFERENCED rather than re-tested here.
+
 ### 16.1 Recorded deviations (evidence)
 
 1. **`weekMonthLabel` / FA-039 (task 10.04).** RN's `utils/dateHelpers.ts`
@@ -767,9 +790,10 @@ against the RN oracle exhaustively in `TodayInsightsTests` (task 10.02);
 ### 16.2 Determinism and idempotency proofs
 
 - **Deterministic daily surface:** the same fixture run twice through
-  `NativeBusinessSnapshotEngine.aggregate` and `NativeTodayInsights.select`
+  `NativeBusinessSnapshotEngine.aggregate`, `NativeTodayInsights.select`, and
+  `NativeSetupChecklistInput.tasks(state:notificationsGranted:)` (checklist)
   produces `Equatable`-equal results both times (`Phase10QualificationTests`
-  §1, §2).
+  §1, §2, §3).
 - **Idempotent scheduling (B2):** a coordinator wired with all five owned
   namespaces (`est_`, `appt_`, `review_`, `inv_`, `rinv_`) reconciled twice
   from the identical fixture produces the identical pending-identifier set
@@ -799,6 +823,35 @@ TZ=America/Phoenix sh native/run-all-domain-tests.sh
 #    host-test runner plus the backend-workers node --test suite)
 ```
 
+**Fix round 1 (evidence/documentation only — implementation was already
+sound):**
+
+```sh
+sh native/run-phase10-qualification-tests.sh
+# -> "Phase 10 qualification tests passed" (run twice, both clean, after
+#    adding the checklist-determinism assertion and the real tax-block
+#    fixture — see §16.1 item 3, §16.2)
+
+TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/phase10QualificationOracle.test.js
+# -> 1 suite, 7 tests, all passing — the committed, reproducible RN oracle
+#    for the weekMonthLabel/FA-039 and Math.round probe values pinned in
+#    Phase10QualificationTests (replaces the deleted scratch probe;
+#    see item 4 below)
+
+sh native/run-doc-reference-check.sh
+# -> clean
+```
+
+Item 4 (minor): the RN probe values in §16.1 items 1–2 were originally
+captured with a scratch jest file (deleted after use, not committed, so not
+referenced here by path) and hand-copied into this doc and into the Swift
+comments. That is now backed by a permanent, committed oracle,
+`__tests__/phase10QualificationOracle.test.js`, which asserts the same
+`weekMonthLabel(getWeekDates("2026-06-01"))` and `Math.round` half/negative
+values directly against the real `utils/dateHelpers.ts` functions under
+`TZ=America/Phoenix`, so both probe values in §16.1 can be re-verified by
+running it rather than by trusting the transcript.
+
 **Blockers (named, unchanged):** device, permission, live-AI-provider, and
 background-delivery evidence remain deferred to Phase 12 per the roadmap's
 2026-09-16 verification-deferral decision — nothing in this task claims it.
@@ -807,10 +860,11 @@ background-delivery evidence remain deferred to Phase 12 per the roadmap's
 
 | Field | Value |
 |---|---|
-| Status | **Code complete** |
-| Files | `native/Phase10QualificationTests/main.swift` (new), `native/run-phase10-qualification-tests.sh` (new, not registered — 10.15 owns that), this doc (§16), `docs/native-parity-matrix.md` (Setup checklist / Proactive insights rows), `docs/native-phase-10-implementation-plan.md` (§6 row flip + this §7 entry) |
-| Commands | §16.3 above |
-| Results | 16 RN-oracle suites / 255 tests passing (unchanged, pre-existing); new `run-phase10-qualification-tests.sh` passing (run twice); full `run-all-domain-tests.sh` aggregate — see report |
+| Status | **Code complete** (fix round 1 applied — evidence/documentation only) |
+| Files | `native/Phase10QualificationTests/main.swift` (new; fix round 1: 10.09/B1 reference, checklist-determinism assertion, real tax-block fixture), `native/run-phase10-qualification-tests.sh` (new, not registered — 10.15 owns that), `__tests__/phase10QualificationOracle.test.js` (new, fix round 1: committed RN oracle), this doc (§16; fix round 1 additions), `docs/native-parity-matrix.md` (Setup checklist / Proactive insights rows), `docs/native-phase-10-implementation-plan.md` (§6 row flip + this §7 entry), `task-10.14-report.md` (fix round 1 section) |
+| Commands | §16.3 above, including the fix round 1 block |
+| Results | 16 RN-oracle suites / 255 tests passing (unchanged, pre-existing); new `run-phase10-qualification-tests.sh` passing (run twice, both before and after fix round 1); new `phase10QualificationOracle.test.js` passing (7/7); full `run-all-domain-tests.sh` aggregate — see report |
 | Deviations recorded | §16.1 (weekMonthLabel/FA-039, Math.round vs. .rounded(), rate onDisappear, grapheme vs. UTF-16 input limit) |
+| Referenced coverage | §16 (10.09/B1 derived-state seam — BackgroundRefreshTests, StoreIntegrationTests), §16 preamble (insight kinds — TodayInsightsTests) |
 | Blockers | Phase 12 device/permission/live-AI/background-delivery evidence only |
 | Handoff | 10.15 (aggregate verification + closeout) is next-ready |

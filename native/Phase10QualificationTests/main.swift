@@ -21,6 +21,28 @@ import UserNotifications
 // checklist's `rate` task completion trigger, `SettingsView.swift`
 // `PricingDefaultsSettings.onDisappear` vs. RN's on-save (§3 — see the
 // 10.12 report and the parity-matrix row this task adds).
+//
+// REFERENCED, not redone: the post-sync-commit derived-state seam (task
+// 10.09, requirement B1) — `NativeDerivedStatePublisher` firing the
+// notification-reconcile hook, the widget-mirror observer notification, and
+// the cached business-snapshot refresh exactly once per committed canonical
+// sync commit, never on `.alreadyRunning`, offline, signed-out, or a
+// pre-commit failure. The publisher's own contract (failure isolation,
+// owner-identity re-verification, the stale-resume generation guard, the
+// register/cache surface) is unit-tested in
+// `native/BackgroundRefreshTests/main.swift` ("Task 10.09 (B1):
+// NativeDerivedStatePublisher seam matrix", run via
+// `native/run-background-refresh-tests.sh`). The higher-level "exactly
+// once per committed commit" guarantee across AppStore's actual commit call
+// sites (`pullDeltaIfPossible`, `runBookingIntakeAfterVerifiedPull`'s local
+// commit, and the initial-sync commit in `beginInitialSyncGate`) is
+// integration-tested in `native/StoreIntegrationTests/main.swift` ("Task
+// 10.09 (B1): AppStore's derived-state seam wiring", plus its "fix round 1:
+// real call-site coverage" and "fix round 2: initial-sync publish ordering"
+// sections), run via `native/run-store-integration-tests.sh`. This suite
+// does not re-derive either of those; the business-snapshot and coach seam
+// tests below (§S1/S2) exercise the *data* the hook refreshes, not the
+// hook's firing discipline itself.
 
 private var failures = 0
 
@@ -141,7 +163,7 @@ private enum Fixture {
     }
 }
 
-// MARK: - 1. Business snapshot + tax block: determinism and the coach seam
+// MARK: - 1. Business snapshot + tax block (S1, S2): determinism and the coach seam
 
 private func testBusinessSnapshotSeam() {
     let aggregate1 = NativeBusinessSnapshotEngine.aggregate(
@@ -154,7 +176,32 @@ private func testBusinessSnapshotSeam() {
     expectEqual(aggregate1.overdueCount, 0, "the invoice is due tomorrow, not yet overdue, at the fixture clock")
     expectEqual(aggregate1.activeJobsByStatus["complete"], nil, "complete is not an active-work status")
 
-    let snapshot = NativeBusinessSnapshot(asOf: "2026-08-04", aggregate: aggregate1, tax: nil)
+    // S2: a real tax block, not `nil` — a paid invoice in the fixture gives
+    // the reserve engine something to reserve against, so this exercises the
+    // actual `TaxEstimateEngine` seam rather than asserting around an absent
+    // block. `NativeBusinessSnapshotEngine.buildTaxBlock`'s own fixture-level
+    // coverage (unset income rate, unset vehicle method, period/deadline
+    // labels) is already pinned in `native/BusinessSnapshotTests/main.swift`
+    // (task 10.01); this only proves the block reaches the coach prompt.
+    let taxInvoice = invoice("""
+    {"id":"i-tax","number":"INV-TAX","amount":5000,"due":"2026-07-01","paid":true,
+     "payments":[{"id":"p-tax","amount":5000,"date":"2026-07-15","method":"cash"}]}
+    """)
+    let taxValues = NativeTaxSettingsValues(taxIncomeRate: 25, vehicleDeductionMethod: .mileage)
+    let taxBlock1 = NativeBusinessSnapshotEngine.buildTaxBlock(
+        invoices: [taxInvoice], expenses: [], trips: [],
+        values: taxValues, mileageRate: Decimal(string: "0.7")!, now: now
+    )
+    let taxBlock2 = NativeBusinessSnapshotEngine.buildTaxBlock(
+        invoices: [taxInvoice], expenses: [], trips: [],
+        values: taxValues, mileageRate: Decimal(string: "0.7")!, now: now
+    )
+    expectEqual(taxBlock1, taxBlock2, "the same fixture builds an identical tax block twice (determinism)")
+    expect(taxBlock1.periodReserve > 0, "the fixture's paid invoice produces a positive period reserve")
+    expect(taxBlock1.incomeRateSet, "an explicit income rate is reported as set")
+    expect(!taxBlock1.needsVehicleChoice, "an elected vehicle method clears the prompt")
+
+    let snapshot = NativeBusinessSnapshot(asOf: "2026-08-04", aggregate: aggregate1, tax: taxBlock1)
     let settings = Fixture.settings(anthropicKey: "sk-ant-SECRET-do-not-leak", groqKey: "gsk-SECRET-do-not-leak")
     let prompt = NativeCoachPrompt.buildSystemPrompt(settings: settings, snapshot: snapshot)
 
@@ -163,6 +210,8 @@ private func testBusinessSnapshotSeam() {
     // in the prompt text.
     expectContains(prompt, "Ace Plumbing", "the prompt cites the same business name as settings")
     expectContains(prompt, "Sam", "the prompt cites the contact name")
+    expectContains(prompt, "Tax set-aside estimate", "the coach prompt cites the tax block (S2) when one is attached")
+    expectContains(prompt, taxBlock1.periodLabel, "the prompt's tax period matches the snapshot's own label")
 
     // Secure provider keys are never interpolated into the prompt (global
     // constraint: "never interpolated into prompts, notifications, analytics,
@@ -234,6 +283,12 @@ private func testSetupChecklistSeam() {
     let tasksBefore = input.tasks(state: emptyState, notificationsGranted: false)
     expect(tasksBefore.first(where: { $0.id == .contact })?.done == true, "contact derives done from settings")
     expect(tasksBefore.first(where: { $0.id == .rate })?.done == false, "rate is not done until explicitly recorded")
+
+    // Determinism: the same canonical input derives the identical task list
+    // twice (part of the "deterministic daily surface" proof — the setup
+    // checklist is a daily-surface input alongside the snapshot and insights).
+    let tasksAgain = input.tasks(state: emptyState, notificationsGranted: false)
+    expectEqual(tasksAgain, tasksBefore, "the same input derives the identical checklist twice (determinism)")
 
     // Recorded deviation (10.12, parity-matrix row added by this task):
     // RN's SettingsPricingScreen marks `rate` done on SAVE
