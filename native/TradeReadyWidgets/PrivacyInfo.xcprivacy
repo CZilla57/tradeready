@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TradeReadyWidgets extension privacy manifest (task 11.01, requirement M1).
+  Contract: docs/native-phase-11-platform-hardening-contract-decisions.md §8.
+  - UserDefaults 1C8F.1: the extension reads the App Group suite
+    (group.com.gettradereadyapp.tradeready) shared with the app; 11.04's
+    intents append to it under the shared lock.
+  - No file-timestamp, system-boot-time or disk-space API is used (the
+    advisory lock is open/flock only). Re-grep before adding a category.
+  - No collected data: the extension neither transmits nor identifies.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

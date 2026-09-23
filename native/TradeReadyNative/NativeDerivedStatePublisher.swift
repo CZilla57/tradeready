@@ -38,6 +38,8 @@ import Foundation
 ///  (b) `register`/`unregister`: the registration point the Phase 11 widget
 ///      mirror (11.01) plugs into. No widget code lives here; a registered
 ///      observer receives the same `Output` snapshot built for (c).
+///      `register(committed:)` (11.01, contract §3.2) additionally delivers
+///      the committed `Input` and the verified `expectedOwnerBinding`.
 ///  (c) `cachedSnapshot`: the refreshed cached business snapshot
 ///      (`AppStore.cachedBusinessSnapshot`). Final-review I2: the coach no
 ///      longer reads it — it builds from live canonical data on demand — so
@@ -51,12 +53,21 @@ import Foundation
 @MainActor
 final class NativeDerivedStatePublisher<Input, Output> {
     typealias SnapshotObserver = (Output) throws -> Void
+    /// Task 11.01 (contract §3.2, C5): the additive observer shape. It
+    /// receives the committed canonical input, the derived output built from
+    /// it, and the owner binding the publish was verified for — so an
+    /// observer that persists owner-scoped output (the widget mirror) never
+    /// reads stale in-memory collections and never needs a separate binding
+    /// accessor.
+    typealias CommitObserver = (_ canonical: Input, _ output: Output, _ expectedOwnerBinding: String) throws -> Void
 
     /// Observers are app-lifetime (the 11.01 widget mirror registers once at
     /// launch and expects every later commit's snapshot, across sign-out and
     /// sign-in). Only `publish` and `unregister` ever remove one; the
     /// account-boundary cache clear (`reset()`) must never touch this map.
     private var observers: [UUID: SnapshotObserver] = [:]
+    /// Task 11.01: same lifetime and delivery rules as `observers`.
+    private var commitObservers: [UUID: CommitObserver] = [:]
 
     /// Output (c), scoped to the owner it was built for. `nil` cache or a
     /// binding that no longer matches the live `ownerBinding()` both read as
@@ -98,8 +109,22 @@ final class NativeDerivedStatePublisher<Input, Output> {
         return id
     }
 
+    /// Task 11.01 (contract §3.2): registers a `CommitObserver`. Delivered
+    /// under exactly the same conditions as `register(_:)` observers (same
+    /// publish, same owner/generation checks, same failure isolation), with
+    /// the same `canonical` the publish built its output from and the
+    /// `expectedOwnerBinding` the publisher just re-checked against the live
+    /// `ownerBinding()`. Returns a token for `unregister`.
+    @discardableResult
+    func register(committed observer: @escaping CommitObserver) -> UUID {
+        let id = UUID()
+        commitObservers[id] = observer
+        return id
+    }
+
     func unregister(_ id: UUID) {
         observers.removeValue(forKey: id)
+        commitObservers.removeValue(forKey: id)
     }
 
     /// Output (c), read for the CURRENT verified owner only. Returns `nil`
@@ -171,6 +196,14 @@ final class NativeDerivedStatePublisher<Input, Output> {
             // corrupt delivery to the others, nor the cache already set above.
             do {
                 try observer(snapshot)
+            } catch {
+                // Isolated failure — the remaining observers still run.
+            }
+        }
+        for (_, observer) in commitObservers {
+            // Task 11.01: same per-observer isolation as above.
+            do {
+                try observer(canonical, snapshot, expectedOwnerBinding)
             } catch {
                 // Isolated failure — the remaining observers still run.
             }

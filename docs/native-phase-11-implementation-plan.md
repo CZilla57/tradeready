@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); implementation tasks 11.01–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 done (2026-09-23); implementation tasks 11.02–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -117,7 +117,9 @@ simulator build; that limitation is recorded, not waived.
 
 ### Shared-file ownership
 
-- **Widget/extension lane:** 11.01–11.04 share the `N/Widgets/` extension target,
+- **Widget/extension lane:** 11.01–11.04 share the extension target (extension-only
+  sources in `native/TradeReadyWidgets/`; shared sources in `N/Widgets/Shared/`; see the
+  11.01 file-placement rule in §7),
   the App Group shared-source files, `N/TradeReadyNative.entitlements`,
   `native/Info.plist`, and `native/TradeReadyNative.xcodeproj/project.pbxproj`. Run
   serially; only 11.01 edits the project file/target definition.
@@ -288,10 +290,11 @@ event catalog enumerates every `track(` name with its properties.
 `N/Domain/NativeBusinessSnapshot.swift`, `N/NativeDerivedStatePublisher.swift`
 (10.09), `N/TradeReadyNative.entitlements`, `native/Info.plist`.
 
-**Own:** new `N/Widgets/` extension target, `N/Widgets/TradeReadyWidgets.swift`,
+**Own:** new extension target, `native/TradeReadyWidgets/TradeReadyWidgets.swift` (relocated
+from `N/Widgets/` by 11.01; see §7),
 `N/Widgets/Shared/WidgetSnapshot.swift`, the target membership of
 `N/Widgets/Shared/` (compiled into both targets, including 11.04's
-`WidgetIntents.swift`), and the extension's `N/Widgets/PrivacyInfo.xcprivacy`;
+`WidgetIntents.swift`), and the extension's `native/TradeReadyWidgets/PrivacyInfo.xcprivacy`;
 new `N/Domain/NativeWidgetSnapshot.swift`
 (pure projection) and `N/NativeWidgetMirror.swift` (App Group writer); edits to
 `native/TradeReadyNative.xcodeproj/project.pbxproj`,
@@ -335,7 +338,8 @@ timelines. Device/extension proof stays deferred.
 **Read:** `targets/widget/Widgets.swift` (Next Job small/medium),
 `utils/widgetBridge.ts#selectNextJob`; `N/Widgets/Shared/WidgetSnapshot.swift`.
 
-**Own:** new `N/Widgets/NextJobWidget.swift` and its provider/timeline; shared view
+**Own:** new `native/TradeReadyWidgets/NextJobWidget.swift` (extension-only root; 11.01 §7
+placement rule) and its provider/timeline; shared view
 components in `N/Widgets/Shared/`.
 
 1. Render customer, time, and address for small and medium families from the
@@ -359,7 +363,8 @@ empty state. Device layout proof stays deferred.
 (`timer_start`/`timer_stop`), `N/NativeWidgetActionReplay.swift`,
 `N/Widgets/Shared/WidgetIntents.swift` (11.04).
 
-**Own:** new `N/Widgets/JobTimerWidget.swift` and the shared timer view. It uses
+**Own:** new `native/TradeReadyWidgets/JobTimerWidget.swift` (extension-only root; 11.01 §7
+placement rule) and the shared timer view. It uses
 11.04's timer intents and defines no `AppIntent` type of its own.
 
 1. Interactive start/stop on iOS 17+ using `Button(intent:)` with 11.04's
@@ -764,7 +769,7 @@ invoke any App Store Connect or deploy command to validate a build.
 
 ## 6. Initial execution ledger
 
-11.00 is done (see §7); tasks **11.01–11.15 are pending**. The source review used to write this plan is
+11.00 and 11.01 are done (see §7); tasks **11.02–11.15 are pending**. The source review used to write this plan is
 not test execution or an implementation completion. When work starts, maintain one
 row per task: status, owner/session, dependency evidence, files, commands, actual
 results, blockers, and handoff. Separate **implementation blocked** from **code
@@ -773,7 +778,7 @@ complete / Phase 12 evidence deferred**.
 | Task | Requirement IDs | Status | Depends on | Deliverable |
 |---|---|---|---|---|
 | 11.00 | all | Done (contract frozen 2026-09-23; C8 → 11.05, C11/P8 → 11.06 named blockers) | — | Contract decisions + event catalog + intent inventory + baselines — [contract](native-phase-11-platform-hardening-contract-decisions.md) |
-| 11.01 | W1, M1 | Pending | 11.00, 10.01, 10.09 | Widget target + snapshot contract + extension manifest |
+| 11.01 | W1, M1 | Done (code complete 2026-09-23; device/extension proof deferred to Phase 12) | 11.00, 10.01, 10.09 | Widget target + snapshot contract + extension manifest |
 | 11.02 | W2 | Pending | 11.01 | Next Job widget |
 | 11.03 | W3 | Pending | 11.01, 11.04 | Job Timer widget |
 | 11.04 | A1, A2, A3 | Pending | 11.01 | All ten App Intents + Siri + action queue |
@@ -909,3 +914,163 @@ runs 11.01 next.
 - M7: `expenseDescription` optionality is recorded as a native choice; untagged
   unknown-type actions are dropped.
 - `sh native/run-doc-reference-check.sh` → 1304 path references checked: 0 missing, 50 planned.
+
+### 11.01 — WidgetKit target and the shared snapshot contract (2026-09-23)
+
+**Status:** Done (code complete). The target builds and embeds with the app, and every
+host-test item in the packet's "Done when" passes. Device and extension proof (the
+widget rendering on a Home Screen, a real App Group container, `WidgetCenter` reloads)
+is deferred to Phase 12. It was not claimed as passed.
+
+**Files:**
+- New, compiled into both targets (`N/Widgets/Shared/`):
+  - `N/Widgets/Shared/WidgetAppGroup.swift`: the suite name, the keys, the account-key
+    list, the lock file name, and `WidgetAppGroupLock`, the single §4.2 `flock`
+    implementation;
+  - `N/Widgets/Shared/WidgetSnapshot.swift`: the §2.2/§2.3 schema, decode and encode,
+    `load(from:)`, `isStale(now:)`, and the local-frame `startDate`.
+- New, extension only (`native/TradeReadyWidgets/`, its own synchronized root):
+  - `native/TradeReadyWidgets/TradeReadyWidgets.swift`: the `@main WidgetBundle`, which
+    holds one placeholder widget that 11.02/11.03 replace;
+  - `native/TradeReadyWidgets/Info.plist`;
+  - `native/TradeReadyWidgets/PrivacyInfo.xcprivacy`;
+  - `native/TradeReadyWidgets/TradeReadyWidgets.entitlements`.
+- New, app only:
+  - `N/Domain/NativeWidgetSnapshot.swift`: the pure projection and `NativeWidgetOwnerTag`;
+  - `N/NativeWidgetMirror.swift`: the writer, `NativeWidgetTimelineReloading`, and
+    `NativeWidgetMirrorOutcome`.
+- Edited:
+  - `N/AppStore.swift`: the write triggers, the owner gate, the injectable reloader,
+    and the sign-out/delete reload;
+  - `N/NativeDerivedStatePublisher.swift`: the commit-observer overload;
+  - `N/NativeAppGroupInbox.swift`: the scrubber now uses `WidgetAppGroup` and
+    `WidgetAppGroupLock`, and the scrub runs under the lock;
+  - `N/TradeReadyNativeApp.swift`: installs the mirror;
+  - `native/TradeReadyNative.xcodeproj/project.pbxproj`: the extension target, the
+    embed phase, the dependency, and both synchronized roots;
+  - `native/Info.plist`: the version keys now come from build settings.
+- Tests: `native/WidgetSnapshotTests/main.swift` and `native/run-widget-snapshot-tests.sh`
+  (both new). The runner is registered in `native/run-all-domain-tests.sh`.
+  `native/run-appstore-sources-common.sh` and `native/run-app-group-pending-open-url-tests.sh`
+  gained the new sources.
+- `N/TradeReadyNative.entitlements` already carried the App Group, so it is unchanged.
+
+**Interface handoff (11.02–11.05):**
+- **File-placement rule (contract §5.4 amendment):**
+  - extension-only code goes in `native/TradeReadyWidgets/` (for example
+    `NextJobWidget.swift` and `JobTimerWidget.swift`);
+  - code shared by the app and the extension goes in `N/Widgets/Shared/` (11.04's
+    `WidgetIntents.swift`). It joins both targets with no project-file edit, so it must
+    compile in both;
+  - never put an extension-only file anywhere else under `N/Widgets/`, because it would
+    join the app target;
+  - the extension compiles with `TRADEREADY_WIDGET_EXTENSION` set, for the rare guard;
+  - no later task edits the target definition.
+- **Owner tag:** `NativeWidgetOwnerTag.make(binding:)` is lowercase hex SHA-256 of
+  `"tradeready.widget.owner.v1:" + binding`. It lives in the app target only; the
+  extension compares tags and never derives one. Test vector: `bind-11.01` →
+  `1e5d7fb08a5be400f0b4515415ee7a0cc66d76a13b46baf11bc2df299128e19f`.
+- **Lock:** `WidgetAppGroupLock.withExclusiveLock(at:_:)`, with the file at
+  `WidgetAppGroup.liveLockFile()`. 11.04's append and 11.05's replay must use this
+  exact helper, never a second `flock` implementation.
+- **Schema:**
+  - `WidgetSnapshot.load(from:)` works for display readers without the lock. Intent
+    writers must read inside their own lock hold (§4.5);
+  - `isStale(now:)` applies the §3.3 rule. 11.02 owns the stale UI and the boundary
+    tests, and 11.05 owns the stale behavior of intents;
+  - `NextJob.startDate(timeZone:)` parses in the local frame.
+- **AppStore API:**
+  - `widgetMirrorOwnerBinding` is `derivedStatePublishBinding`. It is nil while a
+    sign-out or delete scrub is in progress, while the scrub is blocked, or while a
+    scrub is pending;
+  - `refreshWidgetMirror(force:now:)` returns a `NativeWidgetMirrorOutcome?`;
+  - `installWidgetMirror(_:)`;
+  - `registerDerivedStateObserver(committed:)`, the §3.2 overload.
+- **Triggers now wired:**
+  - canonical writes: `snapshot` didSet → one coalesced, non-forced write per main-actor
+    turn;
+  - owner and gate changes;
+  - foreground refresh (forced, after replay);
+  - background refresh (forced, after replay);
+  - the 10.09 seam observer (forced; writes the committed canonical snapshot tagged with
+    `expectedOwnerBinding`).
+- **Reloads:** timelines reload after every write, after sign-out and delete, after
+  `retryAccountScrub`, and after scrub recovery at launch. All go through
+  `NativeWidgetTimelineReloading`.
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-widget-snapshot-tests.sh` → passed. It covers:
+  - F1–F6 through both the native decoder and a verbatim RN `BridgeSnapshot`;
+  - F4 byte-identical encoding and the explicit-null shape;
+  - projections equal to F1, F2 and F3, plus the RN `selectNextJob`/`selectActiveTimer`
+    vectors and the FA-039 evening edge;
+  - stale boundaries at 86,399, 86,400 and 86,401 seconds, a negative age, and garbage;
+  - outstanding = the 10.01 value (160, 1234.55);
+  - the owner-tag vector;
+  - the writer: nil and mismatched owner, written, unchanged versus forced, unavailable;
+  - the lock: a concurrent `flock` holder blocks the writer, and its actions write
+    survives;
+  - the scrub race → `skippedOwnerChanged` with an empty suite;
+  - the commit-observer overload;
+  - the AppStore triggers: sign-in gate, `clockIn`, seam, mismatch;
+  - sign-out → wipe + reload, with no write in the post-scrub window.
+  Two mutation checks confirmed the suite fails when the in-lock owner re-check or the
+  account-boundary suspension is removed.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0, all runners passed (the widget-action batch planner, App Group pending-open-URL, background refresh, widget snapshot and canonical AppStore integration pass lines are all present). This includes
+  `run-widget-action-replay`, `run-app-group-pending-open-url`, `run-store-integration`
+  and `run-background-refresh`.
+- `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/widgetBridge.test.js`
+  → 1 suite and 18 tests passed.
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`, with 7 pre-existing warnings and none in new files. Membership was checked from the SwiftFileLists:
+  - the app list has the Shared files, the projection and the mirror, and not
+    `TradeReadyWidgets.swift`;
+  - the extension list is exactly `WidgetAppGroup.swift`, `WidgetSnapshot.swift` and
+    `TradeReadyWidgets.swift`;
+  - `TradeReadyNative.app/PlugIns/TradeReadyWidgets.appex` carries bundle id
+    `com.gettradereadyapp.tradeready.widgets`, version 1.0 (1), MinimumOSVersion 17.0,
+    and `PrivacyInfo.xcprivacy`.
+- `sh native/run-doc-reference-check.sh` → 1341 path references checked: 0 missing, 41 planned.
+
+**Deviations (recorded; contract amended where it named paths):**
+1. **Sibling-root layout.** Extension-only files live in `native/TradeReadyWidgets/`, not
+   `N/Widgets/` (the P3 fallback). Xcode 26.6 exception sets ignore folder and glob
+   paths. The contract §5.4 and §8 amendments and the 11.02/11.03 Own lists were
+   updated.
+2. **Scrubber lock refactor.** `NativeAppGroupAccountScrubber` now takes the lock through
+   the shared `WidgetAppGroupLock`, and its error mapping is unchanged. This leaves one
+   lock implementation for 11.04 and 11.05.
+3. **Extra writer gate.** `widgetMirrorOwnerBinding` also returns nil across the sign-out
+   and delete scrub window. During `await subscriptionService.logOut()`, `O` is still
+   set and memory still holds the old account's records. The predicate is still §2.5;
+   this only closes a window where it would be stale.
+4. **Coalescing and dedupe.** Canonical-write triggers are coalesced to one write per
+   main-actor turn. They skip a write whose content is unchanged while the stored copy is
+   under 1 hour old. Forced triggers (launch, foreground, background, seam) always
+   write, so `updatedAt` never drifts toward the 24-hour window while the app is in use.
+5. **Empty start time.** An empty `scheduledStartTime` projects as `null`. When neither
+   job has a time, ties keep input order; RN's comparator is inconsistent in that case.
+6. **Stale rule in the schema.** `isStale` is implemented in the shared schema so 11.02
+   and 11.05 share one rule.
+7. **Placeholder widget.** It exists only because a bundle needs a widget. It shows no
+   account data.
+8. **Version keys.** `native/Info.plist` now reads `$(MARKETING_VERSION)` and
+   `$(CURRENT_PROJECT_VERSION)` (still 1.0 and 1), so the app and the extension cannot
+   drift apart.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- The extension installs, and the placeholder or real widgets appear in the gallery.
+- A signed-in app writes `widgetSnapshot` into the real App Group container, and
+  timelines refresh.
+- Sign-out and delete empty the container and blank the widgets.
+- The privacy manifest is present in the archived `.appex` (12.01).
+
+**Concerns:**
+- Nested synchronized roots (`N/Widgets/Shared/` is both inside the app root and its own
+  extension root) are verified with `xcodebuild` only. Behavior in the Xcode IDE file
+  inspector was not checked.
+- A timer whose `end` is `""` is treated as not running natively. This is the existing
+  `NativeTimeTracking.activeSession` behavior, and RN would show it as running.
+
+**Next ready:** 11.04 (App Intents and the action queue; it uses `WidgetAppGroupLock` and
+the owner tag) and 11.02 (Next Job widget). 11.03 needs 11.04, and 11.05 needs 11.01–11.04.

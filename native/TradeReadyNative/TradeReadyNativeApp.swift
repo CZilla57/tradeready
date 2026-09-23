@@ -81,6 +81,11 @@ struct TradeReadyNativeApp: App {
         store.notificationSynchronizeHook = { [weak coordinator] now in
             await coordinator?.synchronize(now: now)
         }
+        // Task 11.01 (W1, contract §3.1): the App Group widget snapshot
+        // writer. Installing it registers the 10.09 seam observer; the store
+        // also mirrors after canonical writes, gate changes and foreground/
+        // background refresh, always gated on the §2.5 owner predicate.
+        store.installWidgetMirror(.live())
         let scheduler = NativeBackgroundRefreshScheduler { [weak store] in
             guard let store else { return .skipped }
             return await store.performBackgroundRefresh()

@@ -13,7 +13,9 @@ protocol NativeAppGroupInbox {
 }
 
 final class NativeUserDefaultsAppGroupInbox: NativeAppGroupInbox {
-    static let suiteName = "group.com.gettradereadyapp.tradeready"
+    /// Task 11.01: the single App Group id lives in `WidgetAppGroup` (shared
+    /// with the widget extension).
+    static let suiteName = WidgetAppGroup.suiteName
 
     private let defaults: UserDefaults?
     private let lock = NSLock()
@@ -40,7 +42,7 @@ enum NativeAppGroupAccountScrubError: Error {
 /// widget and Siri writers. This prevents an append from racing the explicit
 /// sign-out boundary and exposing the previous account on a widget surface.
 struct NativeAppGroupAccountScrubber {
-    static let accountKeys = ["widgetSnapshot", "widgetActions", "activeTrip", "pendingOpenUrl"]
+    static let accountKeys = WidgetAppGroup.accountKeys
 
     let suiteName: String
     let defaults: UserDefaults?
@@ -51,7 +53,7 @@ struct NativeAppGroupAccountScrubber {
         defaults: UserDefaults? = UserDefaults(suiteName: NativeUserDefaultsAppGroupInbox.suiteName),
         lockFile: URL? = FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: NativeUserDefaultsAppGroupInbox.suiteName)?
-            .appendingPathComponent(".tradeready-widget-actions.lock")
+            .appendingPathComponent(WidgetAppGroup.lockFileName)
     ) {
         self.suiteName = suiteName
         self.defaults = defaults
@@ -60,20 +62,23 @@ struct NativeAppGroupAccountScrubber {
 
     func scrub() throws {
         guard let defaults, let lockFile else { throw NativeAppGroupAccountScrubError.unavailable }
-        try FileManager.default.createDirectory(
-            at: lockFile.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        let descriptor = open(lockFile.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { throw NativeAppGroupAccountScrubError.lockFailed }
-        defer { close(descriptor) }
-        guard flock(descriptor, LOCK_EX) == 0 else {
+        // Task 11.01: the one shared lock implementation (contract §4.2), the
+        // same one the widget mirror and the extension's writers take.
+        do {
+            try WidgetAppGroupLock.withExclusiveLock(at: lockFile) {
+                defaults.removePersistentDomain(forName: suiteName)
+                guard Self.accountKeys.allSatisfy({ defaults.object(forKey: $0) == nil }) else {
+                    throw NativeAppGroupAccountScrubError.verificationFailed
+                }
+            }
+        } catch let error as NativeAppGroupAccountScrubError {
+            throw error
+        } catch WidgetAppGroupLockError.unavailable {
+            // Directory creation failed: the pre-11.01 code rethrew the
+            // FileManager error, which callers treat as a failed scrub too.
+            throw NativeAppGroupAccountScrubError.unavailable
+        } catch {
             throw NativeAppGroupAccountScrubError.lockFailed
-        }
-        defer { flock(descriptor, LOCK_UN) }
-
-        defaults.removePersistentDomain(forName: suiteName)
-        guard Self.accountKeys.allSatisfy({ defaults.object(forKey: $0) == nil }) else {
-            throw NativeAppGroupAccountScrubError.verificationFailed
         }
     }
 }

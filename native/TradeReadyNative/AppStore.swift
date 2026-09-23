@@ -1,8 +1,5 @@
 import Foundation
 import os
-#if canImport(WidgetKit)
-import WidgetKit
-#endif
 
 enum NativeAccountSignOutError: LocalizedError {
     case remoteRevocationFailed
@@ -184,6 +181,9 @@ final class AppStore: ObservableObject {
                !Self.isSyncEligible(oldValue) {
                 syncNow(trigger: .signedIn)
             }
+            // Task 11.01 (contract §3.1): a gate change can open or close the
+            // §2.5 owner predicate, so re-mirror (a closed gate is a no-op).
+            scheduleWidgetMirrorRefresh()
         }
     }
     @Published private(set) var migratedAccountState: NativeTypedAccountState?
@@ -280,7 +280,31 @@ final class AppStore: ObservableObject {
     /// previews/tests that never construct the coordinator.
     var onInvoiceCreatedContextualPrompt: (@MainActor () -> Void)?
     private let appGroupAccountScrubber: NativeAppGroupAccountScrubber
-    private var snapshot = Canonical.Snapshot(payload: .init())
+    /// Task 11.01: the WidgetKit reload seam used after every App Group wipe
+    /// (sign-out, account deletion, scrub retry/recovery). Injectable so host
+    /// tests observe reloads.
+    private let widgetTimelineReloader: any NativeWidgetTimelineReloading
+    /// Task 11.01 (contract §3.1): the App Group snapshot writer. Nil until
+    /// `installWidgetMirror(_:)` (production: `TradeReadyNativeApp.init`), so
+    /// previews and host tests never touch the real App Group container.
+    private var widgetMirror: NativeWidgetMirror?
+    private var widgetMirrorObserverToken: UUID?
+    private var widgetMirrorRefreshScheduled = false
+    /// Task 11.01: true from the moment an explicit sign-out/deletion starts
+    /// scrubbing until it finishes. The §2.5 predicate stays non-nil during
+    /// the post-scrub `await subscriptionService.logOut()`, and the in-memory
+    /// snapshot still holds the old owner's records, so without this a
+    /// queued write could re-populate the just-scrubbed suite.
+    private var widgetMirrorSuspendedForAccountBoundary = false
+    private var snapshot = Canonical.Snapshot(payload: .init()) {
+        didSet {
+            // Task 11.01 (contract §3.1 trigger 1): every canonical write
+            // (jobs, time sessions, invoices, payments — and replayed widget
+            // actions) lands here via `apply`/in-place edits. Coalesced to
+            // one write per main-actor turn, after the save has run.
+            scheduleWidgetMirrorRefresh()
+        }
+    }
     private var isApplyingProjection = false
     private var persistenceWritesBlocked = false
     private var persistenceBlockReason: PersistenceBlockReason?
@@ -382,9 +406,11 @@ final class AppStore: ObservableObject {
         invoiceDeliveryService: (any NativeInvoiceDelivering)? = nil,
         advisoryAITransport: (any NativeAdvisoryAITransport)? = nil,
         coachTransport: NativeCoachTransport? = nil,
-        analytics: NativeAnalytics = NativeNoOpAnalytics()
+        analytics: NativeAnalytics = NativeNoOpAnalytics(),
+        widgetTimelineReloader: any NativeWidgetTimelineReloading = NativeWidgetCenterTimelineReloader()
     ) {
         self.analytics = analytics
+        self.widgetTimelineReloader = widgetTimelineReloader
         self.fileURL = fileURL
         self.repository = Canonical.SnapshotRepository(primaryURL: fileURL)
         self.widgetActionReplayTransport = widgetActionReplayTransport ?? (try? .live())
@@ -450,6 +476,8 @@ final class AppStore: ObservableObject {
                 }
                 try repository.finishAccountScrub()
                 NativeGoogleSignInProvider.clearLocalCredential()
+                // Task 11.01: the recovered wipe blanks widgets immediately.
+                widgetTimelineReloader.reloadAllTimelines()
             } catch {
                 accountScrubRecoveryError = error
             }
@@ -4125,6 +4153,7 @@ final class AppStore: ObservableObject {
         }
         authenticationOperationInFlight = true
         defer { authenticationOperationInFlight = false }
+        defer { widgetMirrorSuspendedForAccountBoundary = false }
 
         let sessionStore = NativeKeychainSecureSettingsStore()
         if revokeRemote {
@@ -4138,6 +4167,9 @@ final class AppStore: ObservableObject {
             }
         }
 
+        // Task 11.01: no mirror write may land between the scrub below and
+        // the owner teardown in `applyCompletedSignOutState`.
+        widgetMirrorSuspendedForAccountBoundary = true
         do {
             try performLocalAccountScrub(sessionStore: sessionStore, scope: .live)
         } catch {
@@ -4148,9 +4180,7 @@ final class AppStore: ObservableObject {
         await subscriptionService.logOut()
         applyCompletedSignOutState()
         NativeGoogleSignInProvider.clearLocalCredential()
-        #if canImport(WidgetKit)
-        WidgetCenter.shared.reloadAllTimelines()
-        #endif
+        widgetTimelineReloader.reloadAllTimelines()
     }
 
     func deleteAccount() async throws {
@@ -4159,6 +4189,7 @@ final class AppStore: ObservableObject {
         }
         authenticationOperationInFlight = true
         defer { authenticationOperationInFlight = false }
+        defer { widgetMirrorSuspendedForAccountBoundary = false }
 
         let endpoint: URL
         do { endpoint = try BuildEnvironment.endpoint("api/delete-account", sendsUserData: true) }
@@ -4194,6 +4225,8 @@ final class AppStore: ObservableObject {
             }
         }
 
+        // Task 11.01: see `signOut` — suspend the mirror across the wipe.
+        widgetMirrorSuspendedForAccountBoundary = true
         do {
             try performLocalAccountScrub(sessionStore: sessionStore, scope: .all)
         } catch {
@@ -4209,9 +4242,7 @@ final class AppStore: ObservableObject {
         await subscriptionService.logOut()
         applyCompletedSignOutState()
         NativeGoogleSignInProvider.clearLocalCredential()
-        #if canImport(WidgetKit)
-        WidgetCenter.shared.reloadAllTimelines()
-        #endif
+        widgetTimelineReloader.reloadAllTimelines()
     }
 
     func retryAccountScrub() {
@@ -4243,6 +4274,8 @@ final class AppStore: ObservableObject {
             isAccountScrubBlocked = false
             applyCompletedSignOutState()
             NativeGoogleSignInProvider.clearLocalCredential()
+            // Task 11.01: the completed wipe blanks widgets immediately.
+            widgetTimelineReloader.reloadAllTimelines()
         } catch {
             isAccountScrubBlocked = true
             migrationMessage = "Sign-out cleanup is still incomplete. No local account data was opened."
@@ -5656,8 +5689,103 @@ final class AppStore: ObservableObject {
         derivedStatePublisher.register(observer)
     }
 
+    /// Task 11.01 (contract §3.2, C5): the additive overload. Same owner
+    /// contract as above; the observer also receives the committed canonical
+    /// snapshot the output was built from and the `expectedOwnerBinding` the
+    /// publisher verified, so it never reads stale in-memory collections and
+    /// never needs a separate binding accessor.
+    @discardableResult
+    func registerDerivedStateObserver(
+        committed observer: @escaping (Canonical.Snapshot, NativeBusinessSnapshot, String) throws -> Void
+    ) -> UUID {
+        derivedStatePublisher.register(committed: observer)
+    }
+
     func unregisterDerivedStateObserver(_ id: UUID) {
         derivedStatePublisher.unregister(id)
+    }
+
+    // MARK: Widget mirror (task 11.01, contract §3.1)
+
+    /// The owner binding the widget mirror may write for: the single §2.5
+    /// predicate `derivedStatePublishBinding`, closed while an explicit
+    /// account boundary is scrubbing or a scrub is pending/blocked.
+    var widgetMirrorOwnerBinding: String? {
+        guard !widgetMirrorSuspendedForAccountBoundary,
+              !isAccountScrubBlocked,
+              !repository.isAccountScrubPending
+        else { return nil }
+        return derivedStatePublishBinding
+    }
+
+    /// Installs the App Group writer once at launch: registers the 10.09
+    /// seam observer (trigger 3) and mirrors immediately (a no-op until the
+    /// owner is verified). Re-installing replaces the previous writer.
+    func installWidgetMirror(_ mirror: NativeWidgetMirror) {
+        if let token = widgetMirrorObserverToken {
+            unregisterDerivedStateObserver(token)
+        }
+        widgetMirror = mirror
+        widgetMirrorObserverToken = registerDerivedStateObserver(committed: { [weak self] canonical, business, binding in
+            self?.writeWidgetMirrorFromSeam(canonical: canonical, business: business, expectedOwnerBinding: binding)
+        })
+        refreshWidgetMirror(force: true)
+    }
+
+    /// Triggers 1–2: projects the live canonical snapshot for `O` and writes
+    /// it. Returns nil when no writer is installed.
+    @discardableResult
+    func refreshWidgetMirror(force: Bool, now: Date = Date()) -> NativeWidgetMirrorOutcome? {
+        guard let widgetMirror else { return nil }
+        guard let binding = widgetMirrorOwnerBinding else { return .skippedNoOwner }
+        let projection = NativeWidgetSnapshotProjection.project(
+            jobs: snapshot.payload.jobs ?? [],
+            business: makeCachedBusinessSnapshot(from: snapshot, now: now),
+            now: now
+        )
+        return widgetMirror.write(
+            projection: projection,
+            ownerBinding: binding,
+            isCurrentOwner: { [weak self] candidate in self?.widgetMirrorOwnerBinding == candidate },
+            force: force,
+            now: now
+        )
+    }
+
+    /// Trigger 3 (the 10.09 seam): projects the committed canonical snapshot
+    /// and its already-built business snapshot, stamped for the publish's
+    /// `expectedOwnerBinding`, which must still equal `O` inside the lock.
+    private func writeWidgetMirrorFromSeam(
+        canonical: Canonical.Snapshot,
+        business: NativeBusinessSnapshot,
+        expectedOwnerBinding: String,
+        now: Date = Date()
+    ) {
+        guard let widgetMirror else { return }
+        let projection = NativeWidgetSnapshotProjection.project(
+            jobs: canonical.payload.jobs ?? [],
+            business: business,
+            now: now
+        )
+        widgetMirror.write(
+            projection: projection,
+            ownerBinding: expectedOwnerBinding,
+            isCurrentOwner: { [weak self] candidate in self?.widgetMirrorOwnerBinding == candidate },
+            force: true,
+            now: now
+        )
+    }
+
+    /// Coalesces trigger-1 writes to one per main-actor turn, so a burst of
+    /// in-place edits mirrors once, after the save that follows them.
+    private func scheduleWidgetMirrorRefresh() {
+        guard widgetMirror != nil, !widgetMirrorRefreshScheduled else { return }
+        widgetMirrorRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.widgetMirrorRefreshScheduled = false
+            self.refreshWidgetMirror(force: false)
+        }
     }
 
     /// Thrown by the `makeSnapshot` closure above only in the theoretical case
@@ -5874,6 +6002,11 @@ final class AppStore: ObservableObject {
     /// then pending byte uploads and missing-file backfill. A second sync makes
     /// newly confirmed `uploadedAt` values visible to the user's other devices.
     func performForegroundRefresh() async {
+        // Task 11.01 (contract §3.1 trigger 2): foreground re-mirror, forced
+        // so `updatedAt` refreshes. Activation (which replays widget actions)
+        // runs before this in `TradeReadyNativeApp`, so a just-replayed
+        // `timer_start` is reflected. Runs on every exit path.
+        defer { refreshWidgetMirror(force: true) }
         let synced = await syncNowAndWait(trigger: .foreground) != nil
         // Mirrors RN's foreground `checkAndGenerateRecurringJobs`: runs after
         // the sync when it succeeds, and on the local snapshot when offline —
@@ -6061,6 +6194,8 @@ final class AppStore: ObservableObject {
         // commit/acknowledge any exact-owner widget or Siri actions. Offline
         // sync is a no-op, but local action replay must still get its chance.
         replayVerifiedWidgetActionsIfPossible()
+        // Task 11.01 (contract §3.1 trigger 2): re-mirror after replay.
+        refreshWidgetMirror(force: true)
         return .completed
     }
 

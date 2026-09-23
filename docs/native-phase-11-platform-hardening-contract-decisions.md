@@ -6,6 +6,8 @@
 project file or RN file was changed. Selected contracts are marked **chosen**.
 An open item is marked **blocked**, with its owner and the reason.
 Revised in fix round 1 (2026-09-23): a single owner predicate (§2.5) and precision fixes.
+Amended by 11.01 (2026-09-23): file placement for the extension target (§5.4, §8). No
+schema, owner or write-semantics decision changed.
 
 **How this was produced:**
 - Sources read in full:
@@ -537,6 +539,22 @@ Insurance, Software & Apps, Marketing, Other.
 - Extension-only files (the `@main WidgetBundle`, widget views) are excluded from the
   app target. `N/` is a synchronized root group, so without an exception every file
   joins the app target and two `@main` types fail to compile.
+- **Amended by 11.01 (2026-09-23) — sibling-root layout (the fallback P3 allowed):**
+  Xcode 26.6 exception sets honor per-file paths only (folder paths and globs were
+  tried in a scratch project and ignored), so a per-file exclusion list for every
+  future widget file would be fragile. Instead:
+  - extension-only sources live in their own synchronized root
+    `native/TradeReadyWidgets/`, owned by the extension target only. The app's
+    `N/` root never sees them, so no app-side exception is needed;
+  - `N/Widgets/Shared/` stays inside the app's `N/` root **and** is a second
+    synchronized root owned by the extension. Every file placed there compiles into
+    **both** targets with no project-file edit, including 11.04's
+    `N/Widgets/Shared/WidgetIntents.swift`;
+  - the only exception set lists the extension's `Info.plist` and
+    `TradeReadyWidgets.entitlements` (not compiled sources);
+  - rule for 11.02–11.05: never put an extension-only file under `N/Widgets/`
+    outside `Shared/` (it would join the app target). Shared files must compile in
+    both targets (Foundation/AppIntents/WidgetKit only; no app-only types).
 - Siri-only intents live in the new N/Intents/ directory (app target only).
 - `AppShortcutsProvider` lives in the new N/NativeAppIntents.swift (app target only, per
   Apple DTS; see `targets/widget/_shared/SiriIntents.swift:12-28`).
@@ -631,6 +649,10 @@ and report BLOCKED on the SDK link only (ruling P7).
 Both manifests are new files. The app's is N/PrivacyInfo.xcprivacy, created by 11.09.
 The extension's is N/Widgets/PrivacyInfo.xcprivacy, created by 11.01. Neither exists
 today (grep: no `PrivacyInfo.xcprivacy` in `native/`).
+**Amended by 11.01 (2026-09-23):** the extension manifest is
+`native/TradeReadyWidgets/PrivacyInfo.xcprivacy` (sibling-root layout, §5.4). It declares
+UserDefaults `1C8F.1` only, no tracking and no collected data; the re-grep found no
+file-timestamp, boot-time or disk-space use in the extension's sources.
 
 ### 8.1 Required-reason APIs
 

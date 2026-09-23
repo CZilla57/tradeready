@@ -9,6 +9,7 @@ swiftc \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/NativeDeepLinkParser.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetAppGroup.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeAppGroupInbox.swift" \
   "$ROOT_DIR/native/AppGroupPendingOpenURLTests/main.swift" \
   -o "$OUTPUT_PATH"

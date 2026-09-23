@@ -105,6 +105,10 @@ $ROOT_DIR/native/TradeReadyNative/NativeImportHistory.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAccountDeletion.swift
 $ROOT_DIR/native/TradeReadyNative/NativeTypedAccountState.swift
 $ROOT_DIR/native/TradeReadyNative/NativeDeepLinkParser.swift
+$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetAppGroup.swift
+$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetSnapshot.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeWidgetSnapshot.swift
+$ROOT_DIR/native/TradeReadyNative/NativeWidgetMirror.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAppGroupInbox.swift
 $ROOT_DIR/native/TradeReadyNative/NativeWidgetActionReplay.swift
 $ROOT_DIR/native/TradeReadyNative/BuildEnvironment.swift
