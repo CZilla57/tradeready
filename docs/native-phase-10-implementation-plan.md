@@ -907,7 +907,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.07 | N3, N4 | Pending | 10.05 (+10.06 serialization only) | Appointment + review parity |
 | 10.08 | N5, N6, B2 | Pending | 10.05-10.07 | Unified reconciliation + routing |
 | 10.09 | B1, B2 | Pending | 10.01, 10.08 | Post-sync derived-state seam |
-| 10.10 | C1, C2, C3, C4 | Pending | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
+| 10.10 | C1, C2, C3, C4 | **Code complete** | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
 | 10.11 | D1, D2, D3, D6 | Pending | 10.04 | Today UI |
 | 10.12 | D4, D5, S5 | Pending | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
 | 10.13 | C3, C4, C5 | Pending | 10.10, 10.12 | Coach UI + prefill |
@@ -1170,3 +1170,119 @@ Exit criteria traceability (roadmap Phase 10):
 - Next-ready: 10.11 (Today UI integration) and 10.12 (checklist/hero/insights
   cards) — both were already gated on 10.04 alone for this requirement set and
   can now proceed; 10.05, 10.10 remain unblocked and unaffected.
+
+### 10.10 — Coach transport, provider routing, and system prompt
+
+- Status: **Code complete / Phase 12 evidence deferred (live AI providers).**
+- Files: `native/TradeReadyNative/NativeCoachTransport.swift` (provider
+  precedence — Anthropic key -> Groq key -> backend proxy — the three
+  transports against `/v1/messages`, `api.groq.com`, and the live
+  `backend-workers/src/routes/aiChat.js` `/api/ai-chat` route, `MAX_HISTORY`
+  = 20 truncation, and a typed `NativeCoachTransportError` mirroring RN's
+  throw contract), `native/TradeReadyNative/Domain/NativeCoachPrompt.swift`
+  (`buildSystemPrompt` port), `native/TradeReadyNative/Domain/NativeChatMarkdown.swift`
+  (`formatChatText` port), `native/TradeReadyNative/Domain/NativeCoachQuickPrompts.swift`
+  (`getQuickPrompts` port); `native/CoachTransportTests/main.swift`,
+  `native/CoachPromptTests/main.swift`, `native/ChatMarkdownTests/main.swift`
+  and their `native/run-coach-transport-tests.sh`,
+  `native/run-coach-prompt-tests.sh`, `native/run-chat-markdown-tests.sh`
+  runners (not yet registered in `run-all-domain-tests.sh` per the global
+  constraint — 10.15 owns that).
+- Interface handoff (10.13's adoption contract): `NativeCoachTransport` takes
+  an injected `NativeCoachHTTPDataLoading` loader (the same
+  `async throws -> (Data, URLResponse)` seam as `NativeInvoiceDelivery.swift`,
+  not the synchronous-bridge pattern in `NativeAITransport.swift`) plus a
+  per-call `backendBaseURL`/`sessionBytes` — it has no `.live()` factory and
+  no `BuildEnvironment`/Keychain dependency, so 10.13 constructs it with
+  `NativeCoachTransport(backendBaseURL: BuildEnvironment.backendBaseURL)` and
+  passes the Keychain-read Supabase session bytes at call time, mirroring how
+  `AppStore.swift` already wires `NativeInvoiceDeliveryService`.
+  `sendMessage(messages:systemPrompt:anthropicKey:groqKey:sessionBytes:)`
+  is the one entry point 10.13 calls; it throws `NativeCoachTransportError`
+  exactly where RN throws (missing key, provider error, empty response,
+  backend not configured/signed out, transport failure), and 10.13's `catch`
+  should render `"Something went wrong: \(error.message)"` as the `isError`
+  bubble — this is a drop-in replacement for the prototype `CoachService.reply`
+  in `CoachView.swift` (not edited by this task). `NativeCoachPrompt.buildSystemPrompt(settings:snapshot:)`
+  takes `Canonical.Settings` and the optional `NativeBusinessSnapshot` (10.01)
+  directly — 10.13 builds the prompt once per send and passes it as
+  `systemPrompt` to `sendMessage`. `NativeCoachQuickPrompts.quickPrompts(snapshot:)`
+  returns the four `NativeCoachQuickPrompt` cards in order; 10.13 renders them
+  with no branch logic of its own. `NativeChatMarkdown.formatChatText(_:)` is
+  a pure `String -> String` transform 10.13 applies to every assistant bubble
+  before display.
+- Commands / results:
+  `TZ=America/Phoenix sh native/run-coach-transport-tests.sh` — all checks
+  passed (provider precedence; Anthropic/Groq/backend success + exact request
+  shape/headers/model-constant assertions; missing-key typed errors with RN's
+  exact copy; provider `error` surfacing for all three transports;
+  unparseable/empty-response typing; `MAX_HISTORY` truncation to the last 20
+  for both Anthropic and Groq; backend not-configured, sign-in-required for
+  every malformed/absent session shape, non-2xx surfacing, and a network-level
+  loader failure; end-to-end `sendMessage` routing; a fixture proving no
+  secure key ever appears in a thrown error's message or the Anthropic request
+  body). `TZ=America/Phoenix sh native/run-coach-prompt-tests.sh` — all checks
+  passed (no-snapshot minimal settings; unmatched-trade-id "Trades" fallback
+  with an empty `contactName` dropped from "who"; a full snapshot with
+  overdue/top-customers/active-jobs/tax-known; a snapshot with the tax block
+  entirely absent; a snapshot with tax present but both rate-unknown caveats
+  firing; an all-zero/empty snapshot; the overdue singular/plural boundary; a
+  fixture proving no secure key ever enters the built prompt; every
+  `getQuickPrompts` branch — no-snapshot fallback, live overdue+avgJob, and
+  the overdue-singular case). `TZ=America/Phoenix sh native/run-chat-markdown-tests.sh`
+  — all checks passed, every vector copied verbatim from
+  `__tests__/chatMarkdown.test.ts`. RN oracle re-run:
+  `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/chatMarkdown.test.ts __tests__/estimateSnapshot.test.js` — 2
+  suites / 19 tests, all passing, no oracle file touched.
+  `TZ=America/Phoenix sh native/run-business-snapshot-tests.sh` (10.01
+  regression check, since `NativeCoachPrompt`/`NativeCoachQuickPrompts` sit on
+  top of `NativeBusinessSnapshot`) — all checks passed.
+  `xcodebuild … Release … CODE_SIGNING_ALLOWED=NO build` — **BUILD SUCCEEDED**,
+  no warnings in the four new files.
+- No RN oracle test file exists for `buildSystemPrompt`/`getQuickPrompts`
+  (both are private functions inside `screens/ChatScreen.tsx`, not exported,
+  and neither is unit-tested in `__tests__/`). Every fixture pinned in
+  `CoachPromptTests` was captured by copying the exact function bodies —
+  including the `TRADE_TYPES` table from `utils/pricingEngine.ts` — into a
+  scratch Node probe, running it, and recording the actual printed output; the
+  probe was deleted afterward and no `screens/`/`utils/` file was modified.
+- Recorded RN behavior reproduced deliberately (reads like a bug, is not one):
+  the `BUSINESS DATA (...)` block is built as its own template literal
+  starting with `"\n\n"` and then `.trim()`-ed BEFORE being concatenated onto
+  the rate/prompt prefix — the leading blank line is trimmed away, so
+  `"USD only."` is followed immediately by `"BUSINESS DATA"` with **no**
+  space or line break between them. The tax block, appended afterward with
+  its own un-trimmed leading `"\n"`, does keep a line break before
+  `"Tax set-aside estimate:"`. Confirmed by running the actual RN function
+  (not inferred from reading the source) and pinned as a fixture
+  (`testFullSnapshot`) so a future "fix" of this concatenation does not slip
+  through unnoticed as a silent behavior change.
+- Recorded intentional native difference: RN's `activeJobsByStatus` is a
+  plain object whose `Object.entries()` order is "the order statuses were
+  first encountered while iterating the jobs array" — information
+  `NativeBusinessSnapshotEngine` (10.01) does not preserve, because its
+  `activeJobsByStatus` is a Swift `[String: Int]` (unordered), built to the
+  same "only non-zero statuses present" partial-record contract RN uses. No
+  RN oracle test pins the status-line order inside the prompt text itself
+  (`businessSnapshot.test.js` only asserts the status/count map with
+  `toEqual`, which does not care about key order), so `NativeCoachPrompt`
+  renders statuses in a fixed, documented pipeline order
+  (`lead, estimate_sent, approved, scheduled, in_progress`) rather than an
+  order that cannot be recovered from the already-collapsed dictionary.
+- Recorded native addition (not a divergence from any pinned behavior): the
+  Anthropic/Groq/backend transport failures are surfaced as a typed
+  `NativeCoachTransportError` rather than an untyped `Error`/exception, and a
+  network-level loader failure (a thrown error from the injected loader) is
+  normalized to `.unavailable` rather than propagated as an opaque underlying
+  error — RN does not wrap `fetch` in `try/catch` at all for the two direct
+  providers, so a raw network exception's `.message` would otherwise leak
+  through verbatim. This is a stricter, still RN-compatible typed-result
+  contract per the task brief's "return a typed result the UI renders as an
+  error bubble or fallback" instruction, and it never changes the text shown
+  for a provider- or backend-authored error (those pass through untouched via
+  `.providerError(String)`).
+- Next-ready: 10.13 (Coach UI and contextual prefill) — this task's
+  `NativeCoachTransport`, `NativeCoachPrompt`, `NativeChatMarkdown`, and
+  `NativeCoachQuickPrompts` are the full pure/service contract 10.13 needs;
+  10.11/10.12 remain unaffected and unblocked by this task.
