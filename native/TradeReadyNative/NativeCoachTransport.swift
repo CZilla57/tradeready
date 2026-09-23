@@ -159,10 +159,12 @@ struct NativeCoachTransport: Sendable {
         request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
 
         // RN does not check `res.ok` for the direct providers — only whether
-        // the parsed body carries an `error` field — so this mirrors that.
+        // the parsed body carries a truthy `error` field — so this mirrors
+        // that (a JSON `null` is present but falsy, and must not throw).
         let json = try await performJSON(request)
-        if let error = json["error"] {
-            throw NativeCoachTransportError.providerError(Self.errorText(error) ?? "AI error")
+        let errorValue = json["error"]
+        if Self.isTruthy(errorValue) {
+            throw NativeCoachTransportError.providerError(Self.errorText(errorValue!) ?? "AI error")
         }
         let blocks = json["content"] as? [[String: Any]] ?? []
         let text = blocks.compactMap { $0["text"] as? String }.joined()
@@ -195,13 +197,15 @@ struct NativeCoachTransport: Sendable {
 
         let json = try await performJSON(request)
         // RN's `if (data.error) throw new Error(data.error.message || "AI error")`
-        // is a plain truthiness check on `error` — any present, non-null value,
-        // not only an object with a `message` field — so this mirrors that.
-        if let error = json["error"], !(error is NSNull) {
+        // is a plain JS truthiness check on `error` — a JSON `null` is falsy
+        // and must not throw — so this uses the same shared `isTruthy` rule
+        // as the other two transports.
+        let errorValue = json["error"]
+        if Self.isTruthy(errorValue) {
             // RN reads `data.error.message` unconditionally (no `typeof` branch
             // like the Anthropic path) — an object's `message` field, or the
             // "AI error" fallback for anything else, including a bare string.
-            let message = (error as? [String: Any])?["message"] as? String
+            let message = (errorValue as? [String: Any])?["message"] as? String
             throw NativeCoachTransportError.providerError(message ?? "AI error")
         }
         let choices = json["choices"] as? [[String: Any]] ?? []
@@ -235,8 +239,12 @@ struct NativeCoachTransport: Sendable {
         let (data, response) = try await load(request)
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         let ok = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
-        if !ok || json?["error"] != nil {
-            throw NativeCoachTransportError.providerError((json?["error"] as? String) ?? "AI error")
+        let errorValue = json?["error"]
+        // RN: `if (!res.ok || data.error) throw new Error(data.error || "AI error")`
+        // — the same shared JS-truthiness rule (a JSON `null` `error` on a 2xx
+        // response is falsy and must not throw).
+        if !ok || Self.isTruthy(errorValue) {
+            throw NativeCoachTransportError.providerError((errorValue as? String) ?? "AI error")
         }
         let text = json?["text"] as? String ?? ""
         guard !text.isEmpty else { throw NativeCoachTransportError.emptyResponse }
@@ -257,6 +265,23 @@ struct NativeCoachTransport: Sendable {
         if let text = error as? String { return text }
         if let object = error as? [String: Any] { return object["message"] as? String }
         return nil
+    }
+
+    /// JS truthiness for a decoded JSON value. `null`, `false`, `0`, `""`,
+    /// and absence (`nil`) are all falsy; everything else — including an
+    /// empty object or array — is truthy. Every `if (data.error)` /
+    /// `if (!res.ok || data.error)` check RN performs across all three
+    /// transports is a plain truthiness test, not a "key exists" test, so a
+    /// JSON `null` `error` field must be treated as success, not a failure.
+    /// One shared rule here rather than three separate ad hoc null-guards.
+    private static func isTruthy(_ value: Any?) -> Bool {
+        guard let value, !(value is NSNull) else { return false }
+        switch value {
+        case let flag as Bool: return flag
+        case let text as String: return !text.isEmpty
+        case let number as NSNumber: return number.doubleValue != 0
+        default: return true
+        }
     }
 
     private func performJSON(_ request: URLRequest) async throws -> [String: Any] {

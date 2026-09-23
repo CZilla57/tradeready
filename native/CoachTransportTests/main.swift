@@ -114,6 +114,20 @@ private func testAnthropicProviderError() async {
     } catch { failures += 1; print("FAIL: wrong error type: \(error)") }
 }
 
+private func testAnthropicNullErrorFieldIsSuccess() async {
+    // JS truthiness: `null` is falsy, so `if (data.error)` does not throw. A
+    // response carrying `"error": null` alongside real content is success.
+    let loader = FakeLoader()
+    loader.responseData = Data("""
+    {"error":null,"content":[{"type":"text","text":"still fine"}]}
+    """.utf8)
+    let transport = NativeCoachTransport(backendBaseURL: nil, loader: loader)
+    do {
+        let reply = try await transport.sendClaude(messages: messages(1), systemPrompt: nil, apiKey: "sk-ant")
+        expectEqual(reply, "still fine", "a JSON-null `error` field is falsy and must not throw")
+    } catch { failures += 1; print("FAIL: a null `error` field should not throw — \(error)") }
+}
+
 private func testAnthropicEmptyResponse() async {
     let loader = FakeLoader()
     loader.responseData = Data("""
@@ -215,6 +229,18 @@ private func testGroqProviderErrorObjectAndBareString() async {
     } catch { failures += 1; print("FAIL: wrong error type: \(error)") }
 }
 
+private func testGroqNullErrorFieldIsSuccess() async {
+    let loader = FakeLoader()
+    loader.responseData = Data("""
+    {"error":null,"choices":[{"message":{"content":"still fine"}}]}
+    """.utf8)
+    let transport = NativeCoachTransport(backendBaseURL: nil, loader: loader)
+    do {
+        let reply = try await transport.sendGroq(messages: messages(1), systemPrompt: nil, apiKey: "gsk")
+        expectEqual(reply, "still fine", "a JSON-null `error` field is falsy and must not throw")
+    } catch { failures += 1; print("FAIL: a null `error` field should not throw — \(error)") }
+}
+
 private func testGroqHistoryTruncation() async {
     let loader = FakeLoader()
     loader.responseData = Data("""
@@ -288,6 +314,21 @@ private func testBackendNonOKStatus() async {
     } catch let error as NativeCoachTransportError {
         expectEqual(error, .providerError("Too many requests. Please wait a minute and try again."), "surfaces the backend's own error text")
     } catch { failures += 1; print("FAIL: wrong error type: \(error)") }
+}
+
+private func testBackendNullErrorFieldOnSuccessStatusIsSuccess() async {
+    // JS truthiness: `null` is falsy, so `if (!res.ok || data.error)` does not
+    // throw when the status is 2xx and `error` is `null`.
+    let loader = FakeLoader()
+    loader.status = 200
+    loader.responseData = Data("""
+    {"error":null,"text":"still fine"}
+    """.utf8)
+    let transport = NativeCoachTransport(backendBaseURL: URL(string: "https://worker.test")!, loader: loader)
+    do {
+        let reply = try await transport.sendBackend(messages: messages(1), systemPrompt: nil, sessionBytes: Data("{\"access_token\":\"t\"}".utf8))
+        expectEqual(reply, "still fine", "a JSON-null `error` field on a 2xx response is falsy and must not throw")
+    } catch { failures += 1; print("FAIL: a null `error` field on a 2xx response should not throw — \(error)") }
 }
 
 private func testBackendEmptyResponse() async {
@@ -390,17 +431,20 @@ Task {
     await testAnthropicSuccessAndHeaders()
     await testAnthropicMissingKey()
     await testAnthropicProviderError()
+    await testAnthropicNullErrorFieldIsSuccess()
     await testAnthropicEmptyResponse()
     await testAnthropicUnparseableResponse()
     await testAnthropicHistoryTruncation()
     await testGroqSuccessAndHeaders()
     await testGroqMissingKey()
     await testGroqProviderErrorObjectAndBareString()
+    await testGroqNullErrorFieldIsSuccess()
     await testGroqHistoryTruncation()
     await testBackendSuccess()
     await testBackendNotConfigured()
     await testBackendAuthMissing()
     await testBackendNonOKStatus()
+    await testBackendNullErrorFieldOnSuccessStatusIsSuccess()
     await testBackendEmptyResponse()
     await testTransportFailurePropagates()
     await testSendMessageRouting()
