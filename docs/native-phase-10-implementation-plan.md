@@ -888,7 +888,7 @@ the `ai-chat` route; do not invoke a deploy command to validate a build.
 
 ## 6. Initial execution ledger
 
-Tasks **10.00, 10.01, 10.02, 10.03, and 10.04 are code complete**; all others are pending (see
+All of Phase 10 (**10.00–10.15**) is **code complete** as of this task (see
 the table). The source review used to write this plan is not test execution or
 an implementation completion. Maintain
 one row per task: status, owner/session, dependency evidence, files, commands,
@@ -912,7 +912,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.12 | D4, D5, S5 | **Code complete** | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
 | 10.13 | C3, C4, C5 | **Code complete** | 10.10, 10.12 | Coach UI + prefill |
 | 10.14 | all | **Code complete** | 10.01-10.13 | Cross-client qualification |
-| 10.15 | all | Pending | 10.14 | Aggregate verification + closeout |
+| 10.15 | all | **Code complete** | 10.14 | Aggregate verification + closeout |
 
 Exit criteria traceability (roadmap Phase 10):
 
@@ -2584,3 +2584,118 @@ are already pinned against the RN oracle exhaustively in `TodayInsightsTests`
   allowance not to redo existing coverage); device/permission/live-AI/
   background-delivery proof remains correctly deferred to Phase 12.
 - Next-ready: **10.15** (aggregate verification and closeout).
+
+### 10.15 — Aggregate verification and evidence closeout
+
+**Status:** Code complete. Device, permission, live-AI-provider, and
+background-delivery proof remain deferred to Phase 12 per the roadmap's
+2026-09-16 verification-deferral decision — not claimed here.
+
+**Files:**
+- Modified: `native/run-all-domain-tests.sh` (registers the six new
+  standalone Phase 10 runners plus `run-phase10-qualification-tests.sh`;
+  `run-appstore-sources-common.sh` is a sourced helper, not a runner, and is
+  correctly left unregistered), `docs/native-ios-migration-roadmap.md`
+  (new Phase 10 "Current progress" entry), `docs/native-parity-matrix.md`
+  (Coach/Quick prompts/Insight handoff, Settings › Notifications, and
+  Platform › Notifications/Background refresh/Deep links rows updated from
+  their stale Prototype/Not-started/partial text to reflect Phase 10's
+  landed, host-tested code, each still short of `Verified`), this doc (§6
+  row flip, this §7 entry).
+- New: `docs/native-phase-10-device-runsheet.md` (Today, Setup checklist,
+  Proactive insights, AI coach, Quick prompts, Insight handoff,
+  Notifications, Background refresh, Deep links sections, plus the two
+  parked implementation gates below carried forward as explicit rows).
+- Modified: `docs/native-phase-12-implementation-plan.md` (links the new
+  runsheet into its consolidated Phase 12 runsheet list).
+- No implementation (Swift/RN/backend) source file's behavior was changed —
+  this is a registration/build/evidence/doc task per the brief.
+
+**Runners registered** (in `native/run-all-domain-tests.sh`, per ruling R6 —
+this is the only task allowed to do so): `run-today-insights-tests.sh`
+(10.02), `run-today-briefing-tests.sh` (10.04), `run-coach-transport-tests.sh`
+and `run-coach-prompt-tests.sh` and `run-chat-markdown-tests.sh` (10.10),
+`run-notification-permission-tests.sh` (10.05), and
+`run-phase10-qualification-tests.sh` (10.14). Found via
+`git diff --name-only --diff-filter=A 2bb8dd5..HEAD -- 'native/run-*.sh'`,
+which also surfaced `run-appstore-sources-common.sh` — a sourced dependency
+list (added alongside 10.12's concurrently-authored runner refactor, per
+progress-ledger ruling), not a runner, and correctly excluded.
+
+**Xcode target membership:** verified by construction, not by editing
+`project.pbxproj`. `native/TradeReadyNative.xcodeproj/project.pbxproj`
+defines the whole `TradeReadyNative` folder as a single
+`PBXFileSystemSynchronizedRootGroup` (`fileSystemSynchronizedGroups`), so
+every file physically present under `native/TradeReadyNative/` — including
+all 15 new Phase 10 files added since baseline 2bb8dd5
+(`Domain/NativeChatMarkdown.swift`, `Domain/NativeCoachPrompt.swift`,
+`Domain/NativeCoachQuickPrompts.swift`, `Domain/NativeCoachTranscript.swift`,
+`Domain/NativeInsightsCardPolicy.swift`, `Domain/NativeTodayBriefing.swift`,
+`Domain/NativeTodayInsights.swift`, `NativeAnalytics.swift`,
+`NativeCoachComponents.swift`, `NativeCoachTransport.swift`,
+`NativeDerivedStatePublisher.swift`, `NativeInsightsCard.swift`,
+`NativeNotificationCategories.swift`, `NativeSetupChecklistCard.swift`,
+`NativeTodayComponents.swift`) — is auto-included in the app target with no
+manual pbxproj edit required or performed.
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` — **all 75
+  registered Swift host-test runners passed** (0 failures), followed by
+  `(cd backend-workers && npm test)` — **6 suites, 26 tests, 0 failures**.
+  Two pre-existing compiler warnings appeared, unrelated to this task
+  (`AppStore.swift:7169`'s unused `binding`, `StoreIntegrationTests`'
+  `ScheduleBookingTestLoader` Swift 6 `Sendable`-mutability warning) — both
+  predate this task per the 10.05/10.12 execution log and were left
+  untouched.
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme
+  TradeReadyNative -configuration Release -destination
+  'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` (**unsigned**) —
+  **BUILD SUCCEEDED**, 0 `error:` lines.
+- `security find-identity -v -p codesigning` found one valid identity
+  ("Apple Development: Chad Rector (9HBXYALFY3)"), so the **signed** build
+  was also attempted: `xcodebuild -project native/TradeReadyNative.xcodeproj
+  -scheme TradeReadyNative -configuration Release -destination
+  'generic/platform=iOS' build` (same command, `CODE_SIGNING_ALLOWED=NO`
+  removed) — **BUILD SUCCEEDED**, automatic signing resolved
+  `DEVELOPMENT_TEAM = 96J48TJWX3`, signed with the Apple Development
+  identity above against the "iOS Team Provisioning Profile:
+  com.gettradereadyapp.tradeready". A `build` action only — no `archive`,
+  export, upload, or App Store Connect action was taken.
+- `sh native/run-doc-reference-check.sh` — 0 missing (976 paths checked
+  after this task's doc edits).
+
+**Open implementation gates carried forward** (from the progress ledger's
+Parked / Deferred-minors lines; recorded here and in the new runsheet, not
+waived):
+- **10.12 I4 (parked):** the Stripe account-switch write race
+  (`markSetupTaskDoneIfStripeConnected` racing a Stripe status refresh
+  against an account switch) is proven today only through the pure
+  `stripeTaskWriteAllowed` predicate (four cases), not end-to-end — no
+  injectable Stripe service seam exists in `configuredStripeConnectService()`.
+- **10.13 (parked minor):** the Coach `sending` flag can remain stuck `true`
+  if `CoachView` ever survives an account boundary without RootView's
+  existing teardown running first; unreached today because RootView always
+  tears the view down on sign-out/account-switch.
+- Device/permission/live-AI-provider/background-delivery evidence for every
+  Phase 10 surface remains correctly deferred to Phase 12, tracked row-by-row
+  in the new `docs/native-phase-10-device-runsheet.md`, including the
+  per-task items carried forward from 10.05 (soft-ask permission flow),
+  10.07/10.08 (notification delivery and tap routing), 10.09 (derived-state
+  publish-after-sync and background refresh), 10.12 (in-card notification
+  permission request and "Open device settings"), 10.13 (live AI provider
+  proof), and 10.14 (the four recorded native/RN deviations).
+
+**Concerns / limitations:**
+- The roadmap's pre-existing "Phases 8–12: Not started" line was factually
+  stale for Phase 8/9 even before this task (both have in-flight plan/
+  contract/runsheet artifacts on this branch); this task only carves out and
+  correctly states Phase 10, and leaves an explicit note that 8/9's lines
+  were not reconciled here — out of this task's scope.
+- No new implementation bug was found or fixed; this task's scope is
+  registration, build verification, and evidence/doc closeout only, per the
+  brief.
+- Phase 10 is now **code complete with Phase 12 evidence deferred** across
+  every row; no row anywhere in the parity matrix or roadmap claims a
+  blanket "Verified".
+- Next-ready: **Phase 11** (per the roadmap's dependency graph); **Phase 12**
+  owns executing every row in `docs/native-phase-10-device-runsheet.md`.

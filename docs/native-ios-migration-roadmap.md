@@ -387,7 +387,35 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   Simultaneous-offline recurring generation diverges (React Native-parity
   limitation pinned by test). The phase remains open only for
   physical-device interaction evidence and trusted-staging sync proof.
-- Phases 8–12: **Not started**.
+- Phase 10: **Code complete; device+staging evidence deferred to Phase 12** (see
+  the 2026-09-16 deferral decision above) — every planned Today, proactive-
+  insights, AI-coach, notification, and post-sync derived-state deliverable is
+  implemented and host-tested (see the Phase 10 execution ledger in
+  [native-phase-10-implementation-plan.md](native-phase-10-implementation-plan.md)
+  and the frozen contracts/deviations in
+  [native-phase-10-today-coach-notifications-contract-decisions.md](native-phase-10-today-coach-notifications-contract-decisions.md)).
+  The Today surface (schedule, stats, overdue/lead briefings, booking/portal
+  attention rows, first-action hero, setup checklist, insights card), the
+  business-snapshot and eight-rule proactive-insights engines with mute/snooze
+  lifecycle, the AI coach (provider routing, system prompt, transcript,
+  markdown-lite, quick prompts, insight-handoff prefill), all five notification
+  namespaces with unified reconciliation and exact-owner tap routing, and the
+  post-sync derived-state seam (notification reconcile + cached business
+  snapshot refresh, exactly once per committed sync pass) are done. Cross-
+  engine qualification against a shared fixture (task 10.14) proves
+  determinism and idempotent-reconcile-twice behavior. Two implementation
+  gates stay open and unwaived: the Stripe account-switch write race is
+  proven only through a pure predicate, not end-to-end (no injectable Stripe
+  service seam yet), and the coach `sending` flag could stay stuck if the
+  Coach view ever survives an account boundary without RootView's existing
+  teardown running first. Device, permission, live-AI-provider, and
+  background-delivery evidence remain deferred to Phase 12 per
+  [native-phase-10-device-runsheet.md](native-phase-10-device-runsheet.md).
+- Phases 8–9, 11–12: **Not started** (tracking note: Phase 8's contract
+  decisions and Phase 9's implementation plan/device runsheet already exist as
+  in-flight artifacts from earlier work on this branch; their roadmap status
+  lines were not reconciled by this Phase 10 closeout task and remain as
+  written pending that phase's own closeout).
 
 Tracking details: [native-parity-matrix.md](native-parity-matrix.md),
 [native-phase-2-persistence.md](native-phase-2-persistence.md), and
