@@ -205,14 +205,21 @@ enum ReviewRequestTests {
             expect(false, "review-request store validation — \(error)")
         }
 
-        // Task 10.07 (N4/B2) — the one-shot guard holds across a simulated
+        // Task 10.07 (N4/B2) — the durable record survives a simulated
         // relaunch: reopening the on-disk store (a fresh NativeReviewRequestStore
         // instance against the SAME fileURL, exactly what AppStore's
-        // activateReviewRequests does on every real launch) must reproduce the
-        // identical record, and therefore the identical review_ fire instant
-        // (planItem re-derives fireDate purely from scheduledAt + delay — see
-        // NativeReviewRequests.planItem above). A sweep or relaunch can never
-        // silently move or drop a pending one-shot.
+        // activateReviewRequests does on every real launch) must reproduce
+        // the identical record, and therefore the identical review_ plan
+        // item built from it (planItem re-derives fireDate purely from
+        // scheduledAt + delay — see NativeReviewRequests.planItem above).
+        // This is the pure-store half of the guarantee; the combined
+        // relaunch-THEN-mid-window-sweep proof, exercised through a real
+        // AppStore and a real `now`, lives in
+        // native/StoreIntegrationTests/main.swift (`reviewRequestNotifications(now:)`
+        // swept before and after a relaunch that goes through the real
+        // `activateReviewRequests` reload path) — `NativeReviewRequests.planItem`
+        // itself takes no `now`, so it cannot independently prove a
+        // time-varying sweep.
         do {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             let fileURL = dir.appendingPathComponent("review-requests.json")
@@ -235,29 +242,8 @@ enum ReviewRequestTests {
                 scheduledAt: armedAtDate, delayHours: 2)
             expect(before.fireDate == after.fireDate && before.identifier == after.identifier,
                    "the review_ fire instant re-derived after relaunch matches the instant before relaunch exactly")
-
-            // A "sweep" is any repeated read of the still-pending record while
-            // it sits inside its delay window — reopening the app, a
-            // background sync pass, or the notification coordinator's
-            // cancel-all-then-rebuild. Reading it at several different
-            // simulated "now" instants inside the window must always yield
-            // the SAME fire date (never re-armed to "now + delay", which
-            // would be the bug this task guards against).
-            let scheduledAt = Date(timeIntervalSince1970: 1_800_000_000)
-            let deadline = scheduledAt.addingTimeInterval(2 * 3600)
-            let sweepPoints: [TimeInterval] = [0, 900, 3600, 7199] // several points inside the 2h window
-            var fireDates: [Date] = []
-            for offset in sweepPoints {
-                let item = NativeReviewRequests.planItem(
-                    jobId: "j9", customerName: "Sam", jobTitle: "Faucet swap",
-                    scheduledAt: scheduledAt, delayHours: 2)
-                fireDates.append(item.fireDate)
-                _ = offset // the selector is pure in "now" — it never reads "now" at all
-            }
-            expect(Set(fireDates).count == 1 && fireDates[0] == deadline,
-                   "every sweep inside the delay window rebuilds the exact same fire instant, never one derived from the sweep time")
         } catch {
-            expect(false, "review-request relaunch/sweep parity — \(error)")
+            expect(false, "review-request relaunch parity — \(error)")
         }
 
         if failures == 0 {

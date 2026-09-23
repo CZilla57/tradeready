@@ -2706,15 +2706,15 @@ struct StoreIntegrationTests {
                    "10.07 signing out revokes review routing even for a previously-valid job")
         }
 
-        // Task 10.07 (N4, B2) — the critical review_ rebuild guarantee: a
-        // notification sweep landing INSIDE the delay window (the
-        // coordinator's `synchronizeOnce` clears every owned pending request
-        // and rebuilds from `reviewRequestNotifications`, exactly as
-        // `syncNotifications`'s cancelAllScheduledNotificationsAsync +
-        // rebuild does in RN) must never permanently eat the pending one-shot.
-        // `reviewRequestNotifications(now:)` re-derives the fire instant from
-        // the durable record's `scheduledAt` + the settings delay on every
-        // call, so repeated "sweeps" at different points in time all agree.
+        // Task 10.07 (N4, B2) — the critical review_ rebuild guarantee,
+        // combined at ONE layer: arm the one-shot, sweep it mid-window on the
+        // ARMING store (proving the sweep never re-arms from the sweep
+        // time), then go through a REAL simulated relaunch — a second
+        // AppStore over the same persisted file, seeded through the real
+        // `activateReviewRequests` reload path (`scheduleBookingTestReloadReviewRequests`,
+        // not a bypass) — and sweep the RELAUNCHED store at a mid-window
+        // `now` too, asserting the identical identifier and fire date. Then
+        // prove it drops after firing, and after being marked sent.
         do {
             let sweepDirectory = directory.appendingPathComponent("ReviewSweep10_07", isDirectory: true)
             let sweepURL = sweepDirectory.appendingPathComponent("store.json")
@@ -2732,51 +2732,57 @@ struct StoreIntegrationTests {
             sweepStore.settings.reviewRequestEnabled = true
             sweepStore.settings.reviewRequestDelayHours = 2
 
+            // 1. Arm the one-shot.
             let armedAt = Date(timeIntervalSince1970: 1_800_000_000)
             let outcome = sweepStore.completeJob(id: sweepJob.id, from: .inProgress, on: armedAt)
             expect(outcome == .completed, "10.07 completing the job arms the review_ one-shot")
 
             let expectedFire = armedAt.addingTimeInterval(2 * 3600)
             let identifier = "review_\(sweepJob.id)"
+            let midWindow = armedAt.addingTimeInterval(3600) // 1h into the 2h window
 
-            // Read the plan at several simulated "now" instants inside the
-            // 2h delay window — a fresh read (armingInstant), then two later
-            // reads simulating the app reopening or a background sync pass
-            // partway through the window. Every one of them is what a
-            // cancel-all-then-rebuild sweep at that moment would reschedule.
-            for (label, offset) in [("at arming", 0.0), ("30min into the window", 1800.0), ("90min into the window", 5400.0)] {
-                let sweepNow = armedAt.addingTimeInterval(offset)
-                let plan = sweepStore.reviewRequestNotifications(now: sweepNow)
-                let item = plan.first(where: { $0.identifier == identifier })
-                expect(item != nil, "10.07 a sweep \(label) still finds the pending review_ nudge")
-                expect(item?.fireDate == expectedFire,
-                       "10.07 a sweep \(label) rebuilds the SAME fire instant, never one re-armed from the sweep time")
-            }
+            // 3a. Sweep the ARMING store at a mid-window `now` — a
+            // cancel-all-then-rebuild sweep before any relaunch happens.
+            let armingSweep = sweepStore.reviewRequestNotifications(now: midWindow)
+            let armingItem = armingSweep.first(where: { $0.identifier == identifier })
+            expect(armingItem != nil, "10.07 a mid-window sweep on the arming store still finds the pending review_ nudge")
+            expect(armingItem?.fireDate == expectedFire,
+                   "10.07 a mid-window sweep on the arming store rebuilds the SAME fire instant, never one re-armed from the sweep time")
 
-            // A sweep landing AFTER the fire instant must not re-nag late —
-            // it drops out of the plan entirely rather than firing on the
-            // next sweep.
-            let afterFire = sweepStore.reviewRequestNotifications(now: expectedFire.addingTimeInterval(60))
-            expect(afterFire.first(where: { $0.identifier == identifier }) == nil,
-                   "10.07 a sweep after the fire instant never re-nags late")
-
-            // Simulated relaunch (canonical half): a second AppStore instance
-            // pointed at the same fileURL resolves the same completed job —
-            // the `scheduleBookingTestSeedSignedInOwner` seam only stands up
-            // the identity, not the owner-bound side-stores that a real
-            // launch's `activateReviewRequests` reloads, so the review_
-            // *record's* relaunch survival is proven at the
-            // NativeReviewRequestStore layer instead (two store instances
-            // against the same file, see native/ReviewRequestTests/main.swift).
+            // 2. Simulate a relaunch: a NEW AppStore instance over the same
+            // persisted store file, activated through the REAL
+            // `activateReviewRequests` reload path (not the identity-only
+            // seed) — this is the exact method a live launch's
+            // `applyAuthenticatedIdentityOutcome` calls to repopulate
+            // `reviewRequestRecords` from the on-disk
+            // NativeReviewRequestStore for the verified owner.
             let relaunched = AppStore(fileURL: sweepURL, seedIfMissing: false)
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-10.07-sweep", binding: sweepBinding)
             expect(relaunched.jobs.first(where: { $0.id == sweepJob.id })?.status == .complete,
                    "10.07 the completed job's canonical status survives the simulated relaunch")
+            relaunched.scheduleBookingTestReloadReviewRequests(accountBinding: sweepBinding)
 
-            // Marking the request sent clears it from the plan for good —
-            // the toggle-off/sent semantics are not sweep-rebuilt.
+            // 3b + 4. Sweep the RELAUNCHED store at the SAME mid-window
+            // `now` — the identical review_ identifier and fire date must
+            // survive the relaunch AND the sweep together, at one layer.
+            let relaunchedSweep = relaunched.reviewRequestNotifications(now: midWindow)
+            let relaunchedItem = relaunchedSweep.first(where: { $0.identifier == identifier })
+            expect(relaunchedItem != nil,
+                   "10.07 a mid-window sweep on the RELAUNCHED store still finds the pending review_ nudge")
+            expect(relaunchedItem?.fireDate == expectedFire,
+                   "10.07 a mid-window sweep on the RELAUNCHED store rebuilds the identical fire instant as before the relaunch")
+
+            // 5a. A sweep landing AFTER the fire instant must not re-nag
+            // late — it drops out of the plan entirely rather than firing on
+            // the next sweep, even on the relaunched store.
+            let afterFire = relaunched.reviewRequestNotifications(now: expectedFire.addingTimeInterval(60))
+            expect(afterFire.first(where: { $0.identifier == identifier }) == nil,
+                   "10.07 a sweep after the fire instant never re-nags late, including after a relaunch")
+
+            // 5b. Marking the request sent clears it from the plan for
+            // good — the toggle-off/sent semantics are not sweep-rebuilt.
             sweepStore.markReviewRequestSent(jobID: sweepJob.id, fallback: nil, now: expectedFire.addingTimeInterval(-60))
-            let afterSent = sweepStore.reviewRequestNotifications(now: armedAt.addingTimeInterval(1800))
+            let afterSent = sweepStore.reviewRequestNotifications(now: midWindow)
             expect(afterSent.first(where: { $0.identifier == identifier }) == nil,
                    "10.07 marking the request sent removes it from every subsequent sweep")
         }

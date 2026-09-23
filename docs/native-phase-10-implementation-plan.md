@@ -1400,21 +1400,28 @@ Exit criteria traceability (roadmap Phase 10):
   correct in `NativeReviewRequests` + `AppStore.armReviewRequestIfEligible` /
   `markReviewRequestSent`. The sweep rebuild (brief's "most important item")
   had the formatter bug above; fixed.
-- Parity test (brief item 3, B2 dependency preview): added to
-  `native/ReviewRequestTests/main.swift` — two `NativeReviewRequestStore`
-  instances against the same file URL (a simulated relaunch) resolve the
-  identical record and therefore the identical `review_` fire instant; a
-  simulated multi-point sweep across the delay window re-derives the same
-  fire date every time. Added to `native/StoreIntegrationTests/main.swift` —
-  a full `AppStore` completes a job (arming the one-shot), then calls
-  `reviewRequestNotifications(now:)` at three points inside the 2h delay
-  window (this IS what the coordinator's cancel-all-then-rebuild sweep
-  calls); before the formatter fix this reproduced the bug (empty plan at
-  every sweep point); after the fix all three sweeps return the identical
-  `review_<jobId>` identifier and fire date, a sweep after the fire instant
-  drops it (no late re-nag), a second `AppStore` instance against the same
-  file URL resolves the same completed job (simulated relaunch), and marking
-  the request sent removes it from every subsequent sweep for good.
+- Parity test (brief item 3, B2 dependency preview): the combined
+  sweep-survives-a-relaunch proof lives in one layer, in
+  `native/StoreIntegrationTests/main.swift`. A full `AppStore` completes a
+  job (arming the `review_` one-shot), sweeps
+  `reviewRequestNotifications(now:)` at a mid-window `now` on that store,
+  then simulates a relaunch with a second `AppStore` instance that calls the
+  new `scheduleBookingTestReloadReviewRequests` seam — which invokes the
+  real, private `activateReviewRequests(accountBinding:migrated:)` reload
+  path (the same method a live launch's `applyAuthenticatedIdentityOutcome`
+  calls), not a bypass — and sweeps the SAME mid-window `now` on the
+  relaunched store; the identical `review_<jobId>` identifier and fire date
+  survive both the mid-window sweep and the relaunch together. A further
+  sweep after the fire instant drops it (no late re-nag), and marking the
+  request sent removes it from every subsequent sweep for good.
+  `native/ReviewRequestTests/main.swift` separately keeps a narrower,
+  store-level proof: two `NativeReviewRequestStore` instances against the
+  same file URL (a simulated relaunch) resolve the identical persisted
+  record and therefore the identical `review_` fire instant computed by
+  `NativeReviewRequests.planItem` — this is a pure relaunch-persistence
+  check only, since `planItem` takes no `now` and cannot demonstrate
+  sweep time-variance; that half of the guarantee is exercised solely by
+  the `StoreIntegrationTests` test above.
 - Tap routing (N6): `requestAppointmentConfirmationReview` and
   `requestReviewRequestReview` were already gated on
   `hasExactSignedInWorkspace`/`isSignedIn` and an existing job/draft

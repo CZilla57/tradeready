@@ -7749,6 +7749,19 @@ extension AppStore {
         authenticationGateState = .signedIn(email: nil)
     }
 
+    /// Test-only (task 10.07): invokes the REAL `activateReviewRequests`
+    /// reload — the exact method a live launch's
+    /// `applyAuthenticatedIdentityOutcome` calls to repopulate
+    /// `reviewRequestRecords` from the on-disk `NativeReviewRequestStore` for
+    /// the verified owner — without standing up a full mocked sign-in flow.
+    /// `scheduleBookingTestSeedSignedInOwner` alone only seeds the identity
+    /// fields; it does not reload owner-bound side-stores, so a test that
+    /// needs a genuine "relaunch reads its persisted review_ records back"
+    /// proof must call this too. Production never calls this directly.
+    func scheduleBookingTestReloadReviewRequests(accountBinding: String) {
+        activateReviewRequests(accountBinding: accountBinding, migrated: nil)
+    }
+
     /// Test-only: clears the seeded owner identity (simulates sign-out for
     /// stale-response/account-switch coverage).
     func scheduleBookingTestClearOwner() {
