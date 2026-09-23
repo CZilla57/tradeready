@@ -9,6 +9,23 @@ enum NativeNotificationPermissionState: Equatable, Sendable {
     case authorized
 }
 
+/// Outcome of `NativeEstimateFollowUpNotificationCoordinator.promptForInvoiceRemindersIfNeeded()`
+/// (task 10.05, N1) — informational only; every case is a legitimate no-repeat
+/// outcome and none of them is surfaced as an error.
+enum NativeInvoiceReminderPromptOutcome: Equatable, Sendable {
+    /// No exact signed-in workspace; nothing was read or stamped.
+    case noWorkspace
+    /// The owner-bound flag was already set; silent, matching RN.
+    case alreadyShown
+    /// The flag was just stamped, but OS permission was already settled
+    /// (`authorized`/`denied`); no request was made, matching RN's "silent
+    /// when the OS status is already settled".
+    case permissionAlreadySettled
+    /// OS permission was undetermined: a real request was made (fires the
+    /// system dialog at most once) and, on grant, `synchronize()` ran once.
+    case requested(granted: Bool)
+}
+
 @MainActor
 protocol NativeEstimateFollowUpNotificationCenter: AnyObject {
     func install(delegate: any UNUserNotificationCenterDelegate)
@@ -17,6 +34,11 @@ protocol NativeEstimateFollowUpNotificationCenter: AnyObject {
     func pendingNotificationIdentifiers() async -> [String]
     func removePendingNotificationRequests(withIdentifiers identifiers: [String])
     func schedule(_ notification: NativeEstimateFollowUpNotification, secondsFromNow: TimeInterval) async throws
+    /// Registers the app's `UNNotificationCategory` set (task 10.05, N1). The
+    /// default implementation below is a no-op so every pre-existing fake
+    /// center keeps compiling unmodified; only the system center and a fake
+    /// built to assert registration need to override it.
+    func registerCategories(_ categories: Set<UNNotificationCategory>)
 }
 
 @MainActor
@@ -63,6 +85,7 @@ final class NativeSystemEstimateFollowUpNotificationCenter: NativeEstimateFollow
             "type": "estimate_follow_up",
             "jobId": notification.jobID
         ]
+        content.categoryIdentifier = NativeNotificationNamespace.estimateFollowUp.payloadType
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: max(1, secondsFromNow),
             repeats: false
@@ -85,6 +108,7 @@ final class NativeSystemEstimateFollowUpNotificationCenter: NativeEstimateFollow
             "type": item.route.namespace.payloadType,
             "jobId": item.route.jobID
         ]
+        content.categoryIdentifier = item.route.namespace.payloadType
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: max(1, secondsFromNow),
             repeats: false
@@ -104,6 +128,7 @@ final class NativeSystemEstimateFollowUpNotificationCenter: NativeEstimateFollow
         content.title = item.title
         content.body = item.body
         content.userInfo = item.route.payloadUserInfo
+        content.categoryIdentifier = item.route.namespace.payloadType
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: max(1, secondsFromNow),
             repeats: false
@@ -113,6 +138,13 @@ final class NativeSystemEstimateFollowUpNotificationCenter: NativeEstimateFollow
             content: content,
             trigger: trigger
         ))
+    }
+
+    /// Real, one-time-per-launch `UNUserNotificationCenter.setNotificationCategories`
+    /// call (task 10.05, N1). See `NativeNotificationCategories` for the
+    /// per-family set; none of their actions send anything to a customer.
+    func registerCategories(_ categories: Set<UNNotificationCategory>) {
+        center.setNotificationCategories(categories)
     }
 }
 
@@ -353,6 +385,11 @@ struct NativeNotificationNamespacePlan {
 }
 
 extension NativeEstimateFollowUpNotificationCenter {
+    /// Default no-op so every pre-existing fake center (none of which cares
+    /// about category registration) keeps conforming unmodified; the system
+    /// center and any fake built to assert registration override this.
+    func registerCategories(_ categories: Set<UNNotificationCategory>) {}
+
     /// Generic owned-namespace scheduling. The default implementation bridges
     /// through the pre-existing estimate primitive so existing fakes keep
     /// working; the system center overrides it to stamp the per-namespace
@@ -415,8 +452,16 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
     private let namespacePlans: [NativeNotificationNamespacePlan]
     private let openFollowUp: @MainActor (String) -> Void
     private let openOwnedRoute: (@MainActor (NativeNotificationRoute) -> Void)?
+    /// Task 10.05 (N1): reads/stamps the owner-bound one-shot contextual
+    /// prompt flag (`NativeReminderPromptStore`, keyed by the exact workspace
+    /// binding). Defaults are conservative no-ops so every pre-existing call
+    /// site (tests, the legacy convenience inits) keeps compiling and behaving
+    /// exactly as before this task.
+    private let wasReminderPromptShown: @MainActor () -> Bool
+    private let markReminderPromptShown: @MainActor () -> Void
     private var isSynchronizing = false
     private var needsResynchronization = false
+    private var didRegisterCategories = false
     private static let identifierPrefix = "est_"
     private static let maximumScheduledCount = 60
 
@@ -468,7 +513,9 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
         notificationPlan: @escaping @MainActor (Date) -> [NativeEstimateFollowUpNotification],
         namespacePlans: [NativeNotificationNamespacePlan],
         openFollowUp: @escaping @MainActor (String) -> Void,
-        openOwnedRoute: (@MainActor (NativeNotificationRoute) -> Void)? = nil
+        openOwnedRoute: (@MainActor (NativeNotificationRoute) -> Void)? = nil,
+        wasReminderPromptShown: @escaping @MainActor () -> Bool = { false },
+        markReminderPromptShown: @escaping @MainActor () -> Void = {}
     ) {
         self.center = center
         self.exactWorkspaceBinding = exactWorkspaceBinding
@@ -477,12 +524,47 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
         self.namespacePlans = namespacePlans.filter { $0.namespace != .estimateFollowUp }
         self.openFollowUp = openFollowUp
         self.openOwnedRoute = openOwnedRoute
+        self.wasReminderPromptShown = wasReminderPromptShown
+        self.markReminderPromptShown = markReminderPromptShown
         super.init()
         center.install(delegate: self)
     }
 
     func refreshPermissionState() async {
         permissionState = await center.authorizationState()
+    }
+
+    /// Registers the five per-family `UNNotificationCategory` entries exactly
+    /// once per coordinator lifetime — the coordinator is constructed once at
+    /// app launch and lives for the process, so this is "once per launch"
+    /// (task 10.05, N1). A second call is a no-op and never re-invokes the
+    /// underlying center.
+    func registerCategoriesIfNeeded() {
+        guard !didRegisterCategories else { return }
+        didRegisterCategories = true
+        center.registerCategories(NativeNotificationCategories.makeAll())
+    }
+
+    /// One-shot contextual invoice-reminder prompt (task 10.05, N1), mirroring
+    /// RN's `promptForInvoiceReminders` (`utils/notifications.ts`): the flag is
+    /// stamped BEFORE any permission request so a dismissed/undecided OS
+    /// dialog never re-fires, the ask happens at most once, it is silent when
+    /// the OS permission is already settled either way, and a grant triggers
+    /// exactly one `synchronize()`. No-ops (no read, no stamp) without an
+    /// exact signed-in workspace, matching every other owner-bound operation
+    /// in this coordinator.
+    @discardableResult
+    func promptForInvoiceRemindersIfNeeded() async -> NativeInvoiceReminderPromptOutcome {
+        guard exactWorkspaceBinding() != nil else { return .noWorkspace }
+        guard !wasReminderPromptShown() else { return .alreadyShown }
+        await refreshPermissionState()
+        // Stamp before any request/alert, regardless of the outcome below —
+        // an already-settled permission is marked shown too, exactly like RN.
+        markReminderPromptShown()
+        guard permissionState == .notRequested else { return .permissionAlreadySettled }
+        let granted = await requestAuthorization()
+        if granted { await synchronize() }
+        return .requested(granted: granted)
     }
 
     func requestAuthorization() async -> Bool {

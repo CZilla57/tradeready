@@ -902,7 +902,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.02 | S3 | **Code complete** | 10.00 | NativeTodayInsights |
 | 10.03 | S4, D4, D5 | **Code complete** | 10.00 | Insight-mute + setup-checklist stores |
 | 10.04 | D1, D2, D3, D6 | **Code complete** | 10.00 | NativeTodayBriefing |
-| 10.05 | N1 | Pending | 10.00 | Categories + permission prompt + settings |
+| 10.05 | N1 | **Code complete** | 10.00 | Categories + permission prompt + settings |
 | 10.06 | N2 | Pending | 10.05 | Due-date/auto-outreach parity |
 | 10.07 | N3, N4 | Pending | 10.05 (+10.06 serialization only) | Appointment + review parity |
 | 10.08 | N5, N6, B2 | Pending | 10.05-10.07 | Unified reconciliation + routing |
@@ -1170,6 +1170,118 @@ Exit criteria traceability (roadmap Phase 10):
 - Next-ready: 10.11 (Today UI integration) and 10.12 (checklist/hero/insights
   cards) — both were already gated on 10.04 alone for this requirement set and
   can now proceed; 10.05, 10.10 remain unblocked and unaffected.
+
+### 10.05 — Notification permission, categories, and settings surface
+
+- Status: **Code complete / Phase 12 evidence deferred (device permission
+  dialogs, real OS delivery).**
+- Files (new): `native/TradeReadyNative/NativeNotificationCategories.swift`
+  (`NativeNotificationCategories.makeAll()` — one `UNNotificationCategory` per
+  `NativeNotificationNamespace`, identifier = the namespace's `payloadType`, a
+  single non-destructive `VIEW`/`.foreground` action each — no category can
+  send anything to a customer), `native/NotificationPermissionTests/main.swift`,
+  `native/run-notification-permission-tests.sh`.
+- Files (edited): `native/TradeReadyNative/NativeEstimateFollowUpNotifications.swift`
+  (protocol gains `registerCategories(_:)` with a no-op default extension so
+  every pre-existing fake center keeps conforming unmodified; the system center
+  implements it via `setNotificationCategories` and stamps
+  `content.categoryIdentifier` on every scheduled notification; the coordinator
+  gains `registerCategoriesIfNeeded()` — idempotent, guarded by a private flag
+  — and `promptForInvoiceRemindersIfNeeded()` plus the
+  `NativeInvoiceReminderPromptOutcome` result type; the designated init gains
+  two defaulted closures, `wasReminderPromptShown`/`markReminderPromptShown`),
+  `native/TradeReadyNative/AppStore.swift` (new `reminderPromptStore:
+  NativeReminderPromptStore` property + init wiring; `removeAll()` added to all
+  three account-scrub sites alongside `reviewRequestStore.removeAll()`; new
+  `activateReminderPromptFlag` seed-adoption method — same `mergeSeeded`
+  pattern as `activateReviewRequests` — called from both
+  `applyAuthenticatedIdentityOutcome` and the foreground-activation path;
+  `wasInvoiceReminderPromptShown()`/`markInvoiceReminderPromptShown()` reading
+  the store fail-closed to "already shown"; new settable
+  `onInvoiceCreatedContextualPrompt` hook fired from `commitInvoiceEdit`'s
+  new-invoice branch and from `commitInvoiceFromJob`'s non-`.finalize` branch —
+  the exact native equivalents of RN's two `promptForInvoiceReminders()` call
+  sites in `AddInvoiceScreen.tsx`/`CreateInvoiceFromJobScreen.tsx`),
+  `native/TradeReadyNative/TradeReadyNativeApp.swift` (builds the coordinator
+  into a local `let` so it can wire `store.onInvoiceCreatedContextualPrompt`
+  to `coordinator.promptForInvoiceRemindersIfNeeded()` and call
+  `coordinator.registerCategoriesIfNeeded()` once, both before the
+  `StateObject` wrap). Twelve `native/run-*-tests.sh` runners updated to add
+  `NativeNotificationCategories.swift` (and, for six that compile `AppStore.swift`
+  standalone, `Domain/NativeSetupChecklist.swift` +
+  `NativeSetupChecklistStore.swift`) to their `swiftc` file lists so they keep
+  compiling: `run-notification-coordinator-tests.sh`,
+  `run-estimate-follow-up-notification-tests.sh`,
+  `run-appointment-notification-tests.sh`, `run-review-request-tests.sh`,
+  `run-calendar-editor-tests.sh`, `run-export-import-ui-tests.sh`,
+  `run-phase9-qualification-tests.sh`, `run-pricebook-ui-tests.sh`,
+  `run-schedule-booking-settings-tests.sh`, `run-store-integration-tests.sh`.
+- Interface handoff for 10.12 (setup checklist's `notifications` task): call
+  `NativeEstimateFollowUpNotificationCoordinator.requestAuthorization() async
+  -> Bool` (pre-existing) to request permission — on `true`, call
+  `synchronize()` (pre-existing, already used by `NotificationSettings`); on
+  `false`, read `.permissionState` (`@Published`, pre-existing) — `.denied`
+  means the card should offer "Open device settings"
+  (`UIApplication.openSettingsURLString`, same pattern already used by
+  `NotificationSettings` in `SettingsView.swift`). No new API was needed for
+  this because 10.03/pre-existing work already exposed exactly this shape;
+  10.05 only adds the *contextual, one-shot* ask
+  (`promptForInvoiceRemindersIfNeeded()`), which 10.12 does not call — the
+  checklist's in-card "notifications" task is a direct ask, not the contextual
+  one-shot.
+- Settings surface (item 3 of the brief): already bound to the shared,
+  generalized coordinator (`NativeEstimateFollowUpNotificationCoordinator` with
+  `namespacePlans` covering `.appointment`/`.review`/`.invoiceReminder`/
+  `.recurringInvoice`, aliased `NativeNotificationCoordinator`) rather than an
+  estimate-only coordinator — this was already true in the baseline snapshot
+  from earlier phases, so no `SettingsView.swift` edit was needed. Verified the
+  existing toggle defaults are exactly as specified and untouched:
+  `estimateFollowUpsEnabled` defaults `true` (`CanonicalModels.swift`),
+  `appointmentRemindersEnabled` defaults `false`, `reviewRequestEnabled`
+  defaults `false` (the review-request gate).
+- Commands / results:
+  - `TZ=America/Phoenix sh native/run-notification-permission-tests.sh` —
+    `PASS: native notification permission/category tests` (9 fixture groups:
+    exactly 5 categories keyed to the 5 namespace payload types with one
+    non-destructive action each; `registerCategoriesIfNeeded()` registers once
+    and is a no-op on repeat calls; no workspace → no read/stamp/request;
+    already-shown → silent; OS already `authorized`/`denied` → flag stamped
+    once, no request; undetermined + grant → flag stamped BEFORE the request,
+    exactly one request, exactly one `synchronize()` pass observed as one
+    scheduled item; undetermined + refusal → one request, zero synchronize;
+    three repeated calls in one session → only the first ever requests/stamps;
+    simulated sign-out clears the flag for the next owner).
+  - Re-ran every existing runner touched: `run-notification-coordinator-tests.sh`,
+    `run-estimate-follow-up-notification-tests.sh`,
+    `run-appointment-notification-tests.sh`, `run-invoice-notification-tests.sh`,
+    `run-review-request-tests.sh`, `run-setup-checklist-tests.sh` — all still
+    pass (no behavior change to existing fixtures).
+  - RN oracles: `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+    __tests__/settingsNotificationsScreen.test.tsx __tests__/notifications.test.js`
+    — 2 suites / 40 tests, all passing, no oracle file touched.
+  - `sh native/run-all-domain-tests.sh` — full aggregate green (all Swift host
+    runners plus the Cloudflare Worker/Vercel Node suites), confirming the
+    twelve edited runner scripts and the `AppStore.swift`/coordinator changes
+    do not regress any other domain.
+  - `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme
+    TradeReadyNative -configuration Release -destination
+    'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` — **BUILD SUCCEEDED**.
+- Recorded decision: the contextual prompt does not reproduce RN's custom
+  "Invoice reminders — Not now / Turn on" pre-permission `Alert` UI. Views are
+  out of this task's ownership (integration lanes 10.11–10.13 own screens), and
+  the brief's "Done when" criteria are behavioral (fires at most once, only
+  when undetermined, flag stamped before, grant → one synchronize) rather than
+  UI-shaped; `promptForInvoiceRemindersIfNeeded()` calls
+  `requestAuthorization()` directly when undetermined, which is itself the one
+  system permission dialog. A future task may add the RN-parity rationale copy
+  as a SwiftUI alert around this same call without changing the policy tested
+  here.
+- Blockers: none for this task's own scope. Device permission-dialog and
+  real-delivery evidence remain Phase 12 rows per the roadmap's
+  verification-deferral decision.
+- Next-ready: **10.06** (due-date reminders/auto-outreach parity), **10.07**
+  (appointment/review parity — 10.06 serialization only), and **10.12** (setup
+  checklist's notifications task now has its documented permission API).
 
 ### 10.10 — Coach transport, provider routing, and system prompt
 

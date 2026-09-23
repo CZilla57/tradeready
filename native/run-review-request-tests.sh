@@ -13,6 +13,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUp.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUpNotifications.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeNotificationCategories.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeReviewRequests.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeReviewRequestStore.swift" \
   "$ROOT_DIR/native/ReviewRequestTests/main.swift" \

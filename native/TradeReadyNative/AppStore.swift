@@ -201,6 +201,19 @@ final class AppStore: ObservableObject {
     private let syncCursorStore: Canonical.NativeSyncCursorStore
     private let customerDuplicateDismissalStore: NativeCustomerDuplicateDismissalStore
     private let reviewRequestStore: NativeReviewRequestStore
+    /// Task 10.05 (N1): owner-bound one-shot contextual invoice-reminder
+    /// prompt flag (10.03's `NativeReminderPromptStore`). Same durability
+    /// contract as `reviewRequestStore` — device-local, wiped at the account
+    /// boundary.
+    private let reminderPromptStore: NativeReminderPromptStore
+    /// Task 10.05 (N1) hand-off to the shared notification coordinator: fired
+    /// after a genuinely new invoice is created (never on edit), mirroring RN's
+    /// `promptForInvoiceReminders()` call sites in `AddInvoiceScreen.tsx` and
+    /// `CreateInvoiceFromJobScreen.tsx`. `TradeReadyNativeApp` wires this to
+    /// `NativeEstimateFollowUpNotificationCoordinator.promptForInvoiceRemindersIfNeeded()`.
+    /// Fire-and-forget by design (RN does not await its call either); nil in
+    /// previews/tests that never construct the coordinator.
+    var onInvoiceCreatedContextualPrompt: (@MainActor () -> Void)?
     private let appGroupAccountScrubber: NativeAppGroupAccountScrubber
     private var snapshot = Canonical.Snapshot(payload: .init())
     private var isApplyingProjection = false
@@ -321,6 +334,9 @@ final class AppStore: ObservableObject {
         self.reviewRequestStore = NativeReviewRequestStore(
             fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("review-requests.json")
         )
+        self.reminderPromptStore = NativeReminderPromptStore(
+            fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("invoice-reminder-prompt.json")
+        )
         self.syncStatus = NativeSyncStatus(pendingCount: self.mutationQueue.load().count)
         var accountScrubRecoveryError: Error?
         if let pendingScope = repository.pendingAccountScrubScope {
@@ -335,6 +351,7 @@ final class AppStore: ObservableObject {
                 try syncCursorStore.removeAll()
                 try customerDuplicateDismissalStore.removeAll()
                 try reviewRequestStore.removeAll()
+                try reminderPromptStore.removeAll()
                 try removeImportHistory()
                 try pendingScheduleBookingWorkStore().removeAll()
                 let sessionStore = NativeKeychainSecureSettingsStore()
@@ -635,6 +652,25 @@ final class AppStore: ObservableObject {
     var exactSignedInWorkspaceNotificationBinding: String? {
         guard hasExactSignedInWorkspace else { return nil }
         return verifiedAccountBinding
+    }
+
+    /// Task 10.05 (N1): has the owner-bound one-shot contextual
+    /// invoice-reminder prompt already been shown/settled for the signed-in
+    /// workspace? Reads `NativeReminderPromptStore` directly (no in-memory
+    /// cache to drift) and fails closed to "already shown" — with no exact
+    /// signed-in workspace or an unreadable store, the coordinator must never
+    /// ask, matching the store's fail-closed contract.
+    func wasInvoiceReminderPromptShown() -> Bool {
+        guard let binding = exactSignedInWorkspaceNotificationBinding else { return true }
+        return (try? reminderPromptStore.wasShown(for: binding)) ?? true
+    }
+
+    /// Stamps the flag for the signed-in workspace. Called by the coordinator
+    /// BEFORE any permission request so a dismissed/undecided prompt never
+    /// repeats. A silent no-op without an exact signed-in workspace.
+    func markInvoiceReminderPromptShown() {
+        guard let binding = exactSignedInWorkspaceNotificationBinding else { return }
+        _ = try? reminderPromptStore.markShown(for: binding)
     }
 
     func estimateFollowUpNotifications(now: Date = .now) -> [NativeEstimateFollowUpNotification] {
@@ -978,6 +1014,12 @@ final class AppStore: ObservableObject {
             try apply(updated)
             enqueueUpsert(table: "invoices", recordId: resultInvoice.id, record: resultInvoice)
             enqueueUpsert(table: "jobs", recordId: resultJob.id, record: resultJob)
+            // Contextual permission ask (task 10.05, N1): `.finalize` edits the
+            // existing deposit invoice, while `.create`/`.requestDeposit` mint a
+            // brand-new one — mirroring RN's `promptForInvoiceReminders()` call
+            // in `CreateInvoiceFromJobScreen.tsx`, which only fires outside its
+            // `mode === "finalize"` branch. Fire-and-forget, exactly like RN.
+            if draft.mode != .finalize { onInvoiceCreatedContextualPrompt?() }
             return true
         } catch {
             migrationMessage = "Could not save this invoice: \(error.localizedDescription)"
@@ -2500,6 +2542,12 @@ final class AppStore: ObservableObject {
             guard let published = try? CanonicalUIAdapters.invoice(from: result, calendar: calendar) else {
                 return .failure(.persistenceUnavailable)
             }
+            // Contextual permission ask (task 10.05, N1): a brand-new invoice
+            // (never an edit — this branch only runs when `id == nil`) is the
+            // moment overdue reminders become concretely useful, mirroring RN's
+            // `promptForInvoiceReminders()` call in `AddInvoiceScreen.tsx`.
+            // Fire-and-forget, exactly like the RN call site.
+            onInvoiceCreatedContextualPrompt?()
             return .success(published)
         } catch {
             migrationMessage = "Could not update invoice: \(error.localizedDescription)"
@@ -4000,6 +4048,7 @@ final class AppStore: ObservableObject {
             try syncCursorStore.removeAll()
             try customerDuplicateDismissalStore.removeAll()
             try reviewRequestStore.removeAll()
+            try reminderPromptStore.removeAll()
             try removeImportHistory()
             let sessionStore = NativeKeychainSecureSettingsStore()
             switch repository.pendingAccountScrubScope ?? .live {
@@ -4073,6 +4122,7 @@ final class AppStore: ObservableObject {
         try syncCursorStore.removeAll()
         try customerDuplicateDismissalStore.removeAll()
         try reviewRequestStore.removeAll()
+        try reminderPromptStore.removeAll()
         // Phase 9 task 9.08: device-local import history is per-account
         // operational metadata and must not leak across the account boundary.
         try removeImportHistory()
@@ -4160,6 +4210,20 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Task 10.05 (N1): adopts the migrated `invoiceReminderPromptShown` seed
+    /// into `NativeReminderPromptStore` once at activation, the same pattern
+    /// as `activateReviewRequests` above. A live owner flag always wins — the
+    /// store's `mergeSeeded` can only ever move `false` to `true`, never the
+    /// reverse, so a prompt already answered on this device is never re-armed
+    /// by an older seed. Failure degrades silently (no `migrationMessage`):
+    /// worst case is one extra contextual ask, never data loss.
+    private func activateReminderPromptFlag(
+        accountBinding: String,
+        migratedShown: Bool?
+    ) {
+        _ = try? reminderPromptStore.mergeSeeded(migratedShown ?? false, for: accountBinding)
+    }
+
     private func applyAuthenticatedIdentityOutcome(
         _ outcome: NativeAuthenticatedIdentityActivationOutcome,
         email: String?,
@@ -4195,6 +4259,10 @@ final class AppStore: ObservableObject {
             activateReviewRequests(
                 accountBinding: outcome.verifiedAccountBinding,
                 migrated: outcome.typedAccountState?.reviewRequests
+            )
+            activateReminderPromptFlag(
+                accountBinding: outcome.verifiedAccountBinding,
+                migratedShown: outcome.typedAccountState?.invoiceReminderPromptShown
             )
         } else {
             dismissedCustomerDuplicatePairKeys = []
@@ -5483,6 +5551,10 @@ final class AppStore: ObservableObject {
             activateReviewRequests(
                 accountBinding: outcome.verifiedAccountBinding,
                 migrated: outcome.typedAccountState?.reviewRequests
+            )
+            activateReminderPromptFlag(
+                accountBinding: outcome.verifiedAccountBinding,
+                migratedShown: outcome.typedAccountState?.invoiceReminderPromptShown
             )
             return true
         } catch {

@@ -59,11 +59,14 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeTimeTracking.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeReviewRequests.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeReviewRequestStore.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeSetupChecklist.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeSetupChecklistStore.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeInvoiceDelivery.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeInvoicePDF.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateDelivery.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUp.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUpNotifications.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeNotificationCategories.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeAppointmentNotifications.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeChangeOrders.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeSubscription.swift" \
