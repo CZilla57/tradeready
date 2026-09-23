@@ -403,9 +403,17 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   post-sync derived-state seam (notification reconcile + cached business
   snapshot refresh, exactly once per committed sync pass) are done. Cross-
   engine qualification against a shared fixture (task 10.14) proves
-  determinism and idempotent-reconcile-twice behavior. Five implementation
-  gates stay open and unwaived (all implementation gates, host-testable, not
-  device evidence, except where noted): the Stripe account-switch write race
+  determinism and idempotent-reconcile-twice behavior. The final whole-branch
+  review's fix wave (2026-09-23) made archived jobs route from Today and
+  notification taps (RN parity, contract §9.6), made the coach build its
+  business snapshot from live data, removed an inert AI-privacy toggle,
+  registered every unregistered host runner behind a guard in
+  `native/run-all-domain-tests.sh`, and closed the 10.09 (c) gate: every
+  derived-state publish now requires an exact owner workspace, and
+  `registerDerivedStateObserver` documents that observers fire only for an
+  exact workspace — an explicit **11.01 entry precondition**. Four
+  implementation gates stay open and unwaived (all implementation gates,
+  host-testable, not device evidence, except where noted): the Stripe account-switch write race
   is proven only through a pure predicate, not end-to-end (no injectable
   Stripe service seam yet); the coach `sending` flag could stay stuck if the
   Coach view ever survives an account boundary without RootView's existing
@@ -414,13 +422,14 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   already-superseded commit; the three pre-commit failure diagnostic codes
   `pull/local-commit`, `pull/cursor-commit`, and `pull/authentication` each
   rely only on source-level inspection of an unconditional pre-`publish`
-  `return`, with no automated test independently forcing any of the three;
-  and the post-sync publish still runs when `advancePastInitialSync` ends in
-  `.accountMismatch`/`.unavailable` because `verifiedAccountBinding` isn't
-  cleared in either terminal state. Device, permission, live-AI-provider, and
-  background-delivery evidence remain deferred to Phase 12 per
+  `return`, with no automated test independently forcing any of the three.
+  (The fifth gate, the post-sync publish running when
+  `advancePastInitialSync` ends in `.accountMismatch`/`.unavailable`, is
+  closed by the final-review fix wave, I6, with a forcing test.) Device,
+  permission, live-AI-provider, and background-delivery evidence remain
+  deferred to Phase 12 per
   [native-phase-10-device-runsheet.md](native-phase-10-device-runsheet.md),
-  which also tracks all five gates above.
+  which also tracks the four open gates above.
 - Phases 8–9, 11–12: **Not started** (tracking note: Phase 8's contract
   decisions and Phase 9's implementation plan/device runsheet already exist as
   in-flight artifacts from earlier work on this branch; their roadmap status

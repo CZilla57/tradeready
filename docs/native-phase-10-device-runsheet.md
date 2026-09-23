@@ -46,6 +46,8 @@ entry.
    inside `makeSnapshot`, the cached `NativeBusinessSnapshot` is left on an
    older snapshot than the one that was actually committed (fail-safe — the
    next successful commit corrects it, but the window itself is untested).
+   Lower impact since final-review I2: the coach no longer reads the cache,
+   so only derived-state observers could see the older snapshot.
 4. **10.09 (b) — three pre-commit failure codes have no forcing test**
    *(implementation gate (host-testable), not device evidence)*: the
    diagnostic codes `pull/local-commit`, `pull/cursor-commit`, and
@@ -55,13 +57,14 @@ entry.
    offline/signed-out/owner-changed cases — but no automated test
    independently forces any of the three codes to prove the guard holds at
    that exact boundary.
-5. **10.09 (c) — publish still runs when `advancePastInitialSync` ends in
-   `.accountMismatch`/`.unavailable`** *(implementation gate (host-testable),
-   not device evidence)*: `verifiedAccountBinding` is not cleared in either
-   terminal state, so the post-sync publish (and its derived outputs) still
-   runs — pre-existing gate behavior, not introduced by 10.09, but not yet
-   triaged or covered by a forcing test either. See the "Background refresh"
-   section below for the device-verification row.
+5. **10.09 (c) — CLOSED (final-review I6, 2026-09-23).** The post-sync
+   publish used to run when `advancePastInitialSync` ended in
+   `.accountMismatch`/`.unavailable`. Every publish site and the publisher's
+   owner re-check now use the exact-workspace predicate
+   `AppStore.derivedStatePublishBinding`, and `registerDerivedStateObserver`
+   documents the owner contract (observers fire only for an exact workspace —
+   an explicit 11.01 entry precondition). Forcing test: the "I6" block in
+   `native/StoreIntegrationTests/main.swift`. Kept in this list for history.
 
 ## Today
 
@@ -86,7 +89,7 @@ entry.
 - [ ] All eight insight kinds (`labor_overrun`, `low_margin_estimate`, `uninvoiced_complete`, `due_soon`, `open_slot`, `unscheduled_approved`, `maintenance_due`, `expense_anomaly`) render with correct copy, priority order, and top-three slice on a real account
 - [ ] Insights card is gated behind setup completion exactly as host-tested
 - [ ] Mute ("Dismiss") and snooze ("N days") persist device-locally, are owner-bound, prune on expiry, and are scrubbed at sign-out/account switch — verify on device, not just the host mute-store suite
-- [ ] "Why am I seeing this?" reason sheet opens for every muteable/readable insight and is unreachable for the rest (matches the VoiceOver actions-rotor behavior recorded in 10.12)
+- [ ] "Why am I seeing this?" reason sheet is reachable for **every** insight row (10.12 fix round 1, I3): through the row's long-press context menu and the VoiceOver "Why am I seeing this?" action on every row, and additionally through the ellipsis options dialog on muteable rows; each path fires `insight_reason_viewed` once and shows the insight's reason text
 - [ ] **Stripe account-switch race (10.12 I4, parked)**: switching Stripe-connected accounts while a Stripe status refresh is in flight must not mark the checklist `stripe` task done for the wrong owner — this is proven today only through the pure `stripeTaskWriteAllowed` predicate (four cases), not end-to-end (no injectable Stripe service seam exists yet); exercise this manually on device against two real Stripe-connected accounts
 
 ## AI coach
@@ -112,22 +115,28 @@ entry.
 ## Notifications
 
 - [ ] All five namespaces (`est_`, `appt_`, `review_`, `inv_`, `rinv_`) actually deliver as OS notifications on device, in the documented priority order, under the shared 60-request cap
-- [ ] **Notification permission soft-ask flow (10.05, deferred)**: RN's custom "Not now / Turn on" rationale `Alert` has no native equivalent — native calls `requestAuthorization()` directly (the one system dialog) with no pre-permission rationale screen. Confirm this is an accepted product decision on device, or file a follow-up to add the rationale screen
+- [ ] **Invoice-reminders soft-ask alert (10.05 fix round 1, `TradeReadyNativeApp.swift` `.alert("Invoice reminders", …)` driven by the coordinator's `pendingInvoiceReminderPrompt`)** — shows once: on a fresh account with OS permission undetermined, creating the first invoice shows the "Invoice reminders" alert exactly once; a second invoice (same session or after relaunch) never shows it again
+- [ ] **Soft-ask "Turn on"**: tapping "Turn on" dismisses the alert and then shows the real iOS permission dialog; on Allow, pending reminders are scheduled (one reconcile); on Don't Allow, nothing is scheduled and the alert never returns
+- [ ] **Soft-ask "Not now"**: tapping "Not now" dismisses the alert, shows no iOS permission dialog, and the alert never returns for that account
+- [ ] **Soft-ask silent when settled**: with OS permission already granted or denied, creating the first invoice shows no alert (the flag is still stamped)
+- [ ] **Soft-ask cancelled by sign-out**: with the alert pending (trigger it, then sign out or switch account before answering), the alert is cleared on the next reconcile and never appears for the other account; the new account gets its own one-time ask
 - [ ] Categories survive relaunch (registered once per launch in host tests; unverified end-to-end across app kill/relaunch on device)
 - [ ] **Tap routing (10.07/10.08)**: tapping a delivered notification of each family routes to the exact still-open, owner-verified record; a stale/foreign/unrecognized payload fails closed (no navigation, no crash)
+- [ ] **Archived job routing (final-review I1, contract §9.6)**: archive a job that still has a scheduled appointment and a pending review request; its Today schedule row and its delivered `appt_`/`review_` notifications still appear (RN `utils/archive.ts` parity), and tapping each one opens the job / confirmation / review draft — never a dead tap. A deleted job's notification still fails closed
+- [ ] **Cold-launch notification tap (final-review m7)**: with the app killed, tap a delivered notification of each family. Record what happens: the tap is dropped (no navigation) until the auth gate resolves, because every `request…Review` route guards on the signed-in exact workspace — the same as RN, which ignores the tap until `navigationRef.isReady()` and a session exist. Confirm it does not crash, does not route to a wrong record after sign-in, and note whether the owner expects a deferred route (would be a product follow-up, not a Phase 10 defect)
 - [ ] Sign-out/account-switch clears only the pending requests owned by the signing-out account; a foreign family's pending requests are preserved untouched
 - [ ] Invoice-dunning auto-outreach body variant renders and never auto-sends
 
 ## Background refresh
 
 - [ ] `BGAppRefreshTask` actually fires on device within the OS's scheduling window (30-minute-earliest reschedule) — host tests only prove the registration/scheduling logic, not real OS delivery
-- [ ] **Post-sync derived-state seam (10.09, B1)**: after a real background sync pass, verify on device that (a) notifications reconcile from the committed snapshot, (b) the cached `NativeBusinessSnapshot` used for coach cold start refreshes, and (c) Today/insights reflect the new data on next foreground — the "exactly once per committed pass" guarantee is proven today only by code inspection plus `SyncCoordinatorTests`, because the swiftc host-test harness cannot construct a real `BuildEnvironment`/`Bundle.main`
+- [ ] **Post-sync derived-state seam (10.09, B1)**: after a real background sync pass, verify on device that (a) notifications reconcile from the committed snapshot, (b) the cached `NativeBusinessSnapshot` (now read only by derived-state observers; the coach builds from live data since final-review I2) refreshes, and (c) Today/insights reflect the new data on next foreground — the "exactly once per committed pass" guarantee is proven today only by code inspection plus `SyncCoordinatorTests`, because the swiftc host-test harness cannot construct a real `BuildEnvironment`/`Bundle.main`
 - [ ] Authenticated job-photo upload/backfill still completes during a background pass that also reconciles notifications (no ordering regression)
 - [ ] Expiration mid-pass still completes exactly once (no duplicate notification reconcile, no double-cached snapshot publish) — see also `native-phase-4-background-refresh.md`, which owns the underlying task lifecycle
 - [ ] Signed-out/offline background pass remains a no-op for both the pre-existing sync work and the new Phase 10 reconcile/refresh hook
 - [ ] **10.09 (a), implementation gate (host-testable), not device evidence**: force a `makeSnapshot` failure on a second, later publish after an earlier one already committed, and confirm whether the cache is left on the stale (older) snapshot as expected, or whether it needs a fix before Phase 12 sign-off
 - [ ] **10.09 (b), implementation gate (host-testable), not device evidence**: add or run a forcing test for each of `pull/local-commit`, `pull/cursor-commit`, and `pull/authentication` to independently prove the pre-`publish` `return` guard holds at that exact boundary, not just by source inspection
-- [ ] **10.09 (c), implementation gate (host-testable), not device evidence**: confirm whether the post-sync publish running while `advancePastInitialSync` is in `.accountMismatch`/`.unavailable` (because `verifiedAccountBinding` isn't cleared there) is acceptable pre-existing gate behavior or needs a fix, and add a test either way
+- [x] **10.09 (c), implementation gate — CLOSED by the Phase 10 final-review fix wave (I6), 2026-09-23**: every publish site and the publisher's owner re-check now use `AppStore.derivedStatePublishBinding`, which is nil for `.accountMismatch`/`.unavailable` (and signed-out/recovery gates) and without a workspace bound to the verified binding. Forcing test: `native/StoreIntegrationTests/main.swift` "I6" block drives a real suspended pull, flips the gate to each state, and asserts no notification synchronize, no observer call and no cache write
 
 ## Deep links
 
@@ -139,5 +148,5 @@ entry.
 
 - [ ] Every row above has device/staging evidence or an explicit, recorded waiver
 - [ ] Any row that fails is recorded as a defect with the build ID, not silently waived
-- [ ] All five open implementation gates above (10.12 Stripe account-switch race, 10.13 Coach `sending` stuck-flag boundary, 10.09 (a) stale-cache-on-failed-publish, 10.09 (b) three untested pre-commit failure codes, 10.09 (c) publish running through `.accountMismatch`/`.unavailable`) are either closed with a real fix or explicitly re-accepted with a dated rationale before Phase 12 exit
+- [ ] The four still-open implementation gates above (10.12 Stripe account-switch race, 10.13 Coach `sending` stuck-flag boundary, 10.09 (a) stale-cache-on-failed-publish, 10.09 (b) three untested pre-commit failure codes) are either closed with a real fix or explicitly re-accepted with a dated rationale before Phase 12 exit. 10.09 (c) was closed by the final-review fix wave (I6)
 - [ ] The parity matrix is updated from `In progress` to `Verified` only after the rows above pass

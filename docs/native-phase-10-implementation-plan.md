@@ -2,8 +2,12 @@
 
 **Date:** 2026-09-21
 
-**Status:** In progress — 10.00, 10.01, and 10.03 code complete (see §6 ledger and
-§7 log); all other tasks pending. Revised 2026-09-22 per
+**Status:** Code complete — all tasks 10.00–10.15 are code complete, and the
+final whole-branch review's fix wave has landed (see §6 ledger and §7 log,
+including "Final review fix wave"). Device, permission, live-AI and
+background-delivery evidence is deferred to Phase 12
+([native-phase-10-device-runsheet.md](native-phase-10-device-runsheet.md)).
+Revised 2026-09-22 per
 [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Roadmap goal (Phase 10):** Restore the daily operating surface and proactive behavior.
@@ -429,6 +433,8 @@ UI renders; no `TodayView.swift` edits here.
    search, settings, route, on-my-way), plus the first-action hero destination.
    Reuse the existing one-shot exact-ID routing pattern (verify local ID, change
    tab, install a single-use request; fail closed on missing/archived).
+   *Superseded by the final-review fix wave (I1, contract §9.6): archived
+   jobs route normally; only missing or foreign records fail closed.*
 4. Carry the booking-attention row model through unchanged (reuse
    `NativeBookingAttention.select`), including the native-only `missingJob`/
    `unconvertedActive` rows and their labels.
@@ -572,7 +578,9 @@ identifier scheme and the foreign-family rule.
    a simulated relaunch does not duplicate or drop a family.
 4. Audit every route's tap decode → exact-owner record resolution → fail-closed
    missing/archived/wrong-owner handling for `est_`, `appt_`, `review_`, `inv_`,
-   `rinv_`.
+   `rinv_`. *Superseded for archived jobs by the final-review fix wave (I1,
+   contract §9.6): archived `appt_`/`review_` taps route; `est_` keeps its
+   estimate_sent + not-archived rule.*
 
 **Done when:** the aggregate coordinator suite proves priority, the cap with
 foreign families present, per-family cleanup on toggle/account changes, no
@@ -691,7 +699,8 @@ edits to `N/AppStore.swift` (selected-day/one-shot destination state) and
    empty-schedule actions.
 2. Route every row/insight/action through the typed `NativeTodayDestination`
    from 10.04 using the existing one-shot exact-ID pattern; verify the local ID
-   and fail closed on missing/archived records.
+   and fail closed on missing/archived records. *Superseded by the
+   final-review fix wave (I1, contract §9.6): archived jobs route normally.*
 3. Reuse `NativeInteractionState` for loading/empty/no-match/error presentation
    and await the real sync pass on pull-to-refresh (no early success when the
    coordinator reports `.alreadyRunning`).
@@ -836,10 +845,18 @@ TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/chatMarkdo
 # Notifications, reminders, and review requests
 TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/notifications.test.js __tests__/reminderLogic.test.js __tests__/reminderEmailHardening.test.js __tests__/reviewRequest.test.js __tests__/ReviewRequestScreen.test.tsx
 
-# Phase 10 runners created so far (10.01, 10.03)
+# Phase 10 runners (all registered in native/run-all-domain-tests.sh, which
+# fails if any native/run-*-tests.sh runner is unregistered)
 TZ=America/Phoenix sh native/run-business-snapshot-tests.sh
 TZ=America/Phoenix sh native/run-insight-mute-tests.sh
 TZ=America/Phoenix sh native/run-setup-checklist-tests.sh
+TZ=America/Phoenix sh native/run-today-insights-tests.sh
+TZ=America/Phoenix sh native/run-today-briefing-tests.sh
+TZ=America/Phoenix sh native/run-notification-permission-tests.sh
+TZ=America/Phoenix sh native/run-coach-transport-tests.sh
+TZ=America/Phoenix sh native/run-coach-prompt-tests.sh
+TZ=America/Phoenix sh native/run-chat-markdown-tests.sh
+TZ=America/Phoenix sh native/run-phase10-qualification-tests.sh
 
 # Existing native foundations
 sh native/run-notification-coordinator-tests.sh
@@ -913,6 +930,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.13 | C3, C4, C5 | **Code complete** | 10.10, 10.12 | Coach UI + prefill |
 | 10.14 | all | **Code complete** | 10.01-10.13 | Cross-client qualification |
 | 10.15 | all | **Code complete** | 10.14 | Aggregate verification + closeout |
+| Final review fix wave | D6, N1, N6, B1, C2, S1 | **Code complete** | final whole-branch review | I1–I6 + m2/m3/m5/m6/m7 fixes (§7 "Final review fix wave") |
 
 Exit criteria traceability (roadmap Phase 10):
 
@@ -2732,3 +2750,96 @@ evidence, except where noted):
   blanket "Verified".
 - Next-ready: **Phase 11** (per the roadmap's dependency graph); **Phase 12**
   owns executing every row in `docs/native-phase-10-device-runsheet.md`.
+
+### Final review fix wave
+
+**Status:** Code complete (2026-09-23). Fixes the final whole-branch review's
+Important items I1–I6 and minors m2, m3, m5, m6, m7, per the controller
+rulings in the progress ledger. m1, m4, m8 and m9 are parked by ruling and
+were not touched. Device evidence stays deferred to Phase 12.
+
+**Files:**
+- `native/TradeReadyNative/AppStore.swift`: I1 (`todayJobExists` replaces
+  `isLiveTodayJob` and no longer rejects archived jobs; the archived clause is
+  gone from `requestReviewRequestReview`), I2 (`coachBusinessSnapshot(now:)`
+  always builds from the live canonical snapshot), I4
+  (`coachProviderSummary`; `trackCoachMessageSent` uses it), I6
+  (`derivedStatePublishBinding`, the exact-workspace predicate used by all
+  three publish sites and the publisher's `ownerBinding`; owner-contract doc
+  comment on `registerDerivedStateObserver`; test seam
+  `testSetAuthenticationGateState`), m3 (`Dictionary(_:uniquingKeysWith:)` in
+  the schedule key and the `inv_` selector), m5 (the rinv_ fallback clears
+  `deepLinkedInvoiceID`/`deepLinkedOutreachInvoiceID`).
+- `native/TradeReadyNative/NativeAppointmentNotifications.swift` (I1:
+  `canOpenNotification` fails closed only for missing job / non-exact
+  workspace), `native/TradeReadyNative/Domain/NativeTodayBriefing.swift` (doc
+  comments), `native/TradeReadyNative/NativeDerivedStatePublisher.swift` (I2/I6
+  doc comments), `native/TradeReadyNative/NativeCoachTransport.swift` (I4:
+  key-free `NativeCoachProviderSummary`),
+  `native/TradeReadyNative/SettingsView.swift` (I4: inert "Use business
+  context" toggle removed; provider rows from the store; privacy copy says the
+  business summary is sent), `native/TradeReadyNative/NativeEstimateFollowUpNotifications.swift`
+  (m2: re-check `exactWorkspaceBinding() == binding` after the await; new
+  `.ownerChanged` outcome).
+- Tests: `native/StoreIntegrationTests/main.swift`,
+  `native/AppointmentNotificationTests/main.swift`,
+  `native/NotificationPermissionTests/main.swift`.
+- `native/run-all-domain-tests.sh` (I3): registration guard plus 30 newly
+  registered runners (105 total).
+- Docs: contract §1.5 (nested hero rule) and §9.6 (archived jobs route; cites
+  RN `utils/archive.ts`), `docs/native-parity-matrix.md` (Notifications
+  soft-ask text, AI Assistant row + owner, Analytics m6 gaps, Coach and
+  Background refresh rows), `docs/native-phase-10-device-runsheet.md`
+  (soft-ask device rows, reason-sheet row, archived-routing row, cold-launch
+  tap row, 10.09 (c) closed), `docs/native-ios-migration-roadmap.md` (four open
+  gates, 11.01 precondition), this plan (status line, superseded
+  archived-fail-closed notes in the 10.04/10.08/10.11 packets, §4 runner list,
+  §6 row, this entry).
+
+**Deliberately reversed tests (I1):** the 10.08 fix-round test that asserted
+an archived job's `appt_`/`review_` taps fail closed, and the 10.11 router
+pins for `.job`/`.createInvoice`/`.schedule`/`.onMyWay` on an archived job,
+now assert the opposite (the tap routes). Missing-id and non-exact-workspace
+cases still assert fail-closed. `.customer(archived)` still fails closed (its
+only producer, `maintenance_due`, never selects an archived customer), and the
+`est_` estimate_sent + not-archived rule is unchanged.
+
+**I3 guard result:** besides the six runners the review named, the guard
+found 24 more pre-existing unregistered runners (accounting-package,
+availability, booking-administration, booking-attention, booking-intake,
+booking-response, calendar, csv-export, csv-import, import-engine,
+import-history, import-mapping, job-photo-mutation, mileage, money-report,
+portal-administration, pricebook-ai, pricebook, receipt-ocr, route-planning,
+schedule, tax-settings, trade-template, zip-archive). Every one passed on its
+own under `TZ=America/Phoenix`, so all were registered. Helpers
+(`run-appstore-sources-common.sh`, `run-import-tests-common.sh`,
+`run-doc-reference-check.sh`, `run-phase-3/4-device-preflight.sh`) do not
+match `*-tests.sh`. The guard was checked both ways: a temporary fake
+`run-zzz-fake-tests.sh` and a commented-out registration each made it exit 1.
+
+**Commands and results:**
+- New tests were checked against the old behavior: with the I1/I2/I6/m5
+  fixes temporarily reverted, the store-integration runner reported 17
+  failures (every new I1/I2/I6/m5 assertion); with the fixes restored it
+  passes.
+- `TZ=America/Phoenix sh native/run-store-integration-tests.sh`,
+  `run-appointment-notification-tests.sh` and
+  `run-notification-permission-tests.sh`: PASS.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh`: exit 0 in 699 s,
+  with all 105 registered Swift runners passing, then `backend-workers`
+  `npm test` (6 suites, 26 tests, 0 failures).
+- `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/phase10QualificationOracle.test.js`: 1 suite, 7 tests passed.
+- Unsigned Release `xcodebuild … CODE_SIGNING_ALLOWED=NO build`: BUILD
+  SUCCEEDED, 0 `error:` lines. No signed build was run.
+- `sh native/run-doc-reference-check.sh`: 0 missing.
+
+**Residuals:** the initial-sync publish site in `beginInitialSyncGate` still
+cannot be driven in the swiftc harness (see the 10.09 fix-round-2 note). It
+uses the same `derivedStatePublishBinding` property that the delta-pull test
+drives, and the publisher's own owner re-check uses that predicate too.
+Settings › AI Assistant key entry (RN's "Advanced" Groq/Anthropic fields) has
+no native UI; it is recorded as a Phase 11 row in the parity matrix. Other
+`Dictionary(uniqueKeysWithValues:)` sites outside the schedule key (for
+example `NativeScheduleEditorView.swift` and `NativeExportDataView.swift`
+keyed by job id) were outside m3's scope and are left as they are.

@@ -88,15 +88,24 @@ While loading, each card shows a spinner instead of its value.
 
 ### 1.5 First-action hero (D5)
 
-Derived, never persisted except the sample flag:
+Derived, never persisted except the sample flag. This is RN's **nested** rule
+(`screens/TodayScreen.tsx`, the `let hero` block), implemented by
+`NativeTodayBriefing.hero` (final-review I5 correction; the earlier flattened
+pseudocode wrongly fell through to "Create Your First Job" when sample jobs exist
+alongside a real customer or a finished tour):
 
 ```
 if loading || checklistState == nil || realJobs.length > 0      -> no hero
-else if sampleJobs.length > 0 && realCustomers.length == 0
-        && !checklistState.sampleTourDone                       -> "Explore a Sample Job"
-else if sampleJobs.length == 0 && realCustomers.length == 0     -> "Add Your First Customer"
+else if sampleJobs.length > 0:
+    if realCustomers.length == 0 && !checklistState.sampleTourDone
+                                                                -> "Explore a Sample Job"
+    else                                                        -> no hero
+else if realCustomers.length == 0                               -> "Add Your First Customer"
 else                                                            -> "Create Your First Job"
 ```
+
+So sample jobs plus (a real customer **or** `sampleTourDone`) shows **no hero** —
+never "Create Your First Job".
 
 `realJobs`/`realCustomers` exclude `isSampleId(…)` rows, so any real work retires
 the hero. The sample hero opens the first sample job **that has a scheduled date**
@@ -491,7 +500,26 @@ toggled off removes only its own pending requests.
 (`estimateFollowUp(jobID:)`, `appointmentConfirm(jobID:)`, `reviewRequest(jobID:)`,
 `invoiceReminder(invoiceID:daysPastDue:opensOutreach:)`,
 `recurringInvoiceReminder(ruleID:)`) and the app routes only to records that still
-exist — a missing or archived record fails closed (no invented destination).
+exist in the exact signed-in owner workspace — a **missing** record, or a
+**foreign/non-exact** workspace (signed out, account mismatch, unverified owner),
+fails closed (no invented destination).
+
+**Archived jobs route normally** (final-review I1 amendment, RN parity). RN
+`utils/archive.ts` states that archiving hides records only from the Jobs list,
+the Customers list and global search: "Today, money math, invoices,
+notifications" deliberately still see them. The selectors therefore keep
+archived jobs (Today schedule/lead/date projection, `appt_`, `review_`), and RN's
+tap handlers (`App.tsx` `addNotificationResponseReceivedListener`,
+`TodayScreen.tsx` JobDetail navigation) route with no archive check. Native
+matches: `AppStore.routeToToday` (`.job`, `.schedule`, `.createInvoice`,
+`.onMyWay`), `NativeAppointmentNotifications.canOpenNotification` and
+`AppStore.requestReviewRequestReview` do not reject an archived job, so a shown
+row or a delivered notification is never a dead tap. The one kept exception is
+the `est_` route: `NativeEstimateFollowUp.canOpenNotification` keeps its own
+recorded rule (the job must still be `estimate_sent` and not archived). Today's
+`.customer` destination still rejects an archived customer, which is consistent
+because the only producer (the `maintenance_due` insight) never selects an
+archived customer.
 
 ### 9.7 Permission prompt (N1)
 
