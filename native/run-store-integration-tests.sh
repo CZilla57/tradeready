@@ -54,6 +54,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeSupabasePush.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeSyncCoordinator.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeBackgroundRefresh.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeDerivedStatePublisher.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeJobPhotoTransfer.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeJobPhotoImport.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateApprovalLink.swift" \
@@ -89,6 +90,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReceiptMedia.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativePricebook.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeTaxSettings.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeBusinessSnapshot.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeReceiptOCR.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativePricebookAI.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeAITransport.swift" \

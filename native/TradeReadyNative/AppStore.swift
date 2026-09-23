@@ -4106,6 +4106,7 @@ final class AppStore: ObservableObject {
 
     private func applyCompletedSignOutState() {
         syncCoordinator?.reset()
+        derivedStatePublisher.reset()
         isAccountScrubBlocked = false
         persistenceWritesBlocked = false
         persistenceBlockReason = nil
@@ -5199,6 +5200,72 @@ final class AppStore: ObservableObject {
     private var syncCoordinator: NativeSyncCoordinator?
     private lazy var syncReachability: any NativeSyncReachability = Self.makeSyncReachability()
 
+    // MARK: - Task 10.09: post-sync-commit derived-state seam (B1)
+
+    /// Task 10.09 output (a): set by `TradeReadyNativeApp` at launch to call
+    /// the 10.08 `NativeEstimateFollowUpNotificationCoordinator.synchronize(now:)`.
+    /// AppStore cannot hold a direct reference to the coordinator (it already
+    /// holds a weak reference back to the store for its own notification-plan
+    /// closures), so the hand-off runs the other way — mirrors the existing
+    /// `onInvoiceCreatedContextualPrompt` pattern. `nil` until wired (e.g. in
+    /// a host test that never sets it); the seam then simply skips output (a).
+    var notificationSynchronizeHook: ((Date) async -> Void)?
+
+    /// The single post-sync-commit seam (B1). Instantiated once; its only
+    /// caller is `pullDeltaIfPossible`, immediately after a pull's merged
+    /// canonical snapshot is durably committed.
+    private(set) lazy var derivedStatePublisher = NativeDerivedStatePublisher<Canonical.Snapshot, NativeBusinessSnapshot>(
+        notifySynchronize: { [weak self] now in
+            await self?.notificationSynchronizeHook?(now)
+        },
+        makeSnapshot: { [weak self] canonical, now in
+            guard let self else { throw NativeDerivedStatePublisherOwnerUnavailable() }
+            return self.makeCachedBusinessSnapshot(from: canonical, now: now)
+        },
+        ownerBinding: { [weak self] in self?.verifiedAccountBinding }
+    )
+
+    /// Task 10.09 output (c): the cached business snapshot for coach cold
+    /// start (10.13 reads this). Refreshed after every real committed sync
+    /// pass; cleared at the account boundary.
+    var cachedBusinessSnapshot: NativeBusinessSnapshot? { derivedStatePublisher.cachedSnapshot }
+
+    /// Task 10.09 output (b): the registration point the Phase 11 widget
+    /// mirror (11.01) plugs into. No widget code lives here — this is only
+    /// the seam. Returns a token for `unregisterDerivedStateObserver`.
+    @discardableResult
+    func registerDerivedStateObserver(
+        _ observer: @escaping (NativeBusinessSnapshot) throws -> Void
+    ) -> UUID {
+        derivedStatePublisher.register(observer)
+    }
+
+    func unregisterDerivedStateObserver(_ id: UUID) {
+        derivedStatePublisher.unregister(id)
+    }
+
+    /// Thrown by the `makeSnapshot` closure above only in the theoretical case
+    /// where `self` has already been deallocated when the seam fires; the
+    /// publisher's own failure isolation treats it exactly like any other
+    /// build failure (skip (b)/(c), leave the prior cache untouched).
+    private struct NativeDerivedStatePublisherOwnerUnavailable: Error {}
+
+    private func makeCachedBusinessSnapshot(
+        from canonical: Canonical.Snapshot, now: Date
+    ) -> NativeBusinessSnapshot {
+        NativeBusinessSnapshotEngine.make(
+            invoices: canonical.payload.invoices ?? [],
+            jobs: canonical.payload.jobs ?? [],
+            customers: canonical.payload.customers ?? [],
+            expenses: canonical.payload.expenses ?? [],
+            trips: canonical.payload.trips ?? [],
+            values: canonical.payload.settings.map(NativeTaxSettingsValues.init(from:))
+                ?? NativeTaxSettingsValues(),
+            mileageRate: NativeMileage.effectiveRate(canonical.payload.settings),
+            now: now
+        )
+    }
+
     private static func isSyncEligible(_ state: NativeAuthenticationGateState) -> Bool {
         switch state {
         case .signedIn, .startingPoint: return true
@@ -5313,6 +5380,18 @@ final class AppStore: ObservableObject {
         // occurrences materialize before any recurrence-manager refresh reads
         // them. A no-op when nothing is due; never fails the pull.
         refreshRecurringJobs()
+        // Task 10.09 (B1): the single post-sync-commit seam, invoked exactly
+        // once per real committed pull — foreground or background — and
+        // never on an offline/signed-out/failed pass: every such pass returns
+        // above, before ever reaching this line. Reads `snapshot`, the
+        // just-committed canonical truth (including any recurring-job
+        // materialization just above), never a stale copy read separately.
+        // The owner binding is the one verified for this exact pass, just
+        // above; the seam re-verifies it again before touching each output
+        // and after its own awaits.
+        if let binding = verifiedAccountBinding, subject == authenticatedUserSubject {
+            await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
+        }
         if !outcome.failedTables.isEmpty {
             return .partial(outcome.lastDiagnosticCode)
         }

@@ -3012,6 +3012,71 @@ struct StoreIntegrationTests {
                    "10.08 adding an expense (not read by any notification selector) leaves the schedule key unchanged")
         }
 
+        // MARK: - Task 10.09 (B1): AppStore's derived-state seam wiring.
+        //
+        // The full network sync path is not exercisable in this host-test
+        // binary: `BuildEnvironment.supabaseURL`/`supabasePublishableKey`
+        // read `Bundle.main`'s Info.plist, which is empty here, so
+        // `syncCoordinatorIfConfigured()` always returns `nil` and
+        // `syncNowAndWait`/`performBackgroundRefresh` short-circuit before
+        // ever reaching a pull. The seam's own gating (never invoked on
+        // offline/signed-out/a failed push, since the pull closure itself is
+        // never called in those cases) is instead proven by
+        // `native/run-sync-coordinator-tests.sh`'s existing
+        // `offlinePullCount == 0` / `signedOutPullCount == 0` /
+        // `environmentPullCount == 0` assertions around `.offline`,
+        // `.notAuthenticated`, and `.failed` outcomes — every one of those
+        // guards runs, in `AppStore.pullDeltaIfPossible`, strictly before the
+        // `derivedStatePublisher.publish` call this task added. The
+        // publisher's own failure-isolation/owner-race/reset contract is
+        // unit-tested directly in `native/run-background-refresh-tests.sh`.
+        //
+        // This block instead proves AppStore's wiring of the seam: the
+        // cached business snapshot builds from real canonical data, the
+        // notification hook is reached through `derivedStatePublisher`, a
+        // registered (Phase 11 widget mirror stand-in) observer receives the
+        // exact committed snapshot, and owner-binding gating uses the
+        // store's real `verifiedAccountBinding`.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1009-\(UUID().uuidString)", isDirectory: true)
+            let url = dir.appendingPathComponent("store.json")
+            let snapshot = Canonical.Snapshot(payload: Canonical.SnapshotPayload())
+            try Canonical.SnapshotRepository(primaryURL: url).save(snapshot)
+            let store = AppStore(fileURL: url, seedIfMissing: false,
+                                 subscriptionService: StoreSubscriptionServiceStub())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-10.09", binding: "bind-10.09")
+
+            var notifyCalls = 0
+            store.notificationSynchronizeHook = { _ in notifyCalls += 1 }
+            var observed: [NativeBusinessSnapshot] = []
+            store.registerDerivedStateObserver { observed.append($0) }
+
+            expect(store.cachedBusinessSnapshot == nil, "10.09 the cache is empty before any commit")
+            await store.derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: "bind-10.09")
+            expect(notifyCalls == 1, "10.09 publish reaches the notification hook exactly once")
+            expect(store.cachedBusinessSnapshot != nil, "10.09 publish refreshes the cached business snapshot")
+            expect(observed.count == 1 && observed.first == store.cachedBusinessSnapshot,
+                   "10.09 a registered observer receives the exact committed snapshot")
+
+            // Owner mismatch: no output runs, and the prior good cache and
+            // notify/observer call counts are left completely untouched.
+            await store.derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: "someone-else")
+            expect(notifyCalls == 1 && observed.count == 1,
+                   "10.09 a mismatched owner binding skips every output and leaves prior outputs intact")
+
+            // `applyCompletedSignOutState` (private; exercised end-to-end by
+            // the account-deletion/sign-out suites) calls
+            // `derivedStatePublisher.reset()` on the exact same instance
+            // exposed here. Prove that call clears the cache at the account
+            // boundary, so a later signed-in owner's coach cold start can
+            // never read a prior owner's cached snapshot.
+            store.scheduleBookingTestClearOwner()
+            store.derivedStatePublisher.reset()
+            expect(store.cachedBusinessSnapshot == nil,
+                   "10.09 resetting the seam at the account boundary clears the cached snapshot")
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }

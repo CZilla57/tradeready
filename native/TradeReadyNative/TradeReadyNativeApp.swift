@@ -72,6 +72,15 @@ struct TradeReadyNativeApp: App {
             }
         }
         _followUpNotifications = StateObject(wrappedValue: coordinator)
+        // Task 10.09 (B1 output a): the post-sync-commit seam's only path to
+        // notification reconciliation. AppStore cannot hold the coordinator
+        // directly (see the hand-off note above this init), so it calls out
+        // through this hook after every real committed sync pass, foreground
+        // or background — not a second reconcile path, the same
+        // `synchronize(now:)` the reactive `.task(id:)` below already uses.
+        store.notificationSynchronizeHook = { [weak coordinator] now in
+            await coordinator?.synchronize(now: now)
+        }
         let scheduler = NativeBackgroundRefreshScheduler { [weak store] in
             guard let store else { return .skipped }
             return await store.performBackgroundRefresh()

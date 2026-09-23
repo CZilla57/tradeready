@@ -906,7 +906,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.06 | N2 | **Code complete** | 10.05 | Due-date/auto-outreach parity |
 | 10.07 | N3, N4 | **Code complete** | 10.05 (+10.06 serialization only) | Appointment + review parity |
 | 10.08 | N5, N6, B2 | **Code complete** | 10.05-10.07 | Unified reconciliation + routing |
-| 10.09 | B1, B2 | Pending | 10.01, 10.08 | Post-sync derived-state seam |
+| 10.09 | B1, B2 | **Code complete** | 10.01, 10.08 | Post-sync derived-state seam |
 | 10.10 | C1, C2, C3, C4 | **Code complete** | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
 | 10.11 | D1, D2, D3, D6 | Pending | 10.04 | Today UI |
 | 10.12 | D4, D5, S5 | Pending | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
@@ -1525,6 +1525,151 @@ Exit criteria traceability (roadmap Phase 10):
   point is `NativeEstimateFollowUpNotificationCoordinator.synchronize(now:)`,
   the same method `TradeReadyNativeApp.swift` already calls from
   `.task(id:)` and the foreground path).
+
+### 10.09 — Background refresh completion for Today and scheduling
+
+- Status: **Code complete.** New `N/NativeDerivedStatePublisher.swift`: a
+  generic (`Input`/`Output` type-parameterized, dependency-free) post-sync-commit
+  seam with `register`/`unregister` (output b), a `cachedSnapshot` accessor
+  (output c), and `publish(canonical:expectedOwnerBinding:)`. Its ONE
+  production call site is `AppStore.pullDeltaIfPossible`, immediately after the
+  pulled snapshot is durably applied+saved and `refreshRecurringJobs()` runs —
+  the single point both `performForegroundRefresh` and `performBackgroundRefresh`
+  funnel through via `syncNowAndWait` -> `NativeSyncCoordinator.sync` ->
+  its injected `pull` closure. Every earlier guard in that pass (offline,
+  signed-out/no credentials, backoff, a thrown/failed push which skips the
+  pull entirely, `.alreadyRunning` never reaching `runOnce` at all) returns
+  before that call, so the seam is naturally invoked exactly once per real
+  committed pass and never otherwise — no new gating logic was needed.
+- AppStore wiring: `derivedStatePublisher` (lazy,
+  `NativeDerivedStatePublisher<Canonical.Snapshot, NativeBusinessSnapshot>`),
+  `cachedBusinessSnapshot` (10.13 reads this for coach cold start),
+  `registerDerivedStateObserver`/`unregisterDerivedStateObserver` (11.01's
+  widget-mirror seam), and `notificationSynchronizeHook` — AppStore cannot
+  hold the `NativeEstimateFollowUpNotificationCoordinator` directly (same
+  constraint as the existing `onInvoiceCreatedContextualPrompt` hand-off), so
+  `TradeReadyNativeApp.init` wires the hook to
+  `coordinator.synchronize(now:)` — the exact 10.08 entry point, not a second
+  reconcile path. `applyCompletedSignOutState` gained
+  `derivedStatePublisher.reset()` alongside the existing
+  `syncCoordinator?.reset()` call, so a cleared cache/observer set never
+  survives a sign-out.
+- Failure isolation: `publish` re-verifies `expectedOwnerBinding` before
+  output (a), again before building the shared (b)/(c) snapshot, and again
+  before touching the cache/observers — so a sign-out/account-switch race
+  during either await cannot leak or cache another owner's data. (a) is
+  wrapped in its own `do/catch`; a failing/throwing notify never blocks (b)/(c).
+  (b)/(c) share one `makeSnapshot` build so the cache and every observer see
+  the identical value; a build failure leaves the prior good cache completely
+  untouched (never partially overwritten) and skips every observer for that
+  pass. Each registered observer runs in its own `do/catch`, so one throwing
+  observer cannot block or corrupt delivery to the others or the cache.
+- Simulated-pass matrix -> test citation:
+  - success (all three outputs fire, cache/observer see the exact committed
+    input) -> `BackgroundRefreshTests` "success:" block.
+  - offline / signed-out / failed-table (the seam's pull closure is never
+    reached) -> proven at the coordinator level by
+    `SyncCoordinatorTests`' existing `offlinePullCount == 0`,
+    `signedOutPullCount == 0`, and `environmentPullCount == 0` assertions
+    around `.offline`/`.notAuthenticated`/`.failed(remaining:)` — every one of
+    those guards in `AppStore.pullDeltaIfPossible` runs strictly before this
+    task's `publish` call, so the same proof carries over; `run-sync-coordinator-tests.sh`
+    was not modified and stays green.
+  - `.alreadyRunning` -> `SyncCoordinatorTests`' existing "already-running"
+    assertions (`sync()` returns `.alreadyRunning` without a second `runOnce`,
+    hence without a second pull) — unchanged, still green.
+  - expiration mid-pass -> `BackgroundRefreshTests`' existing
+    `NativeBackgroundRefreshOperation` cancellation tests (exactly-once
+    completion) — unchanged; the seam does not check `Task.isCancelled`,
+    matching `pullDeltaIfPossible`'s pre-existing style (a durable commit that
+    already landed is real committed truth regardless of a later cancel).
+  - one output failing -> `BackgroundRefreshTests`' "isolated" blocks: a
+    throwing notify hook, a throwing snapshot build (with a prior good cache
+    proven intact afterward), and a throwing observer alongside a healthy one.
+  - owner-mismatch before publish and mid-publish (race after the (a) await)
+    -> two more `BackgroundRefreshTests` blocks.
+  - `reset()` clears cache + every observer -> another `BackgroundRefreshTests`
+    block.
+  - AppStore-level wiring (the network sync path itself is not exercisable in
+    this swiftc host-test binary — `BuildEnvironment.supabaseURL`/
+    `supabasePublishableKey` read `Bundle.main`'s Info.plist, empty here, so
+    `syncCoordinatorIfConfigured()` always returns `nil`) -> a dedicated
+    `StoreIntegrationTests` block calls `store.derivedStatePublisher.publish`
+    directly to prove `makeCachedBusinessSnapshot` builds from real canonical
+    data, the notification hook and a registered observer are reached through
+    the real `AppStore` instance, owner-mismatch gating uses the store's real
+    `verifiedAccountBinding`, and `reset()` clears the cache at the account
+    boundary.
+- Runner/build-graph changes (touches every runner that compiles `AppStore.swift`
+  standalone, since it now references `NativeDerivedStatePublisher`/
+  `NativeBusinessSnapshot`): added `NativeDerivedStatePublisher.swift` to
+  `run-background-refresh-tests.sh`, `run-store-integration-tests.sh`,
+  `run-calendar-editor-tests.sh`, `run-export-import-ui-tests.sh`,
+  `run-phase9-qualification-tests.sh`, `run-pricebook-ui-tests.sh`,
+  `run-schedule-booking-settings-tests.sh`; added `Domain/NativeBusinessSnapshot.swift`
+  to `run-store-integration-tests.sh`, `run-export-import-ui-tests.sh`,
+  `run-phase9-qualification-tests.sh`, `run-pricebook-ui-tests.sh`, plus its
+  transitive `Domain/NativeCashBasis.swift`, `Domain/NativeMoneyReports.swift`,
+  `Domain/NativeMileage.swift`, `Domain/NativeTaxSettings.swift`,
+  `NativeTaxBreakdown.swift` to `run-calendar-editor-tests.sh` and
+  `run-schedule-booking-settings-tests.sh` (the two runners with no prior
+  Money-domain dependency at all).
+- Device runsheet rows (10.15 folds these into `docs/native-phase-10-device-runsheet.md`;
+  not created here):
+  1. Step: background-refresh a signed-in device with a pending server-side
+     change (another device edited a job) and Background App Refresh enabled.
+     Expected: the delivered refresh reconciles notification requests to match
+     the pulled snapshot (no stale/duplicate request for the edited record) and
+     a subsequent coach cold-open reflects the new figures with no extra
+     network round trip. Evidence: before/after `UNUserNotificationCenter`
+     pending-request dump; coach system-prompt snapshot values.
+  2. Step: put the device in airplane mode, wait past a scheduled refresh,
+     then restore connectivity and background-refresh again. Expected: no
+     notification reconcile or cache refresh happened while offline (prior
+     good state intact); the next real pass reconciles/refreshes exactly
+     once. Evidence: pending-request dump taken mid-airplane-mode vs. after
+     reconnect.
+  3. Step: sign out, then sign back in as a different account, then background-
+     refresh. Expected: no notification or coach-snapshot data from the first
+     account is ever visible after the second account's first real pass.
+     Evidence: pending-request dump and coach cold-open content immediately
+     after the second sign-in, before any manual refresh.
+  4. Step: force-expire a background refresh mid-pass (Xcode's "Simulate
+     Background App Refresh" then a debugger-forced expiration, or a long
+     Instruments-throttled network). Expected: the system task completes
+     unsuccessfully exactly once; the next delivered/foreground pass still
+     reconciles to a correct set from the retained canonical snapshot, no
+     duplicate notification requests. Evidence: console stage logs
+     (`TradeReadyBackgroundRefresh stage=...`) bracketing the expiration, plus
+     a pending-request dump after the following pass.
+- Files: `N/NativeDerivedStatePublisher.swift` (new),
+  `N/AppStore.swift` (`derivedStatePublisher`, `cachedBusinessSnapshot`,
+  `registerDerivedStateObserver`/`unregisterDerivedStateObserver`,
+  `notificationSynchronizeHook`, `makeCachedBusinessSnapshot`, the `publish`
+  call in `pullDeltaIfPossible`, `derivedStatePublisher.reset()` in
+  `applyCompletedSignOutState`), `N/TradeReadyNativeApp.swift`
+  (`notificationSynchronizeHook` wiring), `native/BackgroundRefreshTests/main.swift`,
+  `native/StoreIntegrationTests/main.swift`, and the seven runner scripts
+  listed above.
+- Commands / results: `TZ=America/Phoenix sh native/run-background-refresh-tests.sh`
+  — "Background refresh tests passed" (0 FAIL lines; 12 new seam-matrix
+  assertions plus the pre-existing policy/operation checks).
+  `TZ=America/Phoenix sh native/run-sync-coordinator-tests.sh` — "PASS: native
+  sync coordinator tests" (unchanged file, confirms the gating proof above
+  still holds). `TZ=America/Phoenix sh native/run-notification-coordinator-tests.sh`
+  — "PASS: native notification coordinator tests" (unchanged).
+  `TZ=America/Phoenix sh native/run-business-snapshot-tests.sh` — "BusinessSnapshotTests:
+  all checks passed" (unchanged). `TZ=America/Phoenix sh native/run-store-integration-tests.sh`
+  — "PASS: canonical AppStore integration tests" (new 10.09 wiring block
+  included). `TZ=America/Phoenix sh native/run-all-domain-tests.sh` and the
+  Release/generic-iOS `xcodebuild` compile — see task report for the full run.
+- Blockers: none. Device delivery evidence remains a Phase 12 row (rows
+  drafted above for 10.15 to fold in).
+- Next-ready: **10.11** (Today UI — can now assume the background/foreground
+  seam keeps derived state current without any UI-triggered refresh of its
+  own) and **11.01** (Phase 11 widget mirror — plugs into
+  `AppStore.registerDerivedStateObserver`, receiving the same committed
+  `NativeBusinessSnapshot` the coach cache uses).
 
 ### 10.10 — Coach transport, provider routing, and system prompt
 

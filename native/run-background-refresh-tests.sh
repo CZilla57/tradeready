@@ -9,6 +9,7 @@ swiftc \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/NativeBackgroundRefresh.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeDerivedStatePublisher.swift" \
   "$ROOT_DIR/native/BackgroundRefreshTests/main.swift" \
   -o "$OUTPUT_PATH"
 

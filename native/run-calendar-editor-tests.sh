@@ -54,6 +54,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeSupabasePush.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeSyncCoordinator.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeBackgroundRefresh.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeDerivedStatePublisher.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeJobPhotoTransfer.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeJobPhotoImport.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateApprovalLink.swift" \
@@ -73,6 +74,12 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeAppointmentNotifications.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeChangeOrders.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeSubscription.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCashBasis.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeMoneyReports.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeMileage.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeTaxSettings.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeTaxBreakdown.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeBusinessSnapshot.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeAccountDeletion.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeTypedAccountState.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeDeepLinkParser.swift" \
