@@ -1771,6 +1771,75 @@ Exit criteria traceability (roadmap Phase 10):
   SUCCEEDED **`, 0 `error:` lines. `sh native/run-doc-reference-check.sh`
   re-run after this fix round's doc edit: 0 missing. See the fix-round-1
   report addendum for the full run detail.
+- **Fix round 2** (controller-reviewed): the re-review marked all 7 round-1
+  findings ADDRESSED but found round 1's own fix introduced a new race in
+  `beginInitialSyncGate`'s `Task`: the new publish call sat BEFORE
+  `markInitialSyncCompleted(subject:)`/`advancePastInitialSync(...)`, and
+  `publish` genuinely suspends in production (it awaits
+  `notifySynchronize`). A concurrent identity change landing during that
+  await — sign-out, `useAnotherAccount`, recovery cancel, or another
+  foreground `activateMigratedAuthenticatedIdentity` bumping
+  `initialSyncGateGeneration` — would let `publish` correctly bail on its
+  own owner/generation guard, but the stale task would then resume past
+  the await and still stamp `initialSyncCompletedSubject`, kick a backfill
+  and `syncNowAndWait`, and let `advancePastInitialSync` overwrite
+  `authenticationGateState`, all for a subject/generation no longer
+  current. Also flagged: the `derivedStatePublisher` doc comment at
+  AppStore.swift (~5262) still claimed "the single post-sync-commit seam...
+  its only caller is `pullDeltaIfPossible`", false since round 1 added two
+  more publish sites. Fix (the reviewer's preferred option): moved the
+  publish call to run AFTER `markInitialSyncCompleted`/
+  `advancePastInitialSync` (still publishing the committed initial-sync
+  snapshot) instead of before, so there is no suspension point left between
+  the closure's subject/generation guard and gate completion — nothing for
+  a concurrent identity change to race against there any more; the publish
+  call itself still re-checks the owner binding via
+  `derivedStatePublisher.publish`'s own guard, so it safely no-ops if the
+  account changed between gate completion and that line running. Corrected
+  the stale doc comment to describe the real multi-site "exactly once per
+  committed canonical sync commit" contract (3 publish sites:
+  `pullDeltaIfPossible`, `beginInitialSyncGate`,
+  `prepareBookingReschedule`'s follow-up pull) and why the generation guard,
+  not a single call site, is what orders them.
+  Test coverage: this exact `Task` closure remains **not drivable
+  end-to-end** in the swiftc host-test harness — confirmed this round by
+  tracing every real call site of `applyAuthenticatedIdentityOutcome`
+  (`activateMigratedAuthenticatedIdentity`, `signIn`, `signUp`,
+  `verifyEmail`, `completePasswordRecovery`, ...), each gated by a
+  `BuildEnvironment.supabaseURL`/`supabasePublishableKey` guard that runs
+  before any of them reach `applyAuthenticatedIdentityOutcome`, always
+  `nil` in this binary; neither test seam that reaches a signed-in state
+  (`scheduleBookingTestSeedSignedInOwner`,
+  `scheduleBookingTestSeedIdentityActivator`) routes through
+  `applyAuthenticatedIdentityOutcome` either — both bypass it by design.
+  Pinned instead, per the reviewer's fallback instruction: a new
+  `StoreIntegrationTests` test calls the real
+  `activateMigratedAuthenticatedIdentity()` — the exact entry point the
+  finding named as a race trigger — and asserts it stops at its
+  `BuildEnvironment` guard (`authenticationGateState == .unavailable`, zero
+  `notifySynchronize` calls, `cachedBusinessSnapshot` still nil), proving
+  that guard still holds as the boundary the reordering fix depends on.
+  What remains unproven by any automated test here: the reordering's actual
+  runtime effect inside the `Task` body (that a real concurrent identity
+  change during the real `notifySynchronize` await no longer corrupts gate
+  state) — verified instead by static reading of the diff (no `await`
+  between the subject/generation guard and
+  `markInitialSyncCompleted`/`advancePastInitialSync`) and by the
+  pre-existing generation-guard test covering `publish`'s own internal
+  ordering guard. Device-level verification remains deferred to Phase 12,
+  same as the rest of network sync.
+  Commands (foreground, no background monitors, per the coordinator's
+  explicit instruction — `run-all-domain-tests.sh` skipped this round since
+  no runner's file list changed): `TZ=America/Phoenix sh
+  native/run-background-refresh-tests.sh` — "Background refresh tests
+  passed". `TZ=America/Phoenix sh native/run-store-integration-tests.sh` —
+  "PASS: canonical AppStore integration tests" (new fix-round-2 guard-pin
+  test added; same two pre-existing unrelated warnings as before). `TZ=
+  America/Phoenix sh native/run-sync-coordinator-tests.sh` — "PASS: native
+  sync coordinator tests". Release/generic-iOS `xcodebuild -project
+  native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration
+  Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO
+  build` — `** BUILD SUCCEEDED **`, 0 `error:` lines.
 - Blockers: none. Device delivery evidence remains a Phase 12 row (rows
   drafted above for 10.15 to fold in).
 - Next-ready: **10.11** (Today UI — can now assume the background/foreground

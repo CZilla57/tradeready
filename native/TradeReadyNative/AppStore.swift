@@ -4418,23 +4418,45 @@ final class AppStore: ObservableObject {
                     throw error
                 }
                 self.refreshRecurringJobs()
-                // Task 10.09 (B1) fix round 1: the initial full sync's commit
-                // just above never routes through `pullDeltaIfPossible` —
-                // it is its own, structurally separate committed canonical
-                // sync commit (`service.pull`, not `service.pullDelta`) —
-                // so it needs its own publish call, not a ride on
-                // `markInitialSyncCompleted`'s later fire-and-forget delta
-                // pull (which is a second, later commit of its own).
-                if let binding = self.verifiedAccountBinding, subject == self.authenticatedUserSubject {
-                    await self.derivedStatePublisher.publish(
-                        canonical: self.snapshot, expectedOwnerBinding: binding
-                    )
-                }
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
                     outcome: outcome,
                     allowUnboundWorkspaceAdoption: allowUnboundWorkspaceAdoption
                 )
+                // Task 10.09 (B1) fix round 2: the initial full sync's commit
+                // above never routes through `pullDeltaIfPossible` — it is
+                // its own, structurally separate committed canonical sync
+                // commit (`service.pull`, not `service.pullDelta`) — so it
+                // needs its own publish call, not a ride on
+                // `markInitialSyncCompleted`'s later fire-and-forget delta
+                // pull (which is a second, later commit of its own).
+                //
+                // Published AFTER the gate work above (not before) on
+                // purpose: `publish` awaits `notifySynchronize`, a genuine
+                // suspension point in production. A publish placed before
+                // `markInitialSyncCompleted`/`advancePastInitialSync` would
+                // let a sign-out / useAnotherAccount / recovery-cancel /
+                // foreground-reactivation that lands during that await race
+                // ahead of the gate work: `publish` would correctly bail on
+                // its own owner guard, but the *stale* task would then
+                // resume and stamp `initialSyncCompletedSubject`, kick a
+                // backfill and `syncNowAndWait`, and let
+                // `advancePastInitialSync` overwrite
+                // `authenticationGateState` from the outcome captured before
+                // the race — all for a subject/generation that is no longer
+                // current. Publishing last keeps the gate-advancement
+                // sequence free of any new suspension between its own
+                // subject/generation guard (above) and its completion, so
+                // there is nothing for a concurrent identity change to race
+                // against there. The publish itself still checks the owner
+                // binding inside `derivedStatePublisher.publish`, so it
+                // safely no-ops if the account changed between the gate
+                // finishing and this line running.
+                if let binding = self.verifiedAccountBinding, subject == self.authenticatedUserSubject {
+                    await self.derivedStatePublisher.publish(
+                        canonical: self.snapshot, expectedOwnerBinding: binding
+                    )
+                }
             } catch {
                 guard let self,
                       subject == self.authenticatedUserSubject,
@@ -5237,9 +5259,17 @@ final class AppStore: ObservableObject {
     /// a host test that never sets it); the seam then simply skips output (a).
     var notificationSynchronizeHook: ((Date) async -> Void)?
 
-    /// The single post-sync-commit seam (B1). Instantiated once; its only
-    /// caller is `pullDeltaIfPossible`, immediately after a pull's merged
-    /// canonical snapshot is durably committed.
+    /// The post-sync-commit seam (B1). Instantiated once. Contract: publish
+    /// exactly once per committed canonical sync commit, not from a single
+    /// call site — there are several legitimate publish sites, each firing
+    /// right after its own commit durably lands: `pullDeltaIfPossible`
+    /// (delta pulls, including the booking-intake re-publish after its own
+    /// local commit), the initial full sync's commit in
+    /// `beginInitialSyncGate`, and `prepareBookingReschedule`'s follow-up
+    /// pull. A monotonic `generation` counter inside
+    /// `NativeDerivedStatePublisher` (plus its owner-binding check) orders
+    /// concurrent publishes so a stale-resuming one never overwrites a
+    /// newer commit's result.
     private(set) lazy var derivedStatePublisher = NativeDerivedStatePublisher<Canonical.Snapshot, NativeBusinessSnapshot>(
         notifySynchronize: { [weak self] now in
             await self?.notificationSynchronizeHook?(now)

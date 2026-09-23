@@ -3279,6 +3279,78 @@ struct StoreIntegrationTests {
                    "10.09 fix1: the observer registered before useAnotherAccount still receives the next publish after sign-in")
         }
 
+        // MARK: - Task 10.09 (B1) fix round 2: initial-sync publish ordering.
+        //
+        // Round 2 review: `beginInitialSyncGate`'s Task closure awaited
+        // `derivedStatePublisher.publish(...)` BEFORE `markInitialSyncCompleted`/
+        // `advancePastInitialSync`. `publish` genuinely suspends in production
+        // (it awaits `notifySynchronize`), so a concurrent identity change
+        // landing during that await (sign-out, `useAnotherAccount`, recovery
+        // cancel, or another foreground `activateMigratedAuthenticatedIdentity`
+        // bumping `initialSyncGateGeneration`) would let `publish` correctly
+        // bail on its own owner/generation guard, but the STALE task would
+        // then resume past the await and still run the gate-completion work
+        // for a subject/generation that was no longer current. The fix moves
+        // the publish to run AFTER gate completion, so there is no suspension
+        // point between the closure's subject/generation guard and
+        // `markInitialSyncCompleted`/`advancePastInitialSync` — nothing for a
+        // concurrent identity change to race against there any more.
+        //
+        // This exact Task closure is NOT drivable end-to-end in this swiftc
+        // host-test binary: `beginInitialSyncGate` itself is only reachable
+        // through `applyAuthenticatedIdentityOutcome`, whose every real call
+        // site (`activateMigratedAuthenticatedIdentity`, `signIn`, `signUp`,
+        // `verifyEmail`, `completePasswordRecovery`, ...) is gated by a
+        // `BuildEnvironment.supabaseURL`/`supabasePublishableKey` guard that
+        // runs BEFORE any of them reach `applyAuthenticatedIdentityOutcome` —
+        // confirmed by inspection of every call site in AppStore.swift, not
+        // merely `beginInitialSyncGate`'s own (redundant, in this harness)
+        // guard at its top. `BuildEnvironment` reads `Bundle.main`'s
+        // Info.plist, which is empty in a plain `swiftc`-compiled binary, so
+        // every one of those guards is always `nil` here — there is no
+        // reachable production path in this harness that ever constructs the
+        // Task whose reordering this round fixes, whether driven directly or
+        // through any test seam (the seams that reach a signed-in state,
+        // `scheduleBookingTestSeedSignedInOwner`/`scheduleBookingTestSeedIdentityActivator`,
+        // both bypass `applyAuthenticatedIdentityOutcome` entirely — they set
+        // identity fields directly, exactly so tests are NOT accidentally
+        // routed through the network-sync gate).
+        //
+        // What this test pins instead: the exact entry point the finding
+        // named as a race trigger — a foreground re-activation via
+        // `activateMigratedAuthenticatedIdentity()` — really does stop at its
+        // `BuildEnvironment` guard in this harness and never reaches
+        // `applyAuthenticatedIdentityOutcome` (so it can never construct a
+        // second, concurrent `beginInitialSyncGate` Task here either). That is
+        // the guard the round-1 fix and this reordering both depend on to be
+        // the *only* other synchronization boundary in play; this confirms it
+        // still holds. What remains genuinely unproven by any automated test
+        // in this repository: the reordering's actual runtime effect inside
+        // `beginInitialSyncGate`'s Task body (i.e., that a real concurrent
+        // identity change during the real `notifySynchronize` await no longer
+        // corrupts `authenticationGateState`/`initialSyncCompletedSubject`)
+        // remains verified by static reading of the diff (no `await` now sits
+        // between the closure's subject/generation guard and
+        // `markInitialSyncCompleted`/`advancePastInitialSync`) and by the
+        // pre-existing generation-guard coverage of `publish` itself in
+        // `native/run-background-refresh-tests.sh`, not by a dynamic test
+        // exercising `beginInitialSyncGate` end to end. Device-level
+        // verification of this path remains deferred to Phase 12 per the
+        // roadmap, same as the rest of network sync.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "1009-initial-sync-guard-pin")
+            var notifyCalls = 0
+            store.notificationSynchronizeHook = { _ in notifyCalls += 1 }
+            await store.activateMigratedAuthenticatedIdentity()
+            expect(store.authenticationGateState == .unavailable,
+                   "10.09 fix2: activateMigratedAuthenticatedIdentity() stops at its BuildEnvironment guard in this harness (never reaches applyAuthenticatedIdentityOutcome / beginInitialSyncGate)")
+            expect(notifyCalls == 0,
+                   "10.09 fix2: since the gate was never reached, no publish's notifySynchronize ran either")
+            expect(store.cachedBusinessSnapshot == nil,
+                   "10.09 fix2: no cache write can have happened without the gate ever running")
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }
