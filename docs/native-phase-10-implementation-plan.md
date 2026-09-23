@@ -888,7 +888,7 @@ the `ai-chat` route; do not invoke a deploy command to validate a build.
 
 ## 6. Initial execution ledger
 
-Tasks **10.00, 10.01, and 10.03 are code complete**; all others are pending (see
+Tasks **10.00, 10.01, 10.02, 10.03, and 10.04 are code complete**; all others are pending (see
 the table). The source review used to write this plan is not test execution or
 an implementation completion. Maintain
 one row per task: status, owner/session, dependency evidence, files, commands,
@@ -901,7 +901,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.01 | S1, S2 | **Code complete** | 10.00 | NativeBusinessSnapshot |
 | 10.02 | S3 | **Code complete** | 10.00 | NativeTodayInsights |
 | 10.03 | S4, D4, D5 | **Code complete** | 10.00 | Insight-mute + setup-checklist stores |
-| 10.04 | D1, D2, D3, D6 | Pending | 10.00 | NativeTodayBriefing |
+| 10.04 | D1, D2, D3, D6 | **Code complete** | 10.00 | NativeTodayBriefing |
 | 10.05 | N1 | Pending | 10.00 | Categories + permission prompt + settings |
 | 10.06 | N2 | Pending | 10.05 | Due-date/auto-outreach parity |
 | 10.07 | N3, N4 | Pending | 10.05 (+10.06 serialization only) | Appointment + review parity |
@@ -1099,3 +1099,74 @@ Exit criteria traceability (roadmap Phase 10):
   matching the sibling `NativeReviewRequestStore` contract.
 - Next-ready: 10.02, 10.04, 10.05, 10.10 (all unblocked); 10.12 now has both
   stores it needs.
+
+### 10.04 — Today selectors, stats, and routing contract
+
+- Status: **Code complete / Phase 12 evidence deferred.**
+- Files: `native/TradeReadyNative/Domain/NativeTodayBriefing.swift` (week strip
+  + per-day schedule filter/sort + earnings, stats inputs, overdue/lead
+  sections with exact caps, awaiting-estimates row (reuses
+  `NativeEstimateFollowUp`), header greeting/date, `NativeTodayDestination` +
+  the exhaustive `destination(for: NativeInsightTarget)` mapping, first-action
+  hero derivation, booking-attention row presentation (reuses
+  `NativeBookingAttention.select`), `isSampleId`), `native/TodayBriefingTests/main.swift`,
+  `native/run-today-briefing-tests.sh`.
+- Interface handoff (10.11/10.12's adoption contract): `NativeTodayDestination`
+  is the pure routing contract — 10.11 executes it through the existing
+  one-shot exact-ID pattern (`NativeGlobalSearch`/
+  `AppStore.routeToGlobalSearchResult`: verify the local id, change tab,
+  install a single-use request, fail closed on missing/archived).
+  `NativeTodayBriefing.destination(for:)` is an exhaustive, no-`default:`
+  switch over `NativeTodayInsight`'s `NativeInsightTarget` (10.02), so a new
+  insight target fails this file's compile instead of silently no-oping.
+  `NativeTodayBriefing.hero(jobs:customers:sampleTourDone:)` takes
+  `sampleTourDone` as a plain `Bool` — it does not call
+  `NativeSetupChecklistStore` (10.03 owns persistence; 10.12 owns the
+  hero-suppresses-insights gate per ledger ruling R3). This task performs no
+  routing side effects and does not edit `AppStore.swift`/`TodayView.swift`.
+- Commands / results: `TZ=America/Phoenix sh native/run-today-briefing-tests.sh`
+  — all checks passed (destination mapping for all 10 insight targets;
+  greeting cutoffs at 11:59/12:00 and 16:59/17:00 with an explicit
+  America/New_York calendar; `formatDisplayDate`/`formatTimeRange` pinned to
+  `dateHelpers.test.js`; week strip Mon–Sun boundaries incl. a DST
+  spring-forward week; `shiftDate` month/year rollovers; unscheduled-last
+  schedule-row ordering; earnings sum including a scheduled lead; overdue
+  filter/sort with due-today excluded and a DST fall-back day-count case;
+  lead sort by `createdAt`; section caps at exactly the limit (no see-more)
+  and one over (see-more = 1); awaiting-estimates gate at the 3-day boundary
+  and the follow-up toggle; first-action hero for sample/add-customer/
+  create-job plus the "no real jobs" and "tour already done" no-hero cases;
+  booking-row presentation incl. the missing-job-id → Jobs-tab fallback;
+  `isSampleId` against the RN `SAMPLE_ID_RE` pattern). RN oracle re-run:
+  `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/dateHelpers.test.js __tests__/TodayScreenSettingsGear.test.tsx
+  __tests__/crossTabNavigation.test.tsx __tests__/bookingAttention.test.ts
+  __tests__/estimateFollowUps.test.ts` — 5 suites / 52 tests, all passing, no
+  oracle file touched. `xcodebuild … Release … CODE_SIGNING_ALLOWED=NO build`
+  — **BUILD SUCCEEDED**.
+- Recorded intentional native difference: RN's `weekMonthLabel` builds its
+  cross-month label via `new Date(weekDates[0])` — a bare-date UTC parse that
+  would mislabel a week starting on the 1st of a month on a west-of-UTC
+  device (e.g. a week containing Jan 1 could read "Dec"). This port computes
+  the label from local-frame date components instead (via
+  `NativeSchedule.parseDateComponents`), per the binding global constraint
+  ("date-only strings use local-frame string math, never Date-parsing to
+  UTC") and CLAUDE.md's correctness-over-continuity rule. Not exercised by
+  the existing RN oracle (`dateHelpers.test.js` only covers a July week), so
+  it is a silent-in-RN defect this native port does not reproduce.
+- Discrepancy found and resolved by reading `TodayScreen.tsx` directly (per
+  the task brief's "Read first" instruction): the frozen contract's §1.5
+  first-action-hero pseudocode is a flattened if/else-if chain, but the
+  actual RN source is a NESTED conditional. They disagree in exactly one
+  state: sample jobs exist AND (a real customer already exists OR the sample
+  tour is done). The contract's flattened form falls through to "Create Your
+  First Job"; the actual RN component shows **no hero at all** in that state
+  (the inner `if` has no `else`, and the outer `else if`/`else` branches are
+  gated on `sampleJobs.length === 0`, which is false here). This port matches
+  the actual component (pinned oracle) and adds a fixture test
+  (`heroSampleWithRealCustomer`) that would fail under the contract's
+  paraphrase. Recommend a follow-up correction to
+  `docs/native-phase-10-today-coach-notifications-contract-decisions.md` §1.5.
+- Next-ready: 10.11 (Today UI integration) and 10.12 (checklist/hero/insights
+  cards) — both were already gated on 10.04 alone for this requirement set and
+  can now proceed; 10.05, 10.10 remain unblocked and unaffected.
