@@ -674,3 +674,143 @@ the two extra attention kinds are recorded intentional differences, not defects.
 | Results | 13 suites / 233 tests passing; four RN oracle groups read in full |
 | Blockers | Phase 12 device/live-provider evidence only |
 | Handoff | §12 decision table + §13 interface handoff; 10.01/10.02/10.03/10.04/10.10 are next-ready |
+
+---
+
+## 16. Task 10.14 — cross-client and hosted-contract qualification (evidence)
+
+**Status:** Code complete. New file: `native/Phase10QualificationTests/main.swift`
++ `native/run-phase10-qualification-tests.sh` (not registered in
+`run-all-domain-tests.sh` — ruling R6, deferred to 10.15). No implementation
+file was changed except the three recorded-deviation doc updates below.
+
+One shared canonical fixture (Tue Aug 4 2026, 10:00 local — the same clock as
+10.02's `TodayInsightsTests` oracle fixture) is threaded through the business
+snapshot, insights, setup checklist, coach prompt/quick-prompts/markdown, and
+the full five-namespace notification set, proving: (a) each engine is
+deterministic on the same input, (b) the seams agree (the snapshot the coach
+cites is the snapshot Today derives; the same `isSetupComplete` gate the hero
+and the insights card both read), and (c) reconciling notifications twice
+from the same fixture yields an identical pending set (B2's idempotent-
+scheduling proof) while a foreign (non-owned) pending request survives both
+passes untouched (N5).
+
+Insight kinds not re-exercised in the new fixture (`labor_overrun`,
+`open_slot`, `unscheduled_approved`, `maintenance_due`) are already pinned
+against the RN oracle exhaustively in `TodayInsightsTests` (task 10.02);
+10.14 references that coverage rather than duplicating it, per the brief.
+
+### 16.1 Recorded deviations (evidence)
+
+1. **`weekMonthLabel` / FA-039 (task 10.04).** RN's `utils/dateHelpers.ts`
+   `weekMonthLabel` parses `weekDates[0]`/`weekDates[6]` with `new Date(...)`
+   — a UTC parse of a date-only string. Probed live under
+   `TZ=America/Phoenix` (`npx jest` scratch probe against the real function,
+   transcript below) for the week `2026-06-01 … 2026-06-07` (entirely inside
+   June): **RN returns `"May – Jun 2026"`** — wrong, since the week never
+   leaves June. Native's `NativeTodayBriefing.monthLabel(for:)` walks local
+   date components (never `Date`-parses) and correctly returns `"Jun 2026"`.
+   `Phase10QualificationTests` asserts both the correct native value and that
+   it differs from the RN oracle's value for this exact fixture (§5 of that
+   file). Probe transcript (`TZ=America/Phoenix npx jest --runInBand
+   --runTestsByPath __tests__/zzTmp1014Probe.test.ts`, scratch file, removed
+   after use):
+   ```
+   WEEK_DATES ["2026-06-01","2026-06-02","2026-06-03","2026-06-04","2026-06-05","2026-06-06","2026-06-07"]
+   WEEK_LABEL May – Jun 2026
+   TZ America/Phoenix 420
+   ```
+2. **`Math.round` vs. Swift `.rounded()` (task 10.02).** Same probe, `Math.round`
+   on `[0.5, 1.5, 2.5, -0.5, -1.5, -2.5]`:
+   ```
+   MATH_ROUND 0.5 1
+   MATH_ROUND 1.5 2
+   MATH_ROUND 2.5 3
+   MATH_ROUND -0.5 -0
+   MATH_ROUND -1.5 -1
+   MATH_ROUND -2.5 -2
+   ```
+   RN's `Math.round` is round-half-towards-positive-infinity; Swift's default
+   `.rounded()` is round-half-away-from-zero. They **agree for every positive
+   half** (both give `1, 2, 3`) and **diverge for every negative half**
+   (`-0/-1/-2` vs. `-1/-2/-3`). `NativeTodayInsights.swift`'s two `.rounded()`
+   call sites (`pointsUnder` in `selectLowMarginEstimates`, `pct` in
+   `selectExpenseAnomaly`) are both guarded to only ever see non-negative
+   inputs by construction (the low-margin rule only fires below target; the
+   anomaly rule only fires when `mtd > avg`), so this divergence is a proven
+   **latent** property of the `Int(_:).rounded())` pattern, not an observed
+   output difference anywhere in the current Phase 10 surface —
+   `Phase10QualificationTests` §6 asserts the divergence table directly so a
+   future call site that ever applies this pattern to a signed delta is
+   flagged by this recorded evidence rather than rediscovered.
+3. **Setup checklist `rate` task completion trigger (task 10.12).** RN's
+   `screens/SettingsPricingScreen.tsx` marks the `rate` setup task done on
+   **save**. Native's `PricingDefaultsSettings` in
+   `native/TradeReadyNative/SettingsView.swift` binds every field
+   continuously (no discrete "save" action exists in the SwiftUI form), so it
+   instead marks the task done in `.onDisappear` — leaving the Pricing
+   Defaults page stands in for "reviewed the pricing defaults" rather than
+   "saved a change." Intentional, not byte-for-byte parity. Recorded in
+   `docs/native-parity-matrix.md`'s "Setup checklist" row (this task) and
+   asserted (idempotence of `markingDone`) in `Phase10QualificationTests` §3.
+4. **Coach input length: grapheme clusters vs. UTF-16 code units (task
+   10.13).** RN's `TextInput maxLength={2000}` counts UTF-16 code units;
+   `NativeCoachInputLimit.clamp` counts Swift grapheme clusters
+   (`String.count`). No RN oracle test pins this exact limit (not in the
+   brief's verification-commands list), so the divergence is accepted per
+   the 10.13 report. `Phase10QualificationTests` §4 demonstrates it directly:
+   a string of `maxLength` family-emoji grapheme clusters is a no-op under
+   native's `clamp` (exactly at the grapheme limit) while already exceeding
+   `maxLength` UTF-16 code units — RN's `TextInput` would have clamped it
+   shorter already.
+
+### 16.2 Determinism and idempotency proofs
+
+- **Deterministic daily surface:** the same fixture run twice through
+  `NativeBusinessSnapshotEngine.aggregate` and `NativeTodayInsights.select`
+  produces `Equatable`-equal results both times (`Phase10QualificationTests`
+  §1, §2).
+- **Idempotent scheduling (B2):** a coordinator wired with all five owned
+  namespaces (`est_`, `appt_`, `review_`, `inv_`, `rinv_`) reconciled twice
+  from the identical fixture produces the identical pending-identifier set
+  (no duplicate identifiers, no churn on a foreign `expo_legacy_x` pending
+  request left untouched by both passes) — `Phase10QualificationTests` §7.
+  Tap-routing (N6) round-trips every owned route through
+  `NativeNotificationRoute.decode(userInfo:)` and fails closed on an unknown
+  or missing `type`.
+
+### 16.3 Commands and results
+
+```sh
+TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/todayInsights.test.ts __tests__/businessSnapshot.test.js __tests__/insightMutes.test.ts __tests__/setupChecklist.test.js __tests__/bookingAttention.test.ts __tests__/bookingNotify.test.js __tests__/TodayScreenSettingsGear.test.tsx __tests__/crossTabNavigation.test.tsx
+# -> 8 suites, 112 tests, all passing
+
+TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/chatMarkdown.test.ts __tests__/estimateSnapshot.test.js __tests__/settingsNotificationsScreen.test.tsx
+# -> 3 suites, 22 tests, all passing
+
+TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/notifications.test.js __tests__/reminderLogic.test.js __tests__/reminderEmailHardening.test.js __tests__/reviewRequest.test.js __tests__/ReviewRequestScreen.test.tsx
+# -> 5 suites, 121 tests, all passing
+
+TZ=America/Phoenix sh native/run-phase10-qualification-tests.sh
+# -> "Phase 10 qualification tests passed" (run twice, both clean)
+
+TZ=America/Phoenix sh native/run-all-domain-tests.sh
+# -> see task-10.14-report.md for the full result (every existing Swift
+#    host-test runner plus the backend-workers node --test suite)
+```
+
+**Blockers (named, unchanged):** device, permission, live-AI-provider, and
+background-delivery evidence remain deferred to Phase 12 per the roadmap's
+2026-09-16 verification-deferral decision — nothing in this task claims it.
+
+### 10.14 execution ledger
+
+| Field | Value |
+|---|---|
+| Status | **Code complete** |
+| Files | `native/Phase10QualificationTests/main.swift` (new), `native/run-phase10-qualification-tests.sh` (new, not registered — 10.15 owns that), this doc (§16), `docs/native-parity-matrix.md` (Setup checklist / Proactive insights rows), `docs/native-phase-10-implementation-plan.md` (§6 row flip + this §7 entry) |
+| Commands | §16.3 above |
+| Results | 16 RN-oracle suites / 255 tests passing (unchanged, pre-existing); new `run-phase10-qualification-tests.sh` passing (run twice); full `run-all-domain-tests.sh` aggregate — see report |
+| Deviations recorded | §16.1 (weekMonthLabel/FA-039, Math.round vs. .rounded(), rate onDisappear, grapheme vs. UTF-16 input limit) |
+| Blockers | Phase 12 device/permission/live-AI/background-delivery evidence only |
+| Handoff | 10.15 (aggregate verification + closeout) is next-ready |

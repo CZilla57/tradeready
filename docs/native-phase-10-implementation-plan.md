@@ -911,7 +911,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.11 | D1, D2, D3, D6 | **Code complete** | 10.04 | Today UI |
 | 10.12 | D4, D5, S5 | **Code complete** | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
 | 10.13 | C3, C4, C5 | **Code complete** | 10.10, 10.12 | Coach UI + prefill |
-| 10.14 | all | Pending | 10.01-10.13 | Cross-client qualification |
+| 10.14 | all | **Code complete** | 10.01-10.13 | Cross-client qualification |
 | 10.15 | all | Pending | 10.14 | Aggregate verification + closeout |
 
 Exit criteria traceability (roadmap Phase 10):
@@ -2490,3 +2490,97 @@ no new test coverage was added and `run-all-domain-tests.sh` was not re-run.
 - Next-ready: **10.14** (cross-client and hosted-contract qualification) —
   Coach UI now has a real transport/prompt/prefill path to qualify against
   the RN oracle end to end.
+
+### 10.14 — Cross-client and hosted-contract qualification
+
+**Status:** Code complete (device/permission/live-AI/background-delivery
+proof deferred to Phase 12 per the roadmap's 2026-09-16 verification-
+deferral decision — not claimed here).
+
+**Files:**
+- New: `native/Phase10QualificationTests/main.swift`,
+  `native/run-phase10-qualification-tests.sh` (a standalone swiftc host-test
+  runner over 10.01/10.02/10.03/10.04/10.10/10.13's pure Domain modules plus
+  the notification coordinator; not registered in `run-all-domain-tests.sh`
+  per ruling R6 — 10.15 owns that registration).
+- Modified: `docs/native-phase-10-today-coach-notifications-contract-decisions.md`
+  (new §16, the evidence and deviation record this task's brief requires),
+  `docs/native-parity-matrix.md` (Setup checklist and Proactive insights
+  rows updated to reflect Phase 10's landed work, including the `rate`
+  `onDisappear` deviation row), this doc (§6 row flip, this §7 entry).
+- No implementation file's behavior was changed — this is a qualification
+  task; the only "fix" this task would be authorized to make is a real
+  parity bug found in a pure module, minimally, and none was found.
+
+**What it does:** one shared canonical fixture (jobs, invoices, customers,
+settings, fixed clock Tue Aug 4 2026 10:00 local — the same clock as 10.02's
+`TodayInsightsTests` RN-oracle fixture) is threaded through the business
+snapshot (S1/S2), the proactive-insights engine and its mute lifecycle
+(S3/S4), the setup checklist (D4/D5), the coach system prompt/quick-prompts/
+markdown-lite (C2/C3/C4), and the full five-namespace notification
+coordinator (N2–N6, B2) in a single Swift host-test suite. It proves:
+determinism (the same fixture selects/aggregates identically on repeat
+calls), the cross-engine seams (the coach prompt cites figures from the same
+snapshot Today derives; secure provider keys never reach the prompt text;
+the setup-checklist `isSetupComplete` gate the hero and insights card both
+read agrees with itself), an idempotent-scheduling proof (reconciling all
+five notification namespaces twice from the identical fixture yields an
+identical pending set, with a foreign pending request surviving both passes
+untouched), and a tap-routing round trip (N6) for every owned route,
+failing closed on an unrecognized or missing payload type.
+
+Four intentional native/RN deviations are recorded with evidence (see
+contract-decisions §16.1): `weekMonthLabel`'s FA-039 UTC-parse defect
+(probed live under `TZ=America/Phoenix`: RN mislabels an all-June week as
+`"May – Jun 2026"`; native's local-frame port correctly returns
+`"Jun 2026"`), `Math.round` vs. Swift `.rounded()` half-rounding for
+negative values (probed live: they agree for every positive half and
+diverge for every negative half; both live call sites in
+`NativeTodayInsights.swift` are proven non-negative by construction, so this
+is a latent, not observed, divergence), the setup checklist's `rate` task
+completion trigger (RN marks it on save; native's continuously-bound
+Pricing Defaults form marks it on `onDisappear` instead — task 10.12's
+documented deviation, now also recorded in the parity matrix per this
+task's brief), and the coach input limit's grapheme-cluster vs. UTF-16
+code-unit counting (task 10.13's already-accepted divergence, demonstrated
+directly here with a family-emoji fixture).
+
+Insight kinds not re-exercised in the new cross-cutting fixture
+(`labor_overrun`, `open_slot`, `unscheduled_approved`, `maintenance_due`)
+are already pinned against the RN oracle exhaustively in `TodayInsightsTests`
+(task 10.02); this task references that coverage rather than duplicating it.
+
+**Commands and results:**
+- `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/todayInsights.test.ts __tests__/businessSnapshot.test.js
+  __tests__/insightMutes.test.ts __tests__/setupChecklist.test.js
+  __tests__/bookingAttention.test.ts __tests__/bookingNotify.test.js
+  __tests__/TodayScreenSettingsGear.test.tsx
+  __tests__/crossTabNavigation.test.tsx` — **8 suites, 112 tests, all
+  passing.**
+- `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/chatMarkdown.test.ts __tests__/estimateSnapshot.test.js
+  __tests__/settingsNotificationsScreen.test.tsx` — **3 suites, 22 tests,
+  all passing.**
+- `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/notifications.test.js __tests__/reminderLogic.test.js
+  __tests__/reminderEmailHardening.test.js __tests__/reviewRequest.test.js
+  __tests__/ReviewRequestScreen.test.tsx` — **5 suites, 121 tests, all
+  passing.**
+- `TZ=America/Phoenix sh native/run-phase10-qualification-tests.sh` — **"Phase
+  10 qualification tests passed"** (run twice back to back, identical clean
+  result both times, confirming the suite itself is deterministic).
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` — see
+  `task-10.14-report.md` for the full aggregate result.
+- `sh native/run-doc-reference-check.sh` — run after the doc edits above;
+  see `task-10.14-report.md` for the result.
+- Compile: no app/UI source was touched (test-only additions plus docs), so
+  the Release `xcodebuild` was not required to re-verify this task's
+  changes; it was still run as part of the closeout aggregate — see the
+  report.
+- Concerns / limitations: the new qualification suite exercises a
+  representative subset of the eight insight kinds directly (the rest are
+  referenced from 10.02's exhaustive RN-oracle coverage, per the brief's
+  allowance not to redo existing coverage); device/permission/live-AI/
+  background-delivery proof remains correctly deferred to Phase 12.
+- Next-ready: **10.15** (aggregate verification and closeout).
