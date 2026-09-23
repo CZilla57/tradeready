@@ -45,7 +45,15 @@ struct NativeCoachQuickPromptGrid: View {
         case "document-text-outline": return "doc.text"
         case "bulb-outline": return "lightbulb"
         case "pricetag-outline": return "tag"
-        default: return "sparkles"
+        default:
+            // Task 10.13 fix round 1: an unmapped icon silently fell back to
+            // "sparkles" for every caller, including a future
+            // `NativeCoachQuickPrompts` icon this map was never updated for
+            // — fail loudly in DEBUG (caught by host tests / development
+            // builds) while keeping the graceful fallback in release so a
+            // shipped app never renders nothing.
+            assertionFailure("NativeCoachQuickPromptGrid.symbol(for:) has no SF Symbol mapping for Ionicons icon \"\(ionicon)\" — add one.")
+            return "sparkles"
         }
     }
 }

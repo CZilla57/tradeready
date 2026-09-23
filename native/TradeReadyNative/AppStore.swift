@@ -201,6 +201,15 @@ final class AppStore: ObservableObject {
     /// insight's "Ask coach" action. 10.13 consumes and clears this — it is
     /// never auto-sent.
     @Published var pendingCoachPrefill: String?
+    /// Task 10.13 fix round 1: bumped by `bumpCoachConversationGeneration()`
+    /// on every "New chat" tap and at every account boundary
+    /// (`resetTodayOwnerState()`). `CoachView.send()` captures a
+    /// `NativeCoachConversationTicket` (this generation + `verifiedAccountBinding`)
+    /// before its network await and re-checks it via `coachReplyStillValid(_:)`
+    /// after — the fix for the stale-reply bug where a reply resolving after
+    /// "New chat"/sign-out/account-switch used to land in a transcript (or
+    /// account) it no longer belonged to.
+    @Published private(set) var coachConversationGeneration = 0
     /// Task 10.12 (D4): one-shot settings deep-link installed by the setup
     /// checklist card's task tap. Typed as the pure `NativeSetupRoute` (10.03)
     /// rather than the UI-layer `SettingsDestination` so `AppStore` carries no
@@ -4509,6 +4518,12 @@ final class AppStore: ObservableObject {
         setupChecklistState = nil
         pendingCoachPrefill = nil
         pendingSettingsDestination = nil
+        // Task 10.13 fix round 1: belt-and-suspenders alongside the
+        // `ownerBinding` check already in `NativeCoachConversationTicket` —
+        // a coach reply in flight across this account boundary is invalid
+        // by generation even if a future refactor ever let `ownerBinding`
+        // alone through.
+        bumpCoachConversationGeneration()
         do {
             try insightMuteStore.removeAll()
         } catch {
@@ -8369,6 +8384,32 @@ extension AppStore {
             "source": sourceIsInsightPrefill ? "insight_prefill" : "organic",
             "provider": provider,
         ])
+    }
+
+    /// Task 10.13 fix round 1: call on every "New chat" tap so a reply
+    /// captured under the OLD ticket (`coachConversationTicket()`, taken
+    /// before this bump) can never pass `coachReplyStillValid(_:)` again,
+    /// even if `CoachView` also cancels its in-flight `Task`. Also bumped
+    /// by `resetTodayOwnerState()` at every account boundary as a
+    /// belt-and-suspenders measure alongside the `ownerBinding` check
+    /// already baked into the ticket.
+    func bumpCoachConversationGeneration() {
+        coachConversationGeneration &+= 1
+    }
+
+    /// Task 10.13 fix round 1: the ticket `CoachView.send()` must capture
+    /// immediately before starting its network await.
+    func coachConversationTicket() -> NativeCoachConversationTicket {
+        NativeCoachConversationTicket(generation: coachConversationGeneration, ownerBinding: verifiedAccountBinding)
+    }
+
+    /// Task 10.13 fix round 1: the ticket `CoachView.send()` must re-check
+    /// immediately after its network await resolves, before appending the
+    /// reply to the transcript. `false` means "New chat", a sign-out, or an
+    /// account switch happened while the request was in flight — the caller
+    /// must discard the reply instead of appending it.
+    func coachReplyStillValid(_ ticket: NativeCoachConversationTicket) -> Bool {
+        NativeCoachConversationGuard.shouldAppend(sent: ticket, current: coachConversationTicket())
     }
 
     /// Installs a one-shot settings deep-link (the checklist card's task tap)

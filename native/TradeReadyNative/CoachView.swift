@@ -29,6 +29,12 @@ struct CoachView: View {
     /// starts, exactly like RN's `prefillPending.current = false`.
     @State private var prefillIsInsightOriginated = false
     @State private var copiedAlertText: String?
+    /// Task 10.13 fix round 1: the in-flight `send()` task, so "New chat"
+    /// can cancel it outright in addition to the ticket guard below —
+    /// belt-and-suspenders, since a cancelled `Task` still races the ticket
+    /// check on some paths (e.g. cooperative cancellation not observed
+    /// until after the network call already returned).
+    @State private var activeSendTask: Task<Void, Never>?
 
     private var quickPrompts: [NativeCoachQuickPrompt] {
         NativeCoachQuickPrompts.quickPrompts(snapshot: store.coachBusinessSnapshot())
@@ -47,7 +53,17 @@ struct CoachView: View {
             .navigationTitle("Coach")
             .toolbar {
                 if NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: messages.count) {
-                    Button("New chat") { messages = [] }
+                    // Task 10.13 fix round 1: cancel any in-flight send AND
+                    // bump the conversation generation before clearing the
+                    // transcript — a reply that resolves after this point
+                    // must never append to the fresh, empty transcript.
+                    Button("New chat") {
+                        activeSendTask?.cancel()
+                        activeSendTask = nil
+                        store.bumpCoachConversationGeneration()
+                        messages = []
+                        sending = false
+                    }
                 }
             }
             .onAppear { consumePrefillIfNeeded() }
@@ -162,24 +178,40 @@ struct CoachView: View {
         messages = history
         sending = true
 
-        Task {
+        // Task 10.13 fix round 1: capture the ticket for THIS transcript
+        // before the network await, and cancel any previous in-flight send
+        // (defensive — the composer/quick-prompts are disabled while
+        // `sending` is true, so at most one send should ever be in flight,
+        // but "New chat" can start a new one right after cancelling this
+        // block's task, and a stale reference here would leak it).
+        let ticket = store.coachConversationTicket()
+        activeSendTask?.cancel()
+        activeSendTask = Task {
+            let outcome: NativeCoachTranscriptMessage
             do {
                 let reply = try await store.sendCoachMessage(
                     history: history.map { NativeCoachMessage(role: $0.role == .user ? .user : .assistant, text: $0.text) }
                 )
-                messages.append(NativeCoachTranscriptMessage(id: UUID().uuidString, role: .assistant, text: reply))
+                outcome = NativeCoachTranscriptMessage(id: UUID().uuidString, role: .assistant, text: reply)
             } catch let error as NativeCoachTransportError {
-                messages.append(NativeCoachTranscriptMessage(
+                outcome = NativeCoachTranscriptMessage(
                     id: UUID().uuidString, role: .assistant,
                     text: NativeCoachErrorBubble.text(for: error), isError: true
-                ))
+                )
             } catch {
-                messages.append(NativeCoachTranscriptMessage(
+                outcome = NativeCoachTranscriptMessage(
                     id: UUID().uuidString, role: .assistant,
                     text: NativeCoachErrorBubble.text(forUntyped: error), isError: true
-                ))
+                )
             }
+            // "New chat", a sign-out, or an account switch since `ticket` was
+            // captured means this reply no longer belongs to the transcript
+            // (or account) currently on screen — drop it instead of
+            // appending it to state that has moved on.
+            guard !Task.isCancelled, store.coachReplyStillValid(ticket) else { return }
+            messages.append(outcome)
             sending = false
+            activeSendTask = nil
         }
     }
 }

@@ -29,9 +29,13 @@ struct NativeCoachTranscriptMessage: Identifiable, Equatable {
 enum NativeCoachInputLimit {
     static let maxLength = 2000
 
-    /// Truncates to `maxLength` UTF-16 code units the same way RN's
-    /// `TextInput` clamps keystrokes past its `maxLength` prop — never
-    /// throws, never rejects, just clips.
+    /// Truncates to `maxLength` Swift grapheme clusters (`String.count`) the
+    /// same way RN's `TextInput` clamps keystrokes past its `maxLength` prop
+    /// — never throws, never rejects, just clips. RN's `maxLength` actually
+    /// counts UTF-16 code units, not grapheme clusters; no RN oracle test
+    /// pins this exact limit, so the small divergence for multi-code-unit
+    /// characters (emoji, some CJK) is accepted rather than hand-rolling
+    /// UTF-16 counting for an untested edge (task 10.13 report, deviation 4).
     static func clamp(_ text: String) -> String {
         guard text.count > maxLength else { return text }
         return String(text.prefix(maxLength))
@@ -64,5 +68,37 @@ enum NativeCoachTranscriptDisplay {
     /// RN's `messages.length > 0` gate on the "New chat" header action.
     static func shouldShowNewChat(messageCount: Int) -> Bool {
         messageCount > 0
+    }
+}
+
+/// Task 10.13 fix round 1: identifies ONE in-flight coach send so a reply
+/// that resolves after the transcript it was sent for is no longer current
+/// — "New chat" was tapped, the user signed out, or the user switched
+/// accounts — can be detected and dropped instead of landing in a
+/// transcript (or an account) it no longer belongs to. Two independent
+/// signals, both must still match:
+///   - `generation`: bumped by `AppStore.bumpCoachConversationGeneration()`,
+///     called on every "New chat" tap AND at every real account boundary
+///     (`resetTodayOwnerState()`); a stale ticket from before either bump
+///     can never match again.
+///   - `ownerBinding`: the verified account binding at send time; a
+///     sign-out (`nil`) or a switch to a different account (a different
+///     hex string) invalidates the ticket even if the generation counter
+///     somehow didn't change.
+/// This check does NOT depend on the view (`CoachView`) still being alive —
+/// it is a plain value comparison `AppStore` can run at any time, so it
+/// still protects correctness even if a future refactor changes how/whether
+/// the view is torn down at an account boundary.
+struct NativeCoachConversationTicket: Equatable {
+    var generation: Int
+    var ownerBinding: String?
+}
+
+enum NativeCoachConversationGuard {
+    /// `true` only when neither the generation nor the owner binding moved
+    /// between `sent` (captured immediately before the network call) and
+    /// `current` (captured immediately after it resolves).
+    static func shouldAppend(sent: NativeCoachConversationTicket, current: NativeCoachConversationTicket) -> Bool {
+        sent.generation == current.generation && sent.ownerBinding == current.ownerBinding
     }
 }

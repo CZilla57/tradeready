@@ -4302,6 +4302,51 @@ struct StoreIntegrationTests {
                    "10.13 New chat appears once any message exists, matching RN's messages.length > 0")
         }
 
+        // MARK: - Task 10.13 fix round 1: stale coach replies.
+        //
+        // The bug: `CoachView.send()` used to append a reply after its await
+        // unconditionally, so a reply resolving after "New chat" (or a
+        // sign-out/account-switch) landed in a transcript — or account — it
+        // no longer belonged to. The fix: capture a
+        // `NativeCoachConversationTicket` (generation + verified account
+        // binding) before the await, and only append if
+        // `AppStore.coachReplyStillValid(_:)` still says yes after.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "1013-fix1-guard")
+            seed08Owner(store, subject: "user-guard", binding: "bind-guard-a")
+
+            // Positive case: neither the generation nor the owner binding
+            // moved between capturing the ticket and re-checking it — the
+            // reply is still valid to append.
+            let ticket = store.coachConversationTicket()
+            expect(store.coachReplyStillValid(ticket),
+                   "10.13 fix1: a reply is valid to append when neither generation nor owner binding changed")
+
+            // "New chat" bumps the generation — a ticket captured before the
+            // bump must never validate again, matching the coordinator's
+            // required case: "send, bump the generation, resolve, and
+            // assert no append."
+            store.bumpCoachConversationGeneration()
+            expect(!store.coachReplyStillValid(ticket),
+                   "10.13 fix1: New chat bumping the generation invalidates an in-flight reply's ticket")
+
+            // A freshly captured ticket AFTER the bump is valid again — the
+            // guard rejects only STALE tickets, not every send after a
+            // "New chat".
+            let freshTicket = store.coachConversationTicket()
+            expect(store.coachReplyStillValid(freshTicket),
+                   "10.13 fix1: a freshly captured ticket after the bump is valid")
+
+            // Account-binding change (sign-out/account-switch) invalidates
+            // too, even with the generation bumped again by the same
+            // account-boundary path (`resetTodayOwnerState()`) — the
+            // "Same for a binding change" required case.
+            let bindingTicket = store.coachConversationTicket()
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-guard-2", binding: "bind-guard-b")
+            expect(!store.coachReplyStillValid(bindingTicket),
+                   "10.13 fix1: an account-binding change invalidates an in-flight reply's ticket")
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }
