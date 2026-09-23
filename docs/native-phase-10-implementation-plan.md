@@ -909,7 +909,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.09 | B1, B2 | **Code complete** | 10.01, 10.08 | Post-sync derived-state seam |
 | 10.10 | C1, C2, C3, C4 | **Code complete** | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
 | 10.11 | D1, D2, D3, D6 | **Code complete** | 10.04 | Today UI |
-| 10.12 | D4, D5, S5 | Pending | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
+| 10.12 | D4, D5, S5 | **Code complete** | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
 | 10.13 | C3, C4, C5 | Pending | 10.10, 10.12 | Coach UI + prefill |
 | 10.14 | all | Pending | 10.01-10.13 | Cross-client qualification |
 | 10.15 | all | Pending | 10.14 | Aggregate verification + closeout |
@@ -2152,3 +2152,170 @@ integration tests`. `TZ=America/Phoenix sh native/run-today-briefing-tests.sh`
 missing, 59 planned (not yet created)`. No test file or runner file list
 changed in this round (the fix was a deletion in `TodayView.swift` only), so
 no new test coverage was added and `run-all-domain-tests.sh` was not re-run.
+
+### 10.12 — Setup checklist, hero, and insights cards
+
+- Status: **Code complete**. Requirements D4, D5, S5.
+- Files: new `native/TradeReadyNative/Domain/NativeInsightsCardPolicy.swift`
+  (pure visibility/slicing/mute-availability policy, kept out of the
+  SwiftUI-importing view file so `AppStore.swift` — compiled standalone by
+  six `swiftc` host-test runners with no SwiftUI files in their list — can
+  depend on it); new `native/TradeReadyNative/NativeAnalytics.swift` (ruling
+  R5's minimal `NativeAnalytics` protocol + no-op default, injected via
+  `AppStore.init(analytics:)`, no transport — Phase 11 extends it); new
+  `native/TradeReadyNative/NativeInsightsCard.swift`/
+  `NativeSetupChecklistCard.swift` (the two view files, RN parity ports of
+  `components/InsightsCard.tsx`/`SetupChecklistCard.tsx`); modified
+  `AppStore.swift` (the `today*` checklist/insights wiring section, the
+  `pendingCoachPrefill`/`pendingSettingsDestination`/`notificationsGranted`
+  one-shot/mirror published state, `activateInsightMutes`/
+  `activateSetupChecklist` at both identity-activation call sites plus the
+  `insightMutes = nil; setupChecklistState = nil` owner-mismatch branch, the
+  owner-bound stores' `removeAll()` at all three real account-scrub call
+  sites — init's pending-scrub recovery block, `retryAccountScrub`,
+  `performLocalAccountScrub` — and at the three account-boundary transitions
+  — `useAnotherAccount`, `applyCompletedSignOutState`,
+  `applyRecoverySignedOutState` — alongside the pre-existing review-request/
+  reminder-prompt scrub lines, plus `markSetupTaskDoneIfStripeConnected()`
+  called from both `refreshStripeStatus()` assignment sites); modified
+  `SettingsView.swift` (`NavigationStack(path:)` + value-based
+  `NavigationLink(value:)` refactor so `SettingsView(initialDestination:)` can
+  programmatically push a task's destination; `SettingsDestination(setupRoute:)`
+  conversion; `PricingSettings.onDisappear { store.markSetupTaskDone(.rate) }`
+  — the native `rate` task's honest-derivation stand-in, since native's
+  bindings write continuously and there is no RN-style explicit save action);
+  modified `TodayView.swift` (fills the two 10.11 slot hooks with the real
+  card views, `handleRouteResult(_:)` extracted from `handle(_:)` and shared
+  by row/hero/insight taps so every route source gets the same
+  `.present*` → sheet-state mapping, `pendingSettingsDestination` →
+  `SettingsView` sheet wiring, `notificationsGranted` mirrored from
+  `NativeEstimateFollowUpNotificationCoordinator.permissionState`); modified
+  `NativeTodayComponents.swift` (removed the two now-filled 10.11 placeholder
+  slot structs); modified `native/StoreIntegrationTests/main.swift` (new
+  `RecordingAnalytics` fake + a full 10.12 test section — see below); modified
+  six `swiftc` runner scripts (`run-calendar-editor-tests.sh`,
+  `run-export-import-ui-tests.sh`, `run-phase9-qualification-tests.sh`,
+  `run-pricebook-ui-tests.sh`, `run-schedule-booking-settings-tests.sh`,
+  `run-store-integration-tests.sh`) to add `Domain/NativeInsightMutes.swift`,
+  `NativeInsightMuteStore.swift`, `Domain/NativeInsightsCardPolicy.swift`, and
+  `NativeAnalytics.swift` to each one's file list (each already compiled
+  `AppStore.swift`, which now depends on all four).
+- Gate/fail-closed matrix (brief step 5, decision row 17):
+  - Mute store unreadable (`insightMutes == nil`): only the five
+    non-muteable (self-resolving) insight kinds render, unfiltered, still
+    capped at the top-3 slice; no dismiss/snooze controls anywhere (tested:
+    `NativeInsightsCardPolicy.visibleInsights`/`.mutesReadable` fail-closed
+    cases, `StoreIntegrationTests/main.swift` "10.12 fail-closed" block).
+  - Checklist store unreadable/not-yet-activated
+    (`setupChecklistState == nil`): the checklist card is hidden
+    (`todaySetupTasks == nil`) and `todaySetupComplete` reads `false`, which
+    also keeps the insights card off (the shared gate, decision row 6)
+    (tested: "10.12 fail-closed: before checklist activation…" cases).
+  - Hero suppresses insights (decision row 18) and setup-incomplete
+    suppresses insights, independently of each other and of an empty result
+    set (tested: "10.12 gate ordering" block against
+    `NativeInsightsCardPolicy.isVisible`).
+- Analytics event table (ruling R5, `NativeAnalytics.track(event:properties:)`,
+  RN's exact `utils/analytics.ts` event names/property keys):
+  | Event | Properties | Fired from |
+  |---|---|---|
+  | `insight_shown` | `kinds` (comma-joined), `ids` (comma-joined) | `trackTodayInsightsShownIfNeeded`, de-duped per distinct visible-id set via `lastShownInsightIDsKey` |
+  | `insight_tapped` | `kind` | `trackInsightTapped` (row tap) |
+  | `insight_coach_opened` | `kind` | `trackInsightCoachOpened` ("Ask coach" tap) |
+  | `insight_reason_viewed` | `kind` | `trackInsightReasonViewed` ("Why am I seeing this?") |
+  | `insight_dismissed` | `kind`, `insightId` | `applyInsightMute(_:days: nil)` |
+  | `insight_snoozed` | `kind`, `insightId`, `days` | `applyInsightMute(_:days: N)` |
+  | `sample_job_opened` | (none) | `markSampleTourDoneIfNeeded`, only for a `.sampleTour` hero tap |
+  | `setup_checklist_dismissed` | `doneCount` | `dismissSetupChecklist` |
+  | `setup_checklist_task_opened` | `task` | `NativeSetupChecklistCardView.handleTap`, every non-notifications task tap |
+  All eight are exercised in `StoreIntegrationTests/main.swift` via a
+  `RecordingAnalytics` fake injected through `AppStore.init(analytics:)`.
+- Prefill handoff for 10.13: `AppStore.installPendingCoachPrefill(_ prompt:
+  String)` sets `pendingCoachPrefill` and switches `selectedTab = .coach`.
+  This task installs and switches tabs only — it deliberately does **not**
+  consume/clear `pendingCoachPrefill`; 10.13 reads it once, fills the coach
+  input, clears it, and never auto-sends (ruling R4). Tested: "10.12 Prefill
+  handoff" block confirms the one-shot set + tab switch.
+- Tests: all of the brief's "Done when" items have host-test coverage in
+  `StoreIntegrationTests/main.swift`'s new "Task 10.12" section — top-three-
+  after-mute, per-kind mute availability (`MUTEABLE_KINDS`/`SNOOZE_DAYS`),
+  fail-closed mute/checklist rendering, gate ordering (hero suppresses
+  insights; incomplete setup suppresses insights; empty result suppresses
+  the card), every checklist destination (`NativeSetupChecklist.route(for:)`
+  for all 5 tasks), markSetupTaskDone/dismissSetupChecklist persistence
+  (including a genuine relaunch reading the file back), hero gate wiring
+  (`todayHero` reads the real activated `sampleTourDone`, a non-sampleTour
+  hero tap is a no-op for the checklist store), `handleTodayHeroTap`/
+  `handleTodayInsightTap` routing (including a sheet-presentation case,
+  `.schedule` → `.presentJobEditor`), prefill install, settings routing, the
+  full analytics table including `insight_shown` de-dup, seed adoption (via
+  `testActivateInsightAndChecklistStores`, the same real-reload pattern as
+  10.07's `scheduleBookingTestReloadReviewRequests`), and the scrub at all
+  three real account boundaries (`useAnotherAccount`, sign-out via the
+  established `derivedStatePublisher.reset()` stand-in is NOT reused here —
+  a real `useAnotherAccount()` and a real `cancelPasswordRecovery()`
+  (`applyRecoverySignedOutState`) are driven end-to-end instead, each
+  followed by a fresh relaunch proving the on-disk stores were actually
+  removed, not just the in-memory copies).
+  A test-writing correction made along the way: `NativeInsightMuteStore`/
+  `NativeSetupChecklistStore` fail-closed on any account binding that is not
+  exactly 64 lowercase-hex characters, so every new test uses a small
+  `hexBinding(_:)` helper to expand a readable tag (e.g. `"bind-1012"`) into
+  a valid one — a bare tag like `"bind-1"` (fine for the pre-existing 8.08
+  booking tests, which never touch these two new 64-hex-bound stores) throws
+  `invalidAccountBinding` and silently fails these tests closed if reused
+  as-is.
+- Commands / results: `TZ=America/Phoenix sh
+  native/run-store-integration-tests.sh` — `PASS: canonical AppStore
+  integration tests`. `TZ=America/Phoenix sh native/run-today-insights-tests.sh
+  native/run-insight-mute-tests.sh native/run-setup-checklist-tests.sh
+  native/run-today-briefing-tests.sh native/run-notification-permission-tests.sh`
+  — all passed (10.02/10.03/10.05 regressions, unaffected). `TZ=America/Phoenix
+  sh native/run-calendar-editor-tests.sh native/run-export-import-ui-tests.sh
+  native/run-phase9-qualification-tests.sh native/run-pricebook-ui-tests.sh
+  native/run-schedule-booking-settings-tests.sh` — all passed after the
+  4-file-list addition (a spurious `NativeExpenseCategories` "cannot find in
+  scope" error on the first background run of this batch was module-cache
+  corruption from two `swiftc` invocations racing on the same shared
+  `tradeready-store-integration-module-cache` path, not a real missing
+  dependency — confirmed by re-running `run-calendar-editor-tests.sh` alone
+  after clearing the cache, which passed cleanly). `TZ=America/Phoenix npm
+  test -- --runInBand --runTestsByPath __tests__/todayInsights.test.ts
+  __tests__/insightMutes.test.ts __tests__/setupChecklist.test.js` — 3 suites
+  / 82 tests passing (RN oracle regression). `TZ=America/Phoenix sh
+  native/run-all-domain-tests.sh` — passing in full (every Swift host-test
+  runner plus the 26 backend-workers tests it chains). `xcodebuild … Release
+  … CODE_SIGNING_ALLOWED=NO build` — **BUILD SUCCEEDED**, 0 `error:` lines.
+  One real compile error was found and fixed during this verification pass
+  (not by the swiftc host-test runners, which never touch `SettingsView.swift`):
+  `PricingSettings`'s `.onDisappear { … }` had been chained after `var body`'s
+  closing brace instead of onto the `SettingsPage(...)` view expression
+  inside it — `expected declaration` at `SettingsView.swift:221`. Fixed by
+  moving the closing brace so `.onDisappear` chains onto the view before
+  `body`'s own closing brace.
+- Self-review: confirmed the exact file set staged for commit
+  (`git status --short`) matches only files this task touched — four new
+  files, the AppStore/SettingsView/TodayView/NativeTodayComponents/
+  StoreIntegrationTests edits, and the six runner file-list edits; no
+  unrelated in-flight work from other agents (backend-workers/backend/
+  supabase changes visible in `git status` at session start) was touched.
+  Verified `insightMutes`/`setupChecklistState` are `private(set)` (readable
+  by tests, writable only through the activation/mutation methods) and that
+  every mute-control affordance in `NativeInsightsCard.swift` is gated on
+  both `isMuteable(kind)` and `mutesReadable(store.insightMutes)`, matching
+  the fail-closed contract.
+- Concerns / limitations: `NativeSetupRoute.settings` (the notifications
+  task's nominal route) is documented as practically unreachable — the
+  checklist card handles `.notifications` in-card before `route(for:)` is
+  ever consulted for it — but the enum stays total and
+  `SettingsDestination(setupRoute:)` maps it to `.notifications` rather than
+  trapping, so a future new task added to `NativeSetupTaskID` without a
+  matching `route(for:)` case would fail to compile (safe) rather than route
+  silently wrong. `RecordingAnalytics`/`ScheduleBookingTestLoader` each carry
+  a pre-existing-pattern Swift 6 strict-concurrency warning (main-actor
+  conformance crossing / mutable stored property on a `Sendable` type) that
+  the codebase does not currently treat as fatal; left as-is, consistent with
+  `ScheduleBookingTestLoader`'s prior art in the same file.
+- Next-ready: **10.13** (Coach UI and contextual prefill) — `pendingCoachPrefill`/
+  `installPendingCoachPrefill` are the exact one-shot handoff API it consumes
+  and clears; 10.14 (cross-client qualification) once 10.13 lands.

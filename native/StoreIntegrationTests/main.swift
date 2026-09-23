@@ -100,6 +100,16 @@ private final class StoreSubscriptionServiceStub: NativeSubscriptionServing {
     func logOut() async {}
 }
 
+/// Records every `track` call verbatim (event name + properties) — task
+/// 10.12's analytics-seam tests inject this in place of `NativeNoOpAnalytics`.
+@MainActor
+private final class RecordingAnalytics: NativeAnalytics {
+    var calls: [(event: String, properties: [String: String])] = []
+    func track(_ event: String, _ properties: [String: String]) {
+        calls.append((event, properties))
+    }
+}
+
 @main
 struct StoreIntegrationTests {
     @MainActor
@@ -3498,6 +3508,338 @@ struct StoreIntegrationTests {
             let outcome = await store.performPullToRefresh()
             expect(outcome == nil,
                    "10.11 pull-to-refresh: with no coordinator configured, performPullToRefresh reports no outcome rather than a fabricated success")
+        }
+
+        // MARK: - Task 10.12: setup checklist, hero state, insights card.
+
+        func customer1012(id: String, name: String = "Real Customer") -> Canonical.Customer {
+            try! JSONDecoder().decode(Canonical.Customer.self, from: Data("""
+            {"id":"\(id)","name":"\(name)","email":"","phone":"","address":"","notes":""}
+            """.utf8))
+        }
+        func insight1012(_ kind: NativeInsightKind, id: String) -> NativeTodayInsight {
+            NativeTodayInsight(kind: kind, id: id, title: "t-\(id)", target: .jobs, reason: "r-\(id)")
+        }
+        // `NativeInsightMuteStore`/`NativeSetupChecklistStore` fail-closed on
+        // any account binding that is not exactly 64 lowercase hex chars —
+        // deterministically expand a short readable tag into one so these
+        // tests both read cleanly and satisfy that validation.
+        func hexBinding(_ tag: String) -> String {
+            let safe = tag.lowercased().compactMap { ch -> Character in
+                ("0"..."9").contains(ch) || ("a"..."f").contains(ch) ? ch : "0"
+            }
+            var s = String(safe)
+            while s.count < 64 { s += "0" }
+            return String(s.prefix(64))
+        }
+
+        // --- S5 (pure policy): top-three-after-mute, per-kind mute
+        // availability, and fail-closed mute rendering. Exercised directly
+        // against `NativeInsightsCardPolicy` — no store I/O needed for the
+        // pure slicing/filtering contract.
+        do {
+            let now = Date()
+            let five = [
+                insight1012(.laborOverrun, id: "labor_overrun:j1"),
+                insight1012(.lowMarginEstimate, id: "low_margin_estimate:j2"),
+                insight1012(.uninvoicedComplete, id: "uninvoiced_complete:j3"),
+                insight1012(.dueSoon, id: "due_soon:i1"),
+                insight1012(.openSlot, id: "open_slot:2026-09-23"),
+            ]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: five, mutes: [], now: now).map(\.id) == five.prefix(3).map(\.id),
+                   "10.12 with no mutes, the top-3 slice is the first 3 insights in priority order")
+
+            let muteFirst = [NativeInsightMutes.makeMute(id: five[0].id, now: now)]
+            let afterMute = NativeInsightsCardPolicy.visibleInsights(all: five, mutes: muteFirst, now: now)
+            expect(afterMute.map(\.id) == [five[1].id, five[2].id, five[3].id],
+                   "10.12 top-three-after-mute: muting the first row promotes the 4th into the visible 3 (mute filter runs before the slice)")
+
+            for kind: NativeInsightKind in [.lowMarginEstimate, .maintenanceDue, .expenseAnomaly] {
+                expect(NativeInsightsCardPolicy.isMuteable(kind), "10.12 \(kind.rawValue) is muteable (MUTEABLE_KINDS)")
+            }
+            for kind: NativeInsightKind in [.laborOverrun, .uninvoicedComplete, .dueSoon, .openSlot, .unscheduledApproved] {
+                expect(!NativeInsightsCardPolicy.isMuteable(kind), "10.12 \(kind.rawValue) is NOT muteable (self-resolving)")
+            }
+            expect(NativeInsightsCardPolicy.snoozeDays(for: .maintenanceDue) == 30,
+                   "10.12 maintenance_due offers a 30-day snooze")
+            expect(NativeInsightsCardPolicy.snoozeDays(for: .lowMarginEstimate) == nil,
+                   "10.12 low_margin_estimate is dismiss-only, no snooze option")
+            expect(NativeInsightsCardPolicy.snoozeDays(for: .expenseAnomaly) == nil,
+                   "10.12 expense_anomaly is dismiss-only, no snooze option")
+
+            // Fail-closed (brief step 5, decision row 17): mutes == nil (the
+            // store was unreadable) renders ONLY the five non-muteable kinds,
+            // never an unfiltered muteable row that might resurrect a
+            // dismissal.
+            let mixedWithMuteable = five + [insight1012(.maintenanceDue, id: "maintenance_due:eq1")]
+            let failClosed = NativeInsightsCardPolicy.visibleInsights(all: mixedWithMuteable, mutes: nil, now: now)
+            expect(failClosed.allSatisfy { !NativeInsightsCardPolicy.isMuteable($0.kind) },
+                   "10.12 fail-closed: an unreadable mute store renders only non-muteable kinds")
+            expect(failClosed.count == 3, "10.12 fail-closed rendering still respects the top-3 limit")
+            expect(!NativeInsightsCardPolicy.mutesReadable(nil), "10.12 mutesReadable(nil) is false — controls hidden")
+            expect(NativeInsightsCardPolicy.mutesReadable([]), "10.12 mutesReadable([]) is true — an empty but loaded store still shows controls")
+
+            // Gate ordering (decision row 18 + row 6): hero suppresses
+            // insights regardless of setup completion; setup incompleteness
+            // suppresses insights regardless of hero; an empty result
+            // (post-mute) suppresses the card even when both gates pass.
+            let hero = NativeTodayHero(kind: .createJob, title: "t", subtitle: "s", destination: .newJob)
+            expect(!NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: hero, insights: five),
+                   "10.12 gate ordering: a shown hero suppresses the insights card even when setup is complete")
+            expect(!NativeInsightsCardPolicy.isVisible(setupComplete: false, hero: nil, insights: five),
+                   "10.12 gate ordering: incomplete setup suppresses the insights card even with no hero")
+            expect(!NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: nil, insights: []),
+                   "10.12 gate ordering: zero visible insights suppresses the card even when otherwise eligible")
+            expect(NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: nil, insights: five),
+                   "10.12 gate ordering: setup complete + no hero + insights present shows the card")
+        }
+
+        // --- Every checklist destination (pure `NativeSetupChecklist.route`).
+        do {
+            expect(NativeSetupChecklist.route(for: .contact) == .business, "10.12 contact task routes to Business settings")
+            expect(NativeSetupChecklist.route(for: .logo) == .business, "10.12 logo task routes to Business settings")
+            expect(NativeSetupChecklist.route(for: .rate) == .pricing, "10.12 rate task routes to Pricing settings")
+            expect(NativeSetupChecklist.route(for: .stripe) == .payments, "10.12 stripe task routes to Payments settings")
+            expect(NativeSetupChecklist.route(for: .notifications) == .settings,
+                   "10.12 notifications task's route is total (handled in-card before this map is consulted in practice)")
+        }
+
+        // --- AppStore wiring: fail-closed default, checklist derivation,
+        // dismiss/mark-done persistence, hero gate wiring (R3), prefill
+        // install (R4), settings routing, and the analytics seam (R5)
+        // including `insight_shown` de-dup.
+        do {
+            let recorder = RecordingAnalytics()
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1012-wiring-\(UUID().uuidString)", isDirectory: true)
+            let wiringURL = dir.appendingPathComponent("store.json")
+            try Canonical.SnapshotRepository(primaryURL: wiringURL).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(
+                jobs: [job08(id: "j1", status: "approved", date: "2026-09-22")], settings: settings08())))
+            let store = AppStore(fileURL: wiringURL, seedIfMissing: false,
+                                 subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder)
+            // Seed a verified owner without going through activation — this proves the FAIL-CLOSED default:
+            // going through activation — this proves the FAIL-CLOSED default:
+            // an owner is signed in but `activateInsightMutes`/
+            // `activateSetupChecklist` have not run yet (matches a real
+            // in-flight launch before identity activation completes).
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-1012", binding: hexBinding("bind-1012"))
+
+            expect(store.todaySetupTasks == nil,
+                   "10.12 fail-closed: before checklist activation, the checklist is hidden (nil), not an empty/complete list")
+            expect(!store.todaySetupComplete,
+                   "10.12 fail-closed: before checklist activation, setup reads as incomplete (never wrongly reveals insights)")
+
+            // Reload the real activation path (the test seam calls the exact
+            // production `activateInsightMutes`/`activateSetupChecklist`).
+            store.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-1012"))
+            expect(store.todaySetupTasks?.count == 5, "10.12 activation yields all 5 checklist tasks")
+            let contactTask = store.todaySetupTasks?.first { $0.id == .contact }
+            expect(contactTask?.done == true, "10.12 contact/address are non-empty in settings08() — contact task derives done")
+            let logoTask = store.todaySetupTasks?.first { $0.id == .logo }
+            expect(logoTask?.done == false, "10.12 no logoPhoto in settings08() — logo task derives not-done")
+            expect(!store.todaySetupComplete, "10.12 setup is not complete while logo/rate/stripe/notifications are outstanding")
+
+            // markSetupTaskDone persists through the real owner-bound store —
+            // prove it with a genuine relaunch reading the file back, not
+            // just the in-memory flag.
+            store.markSetupTaskDone(.rate)
+            expect(store.todaySetupTasks?.first { $0.id == .rate }?.done == true,
+                   "10.12 markSetupTaskDone(.rate) flips the in-memory rate task done")
+            let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                      subscriptionService: StoreSubscriptionServiceStub())
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-1012", binding: hexBinding("bind-1012"))
+            relaunched.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-1012"))
+            expect(relaunched.todaySetupTasks?.first { $0.id == .rate }?.done == true,
+                   "10.12 a real relaunch reads the persisted rate completion back from disk")
+
+            // dismissSetupChecklist: optimistic in-memory flip + analytics +
+            // persistence.
+            expect(recorder.calls.isEmpty, "10.12 sanity: no analytics fired yet")
+            store.dismissSetupChecklist()
+            expect(store.todaySetupComplete, "10.12 dismissSetupChecklist optimistically marks setup complete (dismissed short-circuits the gate)")
+            expect(recorder.calls.contains { $0.event == "setup_checklist_dismissed" },
+                   "10.12 dismissSetupChecklist fires setup_checklist_dismissed with a doneCount property")
+
+            // Hero gate wiring (R3): `todayHero` reads `sampleTourDone` from
+            // the real activated checklist state, not a hardcoded placeholder.
+            let sampleRecorder = RecordingAnalytics()
+            let sampleDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1012-hero-\(UUID().uuidString)", isDirectory: true)
+            let sampleURL = sampleDir.appendingPathComponent("store.json")
+            try Canonical.SnapshotRepository(primaryURL: sampleURL).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(
+                jobs: [job08(id: "j1", status: "lead", date: nil, start: nil, end: nil)], settings: settings08())))
+            let sampleStore = AppStore(fileURL: sampleURL, seedIfMissing: false,
+                                       subscriptionService: StoreSubscriptionServiceStub(), analytics: sampleRecorder)
+            sampleStore.scheduleBookingTestSeedSignedInOwner(subject: "user-hero", binding: hexBinding("bind-hero"))
+            sampleStore.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-hero"))
+            expect(sampleStore.todayHero?.kind == .sampleTour,
+                   "10.12 a fresh account with only a sample job and no real customers shows the sample-tour hero")
+            sampleStore.markSampleTourDoneIfNeeded(for: sampleStore.todayHero!)
+            expect(sampleStore.todayHero == nil,
+                   "10.12 markSampleTourDoneIfNeeded persists sampleTourDone, and todayHero reflects it immediately (no hero re-shown)")
+            expect(sampleRecorder.calls.contains { $0.event == "sample_job_opened" },
+                   "10.12 the sample-tour hero tap fires sample_job_opened")
+            let relaunchedSample = AppStore(fileURL: sampleDir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                            subscriptionService: StoreSubscriptionServiceStub())
+            relaunchedSample.scheduleBookingTestSeedSignedInOwner(subject: "user-hero", binding: hexBinding("bind-hero"))
+            relaunchedSample.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-hero"))
+            expect(relaunchedSample.todayHero == nil,
+                   "10.12 sampleTourDone persists across a real relaunch")
+
+            // A non-sample-tour hero tap is a no-op for the checklist store
+            // (only the sample tour records `sampleTourDone`/fires
+            // `sample_job_opened`).
+            let (customerStore, _) = try seed08Store(customers: [customer1012(id: "real-cust-1")],
+                                                      settings: settings08(), tag: "1012-hero-addcustomer")
+            customerStore.scheduleBookingTestSeedSignedInOwner(subject: "user-hero2", binding: hexBinding("bind-hero2"))
+            customerStore.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-hero2"))
+            expect(customerStore.todayHero?.kind == .createJob,
+                   "10.12 sanity: a real customer with no jobs shows the createJob hero, not addCustomer")
+            let statusBefore = customerStore.todaySetupTasks?.first { $0.id == .rate }?.done
+            customerStore.markSampleTourDoneIfNeeded(for: customerStore.todayHero!)
+            expect(customerStore.todaySetupTasks?.first { $0.id == .rate }?.done == statusBefore,
+                   "10.12 markSampleTourDoneIfNeeded is a no-op for a non-sampleTour hero kind — no spurious checklist write")
+            let heroRouteResult = customerStore.handleTodayHeroTap(customerStore.todayHero!)
+            expect(heroRouteResult == .presentNewJobEditor,
+                   "10.12 handleTodayHeroTap routes the createJob hero's .newJob destination to presentNewJobEditor")
+
+            // Prefill handoff (R4): one-shot value + tab switch, for 10.13 to
+            // consume. This task installs and switches tabs; it does not
+            // consume/clear the value (10.13 owns that).
+            expect(store.pendingCoachPrefill == nil, "10.12 sanity: no prefill installed yet")
+            expect(store.selectedTab == .today, "10.12 sanity: starts on the Today tab")
+            store.installPendingCoachPrefill("Why is this job low margin?")
+            expect(store.pendingCoachPrefill == "Why is this job low margin?",
+                   "10.12 installPendingCoachPrefill sets the one-shot prefill value")
+            expect(store.selectedTab == .coach, "10.12 installPendingCoachPrefill switches to the Coach tab")
+
+            // Settings routing (checklist task tap).
+            expect(store.pendingSettingsDestination == nil, "10.12 sanity: no pending settings destination yet")
+            store.routeToTodaySettings(.pricing)
+            expect(store.pendingSettingsDestination == .pricing, "10.12 routeToTodaySettings installs the one-shot settings route")
+            store.trackSetupChecklistTaskOpened(.rate)
+            expect(recorder.calls.contains { $0.event == "setup_checklist_task_opened" && $0.properties["task"] == "rate" },
+                   "10.12 trackSetupChecklistTaskOpened fires setup_checklist_task_opened with the task id")
+
+            // Insight tap routing reuses the exact 10.04 destination mapping,
+            // including the sheet-presentation cases (`.schedule` →
+            // `.presentJobEditor`) that only `TodayView`'s `onRoute` handler
+            // can present — not just the tab-switch `.handled` cases.
+            let jobTargetInsight = NativeTodayInsight(kind: .laborOverrun, id: "labor_overrun:j1",
+                                                      title: "t", target: .schedule(jobId: "j1"), reason: "r")
+            let routeResult = store.handleTodayInsightTap(jobTargetInsight)
+            expect(routeResult == .presentJobEditor(jobID: "j1"),
+                   "10.12 handleTodayInsightTap routes a .schedule target through the exact 10.04 destination mapping to a sheet-presentation result")
+
+            // Dismiss vs snooze + per-kind mute availability, end to end
+            // through the real owner-bound mute store.
+            let dismissTarget = insight1012(.lowMarginEstimate, id: "low_margin_estimate:j9")
+            store.applyInsightMute(dismissTarget, days: nil)
+            expect(store.insightMutes?.contains(where: { $0.id == dismissTarget.id && $0.until == nil }) == true,
+                   "10.12 applyInsightMute(days: nil) optimistically records a permanent dismiss (no `until`) immediately, in-memory")
+            expect(recorder.calls.contains { $0.event == "insight_dismissed" && $0.properties["insightId"] == dismissTarget.id },
+                   "10.12 a permanent dismiss fires insight_dismissed with the exact insightId")
+
+            let snoozeTarget = insight1012(.maintenanceDue, id: "maintenance_due:eq2")
+            store.applyInsightMute(snoozeTarget, days: 30)
+            expect(store.insightMutes?.contains(where: { $0.id == snoozeTarget.id && $0.until != nil }) == true,
+                   "10.12 applyInsightMute(days: 30) optimistically records a snooze WITH an `until` date, distinct from a dismiss")
+            expect(recorder.calls.contains { $0.event == "insight_snoozed" && $0.properties["days"] == "30" },
+                   "10.12 a snooze fires insight_snoozed with the exact days property")
+
+            // Analytics dedup: `insight_shown` fires once per distinct visible
+            // id SET, not once per render.
+            let shownSet = [insight1012(.dueSoon, id: "due_soon:i9")]
+            let shownCallsBefore = recorder.calls.filter { $0.event == "insight_shown" }.count
+            store.trackTodayInsightsShownIfNeeded(shownSet)
+            store.trackTodayInsightsShownIfNeeded(shownSet)
+            let shownCallsAfterRepeat = recorder.calls.filter { $0.event == "insight_shown" }.count
+            expect(shownCallsAfterRepeat == shownCallsBefore + 1,
+                   "10.12 insight_shown de-dup: calling with the SAME visible id set twice fires analytics only once")
+            store.trackTodayInsightsShownIfNeeded([insight1012(.dueSoon, id: "due_soon:i10")])
+            let shownCallsAfterChange = recorder.calls.filter { $0.event == "insight_shown" }.count
+            expect(shownCallsAfterChange == shownCallsAfterRepeat + 1,
+                   "10.12 insight_shown fires again once the visible id set actually changes")
+
+            store.trackInsightTapped(jobTargetInsight)
+            expect(recorder.calls.contains { $0.event == "insight_tapped" && $0.properties["kind"] == "labor_overrun" },
+                   "10.12 trackInsightTapped fires insight_tapped with the kind property")
+            store.trackInsightCoachOpened(jobTargetInsight)
+            expect(recorder.calls.contains { $0.event == "insight_coach_opened" },
+                   "10.12 trackInsightCoachOpened fires insight_coach_opened")
+            store.trackInsightReasonViewed(jobTargetInsight)
+            expect(recorder.calls.contains { $0.event == "insight_reason_viewed" },
+                   "10.12 trackInsightReasonViewed fires insight_reason_viewed")
+
+            _ = recorder // keep the recorder referenced through the whole `do` block
+        }
+
+        // --- Account-boundary scrub: all three real boundaries wipe the
+        // owner-bound insight-mute and setup-checklist stores, and reset the
+        // in-memory published state + one-shot values, matching the pattern
+        // already established for review requests/reminder prompts.
+        do {
+            let (store, dir) = try seed08Store(settings: settings08(), tag: "1012-scrub-signout")
+            let scrubBinding = hexBinding("bind-scrub-1")
+            seed08Owner(store, binding: scrubBinding)
+            store.testActivateInsightAndChecklistStores(accountBinding: scrubBinding)
+            store.markSetupTaskDone(.rate)
+            store.installPendingCoachPrefill("keep me?")
+            store.routeToTodaySettings(.pricing)
+            expect(store.setupChecklistState != nil, "10.12 scrub sanity: checklist state is populated before the boundary")
+            expect(store.pendingCoachPrefill != nil, "10.12 scrub sanity: a pending prefill is installed before the boundary")
+
+            // `derivedStatePublisher.reset()` alone (the established
+            // lightweight stand-in for the real, App-Group-touching
+            // `signOut()`/`applyCompletedSignOutState()` used throughout the
+            // 10.09 tests above) does not itself clear these NEW 10.12
+            // stores — that clearing lives in the real
+            // `applyCompletedSignOutState`/`useAnotherAccount`/
+            // `applyRecoverySignedOutState` bodies. Drive a REAL
+            // `useAnotherAccount()` (already proven callable in this host
+            // binary above) to exercise one of those three real code paths
+            // end-to-end.
+            store.scheduleBookingTestSeedIdentityActivator()
+            await store.useAnotherAccount { }
+            expect(store.setupChecklistState == nil,
+                   "10.12 a real useAnotherAccount() scrubs setupChecklistState at the account boundary")
+            expect(store.insightMutes == nil,
+                   "10.12 a real useAnotherAccount() scrubs insightMutes at the account boundary")
+            expect(store.pendingCoachPrefill == nil,
+                   "10.12 a real useAnotherAccount() clears the one-shot pending coach prefill")
+            expect(store.pendingSettingsDestination == nil,
+                   "10.12 a real useAnotherAccount() clears the one-shot pending settings destination")
+
+            // The on-disk stores are wiped too, not just the in-memory
+            // published values — prove it with a fresh relaunch + reload for
+            // the SAME (now-departed) binding: activation must come back
+            // empty/fresh, not resurrect the pre-scrub data.
+            let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                      subscriptionService: StoreSubscriptionServiceStub())
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-1", binding: scrubBinding)
+            relaunched.testActivateInsightAndChecklistStores(accountBinding: scrubBinding)
+            expect(relaunched.todaySetupTasks?.first { $0.id == .rate }?.done != true,
+                   "10.12 the on-disk setup-checklist store was actually removed by the scrub, not just the in-memory copy")
+        }
+        do {
+            let (store, dir) = try seed08Store(settings: settings08(), tag: "1012-scrub-recovery")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-r1012", binding: hexBinding("bind-r1012"))
+            store.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-r1012"))
+            store.markSetupTaskDone(.stripe)
+            expect(store.setupChecklistState?.isDone(.stripe) == true, "10.12 scrub sanity: stripe recorded before recovery cancel")
+
+            await store.cancelPasswordRecovery()
+            expect(store.setupChecklistState == nil,
+                   "10.12 a real applyRecoverySignedOutState() (via cancelPasswordRecovery) scrubs setupChecklistState")
+            expect(store.insightMutes == nil,
+                   "10.12 a real applyRecoverySignedOutState() (via cancelPasswordRecovery) scrubs insightMutes")
+
+            let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                      subscriptionService: StoreSubscriptionServiceStub())
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-r1012", binding: hexBinding("bind-r1012"))
+            relaunched.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-r1012"))
+            expect(relaunched.setupChecklistState?.isDone(.stripe) != true,
+                   "10.12 the on-disk setup-checklist store was actually removed by the recovery-boundary scrub")
         }
 
         if failures == 0 { print("PASS: canonical AppStore integration tests") }

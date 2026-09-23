@@ -7,44 +7,76 @@ enum SettingsDestination: Hashable {
     case sync, subscription, account
 }
 
+extension SettingsDestination {
+    /// Task 10.12 (D4): the exact settings subpage each setup-checklist task
+    /// deep-links to (`SETTINGS_ROUTE_FOR_TASK`, 10.03's `NativeSetupRoute`).
+    /// `.settings` (the `notifications` task's route) is unreachable through
+    /// this initializer in practice — the checklist card handles
+    /// `.notifications` in-card, before it would ever call `route(for:)` —
+    /// but the mapping stays total (falls back to `.notifications`) so a
+    /// future caller can never end up with no destination at all.
+    init(setupRoute: NativeSetupRoute) {
+        switch setupRoute {
+        case .business: self = .business
+        case .pricing: self = .pricing
+        case .payments: self = .payments
+        case .settings: self = .notifications
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
+    /// Task 10.12 (D4): a specific subpage to push open immediately, e.g. from
+    /// the setup checklist card's task tap. `nil` shows the plain settings
+    /// list (the existing gear-icon behavior).
+    var initialDestination: SettingsDestination?
+
+    @State private var path = NavigationPath()
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
-                profileHeader
-                settingsGroup("YOUR BUSINESS", rows: [
-                    (.business, "building.2.fill", "Business profile", "Name, trade, contact details, logo"),
-                    (.schedule, "clock.fill", "Schedule", "Working hours, job length, time off"),
-                    (.pricing, "tag.fill", "Pricing defaults", "Labor, markup, overhead, and margin"),
-                    (.numbering, "number.square.fill", "Invoice numbering", "Prefix and starting number"),
-                    (.importData, "square.and.arrow.down.fill", "Import data", "Bring records over from CSV or the old app")
-                ])
-                settingsGroup("GETTING PAID", rows: [
-                    (.payments, "creditcard.fill", "Payments", "Connect Stripe and payment handles"),
-                    (.booking, "calendar.badge.plus", "Booking link", store.settings.bookingEnabled ? "Active — customers can request work" : "Create a link customers can book from")
-                ])
-                settingsGroup("APP", rows: [
-                    (.appearance, "circle.lefthalf.filled", "Appearance", "System, light, or dark mode"),
-                    (.ai, "sparkles", "AI Assistant", "Coach preferences and data access"),
-                    (.notifications, "bell.badge.fill", "Notifications", "Invoices, appointments, and follow-ups"),
-                    (.reviews, "star.fill", "Review requests", store.settings.reviewRequestEnabled ? "Automatic requests are on" : "Google review link and message")
-                ])
-                settingsGroup("SUBSCRIPTION & SUPPORT", rows: [
-                    (.sync, "icloud.fill", "Cloud sync", syncSubtitle),
-                    (.subscription, "diamond.fill", "Subscription", "Plan, billing, and restore purchases"),
-                    (.account, "person.crop.circle.fill", "Account", "Profile, data, and sign out")
-                ])
-                supportLinks
-                Text("TradeReady Native · 1.0 foundation")
-                    .font(.caption).foregroundStyle(.tertiary).frame(maxWidth: .infinity).padding(.bottom, 24)
+        NavigationStack(path: $path) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    profileHeader
+                    settingsGroup("YOUR BUSINESS", rows: [
+                        (.business, "building.2.fill", "Business profile", "Name, trade, contact details, logo"),
+                        (.schedule, "clock.fill", "Schedule", "Working hours, job length, time off"),
+                        (.pricing, "tag.fill", "Pricing defaults", "Labor, markup, overhead, and margin"),
+                        (.numbering, "number.square.fill", "Invoice numbering", "Prefix and starting number"),
+                        (.importData, "square.and.arrow.down.fill", "Import data", "Bring records over from CSV or the old app")
+                    ])
+                    settingsGroup("GETTING PAID", rows: [
+                        (.payments, "creditcard.fill", "Payments", "Connect Stripe and payment handles"),
+                        (.booking, "calendar.badge.plus", "Booking link", store.settings.bookingEnabled ? "Active — customers can request work" : "Create a link customers can book from")
+                    ])
+                    settingsGroup("APP", rows: [
+                        (.appearance, "circle.lefthalf.filled", "Appearance", "System, light, or dark mode"),
+                        (.ai, "sparkles", "AI Assistant", "Coach preferences and data access"),
+                        (.notifications, "bell.badge.fill", "Notifications", "Invoices, appointments, and follow-ups"),
+                        (.reviews, "star.fill", "Review requests", store.settings.reviewRequestEnabled ? "Automatic requests are on" : "Google review link and message")
+                    ])
+                    settingsGroup("SUBSCRIPTION & SUPPORT", rows: [
+                        (.sync, "icloud.fill", "Cloud sync", syncSubtitle),
+                        (.subscription, "diamond.fill", "Subscription", "Plan, billing, and restore purchases"),
+                        (.account, "person.crop.circle.fill", "Account", "Profile, data, and sign out")
+                    ])
+                    supportLinks
+                    Text("TradeReady Native · 1.0 foundation")
+                        .font(.caption).foregroundStyle(.tertiary).frame(maxWidth: .infinity).padding(.bottom, 24)
+                }
+                .frame(maxWidth: 700).padding(.horizontal, 16).padding(.top, 10).frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: 700).padding(.horizontal, 16).padding(.top, 10).frame(maxWidth: .infinity)
+            .background(Color.tradeCanvas)
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
+            .navigationDestination(for: SettingsDestination.self) { settingsDestination($0) }
         }
-        .background(Color.tradeCanvas)
-        .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.large)
+        .onAppear {
+            if let initialDestination, path.isEmpty {
+                path.append(initialDestination)
+            }
+        }
     }
 
     private var profileHeader: some View {
@@ -67,9 +99,7 @@ struct SettingsView: View {
             Text(title).font(.caption2.weight(.semibold)).tracking(0.8).foregroundStyle(.secondary).padding(.leading, 12)
             VStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                    NavigationLink {
-                        settingsDestination(row.0)
-                    } label: {
+                    NavigationLink(value: row.0) {
                         SettingsRow(symbol: row.1, title: row.2, subtitle: row.3)
                     }
                     .buttonStyle(.plain)
@@ -187,7 +217,14 @@ struct PricingSettings: View {
             }
         }
         Section { Text("Defaults prefill new estimates. You can override them on an individual job.").font(.caption).foregroundStyle(.secondary) }
-    }) }
+    })
+    .onDisappear {
+        // Task 10.12 (D4): the setup checklist's `rate` task has no honest
+        // live-derivation (RN's `SettingsPricingScreen` records it on save;
+        // native's bindings write continuously, so leaving this page stands
+        // in for "reviewed the pricing defaults").
+        store.markSetupTaskDone(.rate)
+    } }
     private func percent(_ title: String, _ value: Binding<Double>) -> some View { HStack { Text(title); Spacer(); TextField("0", value: value, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 70); Text("%").foregroundStyle(.secondary) } }
 }
 

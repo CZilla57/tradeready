@@ -205,22 +205,13 @@ struct NativeTodayHeroCardView: View {
     }
 }
 
-// MARK: - Setup checklist / insights slots (10.12 fills these)
-
-/// Exact RN position hook for `<SetupChecklistCard .../>`. Renders nothing
-/// until task 10.12 wires the live checklist derivation/store.
-struct NativeTodaySetupChecklistSlot: View {
-    var body: some View { EmptyView() }
-}
-
-/// Exact RN position hook for the insights card (gated in RN on
-/// `!loading && !hero`). Renders nothing until task 10.12 wires the live
-/// insight derivation and the hero-suppresses-insights gate.
-struct NativeTodayInsightsSlot: View {
-    var body: some View { EmptyView() }
-}
-
 // MARK: - Booking attention row
+//
+// The setup-checklist/insights slot hooks (`NativeTodaySetupChecklistSlot`/
+// `NativeTodayInsightsSlot`, task 10.11) are filled by task 10.12's
+// `NativeSetupChecklistCardView`/`NativeInsightsCardView`
+// (`NativeSetupChecklistCard.swift`/`NativeInsightsCard.swift`), which
+// `TodayView.body` now calls directly at the same RN positions.
 
 struct NativeTodayBookingAttentionRow: View {
     let row: NativeBookingAttention.Row

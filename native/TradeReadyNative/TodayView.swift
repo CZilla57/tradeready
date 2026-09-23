@@ -14,6 +14,7 @@ import SwiftUI
 /// `NativeTodayComponents` hand it.
 struct TodayView: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var followUpNotifications: NativeEstimateFollowUpNotificationCoordinator
 
     @State private var editingJob: Job?
     @State private var creatingNewJob = false
@@ -25,6 +26,9 @@ struct TodayView: View {
     @State private var showingSettings = false
     @State private var bookingAlertRow: NativeBookingAttention.Row?
     @State private var busyBookingRequestIDs: Set<String> = []
+    /// Task 10.12: the setup-checklist card's one-shot deep-link
+    /// (`store.pendingSettingsDestination`) mirrored into local sheet state.
+    @State private var settingsDestination: SettingsDestination?
 
     var body: some View {
         NavigationStack {
@@ -52,17 +56,17 @@ struct TodayView: View {
                     )
 
                     if let hero = store.todayHero {
-                        NativeTodayHeroCardView(hero: hero) { handle(hero.destination) }
+                        NativeTodayHeroCardView(hero: hero) { handleRouteResult(store.handleTodayHeroTap(hero)) }
                     }
 
-                    // Post-onboarding setup checklist — exact RN position;
-                    // 10.12 fills this slot.
-                    NativeTodaySetupChecklistSlot()
+                    // Post-onboarding setup checklist — exact RN position.
+                    NativeSetupChecklistCardView()
 
                     // Proactive insights — takes the checklist's slot once
                     // setup is done; hidden while the first-action hero is up
-                    // (10.12 owns the gate). Exact RN position.
-                    NativeTodayInsightsSlot()
+                    // (AppStore owns the gate, `todayInsightsVisible`). Exact
+                    // RN position.
+                    NativeInsightsCardView(onRoute: handleRouteResult)
 
                     ForEach(store.todayBookingAttentionRows, id: \.request.id) { row in
                         NativeTodayBookingAttentionRow(row: row) { bookingAlertRow = row }
@@ -80,7 +84,22 @@ struct TodayView: View {
             .refreshable { await store.performPullToRefresh() }
             .sheet(isPresented: $showingGlobalSearch) { NativeGlobalSearchView() }
             .sheet(isPresented: $showingCalendar) { NativeCalendarView() }
-            .sheet(isPresented: $showingSettings) { SettingsView() }
+            .sheet(isPresented: $showingSettings, onDismiss: { settingsDestination = nil }) {
+                SettingsView(initialDestination: settingsDestination)
+            }
+            .onChange(of: store.pendingSettingsDestination) { _, newValue in
+                guard let newValue else { return }
+                settingsDestination = SettingsDestination(setupRoute: newValue)
+                showingSettings = true
+                store.pendingSettingsDestination = nil
+            }
+            .task {
+                await followUpNotifications.refreshPermissionState()
+                store.notificationsGranted = followUpNotifications.permissionState == .authorized
+            }
+            .onChange(of: followUpNotifications.permissionState) { _, newValue in
+                store.notificationsGranted = newValue == .authorized
+            }
             .sheet(isPresented: $showingRoute) { NavigationStack { NativeRouteView() } }
             .sheet(item: $editingJob) { JobEditor(job: $0) }
             .sheet(isPresented: $creatingNewJob) {
@@ -234,7 +253,16 @@ struct TodayView: View {
     // MARK: - Destination routing
 
     private func handle(_ destination: NativeTodayDestination) {
-        switch store.routeToToday(destination) {
+        handleRouteResult(store.routeToToday(destination))
+    }
+
+    /// Shared by every route source (row taps, the hero card, insight taps):
+    /// each installs its own side effects (deep-link, analytics, sample-tour
+    /// flag) on `AppStore` first, then hands the resulting
+    /// `NativeTodayRouteResult` here for the one `.present*` → sheet-state
+    /// mapping every caller shares.
+    private func handleRouteResult(_ result: AppStore.NativeTodayRouteResult) {
+        switch result {
         case .handled, .none:
             break
         case .presentJobEditor(let jobID):

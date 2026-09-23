@@ -188,6 +188,32 @@ final class AppStore: ObservableObject {
     @Published private(set) var migratedAccountState: NativeTypedAccountState?
     @Published private(set) var dismissedCustomerDuplicatePairKeys: Set<String> = []
     @Published private(set) var reviewRequestRecords: [NativeReviewRequestRecord] = []
+    /// Task 10.12 (S4): `nil` means the mute store could not be read this
+    /// session (fail-closed — see `NativeInsightsCardPolicy.visibleInsights`);
+    /// an empty array means it was read and holds no active mutes.
+    @Published private(set) var insightMutes: [NativeInsightMute]?
+    /// Task 10.12 (D4/D5): `nil` means either not-yet-loaded or unreadable —
+    /// both cases hide the checklist card and (brief step 5) gate the
+    /// insights card as "setup incomplete".
+    @Published private(set) var setupChecklistState: NativeSetupChecklistState?
+    /// Task 10.12 (ruling R4): one-shot coach prefill installed by an
+    /// insight's "Ask coach" action. 10.13 consumes and clears this — it is
+    /// never auto-sent.
+    @Published var pendingCoachPrefill: String?
+    /// Task 10.12 (D4): one-shot settings deep-link installed by the setup
+    /// checklist card's task tap. Typed as the pure `NativeSetupRoute` (10.03)
+    /// rather than the UI-layer `SettingsDestination` so `AppStore` carries no
+    /// SwiftUI-file dependency; `TodayView` converts via
+    /// `SettingsDestination(setupRoute:)` and presents `SettingsView` with it
+    /// as `initialDestination`, then clears this.
+    @Published var pendingSettingsDestination: NativeSetupRoute?
+    /// Task 10.12 (D4): the `notifications` task's live derivation. `AppStore`
+    /// has no notification-coordinator dependency of its own (it lives at the
+    /// app root as a sibling `EnvironmentObject`), so `TodayView` mirrors
+    /// `NativeEstimateFollowUpNotificationCoordinator.permissionState` into
+    /// this field — the same pattern `deepLinkedJobID` uses for view-owned
+    /// one-shot state.
+    @Published var notificationsGranted = false
     @Published private(set) var pendingCustomerMergeUndo: NativeCustomerMergeUndo?
     @Published private(set) var pendingRecordDeleteUndo: NativeRecordDeleteUndo?
     @Published private(set) var isMigratedLocalOwnerVerified = false
@@ -212,6 +238,23 @@ final class AppStore: ObservableObject {
     /// contract as `reviewRequestStore` — device-local, wiped at the account
     /// boundary.
     private let reminderPromptStore: NativeReminderPromptStore
+    /// Task 10.12 (S4): owner-bound insight dismiss/snooze store (10.03's
+    /// `NativeInsightMuteStore`). Same durability contract as
+    /// `reviewRequestStore` — device-local, wiped at the account boundary
+    /// (mute ids embed this account's record ids).
+    private let insightMuteStore: NativeInsightMuteStore
+    /// Task 10.12 (D4/D5): owner-bound setup-checklist store (10.03's
+    /// `NativeSetupChecklistStore`).
+    private let setupChecklistStore: NativeSetupChecklistStore
+    /// Task 10.12 (ruling R5): no-op by default; Phase 11.08 owns transport.
+    private let analytics: NativeAnalytics
+    /// One bounded, non-PII diagnostic per session per store (brief step 5) —
+    /// tracks which stores have already logged their fail-closed diagnostic
+    /// so a persistently-corrupt file does not spam.
+    private var loggedFailClosedDiagnostics: Set<String> = []
+    /// Task 10.12 (R5): dedup key for `insight_shown` — RN's `lastShownKey`
+    /// ref. Reset at the account boundary alongside the mute/checklist state.
+    private var lastShownInsightIDsKey = ""
     /// Task 10.05 (N1) hand-off to the shared notification coordinator: fired
     /// after a genuinely new invoice is created (never on edit), mirroring RN's
     /// `promptForInvoiceReminders()` call sites in `AddInvoiceScreen.tsx` and
@@ -309,8 +352,10 @@ final class AppStore: ObservableObject {
         estimateApprovalLinkService: (any NativeEstimateApprovalLinking)? = nil,
         changeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)? = nil,
         invoiceDeliveryService: (any NativeInvoiceDelivering)? = nil,
-        advisoryAITransport: (any NativeAdvisoryAITransport)? = nil
+        advisoryAITransport: (any NativeAdvisoryAITransport)? = nil,
+        analytics: NativeAnalytics = NativeNoOpAnalytics()
     ) {
+        self.analytics = analytics
         self.fileURL = fileURL
         self.repository = Canonical.SnapshotRepository(primaryURL: fileURL)
         self.widgetActionReplayTransport = widgetActionReplayTransport ?? (try? .live())
@@ -343,6 +388,12 @@ final class AppStore: ObservableObject {
         self.reminderPromptStore = NativeReminderPromptStore(
             fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("invoice-reminder-prompt.json")
         )
+        self.insightMuteStore = NativeInsightMuteStore(
+            fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("insight-mutes.json")
+        )
+        self.setupChecklistStore = NativeSetupChecklistStore(
+            fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("setup-checklist.json")
+        )
         self.syncStatus = NativeSyncStatus(pendingCount: self.mutationQueue.load().count)
         var accountScrubRecoveryError: Error?
         if let pendingScope = repository.pendingAccountScrubScope {
@@ -358,6 +409,8 @@ final class AppStore: ObservableObject {
                 try customerDuplicateDismissalStore.removeAll()
                 try reviewRequestStore.removeAll()
                 try reminderPromptStore.removeAll()
+                try insightMuteStore.removeAll()
+                try setupChecklistStore.removeAll()
                 try removeImportHistory()
                 try pendingScheduleBookingWorkStore().removeAll()
                 let sessionStore = NativeKeychainSecureSettingsStore()
@@ -1360,6 +1413,7 @@ final class AppStore: ObservableObject {
         do {
             stripeConnectStatus = try await service.status(sessionBytes: credentials.sessionBytes)
             stripeConnectError = nil
+            markSetupTaskDoneIfStripeConnected()
         } catch NativeStripeConnectError.rejectedSession {
             guard await refreshSyncSession(), let retry = currentSyncCredentials() else {
                 stripeConnectError = "Your session expired. Sign in again to check the Stripe connection."
@@ -1368,12 +1422,22 @@ final class AppStore: ObservableObject {
             do {
                 stripeConnectStatus = try await service.status(sessionBytes: retry.sessionBytes)
                 stripeConnectError = nil
+                markSetupTaskDoneIfStripeConnected()
             } catch {
                 stripeConnectError = "Could not check the Stripe connection. Please try again."
             }
         } catch {
             stripeConnectError = "Could not check the Stripe connection. Please try again."
         }
+    }
+
+    /// Task 10.12 (D4): mirrors `utils/stripeStatus.ts`'s
+    /// `if (data?.connected) markSetupTaskDone("stripe")` — the `stripe` task
+    /// has no other honest derivation (unlike `contact`/`logo`/`notifications`,
+    /// which read live settings/permission state directly).
+    private func markSetupTaskDoneIfStripeConnected() {
+        guard stripeConnectStatus?.connected == true else { return }
+        markSetupTaskDone(.stripe)
     }
 
     /// Starts (or resumes) onboarding. The caller opens the returned URL in
@@ -3709,6 +3773,18 @@ final class AppStore: ObservableObject {
             // widget mirror registers once and must keep receiving the next
             // owner's publishes after sign-in).
             derivedStatePublisher.reset()
+            // Task 10.12 (S4/D4/D5): account boundary — wipe the mute/
+            // checklist stores (device-local, owner-scoped) and their
+            // in-memory published state so the next account never inherits
+            // a dismissal, snooze, or "used once" flag.
+            insightMutes = nil
+            setupChecklistState = nil
+            pendingCoachPrefill = nil
+            pendingSettingsDestination = nil
+            try? insightMuteStore.removeAll()
+            try? setupChecklistStore.removeAll()
+            lastShownInsightIDsKey = ""
+            notificationsGranted = false
         } catch {
             authenticationGateState = .unavailable
         }
@@ -4099,6 +4175,8 @@ final class AppStore: ObservableObject {
             try customerDuplicateDismissalStore.removeAll()
             try reviewRequestStore.removeAll()
             try reminderPromptStore.removeAll()
+            try insightMuteStore.removeAll()
+            try setupChecklistStore.removeAll()
             try removeImportHistory()
             let sessionStore = NativeKeychainSecureSettingsStore()
             switch repository.pendingAccountScrubScope ?? .live {
@@ -4158,6 +4236,17 @@ final class AppStore: ObservableObject {
         deepLinkedOutreachInvoiceID = nil
         authenticatedAccountState = .noMigratedSession
         authenticationGateState = .signedOut
+        // Task 10.12 (S4/D4/D5): account boundary — wipe the mute/checklist
+        // stores and their in-memory published state (see `useAnotherAccount`'s
+        // identical comment).
+        insightMutes = nil
+        setupChecklistState = nil
+        pendingCoachPrefill = nil
+        pendingSettingsDestination = nil
+        try? insightMuteStore.removeAll()
+        try? setupChecklistStore.removeAll()
+        lastShownInsightIDsKey = ""
+        notificationsGranted = false
     }
 
     private func performLocalAccountScrub(
@@ -4180,6 +4269,8 @@ final class AppStore: ObservableObject {
         try customerDuplicateDismissalStore.removeAll()
         try reviewRequestStore.removeAll()
         try reminderPromptStore.removeAll()
+        try insightMuteStore.removeAll()
+        try setupChecklistStore.removeAll()
         // Phase 9 task 9.08: device-local import history is per-account
         // operational metadata and must not leak across the account boundary.
         try removeImportHistory()
@@ -4281,6 +4372,79 @@ final class AppStore: ObservableObject {
         _ = try? reminderPromptStore.mergeSeeded(migratedShown ?? false, for: accountBinding)
     }
 
+    /// Task 10.12 (S4): adopts the migrated `insightMutes` seed into
+    /// `NativeInsightMuteStore` once at activation, the same pattern as
+    /// `activateReviewRequests`. With no seed (the common case) this is
+    /// simply "load the current owner mutes or fail closed" — `mergeSeeded`
+    /// still calls through `load`, so an unreadable/corrupt file surfaces the
+    /// same way whether or not a migration seed exists.
+    ///
+    /// Fail-closed (brief step 5, decision row 17): on any failure,
+    /// `insightMutes` is set to `nil` — `NativeInsightsCardPolicy` reads that
+    /// as "render only the five non-muteable kinds, no mute controls" rather
+    /// than an unfiltered list that could resurrect a dismissed row.
+    private func activateInsightMutes(
+        accountBinding: String,
+        migrated: [NativeTypedAccountState.InsightMute]?
+    ) {
+        do {
+            let seeded = (migrated ?? []).map { mute in
+                NativeInsightMute(
+                    id: mute.id,
+                    mutedAt: mute.mutedAt ?? ISO8601DateFormatter.nativeFractional.string(from: Date()),
+                    until: mute.until
+                )
+            }
+            insightMutes = try insightMuteStore.mergeSeeded(seeded, for: accountBinding)
+        } catch {
+            insightMutes = nil
+            logInsightOrChecklistFailClosedDiagnosticOnce(store: "insightMutes")
+        }
+    }
+
+    /// Task 10.12 (D4/D5): adopts the migrated `setupChecklistState` seed
+    /// into `NativeSetupChecklistStore` once at activation.
+    ///
+    /// Fail-closed (brief step 5, decision row 17): on any failure,
+    /// `setupChecklistState` is set to `nil` — the checklist card hides
+    /// entirely, and the insights card's shared `isSetupComplete` gate reads
+    /// `nil` as "incomplete" rather than guessing.
+    private func activateSetupChecklist(
+        accountBinding: String,
+        migrated: NativeTypedAccountState.SetupChecklistState?
+    ) {
+        do {
+            var done: [String: Bool] = [:]
+            if let migratedDone = migrated?.done {
+                if migratedDone.contact == true { done[NativeSetupTaskID.contact.rawValue] = true }
+                if migratedDone.logo == true { done[NativeSetupTaskID.logo.rawValue] = true }
+                if migratedDone.rate == true { done[NativeSetupTaskID.rate.rawValue] = true }
+                if migratedDone.stripe == true { done[NativeSetupTaskID.stripe.rawValue] = true }
+                if migratedDone.notifications == true { done[NativeSetupTaskID.notifications.rawValue] = true }
+            }
+            let seed = NativeSetupChecklistState(
+                dismissed: migrated?.dismissed,
+                done: done.isEmpty ? nil : done,
+                sampleTourDone: migrated?.sampleTourDone
+            )
+            setupChecklistState = try setupChecklistStore.mergeSeeded(seed, for: accountBinding)
+        } catch {
+            setupChecklistState = nil
+            logInsightOrChecklistFailClosedDiagnosticOnce(store: "setupChecklistState")
+        }
+    }
+
+    /// One bounded, non-PII diagnostic per session per store (brief step 5) —
+    /// never the record contents, never the account binding, just which
+    /// store degraded so a persistently-corrupt file does not spam.
+    private func logInsightOrChecklistFailClosedDiagnosticOnce(store: String) {
+        guard !loggedFailClosedDiagnostics.contains(store) else { return }
+        loggedFailClosedDiagnostics.insert(store)
+        #if DEBUG
+        print("[TradeReady] \(store) store was unreadable this session; degraded fail-closed.")
+        #endif
+    }
+
     private func applyAuthenticatedIdentityOutcome(
         _ outcome: NativeAuthenticatedIdentityActivationOutcome,
         email: String?,
@@ -4321,11 +4485,21 @@ final class AppStore: ObservableObject {
                 accountBinding: outcome.verifiedAccountBinding,
                 migratedShown: outcome.typedAccountState?.invoiceReminderPromptShown
             )
+            activateInsightMutes(
+                accountBinding: outcome.verifiedAccountBinding,
+                migrated: outcome.typedAccountState?.insightMutes
+            )
+            activateSetupChecklist(
+                accountBinding: outcome.verifiedAccountBinding,
+                migrated: outcome.typedAccountState?.setupChecklistState
+            )
         } else {
             dismissedCustomerDuplicatePairKeys = []
             reviewRequestRecords = []
             pendingCustomerMergeUndo = nil
             pendingRecordDeleteUndo = nil
+            insightMutes = nil
+            setupChecklistState = nil
         }
         if let gateOverride {
             authenticationGateState = gateOverride
@@ -4866,6 +5040,17 @@ final class AppStore: ObservableObject {
         // snapshot only; observer registrations survive (see
         // `applyCompletedSignOutState`'s identical comment).
         derivedStatePublisher.reset()
+        // Task 10.12 (S4/D4/D5): account boundary — wipe the mute/checklist
+        // stores and their in-memory published state (see
+        // `applyCompletedSignOutState`'s identical comment).
+        insightMutes = nil
+        setupChecklistState = nil
+        pendingCoachPrefill = nil
+        pendingSettingsDestination = nil
+        try? insightMuteStore.removeAll()
+        try? setupChecklistStore.removeAll()
+        lastShownInsightIDsKey = ""
+        notificationsGranted = false
     }
 
     /// Claims and commits bounded batches only after exact legacy-owner proof.
@@ -5766,6 +5951,14 @@ final class AppStore: ObservableObject {
             activateReminderPromptFlag(
                 accountBinding: outcome.verifiedAccountBinding,
                 migratedShown: outcome.typedAccountState?.invoiceReminderPromptShown
+            )
+            activateInsightMutes(
+                accountBinding: outcome.verifiedAccountBinding,
+                migrated: outcome.typedAccountState?.insightMutes
+            )
+            activateSetupChecklist(
+                accountBinding: outcome.verifiedAccountBinding,
+                migrated: outcome.typedAccountState?.setupChecklistState
             )
             return true
         } catch {
@@ -7803,17 +7996,219 @@ extension AppStore {
         )
     }
 
-    /// `sampleTourDone` is not yet wired to a live `NativeSetupChecklistStore`
-    /// binding on `AppStore` (task 10.03 shipped the store; nothing adopts it
-    /// here yet) — passed `false` per the 10.11 task ruling. Task 10.12 owns
-    /// wiring the persisted value and the hero-suppresses-insights gate.
+    /// Task 10.12: wires the persisted `sampleTourDone` value (10.03's
+    /// `NativeSetupChecklistStore`, adopted via `activateSetupChecklist`).
+    /// `setupChecklistState == nil` (not yet loaded / unreadable) reads as
+    /// "not done" here — the hero is the SAFER default when the checklist
+    /// store is degraded (worst case: the sample-tour hero shows once more
+    /// than intended, never a lost first-run experience).
     var todayHero: NativeTodayHero? {
-        NativeTodayBriefing.hero(jobs: canonicalJobs, customers: canonicalCustomers, sampleTourDone: false)
+        NativeTodayBriefing.hero(
+            jobs: canonicalJobs,
+            customers: canonicalCustomers,
+            sampleTourDone: setupChecklistState?.sampleTourDone == true
+        )
     }
 
     /// Reuses the existing Phase 8 read-only selector directly — Today shows
     /// the same rows the Booking Requests screen shows, just condensed.
     var todayBookingAttentionRows: [NativeBookingAttention.Row] { bookingAttentionRows() }
+
+    // MARK: - Setup checklist + insights cards (task 10.12, D4, D5, S4, S5)
+    //
+    // Thin pass-through wiring over the pure 10.02/10.03/10.04 engines and
+    // `NativeInsightsCardPolicy` (this file). No selection/gating/mute policy
+    // lives in `NativeSetupChecklistCard.swift`/`NativeInsightsCard.swift` —
+    // those views only render what these properties/methods hand them.
+
+    /// The settings snapshot the checklist derivation reads. `nil` when no
+    /// settings have loaded yet (matches RN's `!settings` guard).
+    private var todaySetupChecklistInput: NativeSetupChecklistInput? {
+        guard let settings = snapshot.payload.settings else { return nil }
+        return NativeSetupChecklistInput(settings: settings)
+    }
+
+    /// Whether the OS notification permission is currently granted — the
+    /// `notifications` task's live derivation (no stored `done` flag).
+    /// Synced from `NativeEstimateFollowUpNotificationCoordinator.permissionState`
+    /// by `TodayView` into `notificationsGranted` (see that property's doc).
+    private var todayNotificationsGranted: Bool { notificationsGranted }
+
+    /// The rendered checklist rows, or `nil` when the store hasn't loaded /
+    /// is unreadable (brief step 5: checklist stays hidden in that case) or
+    /// settings haven't loaded yet.
+    var todaySetupTasks: [NativeSetupTask]? {
+        guard let input = todaySetupChecklistInput, let state = setupChecklistState else { return nil }
+        return input.tasks(state: state, notificationsGranted: todayNotificationsGranted)
+    }
+
+    /// The one shared "Finish setting up card is off the screen" gate
+    /// (contract §3.1, decision row 6) — both cards read this. Folds in
+    /// "checklist store unreadable/not-yet-loaded → treated as incomplete"
+    /// (brief step 5): a `nil` `setupChecklistState` can never be read as
+    /// "done", which would wrongly reveal the insights card.
+    var todaySetupComplete: Bool {
+        guard let input = todaySetupChecklistInput, let state = setupChecklistState else { return false }
+        return input.isSetupComplete(state: state, notificationsGranted: todayNotificationsGranted)
+    }
+
+    /// The full, un-muted, un-sliced engine output (10.02's
+    /// `NativeTodayInsights.select`), in priority order.
+    var todayInsightsAll: [NativeTodayInsight] {
+        NativeTodayInsights.select(
+            jobs: canonicalJobs,
+            invoices: canonicalInvoices,
+            now: Date(),
+            schedule: calendarResolvedSchedule(),
+            targetMarginPercent: (snapshot.payload.settings?.marginPercent).map(Self.doubleValue)
+                ?? NativeTodayInsights.defaultTargetMarginPercent,
+            customers: canonicalCustomers,
+            recurringJobs: snapshot.payload.recurringJobs ?? [],
+            expenses: canonicalExpenses
+        )
+    }
+
+    /// Mute-filtered, top-3 slice — what the card actually renders (contract
+    /// §3.1: mute filter runs BEFORE the top-3 slice). Fail-closed per brief
+    /// step 5 when `insightMutes == nil` (see `NativeInsightsCardPolicy`).
+    var todayVisibleInsights: [NativeTodayInsight] {
+        NativeInsightsCardPolicy.visibleInsights(all: todayInsightsAll, mutes: insightMutes, now: Date())
+    }
+
+    /// The insights card's full visibility gate: setup complete (shared with
+    /// the checklist), no first-action hero showing (decision row 18), and at
+    /// least one insight to show.
+    var todayInsightsVisible: Bool {
+        NativeInsightsCardPolicy.isVisible(setupComplete: todaySetupComplete, hero: todayHero, insights: todayVisibleInsights)
+    }
+
+    private static func doubleValue(_ decimal: Decimal) -> Double { NSDecimalNumber(decimal: decimal).doubleValue }
+
+    /// Records a completed setup task through the owner-bound store.
+    /// Best-effort: a write failure leaves the in-memory state unchanged
+    /// (worst case the task re-prompts; never a fabricated completion).
+    func markSetupTaskDone(_ task: NativeSetupTaskID) {
+        guard let binding = verifiedAccountBinding else { return }
+        if let updated = try? setupChecklistStore.markTaskDone(task, for: binding) {
+            setupChecklistState = updated
+        }
+    }
+
+    /// "Hide" — RN's `dismissSetupChecklist()`. Optimistic: the card hides
+    /// immediately (the caller reads `todaySetupTasks`/`todaySetupComplete`,
+    /// both of which flip the instant this publishes) and the write follows.
+    func dismissSetupChecklist() {
+        guard let binding = verifiedAccountBinding else { return }
+        let optimistic = NativeSetupChecklist.dismissing(setupChecklistState ?? NativeSetupChecklistState())
+        setupChecklistState = optimistic
+        analytics.track("setup_checklist_dismissed", [
+            "doneCount": String(todaySetupTasks?.filter(\.done).count ?? 0),
+        ])
+        if let persisted = try? setupChecklistStore.dismiss(for: binding) {
+            setupChecklistState = persisted
+        }
+    }
+
+    /// The hero's sample-tour tap (`markSampleTourDone` + `sample_job_opened`
+    /// — RN's `TodayScreen.tsx` call sites, task 10.12 owns wiring this). A
+    /// no-op for any other hero kind.
+    func markSampleTourDoneIfNeeded(for hero: NativeTodayHero) {
+        guard hero.kind == .sampleTour, let binding = verifiedAccountBinding else { return }
+        let optimistic = NativeSetupChecklist.markingSampleTourDone(setupChecklistState ?? NativeSetupChecklistState())
+        setupChecklistState = optimistic
+        analytics.track("sample_job_opened")
+        if let persisted = try? setupChecklistStore.markSampleTourDone(for: binding) {
+            setupChecklistState = persisted
+        }
+    }
+
+    /// Every Today destination routed through the hero card. Marks the
+    /// sample tour done first (so the write races the navigation, never
+    /// after it), then routes normally.
+    @discardableResult
+    func handleTodayHeroTap(_ hero: NativeTodayHero) -> NativeTodayRouteResult {
+        markSampleTourDoneIfNeeded(for: hero)
+        return routeToToday(hero.destination)
+    }
+
+    /// An insight row's tap — routes through the same `NativeTodayDestination`
+    /// mapping every other Today action uses (10.04's exhaustive switch).
+    @discardableResult
+    func handleTodayInsightTap(_ insight: NativeTodayInsight) -> NativeTodayRouteResult {
+        routeToToday(NativeTodayBriefing.destination(for: insight.target))
+    }
+
+    /// Applies a dismiss (`days == nil`) or snooze (`days` > 0) through the
+    /// owner-bound mute store. Optimistic: the row drops from
+    /// `todayVisibleInsights` immediately (the policy re-filters on every
+    /// read), persisted behind it — mirrors RN's `applyMute`.
+    func applyInsightMute(_ insight: NativeTodayInsight, days: Int?) {
+        analytics.track(
+            days == nil ? "insight_dismissed" : "insight_snoozed",
+            days == nil
+                ? ["kind": insight.kind.rawValue, "insightId": insight.id]
+                : ["kind": insight.kind.rawValue, "insightId": insight.id, "days": String(days!)]
+        )
+        let now = Date()
+        let liveIDs = Set(todayInsightsAll.map(\.id))
+        let optimistic = NativeInsightMutes.applying(
+            id: insight.id, now: now, days: days, liveIDs: liveIDs, to: insightMutes ?? []
+        )
+        insightMutes = optimistic
+        guard let binding = verifiedAccountBinding else { return }
+        if let persisted = try? insightMuteStore.applyMute(id: insight.id, now: now, days: days, liveIDs: liveIDs, for: binding) {
+            insightMutes = persisted
+        }
+    }
+
+    /// Installs the one-shot coach prefill (ruling R4) and switches to the
+    /// Coach tab. 10.13 consumes and clears `pendingCoachPrefill`; it never
+    /// auto-sends.
+    func installPendingCoachPrefill(_ prompt: String) {
+        pendingCoachPrefill = prompt
+        selectedTab = .coach
+    }
+
+    /// Installs a one-shot settings deep-link (the checklist card's task tap)
+    /// and requests the Settings sheet. `TodayView` observes
+    /// `pendingSettingsDestination` to present `SettingsView(initialDestination:)`.
+    func routeToTodaySettings(_ route: NativeSetupRoute) {
+        pendingSettingsDestination = route
+    }
+
+    // MARK: - Analytics (task 10.12, ruling R5)
+    //
+    // `insight_shown` fires once per distinct visible id set, not per render
+    // — `lastShownInsightIDsKey` mirrors RN's `lastShownKey` ref.
+
+    func trackTodayInsightsShownIfNeeded(_ insights: [NativeTodayInsight]) {
+        let key = insights.map(\.id).joined(separator: ",")
+        guard !key.isEmpty, key != lastShownInsightIDsKey else { return }
+        lastShownInsightIDsKey = key
+        analytics.track("insight_shown", [
+            "kinds": insights.map(\.kind.rawValue).joined(separator: ","),
+            "ids": insights.map(\.id).joined(separator: ","),
+        ])
+    }
+
+    func trackInsightTapped(_ insight: NativeTodayInsight) {
+        analytics.track("insight_tapped", ["kind": insight.kind.rawValue])
+    }
+
+    func trackInsightCoachOpened(_ insight: NativeTodayInsight) {
+        analytics.track("insight_coach_opened", ["kind": insight.kind.rawValue])
+    }
+
+    func trackInsightReasonViewed(_ insight: NativeTodayInsight) {
+        analytics.track("insight_reason_viewed", ["kind": insight.kind.rawValue])
+    }
+
+    /// RN `SetupChecklistCard.tsx`'s `track("setup_checklist_task_opened",
+    /// {task: id})` — fired for every task tap that routes to Settings
+    /// (the notifications task never reaches this; it's handled in-card).
+    func trackSetupChecklistTaskOpened(_ task: NativeSetupTaskID) {
+        analytics.track("setup_checklist_task_opened", ["task": task.rawValue])
+    }
 
     /// RN's `setSelectedDate`. Refuses a malformed date rather than adopting
     /// a value the week-strip/schedule projection cannot parse.
@@ -8175,6 +8570,14 @@ extension AppStore {
     /// proof must call this too. Production never calls this directly.
     func scheduleBookingTestReloadReviewRequests(accountBinding: String) {
         activateReviewRequests(accountBinding: accountBinding, migrated: nil)
+    }
+
+    /// Test-only (task 10.12): the same real-reload pattern as
+    /// `scheduleBookingTestReloadReviewRequests`, for the insight-mute and
+    /// setup-checklist stores. Production never calls this directly.
+    func testActivateInsightAndChecklistStores(accountBinding: String) {
+        activateInsightMutes(accountBinding: accountBinding, migrated: nil)
+        activateSetupChecklist(accountBinding: accountBinding, migrated: nil)
     }
 
     /// Test-only: clears the seeded owner identity (simulates sign-out for
