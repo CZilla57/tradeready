@@ -903,7 +903,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.03 | S4, D4, D5 | **Code complete** | 10.00 | Insight-mute + setup-checklist stores |
 | 10.04 | D1, D2, D3, D6 | **Code complete** | 10.00 | NativeTodayBriefing |
 | 10.05 | N1 | **Code complete** | 10.00 | Categories + permission prompt + settings |
-| 10.06 | N2 | Pending | 10.05 | Due-date/auto-outreach parity |
+| 10.06 | N2 | **Code complete** | 10.05 | Due-date/auto-outreach parity |
 | 10.07 | N3, N4 | Pending | 10.05 (+10.06 serialization only) | Appointment + review parity |
 | 10.08 | N5, N6, B2 | Pending | 10.05-10.07 | Unified reconciliation + routing |
 | 10.09 | B1, B2 | Pending | 10.01, 10.08 | Post-sync derived-state seam |
@@ -1302,6 +1302,69 @@ Exit criteria traceability (roadmap Phase 10):
 - Next-ready: **10.06** (due-date reminders/auto-outreach parity), **10.07**
   (appointment/review parity — 10.06 serialization only), and **10.12** (setup
   checklist's notifications task now has its documented permission API).
+
+### 10.06 — Due-date reminders and the auto-outreach variant
+
+- Status: **Code complete / Phase 12 evidence deferred (device delivery).**
+  Audit-and-close-gaps task; the audit found the `inv_`/`rinv_` selector
+  already at parity with the RN fixtures. No implementation file changed —
+  only test coverage was added.
+- Audit result (against the frozen contract's §9.1-9.3): paid filtering (ledger
+  `isPaid`, matching RN's `isFullyPaid`), blank/malformed `due` (shared local
+  `dayDate` parser returns `nil`, item dropped), imported `importBatchId`
+  (excluded), pre-completion deposit suppression (`isDunningEligible` mirrors
+  `isJobDunningEligible`), rule-day ordering (outer invoice / inner rule-day,
+  matching RN's loop nesting), and the auto-outreach title/body/
+  `overdue_outreach` payload switch were all already correct in
+  `N/Domain/NativeInvoiceNotifications.swift` and
+  `N/AppStore.swift#invoiceReminderNotifications` — no divergence to close.
+  The shared 60-request cap and native family priority
+  (`est_ → appt_ → review_ → inv_ → rinv_`, foreign-first) live in the
+  coordinator (10.05's file) and were out of this task's scope; confirmed
+  unchanged and still passing.
+- Fire-date drift (item 3): `fireDate(fromDue:plusDays:)` (`inv_`) and
+  `nineAM(on:)` (`rinv_`) already share one `dayDate` local-frame day parser,
+  so the two branches structurally cannot drift independently — no refactor
+  needed. Added a DST-boundary pin (`America/New_York`, 2026-03-08 spring
+  forward) to `native/InvoiceNotificationTests/main.swift` proving both
+  branches land on the same 9 a.m. local instant across the boundary.
+- Tap routing (N6): `AppStore.requestInvoiceReminderReview` was already
+  gated on `hasExactSignedInWorkspace` and `invoices.contains(where:)`
+  (fail-closed for a missing or wrong-owner invoice), and
+  `consumeOutreachDeepLink` was already one-shot with no send path in
+  `NativeInvoiceOutreachView` (manual compose/send only, never automatic).
+  This had zero test coverage anywhere in the repo, so
+  `native/StoreIntegrationTests/main.swift` gained five assertions using the
+  existing `scheduleBookingTestSeedSignedInOwner`/`scheduleBookingTestClearOwner`
+  test seam: routing is inert before an exact-owner workspace is bound; a
+  plain reminder tap routes to the invoice without arming outreach; an
+  auto-outreach tap arms the outreach sheet exactly once (`consumeOutreachDeepLink`
+  returns `true` once, `false` after); a missing invoice ID fails closed; and
+  clearing the owner revokes routing for a previously-valid invoice ID.
+  "Archived" invoices are not a distinct N6 case — `Invoice` carries no
+  `archivedAt`; only jobs/customers do. "Paid" is not a routing block either:
+  the RN `OutreachScreen` still opens for a paid invoice (`isFullyPaid`
+  hides send actions but the screen renders), so the native tap correctly
+  still resolves it — parity holds, not a gap.
+- Files: `native/InvoiceNotificationTests/main.swift` (DST-boundary fire-date
+  test), `native/StoreIntegrationTests/main.swift` (tap-routing tests). No
+  `N/AppStore.swift` or `N/Domain/NativeInvoiceNotifications.swift` edits —
+  the audit found no divergence to fix.
+- Commands / results: `sh native/run-invoice-notification-tests.sh` — PASS.
+  `sh native/run-store-integration-tests.sh` — PASS. `sh
+  native/run-notification-coordinator-tests.sh`, `run-estimate-follow-up-notification-tests.sh`,
+  `run-appointment-notification-tests.sh`, `run-review-request-tests.sh`,
+  `run-notification-permission-tests.sh` — all PASS (unchanged, confirming no
+  regression). `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/notifications.test.js __tests__/reminderLogic.test.js
+  __tests__/reminderEmailHardening.test.js` — 3 suites / 101 tests passing, no
+  oracle file modified. `sh native/run-all-domain-tests.sh` — see task report
+  for the full run.
+- Blockers: none for this task's own scope. Device delivery evidence remains
+  a Phase 12 row.
+- Next-ready: **10.07** (appointment/review parity), **10.08** (unified
+  reconciliation + routing, now has 10.06's confirmed-clean `inv_`/`rinv_`
+  selectors to reconcile against).
 
 ### 10.10 — Coach transport, provider routing, and system prompt
 

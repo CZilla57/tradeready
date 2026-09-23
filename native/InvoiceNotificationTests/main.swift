@@ -76,5 +76,30 @@ let recurring = NativeInvoiceNotifications.recurringReminders(
 expect(recurring.map(\.identifier) == ["rinv_r1"], "only the active future rule schedules")
 expect(recurring.first?.title == "Maintenance invoice ready — Acme", "recurring copy")
 
+// Task 10.06 — the `inv_` and `rinv_` 9 a.m. fire-date construction share the
+// same `dayDate` local-frame day parser (see NativeInvoiceNotifications.swift),
+// so the two branches cannot independently drift the way the pre-2026-08-01
+// bare-UTC parse did. Pin that across a US DST boundary (2026-03-08, spring
+// forward) in an explicit non-UTC zone: both branches must still land at
+// 9 a.m. local on the intended calendar day, not 8 a.m./10 a.m. from a
+// UTC-offset slip.
+var dstCalendar = Calendar(identifier: .gregorian)
+dstCalendar.timeZone = TimeZone(identifier: "America/New_York")!
+let beforeDST = dstCalendar.date(from: DateComponents(year: 2026, month: 3, day: 1, hour: 0))!
+let dunning = NativeInvoiceNotifications.reminders(
+    invoices: [inv("dst", due: "2026-03-07")],
+    ruleDays: [1], autoOutreachEnabled: false,
+    jobStatusByID: [:], now: beforeDST, calendar: dstCalendar)
+let maintenance = NativeInvoiceNotifications.recurringReminders(
+    rules: [.init(id: "dst", customerName: "Acme", isActive: true, nextDueDate: "2026-03-08")],
+    now: beforeDST, calendar: dstCalendar)
+let expectedDST = dstCalendar.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 9))!
+expect(dunning.first?.fireDate == expectedDST,
+       "inv_ fires 9am America/New_York on due+1 across the spring-forward boundary")
+expect(maintenance.first?.fireDate == expectedDST,
+       "rinv_ fires 9am America/New_York on the same DST-boundary day as inv_ — no cross-branch drift")
+expect(dunning.first?.fireDate == maintenance.first?.fireDate,
+       "inv_ and rinv_ resolve the identical fire instant for the same calendar day")
+
 print(failures == 0 ? "PASS: native invoice notification tests" : "FAILED: \(failures) native invoice notification test(s)")
 if failures != 0 { exit(1) }

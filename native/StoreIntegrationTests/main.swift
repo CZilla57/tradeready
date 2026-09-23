@@ -891,6 +891,44 @@ struct StoreIntegrationTests {
         expect(empty.deleteRecurringInvoice(id: "rinv-test-1"), "plan deletes")
         expect(empty.invoices.count == prePlanCount + 1, "generated invoices survive rule deletion")
 
+        // Task 10.06 (N6) — `inv_`/outreach tap routing fails closed before an
+        // exact-owner binding exists, resolves an existing invoice for the
+        // verified owner, and fails closed again for a record that isn't
+        // there. `requestInvoiceReminderReview` is the same method
+        // `TradeReadyNativeApp`'s `openOwnedRoute` calls for a decoded
+        // `.invoiceReminder` notification payload.
+        empty.selectedTab = .today
+        empty.requestInvoiceReminderReview(invoiceID: invoice.id, opensOutreach: false)
+        expect(empty.selectedTab == .today,
+               "invoice reminder tap is inert before an exact-owner workspace is bound")
+        empty.scheduleBookingTestSeedSignedInOwner(subject: "user-10.06", binding: "bind-10.06")
+        empty.requestInvoiceReminderReview(invoiceID: invoice.id, opensOutreach: false)
+        expect(empty.selectedTab == .invoices && empty.deepLinkedInvoiceID == invoice.id
+               && empty.deepLinkedOutreachInvoiceID == nil,
+               "plain reminder tap routes to the exact-owner invoice without opening outreach")
+        expect(empty.consumeOutreachDeepLink(invoiceID: invoice.id) == false,
+               "plain reminder tap never arms the outreach sheet")
+        empty.selectedTab = .today
+        empty.deepLinkedInvoiceID = nil
+        empty.requestInvoiceReminderReview(invoiceID: invoice.id, opensOutreach: true)
+        expect(empty.selectedTab == .invoices && empty.deepLinkedInvoiceID == invoice.id
+               && empty.deepLinkedOutreachInvoiceID == invoice.id,
+               "auto-outreach tap routes to the invoice and arms the outreach sheet")
+        expect(empty.consumeOutreachDeepLink(invoiceID: invoice.id),
+               "auto-outreach tap opens the outreach review exactly once")
+        expect(empty.consumeOutreachDeepLink(invoiceID: invoice.id) == false,
+               "the outreach arm is one-shot — it never re-fires or auto-sends on its own")
+        empty.selectedTab = .today
+        empty.deepLinkedInvoiceID = nil
+        empty.requestInvoiceReminderReview(invoiceID: "no-such-invoice", opensOutreach: true)
+        expect(empty.selectedTab == .today && empty.deepLinkedInvoiceID == nil
+               && empty.deepLinkedOutreachInvoiceID == nil,
+               "a missing invoice fails closed instead of inventing a destination")
+        empty.scheduleBookingTestClearOwner()
+        empty.requestInvoiceReminderReview(invoiceID: invoice.id, opensOutreach: false)
+        expect(empty.selectedTab == .today && empty.deepLinkedInvoiceID == nil,
+               "signing out revokes routing even for a previously-valid invoice ID")
+
         let reloaded = AppStore(fileURL: url, seedIfMissing: false)
         expect(reloaded.customers.first?.name == customer.name, "customer reload projection")
         expect(reloaded.jobs.first?.title == job.title, "job reload projection")
