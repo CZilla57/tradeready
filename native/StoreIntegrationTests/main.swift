@@ -2787,6 +2787,231 @@ struct StoreIntegrationTests {
                    "10.07 marking the request sent removes it from every subsequent sweep")
         }
 
+        // Task 10.08 (N6) — appt_/review_ tap routing must fail closed for an
+        // archived job too, exactly like est_ already does (the carried-
+        // forward 10.06 finding: appt_/review_/rinv_ lacked fail-closed
+        // coverage, and requestRecurringInvoiceReview had a shallower guard
+        // than requestInvoiceReminderReview).
+        do {
+            let archivedDirectory = directory.appendingPathComponent("ArchivedRouting10_08", isDirectory: true)
+            let archivedURL = archivedDirectory.appendingPathComponent("store.json")
+            let archivedStore = AppStore(fileURL: archivedURL, seedIfMissing: false)
+            let archivedBinding = String(repeating: "8", count: 64)
+            archivedStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.08-archived", binding: archivedBinding)
+
+            let archivedCustomer = Customer(name: "Archived Customer", email: "archived@example.test", phone: "555-0199")
+            let archivedJob = Job(
+                customerId: archivedCustomer.id, customerName: archivedCustomer.name,
+                title: "Roof patch", status: .inProgress, laborRate: 95
+            )
+            expect(archivedStore.upsert(archivedCustomer), "10.08 archived-routing fixture customer saves")
+            expect(archivedStore.upsert(archivedJob), "10.08 archived-routing fixture job saves")
+
+            // Baseline: both routes succeed for the live, non-archived job.
+            archivedStore.requestAppointmentConfirmationReview(jobID: archivedJob.id)
+            expect(archivedStore.pendingAppointmentConfirmationJobID == archivedJob.id,
+                   "10.08 appointment tap succeeds for a live job before archiving")
+            archivedStore.dismissPendingAppointmentConfirmation(jobID: archivedJob.id)
+            archivedStore.requestReviewRequestReview(jobID: archivedJob.id)
+            expect(archivedStore.pendingReviewRequestJobID == archivedJob.id,
+                   "10.08 review tap succeeds for a live job before archiving")
+            archivedStore.dismissPendingReviewRequest(jobID: archivedJob.id)
+
+            // Archive the job (same record id, archivedAt now stamped) and
+            // confirm both owned-namespace tap routes fail closed.
+            var archivedRecord = archivedJob
+            archivedRecord.archivedAt = "2026-09-23T00:00:00.000Z"
+            expect(archivedStore.upsert(archivedRecord), "10.08 archiving the job saves")
+
+            archivedStore.selectedTab = .today
+            archivedStore.requestAppointmentConfirmationReview(jobID: archivedJob.id)
+            expect(archivedStore.selectedTab == .today && archivedStore.pendingAppointmentConfirmationJobID == nil,
+                   "10.08 an archived job fails closed for the appointment tap instead of opening a stale confirmation")
+
+            archivedStore.requestReviewRequestReview(jobID: archivedJob.id)
+            expect(archivedStore.selectedTab == .today && archivedStore.pendingReviewRequestJobID == nil,
+                   "10.08 an archived job fails closed for the review tap instead of opening a stale draft")
+        }
+
+        // Task 10.08 (N6) — rinv_ tap routing had NO coverage at all before
+        // this task. Mirrors the inv_/appt_/review_ pattern: inert before an
+        // exact-owner binding, resolves the exact record for the verified
+        // owner (here: the latest GENERATED invoice for the rule, matching
+        // `App.tsx`'s `recurring_invoice` handler — not just a tab switch),
+        // falls back to the plain Invoices tab when nothing has generated
+        // yet, and fails closed for a deleted rule or a signed-out session.
+        do {
+            let rinvDirectory = directory.appendingPathComponent("RecurringRouting10_08", isDirectory: true)
+            let rinvURL = rinvDirectory.appendingPathComponent("store.json")
+            let rinvStore = AppStore(fileURL: rinvURL, seedIfMissing: false)
+            let rinvCustomer = Customer(name: "Maintenance Customer", email: "maint@example.test")
+            expect(rinvStore.upsert(rinvCustomer), "10.08 rinv fixture customer saves")
+
+            // Inert before an exact-owner workspace is bound.
+            rinvStore.selectedTab = .today
+            rinvStore.requestRecurringInvoiceReview(ruleID: "rinv-10-08")
+            expect(rinvStore.selectedTab == .today,
+                   "10.08 recurring-invoice tap is inert before an exact-owner workspace is bound")
+
+            let rinvBinding = String(repeating: "6", count: 64)
+            rinvStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.08-rinv", binding: rinvBinding)
+
+            let rule = Canonical.RecurringInvoice(
+                id: "rinv-10-08", customerId: rinvCustomer.id, customerName: rinvCustomer.name,
+                description: "Quarterly service", amount: 200, dueDays: 30,
+                cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+                occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-10-01",
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+            expect(rinvStore.createRecurringInvoice(rule), "10.08 rinv fixture plan creates")
+
+            // Success, but nothing has generated yet: routes to the plain
+            // Invoices tab (RN's `InvoiceList` with no `openInvoiceId`)
+            // rather than inventing a destination.
+            rinvStore.deepLinkedInvoiceID = nil
+            rinvStore.selectedTab = .today
+            rinvStore.requestRecurringInvoiceReview(ruleID: rule.id)
+            expect(rinvStore.selectedTab == .invoices && rinvStore.deepLinkedInvoiceID == nil,
+                   "10.08 a recurring-invoice tap with no generated occurrence yet falls back to the plain Invoices tab")
+
+            // Generate two occurrences; the tap must resolve the LATEST one
+            // (highest occurrenceNumber), matching App.tsx's `reduce` over
+            // `occurrenceNumber`.
+            expect(rinvStore.runRecurringInvoiceGeneration(today: "2026-10-01"), "10.08 first occurrence generates")
+            expect(rinvStore.runRecurringInvoiceGeneration(today: "2026-11-01"), "10.08 second occurrence generates")
+            let latestID = rinvStore.scheduleBookingTestLatestGeneratedInvoiceID(ruleID: rule.id)
+            expect(latestID != nil, "10.08 two occurrences exist ahead of the routing assertion")
+
+            rinvStore.selectedTab = .today
+            rinvStore.deepLinkedInvoiceID = nil
+            rinvStore.requestRecurringInvoiceReview(ruleID: rule.id)
+            expect(rinvStore.selectedTab == .invoices && rinvStore.deepLinkedInvoiceID == latestID
+                   && rinvStore.deepLinkedOutreachInvoiceID == nil,
+                   "10.08 a recurring-invoice tap resolves the exact latest generated invoice, not just the tab")
+
+            // A deleted rule fails closed instead of inventing a destination.
+            rinvStore.selectedTab = .today
+            rinvStore.deepLinkedInvoiceID = nil
+            rinvStore.requestRecurringInvoiceReview(ruleID: "no-such-rule")
+            expect(rinvStore.selectedTab == .today && rinvStore.deepLinkedInvoiceID == nil,
+                   "10.08 a missing recurring-invoice rule fails closed instead of inventing a destination")
+
+            // Signing out revokes routing even for a previously-valid rule.
+            rinvStore.scheduleBookingTestClearOwner()
+            rinvStore.selectedTab = .today
+            rinvStore.deepLinkedInvoiceID = nil
+            rinvStore.requestRecurringInvoiceReview(ruleID: rule.id)
+            expect(rinvStore.selectedTab == .today && rinvStore.deepLinkedInvoiceID == nil,
+                   "10.08 signing out revokes recurring-invoice routing even for a previously-valid rule")
+        }
+
+        // Task 10.08 (N5) — schedule-key audit: every field the five
+        // notification selectors read must change
+        // `estimateFollowUpNotificationScheduleKey`, and fields the
+        // selectors never read (expenses; insight mutes and setup-checklist
+        // state are separate 10.03 stores the key never touches at all —
+        // confirmed by inspection, not exercised here) must NOT change it.
+        do {
+            let keyDirectory = directory.appendingPathComponent("ScheduleKey10_08", isDirectory: true)
+            let keyURL = keyDirectory.appendingPathComponent("store.json")
+            let keyStore = AppStore(fileURL: keyURL, seedIfMissing: false)
+            let keyBinding = String(repeating: "5", count: 64)
+            keyStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.08-key", binding: keyBinding)
+
+            let keyCustomer = Customer(name: "Key Customer", email: "key@example.test", phone: "555-0111")
+            expect(keyStore.upsert(keyCustomer), "10.08 schedule-key fixture customer saves")
+
+            // est_: job id/status already covered pre-10.08; customerName and
+            // title (both read into the notification's title/body) were
+            // missing from the key before this task's fix.
+            var estimateJob = Job(
+                customerId: keyCustomer.id, customerName: keyCustomer.name,
+                title: "Water heater estimate", status: .lead, laborRate: 90
+            )
+            expect(keyStore.upsert(estimateJob), "10.08 schedule-key estimate fixture saves")
+            expect(keyStore.markEstimateSent(id: estimateJob.id, from: .lead), "10.08 schedule-key estimate marks sent")
+            let keyAfterEstimateSent = keyStore.estimateFollowUpNotificationScheduleKey
+
+            estimateJob.status = .estimateSent
+            estimateJob.title = "Water heater estimate — revised scope"
+            expect(keyStore.upsert(estimateJob), "10.08 schedule-key estimate title edit saves")
+            let keyAfterEstimateTitle = keyStore.estimateFollowUpNotificationScheduleKey
+            expect(keyAfterEstimateTitle != keyAfterEstimateSent,
+                   "10.08 an est_ job's title (used in the notification body) changes the schedule key")
+
+            // review_: the record's customerName/job title feed the body,
+            // and settings.reviewRequestDelayHours feeds the rebuilt fire
+            // date — none were in the key before this task's fix.
+            let reviewJob = Job(
+                customerId: keyCustomer.id, customerName: keyCustomer.name,
+                title: "Gutter cleanup", status: .inProgress, laborRate: 90
+            )
+            expect(keyStore.upsert(reviewJob), "10.08 schedule-key review fixture saves")
+            keyStore.settings.reviewRequestEnabled = true
+            let outcome = keyStore.completeJob(id: reviewJob.id, from: .inProgress)
+            expect(outcome == .completed, "10.08 schedule-key review fixture completes (arms review_)")
+            let keyAfterReviewArmed = keyStore.estimateFollowUpNotificationScheduleKey
+
+            keyStore.settings.reviewRequestDelayHours = keyStore.settings.reviewRequestDelayHours + 5
+            let keyAfterDelayChange = keyStore.estimateFollowUpNotificationScheduleKey
+            expect(keyAfterDelayChange != keyAfterReviewArmed,
+                   "10.08 reviewRequestDelayHours (feeds the rebuilt review_ fire date) changes the schedule key")
+
+            // inv_: invoice.customer/number feed the title/body, and the
+            // LINKED JOB'S STATUS drives dunning eligibility — none were in
+            // the key before this task's fix.
+            var invoiceJob = Job(
+                customerId: keyCustomer.id, customerName: keyCustomer.name,
+                title: "Deposit job", status: .inProgress, laborRate: 90
+            )
+            expect(keyStore.upsert(invoiceJob), "10.08 schedule-key invoice-linked job saves")
+            var keyInvoice = Invoice(
+                customerId: keyCustomer.id, customer: keyCustomer.name, number: "INV-KEY-1",
+                amount: 300, due: Date(timeIntervalSince1970: 1_800_000_000)
+            )
+            keyStore.upsert(keyInvoice)
+            expect(keyStore.scheduleBookingTestLinkInvoiceToJob(invoiceID: keyInvoice.id, jobID: invoiceJob.id),
+                   "10.08 schedule-key invoice links to its job")
+            let keyAfterInvoiceCreated = keyStore.estimateFollowUpNotificationScheduleKey
+
+            keyInvoice.customer = "Key Customer (renamed)"
+            keyStore.upsert(keyInvoice)
+            let keyAfterInvoiceCustomerRename = keyStore.estimateFollowUpNotificationScheduleKey
+            expect(keyAfterInvoiceCustomerRename != keyAfterInvoiceCreated,
+                   "10.08 an invoice's customer name (used in the reminder title) changes the schedule key")
+
+            invoiceJob.status = .complete
+            expect(keyStore.upsert(invoiceJob), "10.08 schedule-key invoice-linked job completes")
+            let keyAfterLinkedJobComplete = keyStore.estimateFollowUpNotificationScheduleKey
+            expect(keyAfterLinkedJobComplete != keyAfterInvoiceCustomerRename,
+                   "10.08 the linked job's status (drives inv_ dunning eligibility) changes the schedule key")
+
+            // rinv_: rule.customerName feeds the body — was missing before
+            // this task's fix.
+            let rinvRule = Canonical.RecurringInvoice(
+                id: "rinv-key-1", customerId: keyCustomer.id, customerName: keyCustomer.name,
+                description: "Key plan", amount: 150, dueDays: 30,
+                cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+                occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+            expect(keyStore.createRecurringInvoice(rinvRule), "10.08 schedule-key rinv fixture saves")
+            let keyAfterRinvCreated = keyStore.estimateFollowUpNotificationScheduleKey
+
+            var renamedRule = rinvRule
+            renamedRule.customerName = "Key Customer (rinv renamed)"
+            expect(keyStore.updateRecurringInvoice(renamedRule), "10.08 schedule-key rinv rename saves")
+            let keyAfterRinvRename = keyStore.estimateFollowUpNotificationScheduleKey
+            expect(keyAfterRinvRename != keyAfterRinvCreated,
+                   "10.08 a recurring rule's customerName (used in the rinv_ body) changes the schedule key")
+
+            // Fields the selectors never read must NOT change the key —
+            // folding them in would only cause redundant reconciles.
+            let keyBeforeExpense = keyStore.estimateFollowUpNotificationScheduleKey
+            keyStore.upsert(Expense(amount: 42, date: .now, category: .fuel))
+            let keyAfterExpense = keyStore.estimateFollowUpNotificationScheduleKey
+            expect(keyAfterExpense == keyBeforeExpense,
+                   "10.08 adding an expense (not read by any notification selector) leaves the schedule key unchanged")
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }

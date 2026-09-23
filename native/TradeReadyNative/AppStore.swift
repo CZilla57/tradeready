@@ -619,13 +619,32 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Task 10.08 (N5): every field read by the five notification selectors
+    /// (`estimateFollowUpNotifications`, `appointmentConfirmationNotifications`,
+    /// `reviewRequestNotifications`, `invoiceReminderNotifications`,
+    /// `recurringInvoiceReminderNotifications`) plus their enable toggles must
+    /// be represented here, so a `.task(id:)` bound to this key re-runs
+    /// `synchronize()` whenever scheduling *or displayed copy* could change.
+    /// Fields the selectors do not read (insight mutes, setup-checklist
+    /// state, expenses, …) are deliberately absent — folding them in would
+    /// only cause redundant reconciles (10.08 resolution). Permission-state
+    /// changes are NOT folded in here: every call site that can change OS
+    /// permission (`SettingsView`'s request button, the invoice-reminder
+    /// soft-ask's "Turn on", and the `scenePhase == .active` foreground path)
+    /// already calls `synchronize()` explicitly afterward.
     var estimateFollowUpNotificationScheduleKey: String {
         guard let binding = exactSignedInWorkspaceNotificationBinding else { return "inactive" }
+        let jobStatusByID = Dictionary(
+            uniqueKeysWithValues: (snapshot.payload.jobs ?? []).map { ($0.id, $0.status) })
+        // est_: title uses customerName, body uses job title.
         let rows = (snapshot.payload.jobs ?? []).compactMap { job -> String? in
             guard job.status == "estimate_sent" else { return nil }
             let sent = job.estimateSentAt ?? job.approval?.sentAt ?? ""
-            return "\(job.id)|\(sent)|\(job.archivedAt ?? "")"
+            return "\(job.id)|\(sent)|\(job.archivedAt ?? "")|\(job.customerName)|\(job.title)"
         }
+        // appt_: title/body use the resolved customer's name (hashed via
+        // appointmentContacts below); the job row itself needs status
+        // membership, scheduledDate, and the ids used to resolve that customer.
         let appointments = (snapshot.payload.jobs ?? []).compactMap { job -> String? in
             guard job.status == "approved" || job.status == "scheduled" || job.status == "in_progress" else { return nil }
             return "\(job.id)|\(job.scheduledDate ?? "")|\(job.customerId)|\(job.customerName)|\(job.archivedAt ?? "")"
@@ -633,18 +652,28 @@ final class AppStore: ObservableObject {
         let appointmentContacts = (snapshot.payload.customers ?? []).map {
             "\($0.id)|\($0.name)|\($0.phone)|\($0.email)"
         }.joined(separator: ";")
+        // review_: body uses the record's customerName and job title; the
+        // rebuilt fire date depends on reviewRequestDelayHours (folded into
+        // the shared toggle prefix below).
+        let jobTitleByID = Dictionary(
+            uniqueKeysWithValues: (snapshot.payload.jobs ?? []).map { ($0.id, $0.title) })
         let reviews = reviewRequestRecords.map {
             let sentAt = $0.sentAt ?? ""
-            return "\($0.jobId)|\($0.scheduledAt)|\(sentAt)"
+            let title = jobTitleByID[$0.jobId] ?? ""
+            return "\($0.jobId)|\($0.scheduledAt)|\(sentAt)|\($0.customerName)|\(title)"
         }.joined(separator: ";")
+        // inv_: title/body use invoice.customer/number; eligibility depends
+        // on the linked job's status (isJobDunningEligible), not just its id.
         let invoiceRows = (snapshot.payload.invoices ?? []).map { invoice in
-            "\(invoice.id)|\(invoice.due)|\(invoice.paid)|\(invoice.jobId ?? "")|\(invoice.importBatchId ?? "")"
+            let linkedStatus = invoice.jobId.flatMap { jobStatusByID[$0] } ?? ""
+            return "\(invoice.id)|\(invoice.due)|\(invoice.paid)|\(invoice.jobId ?? "")|\(invoice.importBatchId ?? "")|\(invoice.customer)|\(invoice.number)|\(linkedStatus)"
         }.joined(separator: ";")
         let invoiceRules = (snapshot.payload.settings?.rules ?? []).map { "\($0.days)" }.joined(separator: ",")
+        // rinv_: body uses rule.customerName.
         let recurringRules = (snapshot.payload.recurringInvoices ?? []).map {
-            "\($0.id)|\($0.nextDueDate)|\($0.isActive)"
+            "\($0.id)|\($0.nextDueDate)|\($0.isActive)|\($0.customerName)"
         }.joined(separator: ";")
-        return "\(binding)|\(settings.estimateFollowUpsEnabled)|\(settings.appointmentRemindersEnabled)|\(settings.reviewRequestEnabled)|\(settings.autoOutreachEnabled)|"
+        return "\(binding)|\(settings.estimateFollowUpsEnabled)|\(settings.appointmentRemindersEnabled)|\(settings.reviewRequestEnabled)|\(settings.autoOutreachEnabled)|\(settings.reviewRequestDelayHours)|"
             + rows.joined(separator: ";") + "|" + appointments.joined(separator: ";") + "|" + appointmentContacts + "|" + reviews
             + "|" + invoiceRows + "|" + invoiceRules + "|" + recurringRules
     }
@@ -4870,10 +4899,14 @@ final class AppStore: ObservableObject {
         pendingAppointmentConfirmationJobID = jobID
     }
 
+    /// Task 10.08 (N6) fix: an archived job now fails closed here too,
+    /// matching the estimate/appointment routes — a stale `review_` payload
+    /// for a job the owner has since archived must not invent a destination.
     func requestReviewRequestReview(jobID: String) {
         guard hasExactSignedInWorkspace,
               isSignedIn,
-              jobs.contains(where: { $0.id == jobID }),
+              let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
+              (job.archivedAt ?? "").isEmpty,
               reviewRequestDraft(jobID: jobID) != nil else { return }
         selectedTab = .jobs
         deepLinkedJobID = jobID
@@ -4893,12 +4926,27 @@ final class AppStore: ObservableObject {
         deepLinkedOutreachInvoiceID = opensOutreach ? invoiceID : nil
     }
 
+    /// Task 10.08 (N6) fix: mirrors `App.tsx`'s `recurring_invoice` tap route —
+    /// generation runs on foreground after sync, so by tap time the newest
+    /// generated invoice usually already exists. Resolve it (highest
+    /// `occurrenceNumber` among invoices with `recurringInvoiceId == ruleID`)
+    /// and deep-link straight to it, exactly like `requestInvoiceReminderReview`;
+    /// when none has generated yet, fall back to the plain Invoices tab
+    /// (RN's `InvoiceList` with no `openInvoiceId`) rather than inventing a
+    /// destination. A missing rule (deleted) or absent exact workspace fails
+    /// closed — no tab switch at all.
     func requestRecurringInvoiceReview(ruleID: String) {
         guard hasExactSignedInWorkspace,
               isSignedIn,
               (snapshot.payload.recurringInvoices ?? []).contains(where: { $0.id == ruleID })
         else { return }
         selectedTab = .invoices
+        let generated = (snapshot.payload.invoices ?? []).filter { $0.recurringInvoiceId == ruleID }
+        let latest = generated.max { ($0.occurrenceNumber ?? 0) < ($1.occurrenceNumber ?? 0) }
+        if let latest {
+            deepLinkedInvoiceID = latest.id
+            deepLinkedOutreachInvoiceID = nil
+        }
     }
 
     /// Consumes a pending outreach deep link for the given invoice. Returns
@@ -7769,6 +7817,40 @@ extension AppStore {
         verifiedAccountBinding = nil
         isMigratedLocalOwnerVerified = false
         authenticationGateState = .signedOut
+    }
+
+    /// Test-only (task 10.08): links an invoice to a job at the canonical
+    /// layer (`invoice.jobId`), the field the editable `Invoice` view model
+    /// does not expose (real linkage goes through `commitInvoiceFromJob`'s
+    /// job-status-gated flow instead). Lets a schedule-key test change ONLY
+    /// the linked job's status and observe its effect on `inv_` dunning
+    /// eligibility without exercising the full invoice-creation flow.
+    /// Production never calls this.
+    @discardableResult
+    func scheduleBookingTestLinkInvoiceToJob(invoiceID: String, jobID: String) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        var updated = snapshot
+        var records = updated.payload.invoices ?? []
+        guard let index = records.firstIndex(where: { $0.id == invoiceID }) else { return false }
+        records[index].jobId = jobID
+        updated.payload.invoices = records
+        do {
+            try repository.save(updated)
+            try apply(updated)
+        } catch { return false }
+        return true
+    }
+
+    /// Test-only (task 10.08): the canonical `recurringInvoiceId`/
+    /// `occurrenceNumber` linkage the view-model `Invoice` does not expose.
+    /// Mirrors exactly what `requestRecurringInvoiceReview` resolves, so a
+    /// test can assert the tap-routing result against ground truth without
+    /// reaching into the private `snapshot`. Production never calls this.
+    func scheduleBookingTestLatestGeneratedInvoiceID(ruleID: String) -> String? {
+        (snapshot.payload.invoices ?? [])
+            .filter { $0.recurringInvoiceId == ruleID }
+            .max { ($0.occurrenceNumber ?? 0) < ($1.occurrenceNumber ?? 0) }?
+            .id
     }
 }
 

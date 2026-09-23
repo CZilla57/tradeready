@@ -375,6 +375,120 @@ enum NotificationCoordinatorTests {
             )
         }
 
+        // Task 10.08 (N5/B2) — all five owned families share the 60-cap
+        // together, with foreign-family requests present and consuming
+        // budget FIRST (never removed), and priority est_ > appt_ > review_
+        // > inv_ > rinv_ holding across the full set, not just the first
+        // three (the earlier cap test above predates the inv_/rinv_
+        // namespaces).
+        do {
+            let center = FakeNotificationCenter()
+            // 57 foreign + 1 pre-existing owned (removed on the sweep)
+            // leaves exactly 3 slots: est_, appt_, review_ schedule; inv_ and
+            // rinv_ do not.
+            center.pendingIdentifiers = (0..<57).map { "foreign_\($0)" } + ["est_stale"]
+            let coordinator = makeCoordinator(
+                center: center,
+                binding: { "owner-a" },
+                est: { date in [estPlan("e", now: date)] },
+                appt: { date in [ownedPlan(.appointmentConfirm(jobID: "a"), now: date)] },
+                review: { date in [ownedPlan(.reviewRequest(jobID: "r"), now: date)] },
+                invoice: { date in [ownedPlan(.invoiceReminder(invoiceID: "i1", daysPastDue: 1, opensOutreach: false), now: date)] },
+                recurring: { date in [ownedPlan(.recurringInvoiceReminder(ruleID: "r1"), now: date)] }
+            )
+
+            await coordinator.synchronize(now: now)
+            expect(
+                center.scheduled.map(\.identifier) == ["est_e", "appt_a", "review_r"],
+                "10.08 with all five families competing under the 60-cap, foreign requests consume budget first and priority stays est_ > appt_ > review_ > inv_ > rinv_"
+            )
+            expect(
+                Set((0..<57).map { "foreign_\($0)" }).isSubset(of: Set(center.pendingIdentifiers)),
+                "10.08 every foreign request survives the sweep at the cap boundary"
+            )
+        }
+
+        // Task 10.08 (B2) — idempotent duplicate prevention: two consecutive
+        // reconciles 1 s apart on the SAME coordinator/center produce the
+        // identical pending set, with no identifier ever pending twice.
+        do {
+            let center = FakeNotificationCenter()
+            let coordinator = makeCoordinator(
+                center: center,
+                binding: { "owner-a" },
+                est: { date in [estPlan("dup", now: date)] },
+                appt: { date in [ownedPlan(.appointmentConfirm(jobID: "a"), now: date)] },
+                review: { date in [ownedPlan(.reviewRequest(jobID: "r"), now: date)] },
+                invoice: { date in [ownedPlan(.invoiceReminder(invoiceID: "i1", daysPastDue: 1, opensOutreach: false), now: date)] },
+                recurring: { date in [ownedPlan(.recurringInvoiceReminder(ruleID: "r1"), now: date)] }
+            )
+
+            await coordinator.synchronize(now: now)
+            let pendingAfterFirst = Set(center.pendingIdentifiers)
+            let scheduledCountAfterFirst = center.scheduled.count
+
+            await coordinator.synchronize(now: now.addingTimeInterval(1))
+            let pendingAfterSecond = Set(center.pendingIdentifiers)
+
+            expect(
+                pendingAfterFirst == ["est_dup", "appt_a", "review_r", "inv_i1_1d", "rinv_r1"],
+                "10.08 the first reconcile schedules exactly one request per owned family"
+            )
+            expect(
+                pendingAfterSecond == pendingAfterFirst,
+                "10.08 a reconcile 1s later produces the identical pending set — no duplicate and no dropped family"
+            )
+            expect(
+                center.pendingIdentifiers.count == Set(center.pendingIdentifiers).count,
+                "10.08 no identifier is ever pending twice after either reconcile"
+            )
+            expect(
+                center.scheduled.count == scheduledCountAfterFirst * 2,
+                "10.08 the second reconcile re-adds each identifier exactly once (cancel-then-reschedule), never stacking a second copy"
+            )
+        }
+
+        // Task 10.08 (B2) — a reconcile after a simulated relaunch (a NEW
+        // coordinator instance, exactly like a fresh app launch, but reusing
+        // the SAME system pending-request state) neither duplicates nor
+        // drops a family: this is the cross-launch determinism the 10.14
+        // idempotence proof at a higher layer builds on.
+        do {
+            let center = FakeNotificationCenter()
+            func launch() -> NativeEstimateFollowUpNotificationCoordinator {
+                makeCoordinator(
+                    center: center,
+                    binding: { "owner-a" },
+                    est: { date in [estPlan("relaunch", now: date)] },
+                    appt: { date in [ownedPlan(.appointmentConfirm(jobID: "a"), now: date)] },
+                    review: { date in [ownedPlan(.reviewRequest(jobID: "r"), now: date)] },
+                    invoice: { date in [ownedPlan(.invoiceReminder(invoiceID: "i1", daysPastDue: 1, opensOutreach: false), now: date)] },
+                    recurring: { date in [ownedPlan(.recurringInvoiceReminder(ruleID: "r1"), now: date)] }
+                )
+            }
+
+            let firstLaunchCoordinator = launch()
+            await firstLaunchCoordinator.synchronize(now: now)
+            let pendingAfterFirstLaunch = Set(center.pendingIdentifiers)
+
+            // Simulate relaunch: a brand-new coordinator instance (the old
+            // one is discarded, as it is at every real app launch), same
+            // underlying system pending-request state, synchronizing 1s
+            // later — the identifier set must be identical.
+            let secondLaunchCoordinator = launch()
+            await secondLaunchCoordinator.synchronize(now: now.addingTimeInterval(1))
+            let pendingAfterRelaunch = Set(center.pendingIdentifiers)
+
+            expect(
+                pendingAfterRelaunch == pendingAfterFirstLaunch,
+                "10.08 a reconcile after a simulated relaunch produces the identical pending set as before it — no family duplicated or dropped"
+            )
+            expect(
+                pendingAfterRelaunch == ["est_relaunch", "appt_a", "review_r", "inv_i1_1d", "rinv_r1"],
+                "10.08 every owned family is present exactly once after the relaunch reconcile"
+            )
+        }
+
         // Estimate decode parity with the pre-existing helper (incl. edges).
         do {
             let long = String(repeating: "x", count: 257)

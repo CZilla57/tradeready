@@ -905,7 +905,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.05 | N1 | **Code complete** | 10.00 | Categories + permission prompt + settings |
 | 10.06 | N2 | **Code complete** | 10.05 | Due-date/auto-outreach parity |
 | 10.07 | N3, N4 | **Code complete** | 10.05 (+10.06 serialization only) | Appointment + review parity |
-| 10.08 | N5, N6, B2 | Pending | 10.05-10.07 | Unified reconciliation + routing |
+| 10.08 | N5, N6, B2 | **Code complete** | 10.05-10.07 | Unified reconciliation + routing |
 | 10.09 | B1, B2 | Pending | 10.01, 10.08 | Post-sync derived-state seam |
 | 10.10 | C1, C2, C3, C4 | **Code complete** | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
 | 10.11 | D1, D2, D3, D6 | Pending | 10.04 | Today UI |
@@ -1456,6 +1456,75 @@ Exit criteria traceability (roadmap Phase 10):
 - Next-ready: **10.08** (unified reconciliation + routing, now has 10.07's
   confirmed-clean `appt_`/`review_` selectors — including the fixed `review_`
   rebuild — to reconcile against).
+
+### 10.08 — Unified notification reconciliation and tap routing
+
+- Status: **Code complete.** Audit-and-close-gaps task, same shape as 10.06/
+  10.07: the single coordinator already reconciled all five owned families
+  with the documented native priority (`est_ → appt_ → review_ → inv_ →
+  rinv_`), per-namespace cleanup before the authorization guard, and the
+  foreign-family rule — confirmed correct by re-reading
+  `N/NativeEstimateFollowUpNotifications.swift` and
+  `N/TradeReadyNativeApp.swift`, unchanged by this task.
+- Audit result (brief item 2, schedule key): `estimateFollowUpNotificationScheduleKey`
+  was missing several fields the five selectors actually read — est_'s
+  `customerName`/`title` (notification title/body), review_'s
+  `customerName`/linked job `title` (body) and `settings.reviewRequestDelayHours`
+  (fire-date offset — a real bug: changing the delay would not retrigger a
+  resync, leaving pending review_ reminders at their stale fire time), inv_'s
+  `customer`/`number` (title/body) and the linked job's `status` (drives
+  `isJobDunningEligible`), and rinv_'s `customerName` (body). Fixed by adding
+  all six. Confirmed insight mutes, setup-checklist state, and expenses are
+  not folded in — the 10.03 mute/checklist stores are not wired into
+  `AppStore` at all yet, and a table test proves an expense addition leaves
+  the key unchanged. Permission state is deliberately NOT a key input; every
+  call site that can change it already calls `synchronize()` explicitly
+  afterward (`SettingsView`'s request button, the invoice-reminder soft-ask's
+  "Turn on", and the `scenePhase == .active` foreground path).
+- Audit result (brief item 4, routing): `appt_`'s
+  `NativeAppointmentNotifications.canOpenNotification` and `review_`'s
+  `requestReviewRequestReview` did not fail closed for an archived job —
+  only `est_`'s did. Fixed both to match. `rinv_`'s
+  `requestRecurringInvoiceReview` never resolved a record at all — it only
+  switched to the Invoices tab. Fixed to resolve the latest GENERATED
+  invoice for the rule (`recurringInvoiceId == ruleID`, highest
+  `occurrenceNumber`), matching `App.tsx`'s `recurring_invoice` tap handler,
+  falling back to the plain tab when nothing has generated yet; a missing
+  rule or absent exact workspace still fails closed.
+- Idempotence (brief item 3): added a named coordinator test proving the
+  shared 60-cap with all five families competing and 57 foreign requests
+  present (foreign consumes budget first, priority holds across the full
+  set); an idempotent-reconcile test (two `synchronize()` calls 1s apart on
+  the same coordinator produce an identical pending set, no identifier ever
+  pending twice); and a simulated-relaunch test (a brand-new coordinator
+  instance reusing the same underlying pending-request state produces the
+  identical set).
+- Tap-routing coverage (carried-forward 10.06 ledger finding): `appt_`/
+  `review_`/`rinv_` lacked fail-closed test coverage; `rinv_` had none at
+  all. `native/StoreIntegrationTests/main.swift` gained an archived-job
+  block for `appt_`/`review_` and a full `rinv_` block (inert before
+  binding, success with/without a generated invoice, missing-rule fail
+  closed, signed-out fail closed).
+- Files: `N/AppStore.swift` (schedule key, `requestReviewRequestReview`,
+  `requestRecurringInvoiceReview`, two test-only `scheduleBookingTest*`
+  seams), `N/NativeAppointmentNotifications.swift` (`canOpenNotification`
+  archived guard), `native/NotificationCoordinatorTests/main.swift`,
+  `native/StoreIntegrationTests/main.swift`.
+- Commands / results: `sh native/run-notification-coordinator-tests.sh`,
+  `run-store-integration-tests.sh`, `run-estimate-follow-up-notification-tests.sh`,
+  `run-appointment-notification-tests.sh`, `run-invoice-notification-tests.sh`,
+  `run-review-request-tests.sh`, `run-notification-permission-tests.sh` — all
+  PASS. `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/notifications.test.js` — 37/37 passing.
+  `__tests__/reminderLogic.test.js __tests__/reminderEmailHardening.test.js
+  __tests__/reviewRequest.test.js` — 79/79 passing, no oracle file modified.
+  `sh native/run-all-domain-tests.sh` and the Release/generic-iOS
+  `xcodebuild` compile — see task report for the full run.
+- Blockers: none. Device delivery evidence remains a Phase 12 row.
+- Next-ready: **10.09** (post-sync derived-state seam — the reconcile entry
+  point is `NativeEstimateFollowUpNotificationCoordinator.synchronize(now:)`,
+  the same method `TradeReadyNativeApp.swift` already calls from
+  `.task(id:)` and the foreground path).
 
 ### 10.10 — Coach transport, provider routing, and system prompt
 
