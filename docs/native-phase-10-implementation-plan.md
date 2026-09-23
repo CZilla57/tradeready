@@ -2660,13 +2660,30 @@ manual pbxproj edit required or performed.
   `DEVELOPMENT_TEAM = 96J48TJWX3`, signed with the Apple Development
   identity above against the "iOS Team Provisioning Profile:
   com.gettradereadyapp.tradeready". A `build` action only — no `archive`,
-  export, upload, or App Store Connect action was taken.
-- `sh native/run-doc-reference-check.sh` — 0 missing (976 paths checked
-  after this task's doc edits).
+  export, upload, or App Store Connect action was taken. The `CodeSign` step
+  from the actual log:
+  ```
+  CodeSign .../TradeReadyNative.app (in target 'TradeReadyNative' from project 'TradeReadyNative')
+      Signing Identity:     "Apple Development: Chad Rector (9HBXYALFY3)"
+      Provisioning Profile: "iOS Team Provisioning Profile: com.gettradereadyapp.tradeready"
+                            (026ceb2d-e98f-4ea2-a729-f4713b559bf3)
+      /usr/bin/codesign --force --sign 2BB2D86E29CBF6805E2E46A09619237378E7A40B --entitlements .../TradeReadyNative.app.xcent ...
+  ```
+  followed by `Validate .../TradeReadyNative.app` and `** BUILD SUCCEEDED **`.
+- `sh native/run-doc-reference-check.sh` — 0 missing (**985 paths checked**,
+  final count after this task's complete set of doc edits, including the
+  fix-round-1 gate additions below).
+- No maintained RN-oracle aggregate list exists for Phase 10 — the
+  contract-decisions doc's oracle index (§11) and 10.14's own commands
+  (§16.3) both run the RN suites, including
+  `__tests__/phase10QualificationOracle.test.js`, by explicit `--runTestsByPath`
+  file list, not through a single aggregate script; this task does not add
+  one, matching that existing convention.
 
 **Open implementation gates carried forward** (from the progress ledger's
 Parked / Deferred-minors lines; recorded here and in the new runsheet, not
-waived):
+waived — all five are implementation gates, host-testable, not device
+evidence, except where noted):
 - **10.12 I4 (parked):** the Stripe account-switch write race
   (`markSetupTaskDoneIfStripeConnected` racing a Stripe status refresh
   against an account switch) is proven today only through the pure
@@ -2676,6 +2693,22 @@ waived):
   if `CoachView` ever survives an account boundary without RootView's
   existing teardown running first; unreached today because RootView always
   tears the view down on sign-out/account-switch.
+- **10.09 (a) (deferred minor):** a newer post-sync publish that fails inside
+  `makeSnapshot` leaves the cached `NativeBusinessSnapshot` on an older
+  snapshot than the one actually committed — fail-safe (the next successful
+  commit corrects it), but the window itself is untested.
+- **10.09 (b) (deferred minor):** the three pre-commit failure diagnostic
+  codes `pull/local-commit`, `pull/cursor-commit`, and `pull/authentication`
+  each sit behind an unconditional `return` positioned, in source, before the
+  derived-state `publish` call — the same structural guarantee already relied
+  on for the tested offline/signed-out/owner-changed cases — but no automated
+  test independently forces any of the three to prove the guard holds at that
+  exact boundary.
+- **10.09 (c) (deferred minor, final review should triage):** the post-sync
+  publish (and its derived outputs) still runs when `advancePastInitialSync`
+  ends in `.accountMismatch`/`.unavailable`, because `verifiedAccountBinding`
+  is not cleared in either terminal state — pre-existing gate behavior, not
+  introduced by 10.09, still untriaged.
 - Device/permission/live-AI-provider/background-delivery evidence for every
   Phase 10 surface remains correctly deferred to Phase 12, tracked row-by-row
   in the new `docs/native-phase-10-device-runsheet.md`, including the

@@ -403,14 +403,24 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   post-sync derived-state seam (notification reconcile + cached business
   snapshot refresh, exactly once per committed sync pass) are done. Cross-
   engine qualification against a shared fixture (task 10.14) proves
-  determinism and idempotent-reconcile-twice behavior. Two implementation
-  gates stay open and unwaived: the Stripe account-switch write race is
-  proven only through a pure predicate, not end-to-end (no injectable Stripe
-  service seam yet), and the coach `sending` flag could stay stuck if the
+  determinism and idempotent-reconcile-twice behavior. Five implementation
+  gates stay open and unwaived (all implementation gates, host-testable, not
+  device evidence, except where noted): the Stripe account-switch write race
+  is proven only through a pure predicate, not end-to-end (no injectable
+  Stripe service seam yet); the coach `sending` flag could stay stuck if the
   Coach view ever survives an account boundary without RootView's existing
-  teardown running first. Device, permission, live-AI-provider, and
+  teardown running first; a newer post-sync publish that fails inside
+  `makeSnapshot` leaves the cached business snapshot on an older,
+  already-superseded commit; the three pre-commit failure diagnostic codes
+  `pull/local-commit`, `pull/cursor-commit`, and `pull/authentication` each
+  rely only on source-level inspection of an unconditional pre-`publish`
+  `return`, with no automated test independently forcing any of the three;
+  and the post-sync publish still runs when `advancePastInitialSync` ends in
+  `.accountMismatch`/`.unavailable` because `verifiedAccountBinding` isn't
+  cleared in either terminal state. Device, permission, live-AI-provider, and
   background-delivery evidence remain deferred to Phase 12 per
-  [native-phase-10-device-runsheet.md](native-phase-10-device-runsheet.md).
+  [native-phase-10-device-runsheet.md](native-phase-10-device-runsheet.md),
+  which also tracks all five gates above.
 - Phases 8–9, 11–12: **Not started** (tracking note: Phase 8's contract
   decisions and Phase 9's implementation plan/device runsheet already exist as
   in-flight artifacts from earlier work on this branch; their roadmap status

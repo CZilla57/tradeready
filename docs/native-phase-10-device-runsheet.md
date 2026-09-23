@@ -18,6 +18,51 @@ Conventions: `[ ]` open, `[x]` passed with evidence link/date. Record device
 model, iOS version, account type, and build ID per row. Use synthetic data in a
 staging/TestFlight account; never production customer data.
 
+## Open implementation gates
+
+These are **not** device-evidence rows — they are named, unresolved gaps in the
+host-testable implementation itself, carried forward from the progress ledger's
+Parked / Deferred-minors lines so they stay visible and are never silently
+waived. Each is labeled **implementation gate (host-testable), not device
+evidence** except where a row is inherently device-only (noted per item). They
+also appear inline in the relevant section below and in the roadmap's Phase 10
+entry.
+
+1. **10.12 I4 — Stripe account-switch write race** *(implementation gate
+   (host-testable), not device evidence)*: `markSetupTaskDoneIfStripeConnected`
+   racing a Stripe status refresh against an account switch is proven today
+   only through the pure `stripeTaskWriteAllowed` predicate (four cases), not
+   end-to-end — `configuredStripeConnectService()` has no injectable transport
+   seam a test can use to control timing. See the "Proactive insights" section
+   below for the device-verification row.
+2. **10.13 — Coach `sending` stuck-flag boundary** *(implementation gate
+   (host-testable), not device evidence)*: `sending` can remain stuck `true`
+   if `CoachView` ever survives an account boundary without RootView's
+   existing teardown running first. Unreached today because RootView always
+   tears the view down on sign-out/account-switch — no test forces the
+   boundary the other way. See the "AI coach" section below.
+3. **10.09 (a) — stale cache on a failed later publish** *(implementation gate
+   (host-testable), not device evidence)*: if a newer post-sync publish fails
+   inside `makeSnapshot`, the cached `NativeBusinessSnapshot` is left on an
+   older snapshot than the one that was actually committed (fail-safe — the
+   next successful commit corrects it, but the window itself is untested).
+4. **10.09 (b) — three pre-commit failure codes have no forcing test**
+   *(implementation gate (host-testable), not device evidence)*: the
+   diagnostic codes `pull/local-commit`, `pull/cursor-commit`, and
+   `pull/authentication` (`pull/session`) each sit behind an unconditional
+   `return` positioned, in source, before the derived-state `publish` call —
+   the same structural guarantee already relied on for the tested
+   offline/signed-out/owner-changed cases — but no automated test
+   independently forces any of the three codes to prove the guard holds at
+   that exact boundary.
+5. **10.09 (c) — publish still runs when `advancePastInitialSync` ends in
+   `.accountMismatch`/`.unavailable`** *(implementation gate (host-testable),
+   not device evidence)*: `verifiedAccountBinding` is not cleared in either
+   terminal state, so the post-sync publish (and its derived outputs) still
+   runs — pre-existing gate behavior, not introduced by 10.09, but not yet
+   triaged or covered by a forcing test either. See the "Background refresh"
+   section below for the device-verification row.
+
 ## Today
 
 - [ ] Day/week schedule strip and day selection match the RN week/day projection, including the current-day default and empty-selected-day row
@@ -80,6 +125,9 @@ staging/TestFlight account; never production customer data.
 - [ ] Authenticated job-photo upload/backfill still completes during a background pass that also reconciles notifications (no ordering regression)
 - [ ] Expiration mid-pass still completes exactly once (no duplicate notification reconcile, no double-cached snapshot publish) — see also `native-phase-4-background-refresh.md`, which owns the underlying task lifecycle
 - [ ] Signed-out/offline background pass remains a no-op for both the pre-existing sync work and the new Phase 10 reconcile/refresh hook
+- [ ] **10.09 (a), implementation gate (host-testable), not device evidence**: force a `makeSnapshot` failure on a second, later publish after an earlier one already committed, and confirm whether the cache is left on the stale (older) snapshot as expected, or whether it needs a fix before Phase 12 sign-off
+- [ ] **10.09 (b), implementation gate (host-testable), not device evidence**: add or run a forcing test for each of `pull/local-commit`, `pull/cursor-commit`, and `pull/authentication` to independently prove the pre-`publish` `return` guard holds at that exact boundary, not just by source inspection
+- [ ] **10.09 (c), implementation gate (host-testable), not device evidence**: confirm whether the post-sync publish running while `advancePastInitialSync` is in `.accountMismatch`/`.unavailable` (because `verifiedAccountBinding` isn't cleared there) is acceptable pre-existing gate behavior or needs a fix, and add a test either way
 
 ## Deep links
 
@@ -91,5 +139,5 @@ staging/TestFlight account; never production customer data.
 
 - [ ] Every row above has device/staging evidence or an explicit, recorded waiver
 - [ ] Any row that fails is recorded as a defect with the build ID, not silently waived
-- [ ] The two parked implementation gates above (Stripe account-switch race, Coach `sending` stuck-flag boundary) are either closed with a real fix or explicitly re-accepted with a dated rationale before Phase 12 exit
+- [ ] All five open implementation gates above (10.12 Stripe account-switch race, 10.13 Coach `sending` stuck-flag boundary, 10.09 (a) stale-cache-on-failed-publish, 10.09 (b) three untested pre-commit failure codes, 10.09 (c) publish running through `.accountMismatch`/`.unavailable`) are either closed with a real fix or explicitly re-accepted with a dated rationale before Phase 12 exit
 - [ ] The parity matrix is updated from `In progress` to `Verified` only after the rows above pass
