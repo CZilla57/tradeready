@@ -899,7 +899,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 |---|---|---|---|---|
 | 10.00 | all | **Code complete** | — | Contract decisions + fixture index |
 | 10.01 | S1, S2 | **Code complete** | 10.00 | NativeBusinessSnapshot |
-| 10.02 | S3 | Pending | 10.00 | NativeTodayInsights |
+| 10.02 | S3 | **Code complete** | 10.00 | NativeTodayInsights |
 | 10.03 | S4, D4, D5 | **Code complete** | 10.00 | Insight-mute + setup-checklist stores |
 | 10.04 | D1, D2, D3, D6 | Pending | 10.00 | NativeTodayBriefing |
 | 10.05 | N1 | Pending | 10.00 | Categories + permission prompt + settings |
@@ -993,6 +993,69 @@ Exit criteria traceability (roadmap Phase 10):
   arrays so money never round-trips through the UI projection's `Double`s; the
   money itself is `PaymentLedger` (the shared oracle), not a re-derived sum.
 - Next-ready: 10.02, 10.03, 10.04, 10.05, 10.10 (all unblocked).
+
+### 10.02 — Proactive insights engine
+
+- Status: **Code complete / Phase 12 evidence deferred.**
+- Files: `native/TradeReadyNative/Domain/NativeTodayInsights.swift` (new:
+  `NativeInsightKind`, `NativeInsightTarget`, `NativeTodayInsight`, and
+  `NativeTodayInsights.select` concatenating the eight selectors in the frozen
+  priority order — `selectLaborOverruns`, `selectLowMarginEstimates`,
+  `selectUninvoicedComplete`, `selectDueSoon`, `selectScheduleInsights`
+  (open_slot + unscheduled_approved), `selectMaintenanceDue`,
+  `selectExpenseAnomaly`, plus the pure `monthsBetween`/`shiftMonth`
+  local-frame helpers and local `formatMoney`/`formatQuote`),
+  `native/TodayInsightsTests/main.swift`, `native/run-today-insights-tests.sh`.
+- Reused rather than rebuilt: `NativeTimeTracking.summary`/`.elapsedLabel` (labor
+  overrun), `NativeSchedule.formatLaborHint`/`.largestFreeGap`/`.isWorkDay`/
+  `.isBlackoutDate`/`.shiftDate`/`.parseDateComponents` and
+  `NativeCalendar.selectUnscheduledApproved` (open slot + unscheduled approved,
+  both generic over `ScheduleJobLike`, already satisfied by `Canonical.Job`),
+  `NativeChangeOrders.billableTotal` (`jobBillableTotal`),
+  `NativeCashBasis.ledgerInvoice`/`.ymd`/`.localComponents` +
+  `PaymentLedger.isFullyPaid`/`.balanceDue` + `NativeMoneyReports.daysPastDue`
+  (due-soon money/date math). `computeEstimateBreakdown`'s labor/material cost
+  pair (the only two fields the low-margin rule reads) has no existing Swift
+  port — `FinancialDomain.PricingEngine.calculate` takes a different forward
+  `PricingInput`, not a stored `Canonical.Job` — so it is reimplemented locally
+  from the job's own `laborHours`/`laborRate`/`materials`/`materialMarkup`
+  exactly as `utils/pricingEngine.ts` does; `formatMoney`/`formatQuote` are
+  likewise local (matching the RN formatter output) rather than importing
+  `NativeJobProfitability.swift`'s heavier profitability dependency chain for
+  two formatting calls.
+- No canonical-input gaps: every RN input (`Job`, `Invoice`, `Customer`,
+  `RecurringJob`, `Expense`, `ResolvedSchedule`) already has a `CanonicalModels`
+  counterpart with the exact fields the rules read, so no rule was suppressed
+  for a missing canonical field.
+- Interface handoff: `NativeTodayInsights.select(jobs:invoices:now:schedule:
+  targetMarginPercent:customers:recurringJobs:expenses:) -> [NativeTodayInsight]`.
+  `NativeTodayInsight` exposes `kind: NativeInsightKind` and `id: String` in the
+  shapes `NativeInsightMutes.filterMuted`/`.activeMutedIDs` already expect (a
+  generic `id: (T) -> String` closure) — no change needed to 10.03's mute file.
+  `NativeInsightTarget` is an exhaustive, Equatable/Hashable enum mirroring
+  `InsightTarget` 1:1 for 10.04's compiler-checked mapping to
+  `NativeTodayDestination`. 10.12 renders `.title`/`.detail`/`.reason`/
+  `.coachPrompt` for the top three post-mute rows.
+- Commands / results: `TZ=America/Phoenix sh native/run-today-insights-tests.sh`
+  — all checks passed (all eight kinds' trigger boundaries incl. the 15-minute
+  labor-overrun floor and 14-minute silence, the low-margin target−3-point
+  boundary and severe/break-even split, the uninvoiced/due-soon single-vs-
+  aggregate collapse and "due today is not overdue" window, open-slot
+  120-minute boundary plus custom-schedule/blackout/non-workday suppression and
+  stable tie-break ordering, unscheduled-approved double-count exclusion,
+  maintenance-due's 6-calendar-month boundary/contact/pipeline/recurring
+  exclusions and first-name-only coachPrompt, expense-anomaly's strict->1.5x
+  threshold/$200 floor/three-non-zero-months guard/future-dated exclusion/
+  biggest-driver category, full priority ordering, and id-shape pinning).
+  RN oracle re-run: `TZ=America/Phoenix npm test -- --runInBand
+  --runTestsByPath __tests__/todayInsights.test.ts` — 55/55 passed (unchanged
+  baseline; this task ports it, does not modify it).
+  `xcodebuild … Release … CODE_SIGNING_ALLOWED=NO build` — **BUILD SUCCEEDED**.
+- Self-review: read the full diff before committing; found no unintended edits
+  to `N/Domain/NativeInsightMutes.swift` or any shared/integration-lane file —
+  only the three new files above are staged.
+- Next-ready: 10.04, 10.11, 10.12 (10.02 was their remaining pure-lane
+  dependency alongside 10.03).
 
 ### 10.03 — Device-local owner-bound state stores
 
