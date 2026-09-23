@@ -1,0 +1,1153 @@
+# Phase 11 — Platform hardening contract decisions
+
+**Task:** 11.00 (freeze contracts and baselines) · **Date:** 2026-09-23
+
+**Status:** Contract frozen. This is characterization only: no Swift file, test,
+project file or RN file was changed. Selected contracts are marked **chosen**.
+An open item is marked **blocked**, with its owner and the reason.
+
+**How this was produced:**
+- Sources read in full:
+  - the RN widget, bridge, action, deep-link and analytics sources;
+  - the RN `App.tsx` Sentry/PostHog init;
+  - the RN tests that pin them;
+  - the native App Group, replay, deep-link, analytics-seam, derived-state and secure-store code.
+- The RN widget files `targets/widget/JobTimer.swift` and
+  `targets/widget/_shared/SiriIntents.swift` carry uncommitted edits by another agent
+  (they add the advisory lock to `appendPendingAction`). They were read as-is from the
+  working tree and are cited that way. Line numbers refer to that working tree.
+- SDK versions and their privacy manifests were read at the pinned tags from GitHub
+  (`git ls-remote`, the releases API, and raw files). Nothing was downloaded into the repo.
+- The snapshot fixtures in §2.4 were decode-checked in a scratchpad against a copy of
+  RN's `BridgeSnapshot`; see §16. The committed decode test belongs to 11.01 (ruling P4).
+- Secrets: the PostHog key, the Sentry DSN and the RevenueCat keys are cited by their
+  `app.json` line, never copied.
+
+This document is binding once committed. It overrides any prose paraphrase in the plan
+(global constraints). Where native code already differs from RN on purpose, the
+difference is recorded here, not reconciled.
+
+Requirement IDs: **W1–W4, A1–A3, L1, L2, P1–P4, R1–R3, H1–H4, M1** (all, for
+characterization).
+
+---
+
+## 1. Contract decision table
+
+| ID | Topic | Decision | Status | Owner |
+|---|---|---|---|---|
+| C1 | Snapshot schema | RN `BridgeSnapshot` v1 fields and optionality, decoded both ways (§2) | chosen | 11.01 |
+| C2 | Native snapshot writer shape | Explicit `null`s, `address` always a string, `outstandingTotal` in cents from 10.01, `.sortedKeys`, fractional ISO `updatedAt`, plus the `ownerTag` field (§2.3) | chosen | 11.01 |
+| C3 | Stale-snapshot window | **86,400 s (24 h)**. The snapshot is stale iff `now − updatedAt > 86400`, or its age is negative or unparseable (§3.3) | chosen | 11.02, 11.05 |
+| C4 | Mirror write triggers | Every committed canonical write that changes jobs, time sessions, invoices or payments; foreground/launch after replay; the 10.09 seam (§3.1) | chosen | 11.01 |
+| C5 | Seam observer input | Add a `(canonical, output)` register overload. The current observer receives only `NativeBusinessSnapshot` (§3.2) | chosen; Own-list addition for 11.01 | 11.01 |
+| C6 | Action queue | Four types, fixed JSON shapes, `flock` protocol, 512 cap, duplicate-id handling, never overwrite a malformed queue (§4) | chosen | 11.04 |
+| C7 | Owner stamping | `ownerTag` goes on the snapshot, on each queued action and on `activeTrip`. Extensions refuse to write when no snapshot is present. Replay drops actions whose owner is missing or mismatched (§4.5) | chosen | 11.01, 11.04, 11.05 |
+| C8 | Malformed or duplicate queue wedge | Native replay retries forever on `malformedQueue`/`duplicateActionID` (§4.6) | **blocked** until 11.05 decides the quarantine policy | 11.05 |
+| C9 | Intents | Ten intents, a single 17.0 floor, target membership per ruling P3 (§5) | chosen | 11.04 (types), 11.01 (membership) |
+| C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen | 11.06 |
+| C11 | Notification `est_` archived dead tap (P8) | Carried over and not decided here | **blocked** until 11.06 decides it (ruling P8) | 11.06 |
+| C12 | SDKs | Sentry Cocoa **9.29.0** and PostHog iOS **3.81.0**, via SPM `exactVersion`, behind Foundation-only adapters (§7) | chosen (PostHog pin has a freshness concern) | 11.07, 11.09 |
+| C13 | Privacy manifests | App and extension manifests: required-reason APIs and collected-data types (§8) | chosen | 11.01, 11.09 |
+| C14 | Analytics gating | Release build **and** a configured, non-`PLACEHOLDER` key. RN gated PostHog on the key only (§9.2) | chosen (recorded deviation) | 11.07 |
+| C15 | Event catalog | 52 events from 73 RN `track(` sites; the fixture in §9.5 is exact | chosen | 11.08 |
+| C16 | Seam property types | Widen `[String: String]` to JSON scalars and string arrays (§9.6) | chosen | 11.07 (in place, ruling P6) |
+| C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
+| C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen | 11.07, 11.09, 11.15 |
+| C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen | 11.15 |
+| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline | 11.10a/11.10b |
+| C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
+
+---
+
+## 2. Snapshot schema (W1)
+
+### 2.1 Keys and container
+
+| Item | Value | Source |
+|---|---|---|
+| App Group id | `group.com.gettradereadyapp.tradeready` | `targets/widget/Widgets.swift:10`, `N/NativeAppGroupInbox.swift:16` |
+| Snapshot key | `widgetSnapshot` (a JSON **string** stored in UserDefaults) | `targets/widget/Widgets.swift:11`, `utils/widgetBridge.ts` `WIDGET_SNAPSHOT_KEY` |
+| Action queue key | `widgetActions` (a JSON array string) | `utils/widgetBridge.ts` `WIDGET_ACTIONS_KEY`, `targets/widget/_shared/SiriIntents.swift:51` |
+| Trip session key | `activeTrip` (a JSON object string, private to Siri) | `targets/widget/_shared/SiriIntents.swift:52` |
+| Cold-launch handoff key | `pendingOpenUrl` (`{url, at}`) | `targets/widget/_shared/SiriIntents.swift:53`, `utils/widgetBridge.ts` `PENDING_OPEN_URL_KEY` |
+| Advisory lock | File `.tradeready-widget-actions.lock` in the App Group container, `flock(LOCK_EX)` | `targets/widget/JobTimer.swift:25-41` (working tree), `N/NativeWidgetActionReplay.swift` claim transport |
+
+The native scrubber `NativeAppGroupAccountScrubber` (`N/NativeAppGroupInbox.swift:42-79`)
+already covers all four keys under the lock. It calls `removePersistentDomain` and
+verifies the result.
+
+### 2.2 `BridgeSnapshot` v1 (RN reference: `targets/widget/Widgets.swift:13-35`)
+
+| Field | Type | Optional | Notes |
+|---|---|---|---|
+| `version` | Int | no | Always `1` |
+| `updatedAt` | String (ISO 8601) | no | RN writes `new Date(now).toISOString()` (fractional, `Z`). The RN widget ignores it. Native uses it for staleness (§3.3) |
+| `nextJob` | object | yes (`null`) | See below |
+| `nextJob.id` | String | no | Exact job id. The deep link uses it verbatim |
+| `nextJob.customerName` | String | no | |
+| `nextJob.title` | String | no | |
+| `nextJob.scheduledDate` | String `yyyy-MM-dd` | no | Local-frame date string. Never parse it as UTC (FA-039) |
+| `nextJob.scheduledStartTime` | String `HH:mm` | yes (`null`) | |
+| `nextJob.address` | String | **no** | Must be a string (`""` when empty). `null` fails RN's decoder (fixture F6) |
+| `timer` | object | yes (`null`) | |
+| `timer.jobId` / `jobTitle` / `customerName` / `startedAt` | String | no | `startedAt` is the ISO clock-in instant |
+| `outstandingTotal` | Number (dollars) | yes | RN always writes it, rounded to cents. Decoders must tolerate it being absent (F5) |
+
+**Decode rules (both directions, chosen):**
+- Plain `JSONDecoder` with no custom key strategy.
+- Unknown keys are ignored. RN already ignores them (`targets/widget/Widgets.swift:37-44`).
+- Native decoding must accept every RN-written fixture unchanged (F1–F3, F5).
+- RN's decoder must accept every native-written snapshot (F4). This is what
+  "byte-compatible" means here: decode equivalence, not identical bytes or key order.
+- Local-frame parsing of `scheduledDate` + `scheduledStartTime`:
+  - locale `en_US_POSIX`, `TimeZone.current`;
+  - format `yyyy-MM-dd HH:mm`, else `yyyy-MM-dd` (`targets/widget/Widgets.swift:58-70`).
+
+**Minimal-projection rule (chosen):**
+- The snapshot contains exactly the fields above, plus `ownerTag` (§2.3).
+- Never include a collection, a customer list, contact details other than the displayed
+  name and address, notes, amounts other than `outstandingTotal`, or any secure value.
+
+**Projection semantics (RN `utils/widgetBridge.ts:99-160`, chosen as the native spec):**
+- `nextJob` is the earliest candidate job:
+  - candidates are not archived, have a `scheduledDate`, have `scheduledDate >=` local
+    today (string compare), and are not in `DONE_STATUSES` = {complete, invoiced, paid, declined};
+  - sort by date, then by `scheduledStartTime` with no-time jobs last;
+  - today's job stays "next" after its start time passes.
+- `timer` is the open session with the latest `start` across all jobs. RN does not
+  filter archived jobs here; native keeps that parity so a running clock is never hidden.
+- `outstandingTotal` = `FinancialDecimal.cents(NativeBusinessSnapshot.outstandingTotal)`
+  (`N/Domain/FinancialDomain.swift:12`, `N/Domain/NativeBusinessSnapshot.swift:110-117`).
+  Encode it as a JSON number. Never re-derive the sum.
+
+### 2.3 Native writer additions (chosen)
+
+- **`ownerTag`**: lowercase hex SHA-256 of `"tradeready.widget.owner.v1:" + accountBinding`,
+  where `accountBinding` is the 64-hex binding `AppStore` already uses
+  (`migratedAccountBinding`/`verifiedAccountBinding`, `N/AppStore.swift:294-295`).
+  - It is hashed again so the raw binding never enters the App Group.
+  - RN decoders ignore it.
+  - The native widget decoder treats it as optional. A missing tag means "no owner":
+    intents refuse to write (§4.5).
+- Encoding:
+  - `JSONEncoder` with `.sortedKeys`;
+  - `nextJob`, `timer` and `scheduledStartTime` written as explicit `null`, never omitted;
+  - `updatedAt` via `ISO8601DateFormatter` with `.withInternetDateTime` and `.withFractionalSeconds`;
+  - `version: 1`.
+
+### 2.4 Fixtures (verbatim; ruling P4)
+
+**F1 — empty.** From `__tests__/widgetBridge.test.js:196-203`, with
+`NOW = new Date(2026,7,3,12,0,0)` in `TZ=America/Phoenix`:
+
+```json
+{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":null,"timer":null,"outstandingTotal":0}
+```
+
+**F2 — full.** From `__tests__/widgetBridge.test.js` next-job j9 (lines 126-133),
+timer j2 (lines 161-166) and total 160 (lines 180-193):
+
+```json
+{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":{"id":"j9","customerName":"Alice Johnson","title":"Fence repair","scheduledDate":"2026-08-04","scheduledStartTime":"10:30","address":"12 Oak St"},"timer":{"jobId":"j2","jobTitle":"Deck build","customerName":"Bob Smith","startedAt":"2026-08-03T10:00:00.000Z"},"outstandingTotal":160}
+```
+
+**F3 — no start time, empty address, fractional total, no timer.**
+
+```json
+{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":{"id":"j5","customerName":"Dana Lee","title":"Gutter clean","scheduledDate":"2026-08-05","scheduledStartTime":null,"address":""},"timer":null,"outstandingTotal":1234.56}
+```
+
+**F4 — native writer shape.** Sorted keys, with `ownerTag` and the RN widget sample
+values from `targets/widget/Widgets.swift:49-56`. The tag here is illustrative:
+
+```json
+{"nextJob":{"address":"1420 Maple Ave","customerName":"Alex Morgan","id":"sample","scheduledDate":"2026-01-01","scheduledStartTime":"09:00","title":"Water heater replacement"},"outstandingTotal":0,"ownerTag":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","timer":null,"updatedAt":"2026-01-01T08:00:00.000Z","version":1}
+```
+
+**F5 — older writer or future field.** `outstandingTotal` is absent and there is an
+unknown key:
+
+```json
+{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":null,"timer":null,"futureField":{"x":1}}
+```
+
+**F6 — must be rejected** (`address: null`). The native writer must never produce it:
+
+```json
+{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":{"id":"j5","customerName":"Dana Lee","title":"Gutter clean","scheduledDate":"2026-08-05","scheduledStartTime":null,"address":null},"timer":null,"outstandingTotal":0}
+```
+
+Expected results against RN `BridgeSnapshot`: F1–F5 decode and F6 is rejected
+(scratchpad result in §16). 11.01's test must also prove the native type decodes F1–F5,
+rejects or explicitly degrades F6, and encodes a projection RN decodes.
+
+---
+
+## 3. Snapshot write semantics (W1, W4)
+
+### 3.1 When the mirror is written (chosen)
+
+RN mirror triggers, for reference:
+- `utils/storage/collections.ts:33` (`saveInvoices`) and `:54` (`saveJobs`);
+- `context/AuthContext.tsx:108` (session start, after `replayWidgetActions`) and `:129`
+  (foreground, after the sync chain);
+- `utils/backgroundRefresh.ts:106`;
+- `utils/storage/lifecycle.ts:141` clears the snapshot.
+
+RN writes best-effort and reloads timelines in the bridge module:
+- `modules/widget-bridge/ios/WidgetBridgeModule.swift`: `setSharedItem` reloads;
+  `clearShared` removes the persistent domain and reloads.
+
+Native writes the mirror:
+1. After every committed canonical write that changes jobs, time sessions, invoices or
+   payments. Invoices are included because `outstandingTotal` depends on them; RN
+   mirrors on `saveInvoices` too.
+2. On launch and foreground, **after** widget-action replay. This way a just-applied
+   `timer_start` is reflected, and a stale snapshot is refreshed.
+3. From an observer registered on the 10.09 post-sync-commit seam
+   (`N/NativeDerivedStatePublisher.swift`). This covers remote pulls and background refresh.
+
+Write protocol:
+- Acquire the advisory lock.
+- Re-check the owner gate, write `widgetSnapshot`, release the lock.
+- Then call `WidgetCenter.shared.reloadAllTimelines()`.
+
+Gate: never write while signed out, while the local owner is unverified or mismatched,
+or without an exact signed-in workspace. Use `hasExactSignedInWorkspace`
+(`N/AppStore.swift:4920`) and the account binding the replay path already uses
+(`N/AppStore.swift:5155-5160`). A gated-off write is a no-op, not a clear. Wiping is the
+scrubber's job.
+
+Wipe authority: `NativeAppGroupAccountScrubber` stays the only wipe path.
+- `signOut(revokeRemote:)` (`N/AppStore.swift:4122-4154`) and `deleteAccount`
+  (`N/AppStore.swift:4156-4230`) already scrub and then call `reloadAllTimelines()`
+  (lines 4152 and 4213).
+- The writer must not re-populate the suite after a scrub. The lock plus the owner
+  re-check inside the lock guarantee this.
+
+### 3.2 Seam observer gap (chosen fix; Own-list addition for 11.01)
+
+`AppStore.registerDerivedStateObserver` (`N/AppStore.swift:5653`) delivers only
+`NativeBusinessSnapshot`. The widget projection also needs jobs and time sessions from
+the canonical snapshot. `NativeDerivedStatePublisher` explicitly forbids reading
+"stale in-memory collections" from an observer, so reading `AppStore.snapshot` inside
+the callback is not allowed.
+
+**Chosen:** 11.01 adds an additive overload to both `N/NativeDerivedStatePublisher.swift`
+and `AppStore` that registers `(canonical: Input, output: Output) throws -> Void`. The
+publisher already holds both values in `publish(canonical:expectedOwnerBinding:)`
+(line 134). Existing observers are unchanged.
+
+11.01 also needs read access to the account binding for `ownerTag`. It may add a narrow
+internal accessor; the binding stays private-set.
+
+### 3.3 Stale-snapshot window (chosen: 86,400 seconds)
+
+`docs/widget-plan.md` defines no stale window, and the RN widget never reads `updatedAt`.
+RN's only day-scale cutoff is `siriStaleActiveTripInterval = 24 * 60 * 60`
+(`targets/widget/_shared/SiriIntents.swift:291`, compared with `>` at line 297). Native
+reuses that value so there is a single day boundary across the extension.
+
+- `stale(now, updatedAt) = age > 86_400 || age < 0 || updatedAt is unparseable`,
+  where `age = now − parse(updatedAt)`.
+- Exactly 86,400 s is **fresh**.
+- Parse with fractional seconds first, then plain (the same two-step as
+  `siriParseISODate`).
+- Separately from staleness, a `nextJob` whose `scheduledDate` < local today is never
+  presented as "next". The widget shows the no-upcoming state for that entry.
+
+Behavior when stale (chosen):
+
+| Surface | Stale behavior |
+|---|---|
+| Next Job widget (11.02) | Explicit stale state ("Open TradeReady to refresh"). No customer name or address, and no job deep link: the whole card opens the app root |
+| Job Timer widget (11.03) | A running timer stays visible and Stop stays enabled; replay clamps and ignores a stop with no open session. The idle Start button is suppressed and the status reads "Open app to sync" |
+| NextJob, ClockIn, OnMyWay, Outstanding intents (11.04) | Refuse with the dialog "Open TradeReady to refresh your schedule." No action is written and no data is spoken |
+| ClockOut, StartTrip, StopTrip, LogExpense | Unaffected by staleness. They do not depend on snapshot contents beyond `ownerTag` |
+| Timeline | Add an entry at `updatedAt + 86_400` (or the next local midnight, whichever is first) so the stale state appears without an app reload |
+
+11.02 (UI) and 11.05 (fixtures) both test the same boundary: 86,399 s is fresh,
+86,400 s is fresh, 86,401 s is stale, a negative age is stale, and garbage is stale.
+
+---
+
+## 4. Action-queue contract (A3)
+
+### 4.1 Types and JSON shapes
+
+`PendingActionType = timer_start | timer_stop | trip_log | expense_log`
+(`utils/widgetActions.ts:37-52`).
+
+| Type | Required | Optional | Writer |
+|---|---|---|---|
+| `timer_start` | `id`, `type`, `at`, `jobId` | `ownerTag` (native, §4.5) | Start Timer, Clock In |
+| `timer_stop` | `id`, `type`, `at` | `jobId` (only when non-empty), `ownerTag` | Stop Timer, Clock Out |
+| `trip_log` | `id`, `type`, `at` (= stopAt), `date` (local `yyyy-MM-dd` of `startedAt`), `odometerStart`, `odometerEnd` | `ownerTag` | Stop Trip |
+| `expense_log` | `id`, `type`, `at`, `date`, `amount` (finite, > 0, ≤ 1,000,000), `category` | `description`, `ownerTag` | Log Expense |
+
+Field rules:
+- `id` is a UUID string: at most 128 UTF-8 bytes, no control characters
+  (`N/NativeWidgetActionReplay.swift` `maximumIdentifierLength`).
+- `at` is ISO 8601 with or without fractional seconds.
+- `date` is strict `yyyy-MM-dd`.
+- Odometers are finite and ≥ 0.
+- `category` is one of the eight expense ids (§5.3). The replayer maps unknown values to
+  `other`, matching RN's `expenseFromAction`.
+- An empty `description` becomes "Logged via Siri".
+
+### 4.2 Lock protocol (chosen, matches the working-tree RN edits)
+
+1. `open(<container>/.tradeready-widget-actions.lock, O_CREAT|O_RDWR, 0600)`, then
+   `flock(LOCK_EX)`.
+2. Read, validate, append and write while holding the lock. Verify the write when the
+   caller needs certainty (Siri).
+3. Unlock and close. Reload timelines outside the lock.
+
+If the container is unavailable or the lock fails, the intent reports failure. It never
+writes without the lock. The native claim transport already takes the same lock before
+it claims a prefix.
+
+### 4.3 Writer rules (chosen; stricter than RN because the native planner rejects whole batches)
+
+The native planner (`N/NativeWidgetActionReplay.swift`) throws for the whole batch on
+`tooManyActions` (> 512), `duplicateActionID`, `malformedQueue`, `malformedAction` and
+`invalidAction`. A single bad append would wedge every later action (§4.6). So writers
+must, inside the lock:
+
+- **Cap:** refuse to append when the queue already holds 512 entries. Return failure;
+  the Siri dialog is "TradeReady has too many pending actions — open the app to sync."
+  RN had no cap (`targets/widget/JobTimer.swift:56-77`).
+- **Duplicate ids:** if an entry with the same `id` exists and is exactly equal (compare
+  with sortedKeys), treat the append as success and do nothing. If it differs, fail.
+  This matches `siriAppendPendingActionLocked`
+  (`targets/widget/_shared/SiriIntents.swift:178-204`).
+- **Malformed existing value:** if `widgetActions` exists but is not a JSON array of
+  objects, **refuse** and never overwrite it. RN `JobTimer.swift` treated it as empty,
+  which silently discards data.
+- **Validate before append:** the new action must pass the same field rules the planner
+  enforces (§4.1).
+- Never write canonical data from an extension.
+
+### 4.4 `activeTrip` private session
+
+Payload is `{id?, startedAt, odometerStart, stopAt?, odometerEnd?, ownerTag}`.
+
+- **Start Trip:**
+  - an existing non-stale trip → "already running";
+  - a stale trip (age > 86,400 s, or an unparseable start) → replaced, with the dialog
+    "Your previous trip was never finished — starting a new one." It is never logged;
+  - `odometerStart` must be finite and ≥ 0.
+- **Stop Trip** (`targets/widget/_shared/SiriIntents.swift:340-376`):
+  - under the lock, persist a stable `id`, `stopAt` and `odometerEnd` into `activeTrip`
+    first;
+  - append `trip_log`, then remove `activeTrip` and verify the removal;
+  - a retry after a crash reuses the same id, so the duplicate-id rule makes it idempotent;
+  - miles spoken = `max(0, end − start)`.
+- Native addition: discard (never log) an `activeTrip` whose `ownerTag` differs from the
+  current snapshot's `ownerTag` (§4.5).
+
+### 4.5 Owner stamping (chosen, new)
+
+**Threat:** a sign-out scrub can run between an intent's snapshot read and its queue
+append. The action then survives into the next account, where an `expense_log` or
+`trip_log` would be applied to the wrong owner.
+
+**Contract:**
+- **Extension writers (11.04):** read `widgetSnapshot.ownerTag` **inside the same lock
+  hold** as the append. With no snapshot or no tag, refuse. Stamp the tag on the action
+  and on `activeTrip`.
+- **Snapshot writer (11.01):** writes `ownerTag` under the lock.
+- **Replayer (11.05):** an action whose `ownerTag` is missing or differs from the
+  verified binding's tag is **acknowledged and dropped**, never applied. It is counted in
+  a bounded diagnostic with no payload.
+  - This retires replay of untagged RN-written actions. That is acceptable because there
+    are no current users (see memory "No current app users"; plan "Upgrade identity").
+  - 11.05 updates `N/NativeWidgetActionReplay.swift` and its fixtures accordingly.
+
+### 4.6 Replay (existing native behavior, recorded)
+
+Order: claim → prepare → apply → save → acknowledge. Sources:
+`NativeWidgetActionReplayCoordinator`, and `N/AppStore.swift:5155-5188`.
+
+- The claim is a write-ahead file in Application Support `WidgetActionClaims`:
+  `claim-<binding>-<digest>.json`, protected with
+  `completeFileProtectionUntilFirstUserAuthentication`.
+- Only the claimed prefix is removed.
+- At most 8 batches of at most 512 actions per activation.
+- Unknown types are retained ("Kept N newer widget action(s)…").
+- Start/stop markers `__nativeWidgetStartActionID` / `__nativeWidgetStopActionID` make
+  replay idempotent. Done statuses are skipped. `scheduled` becomes `in_progress` on
+  start. A stop is clamped to its start. Trips and expenses use deterministic ids.
+- RN's equivalent is `utils/widgetActions.ts`:
+  - RN clears the queue before applying;
+  - `t_siri_<id>` trips, purpose "Business trip (Siri)";
+  - `e_siri_<id>` expenses;
+  - replay ends with a refresh.
+- Triggers:
+  - after the starting point (`N/AppStore.swift:4115-4116`);
+  - identity activation (`:4641-4642`), including foreground via
+    `activateMigratedAuthenticatedIdentity`;
+  - subscription gate advance (`:4848-4849`);
+  - background refresh (`:6063`).
+
+**Blocked (C8, owner 11.05):** on any thrown error the coordinator only reloads and sets
+"Widget actions are still safely queued and will be retried." (`N/AppStore.swift:5186`).
+A malformed queue or a duplicate id therefore fails forever and blocks every later
+action. 11.05 must choose and test a quarantine policy. Suggested shape: move the
+offending raw queue into an owner-scoped quarantine file under the lock, surface a
+bounded message, and continue. The writer rules in §4.3 make this state unreachable
+from native writers, but it stays reachable from legacy or foreign data.
+
+---
+
+## 5. Intent contract (A1, A2)
+
+### 5.1 Inventory
+
+RN sources:
+- `targets/widget/_shared/SiriIntents.swift`: intents at lines 476–814, phrases at
+  lines 824–899.
+- `targets/widget/JobTimer.swift`: timer intents at lines 117–185.
+
+Native type names and phrases may differ from RN (no current users). The native versions
+below are **chosen**.
+
+| # | RN intent (title) | Parameters | App Group behavior | `openAppWhenRun` | Native target | Stale rule |
+|---|---|---|---|---|---|---|
+| 1 | NextJobIntent ("Next Job") | — | Read-only `widgetSnapshot.nextJob`. Dialog "You have no upcoming jobs scheduled." when none | no | app (Siri) | refuse |
+| 2 | StartTripIntent ("Start Mileage Trip") | `odometerStart: Double` | Writes `activeTrip` only (§4.4) | no | app | n/a |
+| 3 | StopTripIntent ("Stop Mileage Trip") | `odometerEnd: Double` | `activeTrip` → one `trip_log`, clear | no | app | n/a |
+| 4 | OnMyWayIntent ("On My Way") | — | Stash `pendingOpenUrl {url, at}` with `tradeready://onmyway/<nextJob.id>` | **yes** (`@MainActor`) | app | refuse |
+| 5 | ClockInIntent ("Clock In") | — | `timer_start` for `nextJob.id`. "already clocked in" if a pending start or snapshot timer exists; "No upcoming job to clock into." | no | app | refuse |
+| 6 | ClockOutIntent ("Clock Out") | — | `timer_stop` with the snapshot timer's `jobId` when known. "You're not clocked in." | no | app | n/a |
+| 7 | LogExpenseIntent ("Log Expense") | `amount: Double`, `category: ExpenseCategory`, `expenseDescription: String?` | `expense_log`. Amount finite, > 0, ≤ 1,000,000, else "That amount doesn't look right." | no | app | n/a |
+| 8 | OutstandingIntent ("Outstanding Invoices") | — | Read-only `outstandingTotal`. "Nothing outstanding — you're fully collected." / "You're owed $X in outstanding invoices." | no | app | refuse |
+| 9 | StartTimerIntent ("Start Job Timer") | `jobId: String` | `timer_start`. An empty id writes nothing. `isDiscoverable = false` | no | **both** (widget button) | Start button hidden when stale |
+| 10 | StopTimerIntent ("Stop Job Timer") | `jobId: String` | `timer_stop` (jobId only if non-empty). `isDiscoverable = false` | no | **both** | allowed |
+
+"On the clock" rule: a pending queued timer action beats the snapshot (last action wins).
+Sources: `siriIsOnTheClock` at `targets/widget/_shared/SiriIntents.swift:238`,
+`lastPendingTimerType` in `JobTimer.swift`.
+
+**OnMyWay under native (chosen):**
+- `openAppWhenRun` runs `perform()` in the app process. There is no
+  `RCTOpenURLNotification`; RN posted it at `targets/widget/_shared/SiriIntents.swift:593`.
+- The intent stashes `pendingOpenUrl`, for a cold launch where `AppStore` is not ready,
+  and hands the URL to an app-side router that feeds `AppStore.handle(url:)` once the
+  store exists.
+- Gap for 11.04/11.06: `consumeVerifiedPendingOpenURLIfNeeded` consumes only once per
+  session (`didConsumeVerifiedPendingOpenURL`, `N/AppStore.swift:5190-5204`). The warm
+  path must therefore route directly rather than rely on the stash.
+- The route ends in `routeToOnMyWay` → `requestOnMyWayReview`
+  (`N/AppStore.swift:5210-5213`): an editable review that is **never auto-sent**.
+
+### 5.2 Phrases (native; the RN phrases are kept, `.applicationName` is required)
+
+| Intent | Phrases | Short title / SF Symbol |
+|---|---|---|
+| Next Job | "What's my next job in X", "What's next in X" | Next Job / `calendar` |
+| Start Trip | "Start a trip in X", "Start tracking miles in X" | Start Trip / `car` |
+| Stop Trip | "Stop my trip in X", "Finish my trip in X" | Stop Trip / `car.fill` |
+| On My Way | "I'm on my way in X", "Tell my customer I'm on my way in X" | On My Way / `message` |
+| Clock In | "Clock in in X", "Start the clock in X" | Clock In / `play.circle` |
+| Clock Out | "Clock out in X", "Stop the clock in X" | Clock Out / `stop.circle` |
+| Log Expense | "Log an expense in X", "Add an expense in X" | Log Expense / `dollarsign.circle` |
+| Outstanding | "How much am I owed in X", "What's outstanding in X" | Outstanding / `banknote` |
+
+X is `\(.applicationName)`. Start/Stop Timer have no phrases (`isDiscoverable = false`).
+
+### 5.3 Expense category AppEnum
+
+Raw values: `materials, tools, fuel, labor, insurance, software, marketing, other`.
+These equal RN `ExpenseCategoryId`.
+
+Display labels: Materials, Tools & Equipment, Fuel & Transport, Subcontractors,
+Insurance, Software & Apps, Marketing, Other.
+
+### 5.4 Target membership (ruling P3)
+
+- The new file N/Widgets/Shared/WidgetIntents.swift (proposed by the plan) holds
+  Start/Stop Timer plus the shared lock/queue helpers. It is a member of **both** the
+  app and extension targets, via 11.01's `PBXFileSystemSynchronizedBuildFileExceptionSet`
+  entries.
+- Extension-only files (the `@main WidgetBundle`, widget views) are excluded from the
+  app target. `N/` is a synchronized root group, so without an exception every file
+  joins the app target and two `@main` types fail to compile.
+- Siri-only intents live in the new N/Intents/ directory (app target only).
+- `AppShortcutsProvider` lives in the new N/NativeAppIntents.swift (app target only, per
+  Apple DTS; see `targets/widget/_shared/SiriIntents.swift:12-28`).
+- A single availability floor of iOS 17.0 applies to every intent, with no mixed
+  `@available`. This matches the app and the extension deployment target.
+
+---
+
+## 6. Deep-link contract (L1, L2)
+
+### 6.1 Grammar (existing: `N/NativeDeepLinkParser.swift:26-49`, RN `utils/deepLinks.ts`)
+
+- `tradeready://job/<id>` and `tradeready://onmyway/<id>`, parsed per
+  `utils/deepLinks.ts` `JOB_LINK`/`ONMYWAY_LINK`.
+- The scheme is case-insensitive.
+- Exactly two components; no query or fragment.
+- The id is percent-decoded and must be non-empty.
+- Anything else → `nil`, with no side effect.
+- `pendingOpenUrl`: `{url, at}`, freshness `0 ≤ age ≤ 300 s`
+  (`pendingOpenURLMaximumAge = 5*60`; RN `PENDING_OPEN_URL_MAX_AGE_MS`). A negative or
+  greater age is rejected. RN reads, then removes, then parses (`App.tsx:537-550`).
+
+### 6.2 Gate order (chosen)
+
+1. **Intercept before parsing:** the Google Sign-In callback (`N/TradeReadyNativeApp.swift:99-101`)
+   and then the password-recovery link inside `handle(url:)` keep their current priority.
+2. **Parse** (above).
+3. **Authenticate:** if the gate is not `.signedIn`, park at most one pending route in
+   memory with its source (warm URL or App Group stash). Apply it once the gate reaches
+   `.signedIn` **for the same owner binding** that was active or expected. Otherwise
+   discard it. RN parked until session and navigation were ready
+   (`App.tsx:491-523`, flush points at 552-553, 558-560 and 593-597).
+4. **Exact owner:** the local owner is verified (`isMigratedLocalOwnerVerified`) and the
+   account binding matches the parked route's binding.
+5. **Record:** the job exists and `archivedAt == nil`.
+   - `job` routes on any non-archived status. A complete or paid job's detail is still
+     the right record.
+   - `onmyway` also refuses `DONE_STATUSES`. A native deviation from RN, chosen so no
+     on-my-way review is offered for finished work.
+   - A failure shows the existing not-found state, never a different record.
+6. On success, track `widget_deep_link_opened {type}` (§9.5).
+7. Remove the stash as RN does.
+
+**Gaps 11.06 must close (found in source):**
+- `AppStore.handle(url:)` (`N/AppStore.swift:3593-3603`) checks only `jobs.contains`.
+  It has no auth, owner or archived gate, and no parking.
+- `NativePendingOpenURLConsumer` (`N/NativeAppGroupInbox.swift:92-133`) has no archived
+  check and never clears its source.
+- **P8 (blocked, C11):** the parked Phase 10 "`est_` archived dead tap" decision belongs
+  to 11.06.
+
+---
+
+## 7. SDK decision (P1, R1; ruling P7)
+
+Both SDKs are consumed through SPM with `kind = exactVersion`, following the existing
+precedent in `native/TradeReadyNative.xcodeproj/project.pbxproj` (GoogleSignIn-iOS 9.2.0,
+purchases-ios-spm 5.83.2). They are linked to the **app target only**; the widget
+extension links neither. Each sits behind a Foundation-only protocol adapter that host
+tests replace with a fake.
+
+| SDK | Repository | Pinned version | Released | SPM product | PrivacyInfo |
+|---|---|---|---|---|---|
+| Sentry Cocoa | `https://github.com/getsentry/sentry-cocoa` | **9.29.0** (latest stable) | 2026-09-17 | `Sentry` (binary xcframework) | Ships `Sources/Resources/PrivacyInfo.xcprivacy`: collects Crash Data, Performance Data, Other Diagnostic Data (linked: no, tracking: no, purpose App Functionality). APIs: UserDefaults `CA92.1`, System Boot Time `35F9.1`, File Timestamp `C617.1` |
+| PostHog iOS | `https://github.com/PostHog/posthog-ios` | **3.81.0** (latest stable) | 2026-09-22 | `PostHog` | Ships `PostHog/Resources/PrivacyInfo.xcprivacy` (Package.swift lines 37-38, `.copy`): collects Product Interaction, Other Usage Data (Analytics; linked: no, tracking: no). APIs: UserDefaults `CA92.1`, System Boot Time `35F9.1`, File Timestamp `C617.1`. Also bundles PHPLCrashReporter |
+
+For reference, the RN versions are `@sentry/react-native` 7.2.0 and
+`posthog-react-native` 4.54.5.
+
+**Concern:** PostHog 3.81.0 was one day old when pinned. 11.07 re-checks for a
+3.81.x patch release before adding the package and records the final pin. Moving to a
+newer patch is allowed; moving to a new minor needs a note in the execution log.
+
+If package resolution fails for lack of network, 11.07/11.09 ship the adapter and fake
+and report BLOCKED on the SDK link only (ruling P7).
+
+---
+
+## 8. Privacy manifest contract (M1)
+
+Both manifests are new files. The app's is N/PrivacyInfo.xcprivacy, created by 11.09.
+The extension's is N/Widgets/PrivacyInfo.xcprivacy, created by 11.01. Neither exists
+today (grep: no `PrivacyInfo.xcprivacy` in `native/`).
+
+### 8.1 Required-reason APIs
+
+| API category | App target | Widget extension | Evidence |
+|---|---|---|---|
+| UserDefaults | `CA92.1` (standard defaults) **and** `1C8F.1` (App Group shared with the extension) | `1C8F.1` | App Group suite: `N/NativeAppGroupInbox.swift`, `N/NativeWidgetActionReplay.swift:393`, `N/LegacyDataImporter.swift:235`. Standard: `N/NativeInitialSync.swift:135,677-684`, `N/NativeSupabasePush.swift:71,314-321` |
+| File timestamp | `C617.1` only if 11.01–11.12 add such a use. None today; SDKs declare their own | none | `N/NativeJobPhotoTransfer.swift:166` reads `.isRegularFileKey`/`.isSymbolicLinkKey`, which is not a required-reason key. grep: no `creationDate`/`modificationDate`/`attributesOfItem`/`stat(` in `N/` |
+| System boot time | none of our own (SDKs declare `35F9.1`) | none | grep: no `systemUptime`/`mach_absolute_time` in `N/` |
+| Disk space | none | none | grep: no `volumeAvailableCapacity` in `N/` |
+
+Each implementer re-greps before writing its manifest, and adds a row if new code
+introduces a category.
+
+### 8.2 Collected-data types (app manifest)
+
+| Type | Linked | Tracking | Purposes | Source |
+|---|---|---|---|---|
+| User ID | **yes** | no | Analytics, App Functionality | `identify` and Sentry user use the Supabase user id (§9.4) |
+| Product Interaction | yes (identified after sign-in) | no | Analytics | PostHog events |
+| Other Usage Data | yes | no | Analytics | PostHog lifecycle and screen events |
+| Crash Data | yes | no | App Functionality | Sentry |
+| Performance Data | yes | no | App Functionality | Sentry traces (0.2) |
+| Other Diagnostic Data | yes | no | App Functionality | Sentry `reportError` |
+
+`NSPrivacyTracking` is false and `NSPrivacyTrackingDomains` is empty. The SDKs' own
+manifests say "linked: no". The app manifest declares "linked: yes" because the app ties
+events to a user id. The app-level declaration wins for App Store labels.
+
+The extension manifest declares **no** collected data: it neither transmits nor
+identifies.
+
+---
+
+## 9. Analytics contract (P1–P3)
+
+### 9.1 RN configuration (reference)
+
+- Key: `app.json:99` (`expo.extra.posthogApiKey`, a `phc_…` project key; not copied).
+- Host: `https://us.i.posthog.com` (`App.tsx:822-831`).
+- `POSTHOG_ENABLED = Boolean(key) && !key.startsWith("PLACEHOLDER")` (`App.tsx:105`).
+  **There is no `__DEV__` gate for PostHog in RN.** Only Sentry uses `enabled: !__DEV__`
+  (`App.tsx:103-114`).
+- `PostHogProvider autocapture={{captureScreens: false}}`. `captureAppLifecycleEvents`
+  therefore takes the SDK default (true) in `posthog-react-native` 4.54.5.
+- `ScreenTracker` calls `useNavigationTracker` inside `NavigationContainer`, which emits
+  `$screen` events with route names.
+- `posthogRef.current` is set at `App.tsx:745`.
+- `track` (`utils/analytics.ts:11-21`) calls `posthogRef.current?.capture` and swallows
+  errors.
+
+### 9.2 Native gating (chosen)
+
+Analytics is enabled iff all three hold:
+1. a non-Debug build (`#if !DEBUG`);
+2. the Info.plist key `TradeReadyPostHogAPIKey` (from the build setting
+   `TRADEREADY_POSTHOG_API_KEY`, following the `N/BuildEnvironment.swift` pattern) is
+   non-empty;
+3. that key does not start with `PLACEHOLDER`.
+
+The host key `TradeReadyPostHogHost` defaults to `https://us.i.posthog.com`.
+
+- Missing configuration → no-op transport, no crash, one bounded debug log.
+- **Recorded deviation:** RN sent events from dev builds. Native Debug is silent by
+  default (plan 11.07 "Debug build emits nothing").
+- Staging stays `https://staging.invalid`. Analytics has no staging project. A staging
+  Release build uses the same gate and will send only if a key is configured, so the
+  staging config must leave the key empty.
+
+SDK options (chosen):
+- `captureApplicationLifecycleEvents = true` (RN parity).
+- `captureScreenViews = false`, since SwiftUI auto-capture is unreliable; screens are
+  sent explicitly (§9.3).
+- Element-interaction autocapture off.
+- Session replay off; surveys off.
+- PostHog exception/crash capture off, because Sentry is the only crash reporter.
+- Flush on background (SDK default).
+
+### 9.3 Screen events (chosen policy; map by 11.08)
+
+- Send `$screen` via the adapter's `screen(name)` for native destinations that have an
+  RN route, using the RN route name (e.g. `Today`, `JobDetail`, `Invoices`).
+- 11.08 delivers the exact destination-to-route-name table and its test.
+- Destinations with no RN route send no screen event.
+
+### 9.4 Identity lifecycle (RN call sites, and the native rule)
+
+RN:
+- `identifyUser(userId)` = `posthog.identify(userId)` + `Sentry.setUser({id})`
+  (`utils/analytics.ts:23-30`). Called from:
+  - `context/AuthContext.tsx:52` (initial `getSession`);
+  - `context/AuthContext.tsx:89` (`onAuthStateChange`, any event except `SIGNED_OUT`).
+- `resetUser()` = `posthog.reset()` + `Sentry.setUser(null)` (`utils/analytics.ts:32-38`).
+  Called from:
+  - `screens/SettingsAccountScreen.tsx:57` (account deletion);
+  - `screens/SettingsAccountScreen.tsx:88` (sign-out);
+  - `screens/PaywallScreen.tsx:131` (hard-gate sign-out).
+- RN does **not** reset on the `SIGNED_OUT` auth event itself.
+
+Native (chosen, 11.08):
+- `identify(supabaseUserID)`, on both SDK adapters, when the authenticated identity is
+  verified and the gate enters `.signedIn`, including cold launch.
+- `reset()` on:
+  - explicit sign-out (`signOut(revokeRemote:)`);
+  - completed account deletion (`deleteAccount`);
+  - the paywall/subscription-gate sign-out;
+  - **account switch**, where the verified user id differs from the last identified one:
+    `reset` runs before the new `identify`;
+  - `applyCompletedSignOutState` (`N/AppStore.swift:4252`).
+- Never send email, name or any other trait. `identify` carries the id only.
+
+### 9.5 Event catalog (52 events, 73 RN call sites)
+
+Every event fires at the same business moment as RN: after the durable save, not on tap.
+Types below: `bool`, `number`, `string`, `string[]`, a literal (`true`), or an enum
+(`a|b`). `?` marks an optional key.
+
+| Event | Properties | RN call sites | Native today |
+|---|---|---|---|
+| `customer_created` | `first: bool` (no prior non-sample customers) | `screens/AddCustomerScreen.tsx:222` (new customers only) | — |
+| `estimate_sent` | — | `screens/SendEstimateScreen.tsx:154`, `:168`; `screens/PricingCalculatorScreen.tsx:352` | — |
+| `payment_link_sent` | `provider: string`, `deposit: bool` | `screens/OutreachScreen.tsx:211` (explicit generation only) | — |
+| `onboarding_step_viewed` | `step: welcome\|business\|starting_point` | `screens/OnboardingScreen.tsx:90`; `screens/StartingPointScreen.tsx:54` | — |
+| `onboarding_completed` | `trade: TradeId` | `screens/OnboardingScreen.tsx:116` | — |
+| `onboarding_start_choice` | `choice: sample\|fresh` | `screens/StartingPointScreen.tsx:62` | — |
+| `sign_in` | `method: password\|apple\|google` | `screens/AuthScreen.tsx:122`, `:172`, `:181` | — |
+| `sign_up` | — | `screens/AuthScreen.tsx:130` | — |
+| `sign_up_confirmation_resent` | — | `screens/AuthScreen.tsx:155` | — |
+| `job_created` | `duplicated?: true`, `customerId?: string` (internal id), `first: bool` | `screens/AddJobScreen.tsx:400` | — |
+| `pricebook_entry_saved` | — | `screens/PricebookEntryScreen.tsx:171` | — |
+| `invoice_paid` | `amount: number` | `screens/InvoicesScreen.tsx:239` (per bulk-settled invoice), `:340`, `:365` (fully settled only) | — |
+| `bulk_invoices_marked_paid` | `count: number` | `screens/InvoicesScreen.tsx:241` | — |
+| `bulk_invoice_reminders` | `channel: email\|text`, `count: number` | `screens/InvoicesScreen.tsx:303` | — |
+| `payment_recorded` | `amount: number`, `method: PaymentMethod`, `balanceRemaining: number` | `screens/InvoicesScreen.tsx:335` (`method: other`, `balanceRemaining: 0`), `:359` | — |
+| `payment_voided` | `amount: number`, `method: PaymentMethod` | `screens/InvoicesScreen.tsx:407` | — |
+| `invoice_finalized` | `source: from_job` | `screens/CreateInvoiceFromJobScreen.tsx:226` | — |
+| `invoice_created` | variants: `{source: from_job, mode: create\|requestDeposit\|finalize}` · `{source: manual}` · `{source: auto_on_complete, usedTrackedTime: bool, autoEmailQueued: bool}` | `screens/CreateInvoiceFromJobScreen.tsx:245`; `screens/AddInvoiceScreen.tsx:109`; `utils/autoInvoice.ts:337` | — |
+| `ai_chat_sent` | `source: insight_prefill\|organic`, `provider: anthropic\|groq\|backend` | `screens/ChatScreen.tsx:166` (before send) | `N/AppStore.swift:8447` |
+| `review_request_sent` | `channel: sms\|email`, `source: notification\|job_detail` | `screens/ReviewRequestScreen.tsx:125`, `:139` | — |
+| `on_my_way_sent` | `{}` | `screens/TodayScreen.tsx:653`; `screens/JobDetailScreen.tsx:806` (only if the composer opened) | **missing (m6)** |
+| `appointment_confirm_sent` | `{}` | `screens/JobDetailScreen.tsx:806` | — |
+| `sample_job_opened` | — | `screens/TodayScreen.tsx:754` | `N/AppStore.swift:8316` |
+| `first_action_tapped` | `action: add_customer\|create_job` | `screens/TodayScreen.tsx:761`, `:766` | **missing (m6)** |
+| `estimate_follow_up_sent` | `channel: sms\|email`, `source: notification\|job_detail` | `screens/EstimateFollowUpScreen.tsx:90`, `:104` | — |
+| `trip_logged` | — | `screens/AddTripScreen.tsx:115` | — |
+| `estimate_follow_up_opened` | `source: job_detail\|notification` | `screens/JobDetailScreen.tsx:644`; `App.tsx:420` | — |
+| `job_status_changed` | `from: JobStatus`, `to: JobStatus` | `screens/JobDetailScreen.tsx:842` | — |
+| `time_tracking_started` | `jobId: string` (internal id) | `screens/JobDetailScreen.tsx:1036` | — |
+| `change_order_created` | `amount: number` | `screens/AddChangeOrderScreen.tsx:118` (new only) | — |
+| `customers_merged` | `jobs: number`, `invoices: number` | `screens/CustomerDetailScreen.tsx:419` | — |
+| `expense_logged` | `category: ExpenseCategoryId`, `linkedToJob: bool` | `components/JobProfitabilitySection.tsx:110`; `hooks/useMoneyData.ts:84` | — |
+| `subscription_paywall_shown` | `context: settings\|onboarding_gate` | `screens/PaywallScreen.tsx:59` | — |
+| `subscription_purchased` | — | `screens/PaywallScreen.tsx:90` | — |
+| `change_order_sent` | `amount: number`, `channel: text\|email` | `components/ChangeOrdersSection.tsx:125` | — |
+| `change_order_decided` | `decision: approved\|declined`, `channel: manual` | `components/ChangeOrdersSection.tsx:176` | — |
+| `setup_checklist_task_opened` | `task: notifications\|contact\|logo\|rate\|stripe` | `components/SetupChecklistCard.tsx:56`, `:78` | `N/AppStore.swift:8527` |
+| `setup_checklist_dismissed` | `doneCount: number` | `components/SetupChecklistCard.tsx:83` | `N/AppStore.swift:8294` (stringified) |
+| `insight_shown` | `kinds: InsightKind[]`, `ids: string[]` | `components/InsightsCard.tsx:139` | `N/AppStore.swift:8505` (comma-joined) |
+| `insight_tapped` | `kind: InsightKind` | `components/InsightsCard.tsx:146` | `N/AppStore.swift:8512` |
+| `insight_coach_opened` | `kind: InsightKind` | `components/InsightsCard.tsx:152` | `N/AppStore.swift:8516` |
+| `insight_reason_viewed` | `kind: InsightKind` | `components/InsightsCard.tsx:170` | `N/AppStore.swift:8520` |
+| `insight_snoozed` | `kind`, `insightId: string`, `days: number` | `components/InsightsCard.tsx:178` | `N/AppStore.swift:8353` (`days` stringified) |
+| `insight_dismissed` | `kind`, `insightId: string` | `components/InsightsCard.tsx:188` | `N/AppStore.swift:8353` |
+| `receipt_scanned` | variants: `{outcome: failed}` · `{outcome: filled\|empty, route: user_key\|backend}` | `components/money/AddExpenseModal.tsx:150`, `:158`, `:184` | — |
+| `tax_settings_saved` | `hasIncomeRate: bool`, `vehicleMethod: mileage\|actual\|unset` | `components/money/TaxSetAsideCard.tsx:61` | — |
+| `pull_to_refresh` | `screen: MoneyScreen\|JobsScreen` | `hooks/useRefresh.ts:17` | — |
+| `overdue_outreach_opened` | `daysPastDue: number` | `App.tsx:427` | — |
+| `appointment_confirm_opened` | `{}` | `App.tsx:434` | — |
+| `booking_request_opened` | `{}` | `App.tsx:466` | — |
+| `booking_update_opened` | `{}` | `App.tsx:476` | — |
+| `widget_deep_link_opened` | `type: job\|onmyway` | `App.tsx:503` | — |
+
+Enum definitions:
+- `TradeId` = plumbing, electrical, hvac, carpenter, bricklayer, plasterer, landscaping,
+  cleaning, painting, handyman, other.
+- `PaymentMethod` = stripe, cash, check, card, other (`types/models.ts:436`).
+- `JobStatus` = lead, estimate_sent, approved, scheduled, in_progress, complete,
+  invoiced, paid, declined (`types/models.ts:18-27`).
+- `ExpenseCategoryId` = materials, tools, fuel, labor, insurance, software, marketing,
+  other (`types/models.ts:44-45`).
+- `InsightKind` = labor_overrun, low_margin_estimate, uninvoiced_complete, due_soon,
+  open_slot, unscheduled_approved, maintenance_due, expense_anomaly
+  (`utils/todayInsights.ts:28`).
+
+Autocapture adds `$screen` (§9.3) and the SDK's `Application …` lifecycle events
+(installed, updated, opened, backgrounded; exact names are set by the pinned SDK).
+These are SDK-generated and outside the fixture.
+
+**Event-catalog fixture.** 11.08's catalog test and 11.07's allow-list read this exact
+JSON. Each event maps to a list of allowed property-shape variants.
+
+```json
+{
+  "catalogVersion": 1,
+  "enums": {
+    "TradeId": ["plumbing","electrical","hvac","carpenter","bricklayer","plasterer","landscaping","cleaning","painting","handyman","other"],
+    "PaymentMethod": ["stripe","cash","check","card","other"],
+    "JobStatus": ["lead","estimate_sent","approved","scheduled","in_progress","complete","invoiced","paid","declined"],
+    "ExpenseCategoryId": ["materials","tools","fuel","labor","insurance","software","marketing","other"],
+    "InsightKind": ["labor_overrun","low_margin_estimate","uninvoiced_complete","due_soon","open_slot","unscheduled_approved","maintenance_due","expense_anomaly"]
+  },
+  "events": {
+    "ai_chat_sent": [{"source": "insight_prefill|organic", "provider": "anthropic|groq|backend"}],
+    "appointment_confirm_opened": [{}],
+    "appointment_confirm_sent": [{}],
+    "booking_request_opened": [{}],
+    "booking_update_opened": [{}],
+    "bulk_invoice_reminders": [{"channel": "email|text", "count": "number"}],
+    "bulk_invoices_marked_paid": [{"count": "number"}],
+    "change_order_created": [{"amount": "number"}],
+    "change_order_decided": [{"decision": "approved|declined", "channel": "manual"}],
+    "change_order_sent": [{"amount": "number", "channel": "text|email"}],
+    "customer_created": [{"first": "bool"}],
+    "customers_merged": [{"jobs": "number", "invoices": "number"}],
+    "estimate_follow_up_opened": [{"source": "job_detail|notification"}],
+    "estimate_follow_up_sent": [{"channel": "sms|email", "source": "notification|job_detail"}],
+    "estimate_sent": [{}],
+    "expense_logged": [{"category": "enum:ExpenseCategoryId", "linkedToJob": "bool"}],
+    "first_action_tapped": [{"action": "add_customer|create_job"}],
+    "insight_coach_opened": [{"kind": "enum:InsightKind"}],
+    "insight_dismissed": [{"kind": "enum:InsightKind", "insightId": "string"}],
+    "insight_reason_viewed": [{"kind": "enum:InsightKind"}],
+    "insight_shown": [{"kinds": "enum[]:InsightKind", "ids": "string[]"}],
+    "insight_snoozed": [{"kind": "enum:InsightKind", "insightId": "string", "days": "number"}],
+    "insight_tapped": [{"kind": "enum:InsightKind"}],
+    "invoice_created": [
+      {"source": "from_job", "mode": "create|requestDeposit|finalize"},
+      {"source": "manual"},
+      {"source": "auto_on_complete", "usedTrackedTime": "bool", "autoEmailQueued": "bool"}
+    ],
+    "invoice_finalized": [{"source": "from_job"}],
+    "invoice_paid": [{"amount": "number"}],
+    "job_created": [{"duplicated?": "true", "customerId?": "string", "first": "bool"}],
+    "job_status_changed": [{"from": "enum:JobStatus", "to": "enum:JobStatus"}],
+    "on_my_way_sent": [{}],
+    "onboarding_completed": [{"trade": "enum:TradeId"}],
+    "onboarding_start_choice": [{"choice": "sample|fresh"}],
+    "onboarding_step_viewed": [{"step": "welcome|business|starting_point"}],
+    "overdue_outreach_opened": [{"daysPastDue": "number"}],
+    "payment_link_sent": [{"provider": "string", "deposit": "bool"}],
+    "payment_recorded": [{"amount": "number", "method": "enum:PaymentMethod", "balanceRemaining": "number"}],
+    "payment_voided": [{"amount": "number", "method": "enum:PaymentMethod"}],
+    "pricebook_entry_saved": [{}],
+    "pull_to_refresh": [{"screen": "MoneyScreen|JobsScreen"}],
+    "receipt_scanned": [{"outcome": "failed"}, {"outcome": "filled|empty", "route": "user_key|backend"}],
+    "review_request_sent": [{"channel": "sms|email", "source": "notification|job_detail"}],
+    "sample_job_opened": [{}],
+    "setup_checklist_dismissed": [{"doneCount": "number"}],
+    "setup_checklist_task_opened": [{"task": "notifications|contact|logo|rate|stripe"}],
+    "sign_in": [{"method": "password|apple|google"}],
+    "sign_up": [{}],
+    "sign_up_confirmation_resent": [{}],
+    "subscription_paywall_shown": [{"context": "settings|onboarding_gate"}],
+    "subscription_purchased": [{}],
+    "tax_settings_saved": [{"hasIncomeRate": "bool", "vehicleMethod": "mileage|actual|unset"}],
+    "time_tracking_started": [{"jobId": "string"}],
+    "trip_logged": [{}],
+    "widget_deep_link_opened": [{"type": "job|onmyway"}]
+  }
+}
+```
+
+Fixture grammar:
+- A property value is `bool`, `number`, `string`, `string[]`, the literal `true`, an
+  inline enum `a|b|c` (a single token is a fixed literal), `enum:<Name>` or
+  `enum[]:<Name>`.
+- A key ending in `?` is optional.
+- `[{}]` means no properties: RN sends `undefined` or `{}`, and the two are equivalent.
+- An event name missing from `events` is **dropped** by the transport. Debug builds
+  assert.
+- A property key missing from every variant of its event is **stripped**.
+- A value of the wrong type or outside its enum is **stripped** with a bounded
+  diagnostic; the event still sends. Rationale: a partial event beats a lost event, and
+  no unexpected data leaves the device.
+
+### 9.6 Native seam inventory and deviations (`N/NativeAnalytics.swift`)
+
+Today's seam is `protocol NativeAnalytics { func track(_ event: String, _ properties: [String: String]) }`
+with the no-op `NativeNoOpAnalytics`. It is injected into `AppStore` at
+`N/AppStore.swift:385` and stored at line 260.
+
+| Call site | Event | Properties sent | Deviation to fix in 11.07/11.08 |
+|---|---|---|---|
+| `N/AppStore.swift:8294` | `setup_checklist_dismissed` | `doneCount: String` | Must be a number |
+| `N/AppStore.swift:8316` | `sample_job_opened` | none | — |
+| `N/AppStore.swift:8353` | `insight_dismissed` / `insight_snoozed` | `kind`, `insightId`, `days: String` | `days` must be a number |
+| `N/AppStore.swift:8447` | `ai_chat_sent` | `source`, `provider` (`coachProviderSummary.analyticsName`) | Check that the provider values are exactly `anthropic\|groq\|backend` |
+| `N/AppStore.swift:8505` | `insight_shown` | `kinds`, `ids` comma-joined | Must be string arrays |
+| `N/AppStore.swift:8512` / `:8516` / `:8520` | `insight_tapped` / `insight_coach_opened` / `insight_reason_viewed` | `kind` | — |
+| `N/AppStore.swift:8527` | `setup_checklist_task_opened` | `task` | — |
+| (missing) | `first_action_tapped`, `on_my_way_sent` | — | Parity matrix m6; 11.08 adds them |
+
+**Chosen (C16, ruling P6):** 11.07 widens the seam **in place** to
+`[String: NativeAnalyticsValue]`, where
+`enum NativeAnalyticsValue { case bool(Bool), number(Double), string(String), strings([String]) }`
+and the enum conforms to the literal protocols. Existing call sites keep compiling
+through a `[String: String]` convenience overload. 11.08 migrates them to typed values.
+The protocol also gains `identify(_ userID: String)`, `reset()` and `screen(_ name: String)`.
+
+---
+
+## 10. Redaction contract (P4, R1–R3)
+
+### 10.1 Allow/deny table
+
+This applies to analytics properties, Sentry events, breadcrumbs, extras, tags and
+contexts, logs, and the widget snapshot.
+
+| Data | Analytics | Sentry (event/breadcrumb/extra) | Widget snapshot | Source |
+|---|---|---|---|---|
+| `providerKey` (Stripe Connect backend API token) | **deny** | **deny** | **deny** | `types/models.ts:961`; `utils/storage/keys.ts:29` |
+| `providerKeys` (public payment handles) | **deny** | **deny** | **deny** | `types/models.ts:971` |
+| `anthropicKey`, `groqKey`, legacy `geminiKey` | **deny** | **deny** | **deny** | `types/models.ts:1036-1037`; `utils/storage/keys.ts:29` |
+| RevenueCat keys (`rcAppleApiKey`, `rcGoogleApiKey`, `TradeReadyRevenueCatAPIKey`) | **deny** | **deny** | **deny** | `app.json` extra; `native/Info.plist:23` |
+| Stripe secret or publishable keys, payment-link URLs with tokens | **deny** | **deny** | **deny** | |
+| Supabase access, refresh or session tokens; `Authorization` headers; `BACKEND_API_TOKEN`; portal and booking tokens | **deny** | **deny** | **deny** | |
+| Customer PII: names, emails, phones, addresses, notes, message bodies, review text | **deny** | **deny** | allow **only** `nextJob.customerName`, `nextJob.address`, `timer.customerName` | `utils/widgetBridge.ts` projection |
+| Document bytes: invoice/estimate PDFs, receipt images, job photos, data URIs, CSV/ZIP exports; request/response bodies | **deny** | **deny** | **deny** | |
+| Money amounts (`amount`, `balanceRemaining`) | allow (catalog only) | deny in extras | `outstandingTotal` only | §9.5 |
+| Counts, enums, booleans in the catalog | allow | allow as tags | — | §9.5 |
+| Internal record ids | allow **only** where the catalog names them (`customerId`, `jobId`, `insightId`, `ids`) | allow in extras when allow-listed (`jobId`, `invoiceId`) | `nextJob.id`, `timer.jobId` | |
+| Supabase user id | `identify` only | `user.id` only | **deny** (the `ownerTag` hash only) | §9.4 |
+| Email address of the signed-in user | **deny** | **deny** (no `user.email`, no `sendDefaultPii`) | **deny** | |
+
+### 10.2 Sentry configuration (chosen; RN `App.tsx:103-114`)
+
+- Enabled iff `!DEBUG`, the DSN (`TradeReadySentryDSN` from `TRADEREADY_SENTRY_DSN`;
+  RN value at `app.json:100`, not copied) is non-empty, and the DSN does not start with
+  `PLACEHOLDER`.
+- `tracesSampleRate = 0.2` and `enableAutoSessionTracking = true`. These are separate
+  settings; the second feeds the Phase 12 crash-free-sessions metric.
+- `environment = BuildEnvironment.environment.rawValue`.
+- `releaseName = <bundle id>@<CFBundleShortVersionString>+<CFBundleVersion>`.
+- dSYM upload configured for org `tradeready-3r` (RN plugin at `app.json:56`). The
+  project slug is chosen in 11.09; the RN slug `react-native` is not reused for native.
+- `sendDefaultPii = false`, `attachScreenshot = false`, `attachViewHierarchy = false`.
+- Session replay sample rates are 0.
+- `enableCaptureFailedRequests = false`, because failed-request events carry URLs that
+  can contain portal/booking tokens.
+- `beforeSend` and `beforeBreadcrumb` run the Foundation-only redactor
+  (`NativeErrorRedaction`, 11.09):
+  - drop request bodies;
+  - strip URL query strings and token-bearing path segments;
+  - drop any key in the deny table, matched case-insensitively and in nested dictionaries;
+  - scrub email, phone and bearer-token patterns in strings;
+  - cap each string at 1 KB.
+- User = `{id: supabaseUserID}` only (`setUser(null)` on reset).
+
+### 10.3 `reportError` parity (R3; RN `utils/analytics.ts:41-78`)
+
+- If the value is an `Error`, capture it as is. Otherwise wrap it as
+  `Error(describeNonError(value))`:
+  - if `message` is a non-empty string: `"[<code>] <message>"` when `code` is a string or
+    number, else `<message>`;
+  - otherwise `JSON.stringify(value)`, else `String(value)`.
+- Context entries become extras. **Native narrowing (chosen):** only the allow-listed
+  extra keys pass: `context`, `operation`, `collection`, `status`, `code`, `count`,
+  `jobId`, `invoiceId`, `componentStack`. Other keys are dropped.
+- `rawError` extra: RN attaches the whole original object, whose `details`/`hint` may
+  contain row data. Native attaches only `{code, message, hint}`, each redacted and capped.
+- The ErrorBoundary analog attaches the SwiftUI context the same way (RN
+  `App.tsx:652` `componentStack`).
+- `Sentry.wrap(AppRoot)` has no native equivalent. SDK start happens in
+  `TradeReadyNativeApp.init`.
+- A reporting failure never blocks or fails a save.
+
+---
+
+## 11. Task 11.15 — AI Assistant advanced key entry
+
+RN behavior (`screens/SettingsAIScreen.tsx`, 65 lines):
+- Hint: "AI features work automatically via our cloud service. Toggle Advanced to use
+  your own API keys instead."
+- An "Advanced" switch (a11y "Advanced AI settings") reveals two `secureTextEntry` fields:
+  - Groq: placeholder `gsk_...`, a11y "Groq API key";
+  - Anthropic: placeholder `sk-ant-...`, a11y "Anthropic API key";
+  - under each: "Stored only on your device. Never share this key."
+- Saved through `useSettingsDraft`.
+- RN storage: `SECURE_FIELDS = ["providerKey","anthropicKey","groqKey"]` in
+  expo-secure-store (`utils/storage/keys.ts:29`). The legacy `geminiKey` is migrated to
+  `groqKey` (`utils/storage/settings.ts:33-41`).
+
+Native contract (chosen):
+- Store the keys with `NativeKeychainSecureSettingsStore`
+  (`N/LegacyMigrationCoordinator.swift:273`). Its backend is `NativeKeychainBackend`
+  (service `com.gettradereadyapp.tradeready.native`,
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`), with accounts `anthropicKey` and
+  `groqKey`.
+  - Save = `backend.upsert(Data(utf8), key:)`.
+  - Clear = `backend.remove(key:)`. An empty trimmed field counts as a clear.
+- The coach already reads these accounts: `advisoryAnthropicKey`/`advisoryGroqKey`
+  (`N/AppStore.swift:7789-7806`), with precedence anthropic → groq → backend in
+  `N/NativeCoachTransport.swift:145`. After save or clear, 11.15 refreshes
+  `coachProviderSummary` (`N/AppStore.swift:8457`).
+- Owner wipe already exists: `clearAccountValues()`
+  (`N/LegacyMigrationCoordinator.swift:367`) removes providerKey, anthropicKey, groqKey,
+  geminiKey and the session on sign-out and deletion.
+- `CanonicalSnapshot.secureSettingsKeys` (`N/Domain/CanonicalSnapshot.swift:181`)
+  keeps the keys out of the canonical file.
+- Redaction rule:
+  - key text never enters `UserDefaults`, the App Group, the canonical snapshot, logs,
+    analytics or Sentry;
+  - the view shows a masked saved state (e.g. `sk-ant-…` plus the last 4 characters, or
+    only "Saved");
+  - `ai_chat_sent.provider` carries only the provider name;
+  - 11.15's redaction test feeds a sample key through the analytics and Sentry redactors
+    and asserts it is absent.
+
+---
+
+## 12. Accessibility baseline (H1)
+
+Method: grep counts per view file under `N/` for the SwiftUI modifiers listed. A count of
+0 in every column omits the file. These counts are a baseline for 11.10a; they are not a
+conformance claim.
+
+Columns: labels = `accessibilityLabel`; hints = `accessibilityHint`; traits =
+`accessibilityAddTraits`; hidden = `accessibilityHidden`; fixed H/W = `.frame(height:)`
+/ `.frame(width:)` with literals; `lineLimit(1)`; anim = `withAnimation`/`.animation`;
+scale = `minimumScaleFactor`.
+
+| File | labels | hints | traits | hidden | fixed H | fixed W | lineLimit(1) | anim | scale |
+|---|---|---|---|---|---|---|---|---|---|
+| `N/CoachView.swift` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
+| `N/Components.swift` | 2 | 0 | 0 | 2 | 1 | 1 | 1 | 0 | 1 |
+| `N/CustomersView.swift` | 5 | 1 | 0 | 1 | 1 | 1 | 0 | 0 | 0 |
+| `N/InvoicesView.swift` | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `N/JobsView.swift` | 1 | 0 | 1 | 0 | 0 | 0 | 3 | 0 | 2 |
+| `N/MoneyView.swift` | 1 | 0 | 1 | 1 | 1 | 1 | 3 | 0 | 0 |
+| `N/NativeAuthView.swift` | 1 | 0 | 0 | 0 | 5 | 0 | 0 | 0 | 0 |
+| `N/NativeBookingRequestsView.swift` | 1 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| `N/NativeBookingSettingsView.swift` | 6 | 7 | 0 | 2 | 1 | 1 | 1 | 0 | 0 |
+| `N/NativeCalendarView.swift` | 17 | 6 | 0 | 1 | 1 | 1 | 0 | 0 | 0 |
+| `N/NativeChangeOrdersView.swift` | 3 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
+| `N/NativeCoachComponents.swift` | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeCustomerPortalView.swift` | 6 | 7 | 0 | 2 | 1 | 1 | 1 | 0 | 0 |
+| `N/NativeEstimateFollowUpView.swift` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeEstimateReview.swift` | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeExpenseEditor.swift` | 3 | 0 | 1 | 1 | 1 | 0 | 1 | 0 | 0 |
+| `N/NativeExportDataView.swift` | 2 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeGlobalSearch.swift` | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeImportView.swift` | 2 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeInsightsCard.swift` | 3 | 0 | 1 | 2 | 0 | 1 | 0 | 0 | 0 |
+| `N/NativeInteractionState.swift` | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeInvoiceOutreachView.swift` | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
+| `N/NativeJobPhotosView.swift` | 3 | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 |
+| `N/NativeJobProfitabilityView.swift` | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeMessageComposer.swift` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeMileageLogView.swift` | 2 | 0 | 1 | 2 | 0 | 0 | 2 | 0 | 0 |
+| `N/NativeMoneyCards.swift` | 2 | 0 | 0 | 1 | 18 | 18 | 4 | 1 | 2 |
+| `N/NativeOnboardingView.swift` | 0 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| `N/NativePasswordRecoveryView.swift` | 2 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 |
+| `N/NativePaywallView.swift` | 1 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | 0 |
+| `N/NativePricebookEntryView.swift` | 2 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativePricebookView.swift` | 2 | 0 | 0 | 1 | 0 | 0 | 2 | 0 | 0 |
+| `N/NativeReviewRequestView.swift` | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeRouteView.swift` | 2 | 0 | 0 | 0 | 3 | 2 | 1 | 0 | 0 |
+| `N/NativeScheduleEditorView.swift` | 9 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeScheduleSettingsView.swift` | 13 | 7 | 0 | 0 | 1 | 0 | 0 | 0 | 0 |
+| `N/NativeSetupChecklistCard.swift` | 2 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeTemplatePickerView.swift` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeTimeTrackingView.swift` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/NativeTodayComponents.swift` | 12 | 0 | 1 | 0 | 4 | 6 | 4 | 0 | 0 |
+| `N/NativeTripEditor.swift` | 2 | 0 | 1 | 0 | 0 | 0 | 1 | 0 | 0 |
+| `N/SettingsView.swift` | 2 | 0 | 0 | 0 | 4 | 7 | 0 | 0 | 0 |
+| `N/TodayView.swift` | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `N/Domain/NativeMileageLog.swift` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**Dynamic Type:**
+- There is no `@ScaledMetric` or `dynamicTypeSize` anywhere in `N/`.
+- Fixed `.font(.system(size:))` uses: `N/Components.swift` 1,
+  `N/NativeBookingRequestsView.swift` 1, `N/NativePaywallView.swift` 2,
+  `N/NativeRouteView.swift` 1, `N/NativeMoneyCards.swift` 2,
+  `N/NativeOnboardingView.swift` 1, `N/NativePasswordRecoveryView.swift` 1,
+  `N/SettingsView.swift` 1. None of these scale.
+- Heaviest fixed-frame file: `N/NativeMoneyCards.swift` (18 heights, 18 widths).
+- AX5 truncation risk: the `lineLimit(1)` sites in `N/NativeMoneyCards.swift`,
+  `N/NativeTodayComponents.swift`, `N/JobsView.swift` and `N/MoneyView.swift`.
+
+**Reduce Motion:** `accessibilityReduceMotion` is never read. Two animations are
+unconditional:
+- `N/CoachView.swift:131` (`withAnimation` scroll-to);
+- `N/NativeMoneyCards.swift:133` (`.snappy` expand).
+
+**Unlabeled icon-only buttons:** VoiceOver reads the SF Symbol name for these.
+- `N/InvoicesView.swift:134` (plus)
+- `N/JobsView.swift:91` (plus)
+- `N/NativeRecurringInvoicesView.swift:61` (plus)
+- `N/CustomersView.swift:141-144` (plus)
+- `N/NativeBookingRequestsView.swift:350-357` (contact icon)
+- `N/NativeRouteView.swift:52-57` (sort `Menu`, `arrow.up.arrow.down`)
+
+The `N/TodayView.swift` calendar, search and settings buttons are labelled.
+
+**Contrast** (WCAG relative luminance; colors from `N/Models.swift:461-467`):
+
+| Pair | Ratio | Result |
+|---|---|---|
+| `tradeReady` (0.114, 0.361, 0.620) on white | 6.82 | pass AA |
+| `tradeReady` on `tradeCanvas` light | 6.24 | pass AA |
+| `tradeReady` on `tradeCanvas` **dark** (0.063, 0.094, 0.149) | **2.61** | **fail** (text and 3:1 UI). `tradeReady` has no dark variant and is the app-wide `.tint` (`N/TradeReadyNativeApp.swift`) |
+| `tradeInk` on `tradeCanvas` light | 14.64 | pass. Only used as a gradient or a 6% overlay |
+| White on `tradeReady` (filled buttons) | 6.82 | pass AA |
+| RN widget: white at 0.55 opacity on navy `#0c335e` (10 pt caption) | 4.94 | pass AA, barely. The native widget must not go lower |
+| RN widget: white at 0.9 / 0.75 / 0.7 / 0.6 on navy | 10.58 / 7.82 / 7.02 / 5.58 | pass |
+| Navy on white (widget button) | 12.72 | pass |
+
+**Release-blocking candidates for 11.10a:**
+1. `tradeReady` tint on the dark canvas (2.61).
+2. The six unlabeled icon buttons.
+3. Reduce Motion ignored in two places.
+4. Fixed font sizes and fixed frames that do not scale (`N/NativeMoneyCards.swift` first).
+
+Keyboard and switch-control navigation are unaudited; they are 11.11's hardware-keyboard
+rows and Phase 12 device rows.
+
+---
+
+## 13. Device matrix (H2–H4; roadmap verification deferral 2026-09-16)
+
+| Row | Owner | Notes |
+|---|---|---|
+| Host suites (`sh native/run-all-domain-tests.sh`, `TZ=America/Phoenix`) | **11.13 / 11.14** | Includes every new Phase 11 runner (ruling P9) |
+| Unsigned generic Release build (`xcodebuild … CODE_SIGNING_ALLOWED=NO`) with the widget extension embedded | **11.13 / 11.14** | Proves the target, membership and SDK link compile |
+| Signed local Release build | **11.14** | The user approved signed local builds (memory "Signed local builds OK"). Archive and upload still need approval |
+| Simulator smoke (optional): widget gallery, Siri shortcut listing, `xcrun simctl openurl` deep links | 11.13 (optional) | Not a device claim |
+| iPhone SE-class, iOS 17.x (floor) | **Phase 12** | Small screen, AX5 Dynamic Type, iOS 17 interactive widget |
+| Standard iPhone, iOS 18.x | **Phase 12** | Widgets, Siri, Control Center |
+| iPhone 16 Pro Max, iOS 27.0 (existing row in `docs/native-phase-3-device-matrix.md`) | **Phase 12** | Launch time and soak baselines from 11.12 |
+| iPad 11-inch and iPad mini, iPadOS 27 | **Phase 12** | Split View, Slide Over, Stage Manager, rotation, hardware keyboard (11.11 rows) |
+| VoiceOver, Switch Control, AX5 Dynamic Type, Reduce Motion, Increase Contrast, dark mode | **Phase 12** | 11.10a/11.10b produce the runsheet rows |
+| Home-screen widgets (Next Job small/medium, Job Timer), Siri phrases, on-my-way cold/warm | **Phase 12** | 11.02–11.06 produce the rows |
+| Sentry/PostHog live delivery (Release, staging key absent → silent) | **Phase 12** | 11.07/11.09 rows |
+| Poor network, memory and battery soak | **Phase 12** | 11.12 host tests plus a soak protocol |
+
+11.14 collects these rows in `docs/native-phase-11-device-runsheet.md`, a new file
+created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in Phase 11.
+
+---
+
+## 14. Parity-matrix source map (per row)
+
+| Parity row (`docs/native-parity-matrix.md`) | RN sources | Native sources today | Owning task(s) |
+|---|---|---|---|
+| WidgetKit | `targets/widget/Widgets.swift`, `targets/widget/JobTimer.swift`, `modules/widget-bridge/ios/WidgetBridgeModule.swift`, `utils/widgetBridge.ts`, `__tests__/widgetBridge.test.js` | `N/NativeAppGroupInbox.swift` (scrubber only) | 11.01 (target, snapshot, writer), 11.02 (Next Job), 11.03 (Job Timer), 11.05 (owner/stale) |
+| App Intents/Siri | `targets/widget/_shared/SiriIntents.swift`, `targets/widget/JobTimer.swift` (timer intents), `utils/widgetActions.ts`, `__tests__/widgetActions.test.js` | `N/NativeWidgetActionReplay.swift` | 11.04 (all intent types), 11.05 (owner gate, quarantine), 11.01 (membership) |
+| Deep links | `utils/deepLinks.ts`, `App.tsx:491-597`, `__tests__/deepLinks.test.js` | `N/NativeDeepLinkParser.swift`, `N/NativeAppGroupInbox.swift`, `N/AppStore.swift:3593` | 11.06 (plus P8) |
+| Analytics | `utils/analytics.ts`, `App.tsx` PostHog provider, every `track(` site (§9.5), `context/AuthContext.tsx`, `__tests__/analytics.test.ts` | `N/NativeAnalytics.swift`, `N/AppStore.swift` sites (§9.6) | 11.07 (transport, privacy), 11.08 (events, identity) |
+| Crash reporting | `utils/analytics.ts#reportError`, `App.tsx:103-114`, `App.tsx:652`, `app.json:56` | none | 11.09 |
+| Accessibility | `components/`, `screens/` labels | §12 inventory | 11.10a, 11.11, 11.10b |
+| Release migration | — (Phase 12) | — | Phase 12 (11.14 hands over runsheets) |
+| Background refresh (widget mirror + replay) | `utils/backgroundRefresh.ts:106` | `N/AppStore.swift:6036-6064` | 11.01 (mirror on the seam), 11.12 (poor-network) |
+| AsyncStorage upgrade (widget/Siri handoff) | `utils/widgetActions.ts` | `N/NativeWidgetActionReplay.swift` | 11.05. Untagged legacy actions are dropped per §4.5; update the row's wording at closeout |
+| Settings › AI Assistant | `screens/SettingsAIScreen.tsx`, `utils/storage/keys.ts` | `N/LegacyMigrationCoordinator.swift`, `N/AppStore.swift:7789` | 11.15 |
+| Today and planning / Coach (event sources) | `screens/TodayScreen.tsx`, `components/InsightsCard.tsx`, `components/SetupChecklistCard.tsx`, `screens/ChatScreen.tsx` | `N/AppStore.swift:8294-8527` | 11.08 (m6 gaps, type widening) |
+| Privacy manifests (roadmap Stage C) | — | none | 11.01 (extension), 11.09 (app) |
+
+---
+
+## 15. Interface handoff per task
+
+- **11.01:**
+  - owns §2 and §3.1–3.2: the schema, F1–F6 decode tests, the writer, `ownerTag`, and
+    the seam `(canonical, output)` overload (**Own-list addition**:
+    `N/NativeDerivedStatePublisher.swift` plus a narrow binding accessor in `N/AppStore.swift`);
+  - the extension manifest (§8);
+  - the P3 exception sets.
+- **11.02:** §3.3 stale state and boundary tests, the empty state, the `widgetURL`
+  grammar (§6.1), and the timeline entry at `updatedAt + 86400`.
+- **11.03:** §3.3 Timer rules. Uses 11.04's timer intents and defines no intents of its own.
+- **11.04:** §4.1–4.5 writer rules (lock, 512 cap, duplicate handling, never overwrite a
+  malformed queue, owner stamp), §5 all ten intents and phrases, and the OnMyWay in-app
+  routing.
+- **11.05:** replay owner gate (§4.5), quarantine policy (C8), stale fixtures (§3.3), and
+  cross-sign-in fixtures.
+- **11.06:** §6 gate order, parking, the archived and done-status rules, and P8.
+- **11.07:** §9.2 gating and options, §9.5 allow-list enforcement, and §9.6 seam
+  widening in place. SDK pin re-check (§7).
+- **11.08:** §9.3 screen map, §9.4 identity lifecycle, §9.5 parity including the m6 gaps.
+- **11.09:** §10.2–10.3 Sentry config, redactor and `reportError`; the app manifest (§8).
+- **11.15:** §11.
+- **11.10a/11.11/11.12/11.10b:** §12 baseline, §13 rows.
+- **11.13/11.14:** §13 Phase 11 rows, the runsheet file, and the parity-row updates from §14.
+
+---
+
+## 16. Verification recorded for this task
+
+| Command | Result |
+|---|---|
+| `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/widgetBridge.test.js __tests__/widgetActions.test.js __tests__/deepLinks.test.js __tests__/analytics.test.ts` | 4 suites and 123 tests passed. The fixture sources are green |
+| Scratchpad-only `swiftc` decode of F1–F6 against a verbatim copy of `BridgeSnapshot` from `targets/widget/Widgets.swift:13-35` (nothing written to the repo) | F1–F5 decode (F5 with `outstandingTotal = nil`); F6 is rejected, as expected |
+| `git ls-remote --tags` plus the GitHub releases API for `getsentry/sentry-cocoa` and `PostHog/posthog-ios` | Latest stable: 9.29.0 (2026-09-17) and 3.81.0 (2026-09-22). PrivacyInfo files read at those tags |
+| `grep -rn "track(" App.tsx screens components hooks utils context` | 73 call sites and 52 distinct events, all in §9.5 |
+| `sh native/run-doc-reference-check.sh` | See the plan execution log (§7 of the plan) |

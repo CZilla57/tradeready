@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** Ready for contract characterization; no implementation tasks completed.
+**Status:** 11.00 contract frozen (2026-09-23); implementation tasks 11.01–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -764,7 +764,7 @@ invoke any App Store Connect or deploy command to validate a build.
 
 ## 6. Initial execution ledger
 
-All tasks **11.00–11.14 are pending**. The source review used to write this plan is
+11.00 is done (see §7); tasks **11.01–11.15 are pending**. The source review used to write this plan is
 not test execution or an implementation completion. When work starts, maintain one
 row per task: status, owner/session, dependency evidence, files, commands, actual
 results, blockers, and handoff. Separate **implementation blocked** from **code
@@ -772,7 +772,7 @@ complete / Phase 12 evidence deferred**.
 
 | Task | Requirement IDs | Status | Depends on | Deliverable |
 |---|---|---|---|---|
-| 11.00 | all | Pending | — | Contract decisions + event catalog + intent inventory + baselines |
+| 11.00 | all | Done (contract frozen 2026-09-23; C8 → 11.05, C11/P8 → 11.06 named blockers) | — | Contract decisions + event catalog + intent inventory + baselines — [contract](native-phase-11-platform-hardening-contract-decisions.md) |
 | 11.01 | W1, M1 | Pending | 11.00, 10.01, 10.09 | Widget target + snapshot contract + extension manifest |
 | 11.02 | W2 | Pending | 11.01 | Next Job widget |
 | 11.03 | W3 | Pending | 11.01, 11.04 | Job Timer widget |
@@ -802,3 +802,87 @@ Exit criteria traceability (roadmap Phase 11):
   executed in Phase 12.
 - Roadmap Stage C "privacy manifests" prerequisite — 11.01 (extension) and 11.09
   (app), verified in Phase 12.01.
+
+## 7. Execution log
+
+### 11.00 — Freeze contracts and baselines (2026-09-23)
+
+**Status:** Done. The contract is frozen; this was characterization only (no Swift, no
+tests, no project or RN edits). Two items are named blockers with owners: C8 (replay
+wedge on a malformed or duplicate queue → 11.05) and C11/P8 (`est_` archived dead tap →
+11.06).
+
+**Files:**
+- `docs/native-phase-11-platform-hardening-contract-decisions.md` (new, created by 11.00);
+- this plan: line-5 status, the §6 row, and this §7.
+
+**Interface handoff** (contract §15 has the full list):
+- **11.01:**
+  - schema and fixtures F1–F6 (§2.4);
+  - the writer rules, including explicit `null`s, `address` always a string,
+    `outstandingTotal` = `FinancialDecimal.cents` of the 10.01 value, and `.sortedKeys`;
+  - `ownerTag`;
+  - write triggers (§3.1).
+  - **Own-list addition:** a `(canonical, output)` observer overload in
+    `N/NativeDerivedStatePublisher.swift` plus a narrow binding accessor in
+    `N/AppStore.swift` (§3.2).
+  - The extension manifest (§8) and the P3 exception sets (§5.4).
+- **11.02 / 11.05:** stale window **86,400 s**. Stale iff `age > 86400`, a negative age,
+  or unparseable; exactly 86,400 s is fresh. Stale UI and intent behavior are in §3.3.
+- **11.04:**
+  - writer rules (§4.3): lock; refuse at 512; exact duplicates are idempotent and
+    differing duplicates fail; never overwrite a malformed queue;
+  - owner stamp (§4.5);
+  - ten intents and phrases (§5), with a single 17.0 floor;
+  - OnMyWay routes in-process, never auto-sent (§5.1).
+- **11.05:** drop actions whose `ownerTag` is missing or mismatched; quarantine policy
+  for C8 (§4.6).
+- **11.06:** gate order parse → auth → exact owner → exists and not archived. `onmyway`
+  also refuses done statuses. Parking across the gate. Close the `handle(url:)` and
+  pending-consumer gaps. Decide P8 (§6).
+- **11.07:**
+  - Release + key + non-`PLACEHOLDER` gate (a deviation: RN had no dev gate for PostHog);
+  - SDK options (§9.2);
+  - allow-list enforcement from the §9.5 JSON fixture;
+  - widen the seam in place to JSON scalars and string arrays, and add
+    identify/reset/screen (§9.6);
+  - re-check the PostHog pin.
+- **11.08:** 52 events / 73 RN sites (§9.5); identity lifecycle, including reset on
+  account switch (§9.4); the `$screen` route-name map (§9.3); m6 gaps
+  (`first_action_tapped`, `on_my_way_sent`) and the stringified properties.
+- **11.09:** Sentry 9.29.0 config (§10.2): 0.2 traces, auto sessions,
+  `sendDefaultPii = false`, failed-request capture off, redactor hooks. `reportError`
+  parity with allow-listed extras and a reduced `rawError` (§10.3). The app manifest (§8).
+- **11.15:** Keychain accounts `anthropicKey`/`groqKey` via
+  `NativeKeychainSecureSettingsStore`; masked display; the redaction test (§11).
+- **11.10a/11.11/11.12/11.10b:** a11y baseline and release-blocking candidates (§12):
+  - `tradeReady` on the dark canvas at 2.61;
+  - six unlabeled icon buttons;
+  - Reduce Motion ignored in two places;
+  - no scaled metrics.
+  Device rows are in §13.
+- **11.13/11.14:** Phase 11 rows (host, unsigned build, signed local build, optional
+  simulator). Phase 12 owns every physical row (§13).
+
+**Commands and results:**
+- `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/widgetBridge.test.js __tests__/widgetActions.test.js __tests__/deepLinks.test.js __tests__/analytics.test.ts`
+  → 4 suites and 123 tests passed.
+- Scratchpad-only `swiftc` decode of F1–F6 against a verbatim copy of RN
+  `BridgeSnapshot` → F1–F5 decode, F6 rejected, as expected. Nothing was added to the repo.
+- `git ls-remote --tags` plus the GitHub releases API → Sentry Cocoa 9.29.0 and PostHog
+  iOS 3.81.0 are the latest stable. PrivacyInfo was read at the tags.
+- Node check: the §9.5 fixture has 52 events, matching the 52 distinct RN `track(`
+  names exactly, and every event has a catalog table row.
+- `sh native/run-doc-reference-check.sh` → 1299 path references checked: 0 missing, 50 planned.
+
+**Deviations and blockers:**
+- Native analytics Debug gate (RN sent from dev).
+- `onmyway` refuses done statuses.
+- Untagged (RN-written) queued actions are dropped by replay (no current users).
+- Writers refuse at 512 and never overwrite a malformed queue (RN JobTimer overwrote).
+- Blocked: C8 (11.05) and C11/P8 (11.06).
+- Concern: the PostHog 3.81.0 pin was one day old (11.07 re-checks).
+
+**Next ready:** 11.01, since its dependencies are satisfied: 11.00 plus 10.01 and 10.09
+from Phase 10. 11.07 and 11.10a are also unblocked by 11.00, but the SDD serial order
+runs 11.01 next.
