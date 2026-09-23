@@ -904,7 +904,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.04 | D1, D2, D3, D6 | **Code complete** | 10.00 | NativeTodayBriefing |
 | 10.05 | N1 | **Code complete** | 10.00 | Categories + permission prompt + settings |
 | 10.06 | N2 | **Code complete** | 10.05 | Due-date/auto-outreach parity |
-| 10.07 | N3, N4 | Pending | 10.05 (+10.06 serialization only) | Appointment + review parity |
+| 10.07 | N3, N4 | **Code complete** | 10.05 (+10.06 serialization only) | Appointment + review parity |
 | 10.08 | N5, N6, B2 | Pending | 10.05-10.07 | Unified reconciliation + routing |
 | 10.09 | B1, B2 | Pending | 10.01, 10.08 | Post-sync derived-state seam |
 | 10.10 | C1, C2, C3, C4 | **Code complete** | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
@@ -1365,6 +1365,90 @@ Exit criteria traceability (roadmap Phase 10):
 - Next-ready: **10.07** (appointment/review parity), **10.08** (unified
   reconciliation + routing, now has 10.06's confirmed-clean `inv_`/`rinv_`
   selectors to reconcile against).
+
+### 10.07 — Appointment and review-request parity
+
+- Status: **Code complete / Phase 12 evidence deferred (device delivery).**
+  Audit-and-close-gaps task. The `appt_` selector
+  (`N/NativeAppointmentNotifications.swift`) and the `review_` pure policy
+  (`N/NativeReviewRequests.swift` + `N/NativeReviewRequestStore.swift`) were
+  already at parity with the RN fixtures — no divergence there. The audit did
+  find and fix one real bug in the `review_` **rebuild wiring**
+  (`N/AppStore.swift#reviewRequestNotifications`): the sweep's rebuild
+  selector read `record.scheduledAt` with a plain `ISO8601DateFormatter()`,
+  which cannot parse the fractional-seconds format every writer
+  (`armReviewRequestIfEligible`, `markReviewRequestSent`) actually produces —
+  every pending record was silently dropped from the rebuilt plan on every
+  sweep, i.e. the exact N4/B2 failure mode this task exists to guard against
+  was live. Fixed by setting `formatter.formatOptions = [.withInternetDateTime,
+  .withFractionalSeconds]` to match the writers.
+- Audit result (brief item 1, appointment): active-status set
+  (`approved`/`scheduled`/`in_progress`), contact requirement
+  (phone-preferred/email-fallback/none, whitespace-only treated as absent),
+  day-before 5pm local fire date (including an explicit DST spring-forward
+  and fall-back case, `America/Los_Angeles` 2027-03-14/2027-11-07), and
+  stable soonest-first ordering (equal fire dates preserve input order) were
+  all already correct in `NativeAppointmentNotifications` — no divergence.
+  Tap-never-auto-sends is `NativeAppointmentConfirmationReviewView`
+  (pre-existing): an editable `TextEditor` gated behind an explicit "Continue
+  to Messages/Mail" button that opens the system composer; nothing sends
+  without that composer's own Send action.
+- Audit result (brief item 2, review): transition-into-`complete` one-shot
+  gating, reachable-contact requirement, no-existing-record guard,
+  `max(1, delayHours || 3)` delay fallback, live-customer-preferred draft
+  with saved-record fallback, and `sent`-cancel-non-blocking were all already
+  correct in `NativeReviewRequests` + `AppStore.armReviewRequestIfEligible` /
+  `markReviewRequestSent`. The sweep rebuild (brief's "most important item")
+  had the formatter bug above; fixed.
+- Parity test (brief item 3, B2 dependency preview): added to
+  `native/ReviewRequestTests/main.swift` — two `NativeReviewRequestStore`
+  instances against the same file URL (a simulated relaunch) resolve the
+  identical record and therefore the identical `review_` fire instant; a
+  simulated multi-point sweep across the delay window re-derives the same
+  fire date every time. Added to `native/StoreIntegrationTests/main.swift` —
+  a full `AppStore` completes a job (arming the one-shot), then calls
+  `reviewRequestNotifications(now:)` at three points inside the 2h delay
+  window (this IS what the coordinator's cancel-all-then-rebuild sweep
+  calls); before the formatter fix this reproduced the bug (empty plan at
+  every sweep point); after the fix all three sweeps return the identical
+  `review_<jobId>` identifier and fire date, a sweep after the fire instant
+  drops it (no late re-nag), a second `AppStore` instance against the same
+  file URL resolves the same completed job (simulated relaunch), and marking
+  the request sent removes it from every subsequent sweep for good.
+- Tap routing (N6): `requestAppointmentConfirmationReview` and
+  `requestReviewRequestReview` were already gated on
+  `hasExactSignedInWorkspace`/`isSignedIn` and an existing job/draft
+  (fail-closed for a missing or wrong-owner job) — zero test coverage
+  anywhere in the repo. `native/StoreIntegrationTests/main.swift` gained
+  assertions using the `scheduleBookingTestSeedSignedInOwner`/
+  `scheduleBookingTestClearOwner` seam (matching 10.06's pattern): both taps
+  are inert before an exact-owner workspace is bound; both route to the
+  exact-owner job and open their editable sheet once bound; a missing job ID
+  fails closed for both; clearing the owner revokes routing for a
+  previously-valid job.
+- Files: `native/AppointmentNotificationTests/main.swift` (expanded fixture
+  coverage), `native/ReviewRequestTests/main.swift` (relaunch/sweep parity),
+  `native/StoreIntegrationTests/main.swift` (tap routing + AppStore-level
+  sweep), `N/AppStore.swift` (`reviewRequestNotifications` formatter fix).
+- Commands / results: `sh native/run-appointment-notification-tests.sh` —
+  PASS. `sh native/run-review-request-tests.sh` — PASS. `sh
+  native/run-store-integration-tests.sh` — PASS (reproduced the sweep bug
+  before the fix, confirmed fixed after). `sh
+  native/run-appointment-messaging-tests.sh`, `run-notification-coordinator-tests.sh`,
+  `run-estimate-follow-up-notification-tests.sh`,
+  `run-invoice-notification-tests.sh`, `run-notification-permission-tests.sh`,
+  `run-background-refresh-tests.sh` — all PASS (unchanged, no regression).
+  `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/notifications.test.js __tests__/reviewRequest.test.js
+  __tests__/ReviewRequestScreen.test.tsx` — 3 suites / 57 tests passing, no
+  oracle file modified. `sh native/run-all-domain-tests.sh` and the
+  Release/generic-iOS `xcodebuild` compile — see task report for the full
+  run.
+- Blockers: none for this task's own scope. Device delivery evidence remains
+  a Phase 12 row.
+- Next-ready: **10.08** (unified reconciliation + routing, now has 10.07's
+  confirmed-clean `appt_`/`review_` selectors — including the fixed `review_`
+  rebuild — to reconcile against).
 
 ### 10.10 — Coach transport, provider routing, and system prompt
 

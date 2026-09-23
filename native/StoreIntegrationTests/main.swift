@@ -2632,6 +2632,155 @@ struct StoreIntegrationTests {
                    "9.08 the account boundary scrubs device-local import history")
         } catch { expect(false, "9.08 account boundary block aborted: \(error)") }
 
+        // Task 10.07 (N3/N4/N6/B2) — appointment and review-request tap
+        // routing, plus the review_ sweep-preservation guarantee. Same
+        // pattern as the 10.06 inv_/rinv_ block above: fails closed before an
+        // exact-owner binding exists, resolves an existing record for the
+        // verified owner, and fails closed again for a record that isn't
+        // there.
+        do {
+            let apptDirectory = directory.appendingPathComponent("AppointmentReview10_07", isDirectory: true)
+            let apptURL = apptDirectory.appendingPathComponent("store.json")
+            let apptStore = AppStore(fileURL: apptURL, seedIfMissing: false)
+            let apptCustomer = Customer(name: "Review Customer", email: "review@example.test", phone: "555-0177")
+            let apptJob = Job(
+                customerId: apptCustomer.id, customerName: apptCustomer.name,
+                title: "Drain cleaning", status: .inProgress, laborRate: 95
+            )
+            expect(apptStore.upsert(apptCustomer), "10.07 appointment/review fixture customer saves")
+            expect(apptStore.upsert(apptJob), "10.07 appointment/review fixture job saves")
+
+            // Tap routing is inert before an exact-owner workspace is bound —
+            // fails closed rather than opening a stale or foreign job.
+            apptStore.selectedTab = .today
+            apptStore.requestAppointmentConfirmationReview(jobID: apptJob.id)
+            expect(apptStore.selectedTab == .today && apptStore.pendingAppointmentConfirmationJobID == nil,
+                   "10.07 appointment tap is inert before an exact-owner workspace is bound")
+            apptStore.requestReviewRequestReview(jobID: apptJob.id)
+            expect(apptStore.selectedTab == .today && apptStore.pendingReviewRequestJobID == nil,
+                   "10.07 review tap is inert before an exact-owner workspace is bound")
+
+            let apptBinding = String(repeating: "7", count: 64)
+            apptStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.07", binding: apptBinding)
+
+            // `requestAppointmentConfirmationReview` is the same method
+            // `TradeReadyNativeApp`'s `openOwnedRoute` calls for a decoded
+            // `.appointmentConfirm` notification payload.
+            apptStore.requestAppointmentConfirmationReview(jobID: apptJob.id)
+            expect(apptStore.selectedTab == .jobs && apptStore.deepLinkedJobID == apptJob.id
+                   && apptStore.pendingAppointmentConfirmationJobID == apptJob.id,
+                   "10.07 an appointment tap routes to the exact-owner job and opens the editable confirmation sheet")
+            apptStore.dismissPendingAppointmentConfirmation(jobID: apptJob.id)
+            expect(apptStore.pendingAppointmentConfirmationJobID == nil,
+                   "10.07 the appointment confirmation sheet can be acknowledged exactly for its job — nothing auto-sends")
+
+            apptStore.selectedTab = .today
+            apptStore.requestAppointmentConfirmationReview(jobID: "no-such-job")
+            expect(apptStore.selectedTab == .today && apptStore.pendingAppointmentConfirmationJobID == nil,
+                   "10.07 a missing job fails closed instead of inventing a destination")
+
+            // Review tap routing needs a resolvable draft (contact info) —
+            // `requestReviewRequestReview` is the same method `openOwnedRoute`
+            // calls for a decoded `.reviewRequest` payload.
+            apptStore.requestReviewRequestReview(jobID: apptJob.id)
+            expect(apptStore.selectedTab == .jobs && apptStore.deepLinkedJobID == apptJob.id
+                   && apptStore.pendingReviewRequestJobID == apptJob.id,
+                   "10.07 a review tap routes to the exact-owner job and opens the editable draft sheet")
+            expect(apptStore.reviewRequestDraft(jobID: apptJob.id) != nil,
+                   "10.07 the review sheet resolves a live-customer draft — nothing is pre-sent")
+            apptStore.dismissPendingReviewRequest(jobID: apptJob.id)
+            expect(apptStore.pendingReviewRequestJobID == nil,
+                   "10.07 the review sheet can be acknowledged exactly for its job")
+
+            apptStore.selectedTab = .today
+            apptStore.requestReviewRequestReview(jobID: "no-such-job")
+            expect(apptStore.selectedTab == .today && apptStore.pendingReviewRequestJobID == nil,
+                   "10.07 a missing job fails closed for the review tap too")
+
+            apptStore.scheduleBookingTestClearOwner()
+            apptStore.requestAppointmentConfirmationReview(jobID: apptJob.id)
+            expect(apptStore.selectedTab == .today && apptStore.pendingAppointmentConfirmationJobID == nil,
+                   "10.07 signing out revokes appointment routing even for a previously-valid job")
+            apptStore.requestReviewRequestReview(jobID: apptJob.id)
+            expect(apptStore.selectedTab == .today && apptStore.pendingReviewRequestJobID == nil,
+                   "10.07 signing out revokes review routing even for a previously-valid job")
+        }
+
+        // Task 10.07 (N4, B2) — the critical review_ rebuild guarantee: a
+        // notification sweep landing INSIDE the delay window (the
+        // coordinator's `synchronizeOnce` clears every owned pending request
+        // and rebuilds from `reviewRequestNotifications`, exactly as
+        // `syncNotifications`'s cancelAllScheduledNotificationsAsync +
+        // rebuild does in RN) must never permanently eat the pending one-shot.
+        // `reviewRequestNotifications(now:)` re-derives the fire instant from
+        // the durable record's `scheduledAt` + the settings delay on every
+        // call, so repeated "sweeps" at different points in time all agree.
+        do {
+            let sweepDirectory = directory.appendingPathComponent("ReviewSweep10_07", isDirectory: true)
+            let sweepURL = sweepDirectory.appendingPathComponent("store.json")
+            let sweepStore = AppStore(fileURL: sweepURL, seedIfMissing: false)
+            let sweepBinding = String(repeating: "9", count: 64)
+            sweepStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.07-sweep", binding: sweepBinding)
+
+            let sweepCustomer = Customer(name: "Sweep Customer", email: "sweep@example.test", phone: "555-0188")
+            let sweepJob = Job(
+                customerId: sweepCustomer.id, customerName: sweepCustomer.name,
+                title: "Water heater swap", status: .inProgress, laborRate: 95
+            )
+            expect(sweepStore.upsert(sweepCustomer), "10.07 sweep fixture customer saves")
+            expect(sweepStore.upsert(sweepJob), "10.07 sweep fixture job saves")
+            sweepStore.settings.reviewRequestEnabled = true
+            sweepStore.settings.reviewRequestDelayHours = 2
+
+            let armedAt = Date(timeIntervalSince1970: 1_800_000_000)
+            let outcome = sweepStore.completeJob(id: sweepJob.id, from: .inProgress, on: armedAt)
+            expect(outcome == .completed, "10.07 completing the job arms the review_ one-shot")
+
+            let expectedFire = armedAt.addingTimeInterval(2 * 3600)
+            let identifier = "review_\(sweepJob.id)"
+
+            // Read the plan at several simulated "now" instants inside the
+            // 2h delay window — a fresh read (armingInstant), then two later
+            // reads simulating the app reopening or a background sync pass
+            // partway through the window. Every one of them is what a
+            // cancel-all-then-rebuild sweep at that moment would reschedule.
+            for (label, offset) in [("at arming", 0.0), ("30min into the window", 1800.0), ("90min into the window", 5400.0)] {
+                let sweepNow = armedAt.addingTimeInterval(offset)
+                let plan = sweepStore.reviewRequestNotifications(now: sweepNow)
+                let item = plan.first(where: { $0.identifier == identifier })
+                expect(item != nil, "10.07 a sweep \(label) still finds the pending review_ nudge")
+                expect(item?.fireDate == expectedFire,
+                       "10.07 a sweep \(label) rebuilds the SAME fire instant, never one re-armed from the sweep time")
+            }
+
+            // A sweep landing AFTER the fire instant must not re-nag late —
+            // it drops out of the plan entirely rather than firing on the
+            // next sweep.
+            let afterFire = sweepStore.reviewRequestNotifications(now: expectedFire.addingTimeInterval(60))
+            expect(afterFire.first(where: { $0.identifier == identifier }) == nil,
+                   "10.07 a sweep after the fire instant never re-nags late")
+
+            // Simulated relaunch (canonical half): a second AppStore instance
+            // pointed at the same fileURL resolves the same completed job —
+            // the `scheduleBookingTestSeedSignedInOwner` seam only stands up
+            // the identity, not the owner-bound side-stores that a real
+            // launch's `activateReviewRequests` reloads, so the review_
+            // *record's* relaunch survival is proven at the
+            // NativeReviewRequestStore layer instead (two store instances
+            // against the same file, see native/ReviewRequestTests/main.swift).
+            let relaunched = AppStore(fileURL: sweepURL, seedIfMissing: false)
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-10.07-sweep", binding: sweepBinding)
+            expect(relaunched.jobs.first(where: { $0.id == sweepJob.id })?.status == .complete,
+                   "10.07 the completed job's canonical status survives the simulated relaunch")
+
+            // Marking the request sent clears it from the plan for good —
+            // the toggle-off/sent semantics are not sweep-rebuilt.
+            sweepStore.markReviewRequestSent(jobID: sweepJob.id, fallback: nil, now: expectedFire.addingTimeInterval(-60))
+            let afterSent = sweepStore.reviewRequestNotifications(now: armedAt.addingTimeInterval(1800))
+            expect(afterSent.first(where: { $0.identifier == identifier }) == nil,
+                   "10.07 marking the request sent removes it from every subsequent sweep")
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }

@@ -692,9 +692,19 @@ final class AppStore: ObservableObject {
         )
     }
 
-        func reviewRequestNotifications(now: Date = .now) -> [NativeNotificationPlanItem] {        guard hasExactSignedInWorkspace, settings.reviewRequestEnabled else { return [] }
+    /// Task 10.07 (N4/B2) fix: rebuilds pending `review_` one-shots from the
+    /// durable records on every call — this IS the sweep-survival mechanism
+    /// (RN's `syncNotifications` rebuild branch). `record.scheduledAt` is
+    /// always written with fractional seconds (`armReviewRequestIfEligible`,
+    /// `markReviewRequestSent`), so the reading formatter must accept that
+    /// exact format too; a plain `ISO8601DateFormatter()` silently fails to
+    /// parse it and drops every pending record from the rebuilt plan — this
+    /// was the bug this fix closes.
+    func reviewRequestNotifications(now: Date = .now) -> [NativeNotificationPlanItem] {
+        guard hasExactSignedInWorkspace, settings.reviewRequestEnabled else { return [] }
         let jobs = snapshot.payload.jobs ?? []
         let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return reviewRequestRecords.compactMap { record in
             guard record.sentAt == nil,
                   let job = jobs.first(where: { $0.id == record.jobId }),
