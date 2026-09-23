@@ -1,0 +1,217 @@
+import Foundation
+
+@main
+struct RepositoryTests {
+    static func main() throws {
+        var failures = 0
+        func expect(_ condition: @autoclosure () -> Bool, _ label: String) {
+            if !condition() { failures += 1; print("FAIL: \(label)") }
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tradeready-repository-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let primary = root.appendingPathComponent("store.json")
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let repository = Canonical.SnapshotRepository(primaryURL: primary, now: { fixedDate })
+
+        let missing = try repository.load()
+        expect(missing == nil, "missing repository has no snapshot")
+
+        let first = snapshot(businessName: "First")
+        let second = snapshot(businessName: "Second")
+        try repository.save(first)
+        let initialLoad = try repository.load()
+        expect(label(of: initialLoad?.snapshot) == "First", "repository loads primary snapshot")
+
+        try repository.save(second)
+        let backup = try Canonical.SnapshotCodec.decode(Data(contentsOf: repository.backupURL))
+        expect(label(of: backup) == "First", "save retains previous valid snapshot")
+
+        let corruptBytes = Data("not-json-private-source".utf8)
+        try corruptBytes.write(to: primary, options: .atomic)
+        let recovered = try repository.load()
+        expect(recovered?.source == .recoveredBackup, "corrupt primary recovers from backup")
+        expect(label(of: recovered?.snapshot) == "First", "recovery returns last known good data")
+        expect(recovered?.quarantinedURL.flatMap { try? Data(contentsOf: $0) } == corruptBytes,
+               "recovery quarantines exact corrupt bytes")
+        let repaired = try Canonical.SnapshotCodec.decode(Data(contentsOf: primary))
+        expect(label(of: repaired) == "First", "recovery repairs primary snapshot")
+
+        try FileManager.default.removeItem(at: primary)
+        let restoredMissing = try repository.load()
+        expect(restoredMissing?.source == .recoveredBackup && restoredMissing?.quarantinedURL == nil,
+               "missing primary restores from backup")
+
+        let legacy = Data("legacy source bytes".utf8)
+        let legacyURL = try repository.preserveLegacyBytes(legacy, migration: .legacyNativeSnapshot)
+        _ = try repository.preserveLegacyBytes(Data("replacement".utf8), migration: .legacyNativeSnapshot)
+        let retainedLegacy = try Data(contentsOf: legacyURL)
+        expect(retainedLegacy == legacy, "legacy backup is immutable across retries")
+
+        let brokenPrimary = root.appendingPathComponent("broken.json")
+        let brokenRepository = Canonical.SnapshotRepository(primaryURL: brokenPrimary)
+        try Data("bad-primary".utf8).write(to: brokenPrimary, options: .atomic)
+        try Data("bad-backup".utf8).write(to: brokenRepository.backupURL, options: .atomic)
+        do {
+            _ = try brokenRepository.load()
+            expect(false, "two corrupt copies throw")
+        } catch Canonical.SnapshotRepository.RepositoryError.corruptPrimaryNoUsableBackup {
+            // Expected.
+        }
+
+        let journalURL = root.appendingPathComponent("migration-journal.json")
+        let journal = Canonical.MigrationJournal(fileURL: journalURL, now: { fixedDate })
+        let firstBegin = try journal.begin(.reactNativeAsyncStorage)
+        let resumedBegin = try journal.begin(.reactNativeAsyncStorage)
+        expect(firstBegin == .started, "journal records migration start")
+        expect(resumedBegin == .resumed, "started migration resumes without duplicate")
+        try journal.fail(.reactNativeAsyncStorage)
+        let restartedBegin = try journal.begin(.reactNativeAsyncStorage)
+        expect(restartedBegin == .started, "failed migration can restart")
+        try journal.complete(.reactNativeAsyncStorage)
+        try journal.complete(.reactNativeAsyncStorage)
+        let completedBegin = try journal.begin(.reactNativeAsyncStorage)
+        expect(completedBegin == .alreadyCompleted, "completed migration is idempotent")
+        let document = try journal.read()
+        expect(document.entries.map(\.status) == [.started, .failed, .started, .completed],
+               "journal retains minimal lifecycle history")
+
+        let journalObject = try JSONSerialization.jsonObject(with: Data(contentsOf: journalURL)) as? [String: Any]
+        let entryObjects = journalObject?["entries"] as? [[String: Any]] ?? []
+        expect(entryObjects.allSatisfy { Set($0.keys) == ["migration", "status", "timestamp"] },
+               "journal schema cannot contain customer data or secrets")
+
+        let diagnostics = repository.diagnostics(for: restoredMissing, journal: document)
+        expect(diagnostics.snapshotSchemaVersion == Canonical.Snapshot.currentSchemaVersion,
+               "diagnostics report snapshot schema")
+        expect(diagnostics.snapshotStatus == .recovered && diagnostics.backupAvailable,
+               "diagnostics report recovery and backup status")
+        expect(diagnostics.migrations.first(where: { $0.migration == .reactNativeAsyncStorage })?.status == .completed,
+               "diagnostics report latest migration status")
+        let diagnosticObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(diagnostics)) as? [String: Any]
+        expect(Set(diagnosticObject?.keys.map { $0 } ?? []) == [
+            "snapshotSchemaVersion", "snapshotStatus", "backupAvailable", "counts", "migrations"
+        ], "diagnostics expose counts and status only")
+
+        let supportReport = try diagnostics.encodedSupportReport(appVersion: "2.4.1")
+        let repeatedSupportReport = try diagnostics.encodedSupportReport(appVersion: "2.4.1")
+        expect(supportReport == repeatedSupportReport, "support report bytes are deterministic")
+        let expectedSupportReport = "{\"appVersion\":\"2.4.1\",\"backupAvailable\":true,\"migrationStatuses\":[{\"migration\":\"canonical-snapshot-v0-to-v1\",\"status\":null},{\"migration\":\"legacy-native-snapshot-to-v1\",\"status\":null},{\"migration\":\"react-native-async-storage-to-v1\",\"status\":\"completed\"}],\"recordCounts\":{\"bookingRequests\":0,\"customerNotes\":0,\"customers\":0,\"expenses\":0,\"invoices\":0,\"jobPhotos\":0,\"jobs\":0,\"pricebook\":0,\"recurringInvoices\":0,\"recurringJobs\":0,\"trips\":0},\"reportSchemaVersion\":1,\"snapshotSchemaVersion\":1,\"snapshotStatus\":\"recovered\"}"
+        expect(supportReport == Data(expectedSupportReport.utf8),
+               "support report matches canonical sorted JSON bytes")
+
+        let supportObject = try JSONSerialization.jsonObject(with: supportReport) as? [String: Any]
+        expect(Set(supportObject?.keys.map { $0 } ?? []) == [
+            "reportSchemaVersion", "appVersion", "snapshotSchemaVersion", "snapshotStatus",
+            "backupAvailable", "recordCounts", "migrationStatuses"
+        ], "support report has a closed top-level schema")
+        expect(supportObject?["reportSchemaVersion"] as? Int == Canonical.PersistenceSupportReport.currentSchemaVersion,
+               "support report identifies its schema")
+        expect(supportObject?["appVersion"] as? String == "2.4.1",
+               "support report identifies the app version")
+
+        let reportCounts = supportObject?["recordCounts"] as? [String: Any]
+        expect(Set(reportCounts?.keys.map { $0 } ?? []) == [
+            "invoices", "jobs", "customers", "expenses", "customerNotes", "recurringJobs",
+            "recurringInvoices", "trips", "pricebook", "bookingRequests", "jobPhotos"
+        ], "support report exposes record counts only")
+        let reportMigrations = supportObject?["migrationStatuses"] as? [[String: Any]] ?? []
+        expect(reportMigrations.count == Canonical.MigrationKind.allCases.count,
+               "support report includes every migration status")
+        expect(reportMigrations.allSatisfy { Set($0.keys) == ["migration", "status"] },
+               "support report migration entries have a closed schema")
+        let migrationNames = reportMigrations.compactMap { $0["migration"] as? String }
+        expect(migrationNames == migrationNames.sorted(), "support report migration order is stable")
+
+        let reportText = String(decoding: supportReport, as: UTF8.self)
+        let forbiddenReportValues = [
+            root.path, "First", "not-json-private-source", "legacy source bytes",
+            "fixture-customer-id", "fixture-provider-secret", "customerName", "providerKey"
+        ]
+        expect(forbiddenReportValues.allSatisfy { !reportText.contains($0) },
+               "support report contains no paths, raw data, customer fields, IDs, or secrets")
+
+        let scrubPrimary = root.appendingPathComponent("Scrub/store.json")
+        let scrubRepository = Canonical.SnapshotRepository(primaryURL: scrubPrimary)
+        try scrubRepository.save(first)
+        try scrubRepository.save(second)
+        let quarantine = scrubPrimary.deletingLastPathComponent()
+            .appendingPathComponent("store.json.corrupt-1700000000000")
+        try Data("private-corrupt-copy".utf8).write(to: quarantine, options: .atomic)
+        let retained = try scrubRepository.preserveLegacyBytes(
+            Data("immutable-recovery-source".utf8), migration: .reactNativeAsyncStorage
+        )
+        try FileManager.default.createDirectory(
+            at: scrubRepository.liveMediaDirectoryURL, withIntermediateDirectories: true
+        )
+        try Data("adopted-photo".utf8).write(
+            to: scrubRepository.liveMediaDirectoryURL.appendingPathComponent("photo.jpg")
+        )
+        let workspace = scrubPrimary.deletingLastPathComponent()
+            .appendingPathComponent("native-account-workspace.json")
+        try Data("account-bound-onboarding".utf8).write(to: workspace, options: .atomic)
+        try Data("account-bound-onboarding-backup".utf8).write(
+            to: workspace.appendingPathExtension("backup"), options: .atomic
+        )
+        try scrubRepository.beginAccountScrub()
+        expect(scrubRepository.isAccountScrubPending
+               && scrubRepository.pendingAccountScrubScope == .live,
+               "account scrub publishes its crash-recovery marker first")
+        try scrubRepository.removeLiveAccountData()
+        expect(!FileManager.default.fileExists(atPath: scrubPrimary.path)
+               && !FileManager.default.fileExists(atPath: scrubRepository.backupURL.path)
+               && !FileManager.default.fileExists(atPath: quarantine.path)
+               && !FileManager.default.fileExists(atPath: scrubRepository.liveMediaDirectoryURL.path)
+               && !FileManager.default.fileExists(atPath: workspace.path)
+               && !FileManager.default.fileExists(atPath: workspace.appendingPathExtension("backup").path),
+               "account scrub removes snapshots, quarantines, live media, and onboarding state")
+        expect((try? Data(contentsOf: retained)) == Data("immutable-recovery-source".utf8),
+               "account scrub preserves the immutable migration recovery source")
+        expect(scrubRepository.isAccountScrubPending,
+               "account scrub marker remains until other account surfaces are cleared")
+        try scrubRepository.finishAccountScrub()
+        let scrubbedLoad = try scrubRepository.load()
+        expect(!scrubRepository.isAccountScrubPending && scrubbedLoad == nil,
+               "finished account scrub cannot recover signed-out data")
+
+        let deletionPrimary = root.appendingPathComponent("Deletion/store.json")
+        let deletionRepository = Canonical.SnapshotRepository(primaryURL: deletionPrimary)
+        try deletionRepository.save(first)
+        let deletionLegacy = try deletionRepository.preserveLegacyBytes(
+            Data("delete-me".utf8), migration: .reactNativeAsyncStorage
+        )
+        let deletionDirectory = deletionPrimary.deletingLastPathComponent()
+        for path in ["auxiliary-state.json", "migration-journal.json", "tradeready-support-report.json"] {
+            try Data("delete-me".utf8).write(
+                to: deletionDirectory.appendingPathComponent(path), options: .atomic
+            )
+        }
+        try deletionRepository.beginAccountScrub(scope: .all)
+        expect(deletionRepository.pendingAccountScrubScope == .all,
+               "permanent deletion survives interruption without storing an account identifier")
+        try deletionRepository.removeAllAccountData()
+        expect(!FileManager.default.fileExists(atPath: deletionLegacy.path)
+               && !FileManager.default.fileExists(
+                    atPath: deletionDirectory.appendingPathComponent("auxiliary-state.json").path
+               ), "permanent deletion removes recovery and activation artifacts")
+        try deletionRepository.finishAccountScrub()
+
+        if failures == 0 { print("PASS: snapshot repository and migration journal tests") }
+        else { print("FAILED: \(failures) repository test(s)"); exit(1) }
+    }
+
+    private static func snapshot(businessName: String) -> Canonical.Snapshot {
+        Canonical.Snapshot(payload: .init(unknownFields: [
+            "testLabel": .string(businessName),
+            "customerName": .string("Fixture Customer"),
+            "customerId": .string("fixture-customer-id"),
+            "providerKey": .string("fixture-provider-secret")
+        ]))
+    }
+
+    private static func label(of snapshot: Canonical.Snapshot?) -> String? {
+        guard case let .string(value)? = snapshot?.payload.unknownFields["testLabel"] else { return nil }
+        return value
+    }
+}

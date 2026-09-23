@@ -1,0 +1,28 @@
+{
+  "_comment": "Deterministic schedule/availability vectors shared with RN (utils/*) and Workers (backend-workers/lib/booking/availability.js). Same values as __tests__/bookingAvailability.test.js DST facts (America/Chicago 2026: spring forward Sun Mar 8, fall back Sun Nov 1). Swift suites in native/{Schedule,Calendar,Availability}Tests assert these verbatim.",
+  "defaults": {
+    "timeZone": null,
+    "workDays": [1, 2, 3, 4, 5, 6],
+    "workDayStart": "08:00",
+    "workDayEnd": "17:00",
+    "defaultDurationMinutes": 60,
+    "bufferMinutes": 0,
+    "slotLeadHours": 24,
+    "slotWindowDays": 14,
+    "blackouts": [],
+    "bookableSlotsEnabled": false
+  },
+  "zoneVectors": [
+    { "date": "2026-08-10", "time": "09:00", "zone": "America/Chicago", "startUtc": "2026-08-10T14:00:00.000Z" },
+    { "date": "2026-01-15", "time": "09:00", "zone": "America/Chicago", "startUtc": "2026-01-15T15:00:00.000Z" },
+    { "date": "2026-03-08", "time": "02:30", "zone": "America/Chicago", "startUtc": null },
+    { "date": "2026-11-01", "time": "01:30", "zone": "America/Chicago", "startUtc": "2026-11-01T06:30:00.000Z" },
+    { "date": "2026-08-10", "time": "09:00", "zone": "Pacific/Auckland", "startUtc": "2026-08-09T21:00:00.000Z" },
+    { "date": "2026-08-10", "time": "09:00", "zone": "Asia/Kolkata", "startUtc": "2026-08-10T03:30:00.000Z" },
+    { "date": "2026-08-10", "time": "00:00", "zone": "UTC", "startUtc": "2026-08-10T00:00:00.000Z" }
+  ],
+  "nowVectors": [
+    { "zone": "America/Chicago", "utcIso": "2026-08-10T12:00:00.000Z", "date": "2026-08-10", "minutes": 420 },
+    { "zone": "Pacific/Auckland", "utcIso": "2026-08-10T12:00:00.000Z", "date": "2026-08-11", "minutes": 0 }
+  ]
+}

@@ -1,0 +1,453 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 70;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000020 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000030 /* GoogleSignIn */; };
+		A00000000000000000000021 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000031 /* GoogleSignInSwift */; };
+		A00000000000000000000022 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000033 /* RevenueCat */; };
+		B00000000000000000000001 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* TestSupport.swift */; };
+		B00000000000000000000002 /* CanonicalModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* CanonicalModelTests.swift */; };
+		B00000000000000000000003 /* FinancialDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000013 /* FinancialDomainTests.swift */; };
+		B00000000000000000000004 /* BusinessRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000014 /* BusinessRulesTests.swift */; };
+		B00000000000000000000005 /* canonical-rich.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000015 /* canonical-rich.json */; };
+		B00000000000000000000006 /* canonical-legacy.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000016 /* canonical-legacy.json */; };
+		B00000000000000000000007 /* canonical-forward-compatible.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000017 /* canonical-forward-compatible.json */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B00000000000000000000031 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000002;
+			remoteInfo = TradeReadyNative;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A00000000000000000000008 /* TradeReadyNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TradeReadyNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000010 /* TradeReadyNativeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TradeReadyNativeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000011 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		B00000000000000000000012 /* CanonicalModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanonicalModelTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000013 /* FinancialDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinancialDomainTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000014 /* BusinessRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BusinessRulesTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000015 /* canonical-rich.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "canonical-rich.json"; path = "CanonicalTests/Fixtures/canonical-rich.json"; sourceTree = "<group>"; };
+		B00000000000000000000016 /* canonical-legacy.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "canonical-legacy.json"; path = "CanonicalTests/Fixtures/canonical-legacy.json"; sourceTree = "<group>"; };
+		B00000000000000000000017 /* canonical-forward-compatible.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "canonical-forward-compatible.json"; path = "CanonicalTests/Fixtures/canonical-forward-compatible.json"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A00000000000000000000009 /* TradeReadyNative */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = TradeReadyNative; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000020 /* GoogleSignIn in Frameworks */,
+				A00000000000000000000021 /* GoogleSignInSwift in Frameworks */,
+				A00000000000000000000022 /* RevenueCat in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000022 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000003 = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000009 /* TradeReadyNative */,
+				B00000000000000000000018 /* TradeReadyNativeTests */,
+				B00000000000000000000019 /* Test Fixtures */,
+				A00000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000008 /* TradeReadyNative.app */,
+				B00000000000000000000010 /* TradeReadyNativeTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		B00000000000000000000018 /* TradeReadyNativeTests */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000011 /* TestSupport.swift */,
+				B00000000000000000000012 /* CanonicalModelTests.swift */,
+				B00000000000000000000013 /* FinancialDomainTests.swift */,
+				B00000000000000000000014 /* BusinessRulesTests.swift */,
+			);
+			path = TradeReadyNativeTests;
+			sourceTree = "<group>";
+		};
+		B00000000000000000000019 /* Test Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000015 /* canonical-rich.json */,
+				B00000000000000000000016 /* canonical-legacy.json */,
+				B00000000000000000000017 /* canonical-forward-compatible.json */,
+			);
+			name = "Test Fixtures";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A00000000000000000000002 /* TradeReadyNative */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000011 /* Build configuration list for PBXNativeTarget "TradeReadyNative" */;
+			buildPhases = (
+				A00000000000000000000005 /* Sources */,
+				A00000000000000000000006 /* Frameworks */,
+				A00000000000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A00000000000000000000009 /* TradeReadyNative */,
+			);
+			name = TradeReadyNative;
+			packageProductDependencies = (
+				A00000000000000000000030 /* GoogleSignIn */,
+				A00000000000000000000031 /* GoogleSignInSwift */,
+				A00000000000000000000033 /* RevenueCat */,
+			);
+			productName = TradeReadyNative;
+			productReference = A00000000000000000000008 /* TradeReadyNative.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B00000000000000000000020 /* TradeReadyNativeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B00000000000000000000040 /* Build configuration list for PBXNativeTarget "TradeReadyNativeTests" */;
+			buildPhases = (
+				B00000000000000000000021 /* Sources */,
+				B00000000000000000000022 /* Frameworks */,
+				B00000000000000000000023 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B00000000000000000000032 /* PBXTargetDependency */,
+			);
+			name = TradeReadyNativeTests;
+			productName = TradeReadyNativeTests;
+			productReference = B00000000000000000000010 /* TradeReadyNativeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A00000000000000000000002 = {
+						CreatedOnToolsVersion = 26.6;
+						SystemCapabilities = {
+							com.apple.InAppPurchase = {
+								enabled = 1;
+							};
+						};
+					};
+					B00000000000000000000020 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = A00000000000000000000002;
+					};
+				};
+			};
+			buildConfigurationList = A00000000000000000000010 /* Build configuration list for PBXProject "TradeReadyNative" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000003;
+			packageReferences = (
+				A00000000000000000000029 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				A00000000000000000000032 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+			);
+			productRefGroup = A00000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A00000000000000000000002 /* TradeReadyNative */,
+				B00000000000000000000020 /* TradeReadyNativeTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000023 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000005 /* canonical-rich.json in Resources */,
+				B00000000000000000000006 /* canonical-legacy.json in Resources */,
+				B00000000000000000000007 /* canonical-forward-compatible.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000021 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000001 /* TestSupport.swift in Sources */,
+				B00000000000000000000002 /* CanonicalModelTests.swift in Sources */,
+				B00000000000000000000003 /* FinancialDomainTests.swift in Sources */,
+				B00000000000000000000004 /* BusinessRulesTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B00000000000000000000032 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A00000000000000000000002 /* TradeReadyNative */;
+			targetProxy = B00000000000000000000031 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000012 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A00000000000000000000013 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A00000000000000000000014 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = TradeReadyNative/TradeReadyNative.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 96J48TJWX3;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TRADEREADY_ALLOW_PRODUCTION_WRITES = NO;
+				TRADEREADY_BACKEND_URL = "http://127.0.0.1:8787";
+				TRADEREADY_EMAIL_CONFIRMATION_URL = "https://gettradereadyapp.com/confirmed.html";
+				TRADEREADY_ENVIRONMENT = development;
+				TRADEREADY_GOOGLE_IOS_CLIENT_ID = "246232122952-b2trko1uog7593a3sg8n25tklifc85nn.apps.googleusercontent.com";
+				TRADEREADY_GOOGLE_SERVER_CLIENT_ID = "246232122952-37tucdttgsrkjs59l46oo29eggalvn92.apps.googleusercontent.com";
+				TRADEREADY_PASSWORD_RESET_URL = "tradeready://reset-password";
+				TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF;
+				TRADEREADY_PRODUCTION_SUPABASE_URL = "https://ncbqswfdvckmdocbawaa.supabase.co";
+				TRADEREADY_REVENUECAT_API_KEY = appl_wHNdVnMEdRdTnMHbDEUgpdhppMO;
+				TRADEREADY_REVENUECAT_ENTITLEMENT_ID = "TradeReady Pro";
+				TRADEREADY_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF;
+				TRADEREADY_SUPABASE_URL = "https://ncbqswfdvckmdocbawaa.supabase.co";
+			};
+			name = Debug;
+		};
+		A00000000000000000000015 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = TradeReadyNative/TradeReadyNative.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 96J48TJWX3;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TRADEREADY_ALLOW_PRODUCTION_WRITES = NO;
+				TRADEREADY_BACKEND_URL = "https://staging.invalid";
+				TRADEREADY_EMAIL_CONFIRMATION_URL = "https://gettradereadyapp.com/confirmed.html";
+				TRADEREADY_ENVIRONMENT = staging;
+				TRADEREADY_GOOGLE_IOS_CLIENT_ID = "246232122952-b2trko1uog7593a3sg8n25tklifc85nn.apps.googleusercontent.com";
+				TRADEREADY_GOOGLE_SERVER_CLIENT_ID = "246232122952-37tucdttgsrkjs59l46oo29eggalvn92.apps.googleusercontent.com";
+				TRADEREADY_PASSWORD_RESET_URL = "tradeready://reset-password";
+				TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF;
+				TRADEREADY_PRODUCTION_SUPABASE_URL = "https://ncbqswfdvckmdocbawaa.supabase.co";
+				TRADEREADY_REVENUECAT_API_KEY = appl_wHNdVnMEdRdTnMHbDEUgpdhppMO;
+				TRADEREADY_REVENUECAT_ENTITLEMENT_ID = "TradeReady Pro";
+				TRADEREADY_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF;
+				TRADEREADY_SUPABASE_URL = "https://ncbqswfdvckmdocbawaa.supabase.co";
+			};
+			name = Release;
+		};
+		B00000000000000000000041 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 96J48TJWX3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TradeReadyNative.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TradeReadyNative";
+			};
+			name = Debug;
+		};
+		B00000000000000000000042 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 96J48TJWX3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TradeReadyNative.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TradeReadyNative";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00000000000000000000010 /* Build configuration list for PBXProject "TradeReadyNative" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000012 /* Debug */,
+				A00000000000000000000013 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000011 /* Build configuration list for PBXNativeTarget "TradeReadyNative" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000014 /* Debug */,
+				A00000000000000000000015 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B00000000000000000000040 /* Build configuration list for PBXNativeTarget "TradeReadyNativeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B00000000000000000000041 /* Debug */,
+				B00000000000000000000042 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A00000000000000000000029 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = exactVersion;
+				version = 9.2.0;
+			};
+		};
+		A00000000000000000000032 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 5.83.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A00000000000000000000030 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000029 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		A00000000000000000000031 /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000029 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
+		A00000000000000000000033 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000032 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}

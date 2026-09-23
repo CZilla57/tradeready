@@ -1,0 +1,10 @@
+[
+  {
+    "ignored" : false,
+    "simulator" : false,
+    "platform" : "com.apple.platform.macosx",
+    "available" : true,
+    "name" : "Fixture Mac"
+  }
+]
+

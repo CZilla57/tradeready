@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "payload": {
+    "invoices": [],
+    "jobs": [],
+    "customers": [],
+    "settings": null,
+    "expenses": [],
+    "customerNotes": {"customer-a": "Call before arrival"},
+    "recurringJobs": [],
+    "recurringInvoices": [],
+    "trips": [],
+    "pricebook": [],
+    "bookingRequests": [],
+    "jobPhotos": [],
+    "futurePayload": [1, null, "retained"]
+  },
+  "createdBy": "fixture",
+  "futureEnvelope": null
+}

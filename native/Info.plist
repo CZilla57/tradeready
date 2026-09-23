@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key><string>TradeReady</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>BGTaskSchedulerPermittedIdentifiers</key><array><string>com.gettradereadyapp.tradeready.sync-refresh</string></array>
+    <key>TradeReadyEnvironment</key><string>$(TRADEREADY_ENVIRONMENT)</string>
+    <key>TradeReadyBackendURL</key><string>$(TRADEREADY_BACKEND_URL)</string>
+    <key>TradeReadyAllowProductionWrites</key><string>$(TRADEREADY_ALLOW_PRODUCTION_WRITES)</string>
+    <key>TradeReadySupabaseURL</key><string>$(TRADEREADY_SUPABASE_URL)</string>
+    <key>TradeReadyProductionSupabaseURL</key><string>$(TRADEREADY_PRODUCTION_SUPABASE_URL)</string>
+    <key>TradeReadyProductionSupabasePublishableKey</key><string>$(TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY)</string>
+    <key>TradeReadySupabasePublishableKey</key><string>$(TRADEREADY_SUPABASE_PUBLISHABLE_KEY)</string>
+    <key>TradeReadyPasswordResetURL</key><string>$(TRADEREADY_PASSWORD_RESET_URL)</string>
+    <key>TradeReadyEmailConfirmationURL</key><string>$(TRADEREADY_EMAIL_CONFIRMATION_URL)</string>
+    <key>TradeReadyRevenueCatAPIKey</key><string>$(TRADEREADY_REVENUECAT_API_KEY)</string>
+    <key>TradeReadyRevenueCatEntitlementID</key><string>$(TRADEREADY_REVENUECAT_ENTITLEMENT_ID)</string>
+    <key>GIDClientID</key><string>$(TRADEREADY_GOOGLE_IOS_CLIENT_ID)</string>
+    <key>GIDServerClientID</key><string>$(TRADEREADY_GOOGLE_SERVER_CLIENT_ID)</string>
+    <key>NSCameraUsageDescription</key><string>TradeReady uses the camera to add job photos.</string>
+    <key>LSRequiresIPhoneOS</key><true/>
+    <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+    <key>UIBackgroundModes</key><array><string>fetch</string></array>
+    <key>UILaunchScreen</key><dict><key>UIColorName</key><string>LaunchBackground</string></dict>
+    <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+    <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+    <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.gettradereadyapp.tradeready</string><key>CFBundleURLSchemes</key><array><string>tradeready</string></array></dict><dict><key>CFBundleURLName</key><string>Google Sign-In</string><key>CFBundleURLSchemes</key><array><string>com.googleusercontent.apps.246232122952-b2trko1uog7593a3sg8n25tklifc85nn</string></array></dict></array>
+</dict>
+</plist>

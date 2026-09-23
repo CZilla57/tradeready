@@ -1,0 +1,577 @@
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
+/// Canonical AppStore integration policy for Phase 8 task 8.08
+/// (requirements S3, S4, B2–B4, P1, P3).
+///
+/// Frozen contracts: `docs/native-phase-8-contract-decisions.md` §§1–9 and the
+/// calendar/booking/routes/portals spec §§3–5, 7.
+///
+/// This file owns the pure, testable integration policy. It performs no I/O
+/// itself except through the injected `save`/`enqueue` closures and the
+/// file-backed `NativeScheduleBookingPendingWorkStore`:
+///
+/// - Schedule-only and schedule-settings commits re-resolve the CURRENT
+///   record, change only owned fields, and preserve unknown/concurrent
+///   server fields by struct copy (the canonical `preservation` bags ride
+///   along untouched).
+/// - Booking/portal intake reuses the task 8.02 planner
+///   (`NativeBookingIntake.plan`) and rechecks current records before the
+///   atomic snapshot + queue commit. A no-op plan writes nothing (a save
+///   would re-enqueue the whole collection).
+/// - Remote actions capture the exact verified owner binding, target ID and
+///   operation identity, and recheck them after every suspension and before
+///   local publication. A timeout after a mutation is an unknown outcome —
+///   never permission to repeat destructive server work automatically.
+/// - Reschedule resolution is a two-phase commit per contract §7: the revised
+///   job schedule is durably saved and queue-acknowledged first, then
+///   `respond` carries the exact schedule proof. A superseding schedule edit
+///   refuses instead of resolving against the wrong slot.
+/// - Link authority is reconciled (`status` read) before adopting or sharing
+///   a local display copy. A present-but-stale token gets the recovery path,
+///   never a share URL.
+/// - Incomplete local-mirror or queue-publication work is persisted per owner
+///   binding and recovered without repeating committed server mutations.
+///   Owner-bound pending work is scrubbed on the account boundary.
+///
+/// What this file does NOT do (no invented backend guarantees): it never
+/// claims live RPC behavior — server preconditions from contract §§2/7 are
+/// consumed through the injected task 8.07 transports, whose stub-loader
+/// tests assert the frozen shapes. Real database concurrency proof stays
+/// deferred to task 8.14 (blocker M1).
+enum NativeScheduleBookingPolicy {
+
+    // MARK: - Schedule-only commit (S3)
+
+    /// Owner-supplied schedule edit. `nil` date/start/end clears the field
+    /// (an untimed dated job is not a midnight appointment). Baselines pin
+    /// the record the draft was opened against; a concurrent schedule or
+    /// lifecycle change refuses instead of silently replacing.
+    struct ScheduleOnlyDraft {
+        var jobID: String
+        var baselineDate: String?
+        var baselineStart: String?
+        var baselineEnd: String?
+        var baselineStatus: String
+        var date: String?
+        var start: String?
+        var end: String?
+
+        init(
+            jobID: String,
+            baselineDate: String? = nil,
+            baselineStart: String? = nil,
+            baselineEnd: String? = nil,
+            baselineStatus: String = "",
+            date: String? = nil,
+            start: String? = nil,
+            end: String? = nil
+        ) {
+            self.jobID = jobID
+            self.baselineDate = baselineDate
+            self.baselineStart = baselineStart
+            self.baselineEnd = baselineEnd
+            self.baselineStatus = baselineStatus
+            self.date = date
+            self.start = start
+            self.end = end
+        }
+    }
+
+    enum ScheduleOnlyApply {
+        /// Field-scoped merged job plus the IDs of conflicting jobs (RN
+        /// parity: conflicts warn, never prevent saving).
+        case apply(job: Canonical.Job, conflictingJobIDs: [String])
+        /// The current schedule or lifecycle no longer matches the draft
+        /// baseline — the owner must refresh/review.
+        case baselineConflict(currentDate: String?, currentStart: String?, currentStatus: String)
+        /// The record is gone — reject rather than recreate it.
+        case missing
+    }
+
+    /// Merges ONLY `scheduledDate/scheduledStartTime/scheduledEndTime` (plus
+    /// the single automatic `approved → scheduled` transition) into the
+    /// current record. Every other field — pricing, contact, photos,
+    /// approvals, history, unknown preservation — survives by struct copy.
+    static func applyScheduleOnly(
+        current: Canonical.Job,
+        jobs: [Canonical.Job],
+        draft: ScheduleOnlyDraft
+    ) -> ScheduleOnlyApply {
+        guard current.baselineStatusMatches(draft.baselineStatus) else {
+            return .baselineConflict(
+                currentDate: current.scheduledDate,
+                currentStart: current.scheduledStartTime,
+                currentStatus: current.status
+            )
+        }
+        guard current.scheduledDate == draft.baselineDate,
+              current.scheduledStartTime == draft.baselineStart,
+              current.scheduledEndTime == draft.baselineEnd
+        else {
+            return .baselineConflict(
+                currentDate: current.scheduledDate,
+                currentStart: current.scheduledStartTime,
+                currentStatus: current.status
+            )
+        }
+        var merged = current
+        merged.scheduledDate = normalizedDate(draft.date)
+        merged.scheduledStartTime = normalizedTime(draft.start)
+        merged.scheduledEndTime = normalizedTime(draft.end)
+        // Only `approved → scheduled` is automatic (S3). Booked leads stay
+        // leads; every other lifecycle transition is an explicit action.
+        if merged.status == "approved", merged.scheduledDate != nil {
+            merged.status = "scheduled"
+        }
+        let conflicts = NativeSchedule.findScheduleConflicts(
+            jobs: jobs,
+            query: NativeSchedule.ConflictQuery(
+                excludeJobId: merged.id,
+                date: merged.scheduledDate ?? "",
+                start: merged.scheduledStartTime ?? "",
+                end: merged.scheduledEndTime,
+                laborHours: (merged.laborHours as NSDecimalNumber).doubleValue,
+                bufferMinutes: 0
+            )
+        ).map(\.scheduleJobId)
+        return .apply(job: merged, conflictingJobIDs: conflicts)
+    }
+
+    // MARK: - Schedule-settings commit (S4)
+
+    /// Owner-supplied settings edit. `nil` leaves the field untouched;
+    /// blackout edits are Add-by-id and remove-by-id (removing one preserves
+    /// all others and nested unknown fields). `baselineSchedule` pins the
+    /// config the draft was opened against; a concurrent owned-field change
+    /// refuses instead of silently replacing.
+    struct ScheduleSettingsDraft {
+        var baselineSchedule: Canonical.ScheduleConfig?
+        var workDays: [Int]?
+        var workDayStart: String?
+        var workDayEnd: String?
+        var defaultDurationMinutes: Int?
+        var bufferMinutes: Int?
+        var slotLeadHours: Int?
+        var slotWindowDays: Int?
+        var timeZone: String??
+        var bookableSlotsEnabled: Bool?
+        var blackoutsToAdd: [Canonical.ScheduleBlackout]
+        var blackoutIDsToRemove: [String]
+
+        init(
+            baselineSchedule: Canonical.ScheduleConfig? = nil,
+            workDays: [Int]? = nil,
+            workDayStart: String? = nil,
+            workDayEnd: String? = nil,
+            defaultDurationMinutes: Int? = nil,
+            bufferMinutes: Int? = nil,
+            slotLeadHours: Int? = nil,
+            slotWindowDays: Int? = nil,
+            timeZone: String?? = nil,
+            bookableSlotsEnabled: Bool? = nil,
+            blackoutsToAdd: [Canonical.ScheduleBlackout] = [],
+            blackoutIDsToRemove: [String] = []
+        ) {
+            self.baselineSchedule = baselineSchedule
+            self.workDays = workDays
+            self.workDayStart = workDayStart
+            self.workDayEnd = workDayEnd
+            self.defaultDurationMinutes = defaultDurationMinutes
+            self.bufferMinutes = bufferMinutes
+            self.slotLeadHours = slotLeadHours
+            self.slotWindowDays = slotWindowDays
+            self.timeZone = timeZone
+            self.bookableSlotsEnabled = bookableSlotsEnabled
+            self.blackoutsToAdd = blackoutsToAdd
+            self.blackoutIDsToRemove = blackoutIDsToRemove
+        }
+    }
+
+    enum ScheduleSettingsApply {
+        case apply(settings: Canonical.Settings)
+        /// An owned schedule field changed under the draft.
+        case baselineConflict
+    }
+
+    /// Merges ONLY owned schedule fields into the latest settings. Booking
+    /// credentials (`bookingLink`) and every unknown/preserved field survive
+    /// by struct copy — a settings save never rounds hours, drops the token,
+    /// or rewrites configuration it does not own.
+    static func applyScheduleSettings(
+        current: Canonical.Settings,
+        draft: ScheduleSettingsDraft
+    ) -> ScheduleSettingsApply {
+        if let baseline = draft.baselineSchedule,
+           !scheduleConfigsMatch(baseline, current.schedule) {
+            return .baselineConflict
+        }
+        var merged = current
+        var schedule = merged.schedule ?? Canonical.ScheduleConfig(
+            decodingSkipped: ()
+        )
+        if let workDays = draft.workDays { schedule.workDays = workDays }
+        if let start = draft.workDayStart { schedule.workDayStart = start }
+        if let end = draft.workDayEnd { schedule.workDayEnd = end }
+        if let duration = draft.defaultDurationMinutes { schedule.defaultDurationMinutes = duration }
+        if let buffer = draft.bufferMinutes { schedule.bufferMinutes = buffer }
+        if let lead = draft.slotLeadHours { schedule.slotLeadHours = lead }
+        if let horizon = draft.slotWindowDays { schedule.slotWindowDays = horizon }
+        if let timeZone = draft.timeZone { schedule.timeZone = timeZone }
+        if let enabled = draft.bookableSlotsEnabled { schedule.bookableSlotsEnabled = enabled }
+        var blackouts = schedule.blackouts ?? []
+        if !draft.blackoutIDsToRemove.isEmpty {
+            let condemned = Set(draft.blackoutIDsToRemove)
+            blackouts.removeAll { condemned.contains($0.id) }
+        }
+        for entry in draft.blackoutsToAdd where !entry.id.isEmpty {
+            // Add-only: never replace an existing stable ID implicitly.
+            if blackouts.contains(where: { $0.id == entry.id }) { continue }
+            blackouts.append(entry)
+        }
+        schedule.blackouts = blackouts.isEmpty ? nil : blackouts
+        merged.schedule = schedule
+        return .apply(settings: merged)
+    }
+
+    // MARK: - Intake recheck (B3, P3)
+
+    /// Rechecks a task 8.02 plan against CURRENT records before the atomic
+    /// commit: drops conversions whose request vanished, changed status, or
+    /// already converted, and whose deterministic job appeared meanwhile (a
+    /// concurrent device won the race). Returns the filtered plan, or nil
+    /// when nothing remains (the caller must not write — a no-op enqueues
+    /// nothing).
+    ///
+    /// Conversion stamps (`convertedJobId`/`convertedCustomerId`,
+    /// `new → converted`) are re-applied onto the CURRENT request rows, so
+    /// late-arriving server lifecycle/history survives (D-B3-4). Created
+    /// customers absent from the current set ride along; blank-field
+    /// backfills from the original plan are dropped on a race (the next
+    /// intake pass re-derives them) rather than clobbering newer contact
+    /// data. In the common path — plan built from these same arrays with no
+    /// suspension between — the recheck is the identity.
+    static func recheckedIntakePlan(
+        _ plan: NativeBookingIntake.Plan,
+        currentRequests: [Canonical.BookingRequest],
+        currentJobs: [Canonical.Job],
+        currentCustomers: [Canonical.Customer]
+    ) -> NativeBookingIntake.Plan? {
+        let currentByID = Dictionary(uniqueKeysWithValues: currentRequests.map { ($0.id, $0) })
+        let currentJobIDs = Set(currentJobs.map(\.id))
+        let planLeadsByID = Dictionary(
+            uniqueKeysWithValues: plan.jobs.filter { $0.id.hasPrefix("jbk_") }.map { ($0.id, $0) }
+        )
+        var surviving: [String] = []
+        for requestID in plan.convertedRequestIDs {
+            guard let current = currentByID[requestID],
+                  NativeBookingIntake.isConvertible(current),
+                  current.convertedJobId == nil
+            else { continue }
+            let jobID = "jbk_\(requestID)"
+            guard !currentJobIDs.contains(jobID), planLeadsByID[jobID] != nil else { continue }
+            surviving.append(requestID)
+        }
+        guard !surviving.isEmpty else { return nil }
+        let survivors = Set(surviving)
+        var nextRequests = currentRequests
+        var drafts: [Canonical.MutationDraft] = []
+        for index in nextRequests.indices where survivors.contains(nextRequests[index].id) {
+            guard let planned = plan.requests.first(where: { $0.id == nextRequests[index].id }) else { continue }
+            var stamped = nextRequests[index]
+            if stamped.status == "new" { stamped.status = planned.status }
+            stamped.convertedJobId = planned.convertedJobId
+            stamped.convertedCustomerId = planned.convertedCustomerId
+            nextRequests[index] = stamped
+            drafts.append(mutationDraft(table: "bookingRequests", id: stamped.id, record: stamped))
+        }
+        var nextJobs = currentJobs
+        var createdJobs: [String] = []
+        for requestID in plan.convertedRequestIDs where survivors.contains(requestID) {
+            let jobID = "jbk_\(requestID)"
+            if let lead = planLeadsByID[jobID] {
+                nextJobs.append(lead)
+                createdJobs.append(jobID)
+                drafts.append(mutationDraft(table: "jobs", id: jobID, record: lead))
+            }
+        }
+        let currentCustomerIDs = Set(currentCustomers.map(\.id))
+        var nextCustomers = currentCustomers
+        var keptCreatedCustomers: [String] = []
+        for customer in plan.customers where plan.createdCustomerIDs.contains(customer.id) {
+            guard !currentCustomerIDs.contains(customer.id) else { continue }
+            nextCustomers.append(customer)
+            keptCreatedCustomers.append(customer.id)
+            drafts.append(mutationDraft(table: "customers", id: customer.id, record: customer))
+        }
+        return NativeBookingIntake.Plan(
+            requests: nextRequests,
+            jobs: nextJobs,
+            customers: nextCustomers,
+            requestsChanged: true,
+            jobsChanged: !createdJobs.isEmpty,
+            customersChanged: !keptCreatedCustomers.isEmpty,
+            convertedRequestIDs: surviving,
+            createdJobIDs: createdJobs,
+            createdCustomerIDs: keptCreatedCustomers,
+            untouchedRequestIDs: plan.untouchedRequestIDs
+                + plan.convertedRequestIDs.filter { !survivors.contains($0) },
+            drafts: drafts
+        )
+    }
+
+    // MARK: - Reschedule proof (B4, contract §7)
+
+    /// Builds the replacement-schedule publication proof for the CURRENT job
+    /// record. `writeStamp` is the local schedule-commit instant (ISO-8601):
+    /// `Canonical.Job` carries no `updatedAt`, so the stamp the server
+    /// compares (`updated_at ≥ proof.updatedAt`) is the durable local write
+    /// recorded in pending work. Never invent server state here.
+    static func rescheduleProof(
+        job: Canonical.Job,
+        writeStamp: String
+    ) -> NativeScheduleProof? {
+        guard let date = job.scheduledDate, !date.isEmpty,
+              let start = job.scheduledStartTime, !start.isEmpty,
+              !writeStamp.isEmpty
+        else { return nil }
+        return NativeScheduleProof(jobId: job.id, updatedAt: writeStamp, date: date, start: start)
+    }
+
+    /// Refuses when a superseding schedule edit landed after proof
+    /// generation: the proof's date/start must still match the current job.
+    static func proofMatchesCurrentJob(_ proof: NativeScheduleProof, job: Canonical.Job?) -> Bool {
+        guard let job, job.id == proof.jobId else { return false }
+        return job.scheduledDate == proof.date && job.scheduledStartTime == proof.start
+    }
+
+    // MARK: - Link-authority reconciliation (B2, P1, contract §6)
+
+    /// Adopts a local display copy ONLY when a fresh `status` read proves it
+    /// current. A present-but-stale token needs the same recovery handling
+    /// as a missing one — never a share URL.
+    static func mayAdoptDisplayToken(displayToken: String?, status: NativeBookingLinkStatus) -> Bool {
+        guard let displayToken, !displayToken.isEmpty else { return false }
+        return status.tokenValid
+    }
+
+    static func mayAdoptPortalDisplayToken(displayToken: String?, status: NativePortalLinkStatus) -> Bool {
+        guard let displayToken, !displayToken.isEmpty else { return false }
+        return status.tokenValid
+    }
+
+    /// `already_exists` on a stale Create: refresh authority and adopt only a
+    /// matching current display copy — never an implicit rotate.
+    static func adoptAfterAlreadyExists(displayToken: String?, status: NativePortalLinkStatus) -> Bool {
+        mayAdoptPortalDisplayToken(displayToken: displayToken, status: status)
+    }
+
+    // MARK: - Local commit boundary
+
+    enum LocalCommitOutcome: Equatable {
+        /// Snapshot + queue both durable.
+        case committed
+        /// The snapshot write failed: nothing was enqueued, nothing published.
+        case snapshotFailed
+        /// The snapshot is durable but the queue write failed: recovery work
+        /// was staged in the pending-work store (never a silent drop).
+        case queueFailedRecoveryStaged
+    }
+
+    /// Durable local-first boundary used by every 8.08 commit: the canonical
+    /// snapshot is saved before the queue is touched, and a queue failure
+    /// never rolls back or hides the saved records — recovery is staged
+    /// instead. Mirrors the `commitCustomerMerge` boundary.
+    static func commitLocal(
+        saveSnapshot: () throws -> Void,
+        publishToQueue: () throws -> Void,
+        stageRecovery: () throws -> Void
+    ) -> LocalCommitOutcome {
+        do {
+            try saveSnapshot()
+        } catch {
+            return .snapshotFailed
+        }
+        do {
+            try publishToQueue()
+            return .committed
+        } catch {
+            do {
+                try stageRecovery()
+            } catch {
+                // Staging itself failed: the snapshot is still durable and
+                // the next edit re-enqueues; the caller surfaces the sync
+                // diagnostic. Never claim the queue publish succeeded.
+            }
+            return .queueFailedRecoveryStaged
+        }
+    }
+
+    // MARK: - Private helpers
+
+    static func normalizedDate(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return NativeSchedule.isValidDate(value) ? value : nil
+    }
+
+    static func normalizedTime(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return NativeSchedule.isValidTime(value) ? value : nil
+    }
+
+    static func scheduleConfigsMatch(_ lhs: Canonical.ScheduleConfig?, _ rhs: Canonical.ScheduleConfig?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return true
+        case let (l?, r?):
+            return l.timeZone == r.timeZone
+                && l.workDays == r.workDays
+                && l.workDayStart == r.workDayStart
+                && l.workDayEnd == r.workDayEnd
+                && l.defaultDurationMinutes == r.defaultDurationMinutes
+                && l.bufferMinutes == r.bufferMinutes
+                && l.slotLeadHours == r.slotLeadHours
+                && l.slotWindowDays == r.slotWindowDays
+                && l.bookableSlotsEnabled == r.bookableSlotsEnabled
+                && l.blackouts == r.blackouts
+        default: return false
+        }
+    }
+
+    static func mutationDraft<Record: Encodable>(
+        table: String,
+        id: String,
+        record: Record
+    ) -> Canonical.MutationDraft {
+        let data = try! JSONEncoder().encode(record)
+        let payload = try! JSONDecoder().decode(Canonical.JSONValue.self, from: data)
+        return Canonical.MutationDraft(table: table, op: .upsert, recordId: id, payload: payload)
+    }
+}
+
+private extension Canonical.Job {
+    /// An empty baseline status means "no lifecycle assertion" (legacy
+    /// callers that only pinned the schedule fields).
+    func baselineStatusMatches(_ baseline: String) -> Bool {
+        baseline.isEmpty || status == baseline
+    }
+}
+
+private extension Canonical.ScheduleConfig {
+    /// Construction for settings that never had a schedule block: every
+    /// owned field stays nil so the first save writes only what the draft
+    /// owns. All-optional decoding of `{}` cannot fail for this shape.
+    init(decodingSkipped: Void) {
+        self = try! JSONDecoder().decode(
+            Canonical.ScheduleConfig.self,
+            from: Data("{}".utf8)
+        )
+    }
+}
+
+extension Canonical.ScheduleBlackout: Equatable {
+    public static func == (lhs: Canonical.ScheduleBlackout, rhs: Canonical.ScheduleBlackout) -> Bool {
+        lhs.id == rhs.id && lhs.start == rhs.start && lhs.end == rhs.end && lhs.reason == rhs.reason
+    }
+}
+
+// MARK: - Incomplete-work persistence and recovery (S3, S4, B2–B4, P1, P3)
+
+/// One unit of owner-bound incomplete work: a server-acknowledged mutation
+/// whose local mirror or queue publication did not finish, or a reschedule
+/// proof awaiting its exact job-mutation acknowledgment. Recovery never
+/// repeats a committed server mutation: mirror items re-apply display data
+/// and re-enqueue; proof items resume at the verification step.
+struct NativeScheduleBookingPendingWork: Codable, Equatable, Sendable {
+    enum Kind: Codable, Equatable, Sendable {
+        /// Display-only booking-link mirror (`token` nil for `set_enabled`).
+        case bookingMirror(token: String?, enabled: Bool, revision: Int, operationId: String)
+        /// Display-only portal mirror for one customer.
+        case portalMirror(customerId: String, token: String?, enabled: Bool?, operationId: String)
+        /// Reschedule proof awaiting exact job-mutation acknowledgment.
+        case rescheduleProof(requestId: String, proof: NativeScheduleProof, writeStamp: String)
+    }
+
+    var kind: Kind
+    /// Exact verified owner binding that owns this work. Items whose binding
+    /// no longer matches are dropped, never adopted by another account.
+    var ownerBinding: String
+
+    init(kind: Kind, ownerBinding: String) {
+        self.kind = kind
+        self.ownerBinding = ownerBinding
+    }
+}
+
+/// File-backed per-device store for 8.08 pending work. The document is keyed
+/// by owner binding at the item level so an account switch can scrub exactly
+/// the departing account's items without touching anything else.
+struct NativeScheduleBookingPendingWorkStore: Sendable {
+    struct Document: Codable {
+        var schemaVersion: Int = 1
+        var items: [NativeScheduleBookingPendingWork] = []
+    }
+
+    var fileURL: URL
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+    }
+
+    func load() -> [NativeScheduleBookingPendingWork] {
+        guard let data = try? Data(contentsOf: fileURL),
+              let document = try? JSONDecoder().decode(Document.self, from: data),
+              document.schemaVersion == 1
+        else { return [] }
+        return document.items
+    }
+
+    func save(_ items: [NativeScheduleBookingPendingWork]) throws {
+        let document = Document(items: items)
+        let data = try JSONEncoder().encode(document)
+        let parent = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    /// Stages one item, replacing any earlier item for the same owner-bound
+    /// target (last-writer-wins per target, mirroring the mutation queue).
+    func stage(_ item: NativeScheduleBookingPendingWork) throws {
+        var items = load().filter { !replaces($0, with: item) }
+        items.append(item)
+        try save(items)
+    }
+
+    func remove(matching predicate: (NativeScheduleBookingPendingWork) -> Bool) throws {
+        try save(load().filter { !predicate($0) })
+    }
+
+    /// Drops every item owned by `binding`. Called on the account boundary
+    /// so no other account can inherit and act on this account's pending
+    /// capability work.
+    func scrubOwnerBoundWork(binding: String) throws {
+        try save(load().filter { $0.ownerBinding != binding })
+    }
+
+    func removeAll() throws {
+        try save([])
+    }
+
+    private func replaces(
+        _ existing: NativeScheduleBookingPendingWork,
+        with staged: NativeScheduleBookingPendingWork
+    ) -> Bool {
+        guard existing.ownerBinding == staged.ownerBinding else { return false }
+        switch (existing.kind, staged.kind) {
+        case (.bookingMirror, .bookingMirror):
+            return true
+        case let (.portalMirror(lID, _, _, _), .portalMirror(rID, _, _, _)):
+            return lID == rID
+        case let (.rescheduleProof(lReq, _, _), .rescheduleProof(rReq, _, _)):
+            return lReq == rReq
+        default:
+            return false
+        }
+    }
+}

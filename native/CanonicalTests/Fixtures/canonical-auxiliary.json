@@ -1,0 +1,128 @@
+{
+  "aiPricingSuggestion": {
+    "laborHours": { "suggested": 3.25, "reasoning": "Fixture labor" },
+    "laborRate": { "suggested": 110.5, "reasoning": "Fixture rate" },
+    "materials": [
+      { "name": "Copper", "suggestedUnitCost": 12.345, "reasoning": "Fixture material" }
+    ],
+    "overallRange": { "low": 400, "mid": 500.25, "high": 625.5, "reasoning": "Fixture range" }
+  },
+  "jobCostInput": {
+    "id": "jc-input",
+    "label": "Permit",
+    "category": "permit",
+    "quantity": "1",
+    "unitCost": 75.25,
+    "markupPercent": "0",
+    "markupPolicy": "passthrough",
+    "taxable": false,
+    "customerVisible": true,
+    "notes": null
+  },
+  "paymentDraft": {
+    "amount": 125.75,
+    "date": "2026-09-06",
+    "method": "check",
+    "note": "Deposit"
+  },
+  "expenseDraft": {
+    "description": "Supplies",
+    "amount": 41.125,
+    "category": "materials",
+    "date": "2026-09-06",
+    "notes": "Fixture",
+    "receiptUri": null,
+    "jobId": "j1"
+  },
+  "paymentPlan": {
+    "enabled": true,
+    "installments": "3",
+    "frequency": "monthly"
+  },
+  "estimateInput": {
+    "laborHours": 2.5,
+    "laborRate": 100,
+    "materials": [
+      { "id": "m-input", "name": "Wire", "quantity": "2.75", "unitCost": 10.5 }
+    ],
+    "materialMarkup": 15,
+    "jobCosts": [
+      {
+        "label": "Delivery",
+        "category": "delivery",
+        "quantity": 1,
+        "unitCost": "12.345",
+        "markupPolicy": "in_margin_base"
+      }
+    ],
+    "overheadPercent": 10,
+    "marginPercent": 20,
+    "travelMiles": 8.5,
+    "travelFeePerMile": 0.67,
+    "isEmergency": true,
+    "emergencyMultiplier": 1.5,
+    "minimumJobFee": 99,
+    "taxPercent": 8.25
+  },
+  "estimateBreakdown": {
+    "laborCost": 250,
+    "materialBaseCost": 28.875,
+    "materialMarkupAmount": 4.33125,
+    "materialCost": 33.20625,
+    "travelCost": 5.695,
+    "directCostMarginBase": 12.345,
+    "directCostPassthrough": 75.25,
+    "directCostLines": [
+      {
+        "label": "Permit",
+        "category": "permit",
+        "amount": 75.25,
+        "markupPolicy": "passthrough",
+        "taxable": false,
+        "customerVisible": true
+      }
+    ],
+    "subtotal": 301.24625,
+    "overheadCost": 30.124625,
+    "profit": 82.84271875,
+    "preTaxTotal": 489.46359375,
+    "totalBeforeTax": 489.46359375,
+    "taxAmount": 40.380747484375,
+    "total": 529.844341234375,
+    "effectiveHourlyRate": 211.93773649375,
+    "hitMinimum": false
+  },
+  "priceRange": {
+    "low": 450,
+    "recommended": 529.844341234375,
+    "high": 610,
+    "breakdown": {
+      "laborCost": 250,
+      "materialBaseCost": 28.875,
+      "materialMarkupAmount": 4.33125,
+      "materialCost": 33.20625,
+      "travelCost": 5.695,
+      "directCostMarginBase": 12.345,
+      "directCostPassthrough": 75.25,
+      "directCostLines": [],
+      "subtotal": 301.24625,
+      "overheadCost": 30.124625,
+      "profit": 82.84271875,
+      "preTaxTotal": 489.46359375,
+      "totalBeforeTax": 489.46359375,
+      "taxAmount": 40.380747484375,
+      "total": 529.844341234375,
+      "effectiveHourlyRate": 211.93773649375,
+      "hitMinimum": false
+    }
+  },
+  "jobEstimateBreakdown": {
+    "laborCost": 250,
+    "materialBaseCost": 28.875,
+    "materialCost": 33.20625,
+    "directCostLines": [],
+    "overheadLine": 246.638091234375,
+    "estimateTotal": 529.844341234375,
+    "hasMaterials": true
+  }
+}
