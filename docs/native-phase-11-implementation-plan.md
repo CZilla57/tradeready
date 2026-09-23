@@ -34,6 +34,7 @@ whose events the analytics catalog mirrors. Design sources:
 "Advanced" Groq/Anthropic key entry (`SettingsAIScreen`). Before execution,
 add an 11.xx task for it (secure field, Keychain storage, redaction per
 11.00), or record a dated cutover waiver in 12.00. Do not leave it unowned.
+**Owned by 11.15** (added 2026-09-23 at SDD start).
 
 ## 1. Execution contract
 
@@ -193,11 +194,12 @@ Known gaps the app-target lane must close (found in source review):
  |- 11.07 analytics transport + privacy (P1,P4)
  |    |- 11.08 event parity + identity lifecycle (P2,P3) [needs Phase 10 closeout]
  |    |- 11.09 crash reporting + redaction + app manifest (R1-R3, M1)
+ |         |- 11.15 Settings AI advanced key entry (P4, R2)
  |- 11.10a accessibility audit + fixes (H1) [needs Phase 10 closeout]
  |    |- 11.11 iPad layouts + multitasking (H2)
  |         |- 11.12 performance + network host tests + soak protocol (H3,H4)
  |              |- 11.10b accessibility re-audit (H1)
-11.01-11.12 (incl. 11.10b) -- 11.13 qualification -- 11.14 closeout
+11.01-11.12 (incl. 11.10b, 11.15) -- 11.13 qualification -- 11.14 closeout
 ```
 
 The diagram expresses interface dependencies, not a requirement to wait for every
@@ -570,6 +572,37 @@ objects report with a meaningful title; Debug reports nothing; traces sample at
 0.2 with session tracking on; the app manifest exists and matches the 11.00
 contract.
 
+### 11.15 — Settings › AI Assistant advanced key entry
+
+**Depends on:** 11.00 redaction contract; 11.09 (redaction/scrubber in place).
+**Requirements:** P4, R2 (secure-key handling); parity row "Settings › AI Assistant".
+Added 2026-09-23 to own the Phase 10 final-review I4 carry-in. Runs in the
+app-target lane after 11.09.
+
+**Read:** `screens/SettingsAIScreen.tsx` (the "Advanced" toggle and Groq/Anthropic
+key entry), the RN key storage it writes, `N/NativeCoachTransport.swift`
+(provider precedence), `N/AppStore.swift` (`coachProviderSummary`), the native
+Settings AI Assistant page, and the existing native Keychain/secure-key store
+that migrated keys are read from.
+
+**Own:** the native Settings › AI Assistant "Advanced" section (view edits) and
+any pure validation helper; a host test runner for the key-entry policy.
+
+1. Add the "Advanced" section with secure (`SecureField`) Groq and Anthropic key
+   entry, matching RN's copy and behavior (save, clear, masked display of a saved
+   key), storing keys only in the existing Keychain store the coach transport
+   reads. No key ever enters `UserDefaults`, the App Group, analytics, crash
+   payloads, logs, or the widget snapshot.
+2. Saving or clearing a key updates the provider summary and the coach transport's
+   provider selection with the same precedence the transport uses.
+3. Keys are owner-bound per the existing secure-store rules and are wiped on
+   sign-out/account deletion the same way migrated keys are.
+
+**Done when:** save/clear/precedence/owner-wipe fixtures pass, a redaction test
+proves an entered key cannot reach an analytics or crash payload, the parity row's
+"Remaining gap" is closed or narrowed with evidence, and the app compiles. Live
+provider proof stays deferred to Phase 12.
+
 ### 11.10 — Accessibility audit and remediation (11.10a, 11.10b)
 
 **Depends on:** 11.00 H1 baseline and Phase 10 closeout (10.15), so the audit
@@ -749,11 +782,12 @@ complete / Phase 12 evidence deferred**.
 | 11.07 | P1, P4 | Pending | 11.00 | Analytics transport + privacy |
 | 11.08 | P2, P3 | Pending | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Pending | 11.07 | Crash reporting + redaction + app manifest |
+| 11.15 | P4, R2 | Pending | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Pending | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Pending | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Pending | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Pending | 11.11, 11.12 | Accessibility re-audit (closes H1) |
-| 11.13 | all | Pending | 11.01-11.12 | Cross-client qualification |
+| 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
 
 Exit criteria traceability (roadmap Phase 11):
