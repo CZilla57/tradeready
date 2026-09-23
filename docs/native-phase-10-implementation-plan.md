@@ -908,7 +908,7 @@ actual results, blockers, and handoff. Separate **implementation blocked** from
 | 10.08 | N5, N6, B2 | **Code complete** | 10.05-10.07 | Unified reconciliation + routing |
 | 10.09 | B1, B2 | **Code complete** | 10.01, 10.08 | Post-sync derived-state seam |
 | 10.10 | C1, C2, C3, C4 | **Code complete** | 10.00, 10.01 | Coach transport + prompt + markdown + quick prompts |
-| 10.11 | D1, D2, D3, D6 | Pending | 10.04 | Today UI |
+| 10.11 | D1, D2, D3, D6 | **Code complete** | 10.04 | Today UI |
 | 10.12 | D4, D5, S5 | Pending | 10.02, 10.03, 10.05, 10.11 | Checklist/hero/insights cards |
 | 10.13 | C3, C4, C5 | Pending | 10.10, 10.12 | Coach UI + prefill |
 | 10.14 | all | Pending | 10.01-10.13 | Cross-client qualification |
@@ -1963,3 +1963,99 @@ Exit criteria traceability (roadmap Phase 10):
   `NativeCoachTransport`, `NativeCoachPrompt`, `NativeChatMarkdown`, and
   `NativeCoachQuickPrompts` are the full pure/service contract 10.13 needs;
   10.11/10.12 remain unaffected and unblocked by this task.
+
+### 10.11 — Today UI integration
+
+- Status: **Code complete.** Setup-checklist and insights slots are
+  intentional `EmptyView()` hooks; 10.12 fills them per the plan's phasing.
+- Files: `native/TradeReadyNative/TodayView.swift` (rewritten — week strip,
+  stats row, first-action hero, booking-attention rows, overdue/follow-up
+  briefing sections, awaiting-estimate row, selected-day schedule, header
+  actions, pull-to-refresh), `native/TradeReadyNative/NativeTodayComponents.swift`
+  (new — the row/card/section view library `TodayView` composes:
+  `NativeTodayWeekStripView`, `NativeTodayStatsRowView`,
+  `NativeTodayHeroCardView`, `NativeTodaySetupChecklistSlot`,
+  `NativeTodayInsightsSlot` (both `EmptyView()` today), `nativeTodayBookingRowLabel`,
+  `NativeTodayBookingAttentionRow`, `NativeTodayBriefingSection`,
+  `NativeTodayOverdueInvoiceRow`, `NativeTodayLeadRow`, `NativeTodaySeeMoreRow`,
+  `NativeTodayListCard`, `NativeTodayJobCard`, `NativeTodayScheduleStop`,
+  `NativeTodayEmptySchedule`), `native/TradeReadyNative/AppStore.swift`
+  (added `selectedTab`/`todaySelectedDate` published state, a
+  `today*` computed-property section reusing 10.01's canonical projections
+  and 10.04's `NativeTodayBriefing`/10.02's `NativeTodayInsights`,
+  `selectTodayDate`/`shiftTodaySelectedWeek`, the `NativeTodayRouteResult`
+  enum, and `routeToToday(_:)` — the destination router; also resets
+  `todaySelectedDate` on the sign-out/account-boundary path),
+  `native/StoreIntegrationTests/main.swift` (router, one-shot, and
+  selected-day/week-nav host tests, appended before the final `PASS`/`FAILED`
+  summary). Six existing standalone runners
+  (`run-calendar-editor-tests.sh`, `run-export-import-ui-tests.sh`,
+  `run-phase9-qualification-tests.sh`, `run-pricebook-ui-tests.sh`,
+  `run-schedule-booking-settings-tests.sh`, `run-store-integration-tests.sh`)
+  had `Domain/NativeTodayInsights.swift` and `Domain/NativeTodayBriefing.swift`
+  added to their `swiftc` file lists, since `AppStore.swift` now references
+  both.
+- Interface handoff (10.12's adoption contract): `NativeTodaySetupChecklistSlot`
+  and `NativeTodayInsightsSlot` are empty `View` structs placed in `TodayView.body`
+  at RN's exact positions (checklist slot right after the hero card, insights
+  slot right after the checklist slot, both before the booking-attention
+  rows) — 10.12 fills their bodies directly (same file, same struct names) or
+  swaps them for real content without touching `TodayView.swift`'s layout.
+  `AppStore.routeToToday(_:)` is the one router both 10.11's rows and 10.12's
+  checklist/hero/insight cards call — it takes any `NativeTodayDestination`
+  (10.04) and returns a `NativeTodayRouteResult`: `.handled` for cases that
+  already mutated store state (tab switch + one-shot deep link, or
+  `todaySelectedDate`), or a `.present*` case the caller turns into a local
+  `@State` sheet toggle exactly as `TodayView.handle(_:)` already does. 10.12
+  passes `sampleTourDone: false` into `NativeTodayBriefing.hero` today (via
+  `AppStore.todayHero`) because `AppStore` does not yet expose
+  `NativeSetupChecklistStore`'s persisted `sampleTourDone` — 10.12 owns wiring
+  that store in and flipping this to the real value.
+- Commands / results: `TZ=America/Phoenix sh native/run-store-integration-tests.sh`
+  — `PASS: canonical AppStore integration tests` (includes the new 10.11
+  router/nav block: every `NativeTodayDestination` case, fail-closed on
+  missing/archived job/customer/invoice ids and malformed dates, one-shot
+  deep-link clearing when routing to a new target, `selectTodayDate`/
+  `shiftTodaySelectedWeek` valid/invalid/±7 behavior, and a
+  `performPullToRefresh()` call confirming it reports no outcome rather than
+  a fabricated success when no sync coordinator is configured).
+  `TZ=America/Phoenix sh native/run-today-briefing-tests.sh` — all checks
+  passed (10.04 regression, unaffected). `TZ=America/Phoenix sh
+  native/run-global-search-tests.sh` — `PASS: native global search tests`
+  (regression check for the shared one-shot deep-link pattern `routeToToday`
+  reuses). `TZ=America/Phoenix sh native/run-export-import-ui-tests.sh`,
+  `run-phase9-qualification-tests.sh`, `run-pricebook-ui-tests.sh` — all
+  passed after the `NativeTodayInsights`/`NativeTodayBriefing` file-list fix.
+  `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath
+  __tests__/TodayScreenSettingsGear.test.tsx __tests__/crossTabNavigation.test.tsx`
+  — 2 suites / 3 tests passing. `TZ=America/Phoenix sh
+  native/run-all-domain-tests.sh` — passing (26 backend-workers tests plus
+  the Swift device-preflight and store-integration runners it chains).
+  `xcodebuild … Release … CODE_SIGNING_ALLOWED=NO build` — **BUILD SUCCEEDED**,
+  0 `error:` lines for the whole app target.
+- Blocker found and deliberately NOT fixed in this task: `run-calendar-editor-tests.sh`
+  and `run-schedule-booking-settings-tests.sh` were already missing
+  `NativeImportHistory.swift` from their `swiftc` file lists before this task
+  started (confirmed via `git diff --stat` — this task's edit to each file
+  only adds the two `NativeTodayInsights`/`NativeTodayBriefing` lines, no
+  removals), so both fail with `error: cannot find 'NativeImportHistory' in
+  scope` unrelated to anything Today-specific. Flagged as a follow-up task
+  (`task_a8b8157d`) rather than fixed inline, to keep this task's diff scoped
+  to Today UI.
+- Recorded native difference: `.onMyWay(jobId:)` routes through the existing
+  on-my-way review sheet (`requestOnMyWayReview`, the same path the
+  notification-tap flow already uses) instead of RN's inline, silent SMS
+  send — this surfaces a "no customer phone" failure through the review
+  sheet's own UI rather than a bare native alert, and was judged the correct
+  reuse of existing infrastructure rather than a second parallel send path.
+  Booking-alert multi-action prompts (`reschedule_requested` needs 4 actions:
+  View job / I've rescheduled it / Decline booking / Cancel) use SwiftUI's
+  `.confirmationDialog` rather than `Alert`, since `Alert` supports at most
+  two buttons; row/alert copy is otherwise byte-identical to
+  `screens/TodayScreen.tsx`'s `handleBookingRowPress`/`bookingRowLabel`.
+  `.route` presents the already-shipped, previously-orphaned Phase 8
+  `NativeRouteView()` — no new maps/routing code was written.
+- Next-ready: **10.12** (setup checklist, hero, and insights cards — the two
+  slot views and `sampleTourDone` wiring described above are ready for it)
+  and, once 10.12 lands, **10.13** (Coach UI, already unblocked on the
+  10.10 side).

@@ -3351,6 +3351,146 @@ struct StoreIntegrationTests {
                    "10.09 fix2: no cache write can have happened without the gate ever running")
         }
 
+        // MARK: - 10.11 Today destination router, selected-day/week nav
+
+        do {
+            let dir1011 = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1011-router-\(UUID().uuidString)", isDirectory: true)
+            let url1011 = dir1011.appendingPathComponent("store.json")
+            let store = AppStore(fileURL: url1011, seedIfMissing: false)
+
+            let job = Job(customerId: "c1011", customerName: "Nora", title: "Panel swap", laborRate: 95)
+            var archivedJob = Job(customerId: "c1011", customerName: "Nora", title: "Old job", laborRate: 95)
+            archivedJob.archivedAt = "2026-09-02T00:00:00.000Z"
+            let invoice = Invoice(customerId: "c1011", customer: "Nora", number: "INV-1011", amount: 250)
+            let customer = Customer(name: "Nora", email: "nora@example.com")
+            var archivedCustomer = Customer(name: "Old Customer", email: "old@example.com")
+            archivedCustomer.archivedAt = "2026-09-02T00:00:00.000Z"
+
+            _ = store.upsert(job)
+            _ = store.upsert(archivedJob)
+            _ = store.upsert(customer)
+            _ = store.upsert(archivedCustomer)
+            store.upsert(invoice)
+
+            // .job: exists and not archived -> handled, tab + one-shot deep link set.
+            expect(store.routeToToday(.job(jobId: job.id)) == .handled,
+                   "10.11 router: .job(existing) is handled")
+            expect(store.selectedTab == .jobs && store.deepLinkedJobID == job.id,
+                   "10.11 router: .job(existing) switches tab and sets the one-shot job id")
+
+            // .job: missing id fails closed and does not disturb prior state.
+            expect(store.routeToToday(.job(jobId: "does-not-exist")) == .none,
+                   "10.11 router: .job(missing) fails closed")
+            expect(store.deepLinkedJobID == job.id,
+                   "10.11 router: a failed-closed route leaves the prior one-shot target untouched")
+
+            // .job: archived id fails closed even though the record exists.
+            expect(store.routeToToday(.job(jobId: archivedJob.id)) == .none,
+                   "10.11 router: .job(archived) fails closed")
+
+            // .invoice: one-shot semantics clear the PRIOR job target.
+            expect(store.routeToToday(.invoice(invoiceId: invoice.id)) == .handled,
+                   "10.11 router: .invoice(existing) is handled")
+            expect(store.selectedTab == .invoices && store.deepLinkedInvoiceID == invoice.id,
+                   "10.11 router: .invoice(existing) switches tab and sets the one-shot invoice id")
+            expect(store.deepLinkedJobID == nil,
+                   "10.11 router: routing to a new one-shot target clears the prior one (routeToGlobalSearchResult parity)")
+
+            expect(store.routeToToday(.invoice(invoiceId: "missing")) == .none,
+                   "10.11 router: .invoice(missing) fails closed")
+
+            // .customer: archived fails closed; existing succeeds.
+            expect(store.routeToToday(.customer(customerId: archivedCustomer.id)) == .none,
+                   "10.11 router: .customer(archived) fails closed")
+            expect(store.routeToToday(.customer(customerId: customer.id)) == .handled,
+                   "10.11 router: .customer(existing) is handled")
+            expect(store.selectedTab == .customers && store.deepLinkedCustomerID == customer.id,
+                   "10.11 router: .customer(existing) switches tab and sets the one-shot customer id")
+
+            // Tab-only destinations always succeed (no id to verify).
+            expect(store.routeToToday(.jobs) == .handled && store.selectedTab == .jobs,
+                   "10.11 router: .jobs always switches tab")
+            expect(store.routeToToday(.invoices) == .handled && store.selectedTab == .invoices,
+                   "10.11 router: .invoices always switches tab")
+            expect(store.routeToToday(.customers) == .handled && store.selectedTab == .customers,
+                   "10.11 router: .customers always switches tab")
+            expect(store.routeToToday(.money) == .handled && store.selectedTab == .money,
+                   "10.11 router: .money always switches tab")
+
+            // .selectDate: valid date updates todaySelectedDate; malformed is a no-op.
+            expect(store.routeToToday(.selectDate(date: "2026-09-01")) == .handled,
+                   "10.11 router: .selectDate(valid) is handled")
+            expect(store.todaySelectedDate == "2026-09-01",
+                   "10.11 router: .selectDate(valid) updates todaySelectedDate")
+            expect(store.routeToToday(.selectDate(date: "not-a-date")) == .none,
+                   "10.11 router: .selectDate(malformed) fails closed")
+            expect(store.todaySelectedDate == "2026-09-01",
+                   "10.11 router: a failed .selectDate leaves todaySelectedDate untouched")
+
+            // View-presentation destinations: no store-state mutation, just the
+            // typed instruction the view acts on. Existence is still checked
+            // for the two that carry a job id.
+            expect(store.routeToToday(.createInvoice(jobId: job.id)) == .presentInvoiceFromJob(jobID: job.id),
+                   "10.11 router: .createInvoice(existing) presents the invoice-from-job sheet")
+            expect(store.routeToToday(.createInvoice(jobId: "missing")) == .none,
+                   "10.11 router: .createInvoice(missing) fails closed")
+            expect(store.routeToToday(.schedule(jobId: job.id)) == .presentJobEditor(jobID: job.id),
+                   "10.11 router: .schedule(existing) presents the job editor")
+            expect(store.routeToToday(.schedule(jobId: "missing")) == .none,
+                   "10.11 router: .schedule(missing) fails closed")
+            expect(store.routeToToday(.newJob) == .presentNewJobEditor,
+                   "10.11 router: .newJob presents a blank job editor")
+            expect(store.routeToToday(.newCustomer) == .presentNewCustomerEditor,
+                   "10.11 router: .newCustomer presents a blank customer editor")
+            expect(store.routeToToday(.calendar) == .presentCalendar, "10.11 router: .calendar presents the calendar")
+            expect(store.routeToToday(.search) == .presentSearch, "10.11 router: .search presents global search")
+            expect(store.routeToToday(.settings) == .presentSettings, "10.11 router: .settings presents settings")
+            expect(store.routeToToday(.route) == .presentRoute, "10.11 router: .route presents the route planner")
+
+            // .onMyWay: reuses the existing notification-tap review flow
+            // (`requestOnMyWayReview`) rather than a silent inline send.
+            expect(store.routeToToday(.onMyWay(jobId: job.id)) == .handled,
+                   "10.11 router: .onMyWay(existing) is handled")
+            expect(store.pendingOnMyWayJobID == job.id,
+                   "10.11 router: .onMyWay(existing) stages the same on-my-way review sheet the notification-tap path uses")
+            expect(store.routeToToday(.onMyWay(jobId: "missing")) == .none,
+                   "10.11 router: .onMyWay(missing) fails closed")
+
+            // Selected-day/week navigation (RN's setSelectedDate/prevWeek/nextWeek).
+            store.selectTodayDate("2026-09-10")
+            expect(store.todaySelectedDate == "2026-09-10", "10.11 nav: selectTodayDate adopts a valid date")
+            store.selectTodayDate("garbage")
+            expect(store.todaySelectedDate == "2026-09-10", "10.11 nav: selectTodayDate refuses a malformed date")
+            store.shiftTodaySelectedWeek(by: 7)
+            expect(store.todaySelectedDate == "2026-09-17", "10.11 nav: shiftTodaySelectedWeek(+7) advances one week")
+            store.shiftTodaySelectedWeek(by: -7)
+            expect(store.todaySelectedDate == "2026-09-10", "10.11 nav: shiftTodaySelectedWeek(-7) returns to the prior week")
+        }
+
+        // Pull-to-refresh `.alreadyRunning` handling: `TodayView.body` calls
+        // `await store.performPullToRefresh()` directly in `.refreshable` with
+        // no local success shortcut — `performPullToRefresh` forwards to the
+        // pre-existing `syncNowAndWait`, whose `.alreadyRunning` branch awaits
+        // `coordinator.waitUntilIdle()` rather than returning early (see
+        // `AppStore.swift`'s `syncNowAndWait`). This harness's
+        // `syncCoordinatorIfConfigured()` always returns `nil` (no network/
+        // auth configuration here — the same boundary the 10.09 tests above
+        // hit), so the real coordinator's `.alreadyRunning` transition cannot
+        // be driven end-to-end from this process; it is exercised by the
+        // analogous already-running guard on `runBookingIntakeAfterVerifiedPull`
+        // above (`10.09`/`8.x` tests, `gatePull`/`.alreadyRunning`) and is
+        // unchanged by this task. What IS pinned here is that
+        // `performPullToRefresh` does not fabricate a success when no
+        // coordinator is configured — it returns `nil`, so `TodayView` never
+        // reports a refresh as complete when nothing actually synced.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "1011-pull-to-refresh")
+            let outcome = await store.performPullToRefresh()
+            expect(outcome == nil,
+                   "10.11 pull-to-refresh: with no coordinator configured, performPullToRefresh reports no outcome rather than a fabricated success")
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }

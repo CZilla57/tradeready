@@ -100,6 +100,8 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeAppGroupInbox.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeWidgetActionReplay.swift" \
   "$ROOT_DIR/native/TradeReadyNative/BuildEnvironment.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayBriefing.swift" \
   "$ROOT_DIR/native/TradeReadyNative/AppStore.swift" \
   "$ROOT_DIR/native/PricebookUITests/main.swift" \
   -o "$OUTPUT_PATH"

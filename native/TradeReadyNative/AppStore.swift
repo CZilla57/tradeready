@@ -152,6 +152,12 @@ final class AppStore: ObservableObject {
         didSet { if !isApplyingProjection { mergeSettingsAndSave() } }
     }
     @Published var selectedTab: AppTab = .today
+    /// RN's Today `selectedDate` state (task 10.11): the week-strip/schedule
+    /// anchor. Starts at launch-time "today" and only changes on explicit
+    /// navigation (day tap, prev/next week, or a `.selectDate` destination) —
+    /// it does not auto-advance across a midnight rollover while foregrounded,
+    /// matching RN's `useState(todayString)` behavior exactly.
+    @Published var todaySelectedDate: String = NativeTodayBriefing.todayDateString(now: Date())
     @Published var deepLinkedJobID: String?
     @Published var deepLinkedCustomerID: String?
     @Published var deepLinkedInvoiceID: String?
@@ -4123,6 +4129,7 @@ final class AppStore: ObservableObject {
         persistenceBlockDetail = nil
         applyEmptySnapshot()
         selectedTab = .today
+        todaySelectedDate = NativeTodayBriefing.todayDateString(now: Date())
         deepLinkedJobID = nil
         deepLinkedCustomerID = nil
         deepLinkedInvoiceID = nil
@@ -7731,6 +7738,199 @@ extension AppStore {
     var canonicalExpenses: [Canonical.Expense] { snapshot.payload.expenses ?? [] }
     var canonicalTrips: [Canonical.Trip] { snapshot.payload.trips ?? [] }
     var canonicalPricebook: [Canonical.PricebookEntry] { snapshot.payload.pricebook ?? [] }
+
+    // MARK: - Today screen (task 10.11, requirements D1, D2, D3, D6)
+    //
+    // Thin pass-through wiring over the pure 10.04 projection
+    // (`NativeTodayBriefing`) and the existing Phase 8 booking-attention
+    // selector (`bookingAttentionRows()`). No selection/cap/order/label
+    // policy lives here — every computed value below just forwards the live
+    // canonical snapshot and `todaySelectedDate` into the pure module.
+
+    /// Today's local date string, recomputed on every access (never cached)
+    /// so a day rollover while the app stays foregrounded is reflected
+    /// immediately — mirrors RN's `getTodayDateString()` being called fresh
+    /// on every render, as distinct from `todaySelectedDate` below (RN's
+    /// `selectedDate` state), which only changes on explicit navigation.
+    var todayString: String { NativeTodayBriefing.todayDateString(now: Date()) }
+
+    var todayHeader: NativeTodayHeader {
+        NativeTodayBriefing.header(now: Date(), todayDateString: todayString)
+    }
+
+    var todayWeekStrip: NativeWeekStrip? {
+        NativeTodayBriefing.weekStrip(
+            selectedDate: todaySelectedDate,
+            today: todayString,
+            jobDates: NativeTodayBriefing.jobDates(canonicalJobs)
+        )
+    }
+
+    var todayIsSelectedDateToday: Bool { todaySelectedDate == todayString }
+
+    var todayScheduleSectionTitle: String {
+        NativeTodayBriefing.scheduleSectionTitle(selectedDate: todaySelectedDate, today: todayString)
+    }
+
+    var todaySelectedDaySchedule: [Canonical.Job] {
+        NativeTodayBriefing.scheduleRows(canonicalJobs, date: todaySelectedDate)
+    }
+
+    var todayEarnings: Decimal { NativeTodayBriefing.earnings(for: todayString, jobs: canonicalJobs) }
+
+    var todayOverdueInvoices: [Canonical.Invoice] {
+        NativeTodayBriefing.overdueInvoices(canonicalInvoices, now: Date())
+    }
+
+    var todayOverdueTotal: Decimal { NativeTodayBriefing.overdueTotal(todayOverdueInvoices) }
+
+    var todayOverdueCapped: NativeCappedSection<Canonical.Invoice> {
+        NativeTodayBriefing.capped(todayOverdueInvoices, limit: NativeTodayBriefing.invoiceLimit)
+    }
+
+    var todayLeadJobs: [Canonical.Job] { NativeTodayBriefing.leadJobs(canonicalJobs) }
+
+    var todayLeadCapped: NativeCappedSection<Canonical.Job> {
+        NativeTodayBriefing.capped(todayLeadJobs, limit: NativeTodayBriefing.leadLimit)
+    }
+
+    /// "ABSENT means ON" (never truthiness) — `settings.estimateFollowUpsEnabled`
+    /// already resolves that default at decode time (see the canonical
+    /// adapter), so this reads it directly rather than re-deriving.
+    var todayAwaitingEstimatesRow: NativeAwaitingEstimatesRow? {
+        NativeTodayBriefing.awaitingEstimatesRow(
+            jobs: canonicalJobs, now: Date(), followUpsEnabled: settings.estimateFollowUpsEnabled
+        )
+    }
+
+    /// `sampleTourDone` is not yet wired to a live `NativeSetupChecklistStore`
+    /// binding on `AppStore` (task 10.03 shipped the store; nothing adopts it
+    /// here yet) — passed `false` per the 10.11 task ruling. Task 10.12 owns
+    /// wiring the persisted value and the hero-suppresses-insights gate.
+    var todayHero: NativeTodayHero? {
+        NativeTodayBriefing.hero(jobs: canonicalJobs, customers: canonicalCustomers, sampleTourDone: false)
+    }
+
+    /// Reuses the existing Phase 8 read-only selector directly — Today shows
+    /// the same rows the Booking Requests screen shows, just condensed.
+    var todayBookingAttentionRows: [NativeBookingAttention.Row] { bookingAttentionRows() }
+
+    /// RN's `setSelectedDate`. Refuses a malformed date rather than adopting
+    /// a value the week-strip/schedule projection cannot parse.
+    func selectTodayDate(_ date: String) {
+        guard NativeSchedule.parseDateComponents(date) != nil else { return }
+        todaySelectedDate = date
+    }
+
+    /// RN's `prevWeek`/`nextWeek` (`shiftDate(selectedDate, ±7)`).
+    func shiftTodaySelectedWeek(by days: Int) {
+        guard let shifted = NativeTodayBriefing.shiftDate(todaySelectedDate, days: days) else { return }
+        todaySelectedDate = shifted
+    }
+
+    /// Classification of every `NativeTodayDestination` case (10.04) for
+    /// `routeToToday` below. Two shapes: `.handled` cases already mutated
+    /// store state themselves (tab switch + one-shot deep link, exactly the
+    /// `routeToGlobalSearchResult` pattern); the `.present*` cases have no
+    /// existing cross-tab one-shot sheet field to deep-link into an editor on
+    /// another tab, so they hand the view a typed instruction to present the
+    /// editor directly from Today — the same thing `NativeGlobalSearchView`'s
+    /// inline action sheet already does for "New job"/"New customer"/"New
+    /// invoice". `.none` is the fail-closed case: a missing or archived
+    /// record, or a malformed date, produces no destination.
+    enum NativeTodayRouteResult: Equatable {
+        case handled
+        case presentJobEditor(jobID: String)
+        case presentNewJobEditor
+        case presentNewCustomerEditor
+        case presentInvoiceFromJob(jobID: String)
+        case presentRoute
+        case presentCalendar
+        case presentSearch
+        case presentSettings
+        case none
+    }
+
+    /// Executes a Today destination against the live snapshot. Reuses the
+    /// exact one-shot exact-ID pattern from `routeToGlobalSearchResult`:
+    /// clears every prior deep-link target first, verifies the CURRENT
+    /// record exists and is not archived, and only then publishes the new
+    /// target — a stale insight/booking-row/hero target for a since-deleted
+    /// record is a no-op, never an invented destination.
+    @discardableResult
+    func routeToToday(_ destination: NativeTodayDestination) -> NativeTodayRouteResult {
+        switch destination {
+        case .job(let id):
+            guard jobs.contains(where: { $0.id == id && ($0.archivedAt ?? "").isEmpty }) else { return .none }
+            resetTodayDeepLinkTargets()
+            deepLinkedJobID = id
+            selectedTab = .jobs
+            return .handled
+        case .createInvoice(let jobID):
+            guard jobs.contains(where: { $0.id == jobID }) else { return .none }
+            return .presentInvoiceFromJob(jobID: jobID)
+        case .invoice(let id):
+            guard invoices.contains(where: { $0.id == id }) else { return .none }
+            resetTodayDeepLinkTargets()
+            deepLinkedInvoiceID = id
+            selectedTab = .invoices
+            return .handled
+        case .invoices:
+            selectedTab = .invoices
+            return .handled
+        case .jobs:
+            selectedTab = .jobs
+            return .handled
+        case .schedule(let jobID):
+            guard jobs.contains(where: { $0.id == jobID }) else { return .none }
+            return .presentJobEditor(jobID: jobID)
+        case .selectDate(let date):
+            guard NativeSchedule.parseDateComponents(date) != nil else { return .none }
+            todaySelectedDate = date
+            return .handled
+        case .customer(let id):
+            guard customers.contains(where: { $0.id == id && ($0.archivedAt ?? "").isEmpty }) else { return .none }
+            resetTodayDeepLinkTargets()
+            deepLinkedCustomerID = id
+            selectedTab = .customers
+            return .handled
+        case .customers:
+            selectedTab = .customers
+            return .handled
+        case .money:
+            selectedTab = .money
+            return .handled
+        case .calendar:
+            return .presentCalendar
+        case .search:
+            return .presentSearch
+        case .settings:
+            return .presentSettings
+        case .route:
+            return .presentRoute
+        case .onMyWay(let jobID):
+            // Deliberate native difference (recorded in the 10.11 report):
+            // RN sends the "on my way" message inline and silently. Native
+            // routes through the same on-my-way review sheet the
+            // notification-tap path already uses (`requestOnMyWayReview`)
+            // rather than duplicating the send — surfacing "no customer"
+            // through the review sheet instead of a bare alert.
+            guard jobs.contains(where: { $0.id == jobID }) else { return .none }
+            requestOnMyWayReview(jobID: jobID)
+            return .handled
+        case .newJob:
+            return .presentNewJobEditor
+        case .newCustomer:
+            return .presentNewCustomerEditor
+        }
+    }
+
+    private func resetTodayDeepLinkTargets() {
+        deepLinkedJobID = nil
+        deepLinkedCustomerID = nil
+        deepLinkedInvoiceID = nil
+        deepLinkedOutreachInvoiceID = nil
+    }
 
     /// Every Overview-tab card for one date filter, in one value.
     func moneyOverview(filter: NativeMoneyDateFilter, now: Date = Date()) -> NativeMoneyOverview {
