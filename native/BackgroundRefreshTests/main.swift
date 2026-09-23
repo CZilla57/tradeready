@@ -99,14 +99,17 @@ struct BackgroundRefreshTests {
         // MARK: - Task 10.09 (B1): NativeDerivedStatePublisher seam matrix
         //
         // These are unit-level tests of the publisher's own contract —
-        // failure isolation, owner-identity re-verification, and the
-        // register/cache surface. The higher-level guarantee ("invoked
-        // exactly once per real committed pass, never on .alreadyRunning,
-        // offline, signed-out, or a failed pass") is a property of its one
-        // call site, `AppStore.pullDeltaIfPossible`, and is covered by
-        // `native/run-store-integration-tests.sh` and
-        // `native/run-sync-coordinator-tests.sh` (every earlier guard in
-        // that function returns before ever reaching the publish call).
+        // failure isolation, owner-identity re-verification, the generation
+        // guard against a superseded (stale-resuming) publish, and the
+        // register/cache surface. The higher-level guarantee ("exactly once
+        // per committed canonical sync commit, never on .alreadyRunning,
+        // offline, signed-out, or a pre-commit failure") is a property of
+        // AppStore's several commit call sites (`pullDeltaIfPossible`,
+        // `runBookingIntakeAfterVerifiedPull`'s local commit, and the
+        // initial-sync commit in `beginInitialSyncGate`) each returning
+        // before ever reaching their own publish call on every excluded
+        // path — covered by `native/run-store-integration-tests.sh` and
+        // `native/run-sync-coordinator-tests.sh`.
 
         struct SeamFailure: Error {}
 
@@ -223,9 +226,10 @@ struct BackgroundRefreshTests {
             expect(second == ["snapshot-5"], "an unregistered observer receives no further snapshots")
         }
 
-        // reset() clears both the cache and every observer registration —
-        // the account-boundary guarantee (sign-out must never leak a prior
-        // owner's cached snapshot or replay to a stale observer).
+        // reset() (fix round 1, finding 2/4): clears ONLY the cached
+        // snapshot at the account boundary. Observers are app-lifetime (the
+        // 11.01 widget mirror registers once) and must survive sign-out to
+        // receive the next owner's publishes after sign-in.
         do {
             var observed = 0
             let publisher = NativeDerivedStatePublisher<Int, String>(
@@ -236,11 +240,74 @@ struct BackgroundRefreshTests {
             publisher.register { _ in observed += 1 }
             await publisher.publish(canonical: 9, expectedOwnerBinding: "owner-a")
             expect(publisher.cachedSnapshot == "snapshot-9", "sanity: the cache is populated before reset")
+            expect(observed == 1, "sanity: the observer ran for the first publish")
             publisher.reset()
             expect(publisher.cachedSnapshot == nil, "reset() clears the cached snapshot at the account boundary")
             await publisher.publish(canonical: 10, expectedOwnerBinding: "owner-a")
-            expect(observed == 1, "reset() removes every observer registration")
+            expect(observed == 2, "reset() does NOT remove observer registrations: the survivor is called again")
             expect(publisher.cachedSnapshot == "snapshot-10", "a publish after reset() still populates a fresh cache")
+        }
+
+        // Fail-closed cached-snapshot read (fix round 1, finding 2): the
+        // cache is scoped to the owner it was built for. If the live owner
+        // changes without an explicit reset() (e.g. a caller forgets to
+        // clear it), the read must still come back nil rather than leak the
+        // previous owner's data.
+        do {
+            var currentOwner = "owner-a"
+            let publisher = NativeDerivedStatePublisher<Int, String>(
+                notifySynchronize: { _ in },
+                makeSnapshot: { input, _ in "snapshot-\(input)" },
+                ownerBinding: { currentOwner }
+            )
+            await publisher.publish(canonical: 1, expectedOwnerBinding: "owner-a")
+            expect(publisher.cachedSnapshot == "snapshot-1", "sanity: cache populated for owner-a")
+            currentOwner = "owner-b"
+            expect(publisher.cachedSnapshot == nil,
+                   "fail-closed: a cache built for a previous owner never reads back for a different live owner")
+            currentOwner = "owner-a"
+            expect(publisher.cachedSnapshot == "snapshot-1",
+                   "the cache reads back once the live owner matches again (no data was lost, just gated)")
+        }
+
+        // Generation guard (fix round 1, finding 3): an older publish that
+        // resumes, after suspending in notifySynchronize, LATER than a newer
+        // publish has already completed must not overwrite the newer
+        // snapshot or re-notify observers with stale data.
+        do {
+            var observed: [String] = []
+            var resumeOlder: CheckedContinuation<Void, Never>?
+            var liveNow = Date(timeIntervalSince1970: 1)
+            let publisher = NativeDerivedStatePublisher<Int, String>(
+                notifySynchronize: { date in
+                    // The "older" publish (canonical 1, now=1) suspends here
+                    // until explicitly resumed; the "newer" publish (canonical
+                    // 2, now=2) resolves immediately — modeling a direct
+                    // booking pull whose notify call coalesces and returns
+                    // right away while an earlier background pass is still
+                    // suspended in its own notify call.
+                    if date == Date(timeIntervalSince1970: 1) {
+                        await withCheckedContinuation { resumeOlder = $0 }
+                    }
+                },
+                makeSnapshot: { input, _ in "snapshot-\(input)" },
+                ownerBinding: { "owner-a" },
+                now: { liveNow }
+            )
+            publisher.register { observed.append($0) }
+            liveNow = Date(timeIntervalSince1970: 1)
+            let older = Task { await publisher.publish(canonical: 1, expectedOwnerBinding: "owner-a") }
+            while resumeOlder == nil { await Task.yield() }
+            liveNow = Date(timeIntervalSince1970: 2)
+            await publisher.publish(canonical: 2, expectedOwnerBinding: "owner-a")
+            expect(publisher.cachedSnapshot == "snapshot-2", "sanity: the newer publish completed and cached its snapshot")
+            expect(observed == ["snapshot-2"], "sanity: the newer publish notified its observer")
+            resumeOlder?.resume()
+            _ = await older.value
+            expect(publisher.cachedSnapshot == "snapshot-2",
+                   "generation guard: the older publish resuming after the newer one does not overwrite the cache")
+            expect(observed == ["snapshot-2"],
+                   "generation guard: the older publish resuming after the newer one does not re-notify observers")
         }
 
         if failures > 0 {

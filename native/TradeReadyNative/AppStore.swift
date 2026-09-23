@@ -3698,6 +3698,11 @@ final class AppStore: ObservableObject {
             initialSyncGateGeneration &+= 1
             authenticatedAccountState = .noMigratedSession
             authenticationGateState = .signedOut
+            // Task 10.09 (B1): account boundary — clear the owner-scoped
+            // cached snapshot (never the observer registrations; the 11.01
+            // widget mirror registers once and must keep receiving the next
+            // owner's publishes after sign-in).
+            derivedStatePublisher.reset()
         } catch {
             authenticationGateState = .unavailable
         }
@@ -4106,6 +4111,11 @@ final class AppStore: ObservableObject {
 
     private func applyCompletedSignOutState() {
         syncCoordinator?.reset()
+        // Task 10.09 (B1): account boundary — clear the owner-scoped cached
+        // snapshot only; observer registrations survive (the 11.01 widget
+        // mirror registers once at launch and must keep receiving the next
+        // owner's publishes after sign-in, not just the one active at
+        // registration time).
         derivedStatePublisher.reset()
         isAccountScrubBlocked = false
         persistenceWritesBlocked = false
@@ -4408,6 +4418,18 @@ final class AppStore: ObservableObject {
                     throw error
                 }
                 self.refreshRecurringJobs()
+                // Task 10.09 (B1) fix round 1: the initial full sync's commit
+                // just above never routes through `pullDeltaIfPossible` —
+                // it is its own, structurally separate committed canonical
+                // sync commit (`service.pull`, not `service.pullDelta`) —
+                // so it needs its own publish call, not a ride on
+                // `markInitialSyncCompleted`'s later fire-and-forget delta
+                // pull (which is a second, later commit of its own).
+                if let binding = self.verifiedAccountBinding, subject == self.authenticatedUserSubject {
+                    await self.derivedStatePublisher.publish(
+                        canonical: self.snapshot, expectedOwnerBinding: binding
+                    )
+                }
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
                     outcome: outcome,
@@ -4811,6 +4833,10 @@ final class AppStore: ObservableObject {
         isSubscriptionTrialing = false
         authenticatedAccountState = .noMigratedSession
         authenticationGateState = .signedOut
+        // Task 10.09 (B1): account boundary — clear the owner-scoped cached
+        // snapshot only; observer registrations survive (see
+        // `applyCompletedSignOutState`'s identical comment).
+        derivedStatePublisher.reset()
     }
 
     /// Claims and commits bounded batches only after exact legacy-owner proof.
@@ -5380,15 +5406,26 @@ final class AppStore: ObservableObject {
         // occurrences materialize before any recurrence-manager refresh reads
         // them. A no-op when nothing is due; never fails the pull.
         refreshRecurringJobs()
-        // Task 10.09 (B1): the single post-sync-commit seam, invoked exactly
-        // once per real committed pull — foreground or background — and
-        // never on an offline/signed-out/failed pass: every such pass returns
-        // above, before ever reaching this line. Reads `snapshot`, the
-        // just-committed canonical truth (including any recurring-job
-        // materialization just above), never a stale copy read separately.
-        // The owner binding is the one verified for this exact pass, just
-        // above; the seam re-verifies it again before touching each output
-        // and after its own awaits.
+        // Task 10.09 (B1): the post-sync-commit seam, invoked exactly once
+        // per commit this call makes — never on an offline/signed-out/
+        // pre-commit-failed pass: every such pass returns above, before ever
+        // reaching this line. `pullDeltaIfPossible` has several call sites
+        // (the coordinator's own pull closure, plus direct calls from the
+        // booking response/reschedule/portal-admin recovery paths) — each
+        // one that reaches here is its own commit and publishes once, from
+        // ITS committed snapshot; this is not a single funnel, and a caller
+        // that performs two separate commits (e.g. `prepareBookingReschedule`
+        // calling `syncNowAndWait` and then this function directly)
+        // correctly publishes twice. `NativeDerivedStatePublisher`'s
+        // generation guard keeps those publishes ordered even if an older
+        // one resumes, after suspending here, later than a newer one. A
+        // partial pull (`outcome.failedTables` non-empty) still committed
+        // whatever tables it did and publishes from that committed snapshot.
+        // Reads `snapshot`, the just-committed canonical truth (including any
+        // recurring-job materialization just above), never a stale copy read
+        // separately. The owner binding is the one verified for this exact
+        // pass, just above; the seam re-verifies it again before touching
+        // each output and after its own awaits.
         if let binding = verifiedAccountBinding, subject == authenticatedUserSubject {
             await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
         }
@@ -6469,6 +6506,17 @@ extension AppStore {
         guard committed else {
             migrationMessage = "Could not save converted requests locally."
             return .skipped(reason: "local-commit")
+        }
+        // Task 10.09 (B1): the booking-intake local commit above is itself a
+        // committed canonical sync commit (new customers/jobs/requests from
+        // the converted intake), distinct from the pull's own publish
+        // earlier in this function (which ran from the PRE-intake snapshot).
+        // Publish once more from the just-committed post-intake snapshot so
+        // notifications/cache/widget mirror see the converted data, not the
+        // stale pre-intake one. `commitScheduleBookingLocal` is synchronous,
+        // so no suspension occurred since the owner was last verified above.
+        if let binding = verifiedAccountBinding {
+            await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
         }
         return .applied(convertedRequestIDs: rechecked.convertedRequestIDs)
     }
@@ -7896,6 +7944,26 @@ extension AppStore {
         verifiedAccountBinding = nil
         isMigratedLocalOwnerVerified = false
         authenticationGateState = .signedOut
+    }
+
+    /// Test-only (task 10.09 fix round 1): injects a minimal
+    /// `NativeAuthenticatedIdentityActivator` so `useAnotherAccount()` can be
+    /// exercised for real without a live Supabase configuration.
+    /// `useAnotherAccount()`'s success path only ever calls
+    /// `activator.clearSession()` (Keychain-only; no network, no App Group
+    /// filesystem access), so the injected verifier below is never actually
+    /// invoked — it exists only to satisfy the activator's initializer.
+    /// Production never calls this.
+    func scheduleBookingTestSeedIdentityActivator() {
+        struct NoopVerifier: NativeAuthenticatedIdentityVerifying {
+            func verify(sessionBytes: Data) async throws -> NativeVerifiedAuxiliaryIdentity {
+                throw NativeAuthenticatedIdentityError.temporarilyUnavailable
+            }
+        }
+        authenticatedIdentityActivator = NativeAuthenticatedIdentityActivator(
+            snapshotURL: fileURL,
+            verifier: NoopVerifier()
+        )
     }
 
     /// Test-only (task 10.08): links an invoice to a job at the canonical

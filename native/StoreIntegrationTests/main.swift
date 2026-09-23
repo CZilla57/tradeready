@@ -1872,6 +1872,15 @@ struct StoreIntegrationTests {
             let (store, dir) = try seed08Store(requests: [convertible], settings: settings08(),
                                                delta: gated, tag: "ownerchange")
             seed08Owner(store)
+            // 10.09 fix round 1 (finding 5): this is the REAL, deterministic
+            // pre-commit failure — "owner changed during the network await"
+            // — that `pullDeltaIfPossible` guards against
+            // (`guard subject == authenticatedUserSubject ... else { return .skipped }`,
+            // strictly before the publish call). Prove it never publishes.
+            var notifyCalls = 0
+            store.notificationSynchronizeHook = { _ in notifyCalls += 1 }
+            var observed = 0
+            store.registerDerivedStateObserver { _ in observed += 1 }
             let flight = Task {
                 await store.runBookingIntakeAfterVerifiedPull(
                     makeCustomerID: { "c_acct_1" }, nowISO: { "2026-09-20T12:00:00.000Z" })
@@ -1891,6 +1900,12 @@ struct StoreIntegrationTests {
             }
             let kept = try snapshot08(dir.appendingPathComponent("store.json")).payload.bookingRequests!.first!
             expect(kept.convertedJobId == nil, "8.08 refused intake converts nothing")
+            expect(notifyCalls == 0,
+                   "10.09 fix1: a pre-commit failure (owner changed during the network await) never publishes")
+            expect(observed == 0,
+                   "10.09 fix1: a pre-commit failure never notifies a registered observer")
+            expect(store.cachedBusinessSnapshot == nil,
+                   "10.09 fix1: a pre-commit failure never populates the cache")
         }
 
         // B4 decline: merges status only; stale owner never publishes.
@@ -3075,6 +3090,193 @@ struct StoreIntegrationTests {
             store.derivedStatePublisher.reset()
             expect(store.cachedBusinessSnapshot == nil,
                    "10.09 resetting the seam at the account boundary clears the cached snapshot")
+        }
+
+        // MARK: - Task 10.09 (B1) fix round 1: real call-site coverage.
+        //
+        // The controller's review found the "exactly once" claim was not
+        // structural (`pullDeltaIfPossible` has several direct callers) and
+        // that the cache leaked across account boundaries. The contract is
+        // now "exactly once per committed canonical sync commit" (several
+        // legitimate commit sites, ordered by a generation guard — see
+        // `native/run-background-refresh-tests.sh`), the cache clears at
+        // every account boundary and reads fail-closed by owner, and
+        // observers are app-lifetime. These tests drive the REAL call sites
+        // (`runBookingIntakeAfterVerifiedPull`, `cancelPasswordRecovery`)
+        // through the `ScheduleBookingTestDelta` harness rather than calling
+        // `derivedStatePublisher` directly. The real `signOut()` is NOT
+        // exercised here — see the inline comment at its test below for why
+        // (it hangs in this host-test binary on App Group container scrub).
+
+        // A committed delta pull with nothing for intake to convert
+        // publishes exactly once — from the pull's own commit.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "1009-pull-once")
+            seed08Owner(store)
+            var notifyCalls = 0
+            store.notificationSynchronizeHook = { _ in notifyCalls += 1 }
+            var observed = 0
+            store.registerDerivedStateObserver { _ in observed += 1 }
+            let outcome = await store.runBookingIntakeAfterVerifiedPull()
+            expect(outcome == .noChange,
+                   "10.09 fix1: sanity — no booking requests, so the pull is the only commit this call makes")
+            expect(notifyCalls == 1,
+                   "10.09 fix1: a committed delta pull with no intake follow-up publishes exactly once")
+            expect(observed == 1,
+                   "10.09 fix1: exactly one observer notification for the one commit")
+            expect(store.cachedBusinessSnapshot != nil,
+                   "10.09 fix1: the cache reflects the committed pull")
+        }
+
+        // A partial pull (some tables failed, but others committed) still
+        // publishes from what it DID commit — it is not a pre-commit
+        // failure, since `apply`/`save`/cursor-save all already succeeded
+        // before `outcome.failedTables` is even inspected.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "1009-partial")
+            seed08Owner(store)
+            delta.handler = { local, cursor in
+                NativeDeltaPullOutcome(snapshot: local, cursor: cursor,
+                                      failedTables: ["invoices"], lastDiagnosticCode: "pull/invoices-500")
+            }
+            var notifyCalls = 0
+            store.notificationSynchronizeHook = { _ in notifyCalls += 1 }
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(notifyCalls == 1,
+                   "10.09 fix1: a partial pull (failedTables non-empty) still publishes from its committed snapshot")
+            expect(store.cachedBusinessSnapshot != nil,
+                   "10.09 fix1: a partial pull still refreshes the cache")
+        }
+
+        // The booking-intake local commit is its OWN commit, distinct from
+        // the pull's — it must publish a second time, from the post-intake
+        // snapshot, not leave the widget/coach cache on the pre-intake data.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let booked = request08(id: "bk-1009r", status: "booked", slot: slot08())
+            let (store, _) = try seed08Store(requests: [booked], settings: settings08(),
+                                             delta: delta, tag: "1009-intake-republish")
+            seed08Owner(store)
+            var observed: [NativeBusinessSnapshot] = []
+            store.registerDerivedStateObserver { observed.append($0) }
+            let outcome = await store.runBookingIntakeAfterVerifiedPull(
+                makeCustomerID: { "c_1009_1" }, nowISO: { "2026-09-20T12:00:00.000Z" })
+            if case .applied = outcome {
+                expect(true, "10.09 fix1: sanity — intake applies for a convertible booked request")
+            } else {
+                expect(false, "10.09 fix1: sanity — intake applies for a convertible booked request")
+            }
+            expect(observed.count == 2,
+                   "10.09 fix1: the intake commit publishes a SECOND time, after the pull's own first publish")
+            expect(observed.first?.totalCustomers == 0,
+                   "10.09 fix1: the pull's own (first) publish reflects the PRE-intake snapshot — no customer yet")
+            expect(observed.last?.totalCustomers == 1,
+                   "10.09 fix1: the intake commit's (second) publish reflects the POST-intake snapshot — the converted customer exists")
+            expect(store.cachedBusinessSnapshot == observed.last,
+                   "10.09 fix1: the cache reflects the latest (post-intake) commit, not the pull's stale one")
+        }
+
+        // Account boundary: a REAL sign-out and a REAL recovery-signed-out
+        // transition each clear the cache; a registered (11.01 widget
+        // mirror stand-in) observer survives both and still receives the
+        // next publish after the next sign-in, per the controller's ruling
+        // that reset() clears owner data only, never observer registrations.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "1009-signout-boundary")
+            seed08Owner(store)
+            var observed = 0
+            store.registerDerivedStateObserver { _ in observed += 1 }
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(store.cachedBusinessSnapshot != nil, "10.09 fix1: sanity — the cache is populated before sign-out")
+            expect(observed == 1, "10.09 fix1: sanity — the observer saw the pre-sign-out publish")
+
+            // The REAL `signOut()` is not safely callable in this host-test
+            // binary: it runs `NativeAppGroupAccountScrubber.scrub()`, which
+            // tries to create/scrub the App Group container directory —
+            // with no App Group entitlement in a plain `swiftc` binary that
+            // call hangs indefinitely (`mkdirat` never returns; verified by
+            // sampling a stuck process during this fix round — see the
+            // report addendum). `applyCompletedSignOutState` — the private
+            // method that call eventually reaches — is exercised end-to-end
+            // by the real account-deletion/sign-out suites elsewhere;
+            // here we instead call the exact one line it added
+            // (`derivedStatePublisher.reset()`, on this same store instance)
+            // directly, which is the established pattern this file already
+            // uses for account-boundary coverage (see the pre-existing
+            // "resetting the seam at the account boundary" case above).
+            store.scheduleBookingTestClearOwner()
+            store.derivedStatePublisher.reset()
+            expect(store.cachedBusinessSnapshot == nil,
+                   "10.09 fix1: the account-boundary reset() clears the cached snapshot")
+
+            // Sign back in (test seam) and publish again: the SAME observer
+            // registered before sign-out must still be called — it was
+            // never unregistered by reset().
+            seed08Owner(store, subject: "user-1b", binding: "bind-1b")
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(observed == 2,
+                   "10.09 fix1: the observer registered before sign-out still receives the next publish after sign-in")
+            expect(store.cachedBusinessSnapshot != nil,
+                   "10.09 fix1: the cache repopulates for the new owner after sign-in")
+        }
+        do {
+            let (store, dir) = try seed08Store(tag: "1009-recovery-boundary")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-r1", binding: "bind-r1")
+            var observed = 0
+            store.registerDerivedStateObserver { _ in observed += 1 }
+            let snapshot = try snapshot08(dir.appendingPathComponent("store.json"))
+            await store.derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: "bind-r1")
+            expect(store.cachedBusinessSnapshot != nil, "10.09 fix1: sanity — the cache is populated before recovery sign-out")
+            expect(observed == 1, "10.09 fix1: sanity — the observer saw the pre-recovery-sign-out publish")
+
+            // `cancelPasswordRecovery()` is the real production entry point
+            // that calls `applyRecoverySignedOutState()`. With no live
+            // Supabase session/config in this host-test binary it takes the
+            // local-only branch (`sessionStore.clearSupabaseSession()`) but
+            // unconditionally still reaches `applyRecoverySignedOutState()`,
+            // including the seam's `reset()` call, exactly as production does.
+            await store.cancelPasswordRecovery()
+            expect(store.cachedBusinessSnapshot == nil,
+                   "10.09 fix1: a real recovery-signed-out transition clears the cached snapshot")
+
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-r2", binding: "bind-r2")
+            await store.derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: "bind-r2")
+            expect(observed == 2,
+                   "10.09 fix1: the observer registered before the recovery sign-out still receives the next publish")
+        }
+
+        // A real `useAnotherAccount()`, on its success path (an injected
+        // identity activator — see `scheduleBookingTestSeedIdentityActivator`,
+        // which only needs `activator.clearSession()` to be reachable, a
+        // Keychain-only call with no network/App-Group filesystem access),
+        // clears the cache; the registered observer survives it exactly
+        // like the other two account-boundary transitions above.
+        do {
+            let delta = ScheduleBookingTestDelta()
+            let (store, _) = try seed08Store(settings: settings08(), delta: delta, tag: "1009-useanother-boundary")
+            seed08Owner(store)
+            store.scheduleBookingTestSeedIdentityActivator()
+            var observed = 0
+            store.registerDerivedStateObserver { _ in observed += 1 }
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(store.cachedBusinessSnapshot != nil,
+                   "10.09 fix1: sanity — the cache is populated before useAnotherAccount")
+            expect(observed == 1, "10.09 fix1: sanity — the observer saw the pre-boundary publish")
+
+            var googleCredentialClearCount = 0
+            await store.useAnotherAccount { googleCredentialClearCount += 1 }
+            expect(googleCredentialClearCount == 1 && store.authenticationGateState == .signedOut,
+                   "10.09 fix1: sanity — useAnotherAccount reached its success path (Google credential cleared, signed out)")
+            expect(store.cachedBusinessSnapshot == nil,
+                   "10.09 fix1: a real useAnotherAccount() clears the cached snapshot at the account boundary")
+
+            seed08Owner(store, subject: "user-1c", binding: "bind-1c")
+            _ = await store.runBookingIntakeAfterVerifiedPull()
+            expect(observed == 2,
+                   "10.09 fix1: the observer registered before useAnotherAccount still receives the next publish after sign-in")
         }
 
         if failures == 0 { print("PASS: canonical AppStore integration tests") }

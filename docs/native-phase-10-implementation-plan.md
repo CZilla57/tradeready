@@ -1528,19 +1528,31 @@ Exit criteria traceability (roadmap Phase 10):
 
 ### 10.09 — Background refresh completion for Today and scheduling
 
-- Status: **Code complete.** New `N/NativeDerivedStatePublisher.swift`: a
-  generic (`Input`/`Output` type-parameterized, dependency-free) post-sync-commit
-  seam with `register`/`unregister` (output b), a `cachedSnapshot` accessor
-  (output c), and `publish(canonical:expectedOwnerBinding:)`. Its ONE
-  production call site is `AppStore.pullDeltaIfPossible`, immediately after the
-  pulled snapshot is durably applied+saved and `refreshRecurringJobs()` runs —
-  the single point both `performForegroundRefresh` and `performBackgroundRefresh`
-  funnel through via `syncNowAndWait` -> `NativeSyncCoordinator.sync` ->
-  its injected `pull` closure. Every earlier guard in that pass (offline,
+- Status: **Code complete (fix round 1 applied — see below).** New
+  `N/NativeDerivedStatePublisher.swift`: a generic (`Input`/`Output`
+  type-parameterized, dependency-free) post-sync-commit seam with
+  `register`/`unregister` (output b), an owner-scoped `cachedSnapshot`
+  accessor that fails closed (output c), and
+  `publish(canonical:expectedOwnerBinding:)` guarded by a monotonic
+  generation counter. **Contract (post-fix-round-1): "exactly once per
+  committed canonical sync commit," not a single call site.**
+  `AppStore.pullDeltaIfPossible` has several legitimate direct callers
+  besides the coordinator's own pull closure (the booking response/
+  reschedule/portal-admin recovery paths) — each one that reaches its commit
+  publishes once, from that commit's snapshot; a caller that performs two
+  separate commits (e.g. `prepareBookingReschedule`'s `syncNowAndWait` pull
+  followed by its own direct `pullDeltaIfPossible`) correctly publishes
+  twice. `AppStore.runBookingIntakeAfterVerifiedPull`'s local commit and the
+  initial-full-sync commit in `beginInitialSyncGate` are each their own
+  commit and publish separately too. The generation guard (not a single
+  funnel) is what keeps these correctly ordered: a publish that resumes,
+  after suspending in the notification-reconcile await, later than a newer
+  publish has already completed must not overwrite the newer cache/observer
+  state with its now-stale snapshot. Every excluded pass (offline,
   signed-out/no credentials, backoff, a thrown/failed push which skips the
-  pull entirely, `.alreadyRunning` never reaching `runOnce` at all) returns
-  before that call, so the seam is naturally invoked exactly once per real
-  committed pass and never otherwise — no new gating logic was needed.
+  pull entirely, `.alreadyRunning` never reaching `runOnce` at all, or any
+  pre-commit failure inside `pullDeltaIfPossible`) still returns before its
+  would-be publish call — no new gating logic was needed for those.
 - AppStore wiring: `derivedStatePublisher` (lazy,
   `NativeDerivedStatePublisher<Canonical.Snapshot, NativeBusinessSnapshot>`),
   `cachedBusinessSnapshot` (10.13 reads this for coach cold start),
@@ -1550,10 +1562,16 @@ Exit criteria traceability (roadmap Phase 10):
   constraint as the existing `onInvoiceCreatedContextualPrompt` hand-off), so
   `TradeReadyNativeApp.init` wires the hook to
   `coordinator.synchronize(now:)` — the exact 10.08 entry point, not a second
-  reconcile path. `applyCompletedSignOutState` gained
-  `derivedStatePublisher.reset()` alongside the existing
-  `syncCoordinator?.reset()` call, so a cleared cache/observer set never
-  survives a sign-out.
+  reconcile path. Every account-boundary path calls
+  `derivedStatePublisher.reset()`: `applyCompletedSignOutState` (alongside the
+  existing `syncCoordinator?.reset()` call), `useAnotherAccount`, and
+  `applyRecoverySignedOutState`. `reset()` clears ONLY the owner-scoped
+  cached snapshot — observer registrations are app-lifetime (the 11.01
+  widget mirror registers once) and must keep receiving the next owner's
+  publishes after sign-in; `cachedSnapshot` additionally fails closed on its
+  own (returns `nil` unless the cache's owner binding still matches the live
+  one), so even a caller that forgot to reset cannot leak a prior owner's
+  snapshot.
 - Failure isolation: `publish` re-verifies `expectedOwnerBinding` before
   output (a), again before building the shared (b)/(c) snapshot, and again
   before touching the cache/observers — so a sign-out/account-switch race
@@ -1663,6 +1681,96 @@ Exit criteria traceability (roadmap Phase 10):
   — "PASS: canonical AppStore integration tests" (new 10.09 wiring block
   included). `TZ=America/Phoenix sh native/run-all-domain-tests.sh` and the
   Release/generic-iOS `xcodebuild` compile — see task report for the full run.
+- **Fix round 1** (controller-reviewed, all findings verified and fixed in
+  one pass): the review found the "exactly once" claim above was not
+  structural (`pullDeltaIfPossible` has 7 direct callers besides the
+  coordinator's pull closure — a reschedule published twice for one
+  logical operation with no ordering guard), the cache was not cleared at
+  every account boundary (`useAnotherAccount`/`applyRecoverySignedOutState`
+  left it readable for the next owner), a stale-resuming publish could
+  overwrite a newer one's cache/observers, `reset()` wrongly dropped
+  observer registrations (breaking the 11.01 widget mirror across
+  sign-out/sign-in), the real call sites were untested, booking-intake
+  never republished its own post-intake commit, and a redundant
+  post-`makeSnapshot` owner check had no suspension before it. Ruling: the
+  contract becomes "exactly once per committed canonical sync commit" (see
+  above); a monotonic generation counter in `NativeDerivedStatePublisher`
+  guards ordering; `cachedSnapshot` is now owner-scoped and fails closed;
+  `reset()` clears only the cache; the redundant post-`makeSnapshot` check
+  was removed (no suspension occurs between it and the prior check, so it
+  was provably dead weight). Fixed: `NativeDerivedStatePublisher.swift`
+  (generation guard, owner-scoped fail-closed `cachedSnapshot`, `reset()`
+  semantics); `AppStore.swift` (`useAnotherAccount` and
+  `applyRecoverySignedOutState` now call `derivedStatePublisher.reset()`;
+  `runBookingIntakeAfterVerifiedPull` publishes a second time from its own
+  post-intake commit; `beginInitialSyncGate`'s initial-full-sync commit —
+  previously not wired to the seam at all — now publishes too; every
+  misleading "single funnel"/"ONE call site" doc comment corrected).
+  New tests drive the REAL call sites through `ScheduleBookingTestDelta`:
+  a committed delta pull publishes exactly once; a partial pull (failed
+  tables, other tables committed) still publishes; the owner-changed-
+  during-the-network-await pre-commit failure publishes nothing (the
+  other three pre-commit diagnostic codes — `pull/local-commit`,
+  `pull/cursor-commit`, `pull/authentication`/`pull/session` — are not
+  independently forceable in this harness without a new filesystem/network-
+  failure test seam, out of scope for this round; each sits behind an
+  unconditional `return` positioned, in source, before the `publish` call,
+  the same structural guarantee already relied on for the offline/signed-
+  out cases); the booking-intake commit republishes post-intake data (a
+  second, distinct snapshot with the new customer, superseding the pull's
+  pre-intake one). Account boundary: a real `cancelPasswordRecovery()`
+  (the production entry point to `applyRecoverySignedOutState`) and a real
+  `useAnotherAccount()` — via a NEW test-only seam,
+  `scheduleBookingTestSeedIdentityActivator`, that injects a minimal
+  `NativeAuthenticatedIdentityActivator` so `useAnotherAccount()` reaches
+  its success path (its `clearSession()` call is Keychain-only, no
+  network/App-Group access, so the injected verifier is never actually
+  invoked) — each clear `cachedBusinessSnapshot` while a previously-
+  registered observer still fires on the next publish after sign-in. The
+  real `signOut()` is deliberately NOT exercised: first attempted, it hung
+  indefinitely in this host-test binary (`sample`d mid-hang; the stack
+  showed `AppStore.signOut` -> `performLocalAccountScrub` ->
+  `NativeAppGroupAccountScrubber.scrub()` blocked in `mkdirat`, trying to
+  create the App Group container directory with no App Group entitlement in
+  a plain `swiftc` binary) — a genuine, newly-discovered harness hazard, not
+  a scope decision. `applyCompletedSignOutState`'s boundary is instead
+  proven by calling its one relevant line
+  (`derivedStatePublisher.reset()`) directly on the same store instance, the
+  established pattern this file already used before this fix round. The
+  generation guard itself (an older publish resuming after a newer one
+  completes must not overwrite it) is unit-tested in
+  `BackgroundRefreshTests` with a controlled continuation-based race. The
+  initial-full-sync publish added to `beginInitialSyncGate` is not
+  exercisable end-to-end in this harness: that function's own first guard
+  requires `BuildEnvironment.supabaseURL`/`supabasePublishableKey` non-nil,
+  which — same pre-existing constraint noted throughout this task — are
+  always `nil` in a plain `swiftc`-compiled binary, so the function returns
+  before ever reaching the `Task` closure the publish call lives in; the
+  fix was verified by code inspection (identical shape/position to the
+  already-tested `pullDeltaIfPossible` publish call) rather than a live
+  test. (The original 10.09 report's §9/§10 called the
+  `useAnotherAccount`/`applyRecoverySignedOutState` gap "out of scope" —
+  that was superseded by this fix round: both are now covered, one for
+  real, one via a purpose-built test seam; only `signOut()`'s own App
+  Group scrub and the network-sync/initial-sync paths remain genuinely
+  undrivable here, for the reasons given above.)
+  Commands: `TZ=America/Phoenix sh native/run-background-refresh-tests.sh`
+  — "Background refresh tests passed" (generation-guard + fail-closed-cache
+  + observer-survives-reset assertions added). `TZ=America/Phoenix sh
+  native/run-store-integration-tests.sh` — "PASS: canonical AppStore
+  integration tests" (real-call-site fix-round-1 block added).
+  `TZ=America/Phoenix sh native/run-sync-coordinator-tests.sh` — "PASS:
+  native sync coordinator tests" (unchanged). `TZ=America/Phoenix sh
+  native/run-notification-coordinator-tests.sh` — "PASS: native
+  notification coordinator tests" (unchanged). `TZ=America/Phoenix sh
+  native/run-all-domain-tests.sh` — 0 FAIL lines across every Swift host-test
+  runner plus `backend-workers`' 26/26 `npm test`. Release/generic-iOS
+  `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme
+  TradeReadyNative -configuration Release -destination
+  'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` — `** BUILD
+  SUCCEEDED **`, 0 `error:` lines. `sh native/run-doc-reference-check.sh`
+  re-run after this fix round's doc edit: 0 missing. See the fix-round-1
+  report addendum for the full run detail.
 - Blockers: none. Device delivery evidence remains a Phase 12 row (rows
   drafted above for 10.15 to fold in).
 - Next-ready: **10.11** (Today UI — can now assume the background/foreground
