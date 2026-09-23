@@ -69,7 +69,7 @@ public enum NativeBookingAttention {
         requests: [Canonical.BookingRequest],
         jobs: [Canonical.Job]
     ) -> [Row] {
-        let jobsByID = Dictionary(uniqueKeysWithValues: jobs.map { ($0.id, $0) })
+        let jobsByID = Dictionary(jobs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var rows: [Row] = []
         for request in requests {
             // Portal change rows carry no kind/slot — handled before the

@@ -29,6 +29,12 @@ whose events the analytics catalog mirrors. Design sources:
 `targets/widget/` (`Widgets.swift`, `JobTimer.swift`, `_shared/SiriIntents.swift`),
 `utils/analytics.ts`, `utils/deepLinks.ts`, and `App.tsx` (Sentry/PostHog init).
 
+**Carried in from Phase 10 (final review I4, 2026-09-23):** the parity-matrix
+"Settings › AI Assistant" row assigns Phase 11 the missing native UI for RN's
+"Advanced" Groq/Anthropic key entry (`SettingsAIScreen`). Before execution,
+add an 11.xx task for it (secure field, Keychain storage, redaction per
+11.00), or record a dated cutover waiver in 12.00. Do not leave it unowned.
+
 ## 1. Execution contract
 
 Use one bounded task per subagent session. Read this plan, the roadmap Phase 11

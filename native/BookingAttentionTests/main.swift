@@ -208,5 +208,15 @@ do {
     expect(rows[0].request.slot?.date == "2026-08-12", "slot preserved on the row")
 }
 
+// 10. A duplicated job id (corrupt/duplicate row) must not trap Today's render;
+// the first job wins, matching the schedule-key dedupe.
+do {
+    let first = job()
+    let second = job(date: "2026-09-01")
+    let rows = NativeBookingAttention.select(
+        requests: [booked(status: "reschedule_requested")], jobs: [first, second])
+    expect(rows.count == 1 && rows[0].jobID == "jbk_bk1", "duplicate job id selects without trapping")
+}
+
 if failures == 0 { print("PASS: native booking attention tests") }
 else { print("\(failures) booking attention test(s) failed"); exit(1) }
