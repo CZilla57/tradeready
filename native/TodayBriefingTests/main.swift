@@ -333,6 +333,51 @@ let portalPresentation = NativeTodayBriefing.bookingRowPresentation(portalChange
 expectEqual(portalPresentation.title, "Dana Fox asked to cancel", "booking row title: portal change cancel verb")
 expectEqual(portalPresentation.jobDestination, .jobs, "booking row destination: no jobID falls back to Jobs tab (never a dead action)")
 
+// MARK: - bookingRowLabel (task 10.11 fix round 1 — moved out of view code)
+//
+// Short date-only form, distinct from `bookingRowPresentation(_:).summary`'s
+// time-inclusive `when` used for the tap alert.
+
+func bookedRequestWithSlot(id: String, status: String) -> Canonical.BookingRequest {
+    decodeRequest("""
+    {"id":"\(id)","status":"\(status)","name":"Dana Fox","phone":"","email":"","address":"",
+     "details":"details","preferredTiming":"","createdAt":"2026-08-01T00:00:00.000Z",
+     "slot":{"date":"2026-07-04","start":"09:00","end":"11:00","timeZone":"America/Phoenix",
+     "startUtc":"","endUtc":""}}
+    """)
+}
+
+let rescheduleRowWithSlot = NativeBookingAttention.Row(
+    kind: .rescheduleRequested, request: bookedRequestWithSlot(id: "bk-slot", status: "reschedule_requested"),
+    jobID: "j1", note: nil
+)
+expectEqual(
+    NativeTodayBriefing.bookingRowLabel(rescheduleRowWithSlot),
+    "Dana Fox asked to reschedule Saturday, July 4",
+    "bookingRowLabel: reschedule uses the short date-only form"
+)
+
+let cancelledRow = NativeBookingAttention.Row(
+    kind: .cancelled, request: bookedRequestWithSlot(id: "bk-cancel", status: "cancelled"), jobID: "j1", note: nil
+)
+expectEqual(
+    NativeTodayBriefing.bookingRowLabel(cancelledRow),
+    "Booking cancelled — Dana Fox, Saturday, July 4",
+    "bookingRowLabel: cancelled uses the short date-only form"
+)
+
+expectEqual(
+    NativeTodayBriefing.bookingRowLabel(portalChangeRow),
+    "Dana Fox asked to cancel an appointment",
+    "bookingRowLabel: portal change ignores the slot date entirely, mirrors the cancel/reschedule verb"
+)
+
+expectEqual(
+    NativeTodayBriefing.bookingRowLabel(missingJobRow),
+    NativeTodayBriefing.bookingRowPresentation(missingJobRow).summary,
+    "bookingRowLabel: native-only missingJob falls back to the presentation summary"
+)
+
 // MARK: - isSampleId (utils/sampleData.ts SAMPLE_ID_RE port)
 
 expect(NativeTodayBriefing.isSampleId("j1"), "isSampleId j1")

@@ -7851,23 +7851,31 @@ extension AppStore {
         case none
     }
 
+    /// True when `jobID` names a job that currently exists and is not
+    /// archived. The single fail-closed check every job-based
+    /// `NativeTodayDestination` case below uses, so "exists but archived"
+    /// cannot slip through on some cases and not others.
+    private func isLiveTodayJob(_ jobID: String) -> Bool {
+        jobs.contains(where: { $0.id == jobID && ($0.archivedAt ?? "").isEmpty })
+    }
+
     /// Executes a Today destination against the live snapshot. Reuses the
     /// exact one-shot exact-ID pattern from `routeToGlobalSearchResult`:
     /// clears every prior deep-link target first, verifies the CURRENT
     /// record exists and is not archived, and only then publishes the new
     /// target — a stale insight/booking-row/hero target for a since-deleted
-    /// record is a no-op, never an invented destination.
+    /// or since-archived record is a no-op, never an invented destination.
     @discardableResult
     func routeToToday(_ destination: NativeTodayDestination) -> NativeTodayRouteResult {
         switch destination {
         case .job(let id):
-            guard jobs.contains(where: { $0.id == id && ($0.archivedAt ?? "").isEmpty }) else { return .none }
+            guard isLiveTodayJob(id) else { return .none }
             resetTodayDeepLinkTargets()
             deepLinkedJobID = id
             selectedTab = .jobs
             return .handled
         case .createInvoice(let jobID):
-            guard jobs.contains(where: { $0.id == jobID }) else { return .none }
+            guard isLiveTodayJob(jobID) else { return .none }
             return .presentInvoiceFromJob(jobID: jobID)
         case .invoice(let id):
             guard invoices.contains(where: { $0.id == id }) else { return .none }
@@ -7882,11 +7890,11 @@ extension AppStore {
             selectedTab = .jobs
             return .handled
         case .schedule(let jobID):
-            guard jobs.contains(where: { $0.id == jobID }) else { return .none }
+            guard isLiveTodayJob(jobID) else { return .none }
             return .presentJobEditor(jobID: jobID)
         case .selectDate(let date):
             guard NativeSchedule.parseDateComponents(date) != nil else { return .none }
-            todaySelectedDate = date
+            selectTodayDate(date)
             return .handled
         case .customer(let id):
             guard customers.contains(where: { $0.id == id && ($0.archivedAt ?? "").isEmpty }) else { return .none }
@@ -7910,12 +7918,14 @@ extension AppStore {
             return .presentRoute
         case .onMyWay(let jobID):
             // Deliberate native difference (recorded in the 10.11 report):
-            // RN sends the "on my way" message inline and silently. Native
-            // routes through the same on-my-way review sheet the
+            // RN pre-fills the OS SMS/email composer and still requires the
+            // owner to hit send there (`utils/appointmentSend.ts`,
+            // `utils/messaging.ts`) — it is not a silent background send.
+            // Native routes through the same on-my-way review sheet the
             // notification-tap path already uses (`requestOnMyWayReview`)
-            // rather than duplicating the send — surfacing "no customer"
-            // through the review sheet instead of a bare alert.
-            guard jobs.contains(where: { $0.id == jobID }) else { return .none }
+            // rather than duplicating that composer-launch logic — both
+            // paths still require the owner to review and send.
+            guard isLiveTodayJob(jobID) else { return .none }
             requestOnMyWayReview(jobID: jobID)
             return .handled
         case .newJob:

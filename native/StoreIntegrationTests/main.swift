@@ -3435,10 +3435,14 @@ struct StoreIntegrationTests {
                    "10.11 router: .createInvoice(existing) presents the invoice-from-job sheet")
             expect(store.routeToToday(.createInvoice(jobId: "missing")) == .none,
                    "10.11 router: .createInvoice(missing) fails closed")
+            expect(store.routeToToday(.createInvoice(jobId: archivedJob.id)) == .none,
+                   "10.11 router: .createInvoice(archived) fails closed — a since-archived job never presents the invoice-from-job sheet")
             expect(store.routeToToday(.schedule(jobId: job.id)) == .presentJobEditor(jobID: job.id),
                    "10.11 router: .schedule(existing) presents the job editor")
             expect(store.routeToToday(.schedule(jobId: "missing")) == .none,
                    "10.11 router: .schedule(missing) fails closed")
+            expect(store.routeToToday(.schedule(jobId: archivedJob.id)) == .none,
+                   "10.11 router: .schedule(archived) fails closed — a since-archived job never presents the job editor")
             expect(store.routeToToday(.newJob) == .presentNewJobEditor,
                    "10.11 router: .newJob presents a blank job editor")
             expect(store.routeToToday(.newCustomer) == .presentNewCustomerEditor,
@@ -3456,6 +3460,11 @@ struct StoreIntegrationTests {
                    "10.11 router: .onMyWay(existing) stages the same on-my-way review sheet the notification-tap path uses")
             expect(store.routeToToday(.onMyWay(jobId: "missing")) == .none,
                    "10.11 router: .onMyWay(missing) fails closed")
+            let pendingBeforeArchivedOnMyWay = store.pendingOnMyWayJobID
+            expect(store.routeToToday(.onMyWay(jobId: archivedJob.id)) == .none,
+                   "10.11 router: .onMyWay(archived) fails closed — a since-archived job never stages a review sheet")
+            expect(store.pendingOnMyWayJobID == pendingBeforeArchivedOnMyWay,
+                   "10.11 router: a failed-closed .onMyWay leaves pendingOnMyWayJobID untouched")
 
             // Selected-day/week navigation (RN's setSelectedDate/prevWeek/nextWeek).
             store.selectTodayDate("2026-09-10")

@@ -461,6 +461,29 @@ public enum NativeTodayBriefing {
         }
     }
 
+    /// RN's `bookingRowLabel` — the SHORT date-only form used for both the
+    /// row's visible text and its accessibility label. Deliberately distinct
+    /// from `bookingRowPresentation(_:).summary`, which carries a
+    /// time-inclusive `when` meant for the tap alert, not this row.
+    public static func bookingRowLabel(_ row: NativeBookingAttention.Row) -> String {
+        let request = row.request
+        if row.kind == .portalChange {
+            let verb = request.portalKind == "cancel" ? "cancel" : "reschedule"
+            return "\(request.name) asked to \(verb) an appointment"
+        }
+        let when = request.slot.map { formatDisplayDate($0.date) } ?? ""
+        switch row.kind {
+        case .rescheduleRequested:
+            return "\(request.name) asked to reschedule \(when)".trimmingCharacters(in: .whitespaces)
+        case .cancelled:
+            return "Booking cancelled — \(request.name), \(when)".trimmingCharacters(in: .whitespaces)
+        case .missingJob, .unconvertedActive:
+            return bookingRowPresentation(row).summary
+        case .portalChange:
+            return ""
+        }
+    }
+
     // MARK: - Private formatting tables
 
     private static let weekdayNamesLong = [

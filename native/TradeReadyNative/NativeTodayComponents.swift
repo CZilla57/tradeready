@@ -222,29 +222,6 @@ struct NativeTodayInsightsSlot: View {
 
 // MARK: - Booking attention row
 
-/// RN's `bookingRowLabel` — the SHORT date-only form used for both the row's
-/// visible text and its accessibility label. Deliberately distinct from
-/// `NativeTodayBriefing.bookingRowPresentation(_:).summary`, which carries a
-/// time-inclusive `when` meant for the tap alert, not this row.
-func nativeTodayBookingRowLabel(_ row: NativeBookingAttention.Row) -> String {
-    let request = row.request
-    if row.kind == .portalChange {
-        let verb = request.portalKind == "cancel" ? "cancel" : "reschedule"
-        return "\(request.name) asked to \(verb) an appointment"
-    }
-    let when = request.slot.map { NativeTodayBriefing.formatDisplayDate($0.date) } ?? ""
-    switch row.kind {
-    case .rescheduleRequested:
-        return "\(request.name) asked to reschedule \(when)".trimmingCharacters(in: .whitespaces)
-    case .cancelled:
-        return "Booking cancelled — \(request.name), \(when)".trimmingCharacters(in: .whitespaces)
-    case .missingJob, .unconvertedActive:
-        return NativeTodayBriefing.bookingRowPresentation(row).summary
-    case .portalChange:
-        return ""
-    }
-}
-
 struct NativeTodayBookingAttentionRow: View {
     let row: NativeBookingAttention.Row
     let onTap: () -> Void
@@ -257,7 +234,7 @@ struct NativeTodayBookingAttentionRow: View {
         Button(action: onTap) {
             HStack(spacing: 10) {
                 Image(systemName: symbol).font(.subheadline).foregroundStyle(.orange)
-                Text(nativeTodayBookingRowLabel(row))
+                Text(NativeTodayBriefing.bookingRowLabel(row))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -268,7 +245,7 @@ struct NativeTodayBookingAttentionRow: View {
             .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(nativeTodayBookingRowLabel(row))
+        .accessibilityLabel(NativeTodayBriefing.bookingRowLabel(row))
     }
 }
 
