@@ -82,11 +82,14 @@ struct NativeSetupChecklistCardView: View {
 
     private func handleTap(_ task: NativeSetupTask) {
         guard !task.done else { return }
+        // Fix round 1 (minor): RN fires `setup_checklist_task_opened` for
+        // every task tap, including `notifications` — it was previously
+        // skipped here because of the early return below.
+        store.trackSetupChecklistTaskOpened(task.id)
         if task.id == .notifications {
             Task { await handleNotificationsTask() }
             return
         }
-        store.trackSetupChecklistTaskOpened(task.id)
         store.routeToTodaySettings(NativeSetupChecklist.route(for: task.id))
     }
 

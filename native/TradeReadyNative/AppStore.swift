@@ -1,4 +1,5 @@
 import Foundation
+import os
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
@@ -252,6 +253,12 @@ final class AppStore: ObservableObject {
     /// tracks which stores have already logged their fail-closed diagnostic
     /// so a persistently-corrupt file does not spam.
     private var loggedFailClosedDiagnostics: Set<String> = []
+    /// Fix round 1 (I6): test/observability seam for the diagnostics above —
+    /// every code this session has emitted, in order, readable without
+    /// scraping unified logging. Production also emits each one through
+    /// `Self.diagnosticsLogger`, which survives Release builds (the prior
+    /// `#if DEBUG print(...)` did not).
+    private(set) var recordedDiagnostics: [String] = []
     /// Task 10.12 (R5): dedup key for `insight_shown` — RN's `lastShownKey`
     /// ref. Reset at the account boundary alongside the mute/checklist state.
     private var lastShownInsightIDsKey = ""
@@ -1403,6 +1410,12 @@ final class AppStore: ObservableObject {
 
     /// Reads the current Connect state. Surfaces authentication rejection
     /// through one verified-refresh retry, matching the sync boundary.
+    ///
+    /// Fix round 1 (I4): `verifiedAccountBinding` is captured immediately
+    /// before each `await service.status(...)` and re-checked immediately
+    /// after, so an account switch that lands mid-await can never write the
+    /// `stripe` task done under the account that's live by the time the
+    /// response arrives.
     func refreshStripeStatus() async {
         guard let service = configuredStripeConnectService(), let credentials = currentSyncCredentials() else {
             stripeConnectError = "Stripe status is unavailable until the backend is configured and you are signed in."
@@ -1410,19 +1423,21 @@ final class AppStore: ObservableObject {
         }
         stripeConnectLoading = true
         defer { stripeConnectLoading = false }
+        let bindingBeforeAwait = verifiedAccountBinding
         do {
             stripeConnectStatus = try await service.status(sessionBytes: credentials.sessionBytes)
             stripeConnectError = nil
-            markSetupTaskDoneIfStripeConnected()
+            markSetupTaskDoneIfStripeConnected(verifiedAccountBindingBeforeAwait: bindingBeforeAwait)
         } catch NativeStripeConnectError.rejectedSession {
             guard await refreshSyncSession(), let retry = currentSyncCredentials() else {
                 stripeConnectError = "Your session expired. Sign in again to check the Stripe connection."
                 return
             }
+            let bindingBeforeRetryAwait = verifiedAccountBinding
             do {
                 stripeConnectStatus = try await service.status(sessionBytes: retry.sessionBytes)
                 stripeConnectError = nil
-                markSetupTaskDoneIfStripeConnected()
+                markSetupTaskDoneIfStripeConnected(verifiedAccountBindingBeforeAwait: bindingBeforeRetryAwait)
             } catch {
                 stripeConnectError = "Could not check the Stripe connection. Please try again."
             }
@@ -1435,9 +1450,29 @@ final class AppStore: ObservableObject {
     /// `if (data?.connected) markSetupTaskDone("stripe")` — the `stripe` task
     /// has no other honest derivation (unlike `contact`/`logo`/`notifications`,
     /// which read live settings/permission state directly).
-    private func markSetupTaskDoneIfStripeConnected() {
-        guard stripeConnectStatus?.connected == true else { return }
+    ///
+    /// Fix round 1 (I4): the connected-check is now paired with
+    /// `Self.stripeTaskWriteAllowed`, a pure predicate that also requires the
+    /// account binding to be unchanged since the await started.
+    private func markSetupTaskDoneIfStripeConnected(verifiedAccountBindingBeforeAwait: String?) {
+        guard Self.stripeTaskWriteAllowed(
+            connected: stripeConnectStatus?.connected == true,
+            bindingBeforeAwait: verifiedAccountBindingBeforeAwait,
+            currentBinding: verifiedAccountBinding
+        ) else { return }
         markSetupTaskDone(.stripe)
+    }
+
+    /// Fix round 1 (I4): pure stale-write guard for
+    /// `markSetupTaskDoneIfStripeConnected`, factored out so it's directly
+    /// testable without driving a real network await — `configuredStripeConnectService()`
+    /// performs real network I/O and has no injectable seam today, so the
+    /// full async race isn't exercised end-to-end (see the fix-round-1 report
+    /// section for why). This predicate is what the guard actually decides:
+    /// write only when Stripe reports connected AND the verified account
+    /// binding captured before the `await` still matches the one live now.
+    static func stripeTaskWriteAllowed(connected: Bool, bindingBeforeAwait: String?, currentBinding: String?) -> Bool {
+        connected && bindingBeforeAwait != nil && bindingBeforeAwait == currentBinding
     }
 
     /// Starts (or resumes) onboarding. The caller opens the returned URL in
@@ -3777,14 +3812,7 @@ final class AppStore: ObservableObject {
             // checklist stores (device-local, owner-scoped) and their
             // in-memory published state so the next account never inherits
             // a dismissal, snooze, or "used once" flag.
-            insightMutes = nil
-            setupChecklistState = nil
-            pendingCoachPrefill = nil
-            pendingSettingsDestination = nil
-            try? insightMuteStore.removeAll()
-            try? setupChecklistStore.removeAll()
-            lastShownInsightIDsKey = ""
-            notificationsGranted = false
+            resetTodayOwnerState()
         } catch {
             authenticationGateState = .unavailable
         }
@@ -4239,14 +4267,7 @@ final class AppStore: ObservableObject {
         // Task 10.12 (S4/D4/D5): account boundary — wipe the mute/checklist
         // stores and their in-memory published state (see `useAnotherAccount`'s
         // identical comment).
-        insightMutes = nil
-        setupChecklistState = nil
-        pendingCoachPrefill = nil
-        pendingSettingsDestination = nil
-        try? insightMuteStore.removeAll()
-        try? setupChecklistStore.removeAll()
-        lastShownInsightIDsKey = ""
-        notificationsGranted = false
+        resetTodayOwnerState()
     }
 
     private func performLocalAccountScrub(
@@ -4434,15 +4455,58 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// One bounded, non-PII diagnostic per session per store (brief step 5) —
-    /// never the record contents, never the account binding, just which
-    /// store degraded so a persistently-corrupt file does not spam.
+    /// `os.Logger` sink for the fail-closed diagnostics below. Category
+    /// mirrors the two owner-bound stores this task added; no other AppStore
+    /// diagnostic sink existed to reuse (fix round 1, I6).
+    private static let diagnosticsLogger = Logger(subsystem: "com.tradeready.native", category: "today-owner-state")
+
+    /// One bounded, non-PII diagnostic per session per code (brief step 5,
+    /// fix round 1 I6) — never the record contents, never the account
+    /// binding, just a fixed code identifying which store/operation
+    /// degraded, so a persistently-corrupt file does not spam. Emitted
+    /// through `os.Logger` (survives Release builds, unlike the prior
+    /// `#if DEBUG print(...)`) and appended to `recordedDiagnostics` so tests
+    /// can observe both the emission and the once-per-session dedup without
+    /// scraping unified logging.
     private func logInsightOrChecklistFailClosedDiagnosticOnce(store: String) {
         guard !loggedFailClosedDiagnostics.contains(store) else { return }
         loggedFailClosedDiagnostics.insert(store)
-        #if DEBUG
-        print("[TradeReady] \(store) store was unreadable this session; degraded fail-closed.")
-        #endif
+        recordedDiagnostics.append(store)
+        Self.diagnosticsLogger.error("today owner-state store degraded fail-closed: \(store, privacy: .public)")
+    }
+
+    /// Task 10.12 (S4/D4/D5), extracted in fix round 1 (I8): the one shared
+    /// account-boundary reset for the insight-mute/setup-checklist
+    /// owner-bound stores and their dependent one-shot/mirror state — wipes
+    /// the in-memory published state and the on-disk files so the next
+    /// account never inherits a dismissal, snooze, or "used once" flag.
+    /// Called at every real sign-out/account-switch path (`useAnotherAccount`,
+    /// `applyCompletedSignOutState`, `applyRecoverySignedOutState`) so this
+    /// logic exists exactly once instead of three times.
+    ///
+    /// A `removeAll()` failure is now routed to the same fail-closed
+    /// diagnostic as an unreadable store (I6) rather than silently dropped
+    /// via bare `try?`. The in-memory state is cleared either way — worst
+    /// case a stale on-disk file for the previous owner lingers, but it can
+    /// never be read back in for a *different* account because both stores
+    /// fail closed on an account-binding mismatch.
+    private func resetTodayOwnerState() {
+        insightMutes = nil
+        setupChecklistState = nil
+        pendingCoachPrefill = nil
+        pendingSettingsDestination = nil
+        do {
+            try insightMuteStore.removeAll()
+        } catch {
+            logInsightOrChecklistFailClosedDiagnosticOnce(store: "insightMutesRemoveAllFailed")
+        }
+        do {
+            try setupChecklistStore.removeAll()
+        } catch {
+            logInsightOrChecklistFailClosedDiagnosticOnce(store: "setupChecklistRemoveAllFailed")
+        }
+        lastShownInsightIDsKey = ""
+        notificationsGranted = false
     }
 
     private func applyAuthenticatedIdentityOutcome(
@@ -5043,14 +5107,7 @@ final class AppStore: ObservableObject {
         // Task 10.12 (S4/D4/D5): account boundary — wipe the mute/checklist
         // stores and their in-memory published state (see
         // `applyCompletedSignOutState`'s identical comment).
-        insightMutes = nil
-        setupChecklistState = nil
-        pendingCoachPrefill = nil
-        pendingSettingsDestination = nil
-        try? insightMuteStore.removeAll()
-        try? setupChecklistStore.removeAll()
-        lastShownInsightIDsKey = ""
-        notificationsGranted = false
+        resetTodayOwnerState()
     }
 
     /// Claims and commits bounded batches only after exact legacy-owner proof.
@@ -7996,17 +8053,18 @@ extension AppStore {
         )
     }
 
-    /// Task 10.12: wires the persisted `sampleTourDone` value (10.03's
-    /// `NativeSetupChecklistStore`, adopted via `activateSetupChecklist`).
-    /// `setupChecklistState == nil` (not yet loaded / unreadable) reads as
-    /// "not done" here — the hero is the SAFER default when the checklist
-    /// store is degraded (worst case: the sample-tour hero shows once more
-    /// than intended, never a lost first-run experience).
+    /// Task 10.12 (fix round 1, I1): wires the persisted `sampleTourDone`
+    /// value (10.03's `NativeSetupChecklistStore`, adopted via
+    /// `activateSetupChecklist`). Contract §1.5 requires
+    /// `checklistState == nil -> no hero`, matching RN's `checklistState &&`
+    /// gate — an unreadable/not-yet-loaded checklist store must not show any
+    /// hero (including the sample-tour one), not fall back to "not done".
     var todayHero: NativeTodayHero? {
-        NativeTodayBriefing.hero(
+        guard let state = setupChecklistState else { return nil }
+        return NativeTodayBriefing.hero(
             jobs: canonicalJobs,
             customers: canonicalCustomers,
-            sampleTourDone: setupChecklistState?.sampleTourDone == true
+            sampleTourDone: state.sampleTourDone == true
         )
     }
 
@@ -8087,8 +8145,13 @@ extension AppStore {
     /// Records a completed setup task through the owner-bound store.
     /// Best-effort: a write failure leaves the in-memory state unchanged
     /// (worst case the task re-prompts; never a fabricated completion).
+    ///
+    /// Fix round 1 (I1): no-op when `setupChecklistState == nil` — an
+    /// unreadable/not-yet-activated store must never be conjured into
+    /// existence by a mutator; `?? NativeSetupChecklistState()` previously
+    /// did exactly that, flipping a degraded store into live state.
     func markSetupTaskDone(_ task: NativeSetupTaskID) {
-        guard let binding = verifiedAccountBinding else { return }
+        guard setupChecklistState != nil, let binding = verifiedAccountBinding else { return }
         if let updated = try? setupChecklistStore.markTaskDone(task, for: binding) {
             setupChecklistState = updated
         }
@@ -8097,9 +8160,12 @@ extension AppStore {
     /// "Hide" — RN's `dismissSetupChecklist()`. Optimistic: the card hides
     /// immediately (the caller reads `todaySetupTasks`/`todaySetupComplete`,
     /// both of which flip the instant this publishes) and the write follows.
+    ///
+    /// Fix round 1 (I1): no-op when `setupChecklistState == nil` (see
+    /// `markSetupTaskDone`'s identical note).
     func dismissSetupChecklist() {
-        guard let binding = verifiedAccountBinding else { return }
-        let optimistic = NativeSetupChecklist.dismissing(setupChecklistState ?? NativeSetupChecklistState())
+        guard let state = setupChecklistState, let binding = verifiedAccountBinding else { return }
+        let optimistic = NativeSetupChecklist.dismissing(state)
         setupChecklistState = optimistic
         analytics.track("setup_checklist_dismissed", [
             "doneCount": String(todaySetupTasks?.filter(\.done).count ?? 0),
@@ -8112,9 +8178,16 @@ extension AppStore {
     /// The hero's sample-tour tap (`markSampleTourDone` + `sample_job_opened`
     /// — RN's `TodayScreen.tsx` call sites, task 10.12 owns wiring this). A
     /// no-op for any other hero kind.
+    ///
+    /// Fix round 1 (I1): also a no-op when `setupChecklistState == nil` (see
+    /// `markSetupTaskDone`'s identical note) — in practice `todayHero` is
+    /// already `nil` whenever the store is unreadable, so this only guards a
+    /// caller that constructs/passes a hero value directly (as tests do).
     func markSampleTourDoneIfNeeded(for hero: NativeTodayHero) {
-        guard hero.kind == .sampleTour, let binding = verifiedAccountBinding else { return }
-        let optimistic = NativeSetupChecklist.markingSampleTourDone(setupChecklistState ?? NativeSetupChecklistState())
+        guard hero.kind == .sampleTour, let state = setupChecklistState,
+            let binding = verifiedAccountBinding
+        else { return }
+        let optimistic = NativeSetupChecklist.markingSampleTourDone(state)
         setupChecklistState = optimistic
         analytics.track("sample_job_opened")
         if let persisted = try? setupChecklistStore.markSampleTourDone(for: binding) {
@@ -8142,7 +8215,17 @@ extension AppStore {
     /// owner-bound mute store. Optimistic: the row drops from
     /// `todayVisibleInsights` immediately (the policy re-filters on every
     /// read), persisted behind it — mirrors RN's `applyMute`.
+    ///
+    /// Fix round 1 (I2): fail-closed at the store layer, not just the view.
+    /// `insightMutes == nil` (unreadable) is now a no-op — `?? []` previously
+    /// let a mute exist purely in memory on top of a degraded store, which
+    /// `NativeInsightsCardPolicy` would then read as "readable" on the next
+    /// pass (the in-memory value is non-nil) despite nothing durable backing
+    /// it. The owner-binding guard also now runs BEFORE the optimistic
+    /// mutation, so a mute can never be applied in memory without a binding
+    /// to persist it under.
     func applyInsightMute(_ insight: NativeTodayInsight, days: Int?) {
+        guard let mutes = insightMutes, let binding = verifiedAccountBinding else { return }
         analytics.track(
             days == nil ? "insight_dismissed" : "insight_snoozed",
             days == nil
@@ -8152,10 +8235,9 @@ extension AppStore {
         let now = Date()
         let liveIDs = Set(todayInsightsAll.map(\.id))
         let optimistic = NativeInsightMutes.applying(
-            id: insight.id, now: now, days: days, liveIDs: liveIDs, to: insightMutes ?? []
+            id: insight.id, now: now, days: days, liveIDs: liveIDs, to: mutes
         )
         insightMutes = optimistic
-        guard let binding = verifiedAccountBinding else { return }
         if let persisted = try? insightMuteStore.applyMute(id: insight.id, now: now, days: days, liveIDs: liveIDs, for: binding) {
             insightMutes = persisted
         }
@@ -8575,9 +8657,35 @@ extension AppStore {
     /// Test-only (task 10.12): the same real-reload pattern as
     /// `scheduleBookingTestReloadReviewRequests`, for the insight-mute and
     /// setup-checklist stores. Production never calls this directly.
-    func testActivateInsightAndChecklistStores(accountBinding: String) {
-        activateInsightMutes(accountBinding: accountBinding, migrated: nil)
-        activateSetupChecklist(accountBinding: accountBinding, migrated: nil)
+    ///
+    /// Fix round 1 (I5): the two `migrated*` parameters drive the REAL
+    /// migration-seed adoption path (`mergeSeeded`, via `activateInsightMutes`/
+    /// `activateSetupChecklist`) with actual seed content — the prior
+    /// `migrated: nil` calls only ever exercised the "no seed" branch, so
+    /// seed adoption itself was untested despite the task 10.12 report
+    /// originally claiming otherwise. Defaulted to `nil` so every existing
+    /// call site is unaffected.
+    func testActivateInsightAndChecklistStores(
+        accountBinding: String,
+        migratedInsightMutes: [NativeTypedAccountState.InsightMute]? = nil,
+        migratedSetupChecklistState: NativeTypedAccountState.SetupChecklistState? = nil
+    ) {
+        activateInsightMutes(accountBinding: accountBinding, migrated: migratedInsightMutes)
+        activateSetupChecklist(accountBinding: accountBinding, migrated: migratedSetupChecklistState)
+    }
+
+    /// Test-only (fix round 1, I7a): drives the real `applyCompletedSignOutState()`
+    /// body directly. The public `signOut()`/`deleteAccount()`/
+    /// `retryAccountScrub()` callers all wrap it in a real Keychain-backed
+    /// local account scrub (and, for `signOut(revokeRemote: true)`, a network
+    /// revoke call) that this host-test binary cannot drive deterministically
+    /// — this seam isolates exactly the state-reset behavior
+    /// `applyCompletedSignOutState()` itself owns, including this task's
+    /// `resetTodayOwnerState()` call, the same way `scheduleBookingTestReloadReviewRequests`
+    /// isolates a different private activation method elsewhere in this file.
+    /// Production never calls this directly.
+    func testApplyCompletedSignOutState() {
+        applyCompletedSignOutState()
     }
 
     /// Test-only: clears the seeded owner identity (simulates sign-out for

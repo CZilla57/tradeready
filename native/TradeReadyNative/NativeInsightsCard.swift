@@ -61,18 +61,33 @@ struct NativeInsightsCardView: View {
 
     @ViewBuilder
     private func optionsActions(for insight: NativeTodayInsight) -> some View {
+        reasonButton(for: insight)
+        muteButtons(for: insight)
+        Button("Cancel", role: .cancel) {}
+    }
+
+    /// Fix round 1 (I3): always offered — the reason sheet must be reachable
+    /// for every row, muteable or not, matching RN's long-press. This is the
+    /// one place that fires `insight_reason_viewed`, whether reached through
+    /// the ellipsis dialog or the row's `.contextMenu`.
+    private func reasonButton(for insight: NativeTodayInsight) -> some View {
         Button("Why am I seeing this?") {
             store.trackInsightReasonViewed(insight)
             reasonInsight = insight
         }
-        if NativeInsightsCardPolicy.isMuteable(insight.kind),
-           let days = NativeInsightsCardPolicy.snoozeDays(for: insight.kind) {
-            Button("Snooze \(days) days") { store.applyInsightMute(insight, days: days) }
-        }
-        if NativeInsightsCardPolicy.isMuteable(insight.kind) {
+    }
+
+    /// Fix round 1 (I3): snooze/dismiss, gated on the single policy-layer
+    /// decision (`NativeInsightsCardPolicy.muteControlsAvailable`) instead of
+    /// the view re-deriving `isMuteable && mutesReadable` ad hoc.
+    @ViewBuilder
+    private func muteButtons(for insight: NativeTodayInsight) -> some View {
+        if NativeInsightsCardPolicy.muteControlsAvailable(for: insight.kind, mutes: store.insightMutes) {
+            if let days = NativeInsightsCardPolicy.snoozeDays(for: insight.kind) {
+                Button("Snooze \(days) days") { store.applyInsightMute(insight, days: days) }
+            }
             Button("Dismiss", role: .destructive) { store.applyInsightMute(insight, days: nil) }
         }
-        Button("Cancel", role: .cancel) {}
     }
 
     private func row(_ insight: NativeTodayInsight) -> some View {
@@ -102,7 +117,7 @@ struct NativeInsightsCardView: View {
                 }
             }
             Spacer(minLength: 8)
-            if NativeInsightsCardPolicy.isMuteable(insight.kind), NativeInsightsCardPolicy.mutesReadable(store.insightMutes) {
+            if NativeInsightsCardPolicy.muteControlsAvailable(for: insight.kind, mutes: store.insightMutes) {
                 Button {
                     optionsInsight = insight
                 } label: {
@@ -119,8 +134,81 @@ struct NativeInsightsCardView: View {
             store.trackInsightTapped(insight)
             onRoute(store.handleTodayInsightTap(insight))
         }
+        // Fix round 1 (I3): long-press/context-menu equivalent of the
+        // ellipsis dialog, attached to every row unconditionally so the
+        // reason is reachable even when there are no mute controls to show.
+        .contextMenu {
+            optionsActions(for: insight)
+        }
+        // Fix round 1 (I3 accessibility minor): `.accessibilityElement(children:
+        // .combine)` merges the row into one VoiceOver element, which makes
+        // the nested "Ask coach" and "Options" buttons unreachable as
+        // separate swipe targets. Exposing them as accessibility actions
+        // (plus the reason, always) keeps the row a single element for
+        // swipe navigation while restoring access to every action through
+        // VoiceOver's actions rotor, matching RN's equivalent affordances.
         .accessibilityElement(children: .combine)
         .accessibilityLabel(insight.title)
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: Text("Why am I seeing this?")) {
+            store.trackInsightReasonViewed(insight)
+            reasonInsight = insight
+        }
+        .modifier(InsightCoachAccessibilityAction(insight: insight, store: store))
+        .modifier(InsightMuteAccessibilityActions(insight: insight, store: store))
+    }
+}
+
+/// Fix round 1 (I3 accessibility minor): the "Ask coach" action, exposed only
+/// when the insight actually carries a coach prompt — split into its own
+/// `ViewModifier` because `accessibilityAction` isn't conditionally
+/// applicable inline without one.
+private struct InsightCoachAccessibilityAction: ViewModifier {
+    let insight: NativeTodayInsight
+    let store: AppStore
+
+    func body(content: Content) -> some View {
+        if let prompt = insight.coachPrompt {
+            content.accessibilityAction(named: Text("Ask coach")) {
+                store.trackInsightCoachOpened(insight)
+                store.installPendingCoachPrefill(prompt)
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// Fix round 1 (I3 accessibility minor): snooze/dismiss actions, gated on the
+/// same policy-layer decision as the ellipsis button and the context menu.
+private struct InsightMuteAccessibilityActions: ViewModifier {
+    let insight: NativeTodayInsight
+    let store: AppStore
+
+    func body(content: Content) -> some View {
+        if NativeInsightsCardPolicy.muteControlsAvailable(for: insight.kind, mutes: store.insightMutes) {
+            content
+                .accessibilityAction(named: Text("Dismiss")) {
+                    store.applyInsightMute(insight, days: nil)
+                }
+                .modifier(InsightSnoozeAccessibilityAction(insight: insight, store: store))
+        } else {
+            content
+        }
+    }
+}
+
+private struct InsightSnoozeAccessibilityAction: ViewModifier {
+    let insight: NativeTodayInsight
+    let store: AppStore
+
+    func body(content: Content) -> some View {
+        if let days = NativeInsightsCardPolicy.snoozeDays(for: insight.kind) {
+            content.accessibilityAction(named: Text("Snooze \(days) days")) {
+                store.applyInsightMute(insight, days: days)
+            }
+        } else {
+            content
+        }
     }
 }

@@ -3617,8 +3617,8 @@ struct StoreIntegrationTests {
                 jobs: [job08(id: "j1", status: "approved", date: "2026-09-22")], settings: settings08())))
             let store = AppStore(fileURL: wiringURL, seedIfMissing: false,
                                  subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder)
-            // Seed a verified owner without going through activation — this proves the FAIL-CLOSED default:
-            // going through activation — this proves the FAIL-CLOSED default:
+            // Seed a verified owner without going through activation — this
+            // proves the FAIL-CLOSED default:
             // an owner is signed in but `activateInsightMutes`/
             // `activateSetupChecklist` have not run yet (matches a real
             // in-flight launch before identity activation completes).
@@ -3655,10 +3655,12 @@ struct StoreIntegrationTests {
             // dismissSetupChecklist: optimistic in-memory flip + analytics +
             // persistence.
             expect(recorder.calls.isEmpty, "10.12 sanity: no analytics fired yet")
+            let doneCountBeforeDismiss = store.todaySetupTasks?.filter(\.done).count
             store.dismissSetupChecklist()
             expect(store.todaySetupComplete, "10.12 dismissSetupChecklist optimistically marks setup complete (dismissed short-circuits the gate)")
-            expect(recorder.calls.contains { $0.event == "setup_checklist_dismissed" },
-                   "10.12 dismissSetupChecklist fires setup_checklist_dismissed with a doneCount property")
+            expect(recorder.calls.contains {
+                $0.event == "setup_checklist_dismissed" && $0.properties["doneCount"] == String(doneCountBeforeDismiss ?? 0)
+            }, "10.12 dismissSetupChecklist fires setup_checklist_dismissed with the exact pre-dismiss doneCount property")
 
             // Hero gate wiring (R3): `todayHero` reads `sampleTourDone` from
             // the real activated checklist state, not a hardcoded placeholder.
@@ -3770,8 +3772,6 @@ struct StoreIntegrationTests {
             store.trackInsightReasonViewed(jobTargetInsight)
             expect(recorder.calls.contains { $0.event == "insight_reason_viewed" },
                    "10.12 trackInsightReasonViewed fires insight_reason_viewed")
-
-            _ = recorder // keep the recorder referenced through the whole `do` block
         }
 
         // --- Account-boundary scrub: all three real boundaries wipe the
@@ -3818,7 +3818,13 @@ struct StoreIntegrationTests {
                                       subscriptionService: StoreSubscriptionServiceStub())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-1", binding: scrubBinding)
             relaunched.testActivateInsightAndChecklistStores(accountBinding: scrubBinding)
-            expect(relaunched.todaySetupTasks?.first { $0.id == .rate }?.done != true,
+            // Fix round 1 (I7c): assert non-nil first — the store came back
+            // readable (a fresh, empty state), not that the check was simply
+            // vacuous against a still-nil/unreadable store.
+            let relaunchedRateTask = relaunched.todaySetupTasks?.first { $0.id == .rate }
+            expect(relaunchedRateTask != nil,
+                   "10.12 the relaunched, re-activated store reads back a real (non-nil) rate task")
+            expect(relaunchedRateTask?.done == false,
                    "10.12 the on-disk setup-checklist store was actually removed by the scrub, not just the in-memory copy")
         }
         do {
@@ -3838,8 +3844,293 @@ struct StoreIntegrationTests {
                                       subscriptionService: StoreSubscriptionServiceStub())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-r1012", binding: hexBinding("bind-r1012"))
             relaunched.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-r1012"))
-            expect(relaunched.setupChecklistState?.isDone(.stripe) != true,
+            // Fix round 1 (I7c): assert non-nil first, then the value — a
+            // still-nil/unreadable state would make `!= true` vacuously pass.
+            expect(relaunched.setupChecklistState != nil,
+                   "10.12 the relaunched, re-activated store reads back a real (non-nil) checklist state")
+            expect(relaunched.setupChecklistState?.isDone(.stripe) == false,
                    "10.12 the on-disk setup-checklist store was actually removed by the recovery-boundary scrub")
+        }
+
+        // MARK: - Task 10.12 fix round 1
+
+        // --- I1: contract §1.5 `checklistState == nil -> no hero`, and every
+        // checklist mutator is a no-op while the store is nil/unreadable —
+        // not just `todayHero`. Uses a signed-in-but-not-yet-activated store
+        // (the same fail-closed default already proven above for
+        // `todaySetupTasks`/`todaySetupComplete`).
+        do {
+            let (store, _) = try seed08Store(jobs: [job08(id: "j1", status: "lead", date: nil, start: nil, end: nil)],
+                                              settings: settings08(), tag: "1012-fix1-i1")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-i1", binding: hexBinding("bind-i1"))
+            expect(store.setupChecklistState == nil, "10.12 fix1 I1 sanity: checklist store is nil before activation")
+
+            expect(store.todayHero == nil,
+                   "10.12 fix1 I1: checklistState == nil -> no hero (contract §1.5), even though the job data alone would otherwise show the sample-tour hero")
+
+            let syntheticHero = NativeTodayHero(kind: .sampleTour, title: "t", subtitle: "s", destination: .job(jobId: "j1"))
+            store.markSampleTourDoneIfNeeded(for: syntheticHero)
+            expect(store.setupChecklistState == nil,
+                   "10.12 fix1 I1: markSampleTourDoneIfNeeded is a no-op while setupChecklistState is nil")
+
+            store.markSetupTaskDone(.rate)
+            expect(store.setupChecklistState == nil,
+                   "10.12 fix1 I1: markSetupTaskDone is a no-op while setupChecklistState is nil")
+
+            store.dismissSetupChecklist()
+            expect(store.setupChecklistState == nil,
+                   "10.12 fix1 I1: dismissSetupChecklist is a no-op while setupChecklistState is nil")
+
+            expect(!store.todayInsightsVisible,
+                   "10.12 fix1 I1: the insights card stays hidden while the checklist store is nil (setup reads as incomplete, which gates the card regardless of hero)")
+        }
+
+        // --- I2: `applyInsightMute` is fail-closed AT THE STORE LAYER, and
+        // the owner-binding guard runs BEFORE the optimistic in-memory
+        // mutation.
+        do {
+            // (a) insightMutes == nil (unreadable/pre-activation): a no-op,
+            // not a `?? []` fabrication.
+            let (nilMutesStore, _) = try seed08Store(settings: settings08(), tag: "1012-fix1-i2-nil")
+            nilMutesStore.scheduleBookingTestSeedSignedInOwner(subject: "user-i2a", binding: hexBinding("bind-i2a"))
+            expect(nilMutesStore.insightMutes == nil, "10.12 fix1 I2 sanity: insightMutes is nil before activation")
+            nilMutesStore.applyInsightMute(insight1012(.lowMarginEstimate, id: "low_margin_estimate:i2a"), days: nil)
+            expect(nilMutesStore.insightMutes == nil,
+                   "10.12 fix1 I2: applyInsightMute is a no-op when insightMutes is nil — it never fabricates `[]` and writes into it")
+
+            // (b) the binding guard runs BEFORE the optimistic mutation: a
+            // readable (non-nil) mute list with NO verified binding must not
+            // be mutated in memory at all.
+            let recorder = RecordingAnalytics()
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1012-fix1-i2b-\(UUID().uuidString)", isDirectory: true)
+            let url = dir.appendingPathComponent("store.json")
+            try Canonical.SnapshotRepository(primaryURL: url).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings08())))
+            let boundStore = AppStore(fileURL: url, seedIfMissing: false,
+                                      subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder)
+            boundStore.scheduleBookingTestSeedSignedInOwner(subject: "user-i2b", binding: hexBinding("bind-i2b"))
+            boundStore.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-i2b"))
+            expect(boundStore.insightMutes != nil, "10.12 fix1 I2 sanity: insightMutes is readable (non-nil, empty) after activation")
+            boundStore.scheduleBookingTestClearOwner()
+            let mutesBeforeUnboundAttempt = boundStore.insightMutes
+            boundStore.applyInsightMute(insight1012(.maintenanceDue, id: "maintenance_due:i2b"), days: 30)
+            expect(boundStore.insightMutes == mutesBeforeUnboundAttempt,
+                   "10.12 fix1 I2: with insightMutes readable but no verified account binding, applyInsightMute makes NO optimistic in-memory mutation — the binding guard runs first")
+            expect(!recorder.calls.contains(where: { $0.event == "insight_snoozed" }),
+                   "10.12 fix1 I2: no analytics fires for an applyInsightMute call the guard rejected")
+        }
+
+        // --- I4: the stripe-task write is a pure, directly testable
+        // predicate (`AppStore.stripeTaskWriteAllowed`) requiring BOTH a
+        // connected status AND an unchanged account binding across the
+        // await. `configuredStripeConnectService()` performs real network
+        // I/O with no injectable seam, so the full async race through
+        // `refreshStripeStatus()` is not driven end-to-end here — this is
+        // exactly the predicate that guard makes its decision from, and it
+        // is what determines whether the account-switch-mid-await race is
+        // closed.
+        do {
+            expect(AppStore.stripeTaskWriteAllowed(connected: true, bindingBeforeAwait: "b1", currentBinding: "b1"),
+                   "10.12 fix1 I4: connected + unchanged binding -> write allowed")
+            expect(!AppStore.stripeTaskWriteAllowed(connected: true, bindingBeforeAwait: "b1", currentBinding: "b2"),
+                   "10.12 fix1 I4: connected but the binding changed during the await (account switch) -> write REJECTED")
+            expect(!AppStore.stripeTaskWriteAllowed(connected: false, bindingBeforeAwait: "b1", currentBinding: "b1"),
+                   "10.12 fix1 I4: unchanged binding but not connected -> write rejected")
+            expect(!AppStore.stripeTaskWriteAllowed(connected: true, bindingBeforeAwait: nil, currentBinding: nil),
+                   "10.12 fix1 I4: never had a verified binding before the await -> write rejected, not vacuously allowed by nil == nil")
+        }
+
+        // --- I5: seed adoption is REALLY exercised (the pre-fix-round-1
+        // report's claim that this was covered was wrong — every existing
+        // `testActivateInsightAndChecklistStores` call passed `migrated:
+        // nil`, which only exercises the "no seed" branch of `mergeSeeded`).
+        // Drives the real migration-seed adoption path with actual seed
+        // content for both stores and asserts the live stores adopted it.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "1012-fix1-i5")
+            let binding = hexBinding("bind-i5-seed")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-i5", binding: binding)
+            store.testActivateInsightAndChecklistStores(
+                accountBinding: binding,
+                migratedInsightMutes: [
+                    NativeTypedAccountState.InsightMute(id: "low_margin_estimate:seed-dismiss", mutedAt: nil, until: nil),
+                    NativeTypedAccountState.InsightMute(id: "maintenance_due:seed-snooze", mutedAt: nil, until: "2099-01-01"),
+                ],
+                migratedSetupChecklistState: NativeTypedAccountState.SetupChecklistState(
+                    dismissed: true,
+                    done: NativeTypedAccountState.SetupChecklistState.Done(
+                        contact: true, logo: true, rate: nil, stripe: nil, notifications: nil
+                    ),
+                    sampleTourDone: true
+                )
+            )
+            expect(store.insightMutes?.contains(where: { $0.id == "low_margin_estimate:seed-dismiss" && $0.until == nil }) == true,
+                   "10.12 fix1 I5: the seeded permanent dismiss was adopted into the live insight-mute store")
+            expect(store.insightMutes?.contains(where: { $0.id == "maintenance_due:seed-snooze" && $0.until == "2099-01-01" }) == true,
+                   "10.12 fix1 I5: the seeded snooze (with its `until`) was adopted into the live insight-mute store")
+            expect(store.setupChecklistState?.isDone(.contact) == true,
+                   "10.12 fix1 I5: the seeded `done.contact` was adopted into the live setup-checklist store")
+            expect(store.setupChecklistState?.isDone(.logo) == true,
+                   "10.12 fix1 I5: the seeded `done.logo` was adopted into the live setup-checklist store")
+            expect(store.setupChecklistState?.sampleTourDone == true,
+                   "10.12 fix1 I5: the seeded `sampleTourDone` was adopted into the live setup-checklist store")
+            expect(store.setupChecklistState?.dismissed == true,
+                   "10.12 fix1 I5: the seeded `dismissed` was adopted into the live setup-checklist store")
+        }
+
+        // --- I6: the fail-closed diagnostic is bounded, once-per-session,
+        // and observable via `recordedDiagnostics` (a Release-safe seam —
+        // production also emits it through `os.Logger`, not `#if DEBUG
+        // print(...)`, so it survives Release builds too).
+        do {
+            let (store, dir) = try seed08Store(settings: settings08(), tag: "1012-fix1-i6")
+            let binding = hexBinding("bind-i6-diag")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-i6", binding: binding)
+            // Corrupt the setup-checklist file so activation fails closed.
+            try Data("not valid json".utf8).write(to: dir.appendingPathComponent("setup-checklist.json"))
+            store.testActivateInsightAndChecklistStores(accountBinding: binding)
+            expect(store.setupChecklistState == nil, "10.12 fix1 I6 sanity: the corrupt file made activation fail closed")
+            expect(store.recordedDiagnostics.contains("setupChecklistState"),
+                   "10.12 fix1 I6: the fail-closed diagnostic code was recorded")
+            let countAfterFirst = store.recordedDiagnostics.filter { $0 == "setupChecklistState" }.count
+            // Re-activating against the SAME still-corrupt file must not
+            // re-emit — once per session per code.
+            store.testActivateInsightAndChecklistStores(accountBinding: binding)
+            let countAfterSecond = store.recordedDiagnostics.filter { $0 == "setupChecklistState" }.count
+            expect(countAfterSecond == countAfterFirst,
+                   "10.12 fix1 I6: the diagnostic is emitted at most once per session per code, even after a second failure")
+        }
+
+        // --- I7(a): drive `applyCompletedSignOutState()` for real (not just
+        // `useAnotherAccount()`/`applyRecoverySignedOutState()`, already
+        // covered above) and assert both owner-bound stores are scrubbed.
+        do {
+            let (store, dir) = try seed08Store(settings: settings08(), tag: "1012-fix1-i7a")
+            let binding = hexBinding("bind-i7a")
+            seed08Owner(store, binding: binding)
+            store.testActivateInsightAndChecklistStores(accountBinding: binding)
+            store.markSetupTaskDone(.rate)
+            expect(store.setupChecklistState?.isDone(.rate) == true, "10.12 fix1 I7a sanity: rate recorded before sign-out")
+
+            store.testApplyCompletedSignOutState()
+            expect(store.setupChecklistState == nil,
+                   "10.12 fix1 I7a: a real applyCompletedSignOutState() scrubs setupChecklistState")
+            expect(store.insightMutes == nil,
+                   "10.12 fix1 I7a: a real applyCompletedSignOutState() scrubs insightMutes")
+
+            let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                      subscriptionService: StoreSubscriptionServiceStub())
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-i7a", binding: binding)
+            relaunched.testActivateInsightAndChecklistStores(accountBinding: binding)
+            expect(relaunched.setupChecklistState != nil,
+                   "10.12 fix1 I7a: the relaunched, re-activated store reads back a real (non-nil) checklist state")
+            expect(relaunched.setupChecklistState?.isDone(.rate) == false,
+                   "10.12 fix1 I7a: the on-disk setup-checklist store was actually removed by applyCompletedSignOutState, not just the in-memory copy")
+        }
+
+        // --- I7(b): apply a mute, cross a boundary, relaunch/reactivate, and
+        // assert the on-disk mute is gone (mirrors the I7(a)/existing scrub
+        // tests' relaunch pattern, for the mute store specifically).
+        do {
+            let (store, dir) = try seed08Store(settings: settings08(), tag: "1012-fix1-i7b")
+            let binding = hexBinding("bind-i7b")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-i7b", binding: binding)
+            store.testActivateInsightAndChecklistStores(accountBinding: binding)
+            store.applyInsightMute(insight1012(.lowMarginEstimate, id: "low_margin_estimate:i7b"), days: nil)
+            expect(store.insightMutes?.isEmpty == false, "10.12 fix1 I7b sanity: a mute was recorded before the boundary")
+
+            store.testApplyCompletedSignOutState()
+
+            let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                      subscriptionService: StoreSubscriptionServiceStub())
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-i7b", binding: binding)
+            relaunched.testActivateInsightAndChecklistStores(accountBinding: binding)
+            expect(relaunched.insightMutes != nil,
+                   "10.12 fix1 I7b: the relaunched, re-activated store reads back a real (non-nil) mute list")
+            expect(relaunched.insightMutes?.isEmpty == true,
+                   "10.12 fix1 I7b: the on-disk insight-mute store was actually wiped by the boundary scrub, not just the in-memory copy")
+        }
+
+        // --- I7(d): the unreadable/corrupt-file path AND a wrong-owner file
+        // both fail closed identically — non-muteable kinds only, no mute
+        // controls, checklist hidden, insights gated.
+        do {
+            let (store, dir) = try seed08Store(settings: settings08(), tag: "1012-fix1-i7d-corrupt")
+            let binding = hexBinding("bind-i7d-corrupt")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-i7d", binding: binding)
+            try Data("not valid json".utf8).write(to: dir.appendingPathComponent("insight-mutes.json"))
+            try Data("not valid json".utf8).write(to: dir.appendingPathComponent("setup-checklist.json"))
+            store.testActivateInsightAndChecklistStores(accountBinding: binding)
+            expect(store.insightMutes == nil, "10.12 fix1 I7d: a corrupt mute file activates to nil (fail-closed)")
+            expect(store.setupChecklistState == nil, "10.12 fix1 I7d: a corrupt checklist file activates to nil (fail-closed)")
+            expect(store.todaySetupTasks == nil, "10.12 fix1 I7d: the checklist card stays hidden")
+            expect(!store.todayInsightsVisible, "10.12 fix1 I7d: the insights card stays gated (setup reads as incomplete)")
+            let fromCorrupt = NativeInsightsCardPolicy.visibleInsights(
+                all: [insight1012(.laborOverrun, id: "labor_overrun:i7d"), insight1012(.maintenanceDue, id: "maintenance_due:i7d")],
+                mutes: store.insightMutes, now: Date()
+            )
+            expect(fromCorrupt.map(\.id) == ["labor_overrun:i7d"],
+                   "10.12 fix1 I7d: with mutes nil, only the non-muteable kind renders — no mute controls are possible without a readable store")
+            expect(!NativeInsightsCardPolicy.muteControlsAvailable(for: .maintenanceDue, mutes: store.insightMutes),
+                   "10.12 fix1 I7d: mute controls are unavailable when the store is unreadable")
+
+            // A file bound to a DIFFERENT owner is the other unreadable-store
+            // shape (accountBindingMismatch, not unsupportedSchema/decode
+            // failure) — same fail-closed outcome.
+            let (wrongOwnerStore, wrongOwnerDir) = try seed08Store(settings: settings08(), tag: "1012-fix1-i7d-wrongowner")
+            let realBinding = hexBinding("bind-i7d-real")
+            let otherBinding = hexBinding("bind-i7d-other")
+            wrongOwnerStore.scheduleBookingTestSeedSignedInOwner(subject: "user-i7d-owner", binding: otherBinding)
+            wrongOwnerStore.testActivateInsightAndChecklistStores(accountBinding: otherBinding)
+            wrongOwnerStore.markSetupTaskDone(.rate)
+            // Also write the mute file — an insight-mutes.json that never
+            // existed loads as `[]` (a genuinely empty but READABLE store,
+            // not unreadable), which wouldn't exercise the mismatch path.
+            wrongOwnerStore.applyInsightMute(insight1012(.lowMarginEstimate, id: "low_margin_estimate:i7d-wrongowner"), days: nil)
+            // Now "sign in" as a DIFFERENT owner over the same on-disk files.
+            let impersonating = AppStore(fileURL: wrongOwnerDir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                         subscriptionService: StoreSubscriptionServiceStub())
+            impersonating.scheduleBookingTestSeedSignedInOwner(subject: "user-i7d-real", binding: realBinding)
+            impersonating.testActivateInsightAndChecklistStores(accountBinding: realBinding)
+            expect(impersonating.setupChecklistState == nil,
+                   "10.12 fix1 I7d: a setup-checklist file bound to a DIFFERENT owner activates to nil (accountBindingMismatch fails closed)")
+            expect(impersonating.insightMutes == nil,
+                   "10.12 fix1 I7d: an insight-mute file bound to a DIFFERENT owner activates to nil (accountBindingMismatch fails closed)")
+        }
+
+        // --- I7(e): snooze expiry — once `until` has passed, the row comes
+        // back (pure policy, `NativeInsightsCardPolicy`/`NativeInsightMutes`).
+        do {
+            let now = ISO8601DateFormatter().date(from: "2026-09-23T12:00:00Z")!
+            let insight = insight1012(.maintenanceDue, id: "maintenance_due:i7e")
+            let expiredSnooze = [NativeInsightMute(id: insight.id, mutedAt: "2026-08-01T00:00:00.000Z", until: "2026-09-01")]
+            let stillVisible = NativeInsightsCardPolicy.visibleInsights(all: [insight], mutes: expiredSnooze, now: now)
+            expect(stillVisible.map(\.id) == [insight.id],
+                   "10.12 fix1 I7e: once `until` (2026-09-01) has passed relative to `now` (2026-09-23), the snoozed row is visible again")
+
+            let activeSnooze = [NativeInsightMute(id: insight.id, mutedAt: "2026-09-20T00:00:00.000Z", until: "2099-01-01")]
+            let stillHidden = NativeInsightsCardPolicy.visibleInsights(all: [insight], mutes: activeSnooze, now: now)
+            expect(stillHidden.isEmpty,
+                   "10.12 fix1 I7e sanity: a snooze whose `until` has NOT yet passed still hides the row")
+        }
+
+        // --- Minor: the notifications checklist task also fires
+        // `setup_checklist_task_opened` with `task: "notifications"`, as RN
+        // does — it was previously skipped by the early return in
+        // `NativeSetupChecklistCardView.handleTap`. `AppStore` doesn't know
+        // which task id triggered the in-card notifications flow, so this
+        // exercises the exact call the view now makes before that flow.
+        do {
+            let recorder = RecordingAnalytics()
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-1012-fix1-notif-\(UUID().uuidString)", isDirectory: true)
+            let url = dir.appendingPathComponent("store.json")
+            try Canonical.SnapshotRepository(primaryURL: url).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings08())))
+            let store = AppStore(fileURL: url, seedIfMissing: false,
+                                 subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder)
+            store.trackSetupChecklistTaskOpened(.notifications)
+            expect(recorder.calls.contains { $0.event == "setup_checklist_task_opened" && $0.properties["task"] == "notifications" },
+                   "10.12 fix1 minor: the notifications task also fires setup_checklist_task_opened, matching RN")
         }
 
         if failures == 0 { print("PASS: canonical AppStore integration tests") }

@@ -77,6 +77,16 @@ enum NativeInsightsCardPolicy {
     /// durably record their effect).
     static func mutesReadable(_ mutes: [NativeInsightMute]?) -> Bool { mutes != nil }
 
+    /// Fix round 1 (I3): the single gating decision for whether a row shows
+    /// mute/snooze controls at all — `isMuteable(kind) && mutesReadable(mutes)`.
+    /// Lives here (not ad hoc in `NativeInsightsCard.swift`) so the view has
+    /// one call to make and the rule can't drift between the ellipsis button
+    /// and any future mute-affordance. The "Why am I seeing this?" reason is
+    /// NOT gated by this — every row offers it, muteable or not.
+    static func muteControlsAvailable(for kind: NativeInsightKind, mutes: [NativeInsightMute]?) -> Bool {
+        isMuteable(kind) && mutesReadable(mutes)
+    }
+
     /// `!!settings && state !== null && mutes !== null && isSetupComplete(...)
     /// && insights.length > 0`, PLUS decision row 18: hidden while the
     /// first-action hero is shown. `setupComplete` already folds in "checklist
