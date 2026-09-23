@@ -5,6 +5,7 @@
 **Status:** Contract frozen. This is characterization only: no Swift file, test,
 project file or RN file was changed. Selected contracts are marked **chosen**.
 An open item is marked **blocked**, with its owner and the reason.
+Revised in fix round 1 (2026-09-23): a single owner predicate (§2.5) and precision fixes.
 
 **How this was produced:**
 - Sources read in full:
@@ -37,12 +38,12 @@ characterization).
 | ID | Topic | Decision | Status | Owner |
 |---|---|---|---|---|
 | C1 | Snapshot schema | RN `BridgeSnapshot` v1 fields and optionality, decoded both ways (§2) | chosen | 11.01 |
-| C2 | Native snapshot writer shape | Explicit `null`s, `address` always a string, `outstandingTotal` in cents from 10.01, `.sortedKeys`, fractional ISO `updatedAt`, plus the `ownerTag` field (§2.3) | chosen | 11.01 |
+| C2 | Native snapshot writer shape | Explicit `null`s, `address` always a string, `outstandingTotal` in dollars rounded to 2 dp from the 10.01 value, `.sortedKeys`, fractional ISO `updatedAt`, plus the `ownerTag` field (§2.3) | chosen | 11.01 |
 | C3 | Stale-snapshot window | **86,400 s (24 h)**. The snapshot is stale iff `now − updatedAt > 86400`, or its age is negative or unparseable (§3.3) | chosen | 11.02, 11.05 |
 | C4 | Mirror write triggers | Every committed canonical write that changes jobs, time sessions, invoices or payments; foreground/launch after replay; the 10.09 seam (§3.1) | chosen | 11.01 |
-| C5 | Seam observer input | Add a `(canonical, output)` register overload. The current observer receives only `NativeBusinessSnapshot` (§3.2) | chosen; Own-list addition for 11.01 | 11.01 |
+| C5 | Seam observer input | Add a `(canonical, output, expectedOwnerBinding)` register overload. The current observer receives only `NativeBusinessSnapshot` (§3.2) | chosen; Own-list addition for 11.01 | 11.01 |
 | C6 | Action queue | Four types, fixed JSON shapes, `flock` protocol, 512 cap, duplicate-id handling, never overwrite a malformed queue (§4) | chosen | 11.04 |
-| C7 | Owner stamping | `ownerTag` goes on the snapshot, on each queued action and on `activeTrip`. Extensions refuse to write when no snapshot is present. Replay drops actions whose owner is missing or mismatched (§4.5) | chosen | 11.01, 11.04, 11.05 |
+| C7 | Owner stamping | `ownerTag` (hash of the §2.5 binding) goes on the snapshot, on each queued action, on `activeTrip` and on the `pendingOpenUrl` stash. Extensions refuse to write when no snapshot is present. Replay drops actions whose owner is missing or mismatched (§4.5) | chosen | 11.01, 11.04, 11.05 |
 | C8 | Malformed or duplicate queue wedge | Native replay retries forever on `malformedQueue`/`duplicateActionID` (§4.6) | **blocked** until 11.05 decides the quarantine policy | 11.05 |
 | C9 | Intents | Ten intents, a single 17.0 floor, target membership per ruling P3 (§5) | chosen | 11.04 (types), 11.01 (membership) |
 | C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen | 11.06 |
@@ -50,12 +51,13 @@ characterization).
 | C12 | SDKs | Sentry Cocoa **9.29.0** and PostHog iOS **3.81.0**, via SPM `exactVersion`, behind Foundation-only adapters (§7) | chosen (PostHog pin has a freshness concern) | 11.07, 11.09 |
 | C13 | Privacy manifests | App and extension manifests: required-reason APIs and collected-data types (§8) | chosen | 11.01, 11.09 |
 | C14 | Analytics gating | Release build **and** a configured, non-`PLACEHOLDER` key. RN gated PostHog on the key only (§9.2) | chosen (recorded deviation) | 11.07 |
-| C15 | Event catalog | 52 events from 73 RN `track(` sites; the fixture in §9.5 is exact | chosen | 11.08 |
+| C15 | Event catalog | 52 events from 70 RN `track(` call sites; the fixture in §9.5 is exact. 11.08 asserts the event set, never a site count | chosen | 11.08 |
 | C16 | Seam property types | Widen `[String: String]` to JSON scalars and string arrays (§9.6) | chosen | 11.07 (in place, ruling P6) |
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen | 11.15 |
 | C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline | 11.10a/11.10b |
+| C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; gaps owned by 11.05 (replay) and 11.06 (deep link + pending-URL consumer) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
 
 ---
@@ -70,7 +72,7 @@ characterization).
 | Snapshot key | `widgetSnapshot` (a JSON **string** stored in UserDefaults) | `targets/widget/Widgets.swift:11`, `utils/widgetBridge.ts` `WIDGET_SNAPSHOT_KEY` |
 | Action queue key | `widgetActions` (a JSON array string) | `utils/widgetBridge.ts` `WIDGET_ACTIONS_KEY`, `targets/widget/_shared/SiriIntents.swift:51` |
 | Trip session key | `activeTrip` (a JSON object string, private to Siri) | `targets/widget/_shared/SiriIntents.swift:52` |
-| Cold-launch handoff key | `pendingOpenUrl` (`{url, at}`) | `targets/widget/_shared/SiriIntents.swift:53`, `utils/widgetBridge.ts` `PENDING_OPEN_URL_KEY` |
+| Cold-launch handoff key | `pendingOpenUrl` (RN `{url, at}`; native adds `ownerTag`, §6.2) | `targets/widget/_shared/SiriIntents.swift:53`, `utils/widgetBridge.ts` `PENDING_OPEN_URL_KEY` |
 | Advisory lock | File `.tradeready-widget-actions.lock` in the App Group container, `flock(LOCK_EX)` | `targets/widget/JobTimer.swift:25-41` (working tree), `N/NativeWidgetActionReplay.swift` claim transport |
 
 The native scrubber `NativeAppGroupAccountScrubber` (`N/NativeAppGroupInbox.swift:42-79`)
@@ -117,15 +119,17 @@ verifies the result.
   - today's job stays "next" after its start time passes.
 - `timer` is the open session with the latest `start` across all jobs. RN does not
   filter archived jobs here; native keeps that parity so a running clock is never hidden.
-- `outstandingTotal` = `FinancialDecimal.cents(NativeBusinessSnapshot.outstandingTotal)`
-  (`N/Domain/FinancialDomain.swift:12`, `N/Domain/NativeBusinessSnapshot.swift:110-117`).
-  Encode it as a JSON number. Never re-derive the sum.
+- `outstandingTotal` = `FinancialDecimal.cents(NativeBusinessSnapshot.outstandingTotal)`.
+  Despite its name, `cents` returns **dollars rounded to 2 decimal places** (`.plain`
+  rounding; `N/Domain/FinancialDomain.swift:12-17`), which matches RN's `roundToCents`.
+  Source value: `N/Domain/NativeBusinessSnapshot.swift:110-117`. Encode it as a JSON
+  number of dollars (e.g. `160`, `1234.56`). Never re-derive the sum.
 
 ### 2.3 Native writer additions (chosen)
 
-- **`ownerTag`**: lowercase hex SHA-256 of `"tradeready.widget.owner.v1:" + accountBinding`,
-  where `accountBinding` is the 64-hex binding `AppStore` already uses
-  (`migratedAccountBinding`/`verifiedAccountBinding`, `N/AppStore.swift:294-295`).
+- **`ownerTag`**: lowercase hex SHA-256 of `"tradeready.widget.owner.v1:" + O`, where `O`
+  is the 64-hex owner binding defined in §2.5 (`AppStore.derivedStatePublishBinding`).
+  For the seam writer, `O` is the publish's `expectedOwnerBinding` (§3.2).
   - It is hashed again so the raw binding never enters the App Group.
   - RN decoders ignore it.
   - The native widget decoder treats it as optional. A missing tag means "no owner":
@@ -182,6 +186,48 @@ Expected results against RN `BridgeSnapshot`: F1–F5 decode and F6 is rejected
 (scratchpad result in §16). 11.01's test must also prove the native type decodes F1–F5,
 rejects or explicitly degrades F6, and encodes a projection RN decodes.
 
+### 2.5 Owner predicate (chosen; one predicate for all four paths)
+
+**Predicate:** `O = AppStore.derivedStatePublishBinding` (`N/AppStore.swift:5600-5611`).
+It returns `verifiedAccountBinding` only when both of these hold:
+- the gate is one of `.signedIn`, `.subscriptionLoading`, `.paywall`, `.startingPoint`
+  or `.onboarding`;
+- the workspace is exact: `isMigratedLocalOwnerVerified ||
+  hasCompletedPersistedWorkspace(binding:)`.
+
+It is the same predicate the 10.09 publisher already uses for its owner re-check
+(`ownerBinding:` at `N/AppStore.swift:5581`). It is equivalent to
+`hasExactSignedInWorkspace` (`N/AppStore.swift:4920`) plus `verifiedAccountBinding`,
+except that it also rejects the `.accountMismatch`/`.unavailable` gates.
+
+| Path | Rule | Owner |
+|---|---|---|
+| Snapshot writer | Write only when `O != nil`. The seam observer uses the publish's `expectedOwnerBinding`, which the publisher re-checks against `O` | 11.01 |
+| `ownerTag` | `sha256hex("tradeready.widget.owner.v1:" + O)` (§2.3) | 11.01 (snapshot), 11.04 (actions, `activeTrip`, stash) |
+| Replay gate | Replay only when `O != nil` **and** the gate is `.signedIn`. The coordinator receives `O` as its verified binding, and an action's `ownerTag` must equal `hash(O)` (§4.5) | 11.05 |
+| Deep-link and pending-URL gate | Route only when `O != nil` **and** the gate is `.signedIn`. A stash's `ownerTag` must equal `hash(O)` (§6.2) | 11.06 |
+
+Replay and routing also require `.signedIn` because they mutate data or navigate. The
+writer may run in the post-sign-in gates because the publisher does.
+
+**Not used:** `migratedAccountBinding` and `isMigratedLocalOwnerVerified` on their own.
+Both are set only when an RN legacy auxiliary artifact was staged
+(`N/NativeAuthenticatedIdentity.swift:544-553`, `:587-588`). With no current users,
+every future account is native-only, so a gate on them never opens.
+
+**Gaps in existing code (named, with owners):**
+- **11.05:** `replayVerifiedWidgetActionsIfPossible` (`N/AppStore.swift:5155-5160`)
+  requires `isMigratedLocalOwnerVerified` and `migratedAccountBinding`, so widget and
+  Siri actions would never replay for a native-only account. Switch it to `O`. The
+  claim files are keyed by binding (`claim-<binding>-<digest>.json`); 11.05 decides what
+  happens to an in-flight claim keyed by the old binding (no current users, so it may
+  discard).
+- **11.06:** `consumeVerifiedPendingOpenURLIfNeeded` (`N/AppStore.swift:5190-5194`)
+  requires `isMigratedLocalOwnerVerified`, so the cold stash would never be consumed.
+  It also runs only once per session (`didConsumeVerifiedPendingOpenURL`), so a later
+  warm stash is ignored. Switch it to `O` and to the §6.2 lock/tag rules, and consume on
+  every activation.
+
 ---
 
 ## 3. Snapshot write semantics (W1, W4)
@@ -213,11 +259,9 @@ Write protocol:
 - Re-check the owner gate, write `widgetSnapshot`, release the lock.
 - Then call `WidgetCenter.shared.reloadAllTimelines()`.
 
-Gate: never write while signed out, while the local owner is unverified or mismatched,
-or without an exact signed-in workspace. Use `hasExactSignedInWorkspace`
-(`N/AppStore.swift:4920`) and the account binding the replay path already uses
-(`N/AppStore.swift:5155-5160`). A gated-off write is a no-op, not a clear. Wiping is the
-scrubber's job.
+Gate: write only when the §2.5 owner predicate `O` is non-nil, re-checked inside the
+lock. For seam writes, `O` must also equal the publish's `expectedOwnerBinding`.
+A gated-off write is a no-op, not a clear. Wiping is the scrubber's job.
 
 Wipe authority: `NativeAppGroupAccountScrubber` stays the only wipe path.
 - `signOut(revokeRemote:)` (`N/AppStore.swift:4122-4154`) and `deleteAccount`
@@ -235,12 +279,16 @@ the canonical snapshot. `NativeDerivedStatePublisher` explicitly forbids reading
 the callback is not allowed.
 
 **Chosen:** 11.01 adds an additive overload to both `N/NativeDerivedStatePublisher.swift`
-and `AppStore` that registers `(canonical: Input, output: Output) throws -> Void`. The
-publisher already holds both values in `publish(canonical:expectedOwnerBinding:)`
-(line 134). Existing observers are unchanged.
+and `AppStore` that registers
+`(canonical: Input, output: Output, expectedOwnerBinding: String) throws -> Void`. The
+publisher already holds all three values in `publish(canonical:expectedOwnerBinding:)`
+(line 134), and it re-checks that binding against `O` around every await. The writer
+computes `ownerTag` from the delivered `expectedOwnerBinding`, so the tag provably
+matches the publish's owner. No separate binding accessor is needed; the binding stays
+private. Existing observers are unchanged.
 
-11.01 also needs read access to the account binding for `ownerTag`. It may add a narrow
-internal accessor; the binding stays private-set.
+Non-seam writes (triggers 1–2 in §3.1) run inside `AppStore`, which reads `O`
+directly.
 
 ### 3.3 Stale-snapshot window (chosen: 86,400 seconds)
 
@@ -264,7 +312,7 @@ Behavior when stale (chosen):
 | Next Job widget (11.02) | Explicit stale state ("Open TradeReady to refresh"). No customer name or address, and no job deep link: the whole card opens the app root |
 | Job Timer widget (11.03) | A running timer stays visible and Stop stays enabled; replay clamps and ignores a stop with no open session. The idle Start button is suppressed and the status reads "Open app to sync" |
 | NextJob, ClockIn, OnMyWay, Outstanding intents (11.04) | Refuse with the dialog "Open TradeReady to refresh your schedule." No action is written and no data is spoken |
-| ClockOut, StartTrip, StopTrip, LogExpense | Unaffected by staleness. They do not depend on snapshot contents beyond `ownerTag` |
+| ClockOut, StartTrip, StopTrip, LogExpense | Not refused when stale. StartTrip, StopTrip and LogExpense read only `ownerTag` from the snapshot. ClockOut also reads `snapshot.timer`, for the on-the-clock check and the optional `jobId` (`targets/widget/_shared/SiriIntents.swift:643-655`), inside the append's lock hold (§4.5). With a stale timer, the worst case is a `timer_stop` that replay ignores because that session is already closed |
 | Timeline | Add an entry at `updatedAt + 86_400` (or the next local midnight, whichever is first) so the stale state appears without an app reload |
 
 11.02 (UI) and 11.05 (fixtures) both test the same boundary: 86,399 s is fresh,
@@ -354,15 +402,28 @@ append. The action then survives into the next account, where an `expense_log` o
 `trip_log` would be applied to the wrong owner.
 
 **Contract:**
-- **Extension writers (11.04):** read `widgetSnapshot.ownerTag` **inside the same lock
-  hold** as the append. With no snapshot or no tag, refuse. Stamp the tag on the action
-  and on `activeTrip`.
+- **Extension writers (11.04):** every snapshot read used to build an action happens
+  **in the same lock hold as the append**. That covers:
+  - `ownerTag`;
+  - `nextJob.id` (ClockIn, OnMyWay);
+  - `timer` and `timer.jobId` (ClockOut's on-the-clock check and its `jobId`);
+  - the queue's last pending timer type (the "on the clock" rule).
+  Reading before the lock and appending after it is forbidden. It would reopen the
+  ClockIn/ClockOut race and the scrub race.
+- **No snapshot or no tag → refuse.** Write nothing and speak no data. The Siri dialog
+  is **"Open TradeReady and sign in first."** This also applies to the read-only
+  NextJob and Outstanding intents. The widget timer buttons write nothing and the
+  widget shows its empty state.
+- Stamp the tag on the action, on `activeTrip` and on the `pendingOpenUrl` stash (§6.2).
 - **Snapshot writer (11.01):** writes `ownerTag` under the lock.
-- **Replayer (11.05):** an action whose `ownerTag` is missing or differs from the
-  verified binding's tag is **acknowledged and dropped**, never applied. It is counted in
+- **Replayer (11.05):** an action whose `ownerTag` is missing or differs from
+  `hash(O)` (§2.5) is **acknowledged and dropped**, never applied. It is counted in
   a bounded diagnostic with no payload.
   - This retires replay of untagged RN-written actions. That is acceptable because there
     are no current users (see memory "No current app users"; plan "Upgrade identity").
+  - The owner check runs **before** type dispatch. An untagged or mismatched action of
+    an unknown type is dropped like any other. Only tagged, owner-matched unknown types
+    are retained (§4.6).
   - 11.05 updates `N/NativeWidgetActionReplay.swift` and its fixtures accordingly.
 
 ### 4.6 Replay (existing native behavior, recorded)
@@ -375,7 +436,9 @@ Order: claim → prepare → apply → save → acknowledge. Sources:
   `completeFileProtectionUntilFirstUserAuthentication`.
 - Only the claimed prefix is removed.
 - At most 8 batches of at most 512 actions per activation.
-- Unknown types are retained ("Kept N newer widget action(s)…").
+- Unknown types are retained ("Kept N newer widget action(s)…"). Under §4.5 this
+  applies only to tagged, owner-matched actions; an untagged or mismatched unknown-type
+  action is dropped.
 - Start/stop markers `__nativeWidgetStartActionID` / `__nativeWidgetStopActionID` make
   replay idempotent. Done statuses are skipped. `scheduled` becomes `in_progress` on
   start. A stop is clamped to its start. Trips and expenses use deterministic ids.
@@ -418,10 +481,10 @@ below are **chosen**.
 | 1 | NextJobIntent ("Next Job") | — | Read-only `widgetSnapshot.nextJob`. Dialog "You have no upcoming jobs scheduled." when none | no | app (Siri) | refuse |
 | 2 | StartTripIntent ("Start Mileage Trip") | `odometerStart: Double` | Writes `activeTrip` only (§4.4) | no | app | n/a |
 | 3 | StopTripIntent ("Stop Mileage Trip") | `odometerEnd: Double` | `activeTrip` → one `trip_log`, clear | no | app | n/a |
-| 4 | OnMyWayIntent ("On My Way") | — | Stash `pendingOpenUrl {url, at}` with `tradeready://onmyway/<nextJob.id>` | **yes** (`@MainActor`) | app | refuse |
+| 4 | OnMyWayIntent ("On My Way") | — | Stash `pendingOpenUrl {url, at, ownerTag}` with `tradeready://onmyway/<nextJob.id>`, written in one lock hold with the `nextJob`/`ownerTag` read (§4.5, §6.2) | **yes** (`@MainActor`) | app | refuse |
 | 5 | ClockInIntent ("Clock In") | — | `timer_start` for `nextJob.id`. "already clocked in" if a pending start or snapshot timer exists; "No upcoming job to clock into." | no | app | refuse |
 | 6 | ClockOutIntent ("Clock Out") | — | `timer_stop` with the snapshot timer's `jobId` when known. "You're not clocked in." | no | app | n/a |
-| 7 | LogExpenseIntent ("Log Expense") | `amount: Double`, `category: ExpenseCategory`, `expenseDescription: String?` | `expense_log`. Amount finite, > 0, ≤ 1,000,000, else "That amount doesn't look right." | no | app | n/a |
+| 7 | LogExpenseIntent ("Log Expense") | `amount: Double`, `category: ExpenseCategory`, `expenseDescription: String?` (native choice: RN declares a non-optional `String` at `targets/widget/_shared/SiriIntents.swift:760`. Optional lets Siri skip the prompt; empty or absent becomes "Logged via Siri") | `expense_log`. Amount finite, > 0, ≤ 1,000,000, else "That amount doesn't look right." | no | app | n/a |
 | 8 | OutstandingIntent ("Outstanding Invoices") | — | Read-only `outstandingTotal`. "Nothing outstanding — you're fully collected." / "You're owed $X in outstanding invoices." | no | app | refuse |
 | 9 | StartTimerIntent ("Start Job Timer") | `jobId: String` | `timer_start`. An empty id writes nothing. `isDiscoverable = false` | no | **both** (widget button) | Start button hidden when stale |
 | 10 | StopTimerIntent ("Stop Job Timer") | `jobId: String` | `timer_stop` (jobId only if non-empty). `isDiscoverable = false` | no | **both** | allowed |
@@ -501,27 +564,38 @@ Insurance, Software & Apps, Marketing, Other.
 1. **Intercept before parsing:** the Google Sign-In callback (`N/TradeReadyNativeApp.swift:99-101`)
    and then the password-recovery link inside `handle(url:)` keep their current priority.
 2. **Parse** (above).
-3. **Authenticate:** if the gate is not `.signedIn`, park at most one pending route in
-   memory with its source (warm URL or App Group stash). Apply it once the gate reaches
-   `.signedIn` **for the same owner binding** that was active or expected. Otherwise
-   discard it. RN parked until session and navigation were ready
+3. **Read the stash under the lock.** The `pendingOpenUrl` stash is `{url, at, ownerTag}`.
+   11.04 writes it inside the same lock hold that reads `ownerTag` and `nextJob.id`
+   (§4.5). The consumer (11.06) reads **and removes** it in one lock hold, whether or not
+   it is valid, then checks freshness (`0 ≤ age ≤ 300 s`) and parses it. A stash with no
+   tag is discarded.
+4. **Authenticate and park:** if the gate is not `.signedIn`, park at most one pending
+   route in memory, holding its source, its `ownerTag` (stash) or arrival-time `O` (warm
+   URL, possibly nil), and `at`. RN parked until session and navigation were ready
    (`App.tsx:491-523`, flush points at 552-553, 558-560 and 593-597).
-4. **Exact owner:** the local owner is verified (`isMigratedLocalOwnerVerified`) and the
-   account binding matches the parked route's binding.
-5. **Record:** the job exists and `archivedAt == nil`.
+   - Cold-launch parking rule: apply the parked stash route only when the gate reaches
+     `.signedIn` with `hash(O) == ownerTag`.
+   - Discard it when the tag differs, when the gate reaches `.signedOut`,
+     `.accountMismatch` or `.unavailable`, or when the app backgrounds first.
+   - A parked warm URL applies when `.signedIn`, and only if its arrival binding was nil
+     or equals `O`. The record lookup in step 6 is always in the current owner's data.
+5. **Exact owner:** the §2.5 predicate `O` is non-nil and the gate is `.signedIn`.
+6. **Record:** the job exists and `archivedAt == nil`.
    - `job` routes on any non-archived status. A complete or paid job's detail is still
      the right record.
    - `onmyway` also refuses `DONE_STATUSES`. A native deviation from RN, chosen so no
      on-my-way review is offered for finished work.
    - A failure shows the existing not-found state, never a different record.
-6. On success, track `widget_deep_link_opened {type}` (§9.5).
-7. Remove the stash as RN does.
+7. On success, track `widget_deep_link_opened {type}` (§9.5). The stash was already
+   removed in step 3 (RN reads, then removes, then parses).
 
 **Gaps 11.06 must close (found in source):**
 - `AppStore.handle(url:)` (`N/AppStore.swift:3593-3603`) checks only `jobs.contains`.
   It has no auth, owner or archived gate, and no parking.
 - `NativePendingOpenURLConsumer` (`N/NativeAppGroupInbox.swift:92-133`) has no archived
-  check and never clears its source.
+  check, does not take the lock, and never clears its source.
+- `consumeVerifiedPendingOpenURLIfNeeded` is gated on the migrated owner and runs once
+  per session (§2.5).
 - **P8 (blocked, C11):** the parked Phase 10 "`est_` archived dead tap" decision belongs
   to 11.06.
 
@@ -667,7 +741,7 @@ Native (chosen, 11.08):
   - `applyCompletedSignOutState` (`N/AppStore.swift:4252`).
 - Never send email, name or any other trait. `identify` carries the id only.
 
-### 9.5 Event catalog (52 events, 73 RN call sites)
+### 9.5 Event catalog (52 events, 70 RN call sites)
 
 Every event fires at the same business moment as RN: after the durable save, not on tap.
 Types below: `bool`, `number`, `string`, `string[]`, a literal (`true`), or an enum
@@ -1119,19 +1193,25 @@ created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in
 
 - **11.01:**
   - owns §2 and §3.1–3.2: the schema, F1–F6 decode tests, the writer, `ownerTag`, and
-    the seam `(canonical, output)` overload (**Own-list addition**:
-    `N/NativeDerivedStatePublisher.swift` plus a narrow binding accessor in `N/AppStore.swift`);
+    the seam `(canonical, output, expectedOwnerBinding)` overload (**Own-list addition**:
+    `N/NativeDerivedStatePublisher.swift` and the matching `AppStore.registerDerivedStateObserver`
+    overload in `N/AppStore.swift`; no separate binding accessor);
+  - the writer gated on the §2.5 predicate;
   - the extension manifest (§8);
   - the P3 exception sets.
 - **11.02:** §3.3 stale state and boundary tests, the empty state, the `widgetURL`
   grammar (§6.1), and the timeline entry at `updatedAt + 86400`.
 - **11.03:** §3.3 Timer rules. Uses 11.04's timer intents and defines no intents of its own.
 - **11.04:** §4.1–4.5 writer rules (lock, 512 cap, duplicate handling, never overwrite a
-  malformed queue, owner stamp), §5 all ten intents and phrases, and the OnMyWay in-app
-  routing.
-- **11.05:** replay owner gate (§4.5), quarantine policy (C8), stale fixtures (§3.3), and
-  cross-sign-in fixtures.
-- **11.06:** §6 gate order, parking, the archived and done-status rules, and P8.
+  malformed queue, owner stamp, every snapshot read in the append's lock hold, the "Open
+  TradeReady and sign in first." refusal), §5 all ten intents and phrases, the tagged
+  `pendingOpenUrl` stash (§6.2), and the OnMyWay in-app routing.
+- **11.05:** switch the replay gate from the migrated owner to the §2.5 predicate (gap),
+  the replay owner-tag gate (§4.5, including dropping untagged unknown types),
+  the quarantine policy (C8), stale fixtures (§3.3), and cross-sign-in fixtures.
+- **11.06:** switch the deep-link and pending-URL gate to the §2.5 predicate, and remove
+  the once-per-session consume (gap). §6 gate order, stash read-and-remove under the
+  lock, tag-based cold-launch parking, the archived and done-status rules, and P8.
 - **11.07:** §9.2 gating and options, §9.5 allow-list enforcement, and §9.6 seam
   widening in place. SDK pin re-check (§7).
 - **11.08:** §9.3 screen map, §9.4 identity lifecycle, §9.5 parity including the m6 gaps.
@@ -1149,5 +1229,5 @@ created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in
 | `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/widgetBridge.test.js __tests__/widgetActions.test.js __tests__/deepLinks.test.js __tests__/analytics.test.ts` | 4 suites and 123 tests passed. The fixture sources are green |
 | Scratchpad-only `swiftc` decode of F1–F6 against a verbatim copy of `BridgeSnapshot` from `targets/widget/Widgets.swift:13-35` (nothing written to the repo) | F1–F5 decode (F5 with `outstandingTotal = nil`); F6 is rejected, as expected |
 | `git ls-remote --tags` plus the GitHub releases API for `getsentry/sentry-cocoa` and `PostHog/posthog-ios` | Latest stable: 9.29.0 (2026-09-17) and 3.81.0 (2026-09-22). PrivacyInfo files read at those tags |
-| `grep -rn "track(" App.tsx screens components hooks utils context` | 73 call sites and 52 distinct events, all in §9.5 |
+| `grep -rn "track(" --include='*.ts' --include='*.tsx' App.tsx screens components hooks utils context` | 72 lines: 70 call sites, plus 2 in `utils/analytics.ts` (the definition and a comment). 52 distinct events, all in §9.5. 11.08 must not assert a site count |
 | `sh native/run-doc-reference-check.sh` | See the plan execution log (§7 of the plan) |

@@ -820,26 +820,33 @@ wedge on a malformed or duplicate queue → 11.05) and C11/P8 (`est_` archived d
 - **11.01:**
   - schema and fixtures F1–F6 (§2.4);
   - the writer rules, including explicit `null`s, `address` always a string,
-    `outstandingTotal` = `FinancialDecimal.cents` of the 10.01 value, and `.sortedKeys`;
-  - `ownerTag`;
+    `outstandingTotal` = the 10.01 value in dollars rounded to 2 dp (`FinancialDecimal.cents`
+    rounds dollars; it does not convert to cents), and `.sortedKeys`;
+  - `ownerTag` = hash of the single owner predicate `derivedStatePublishBinding` (§2.5);
+  - the writer gated on that predicate;
   - write triggers (§3.1).
-  - **Own-list addition:** a `(canonical, output)` observer overload in
-    `N/NativeDerivedStatePublisher.swift` plus a narrow binding accessor in
-    `N/AppStore.swift` (§3.2).
+  - **Own-list addition:** a `(canonical, output, expectedOwnerBinding)` observer overload
+    in `N/NativeDerivedStatePublisher.swift` and the matching
+    `AppStore.registerDerivedStateObserver` overload (§3.2). No separate binding accessor.
   - The extension manifest (§8) and the P3 exception sets (§5.4).
 - **11.02 / 11.05:** stale window **86,400 s**. Stale iff `age > 86400`, a negative age,
   or unparseable; exactly 86,400 s is fresh. Stale UI and intent behavior are in §3.3.
 - **11.04:**
   - writer rules (§4.3): lock; refuse at 512; exact duplicates are idempotent and
     differing duplicates fail; never overwrite a malformed queue;
-  - owner stamp (§4.5);
+  - owner stamp on actions, `activeTrip` and the `pendingOpenUrl` stash; every snapshot
+    read happens in the append's lock hold; with no snapshot or tag, refuse with "Open
+    TradeReady and sign in first." (§4.5, §6.2);
   - ten intents and phrases (§5), with a single 17.0 floor;
   - OnMyWay routes in-process, never auto-sent (§5.1).
-- **11.05:** drop actions whose `ownerTag` is missing or mismatched; quarantine policy
-  for C8 (§4.6).
+- **11.05:** move the replay gate from the migrated-only owner to the §2.5 predicate
+  (gap: native-only accounts never replay today). Drop actions whose `ownerTag` is
+  missing or mismatched, including unknown types. Quarantine policy for C8 (§4.6).
 - **11.06:** gate order parse → auth → exact owner → exists and not archived. `onmyway`
-  also refuses done statuses. Parking across the gate. Close the `handle(url:)` and
-  pending-consumer gaps. Decide P8 (§6).
+  also refuses done statuses. Move the deep-link and pending-URL gate to the §2.5
+  predicate (gap: migrated-only today, and the consumer runs once per session). Read and
+  remove the stash under the lock; tag-based cold-launch parking. Close the
+  `handle(url:)` and pending-consumer gaps. Decide P8 (§6).
 - **11.07:**
   - Release + key + non-`PLACEHOLDER` gate (a deviation: RN had no dev gate for PostHog);
   - SDK options (§9.2);
@@ -847,7 +854,7 @@ wedge on a malformed or duplicate queue → 11.05) and C11/P8 (`est_` archived d
   - widen the seam in place to JSON scalars and string arrays, and add
     identify/reset/screen (§9.6);
   - re-check the PostHog pin.
-- **11.08:** 52 events / 73 RN sites (§9.5); identity lifecycle, including reset on
+- **11.08:** 52 events / 70 RN call sites (§9.5), asserting the event set and never a site count; identity lifecycle, including reset on
   account switch (§9.4); the `$screen` route-name map (§9.3); m6 gaps
   (`first_action_tapped`, `on_my_way_sent`) and the stringified properties.
 - **11.09:** Sentry 9.29.0 config (§10.2): 0.2 traces, auto sessions,
@@ -881,8 +888,24 @@ wedge on a malformed or duplicate queue → 11.05) and C11/P8 (`est_` archived d
 - Untagged (RN-written) queued actions are dropped by replay (no current users).
 - Writers refuse at 512 and never overwrite a malformed queue (RN JobTimer overwrote).
 - Blocked: C8 (11.05) and C11/P8 (11.06).
+- Gaps with owners (C22): existing replay and pending-URL consume run only for migrated
+  (RN-artifact) owners → 11.05 and 11.06.
 - Concern: the PostHog 3.81.0 pin was one day old (11.07 re-checks).
 
 **Next ready:** 11.01, since its dependencies are satisfied: 11.00 plus 10.01 and 10.09
 from Phase 10. 11.07 and 11.10a are also unblocked by 11.00, but the SDD serial order
 runs 11.01 next.
+
+**Fix round 1 (2026-09-23, task review of 55c8357):**
+- I1: one owner predicate for the snapshot writer, `ownerTag`, the replay gate and the
+  deep-link gate: `derivedStatePublishBinding` (contract §2.5, C22). The migrated-only
+  replay and consume gates are recorded as gaps owned by 11.05 and 11.06.
+- M1: 70 call sites, not 73.
+- M2: `outstandingTotal` wording is dollars rounded to 2 dp.
+- M3: the full snapshot read happens in the append's lock hold.
+- M4: ClockOut reads `snapshot.timer`; the no-snapshot refusal dialog is defined.
+- M5: the overload passes `expectedOwnerBinding`, so no accessor is needed.
+- M6: the stash is tagged and removed under the lock, with a cold-launch parking rule.
+- M7: `expenseDescription` optionality is recorded as a native choice; untagged
+  unknown-type actions are dropped.
+- `sh native/run-doc-reference-check.sh` → 1304 path references checked: 0 missing, 50 planned.
