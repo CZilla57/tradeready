@@ -21,9 +21,12 @@ enum NativeInvoiceReminderPromptOutcome: Equatable, Sendable {
     /// (`authorized`/`denied`); no request was made, matching RN's "silent
     /// when the OS status is already settled".
     case permissionAlreadySettled
-    /// OS permission was undetermined: a real request was made (fires the
-    /// system dialog at most once) and, on grant, `synchronize()` ran once.
-    case requested(granted: Bool)
+    /// OS permission was undetermined: the flag was stamped and a soft-ask
+    /// (RN's `Alert.alert('Invoice reminders', …)`) is now pending the
+    /// caller's "Not now"/"Turn on" choice — see `pendingInvoiceReminderPrompt`,
+    /// `confirmInvoiceReminderPrompt()`, `dismissInvoiceReminderPrompt()`. No
+    /// OS permission dialog fires yet.
+    case pendingUserChoice
 }
 
 @MainActor
@@ -445,6 +448,13 @@ extension NativeEstimateFollowUpNotificationCenter {
 final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableObject,
     UNUserNotificationCenterDelegate {
     @Published private(set) var permissionState: NativeNotificationPermissionState = .unknown
+    /// Task 10.05 fix round 1 (N1): true while RN's pre-permission rationale
+    /// ("Invoice reminders — Not now / Turn on") is awaiting the user's
+    /// choice. The owner-bound flag has ALREADY been stamped by the time this
+    /// becomes true, so a dismissed/ignored soft-ask never repeats. A
+    /// SwiftUI `.alert` bound to this presents the exact RN copy; no OS
+    /// permission dialog fires until `confirmInvoiceReminderPrompt()` runs.
+    @Published private(set) var pendingInvoiceReminderPrompt = false
 
     private let center: any NativeEstimateFollowUpNotificationCenter
     private let exactWorkspaceBinding: @MainActor () -> String?
@@ -454,11 +464,18 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
     private let openOwnedRoute: (@MainActor (NativeNotificationRoute) -> Void)?
     /// Task 10.05 (N1): reads/stamps the owner-bound one-shot contextual
     /// prompt flag (`NativeReminderPromptStore`, keyed by the exact workspace
-    /// binding). Defaults are conservative no-ops so every pre-existing call
-    /// site (tests, the legacy convenience inits) keeps compiling and behaving
-    /// exactly as before this task.
+    /// binding). Defaults are fail-safe (`wasReminderPromptShown` defaults to
+    /// `true`, i.e. "treat as already shown") so a caller that never injects
+    /// the real store closures (a legacy convenience init, or a test that
+    /// does not care about this feature) can never trigger the soft-ask or
+    /// re-request indefinitely.
     private let wasReminderPromptShown: @MainActor () -> Bool
     private let markReminderPromptShown: @MainActor () -> Void
+    /// The exact workspace binding the pending soft-ask was raised for.
+    /// Cleared (along with `pendingInvoiceReminderPrompt`) the moment a
+    /// `synchronize()` pass observes a different (or absent) binding — i.e.
+    /// sign-out or account switch dismisses any pending alert.
+    private var pendingInvoiceReminderPromptBinding: String?
     private var isSynchronizing = false
     private var needsResynchronization = false
     private var didRegisterCategories = false
@@ -514,7 +531,7 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
         namespacePlans: [NativeNotificationNamespacePlan],
         openFollowUp: @escaping @MainActor (String) -> Void,
         openOwnedRoute: (@MainActor (NativeNotificationRoute) -> Void)? = nil,
-        wasReminderPromptShown: @escaping @MainActor () -> Bool = { false },
+        wasReminderPromptShown: @escaping @MainActor () -> Bool = { true },
         markReminderPromptShown: @escaping @MainActor () -> Void = {}
     ) {
         self.center = center
@@ -549,22 +566,49 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
     /// RN's `promptForInvoiceReminders` (`utils/notifications.ts`): the flag is
     /// stamped BEFORE any permission request so a dismissed/undecided OS
     /// dialog never re-fires, the ask happens at most once, it is silent when
-    /// the OS permission is already settled either way, and a grant triggers
-    /// exactly one `synchronize()`. No-ops (no read, no stamp) without an
-    /// exact signed-in workspace, matching every other owner-bound operation
-    /// in this coordinator.
+    /// the OS permission is already settled either way. When OS permission is
+    /// undetermined, RN shows a custom rationale `Alert.alert('Invoice
+    /// reminders', …)` BEFORE the real OS dialog fires — that alert is
+    /// surfaced here via `pendingInvoiceReminderPrompt` rather than by calling
+    /// `requestAuthorization()` directly; the caller (a root-level SwiftUI
+    /// `.alert`) resolves it via `confirmInvoiceReminderPrompt()` ("Turn on")
+    /// or `dismissInvoiceReminderPrompt()` ("Not now"). No-ops (no read, no
+    /// stamp) without an exact signed-in workspace, matching every other
+    /// owner-bound operation in this coordinator.
     @discardableResult
     func promptForInvoiceRemindersIfNeeded() async -> NativeInvoiceReminderPromptOutcome {
-        guard exactWorkspaceBinding() != nil else { return .noWorkspace }
+        guard let binding = exactWorkspaceBinding() else { return .noWorkspace }
         guard !wasReminderPromptShown() else { return .alreadyShown }
         await refreshPermissionState()
         // Stamp before any request/alert, regardless of the outcome below —
         // an already-settled permission is marked shown too, exactly like RN.
         markReminderPromptShown()
         guard permissionState == .notRequested else { return .permissionAlreadySettled }
+        pendingInvoiceReminderPromptBinding = binding
+        pendingInvoiceReminderPrompt = true
+        return .pendingUserChoice
+    }
+
+    /// RN's "Turn on": resolves a pending soft-ask by firing the real OS
+    /// permission request, and — on grant — running `synchronize()` exactly
+    /// once. Safe to call even if the pending state was already cleared (by
+    /// `dismissInvoiceReminderPrompt()` or a sign-out); it simply requests
+    /// authorization and reports the result.
+    @discardableResult
+    func confirmInvoiceReminderPrompt() async -> Bool {
+        pendingInvoiceReminderPrompt = false
+        pendingInvoiceReminderPromptBinding = nil
         let granted = await requestAuthorization()
         if granted { await synchronize() }
-        return .requested(granted: granted)
+        return granted
+    }
+
+    /// RN's "Not now": clears the pending soft-ask without requesting OS
+    /// permission. The owner-bound flag was already stamped before the alert
+    /// appeared, so it stays stamped — the prompt never repeats, matching RN.
+    func dismissInvoiceReminderPrompt() {
+        pendingInvoiceReminderPrompt = false
+        pendingInvoiceReminderPromptBinding = nil
     }
 
     func requestAuthorization() async -> Bool {
@@ -641,6 +685,18 @@ final class NativeEstimateFollowUpNotificationCoordinator: NSObject, ObservableO
 
     private func synchronizeOnce(now: Date) async {
         let expectedBinding = exactWorkspaceBinding()
+
+        // Task 10.05 fix round 1 (N1): a pending soft-ask belongs to the exact
+        // workspace it was raised for. Sign-out or account-change (the
+        // binding no longer matches, or is gone entirely) dismisses it — the
+        // user should never see "Turn on"/"Not now" for an account they've
+        // left.
+        if let promptBinding = pendingInvoiceReminderPromptBinding,
+           promptBinding != expectedBinding {
+            pendingInvoiceReminderPrompt = false
+            pendingInvoiceReminderPromptBinding = nil
+        }
+
         permissionState = await center.authorizationState()
 
         let pending = await center.pendingNotificationIdentifiers()

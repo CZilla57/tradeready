@@ -115,6 +115,34 @@ struct TradeReadyNativeApp: App {
                         break
                     }
                 }
+                // Task 10.05 fix round 1 (N1): RN's pre-permission rationale,
+                // copied verbatim from `promptForInvoiceReminders()` in
+                // `utils/notifications.ts`. The coordinator has already
+                // stamped the owner-bound one-shot flag by the time this can
+                // appear, so it is presented at most once; "Turn on" is the
+                // only path that fires the real OS permission dialog.
+                .alert(
+                    "Invoice reminders",
+                    isPresented: Binding(
+                        get: { followUpNotifications.pendingInvoiceReminderPrompt },
+                        set: { isPresented in
+                            if !isPresented {
+                                followUpNotifications.dismissInvoiceReminderPrompt()
+                            }
+                        }
+                    )
+                ) {
+                    Button("Not now", role: .cancel) {
+                        followUpNotifications.dismissInvoiceReminderPrompt()
+                    }
+                    Button("Turn on") {
+                        Task { await followUpNotifications.confirmInvoiceReminderPrompt() }
+                    }
+                } message: {
+                    Text(
+                        "Want a heads-up before invoices go overdue? TradeReady can notify you so nothing slips through the cracks."
+                    )
+                }
         }
     }
 }

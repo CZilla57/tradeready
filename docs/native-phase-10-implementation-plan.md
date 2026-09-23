@@ -1266,16 +1266,36 @@ Exit criteria traceability (roadmap Phase 10):
   - `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme
     TradeReadyNative -configuration Release -destination
     'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` — **BUILD SUCCEEDED**.
-- Recorded decision: the contextual prompt does not reproduce RN's custom
-  "Invoice reminders — Not now / Turn on" pre-permission `Alert` UI. Views are
-  out of this task's ownership (integration lanes 10.11–10.13 own screens), and
-  the brief's "Done when" criteria are behavioral (fires at most once, only
-  when undetermined, flag stamped before, grant → one synchronize) rather than
-  UI-shaped; `promptForInvoiceRemindersIfNeeded()` calls
-  `requestAuthorization()` directly when undetermined, which is itself the one
-  system permission dialog. A future task may add the RN-parity rationale copy
-  as a SwiftUI alert around this same call without changing the policy tested
-  here.
+- **Fix round 1 (2026-09-22):** review found the first pass skipped RN's
+  custom pre-permission rationale `Alert.alert('Invoice reminders', …)` and
+  fired the real OS permission dialog directly and unconditionally when
+  undetermined — not "exactly like RN" as the brief requires. Corrected: the
+  coordinator now stamps the flag then publishes a pending soft-ask
+  (`@Published pendingInvoiceReminderPrompt`, plus
+  `pendingInvoiceReminderPromptBinding` for owner-scoping) instead of calling
+  `requestAuthorization()` directly; `NativeInvoiceReminderPromptOutcome`
+  gained `.pendingUserChoice` in place of the old `.requested(granted:)`.
+  `TradeReadyNativeApp.swift` presents it via a root-level SwiftUI `.alert`
+  using RN's title/message/button copy verbatim from `utils/notifications.ts`;
+  "Turn on" calls the new `confirmInvoiceReminderPrompt() async -> Bool`
+  (requests authorization, and on grant runs `synchronize()` exactly once);
+  "Not now" calls `dismissInvoiceReminderPrompt()` (clears the pending state
+  only — the flag stays stamped, as in RN, so it never re-asks). A
+  binding-mismatch check in `synchronizeOnce(now:)` dismisses any pending
+  soft-ask that belongs to an account the user has since left. Also fixed
+  Minor #1: `wasReminderPromptShown`'s default closure changed from `{ false
+  }` to `{ true }` — the previous default was unsafe for any caller that
+  never injects the real store closures (it could re-request indefinitely);
+  the fail-safe default now means "treat as already shown" until a real
+  store is wired in. `native/NotificationPermissionTests/main.swift` was
+  rewritten to assert the new contract: flag stamped before the alert can
+  show; zero OS requests until "Turn on"; "Not now" makes zero requests;
+  repeated calls while pending never ask twice; a grant triggers exactly one
+  `synchronize()`; an account-binding change during `synchronize()` dismisses
+  a stale pending alert; and the fail-safe default never prompts when no
+  store is injected. The previous "Recorded decision" entry below, which
+  described the missing rationale UI as an intentional, correct scope choice,
+  was incorrect and is superseded by this fix.
 - Blockers: none for this task's own scope. Device permission-dialog and
   real-delivery evidence remain Phase 12 rows per the roadmap's
   verification-deferral decision.

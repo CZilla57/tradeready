@@ -211,16 +211,16 @@ enum NotificationPermissionTests {
             expect(center.requestAuthorizationCallCount == 0, "denied status never requests authorization")
         }
 
-        // 6. Undetermined + grant: the flag is stamped BEFORE the request (we
-        // assert ordering by checking the mark happened even though we then
-        // simulate a grant), exactly one request fires, and the grant
-        // triggers exactly one synchronize (observed as exactly one
-        // schedule() call from the injected plan item).
+        // 6. Undetermined: the flag is stamped BEFORE anything else (we assert
+        // ordering by checking the mark happened before any OS request could
+        // have fired), the outcome is `.pendingUserChoice`, and — crucially —
+        // NO OS permission request fires yet: the soft-ask alert is only
+        // published as pending, awaiting "Not now"/"Turn on".
         do {
             let center = FakeNotificationCenter(permission: .notRequested)
             center.requestOutcome = .authorized
             let flag = FakeReminderPromptFlag()
-            var stampedBeforeRequest = false
+            var stampedBeforeAnyRequest = false
             let coordinator = NativeEstimateFollowUpNotificationCoordinator(
                 center: center,
                 exactWorkspaceBinding: { "owner-a" },
@@ -238,22 +238,33 @@ enum NotificationPermissionTests {
                 openOwnedRoute: nil,
                 wasReminderPromptShown: { flag.wasShown() },
                 markReminderPromptShown: {
-                    // Captured at the moment of stamping: the OS request has
-                    // not fired yet (count is still 0).
-                    stampedBeforeRequest = center.requestAuthorizationCallCount == 0
+                    stampedBeforeAnyRequest = center.requestAuthorizationCallCount == 0
                     flag.markShown()
                 }
             )
+            expect(!coordinator.pendingInvoiceReminderPrompt, "no pending alert before the call")
             let outcome = await coordinator.promptForInvoiceRemindersIfNeeded()
-            expect(outcome == .requested(granted: true), "undetermined + grant yields .requested(granted: true)")
-            expect(stampedBeforeRequest, "the flag is stamped before the authorization request")
+            expect(outcome == .pendingUserChoice, "undetermined status yields .pendingUserChoice")
+            expect(stampedBeforeAnyRequest, "the flag is stamped before any OS request")
             expect(flag.markCallCount == 1, "stamped exactly once")
-            expect(center.requestAuthorizationCallCount == 1, "requests authorization exactly once")
+            expect(
+                center.requestAuthorizationCallCount == 0,
+                "no OS permission request fires until \"Turn on\" is chosen"
+            )
+            expect(coordinator.pendingInvoiceReminderPrompt, "the soft-ask is now pending")
+
+            // "Turn on": the coordinator's request path runs, and a grant
+            // triggers exactly one synchronize (observed as exactly one
+            // schedule() call from the injected plan item).
+            let granted = await coordinator.confirmInvoiceReminderPrompt()
+            expect(granted, "requestOutcome .authorized reports as granted")
+            expect(!coordinator.pendingInvoiceReminderPrompt, "\"Turn on\" clears the pending alert")
+            expect(center.requestAuthorizationCallCount == 1, "\"Turn on\" requests authorization exactly once")
             expect(center.scheduled == ["est_j1"], "a grant triggers exactly one synchronize (one schedule pass)")
         }
 
-        // 7. Undetermined + refusal: request fires, but no synchronize (no
-        // schedule call), and the flag is still stamped so it never re-asks.
+        // 7. Undetermined + "Not now": no OS request is ever made, the pending
+        // alert clears, and the flag is still stamped so it never re-asks.
         do {
             let center = FakeNotificationCenter(permission: .notRequested)
             center.requestOutcome = .denied
@@ -271,23 +282,30 @@ enum NotificationPermissionTests {
                 markReminderPromptShown: { flag.markShown() }
             )
             let outcome = await coordinator.promptForInvoiceRemindersIfNeeded()
-            expect(outcome == .requested(granted: false), "undetermined + refusal yields .requested(granted: false)")
-            expect(flag.markCallCount == 1, "still stamped exactly once on refusal")
-            expect(center.requestAuthorizationCallCount == 1, "requests authorization exactly once")
-            expect(center.scheduled.isEmpty, "a refusal never synchronizes")
+            expect(outcome == .pendingUserChoice, "undetermined status yields .pendingUserChoice")
+            expect(flag.markCallCount == 1, "still stamped exactly once")
+
+            coordinator.dismissInvoiceReminderPrompt()
+            expect(!coordinator.pendingInvoiceReminderPrompt, "\"Not now\" clears the pending alert")
+            expect(center.requestAuthorizationCallCount == 0, "\"Not now\" never requests authorization")
+            expect(center.scheduled.isEmpty, "\"Not now\" never synchronizes")
         }
 
         // 8. Ask-at-most-once across repeated calls (e.g. two invoices created
-        // in the same session): only the first call ever requests.
+        // in the same session): only the first call ever stamps/pends, and a
+        // second ask never happens even if the first is never resolved.
         do {
             let center = FakeNotificationCenter(permission: .notRequested)
             center.requestOutcome = .denied
             let flag = FakeReminderPromptFlag()
             let coordinator = makeCoordinator(center: center, binding: { "owner-a" }, flag: flag)
-            _ = await coordinator.promptForInvoiceRemindersIfNeeded()
-            _ = await coordinator.promptForInvoiceRemindersIfNeeded()
-            _ = await coordinator.promptForInvoiceRemindersIfNeeded()
-            expect(center.requestAuthorizationCallCount == 1, "only the first call ever requests authorization")
+            let first = await coordinator.promptForInvoiceRemindersIfNeeded()
+            let second = await coordinator.promptForInvoiceRemindersIfNeeded()
+            let third = await coordinator.promptForInvoiceRemindersIfNeeded()
+            expect(first == .pendingUserChoice, "the first call pends the soft-ask")
+            expect(second == .alreadyShown, "a second call while pending is already-shown, never a second ask")
+            expect(third == .alreadyShown, "a third call is also already-shown")
+            expect(center.requestAuthorizationCallCount == 0, "no call ever requests authorization on its own")
             expect(flag.markCallCount == 1, "only the first call ever stamps the flag")
         }
 
@@ -311,6 +329,50 @@ enum NotificationPermissionTests {
                 flag.markCallCount == markCountBeforeNextOwner + 1,
                 "the next owner's settled status stamps its own flag exactly once"
             )
+        }
+
+        // 10. Sign-out dismisses a PENDING soft-ask: if owner-a has a pending
+        // alert when the account switches, `synchronize()` (as driven by
+        // TradeReadyNativeApp's `.task(id: store.estimateFollowUpNotificationScheduleKey)`,
+        // which re-fires on every account change) must clear it — the user
+        // must never see "Turn on"/"Not now" for an account they've left.
+        do {
+            let center = FakeNotificationCenter(permission: .notRequested)
+            let flag = FakeReminderPromptFlag()
+            var currentBinding: String? = "owner-a"
+            let coordinator = makeCoordinator(center: center, binding: { currentBinding }, flag: flag)
+            let outcome = await coordinator.promptForInvoiceRemindersIfNeeded()
+            expect(outcome == .pendingUserChoice, "owner-a has a pending soft-ask")
+            expect(coordinator.pendingInvoiceReminderPrompt, "the pending alert is showing")
+
+            currentBinding = "owner-b"
+            await coordinator.synchronize()
+            expect(
+                !coordinator.pendingInvoiceReminderPrompt,
+                "an account-binding change during synchronize() dismisses the stale pending alert"
+            )
+        }
+
+        // 11. Minor #1 fail-safe default: a coordinator constructed WITHOUT
+        // injecting `wasReminderPromptShown`/`markReminderPromptShown` (as a
+        // legacy call site or an unrelated test would) must never prompt —
+        // the default must be fail-safe ("treat as already shown"), not the
+        // unsafe old default of "never shown" which could re-request
+        // indefinitely.
+        do {
+            let center = FakeNotificationCenter(permission: .notRequested)
+            let coordinator = NativeEstimateFollowUpNotificationCoordinator(
+                center: center,
+                exactWorkspaceBinding: { "owner-a" },
+                notificationPlan: { _ in [] },
+                namespacePlans: [],
+                openFollowUp: { _ in },
+                openOwnedRoute: nil
+            )
+            let outcome = await coordinator.promptForInvoiceRemindersIfNeeded()
+            expect(outcome == .alreadyShown, "the fail-safe default never prompts when no store is injected")
+            expect(!coordinator.pendingInvoiceReminderPrompt, "no pending alert is ever raised")
+            expect(center.requestAuthorizationCallCount == 0, "no OS request is ever made")
         }
 
         if failures == 0 {
