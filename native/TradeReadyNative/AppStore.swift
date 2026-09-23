@@ -296,8 +296,20 @@ final class AppStore: ObservableObject {
     /// snapshot still holds the old owner's records, so without this a
     /// queued write could re-populate the just-scrubbed suite.
     private var widgetMirrorSuspendedForAccountBoundary = false
+    /// Task 11.01 fix round 1 (contract §3.2 amendment): bumped on every
+    /// canonical write, so a seam delivery can tell whether the live snapshot
+    /// moved on while its publish was suspended in `notifySynchronize`.
+    private var canonicalWriteRevision: UInt64 = 0
+    /// The canonical revision captured by the most recently started
+    /// `publishDerivedState` (only the latest-started publish can deliver:
+    /// the publisher's generation guard stops older ones). Nil when no
+    /// AppStore publish is in flight (e.g. a direct publisher call).
+    private var widgetSeamCapture: (token: UUID, revision: UInt64)?
+    /// Which canonical the last seam write projected; host tests only.
+    private(set) var lastWidgetSeamSource: NativeWidgetSeamSource?
     private var snapshot = Canonical.Snapshot(payload: .init()) {
         didSet {
+            canonicalWriteRevision &+= 1
             // Task 11.01 (contract §3.1 trigger 1): every canonical write
             // (jobs, time sessions, invoices, payments — and replayed widget
             // actions) lands here via `apply`/in-place edits. Coalesced to
@@ -4770,9 +4782,7 @@ final class AppStore: ObservableObject {
                 // `snapshot` is pulled data merged into another owner's
                 // workspace and must never reach an observer.
                 if let binding = self.derivedStatePublishBinding, subject == self.authenticatedUserSubject {
-                    await self.derivedStatePublisher.publish(
-                        canonical: self.snapshot, expectedOwnerBinding: binding
-                    )
+                    await self.publishDerivedState(expectedOwnerBinding: binding)
                 }
             } catch {
                 guard let self,
@@ -5705,6 +5715,17 @@ final class AppStore: ObservableObject {
         derivedStatePublisher.unregister(id)
     }
 
+    /// Every AppStore publish site goes through here: publishes the live
+    /// canonical snapshot and records its revision, so the widget seam
+    /// observer can detect a local write that landed while the publish was
+    /// suspended (task 11.01 fix round 1, contract §3.2 amendment).
+    func publishDerivedState(expectedOwnerBinding binding: String) async {
+        let token = UUID()
+        widgetSeamCapture = (token, canonicalWriteRevision)
+        defer { if widgetSeamCapture?.token == token { widgetSeamCapture = nil } }
+        await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
+    }
+
     // MARK: Widget mirror (task 11.01, contract §3.1)
 
     /// The owner binding the widget mirror may write for: the single §2.5
@@ -5752,9 +5773,17 @@ final class AppStore: ObservableObject {
         )
     }
 
-    /// Trigger 3 (the 10.09 seam): projects the committed canonical snapshot
-    /// and its already-built business snapshot, stamped for the publish's
+    /// Trigger 3 (the 10.09 seam), stamped for the publish's
     /// `expectedOwnerBinding`, which must still equal `O` inside the lock.
+    ///
+    /// Contract §3.2 amendment (fix round 1): the seam projects the NEWEST
+    /// canonical for the delivered owner. The publish captured its canonical
+    /// before awaiting `notifySynchronize`; a local write (e.g. a clock-in)
+    /// that landed during that suspension has already been mirrored by
+    /// trigger 1, so writing the delivered canonical would roll the mirror
+    /// back. When the revision moved on, project the live snapshot instead;
+    /// otherwise project the delivered canonical and its business snapshot.
+    /// Non-forced: the writer's 1-hour dedupe skips an unchanged mirror.
     private func writeWidgetMirrorFromSeam(
         canonical: Canonical.Snapshot,
         business: NativeBusinessSnapshot,
@@ -5762,16 +5791,28 @@ final class AppStore: ObservableObject {
         now: Date = Date()
     ) {
         guard let widgetMirror else { return }
-        let projection = NativeWidgetSnapshotProjection.project(
-            jobs: canonical.payload.jobs ?? [],
-            business: business,
-            now: now
-        )
+        let movedOn = widgetSeamCapture.map { $0.revision != canonicalWriteRevision } ?? false
+        let projection: WidgetSnapshot
+        if movedOn {
+            lastWidgetSeamSource = .live
+            projection = NativeWidgetSnapshotProjection.project(
+                jobs: snapshot.payload.jobs ?? [],
+                business: makeCachedBusinessSnapshot(from: snapshot, now: now),
+                now: now
+            )
+        } else {
+            lastWidgetSeamSource = .delivered
+            projection = NativeWidgetSnapshotProjection.project(
+                jobs: canonical.payload.jobs ?? [],
+                business: business,
+                now: now
+            )
+        }
         widgetMirror.write(
             projection: projection,
             ownerBinding: expectedOwnerBinding,
             isCurrentOwner: { [weak self] candidate in self?.widgetMirrorOwnerBinding == candidate },
-            force: true,
+            force: false,
             now: now
         )
     }
@@ -5948,7 +5989,7 @@ final class AppStore: ObservableObject {
         // `derivedStatePublishBinding`); a gate that moved to
         // `.accountMismatch`/`.unavailable` during the pull await skips it.
         if let binding = derivedStatePublishBinding, subject == authenticatedUserSubject {
-            await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
+            await publishDerivedState(expectedOwnerBinding: binding)
         }
         if !outcome.failedTables.isEmpty {
             return .partial(outcome.lastDiagnosticCode)
@@ -6002,11 +6043,13 @@ final class AppStore: ObservableObject {
     /// then pending byte uploads and missing-file backfill. A second sync makes
     /// newly confirmed `uploadedAt` values visible to the user's other devices.
     func performForegroundRefresh() async {
-        // Task 11.01 (contract §3.1 trigger 2): foreground re-mirror, forced
-        // so `updatedAt` refreshes. Activation (which replays widget actions)
-        // runs before this in `TradeReadyNativeApp`, so a just-replayed
-        // `timer_start` is reflected. Runs on every exit path.
-        defer { refreshWidgetMirror(force: true) }
+        // Task 11.01 (contract §3.1 trigger 2): foreground re-mirror.
+        // Activation (which replays widget actions) runs before this in
+        // `TradeReadyNativeApp`, so a just-replayed `timer_start` is
+        // reflected. Runs on every exit path. Non-forced (fix round 1): the
+        // seam already wrote any pulled change, and the 1-hour dedupe still
+        // rewrites a mirror that is an hour old, so a stale one is refreshed.
+        defer { refreshWidgetMirror(force: false) }
         let synced = await syncNowAndWait(trigger: .foreground) != nil
         // Mirrors RN's foreground `checkAndGenerateRecurringJobs`: runs after
         // the sync when it succeeds, and on the local snapshot when offline —
@@ -6195,7 +6238,8 @@ final class AppStore: ObservableObject {
         // sync is a no-op, but local action replay must still get its chance.
         replayVerifiedWidgetActionsIfPossible()
         // Task 11.01 (contract §3.1 trigger 2): re-mirror after replay.
-        refreshWidgetMirror(force: true)
+        // Non-forced (fix round 1): see `performForegroundRefresh`.
+        refreshWidgetMirror(force: false)
         return .completed
     }
 
@@ -7052,7 +7096,7 @@ extension AppStore {
         // stale pre-intake one. `commitScheduleBookingLocal` is synchronous,
         // so no suspension occurred since the owner was last verified above.
         if let binding = derivedStatePublishBinding {
-            await derivedStatePublisher.publish(canonical: snapshot, expectedOwnerBinding: binding)
+            await publishDerivedState(expectedOwnerBinding: binding)
         }
         return .applied(convertedRequestIDs: rechecked.convertedRequestIDs)
     }

@@ -990,10 +990,14 @@ is deferred to Phase 12. It was not claimed as passed.
   - canonical writes: `snapshot` didSet → one coalesced, non-forced write per main-actor
     turn;
   - owner and gate changes;
-  - foreground refresh (forced, after replay);
-  - background refresh (forced, after replay);
-  - the 10.09 seam observer (forced; writes the committed canonical snapshot tagged with
-    `expectedOwnerBinding`).
+  - foreground refresh (after replay);
+  - background refresh (after replay);
+  - the 10.09 seam observer. It writes the committed canonical tagged with
+    `expectedOwnerBinding`, or the live snapshot if a local write landed during the
+    publish (fix round 1).
+  - Only the launch-time install write is forced; every other write uses the 1-hour dedupe.
+- **Publishing:** every AppStore publish site calls `publishDerivedState(expectedOwnerBinding:)`
+  (fix round 1). Never call `derivedStatePublisher.publish` directly from `AppStore`.
 - **Reloads:** timelines reload after every write, after sign-out and delete, after
   `retryAccountScrub`, and after scrub recovery at launch. All go through
   `NativeWidgetTimelineReloading`.
@@ -1045,9 +1049,11 @@ is deferred to Phase 12. It was not claimed as passed.
    set and memory still holds the old account's records. The predicate is still §2.5;
    this only closes a window where it would be stale.
 4. **Coalescing and dedupe.** Canonical-write triggers are coalesced to one write per
-   main-actor turn. They skip a write whose content is unchanged while the stored copy is
-   under 1 hour old. Forced triggers (launch, foreground, background, seam) always
-   write, so `updatedAt` never drifts toward the 24-hour window while the app is in use.
+   main-actor turn. Every trigger except the launch-time install skips a write whose
+   content is unchanged while the stored copy is under 1 hour old. The foreground,
+   background and seam triggers became non-forced in fix round 1. A copy an hour old or
+   older is always rewritten, so `updatedAt` never nears the 24-hour window while the
+   app is in use.
 5. **Empty start time.** An empty `scheduledStartTime` projects as `null`. When neither
    job has a time, ties keep input order; RN's comparator is inconsistent in that case.
 6. **Stale rule in the schema.** `isStale` is implemented in the shared schema so 11.02
@@ -1074,3 +1080,39 @@ is deferred to Phase 12. It was not claimed as passed.
 
 **Next ready:** 11.04 (App Intents and the action queue; it uses `WidgetAppGroupLock` and
 the owner tag) and 11.02 (Next Job widget). 11.03 needs 11.04, and 11.05 needs 11.01–11.04.
+
+**Fix round 1 (2026-09-23, task review of c35c248):**
+- **I1 (seam rollback).** The seam write could overwrite a newer local write with the
+  older canonical captured before `notifySynchronize`.
+  - Fix (controller ruling, contract §3.2 amendment): `snapshot.didSet` bumps
+    `canonicalWriteRevision`. The new `AppStore.publishDerivedState(expectedOwnerBinding:)`
+    records the revision it captured, and all three AppStore publish sites now call it.
+  - `writeWidgetMirrorFromSeam` projects the live snapshot when the revision moved on,
+    and the delivered canonical otherwise. `lastWidgetSeamSource`
+    (`NativeWidgetSeamSource`) records which one it used, for tests.
+- **Minor (duplicate writes per pass).** The seam write is non-forced. The foreground and
+  background trigger-2 writes are non-forced too: both run after the pass's seam write,
+  so making only the seam non-forced would still leave one duplicate write and reload
+  per pass. §3.3 is still met, because the 1-hour dedupe rewrites any copy that old.
+- **Test.** `testSeamProjectsNewestCanonical` in `native/WidgetSnapshotTests/main.swift`
+  uses a fake `notifySynchronize` that suspends, and clocks in during the suspension.
+  It asserts:
+  - the resumed seam keeps the timer and projects the live snapshot;
+  - the delivered path writes (and reloads once) when nothing moved on;
+  - an unchanged follow-up publish neither writes nor reloads;
+  - a mismatched owner is refused.
+- **Mutation checks:**
+  - moved-on detection disabled → 4 failures, including the timer dropped;
+  - seam forced → 2 failures (the dedupe tests).
+  The source was restored byte-identical.
+- **Commands:**
+  - `TZ=America/Phoenix sh native/run-widget-snapshot-tests.sh` → passed;
+  - `sh native/run-store-integration-tests.sh` → PASS;
+  - `sh native/run-background-refresh-tests.sh` → passed;
+  - `sh native/run-phase10-qualification-tests.sh` → passed;
+  - Release generic `xcodebuild` → BUILD SUCCEEDED, with only the 7 pre-existing
+    warnings;
+  - `sh native/run-doc-reference-check.sh` → 1342 path references checked: 0 missing, 41 planned.
+- **Deferred by the controller (not addressed):** `flock` on the main actor, the
+  visibility of the raw binding accessor, the scrub-race test's manual wipe, and the
+  second `lockFileName` constant (→ 11.05).

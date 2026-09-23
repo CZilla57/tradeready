@@ -45,6 +45,17 @@ enum NativeWidgetMirrorOutcome: Equatable {
     case encodingFailed
 }
 
+/// Which canonical snapshot a seam (trigger 3) write projected (contract
+/// §3.2 amendment, 11.01 fix round 1).
+enum NativeWidgetSeamSource: Equatable {
+    /// The canonical the publish delivered: nothing changed locally while it
+    /// was suspended.
+    case delivered
+    /// The live snapshot: a local canonical write landed during the publish's
+    /// suspension, so the delivered canonical is older than the mirror.
+    case live
+}
+
 struct NativeWidgetMirror {
     /// A non-forced write skips an unchanged mirror only while the stored
     /// copy is younger than this, so `updatedAt` never drifts toward the
@@ -85,8 +96,9 @@ struct NativeWidgetMirror {
     ///   - isCurrentOwner: evaluated INSIDE the lock; must return true only
     ///     when `ownerBinding` is still the live owner and no account
     ///     boundary is in progress.
-    ///   - force: launch/foreground/seam writes refresh `updatedAt` even when
-    ///     nothing else changed; canonical-write triggers pass false.
+    ///   - force: rewrite even when the stored content is unchanged and
+    ///     fresh (used once at install/launch). Every other trigger passes
+    ///     false and relies on the `unchangedRefreshInterval` dedupe.
     @discardableResult
     func write(
         projection: WidgetSnapshot,

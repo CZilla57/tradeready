@@ -750,6 +750,7 @@ private func testAppStoreWiring() async throws {
     ))
     await store.derivedStatePublisher.publish(canonical: committed, expectedOwnerBinding: "bind-11.01")
     expectEqual(group.stored?.nextJob?.id, "from-seam", "the seam observer writes after a committed publish, from the committed input")
+    expectEqual(store.lastWidgetSeamSource, .delivered, "a direct publish (no local write since capture) projects the delivered canonical")
     expectEqual(group.stored?.outstandingTotal, 0, "the seam write uses the publish's business snapshot")
     expectEqual(group.stored?.ownerTag, NativeWidgetOwnerTag.make(binding: "bind-11.01"), "the seam write is tagged for expectedOwnerBinding")
 
@@ -760,6 +761,83 @@ private func testAppStoreWiring() async throws {
     // Foreground trigger (forced; refreshes updatedAt).
     expectEqual(store.refreshWidgetMirror(force: true, now: now), .written, "a forced refresh writes for the exact owner")
     expectEqual(group.stored?.updatedAt, "2026-08-03T19:00:00.000Z", "the forced refresh stamps the injected clock")
+}
+
+/// A fake `notifySynchronize` that suspends until the test opens it.
+@MainActor
+private final class SyncGate {
+    private(set) var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+/// Fix round 1 (contract §3.2 amendment): the seam projects the NEWEST
+/// canonical for the delivered owner — never an older canonical over a newer
+/// local write — and seam writes are non-forced (deduped).
+@MainActor
+private func testSeamProjectsNewestCanonical() async throws {
+    let group = TempAppGroup("seam-newest")
+    defer { group.cleanUp() }
+    let reloader = RecordingReloader()
+    let store = try makeStore("seam-newest", jobs: [
+        job(#"{"id":"future","scheduledDate":"2099-01-01","scheduledStartTime":"08:00"}"#),
+    ], group: group, reloader: reloader)
+    store.installWidgetMirror(group.mirror(reloader))
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-11.01", binding: "bind-11.01")
+    await settle()
+    expect(group.stored?.timer == nil, "sanity: no timer mirrored before the clock-in")
+
+    // (a) Nothing moved on: the production publish path projects the
+    // delivered canonical and writes.
+    group.defaults.removeObject(forKey: WidgetAppGroup.snapshotKey)
+    let reloadsBeforeDelivered = reloader.count
+    await store.publishDerivedState(expectedOwnerBinding: "bind-11.01")
+    expectEqual(store.lastWidgetSeamSource, .delivered, "no local write during the publish → the delivered canonical is projected")
+    expectEqual(group.stored?.nextJob?.id, "future", "the delivered-canonical seam write lands")
+    expectEqual(group.stored?.ownerTag, NativeWidgetOwnerTag.make(binding: "bind-11.01"), "the delivered write is tagged for the owner")
+    expectEqual(reloader.count, reloadsBeforeDelivered + 1, "the delivered-canonical seam write reloads once")
+
+    // (b) A local clock-in lands while the publish is suspended in
+    // notifySynchronize. Trigger 1 mirrors the timer; the resumed seam
+    // delivery must not roll it back to the captured pre-edit canonical.
+    let gate = SyncGate()
+    store.notificationSynchronizeHook = { _ in await gate.wait() }
+    defer { store.notificationSynchronizeHook = nil }
+    let publish = Task { @MainActor in
+        await store.publishDerivedState(expectedOwnerBinding: "bind-11.01")
+    }
+    await settle()
+    expect(gate.entered, "sanity: the publish is suspended in notifySynchronize")
+    expect(store.clockIn(jobID: "future", on: now), "sanity: clock-in commits during the suspended publish")
+    await settle()
+    expectEqual(group.stored?.timer?.jobId, "future", "trigger 1 mirrors the clock-in while the publish is suspended")
+    gate.open()
+    await publish.value
+    await settle()
+    expectEqual(store.lastWidgetSeamSource, .live, "the live snapshot moved on → the seam projects the live snapshot")
+    expectEqual(group.stored?.timer?.jobId, "future", "the resumed seam write never drops the newer local timer")
+    expectEqual(group.stored?.ownerTag, NativeWidgetOwnerTag.make(binding: "bind-11.01"), "the live projection is tagged for expectedOwnerBinding")
+
+    // (c) Non-forced seam: an unchanged, fresh mirror is not rewritten.
+    store.notificationSynchronizeHook = nil
+    let storedBefore = group.storedJSON
+    let reloadsBeforeDedupe = reloader.count
+    await store.publishDerivedState(expectedOwnerBinding: "bind-11.01")
+    expectEqual(store.lastWidgetSeamSource, .delivered, "sanity: nothing moved on for the follow-up publish")
+    expectEqual(group.storedJSON, storedBefore, "a seam delivery of unchanged content leaves the mirror as is")
+    expectEqual(reloader.count, reloadsBeforeDedupe, "a seam delivery of unchanged content does not reload timelines")
+
+    // (d) Owner mismatch is still refused on the live path.
+    let beforeMismatch = group.storedJSON
+    await store.publishDerivedState(expectedOwnerBinding: "someone-else")
+    expectEqual(group.storedJSON, beforeMismatch, "a mismatched publish never writes, live or delivered")
 }
 
 @MainActor
@@ -831,6 +909,7 @@ struct WidgetSnapshotTests {
         try testWriterHoldsLock()
         await testPublisherCommitObserver()
         try await testAppStoreWiring()
+        try await testSeamProjectsNewestCanonical()
         try await testSignOutScrubsAndReloads()
 
         if failures > 0 {

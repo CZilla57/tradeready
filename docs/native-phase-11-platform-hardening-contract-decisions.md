@@ -292,6 +292,30 @@ private. Existing observers are unchanged.
 Non-seam writes (triggers 1–2 in §3.1) run inside `AppStore`, which reads `O`
 directly.
 
+**Amended by 11.01 fix round 1 (2026-09-23, controller ruling):** the seam observer
+projects the **newest** canonical for the delivered owner.
+- The problem: every AppStore publish site captures `canonical` (the live snapshot) before
+  the publisher awaits `notifySynchronize`. A local write during that suspension (for
+  example a clock-in) is mirrored at once by trigger 1. The owner and generation guards
+  catch newer publishes, not newer local writes, so writing the delivered canonical
+  afterwards would roll the mirror back, and no later trigger would correct it.
+- `AppStore` keeps a canonical-write revision, bumped in `snapshot.didSet`. Every AppStore
+  publish goes through `AppStore.publishDerivedState(expectedOwnerBinding:)`, which records
+  the revision it captured.
+- On delivery:
+  - if the revision has moved on, the observer projects the **live** snapshot, tagged
+    for `expectedOwnerBinding`. The in-lock owner re-check still requires that binding
+    to equal `O`;
+  - otherwise it projects the delivered canonical and its business snapshot.
+- An older canonical is never written over a newer one. This is the one sanctioned read
+  of the live snapshot from inside the callback: it only ever picks newer data for the
+  same verified owner.
+- Seam writes (and the §3.1 trigger-2 foreground and background writes) are
+  **non-forced**. The writer skips a write when the stored content is unchanged and less
+  than one hour old, so a sync pass writes and reloads at most once. Any mirror an hour
+  old or older is still rewritten, so trigger 2 still refreshes a stale snapshot (§3.3).
+  Only the launch-time install write is forced.
+
 ### 3.3 Stale-snapshot window (chosen: 86,400 seconds)
 
 `docs/widget-plan.md` defines no stale window, and the RN widget never reads `updatedAt`.
