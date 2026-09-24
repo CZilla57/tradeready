@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09 and 11.15 done (2026-09-24); implementation tasks 11.10–11.14 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15 and 11.10a done (2026-09-24); 11.11, 11.12, 11.10b, 11.13 and 11.14 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -788,7 +788,7 @@ complete / Phase 12 evidence deferred**.
 | 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 49 wired (the booking push opens await native push; `tax_settings_saved` is unreachable until a native tax-settings editor exists); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Done (code complete 2026-09-24; Sentry Cocoa 9.29.0 linked, app target only; no DSN committed, so crash reporting is off until a release DSN is supplied; app manifest written; dSYM upload script for `tradeready-3r/tradeready-ios`; device proof deferred to Phase 12) | 11.07 | Crash reporting + redaction + app manifest |
 | 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys at sign-out, deletion, account switch and password-recovery exits (fix round 1); live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
-| 11.10a | H1 | Pending | 11.00, 10.15 | Accessibility audit + fixes |
+| 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A14–A18 to 11.10b; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Pending | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Pending | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Pending | 11.11, 11.12 | Accessibility re-audit (closes H1) |
@@ -2659,3 +2659,143 @@ retries it. A persistent remove failure would leave the key until the next sign-
 deletion scrub, which does fail closed.
 
 **Next ready:** 11.10a (accessibility audit).
+
+### 11.10a — Accessibility audit and remediation (2026-09-24)
+
+**Status:** Done (steps 1–4). All four §12 release-blocking candidates are fixed and
+host-tested. Contract §12.1 lists 19 findings: 0 release-blocking findings are open, A14–A18
+go to 11.10b, A11 goes to 11.11, and A12, A13 and A19 are deferred to device. **H1 is not
+closed.** 11.10b re-audits after 11.11 and 11.12.
+
+**Controller rulings applied:**
+- (a) `tradeReady` has a dark variant, and the light value is unchanged. Contrast is proven
+  by a pure luminance computation in the host suite.
+- (b) Step 4 is the audit plus focus-order fixes. Keyboard shortcuts go to 11.11.
+
+**Files:**
+- New policy file: `N/Domain/NativeAccessibilityAudit.swift` (Foundation-only). It holds:
+  - the WCAG luminance, contrast and compositing math;
+  - the palette and the contrast-requirement table;
+  - the Reduce Motion policy;
+  - the 44pt touch target;
+  - the RN label catalog.
+- New view helpers: `N/NativeAccessibilityViews.swift`. They are
+  `tradeReadyProminentButtonStyle()`, `NativeAccessibilityAdaptiveRow` and
+  `NativeAccessibilityColumnDivider`.
+- New tests: `native/AccessibilityAuditTests/main.swift` and
+  `native/run-accessibility-audit-tests.sh`. The runner is registered in
+  `native/run-all-domain-tests.sh`.
+- `native/run-schedule-booking-settings-tests.sh` now compiles the audit file, because
+  `NativeScheduleSettingsView.swift` uses its touch-target constant.
+- Palette:
+  - `N/Models.swift`: dynamic `tradeReady`, plus the new `tradeReadyFill`.
+  - `N/Assets.xcassets/AccentColor.colorset/Contents.json`: light and dark tint.
+- Views: `CoachView`, `Components`, `CustomersView`, `InvoicesView`, `JobsView`,
+  `MoneyView`, `NativeAuthView`, `NativeBookingRequestsView`, `NativeChangeOrdersView`,
+  `NativeEstimateFollowUpView`, `NativeEstimateReview`, `NativeExpenseEditor`,
+  `NativeExportDataView`, `NativeImportView`, `NativeInteractionState`,
+  `NativeInvoiceOutreachView`, `NativeMessageComposer`, `NativeMileageLogView`,
+  `NativeMoneyCards`, `NativeOnboardingView`, `NativePasswordRecoveryView`,
+  `NativePaywallView`, `NativePricebookView`, `NativeRecurringInvoicesView`,
+  `NativeReviewRequestView`, `NativeRouteView`, `NativeScheduleSettingsView`,
+  `NativeTimeTrackingView`, `NativeTodayComponents`, `NativeTripEditor`, `RootView` and
+  `SettingsView`. Every edit is a local modifier or label change. No view was restructured,
+  and none now holds policy.
+- Untouched: the 11.08 `$screen` analytics and the 11.15 Settings › Advanced section.
+
+**Interface handoff:**
+- **Color:**
+  - `Color.tradeReady` is for text, icons, outlines and graphics.
+  - `Color.tradeReadyFill` is for any opaque surface under white text or icons.
+  - Use `.tradeReadyProminentButtonStyle()`, never raw `.borderedProminent`. The only
+    exception is the time-tracking re-tint.
+  - The suite fails on a new raw prominent button. It also fails on a new opaque
+    `tradeReady` fill outside the allowlist: `NativeMoneyCards` 3 and
+    `NativeTodayComponents` 2 (chart bars and dots).
+- **Motion:** every `withAnimation`/`.animation(` in `N/` must pass
+  `NativeAccessibilityAudit.allowsCustomMotion(reduceMotion:)`.
+- **Type:**
+  - No `.font(.system(size: <literal>))` outside `N/Widgets/`.
+  - Use `@ScaledMetric` or a text style.
+  - For multi-column figure rows, use `NativeAccessibilityAdaptiveRow` (it stacks at AX
+    sizes) with `NativeAccessibilityColumnDivider`.
+- **Labels:**
+  - Every icon-only `Button`, `Menu`, `NavigationLink`, `ShareLink` or `Link` needs an
+    `.accessibilityLabel`. The scan reads each construct to the end of its trailing
+    closures and modifier chain.
+  - New RN-backed strings go in `NativeAccessibilityAudit.labelCatalog`.
+- **For 11.11:** hardware keyboard shortcuts and iPad keyboard commands (A11). The
+  `@FocusState` chains in auth and recovery are what those shortcuts build on.
+- **For 11.10b:** A14–A18, plus the re-audit after 11.11 and 11.12.
+
+**Commands and results:**
+- RED: the new suite run against the pre-fix views → 117 of 439 checks failed.
+- GREEN: `TZ=America/Phoenix sh native/run-accessibility-audit-tests.sh` →
+  `accessibility-audit tests: 421/421 checks passed`.
+  - The count differs from RED because many checks run once per matching source site,
+    so the number of checks follows the source being scanned.
+  - The suite scans at least 100 files and 300 controls.
+  - A built-in fixture checks the scanner itself: 7 controls, 4 icon-only, unlabeled
+    lines [12, 15].
+- Mutations (each applied in place, run and restored with a `cmp` check). All nine were
+  killed:
+
+  | Mutation | Failures |
+  |---|---|
+  | Dark tint reverted to the light value | 1 |
+  | `addJob` label removed | 4 |
+  | Coach scroll ignores Reduce Motion | 1 |
+  | A raw `.borderedProminent` | 1 |
+  | Working day back to 36pt | 1 |
+  | Email Next does nothing | 1 |
+  | White text on the dark tint | 2 |
+  | A fixed 8pt font | 1 |
+  | Route menu label removed | 4 |
+
+- `TZ=America/Phoenix sh native/run-schedule-booking-settings-tests.sh` →
+  `ScheduleBookingSettingsTests: all checks passed`
+- `TZ=America/Phoenix sh native/run-interaction-state-tests.sh` → pass
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0. The output includes
+  `accessibility-audit tests: 421/421 checks passed`, `ai-provider-key tests: 274/274 checks passed`,
+  `error-redaction tests: 691/691 checks passed`, `ScheduleBookingSettingsTests: all checks passed`
+  and node `fail 0`.
+- Release `xcodebuild … CODE_SIGNING_ALLOWED=NO build` → `** BUILD SUCCEEDED **`, with no
+  warnings from touched files.
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Deviations (native differences from RN, recorded in contract §12.1):**
+- The dark `tradeReadyFill` `#2f78c4` is native only. RN puts white text on `#5b9bdb`,
+  which measures 2.93:1.
+- The auth email field's return key moves to the password field. RN uses "done".
+- The recovery "New password" field's return key moves to the confirmation field.
+- The Today week strip is capped at AX1.
+- The booking "Text {name}" label and the route "Route order options" label are native
+  only. RN has no matching icon button for either.
+- `AccentColor` changed from `(0.05, 0.53, 0.85)` to the brand tint with a dark variant.
+- `run-schedule-booking-settings-tests.sh` gained one source line. It is outside the listed
+  runner work, but the runner does not compile without it.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+
+| Row | Step | Pass when |
+|---|---|---|
+| A11-VO-1 | VoiceOver sweep of the tabs Today, Jobs, Invoices, Customers, Money and Settings, plus the booking, route and recurring plus buttons | Every control reads a meaningful label, and none reads as "Button" or "plus" |
+| A11-VO-2 | Today job card: reach "On my way" with VoiceOver (A13) | It is reachable and actionable; if not, open an 11.10b item |
+| A11-VO-3 | Reading order on Today, Money and the Job detail screen (A12) | Order follows the visual layout |
+| A11-AX5-1 | AX5 on the Money cards (summary, receivables, forecast, customer mix, seasonal, avg job, expense trends), the Today stats, the Jobs stats and the Invoices metrics | Rows stack, and no amount is truncated or split |
+| A11-AX5-2 | AX5 on the auth and recovery submit buttons, the paywall and onboarding | Labels are not clipped, and the buttons grow |
+| A11-AX5-3 | AX5 on the week strip | It is capped at AX1 without overlap, and VoiceOver reads each day |
+| A11-DARK-1 | Dark mode: tint text and outlines, prominent buttons, selected chips, week day, Today hero, working days | Text is legible, the selected state is visible, and white labels sit on the fill |
+| A11-RM-1 | Reduce Motion on: Money section expand, coach scroll-to-bottom | The change happens without animation |
+| A11-SC-1 | Switch Control on auth (email → password → submit), schedule working days and route reorder | Items are reachable in order, and the 44pt targets can be activated |
+| A11-KB-1 | Hardware keyboard auth and recovery: Return chains (with 11.11 shortcuts) | Email → password → submit; new password → confirmation → submit |
+| A11-TT-1 | Touch targets: week arrows, route chevrons, working days | Each reliably hits on the first tap |
+| A11-IC-1 | Increase Contrast on and off, in light and dark | No regressions against the §12.1 table |
+| A11-W-1 | Widgets at AX sizes (A9) | The fixed canvas is legible, matching RN |
+
+**Concerns:**
+- Device-only proof (VoiceOver, Switch Control, AX5, Increase Contrast) is deferred to
+  Phase 12, as the rows above record. None is claimed as passed.
+- A14–A18 are non-blocking and go to 11.10b.
+
+**Next ready:** 11.11 (iPad layouts, multitasking and rotation).

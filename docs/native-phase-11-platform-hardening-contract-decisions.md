@@ -65,7 +65,7 @@ characterization).
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen; crash side implemented by 11.09 (§10.4) | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen; implemented by 11.15 with the native differences in §11.1 | 11.15 |
-| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline | 11.10a/11.10b |
+| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audits and closes H1 | 11.10a/11.10b |
 | C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
 
@@ -1678,6 +1678,70 @@ The `N/TodayView.swift` calendar, search and settings buttons are labelled.
 
 Keyboard and switch-control navigation are unaudited; they are 11.11's hardware-keyboard
 rows and Phase 12 device rows.
+
+### 12.1 11.10a audit results (2026-09-24)
+
+11.10a re-ran the §12 inventory against HEAD `0cc4174` and fixed every release-blocking
+candidate. The proof is `sh native/run-accessibility-audit-tests.sh`
+(`native/AccessibilityAuditTests/main.swift`). It runs a pure contrast computation and
+scans the source of every `.swift` file under `N/`. Each scan reads a construct from
+its keyword to the end of its modifier chain, not a fixed window. Known sites are looked
+up by marker, and a missing marker fails the run. The policy is in
+`N/Domain/NativeAccessibilityAudit.swift` (palette, contrast table, Reduce Motion
+policy, RN label catalog). The view helpers are in `N/NativeAccessibilityViews.swift`.
+
+**Release-blocking findings open: 0.** H1 stays open until 11.10b re-audits after
+11.11 and 11.12.
+
+**Palette decision (native difference).** `tradeReady` is now dynamic:
+
+- **Light:** unchanged `#1d5c9e`, RN `lightColors.accent`.
+- **Dark:** `#5b9bdb`, RN `darkColors.accent`.
+
+White text on `#5b9bdb` measures 2.93:1, so RN's dark filled buttons fail. A new
+`tradeReadyFill` therefore carries every surface with white text or icons:
+
+- **Light:** `#1d5c9e`.
+- **Dark:** `#2f78c4`, native only. White text on it measures 4.56:1. Against the dark
+  grounds the fill measures 3.06:1 or more, so the selected state stays visible.
+
+The `AccentColor` asset now carries the same light and dark tint. It used to be
+`(0.05, 0.53, 0.85)`, which measures 3.83:1 on white and is used by UIKit alerts.
+
+| Pair (WCAG 2.x, computed by the host suite) | Ratio | Minimum |
+|---|---|---|
+| Tint text on the dark canvas `#101826` | 6.06 | 4.5 |
+| Tint text on dark `systemBackground` / list row `#1c1c1e` / sheet list row `#2c2c2e` | 7.16 / 5.80 / 4.75 | 4.5 |
+| Tint text on the RN dark surface `#182238` | 5.40 | 4.5 |
+| Tint text on a 12% tint wash (dark canvas / dark row), `.bordered` wash | 5.09 / 4.86 / 4.84 | 4.5 |
+| Tint text on the light canvas / white / light grouped / 12% wash | 6.24 / 6.82 / 6.11 / 5.69 | 4.5 |
+| White text on the fill (light / dark) | 6.82 / 4.56 | 4.5 |
+| Fill as UI on the dark canvas / black / `#1c1c1e` / `#2c2c2e` | 3.91 / 4.61 / 3.74 / 3.06 | 3.0 |
+
+Tint text on the elevated tertiary ground `#3a3a3c` measures 3.87:1. No `N/` view puts
+tint text on that ground, so this is recorded only.
+
+| # | Finding (§12 or found by the 11.10a scan) | Disposition | Evidence |
+|---|---|---|---|
+| A1 | **Blocking 1.** `tradeReady` measured 2.61:1 on the dark canvas | **Fixed:** dark variant plus `tradeReadyFill` (above). 24 `.borderedProminent` buttons now use `tradeReadyProminentButtonStyle()`. The clock-in button re-tints to the fill. 13 opaque fills under white text were moved to the fill: 8 chips, the selected week day, the Today hero, the "Schedule a Job" button, the working-day toggles and the Settings avatar gradient. `AccentColor` was aligned | Contrast table, palette literals parsed from `N/Models.swift` and the asset JSON, no raw `.borderedProminent`, opaque tint fills only on the allow-listed chart bars and dots |
+| A2 | **Blocking 2.** Six unlabeled icon buttons | **Fixed.** RN labels: "Add new invoice", "Add new job", "Add maintenance plan", "Add new customer". Booking contact: "Call/Text/Email {name}", following RN `CustomerDetailScreen` (Text is native only). Route order `Menu`: "Route order options" (native only; RN has a text button) | Icon-only scan (0 unlabeled). The six sites are found by marker. The catalog is checked against the RN `accessibilityLabel` text in the working tree |
+| A3 | Found by the scan: the route "move stop" chevrons were unlabeled, with glyph-sized targets | **Fixed.** RN labels "Move stop up" and "Move stop down", with a 44×44 target | Scan plus touch-target check |
+| A4 | **Blocking 3.** Reduce Motion was ignored: the `CoachView` scroll-to and the `NativeMoneyCards` section expand | **Fixed.** `NativeAccessibilityAudit.allowsCustomMotion(reduceMotion:)`. With the setting on, the change happens without animation | Every `withAnimation`/`.animation(` in `N/` must pass through the policy. Both sites are found by marker |
+| A5 | **Blocking 4.** Fixed fonts and frames did not scale | **Fixed:** all ten non-widget `.font(.system(size:))` literals now use `@ScaledMetric` or `.largeTitle`. Money cards: the 110pt expense-trend chart no longer clips its labels; the rank, count and icon columns scale; seven multi-column rows stack at AX sizes (`NativeAccessibilityAdaptiveRow`) instead of shrinking or truncating amounts. The Today stats, Jobs stats and Invoices metrics rows also stack. The auth and recovery submit buttons use `minHeight: 48`. Customer initials, the week-strip day circles and the `SettingsRow`/`MetricCard` badges scale | No fixed-point font outside `N/Widgets/`, `@ScaledMetric` present per file, site checks |
+| A6 | Found: the working-day toggles were 36pt tall, and the week-strip arrows were glyph-sized | **Fixed:** 44pt minimum | Touch-target checks |
+| A7 | Found (step 4): the auth email field showed "Next", which did nothing. The recovery "New password" field had no return action | **Fixed:** `@FocusState`. Email Next moves to the password (Go still sends a reset). Show/Hide keeps focus. New password Next moves to confirmation, then Go submits. RN uses "done" (dismiss) on email, so this is a native difference | Focus checks |
+| A8 | Week strip at AX2–AX5: seven day columns and two arrows cannot grow further on a phone | **Retained by design:** capped at `.accessibility1`; VoiceOver reads each day in full | Cap check; Phase 12 AX5 row |
+| A9 | Widget views (`N/Widgets/Shared/*`) use fixed-point fonts | **Retained:** fixed widget canvas, matching RN `targets/widget`. Owned by 11.02/11.03 | Scan exempts only `N/Widgets/`; Phase 12 widget AX row |
+| A10 | Remaining `lineLimit(1)` sites: names, notes, addresses, links, job titles | **Retained:** truncating a name or address does not lose meaning in a list row, the detail screen shows the full text, and VoiceOver reads it in full. The amount sites that could lose meaning now stack | Reviewed |
+| A11 | Hardware-keyboard shortcuts and iPad keyboard commands | **Handed off to 11.11** (controller ruling b) | — |
+| A12 | Reading order: static review found no layered text out of order. The one layered text view, the calendar timeline, is already hidden from VoiceOver. No `accessibilitySortPriority` was added | **Deferred to device** (Phase 12 VoiceOver rows) | — |
+| A13 | Today job card: an "On my way" button nested inside the card button. Its VoiceOver reachability can only be confirmed on a device | **Deferred to device.** If it is unreachable, 11.10b adds an `accessibilityAction` | Phase 12 row |
+| A14 | Money cards with `onOpen` use the label "{title}, open", which hides their figures from VoiceOver. RN `TaxSetAsideCard` does the same | **11.10b** (not blocking; matches RN) | — |
+| A15 | The Money charts (monthly, seasonal, expense trends) have no accessibility summary; VoiceOver reads each month letter separately | **11.10b** (not blocking; the totals under each chart are readable text) | — |
+| A16 | Cosmetic fixed icon frames: `MoneyView` category badge, `SettingsView` sync-status badge and avatar, Today hero circle, job-photo thumbnail, route index column, booking-request kind column (56pt; text wraps at AX5) | **11.10b** with the 11.11 layout pass (not blocking: icons overflow their frame without clipping, and the text wraps rather than disappearing) | — |
+| A17 | The job-photo error badge is not announced | **11.10b** (not blocking) | — |
+| A18 | The clock-out `.borderedProminent` uses system red: white on dark `#ff453a` measures about 3.4:1 | **11.10b** (not blocking: the system destructive color, with a semibold label) | — |
+| A19 | Switch Control, full VoiceOver, AX5 layout, Increase Contrast | **Deferred to device** (Phase 12; runsheet rows in the plan's 11.10a entry) | — |
 
 ---
 
