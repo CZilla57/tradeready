@@ -17,7 +17,8 @@ import Foundation
 ///
 /// Foundation-only: the width math is covered by
 /// `native/LayoutMetricsTests/main.swift`. The SwiftUI modifiers below are
-/// compiled only where UIKit exists (the app), not in the host test.
+/// compiled wherever SwiftUI exists: the app, and the macOS host runners that
+/// compile view files (calendar editor, schedule and booking settings).
 enum NativeLayoutMetrics {
     /// RN `layout.contentMaxWidth` (points).
     static let contentMaxWidth: Double = 700
@@ -91,7 +92,7 @@ enum NativeLayoutMetrics {
     }
 }
 
-#if canImport(UIKit)
+#if canImport(SwiftUI)
 import SwiftUI
 
 extension View {

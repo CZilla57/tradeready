@@ -621,6 +621,87 @@ func testManifest(root: URL) {
     }
 }
 
+/// The code of `file` with every `#if !FLAG … #endif` region removed for each
+/// flag in `defined` (nested directives are balanced), so a host runner's
+/// `-D` flags decide which view code it actually compiles.
+func activeCode(_ file: SourceFile, defined: Set<String>) -> String {
+    var kept: [Substring] = []
+    var skipDepth = 0
+    for line in file.codeText.split(separator: "\n", omittingEmptySubsequences: false) {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if skipDepth > 0 {
+            if trimmed.hasPrefix("#if") { skipDepth += 1 }
+            if trimmed.hasPrefix("#endif") { skipDepth -= 1 }
+            continue
+        }
+        if trimmed.hasPrefix("#if !"),
+           defined.contains(String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)) {
+            skipDepth = 1
+            continue
+        }
+        kept.append(line)
+    }
+    return kept.joined(separator: "\n")
+}
+
+/// Every host runner that compiles a file using the column modifiers must also
+/// compile `NativeLayoutMetrics.swift`, or the aggregate breaks (the calendar
+/// editor and schedule/booking settings runners compile view files on macOS).
+func testHostRunners(root: URL, sources: [SourceFile]) {
+    let native = root.appendingPathComponent("native")
+    let scripts = ((try? FileManager.default.contentsOfDirectory(atPath: native.path)) ?? [])
+        .filter { $0.hasPrefix("run-") && $0.hasSuffix(".sh") }.sorted()
+    expect(scripts.count >= 40, "found the native host runners (\(scripts.count))")
+    guard let common = read(root, "native/run-appstore-sources-common.sh") else {
+        expect(false, "native/run-appstore-sources-common.sh is readable"); return
+    }
+    func compiledFiles(_ script: String) -> Set<String> {
+        var names = Set<String>()
+        for token in script.split(whereSeparator: { " \n\t\"\\".contains($0) })
+        where token.contains("native/TradeReadyNative/") && token.hasSuffix(".swift") {
+            let path = String(token.components(separatedBy: "native/TradeReadyNative/").last!)
+            let parts = path.components(separatedBy: "*")
+            if parts.count == 2 {
+                // A shell glob (`Domain/Canonical*.swift`): expand it over N/.
+                let matches = sources.map(\.relativePath).filter {
+                    $0.hasPrefix(parts[0]) && $0.hasSuffix(parts[1]) && $0.count >= path.count - 1
+                }
+                expect(!matches.isEmpty, "glob N/\(path) matches files")
+                names.formUnion(matches)
+            } else {
+                names.insert(path)
+            }
+        }
+        return names
+    }
+    let byPath = Dictionary(uniqueKeysWithValues: sources.map { ($0.relativePath, $0) })
+    var runnersCompilingUsers = 0
+    for name in scripts where name != "run-appstore-sources-common.sh" {
+        guard let script = read(root, "native/\(name)") else { expect(false, "\(name) is readable"); continue }
+        var files = compiledFiles(script)
+        if script.contains("APPSTORE_TEST_SOURCES") { files.formUnion(compiledFiles(common)) }
+        var defined = Set<String>()
+        let words = script.split(whereSeparator: { " \n\t\\".contains($0) }).map(String.init)
+        for (index, word) in words.enumerated() where word == "-D" && index + 1 < words.count {
+            defined.insert(words[index + 1])
+        }
+        let users = files.sorted().filter { path in
+            guard path != "NativeLayoutMetrics.swift" else { return false }
+            guard let file = byPath[path] else { return false }
+            return activeCode(file, defined: defined).contains("nativeContentColumn")
+        }
+        for missing in files.sorted() where byPath[missing] == nil {
+            expect(false, "\(name) compiles N/\(missing), which exists")
+        }
+        guard !users.isEmpty else { continue }
+        runnersCompilingUsers += 1
+        expect(files.contains("NativeLayoutMetrics.swift"),
+               "\(name) compiles NativeLayoutMetrics.swift for \(users.joined(separator: ", "))")
+    }
+    // The calendar editor and schedule/booking settings runners compile column users.
+    expect(runnersCompilingUsers >= 2, "host runners compiling column users found (\(runnersCompilingUsers))")
+}
+
 /// Literal hand-rolled width caps that are allowed (file → literals). They are
 /// narrower than the column (a single form card) and predate 11.11.
 let allowedMaxWidthLiterals: [String: [Int]] = [
@@ -784,6 +865,7 @@ struct LayoutMetricsTests {
         testFixedChrome(sources: sources)
         testNavigationStructure(sources: sources)
         testManifest(root: root)
+        testHostRunners(root: root, sources: sources)
         testFixedWidths(sources: sources)
         testKeyboardShortcuts(sources: sources)
 
