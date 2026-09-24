@@ -1373,8 +1373,10 @@ contexts, logs, and the widget snapshot.
   **Chosen (11.09): `tradeready-ios`.** The upload is the checked-in script
   `native/scripts/upload-sentry-dsyms.sh <App.xcarchive>`, run by hand on a Release
   archive (a Phase 12 runsheet row). It no-ops with a message when `SENTRY_AUTH_TOKEN`
-  or the project slug is absent. There is no run-script build phase and no token in the
-  repo. The Sentry project `tradeready-ios` must exist in the org before the first
+  is absent or `SENTRY_ORG` / `SENTRY_PROJECT` is set empty. Source bundles
+  (`--include-sources`) are opt-in with `SENTRY_INCLUDE_SOURCES=1` and off by default,
+  because they send app source code to Sentry (11.09 fix round 1). There is no run-script
+  build phase and no token in the repo. The Sentry project `tradeready-ios` must exist in the org before the first
   upload.
 - `sendDefaultPii = false`, `attachScreenshot = false`, `attachViewHierarchy = false`.
 - Session replay sample rates are 0.
@@ -1432,9 +1434,14 @@ the DSN at build time. `debug = false`.
   rebuilt as `{id}` and only a plain identifier survives.
 - URLs keep scheme, host, port and path. User info is dropped. Payment hosts (Stripe
   links, PayPal.me, Venmo, Cash App, Square) lose their whole path. A path segment after a
-  capability marker (`portal`, `booking`, `book`, `pay`, `t`, `p`, `e`, `s`, `l`, …) or a
-  token-shaped segment (a credential prefix, or 20+ URL-safe characters mixing letters and
-  digits that is not a UUID) becomes `[Filtered]`.
+  capability marker (`portal`, `booking`, `book`, `pay`, `reset-password`, `t`, `p`, `e`,
+  `s`, `l`, …) or a token-shaped segment (a credential prefix, or 20+ URL-safe characters
+  mixing letters and digits that is not a UUID) becomes `[Filtered]`. For a non-network
+  scheme (`tradeready://portal/<token>`) the host is the route, so it is checked as the
+  segment before the path; `http(s)` and `ws(s)` hosts never count as markers.
+- Redaction is idempotent (11.09 fix round 1): breadcrumbs pass `beforeBreadcrumb` and
+  then `beforeSend`, so a `[Filtered]`, `[email]` or `[phone]` path segment from the
+  first pass is kept as is, and a second pass returns identical output.
 - Strings are also scrubbed of JWTs, credential prefixes, `key=value` secrets, API-key
   headers, data URIs and base64 runs of 120+ characters (`[document]`). A plain
   alphanumeric run that long is also scrubbed, which is acceptable for diagnostics.

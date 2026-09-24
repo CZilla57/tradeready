@@ -422,7 +422,7 @@ struct NativeAnalyticsPrivacyPolicy {
     /// Characters a catalog `string` value may contain: internal ids
     /// (`1727190000000k3j9x`, UUIDs, `labor_overrun:<id>`,
     /// `low_margin_estimate:<id>:1234.5`, `open_slot:2026-09-24`).
-    static let identifierCharacters = asciiLetters.union(asciiDigits).union(CharacterSet(charactersIn: "_-.:"))
+    static var identifierCharacters: CharacterSet { NativeSensitiveData.identifierCharacters }
     static let nameCharacters = asciiLetters.union(asciiDigits).union(CharacterSet(charactersIn: "_$"))
 
     let catalog: NativeAnalyticsEventCatalog?

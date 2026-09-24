@@ -45,6 +45,10 @@ enum NativeSensitiveData {
 
     static let asciiLetters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
     static let asciiDigits = CharacterSet(charactersIn: "0123456789")
+    /// Characters a plain identifier may contain: internal ids
+    /// (`1727190000000k3j9x`, UUIDs, `labor_overrun:<id>`,
+    /// `low_margin_estimate:<id>:1234.5`, `open_slot:2026-09-24`). Analytics
+    /// forwards to this set for catalog `string` values.
     static let identifierCharacters = asciiLetters.union(asciiDigits).union(CharacterSet(charactersIn: "_-.:"))
 
     /// A whole value that is (or starts with) a credential.
@@ -216,6 +220,10 @@ struct NativeErrorRedaction {
     static let filteredEmail = "[email]"
     static let filteredPhone = "[phone]"
     static let filteredDocument = "[document]"
+    /// Placeholders a URL path can already hold from an earlier pass
+    /// (breadcrumbs pass `beforeBreadcrumb`, then `beforeSend`). They are kept
+    /// as is, so redacting twice gives the same text as redacting once.
+    static let pathPlaceholders: Set<String> = [filtered, filteredEmail, filteredPhone]
 
     /// §10.3 native narrowing: the only extra keys that pass.
     static let allowedExtraKeys: Set<String> = [
@@ -257,12 +265,16 @@ struct NativeErrorRedaction {
         "pay.stripe.com", "connect.stripe.com", "paypal.me", "paypal.com", "venmo.com", "cash.app",
         "square.link", "squareup.com", "square.site",
     ]
-    /// A path segment after one of these is a capability token.
+    /// A path segment after one of these is a capability token. For a custom
+    /// scheme (`tradeready://portal/<token>`) the host is checked as the first
+    /// path segment.
     static let tokenPathMarkers: Set<String> = [
         "portal", "booking", "book", "token", "tokens", "t", "p", "pay", "invite", "reset",
-        "verify", "confirm", "approve", "approval", "e", "sign", "s", "r", "l", "link", "links",
-        "manage", "respond",
+        "reset-password", "verify", "confirm", "approve", "approval", "e", "sign", "s", "r", "l",
+        "link", "links", "manage", "respond",
     ]
+    /// Schemes whose host is a network host, never a route name.
+    static let networkSchemes: Set<String> = ["http", "https", "ws", "wss"]
 
     // MARK: Keys
 
@@ -297,8 +309,18 @@ struct NativeErrorRedaction {
     /// Scheme, host and path only: no user info, query or fragment. Payment
     /// hosts lose their whole path; elsewhere a token-bearing segment (after a
     /// capability marker such as `portal`, or token-shaped itself) is filtered.
+    /// A custom scheme's host is a route name, so it counts as the segment
+    /// before the path (`tradeready://portal/<token>`). Idempotent: a path
+    /// placeholder from an earlier pass is kept as is.
     func redactURL(_ text: String) -> String {
-        guard let components = URLComponents(string: text), let scheme = components.scheme else {
+        // Placeholders hold `[` and `]`, which are not legal in a URL path;
+        // encode them so a second pass parses the same URL the first pass built.
+        var parseable = text
+        for placeholder in Self.pathPlaceholders {
+            let encoded = placeholder.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? placeholder
+            parseable = parseable.replacingOccurrences(of: placeholder, with: encoded)
+        }
+        guard let components = URLComponents(string: parseable), let scheme = components.scheme else {
             return Self.filtered
         }
         let host = (components.host ?? "").lowercased()
@@ -310,12 +332,14 @@ struct NativeErrorRedaction {
             if components.path.count > 1 { rebuilt += "/\(Self.filtered)" }
             return rebuilt
         }
-        var previous = ""
+        var previous = Self.networkSchemes.contains(scheme.lowercased()) ? "" : host
         var path: [String] = []
         for segment in segments {
             if segment.isEmpty { path.append(segment); continue }
             let decoded = segment.removingPercentEncoding ?? segment
-            if Self.tokenPathMarkers.contains(previous.lowercased()) || Self.isTokenShaped(decoded) {
+            if Self.pathPlaceholders.contains(decoded) {
+                path.append(decoded)
+            } else if Self.tokenPathMarkers.contains(previous.lowercased()) || Self.isTokenShaped(decoded) {
                 path.append(Self.filtered)
             } else {
                 path.append(Self.scrubPathSegment(decoded))

@@ -70,15 +70,26 @@ final class ThrowingCrashAdapter: NativeCrashReportingSDKAdapter, @unchecked Sen
     func setUser(id: String?) throws { lock.lock(); count += 1; lock.unlock(); throw FakeCrashError() }
 }
 
-/// Blocks every adapter call until released: a slow SDK.
+/// Blocks every adapter call until released: a slow SDK. The wait is
+/// bounded, so a regression that calls the SDK on the caller's thread fails
+/// the timing and timeout checks instead of hanging the runner.
 final class BlockingCrashAdapter: NativeCrashReportingSDKAdapter, @unchecked Sendable {
+    static let maximumWait: TimeInterval = 3
     let gate = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var count = 0
+    private var timeouts = 0
     var completed: Int { lock.lock(); defer { lock.unlock() }; return count }
+    var timedOut: Int { lock.lock(); defer { lock.unlock() }; return timeouts }
     func start(options: NativeCrashReportingOptions, redaction: NativeErrorRedaction) throws {}
-    func capture(_ report: NativeCrashReport) throws { gate.wait(); lock.lock(); count += 1; lock.unlock() }
-    func setUser(id: String?) throws { gate.wait(); lock.lock(); count += 1; lock.unlock() }
+    func capture(_ report: NativeCrashReport) throws { block() }
+    func setUser(id: String?) throws { block() }
+    private func block() {
+        let released = gate.wait(timeout: .now() + Self.maximumWait) == .success
+        lock.lock()
+        if released { count += 1 } else { timeouts += 1 }
+        lock.unlock()
+    }
 }
 
 final class DiagnosticRecorder: @unchecked Sendable {
@@ -193,6 +204,7 @@ struct ErrorRedactionTests {
         gateAndOptions()
         stringRedaction()
         preservedValues()
+        idempotenceAndCustomSchemes()
         keyDenyClasses()
         eventRedaction()
         breadcrumbAndSpanRedaction()
@@ -362,6 +374,86 @@ struct ErrorRedactionTests {
             "https://abc.supabase.co/rest/v1/jobs/123e4567-e89b-12d3-a456-426614174000",
             "preserve: UUID record ids in paths"
         )
+    }
+
+    // MARK: 2b. Idempotence (breadcrumbs pass beforeBreadcrumb, then beforeSend)
+    // and custom-scheme deep links (the host is the first route segment)
+
+    static func idempotenceAndCustomSchemes() {
+        // The review case: a `[Filtered]` segment that follows no marker.
+        let tokenThenPath = "https://tradeready.app/api/x/a1b2c3d4e5f6g7h8i9j0k1/next"
+        expectEqual(redaction.redactURL(tokenThenPath), "https://tradeready.app/api/x/[Filtered]/next",
+                    "idempotent: first pass filters the token segment")
+        expectEqual(redaction.redactURL(redaction.redactURL(tokenThenPath)), "https://tradeready.app/api/x/[Filtered]/next",
+                    "idempotent: a second pass keeps [Filtered] (not %5BFiltered%5D)")
+
+        let urls = [
+            tokenThenPath,
+            "https://api.gettradereadyapp.com/portal/Zx9Kq2Lm7Np4Rt6Vw8Yb/pay?t=abc#frag",
+            "https://api.gettradereadyapp.com/booking/respond/abc?approve=1",
+            "https://tradeready.app/api/estimate/sk_live_abc123",
+            "https://paypal.me/PatOwner/25",
+            "https://venmo.com/u/pat-owner",
+            "https://admin:pw@db.example.com:8443/rest",
+            "https://x.example.com/u/pat@example.com/more",
+            "https://x.example.com/call/4805550100/log",
+            "https://x.example.com/a%20b/100%25/c%2Fd",
+            "https://Tradeready.APP/Jobs/123e4567-e89b-12d3-a456-426614174000",
+            "tradeready://portal/Ab12Cd34/pay",
+            "tradeready://job/1700000000000-abc12",
+        ]
+        for url in urls {
+            let once = redaction.redactURL(url)
+            expectEqual(redaction.redactURL(once), once, "idempotent url: '\(url)'")
+            expectEqual(redaction.redactString("GET \(url) failed"), redaction.redactString(redaction.redactString("GET \(url) failed")),
+                        "idempotent string with url: '\(url)'")
+        }
+        let strings = poison.map(\.text) + [
+            "call 480-555-0100 today", "mail PAT@EXAMPLE.COM now", "BEARER abc123", "Access_Token=abc123",
+            "x-api-key: abc123", "img data:image/png;base64,iVBORw0KGgo= end",
+            "record 123e4567-e89b-12d3-a456-426614174000 failed", "due 2026-09-24 overdue",
+            String(repeating: "ab ", count: 2_000), String(repeating: "é日", count: 800),
+        ]
+        for text in strings {
+            let once = redaction.redactString(text)
+            expectEqual(redaction.redactString(once), once, "idempotent string: '\(text.prefix(60))'")
+        }
+        let crumb = NativeCrashBreadcrumbPayload(
+            category: "http", type: "http", message: poisonText(),
+            data: ["url": tokenThenPath, "to": "tradeready://portal/Ab12Cd34", "status_code": 500]
+        )
+        let crumbOnce = redaction.redactBreadcrumb(crumb)
+        expectEqual(canonicalJSON(redaction.redactBreadcrumb(crumbOnce).jsonObject), canonicalJSON(crumbOnce.jsonObject),
+                    "idempotent: beforeBreadcrumb then beforeSend leaves the breadcrumb unchanged")
+        var event = NativeCrashEventPayload()
+        event.message = poisonText()
+        event.breadcrumbs = [crumbOnce]
+        event.request = .init(url: tokenThenPath, method: "GET")
+        let eventOnce = redaction.redactEvent(event)
+        expectEqual(canonicalJSON(redaction.redactEvent(eventOnce).jsonObject), canonicalJSON(eventOnce.jsonObject),
+                    "idempotent: a redacted event redacts to itself")
+
+        // Custom schemes: the host is the route, so a short token after a
+        // token-bearing route is filtered like a path segment after a marker.
+        expectEqual(redaction.redactURL("tradeready://portal/Ab12Cd34"), "tradeready://portal/[Filtered]",
+                    "custom scheme: short token after tradeready://portal/")
+        expectEqual(redaction.redactURL("tradeready://Portal/Ab12Cd34/pay"), "tradeready://portal/[Filtered]/pay",
+                    "custom scheme: the route match ignores case; later segments are checked as usual")
+        for route in NativeErrorRedaction.tokenPathMarkers.sorted() {
+            expectEqual(redaction.redactURL("tradeready://\(route)/Ab12Cd34"), "tradeready://\(route)/[Filtered]",
+                        "custom scheme: short token after tradeready://\(route)/")
+            expect(!redaction.redactString("open tradeready://\(route)/Ab12Cd34 failed").contains("Ab12Cd34"),
+                   "custom scheme in text: no token after tradeready://\(route)/")
+        }
+        expectEqual(redaction.redactURL("tradeready://reset-password/Qm7Xz2"), "tradeready://reset-password/[Filtered]",
+                    "custom scheme: the reset-password route is token-bearing")
+        // Record routes keep their ids; a network host named like a marker is not a route.
+        expectEqual(redaction.redactURL("tradeready://job/1700000000000-abc12"), "tradeready://job/1700000000000-abc12",
+                    "custom scheme: a job record id survives")
+        expectEqual(redaction.redactURL("tradeready://onmyway/job-1"), "tradeready://onmyway/job-1",
+                    "custom scheme: an on-my-way record id survives")
+        expectEqual(redaction.redactURL("https://portal/status"), "https://portal/status",
+                    "network scheme: a host named portal is a host, not a route")
     }
 
     // MARK: 3. Key classes (§10.1), case-insensitive, nested
@@ -682,10 +774,6 @@ struct ErrorRedactionTests {
         expectEqual(throwing.attempts, 2, "throwing adapter: both calls attempted")
         expectEqual(throwDiagnostics.all, ["capture_failed", "set_user_failed"], "throwing adapter: swallowed with codes")
 
-        let noop = NativeNoOpCrashReporting()
-        noop.reportError("x", context: ["context": "y"])
-        noop.setUser(id: "user-a")
-        expect(true, "no-op reporter: accepts every call")
     }
 
     // MARK: 10. setUser at every identity boundary (§9.4, 11.08 lifecycle)
@@ -801,6 +889,7 @@ struct ErrorRedactionTests {
         expectEqual(blocking.completed, 0, "slow: the SDK had not finished any call")
         for _ in 0..<3 { blocking.gate.signal() }
         slow.waitUntilIdle()
+        expectEqual(blocking.timedOut, 0, "slow: no SDK call waited out its bound (none ran on the caller)")
         expectEqual(blocking.completed, 3, "slow: the queued calls finish once the SDK frees up")
     }
 
@@ -882,6 +971,59 @@ struct ErrorRedactionTests {
 
     // MARK: 13. Wiring, linkage and manifests (source checks)
 
+    /// Runs the dSYM script against a fake `sentry-cli` that records its
+    /// arguments: the no-op paths send nothing, and `--include-sources` is
+    /// passed only when `SENTRY_INCLUDE_SOURCES=1`.
+    static func dsymScriptBehaviour(root: URL) {
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appending(path: "tradeready-dsym-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? fm.removeItem(at: work) }
+        let dsyms = work.appending(path: "dSYMs/TradeReadyNative.app.dSYM", directoryHint: .isDirectory)
+        try? fm.createDirectory(at: dsyms, withIntermediateDirectories: true)
+        let argsFile = work.appending(path: "cli-args.txt")
+        let cli = work.appending(path: "fake-sentry-cli")
+        try? "#!/bin/sh\nprintf '%s\\n' \"$@\" > '\(argsFile.path)'\n".write(to: cli, atomically: true, encoding: .utf8)
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+
+        func run(_ environment: [String: String]) -> (status: Int32, output: String, args: [String]?) {
+            try? fm.removeItem(at: argsFile)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = [root.appending(path: "native/scripts/upload-sentry-dsyms.sh").path, work.path]
+            var env = ["PATH": "/usr/bin:/bin", "SENTRY_CLI": cli.path]
+            env.merge(environment) { _, new in new }
+            process.environment = env
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            guard (try? process.run()) != nil else { return (-1, "", nil) }
+            process.waitUntilExit()
+            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let args = (try? String(contentsOf: argsFile, encoding: .utf8))?.split(separator: "\n").map(String.init)
+            return (process.terminationStatus, output, args)
+        }
+
+        let noToken = run([:])
+        expect(noToken.status == 0 && noToken.args == nil && noToken.output.contains("SENTRY_AUTH_TOKEN is not set"),
+               "dSYM script: no token exits 0 and sends nothing")
+        let emptyOrg = run(["SENTRY_AUTH_TOKEN": "test-only", "SENTRY_ORG": ""])
+        expect(emptyOrg.status == 0 && emptyOrg.args == nil && emptyOrg.output.contains("SENTRY_ORG is empty"),
+               "dSYM script: an empty SENTRY_ORG exits 0 and sends nothing")
+        let emptyProject = run(["SENTRY_AUTH_TOKEN": "test-only", "SENTRY_PROJECT": ""])
+        expect(emptyProject.status == 0 && emptyProject.args == nil && emptyProject.output.contains("SENTRY_PROJECT is empty"),
+               "dSYM script: an empty SENTRY_PROJECT exits 0 and sends nothing")
+        let plain = run(["SENTRY_AUTH_TOKEN": "test-only"])
+        expectEqual(plain.args, ["debug-files", "upload", "--org", "tradeready-3r", "--project", "tradeready-ios",
+                                 work.appending(path: "dSYMs").path],
+                    "dSYM script: default upload has the default slugs and no --include-sources")
+        expect(!(plain.args ?? []).contains("test-only"), "dSYM script: the token is never an argument")
+        let withSources = run(["SENTRY_AUTH_TOKEN": "test-only", "SENTRY_INCLUDE_SOURCES": "1"])
+        expect((withSources.args ?? []).contains("--include-sources"), "dSYM script: SENTRY_INCLUDE_SOURCES=1 opts in to source bundles")
+        let otherValue = run(["SENTRY_AUTH_TOKEN": "test-only", "SENTRY_INCLUDE_SOURCES": "yes"])
+        expect(otherValue.args != nil && !(otherValue.args ?? []).contains("--include-sources"),
+               "dSYM script: only the value 1 opts in to source bundles")
+    }
+
     static func read(_ root: URL, _ path: String) -> String {
         (try? String(contentsOf: root.appending(path: path), encoding: .utf8)) ?? ""
     }
@@ -951,6 +1093,7 @@ struct ErrorRedactionTests {
         expect(script.contains("SENTRY_AUTH_TOKEN is not set; skipping"), "dSYM: no-op without a token")
         let assignments = script.split(separator: "\n").filter { !$0.hasPrefix("#") && $0.contains("SENTRY_AUTH_TOKEN=") }
         expect(!script.contains("sntrys_") && assignments.isEmpty, "dSYM: no token in the repo")
+        dsymScriptBehaviour(root: root)
 
         // Privacy manifests (§8).
         func plist(_ path: String) -> [String: Any] {

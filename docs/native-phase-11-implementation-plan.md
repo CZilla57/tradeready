@@ -2291,7 +2291,8 @@ both unblocked by 11.07.
 - **dSYM upload:** `native/scripts/upload-sentry-dsyms.sh <App.xcarchive | dSYMs dir>`,
   run by hand on a Release archive. It calls `sentry-cli debug-files upload`, takes the
   token from `SENTRY_AUTH_TOKEN` only, and exits 0 with a message when the token or the
-  slug is absent. There is no run-script build phase and no token in the repo.
+  slug is absent. Source bundles are opt-in (`SENTRY_INCLUDE_SOURCES=1`, off by default;
+  fix round 1). There is no run-script build phase and no token in the repo.
 - **§8.3:** Other Financial Info and Purchase History are declared (linked, Analytics).
   Device ID is not declared (PostHog's id is a rotating per-install UUID, not the IDFA or
   IDFV, and flags are off). The inert `PostHog_PHPLCrashReporter.bundle` manifest is left as
@@ -2407,7 +2408,8 @@ both unblocked by 11.07.
 - Create the Sentry project `tradeready-ios` in org `tradeready-3r`, build a Release
   archive with `TRADEREADY_SENTRY_DSN` set, then run
   `SENTRY_AUTH_TOKEN=… sh native/scripts/upload-sentry-dsyms.sh <App.xcarchive>`. Sentry
-  lists the app and widget dSYMs.
+  lists the app and widget dSYMs. Add `SENTRY_INCLUDE_SOURCES=1` only if uploading
+  source bundles (app source code) to Sentry is intended; the default sends none.
 - Trigger a test crash and a `deleteAccount` failure. Each arrives symbolicated with
   `release = <bundle>@<version>+<build>`, `environment`, user `{id}` only, no email, IP or
   device name, and a `[Filtered]` URL token.
@@ -2429,3 +2431,22 @@ both unblocked by 11.07.
   plain command hangs on a keychain lookup.
 
 **Next ready:** 11.15 (AI Assistant advanced key entry) and 11.10a (accessibility audit).
+
+**Fix round 1 (2026-09-24):** five review minors, one commit.
+- URL redaction is idempotent. A `[Filtered]`, `[email]` or `[phone]` path segment is
+  kept, and placeholders are encoded before parsing. Before this fix, a second pass
+  (`beforeBreadcrumb` then `beforeSend`) turned `[Filtered]` into `%5BFiltered%5D`.
+- For a non-`http(s)`/`ws(s)` scheme the host counts as the first route segment, so
+  `tradeready://portal/Ab12Cd34` and every other marker route filter a short token.
+  `reset-password` joins the markers.
+- `upload-sentry-dsyms.sh`: `--include-sources` is opt-in via `SENTRY_INCLUDE_SOURCES=1`.
+  `SENTRY_ORG` now defaults only when unset, so the empty-org no-op is reachable.
+- Tests:
+  - the `expect(true, …)` no-op check is removed;
+  - the slow-adapter fake waits at most 3 s per call and counts timeouts, so a
+    synchronous-capture regression fails instead of hanging the aggregate;
+  - new idempotence, custom-scheme and dSYM-script behaviour checks (fake `sentry-cli`).
+- `identifierCharacters` has one definition, in `NativeSensitiveData`; analytics forwards
+  to it.
+- `error-redaction tests: 687/687 checks passed`. The analytics runners, the aggregate
+  and the Release compile pass (see the task report).
