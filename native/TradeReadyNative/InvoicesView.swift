@@ -56,11 +56,14 @@ struct InvoicesView: View {
     }
 
     private var invoices: [Invoice] {
-        store.invoices.filter { invoice in
-            let matchesSearch = search.isEmpty || invoice.customer.localizedCaseInsensitiveContains(search) || invoice.number.localizedCaseInsensitiveContains(search)
-            let matchesFilter = switch filter { case .all: true; case .unpaid: !invoice.isPaid; case .overdue: invoice.isOverdue; case .paid: invoice.isPaid }
-            return matchesSearch && matchesFilter
-        }.sorted { $0.due < $1.due }
+        // Task 11.12: an InvoiceListProjection signpost with the visible row count.
+        NativePerformanceMetrics.shared.measure(.invoiceListProjection, count: { $0.count }) {
+            store.invoices.filter { invoice in
+                let matchesSearch = search.isEmpty || invoice.customer.localizedCaseInsensitiveContains(search) || invoice.number.localizedCaseInsensitiveContains(search)
+                let matchesFilter = switch filter { case .all: true; case .unpaid: !invoice.isPaid; case .overdue: invoice.isOverdue; case .paid: invoice.isPaid }
+                return matchesSearch && matchesFilter
+            }.sorted { $0.due < $1.due }
+        }
     }
 
     private var contentState: NativeContentState {

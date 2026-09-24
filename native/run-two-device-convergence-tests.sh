@@ -14,6 +14,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeMutationQueue.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeInitialSync.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeSupabasePush.swift" \
+  "$ROOT_DIR/native/HostTestSupport/InMemorySupabase.swift" \
   "$ROOT_DIR/native/TwoDeviceConvergenceTests/main.swift" \
   -o "$OUTPUT_PATH"
 

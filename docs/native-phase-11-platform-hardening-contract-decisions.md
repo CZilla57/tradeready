@@ -1925,12 +1925,12 @@ iOS 17 floor, since the probe ran on the iOS 26 runtime.
 | Simulator smoke (optional): widget gallery, Siri shortcut listing, `xcrun simctl openurl` deep links | 11.13 (optional) | Not a device claim |
 | iPhone SE-class, iOS 17.x (floor) | **Phase 12** | Small screen, AX5 Dynamic Type, iOS 17 interactive widget |
 | Standard iPhone, iOS 18.x | **Phase 12** | Widgets, Siri, Control Center |
-| iPhone 16 Pro Max, iOS 27.0 (existing row in `docs/native-phase-3-device-matrix.md`) | **Phase 12** | Launch time and soak baselines from 11.12 |
+| iPhone 16 Pro Max, iOS 27.0 (existing row in `docs/native-phase-3-device-matrix.md`) | **Phase 12** | Launch time and soak baselines from 11.12: PERF-1 to PERF-10 and SOAK-1 to SOAK-6 in `docs/native-phase-11-performance.md` |
 | iPad 11-inch and iPad mini, iPadOS 27 | **Phase 12** | Split View, Slide Over, Stage Manager, rotation, hardware keyboard (11.11 rows) |
 | VoiceOver, Switch Control, AX5 Dynamic Type, Reduce Motion, Increase Contrast, dark mode | **Phase 12** | 11.10a/11.10b produce the runsheet rows |
 | Home-screen widgets (Next Job small/medium, Job Timer), Siri phrases, on-my-way cold/warm | **Phase 12** | 11.02–11.06 produce the rows |
 | Sentry/PostHog live delivery (Release, staging key absent → silent) | **Phase 12** | 11.07/11.09 rows |
-| Poor network, memory and battery soak | **Phase 12** | 11.12 host tests plus a soak protocol |
+| Poor network, memory and battery soak | **Phase 12** | 11.12 host tests (`native/run-poor-network-tests.sh`, done 2026-09-24) plus the soak protocol (SOAK-1 to SOAK-6 in `docs/native-phase-11-performance.md`) |
 
 11.14 collects these rows in `docs/native-phase-11-device-runsheet.md`, a new file
 created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in Phase 11.
@@ -1985,7 +1985,10 @@ created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in
 - **11.09:** §10.2–10.3 Sentry config, redactor and `reportError`; the app manifest (§8).
   Done 2026-09-24 (§10.4; §8.1 and §8.3 amended).
 - **11.15:** §11. Done 2026-09-24 (§11.1).
-- **11.10a/11.11/11.12/11.10b:** §12 baseline, §13 rows.
+- **11.10a/11.11/11.12/11.10b:** §12 baseline, §13 rows. 11.12 done 2026-09-24: the
+  signpost facade `N/NativePerformanceMetrics.swift` (pinned call-site inventory), the
+  poor-network suite, and the measurement and soak protocol with Phase 12 owners in
+  `docs/native-phase-11-performance.md`.
 - **11.13/11.14:** §13 Phase 11 rows, the runsheet file, and the parity-row updates from §14.
 
 ---

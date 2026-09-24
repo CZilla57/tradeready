@@ -572,10 +572,15 @@ final class AppStore: ObservableObject {
                     || journalStatus == .failed
                 if shouldAttempt {
                     let coordinator = LegacyMigrationCoordinator(repository: repository, journal: migrationJournal)
-                    launchOutcome = if let legacyMigrationSource {
-                        try coordinator.migrate(currentSettings: settings, source: legacyMigrationSource)
-                    } else {
-                        try coordinator.migrate(currentSettings: settings)
+                    let source = legacyMigrationSource
+                    let currentSettings = settings
+                    // Task 11.12: a LegacyMigration signpost around the same
+                    // synchronous call (a throw ends it as failed and rethrows).
+                    launchOutcome = try NativePerformanceMetrics.shared.measure(.legacyMigration) {
+                        if let source {
+                            return try coordinator.migrate(currentSettings: currentSettings, source: source)
+                        }
+                        return try coordinator.migrate(currentSettings: currentSettings)
                     }
                 }
             } catch {
@@ -585,7 +590,15 @@ final class AppStore: ObservableObject {
 
         let completedWithoutSnapshot = launchOutcome?.status == .alreadyCompleted && !hadNativeSnapshot
         if accountScrubRecoveryError == nil {
+            // Task 11.12: a SnapshotLoad signpost (record count, and failed
+            // when the stored snapshot could not be read).
+            let snapshotLoad = NativePerformanceMetrics.shared.begin(.snapshotLoad)
             load(seedIfMissing: seedIfMissing && launchError == nil && !completedWithoutSnapshot)
+            NativePerformanceMetrics.shared.end(
+                snapshotLoad,
+                outcome: persistenceWritesBlocked ? .failed : .completed,
+                count: performanceRecordCount()
+            )
         } else {
             applyEmptySnapshot()
             persistenceWritesBlocked = true
@@ -5116,8 +5129,13 @@ final class AppStore: ObservableObject {
         let subject = outcome.verifiedUserSubject
         let localSnapshot = snapshot
         authenticationGateState = .initialSyncLoading
+        // Task 11.12: an InitialSync signpost from the gate to the commit.
+        // Ending is idempotent: the explicit ends below win, and the deferred
+        // end only closes a pass that a stale account or generation dropped.
+        let initialSync = NativePerformanceMetrics.shared.begin(.initialSync)
 
         Task { [weak self] in
+            defer { NativePerformanceMetrics.shared.end(initialSync, outcome: .skipped) }
             do {
                 let candidate = try await service.pull(
                     sessionBytes: sessionBytes,
@@ -5137,6 +5155,7 @@ final class AppStore: ObservableObject {
                     try? self.apply(previous)
                     throw error
                 }
+                NativePerformanceMetrics.shared.end(initialSync, count: self.performanceRecordCount())
                 self.refreshRecurringJobs()
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
@@ -5181,6 +5200,7 @@ final class AppStore: ObservableObject {
                     await self.publishDerivedState(expectedOwnerBinding: binding)
                 }
             } catch {
+                NativePerformanceMetrics.shared.end(initialSync, outcome: .failed)
                 guard let self,
                       subject == self.authenticatedUserSubject,
                       generation == self.initialSyncGateGeneration
@@ -6347,6 +6367,19 @@ final class AppStore: ObservableObject {
     /// so the next pass retries. An auth rejection refreshes the session once and
     /// retries the pull from the original cursor and snapshot (no partial commit).
     private func pullDeltaIfPossible() async -> NativeSyncPullResult {
+        // Task 11.12: a DeltaPull signpost around the unchanged pull and
+        // commit below; its outcome word is the pull result's state.
+        let deltaPull = NativePerformanceMetrics.shared.begin(.deltaPull)
+        let result = await pullDeltaAndCommit()
+        NativePerformanceMetrics.shared.end(
+            deltaPull,
+            outcome: Self.performanceOutcome(result),
+            count: performanceRecordCount()
+        )
+        return result
+    }
+
+    private func pullDeltaAndCommit() async -> NativeSyncPullResult {
         guard !persistenceWritesBlocked else { return .failed("pull/local-protection") }
         guard let service = deltaSyncServiceIfConfigured() else { return .skipped }
         guard let credentials = currentSyncCredentials() else { return .failed("pull/session") }
@@ -6665,6 +6698,14 @@ final class AppStore: ObservableObject {
     /// workspace. It never advances onboarding/subscription UI or adopts an
     /// unbound snapshot while no foreground is present.
     func performBackgroundRefresh() async -> NativeBackgroundRefreshOutcome {
+        // Task 11.12: a BackgroundRefresh signpost around the unchanged pass.
+        let backgroundRefresh = NativePerformanceMetrics.shared.begin(.backgroundRefresh)
+        let outcome = await runBackgroundRefresh()
+        NativePerformanceMetrics.shared.end(backgroundRefresh, outcome: Self.performanceOutcome(outcome))
+        return outcome
+    }
+
+    private func runBackgroundRefresh() async -> NativeBackgroundRefreshOutcome {
         guard !Task.isCancelled else { return .failed }
         guard !persistenceWritesBlocked else { return .failed }
         guard await prepareBackgroundIdentityIfNeeded() else { return .skipped }
@@ -6777,6 +6818,41 @@ final class AppStore: ObservableObject {
 
     private func scheduleSyncAfterLocalChange() {
         syncNow(trigger: .localChange)
+    }
+
+    // MARK: Task 11.12 signpost metadata (counts and outcome words only)
+
+    /// The number of canonical records in memory: the only size a signpost
+    /// carries (no ids, names or values).
+    private func performanceRecordCount() -> Int {
+        let payload = snapshot.payload
+        return (payload.jobs?.count ?? 0)
+            + (payload.invoices?.count ?? 0)
+            + (payload.customers?.count ?? 0)
+            + (payload.expenses?.count ?? 0)
+            + (payload.recurringJobs?.count ?? 0)
+            + (payload.recurringInvoices?.count ?? 0)
+            + (payload.trips?.count ?? 0)
+            + (payload.pricebook?.count ?? 0)
+            + (payload.bookingRequests?.count ?? 0)
+            + (payload.jobPhotos?.count ?? 0)
+    }
+
+    private static func performanceOutcome(_ result: NativeSyncPullResult) -> NativePerformanceOutcome {
+        switch result.state {
+        case .completed: .completed
+        case .partial: .partial
+        case .failed: .failed
+        case .skipped: .skipped
+        }
+    }
+
+    private static func performanceOutcome(_ outcome: NativeBackgroundRefreshOutcome) -> NativePerformanceOutcome {
+        switch outcome {
+        case .completed: .completed
+        case .skipped: .skipped
+        case .failed: .failed
+        }
     }
 
     private func configuredJobPhotoTransferService() -> (any NativeJobPhotoTransferring)? {
@@ -9853,6 +9929,14 @@ extension AppStore {
     /// `pullDeltaIfPossible` commit path. Production never calls this.
     func testSetAuthenticationGateState(_ state: NativeAuthenticationGateState) {
         authenticationGateState = state
+    }
+
+    /// Test-only (task 11.12): runs the real `pullDeltaIfPossible`, the pull
+    /// closure `syncCoordinatorIfConfigured` hands the coordinator. The
+    /// poor-network suite builds that same coordinator around it, because
+    /// the host harness has no `BuildEnvironment`. Production never calls this.
+    func testPullDeltaIfPossible() async -> NativeSyncPullResult {
+        await pullDeltaIfPossible()
     }
 
     /// Test-only (task 11.05): seeds a NATIVE-ONLY signed-in owner: no

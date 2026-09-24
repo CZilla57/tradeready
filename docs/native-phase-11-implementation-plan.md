@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15, 11.10a and 11.11 done (2026-09-24); 11.12, 11.10b, 11.13 and 11.14 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15, 11.10a, 11.11 and 11.12 done (2026-09-24); 11.10b, 11.13 and 11.14 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -790,7 +790,7 @@ complete / Phase 12 evidence deferred**.
 | 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys at sign-out, deletion, account switch and password-recovery exits (fix round 1); live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A15–A18, A22 and A24 to 11.10b; fix round 1 closed I1–I3 and m1–m6; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
-| 11.12 | H3, H4 | Pending | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
+| 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 140 checks, 5/5 mutations caught; **one data-loss finding, not fixed** (an edit saved during an in-flight delta pull is reverted by the pull commit and can be lost; gated repro D, see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Pending | 11.11, 11.12 | Accessibility re-audit (closes H1) |
 | 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
@@ -3186,3 +3186,179 @@ M5 (optional) is partly done.
   is measured only through the tab hop. IPAD-KB-1 covers a user pop.
 
 **Next ready:** 11.12 (performance, launch time and device soak).
+
+### 11.12 — Performance, launch time and device soak (2026-09-24)
+
+**Status:** Done with a concern (steps 1–4). Signposts are in place, the three required
+poor-network scenarios pass, and the measurement and soak protocol names a Phase 12
+owner for every row (`docs/native-phase-11-performance.md`). No behavior changed. One
+real data-loss bug was found and is **not fixed** (the finding below; failing repro D).
+Device numbers are deferred to Phase 12 Stage A (12.04).
+
+**Finding D: an edit during an in-flight delta pull is reverted and can be lost (open).**
+- **Contract.** `N/NativeSyncCoordinator.swift`: "Never let a remote pull overwrite
+  canonical records that still have a local mutation waiting to reach the server." The
+  pass checks the queue *before* the pull.
+- **Defect.** `pullDeltaAndCommit` (formerly the body of `pullDeltaIfPossible`) merges
+  into `localSnapshot`, which it captured before its network await, and commits that
+  result. An edit saved during the await is queued (and its trigger coalesces), but the
+  commit reverts it in memory and on disk. Online, the coalesced rerun pushes it and
+  pulls it back, so the revert is transient. If the link drops first, the device shows
+  the old value. A second edit to the same record is then built from the reverted
+  record, and last-writer-wins replaces the queued first edit, which is lost.
+- **Evidence.** In `native/PoorNetworkTests/main.swift` scenario D (a held first page,
+  an edit, then a drop), running with `TRADEREADY_RUN_KNOWN_BUG_REPROS=1` gives
+  `poor-network tests: 3 of 150 checks FAILED`:
+  - the memory title after the commit is the pre-edit value;
+  - the disk title is the pre-edit value;
+  - after reconnecting, the server title is the pre-edit value (the first edit is
+    lost).
+
+  The default run prints a `SKIP: D …` line and stays green. The repro is gated, not
+  silently passing, so the aggregate stays usable for 11.10b.
+- **Not fixed.** Every option changes sync policy:
+  - discard a pull whose base snapshot changed during the await, and leave the
+    cursors;
+  - re-apply pending queue items over the candidate before commit;
+  - skip commit while the queue is non-empty (this also changes the booking/portal
+    recovery callers).
+
+  This needs a controller ruling. Un-gate D in the same change as the fix.
+
+**Files:**
+- New facade: `N/NativePerformanceMetrics.swift`.
+  - `NativePerformanceInterval` has eight cases, each with a `StaticString` name.
+  - `NativePerformanceOutcome` has four words.
+  - `NativePerformanceMetrics.shared` provides `begin`/`end` (idempotent), `measure`
+    (rethrows; a throw ends as `failed`), `beginLaunch`/`endLaunch` (once per process)
+    and `metadata(count:outcome:)`, which is the only renderer.
+  - `NativeOSSignpostSink` wraps `OSSignposter` (`com.tradeready.native`, Points of
+    Interest).
+- Instrumented sites (the pinned inventory):
+  - `N/AppStore.swift`:
+    - `SnapshotLoad` around the init `load`;
+    - `LegacyMigration` measured around the launch `migrate`;
+    - `InitialSync` in the gate task (explicit ends, plus a deferred `skipped`
+      fallback);
+    - `DeltaPull` wrapping the unchanged body, moved verbatim to
+      `pullDeltaAndCommit`;
+    - `BackgroundRefresh` wrapping the unchanged body, moved verbatim to
+      `runBackgroundRefresh`;
+    - a private record-count helper and outcome mappers.
+  - `N/TradeReadyNativeApp.swift`: `beginLaunch` at the top of `init`, and a root
+    `.onAppear` calling `endLaunch`.
+  - `N/JobsView.swift` (`listState`) and `N/InvoicesView.swift` (`invoices`): measured
+    projections.
+- New tests:
+  - `native/PerformanceMetricsTests/main.swift` and
+    `native/run-performance-metrics-tests.sh`;
+  - `native/PoorNetworkTests/main.swift` and `native/run-poor-network-tests.sh`.
+
+  Both are registered in `native/run-all-domain-tests.sh`.
+  `N/NativePerformanceMetrics.swift` was added to `native/run-appstore-sources-common.sh`.
+- Shared test support:
+  - `native/HostTestSupport/InMemorySupabase.swift` was moved unchanged out of
+    `native/TwoDeviceConvergenceTests/main.swift`, and
+    `native/run-two-device-convergence-tests.sh` compiles it.
+  - `native/HostTestSupport/RecordingSignpostSink.swift` is new.
+- `N/AppStore.swift` gained the test hook `testPullDeltaIfPossible()`, which calls the
+  real `pullDeltaIfPossible`. The host harness has no `BuildEnvironment`, so the suite
+  builds the same coordinator `syncCoordinatorIfConfigured` builds, around this hook.
+- Docs:
+  - new `docs/native-phase-11-performance.md`;
+  - contract §13 (Pro Max and soak rows) and §15;
+  - parity rows "Supabase sync" and "Background refresh" narrowed (status unchanged);
+  - this ledger row.
+- Unchanged: `project.pbxproj` (the app target uses synchronized groups, so the new
+  file is picked up), `native/Info.plist`, and everything under `targets/`,
+  `backend*/`, `__tests__/`, `supabase/`, `utils/` and `types/`. The roadmap has no
+  Phase 11 progress bullet, so it was not edited (11.14 owns the closeout).
+
+**Interface handoff:**
+- **New interval:** add a case to `NativePerformanceInterval` and call
+  `NativePerformanceMetrics.shared.begin/measure(.case …)`. Then update both the catalog
+  and `expectedInventory` in `native/PerformanceMetricsTests/main.swift`. The suite
+  fails on:
+  - an unlisted site;
+  - a string literal or `await` in a call's arguments;
+  - any label other than `count`/`outcome`;
+  - an `await` inside a measured closure;
+  - any other `N/` file touching `OSSignposter`.
+- **Metadata** is counts and the four outcome words only. Never widen the facade to
+  take a `String`.
+- **Poor-network harness:** `Harness` + `PoorNetworkLink` in
+  `native/PoorNetworkTests/main.swift` is the place for any future degraded-network
+  case. The link sits in front of the shared `InMemorySupabase`, so don't start a
+  second fake stack.
+- **For 11.10b:** there are no UI changes. The only view edits wrap existing
+  computed properties.
+- **For 11.13/11.14:** the §13 soak and launch rows now point at PERF-1 to PERF-10 and
+  SOAK-1 to SOAK-6. 11.14 copies them into the device runsheet.
+- **For Phase 12:** see the owner summary in the performance doc. The threshold
+  tension is recorded there: this plan's step 4 says thresholds come "from the current
+  Expo app's production metrics", while Phase 12.00 says no Expo production baseline
+  exists and thresholds are absolute targets. The doc follows 12.00 and sets no
+  numbers.
+
+**Commands and results:**
+- RED:
+  - `sh native/run-performance-metrics-tests.sh` failed to compile before the facade
+    existed.
+  - With the facade and no call sites, the result was
+    `performance-metrics tests: 1 of 118 checks FAILED` (the pinned inventory was
+    empty).
+  - `sh native/run-poor-network-tests.sh` before instrumentation gave
+    `poor-network tests: 4 of 98 checks FAILED`: three `DeltaPull` signpost checks,
+    plus one wrong expectation of mine. `sync` returns the coalesced rerun's outcome
+    (`pushed: 0`), and the assertion was corrected to that documented behavior.
+- GREEN:
+  - `TZ=America/Phoenix sh native/run-performance-metrics-tests.sh` →
+    `performance-metrics tests: 171/171 checks passed`
+  - `TZ=America/Phoenix sh native/run-poor-network-tests.sh` →
+    `poor-network tests: 140/140 checks passed`, plus the `SKIP: D …` line
+  - D on request (`TRADEREADY_RUN_KNOWN_BUG_REPROS=1`) →
+    `poor-network tests: 3 of 150 checks FAILED` (Finding D)
+- Neighbors, all passing:
+  - two-device convergence (after the move);
+  - store integration;
+  - sync coordinator;
+  - background refresh;
+  - `layout-metrics tests: 822/822 checks passed`;
+  - `accessibility-audit tests: 473/473 checks passed`.
+- Mutations: five applied to production code, run, and restored from a copy
+  (`git status` clean for those files):
+
+  | Mutation | Result |
+  |---|---|
+  | Push drops `resolution=merge-duplicates` | caught (2 failures: the replay gets a 409 and never completes) |
+  | The coordinator reconciles with every started item (re-sends acknowledged changes) | caught (6+ failures) |
+  | The delta pull swallows a collection failure | at first **survived**, because settings and notes also failed in the drop. Case C3 (one throttled table) was added, and it is now caught (2 failures) |
+  | The coordinator pulls over pending writes | caught (2 failures) |
+  | A dropped table wipes its committed rows | caught (4 failures) |
+
+- Release compile (`xcodebuild … -configuration Release -destination 'generic/platform=iOS'
+  CODE_SIGNING_ALLOWED=NO build`) → `** BUILD SUCCEEDED **`, with no warnings in the
+  touched files. `DEBUG_INFORMATION_FORMAT = dwarf-with-dsym` for Release.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → `aggregate exit=0` (65 `PASS` lines, including `performance-metrics tests: 171/171` and `poor-network tests: 140/140`, and the backend-workers `npm test` 26/26). This ran before the gated D repro was added; the default output is unchanged apart from the `SKIP: D …` line, which was re-run separately. The working tree includes other agents' uncommitted backend changes.
+- `sh native/run-doc-reference-check.sh` → `1603 path references checked: 0 missing, 14 planned (not yet created).`
+
+**Deviations (recorded, no policy change):**
+- Outside the Own list, as test and tooling support:
+  - `native/PerformanceMetricsTests/` and its runner, which provide the metadata-shape
+    proof the brief asks for;
+  - the two `native/HostTestSupport/` files;
+  - the `InMemorySupabase` move, a pure extraction that reuses the fake instead of
+    building a parallel one;
+  - the `testPullDeltaIfPossible()` hook.
+- `PoorNetworkLink` models PostgREST's 409 for a plain insert of an existing id. This is
+  the one server rule the shared fake lacks, and it is what makes the idempotent-replay
+  assertion meaningful. It lives in the test file, so the shared fake is unchanged.
+
+**Observations (not bugs under the current contract; not changed):**
+- Under a 429 the push still sends every queued item once per pass (there is no early
+  stop). This is bounded by one attempt per item per pass plus backoff. Whether to stop
+  at the first throttle is a policy question for Phase 12 monitoring.
+- Finding D (above) was first suspected from code reading, then proven with the
+  probe that became scenario D.
+
+**Next ready:** 11.10b (accessibility re-audit).

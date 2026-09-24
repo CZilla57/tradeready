@@ -8,6 +8,10 @@ struct TradeReadyNativeApp: App {
     private let backgroundRefreshScheduler: NativeBackgroundRefreshScheduler
 
     init() {
+        // Task 11.12: the Launch signpost starts here and ends at the root
+        // view's first appearance. It is synchronous and cannot trap, so it
+        // does not delay crash reporting (a flag read when nothing records).
+        NativePerformanceMetrics.shared.beginLaunch()
         // Task 11.09 (contract §10.2): crash reporting starts first, on the
         // main thread, so a crash later in launch is captured (RN
         // `Sentry.init` runs at module load, `Sentry.wrap(AppRoot)` has no
@@ -121,6 +125,9 @@ struct TradeReadyNativeApp: App {
                 .environmentObject(followUpNotifications)
                 .tint(.tradeReady)
                 .preferredColorScheme(store.settings.appearance.colorScheme)
+                // Task 11.12: the root view's first appearance ends the Launch
+                // signpost; later appearances are no-ops.
+                .onAppear { NativePerformanceMetrics.shared.endLaunch() }
                 .onOpenURL { url in
                     // Task 11.06 (contract §6.2 step 1): Google Sign-In sees
                     // the URL first; a claimed callback never reaches the

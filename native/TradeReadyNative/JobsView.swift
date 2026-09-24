@@ -24,7 +24,10 @@ struct JobsView: View {
     }
 
     private var listState: NativeJobListState {
-        NativeJobList.state(items: store.jobListItems, selectedFilter: filter, query: search)
+        // Task 11.12: a JobListProjection signpost with the visible row count.
+        NativePerformanceMetrics.shared.measure(.jobListProjection, count: { $0.items.count }) {
+            NativeJobList.state(items: store.jobListItems, selectedFilter: filter, query: search)
+        }
     }
 
     private var contentState: NativeContentState {
