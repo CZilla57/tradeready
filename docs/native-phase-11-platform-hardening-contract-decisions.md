@@ -8,6 +8,9 @@ An open item is marked **blocked**, with its owner and the reason.
 Revised in fix round 1 (2026-09-23): a single owner predicate (§2.5) and precision fixes.
 Amended by 11.01 (2026-09-23): file placement for the extension target (§5.4, §8). No
 schema, owner or write-semantics decision changed.
+Amended by 11.07 (2026-09-24): the PostHog pin re-check (§7), the analytics inputs for the
+app manifest (§8.3) and the implementation notes (§9.7). No gating, catalog or redaction
+decision changed.
 
 **How this was produced:**
 - Sources read in full:
@@ -50,11 +53,11 @@ characterization).
 | C9 | Intents | Ten intents, a single 17.0 floor, target membership per ruling P3 (§5) | chosen | 11.04 (types), 11.01 (membership) |
 | C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen; implemented by 11.06 with the native differences in §6.3 | 11.06 |
 | C11 | Notification `est_` archived dead tap (P8) | An archived `estimate_sent` job's delivered `est_` notification **opens** its editable follow-up review; only a missing job, an answered estimate or a non-exact/signed-out workspace fail closed (§6.3) | **resolved** by 11.06 (2026-09-24) | 11.06 |
-| C12 | SDKs | Sentry Cocoa **9.29.0** and PostHog iOS **3.81.0**, via SPM `exactVersion`, behind Foundation-only adapters (§7) | chosen (PostHog pin has a freshness concern) | 11.07, 11.09 |
+| C12 | SDKs | Sentry Cocoa **9.29.0** and PostHog iOS **3.81.0**, via SPM `exactVersion`, behind Foundation-only adapters (§7) | chosen; PostHog pin re-checked and kept by 11.07 (§7) | 11.07, 11.09 |
 | C13 | Privacy manifests | App and extension manifests: required-reason APIs and collected-data types (§8) | chosen | 11.01, 11.09 |
 | C14 | Analytics gating | Release build **and** a configured, non-`PLACEHOLDER` key. RN gated PostHog on the key only (§9.2) | chosen (recorded deviation) | 11.07 |
 | C15 | Event catalog | 52 events from 70 RN `track(` call sites; the fixture in §9.5 is exact. 11.08 asserts the event set, never a site count | chosen | 11.08 |
-| C16 | Seam property types | Widen `[String: String]` to JSON scalars and string arrays (§9.6) | chosen | 11.07 (in place, ruling P6) |
+| C16 | Seam property types | Widen `[String: String]` to JSON scalars and string arrays (§9.6) | chosen; implemented by 11.07 (§9.7) | 11.07 (in place, ruling P6) |
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen | 11.15 |
@@ -750,6 +753,12 @@ newer patch is allowed; moving to a new minor needs a note in the execution log.
 If package resolution fails for lack of network, 11.07/11.09 ship the adapter and fake
 and report BLOCKED on the SDK link only (ruling P7).
 
+**Re-check (11.07, 2026-09-24):** `git ls-remote --tags https://github.com/PostHog/posthog-ios`
+lists no 3.81.x patch after 3.81.0. The next tag is **3.82.0**, a new minor, which was not
+adopted. The final pin is **3.81.0** (`exactVersion`, revision
+`2771b92c2e7b5471c196d24d5bc4997e26cafbcd` in `Package.resolved`). The package resolved
+over the network and links to the app target only.
+
 ---
 
 ## 8. Privacy manifest contract (M1)
@@ -791,6 +800,47 @@ events to a user id. The app-level declaration wins for App Store labels.
 
 The extension manifest declares **no** collected data: it neither transmits nor
 identifies.
+
+### 8.3 Analytics inputs for the app manifest (recorded by 11.07, 2026-09-24)
+
+11.09 writes the app manifest. These are the analytics facts it needs, taken from the
+linked SDK and the implemented transport.
+
+**Collected-data types that analytics contributes** (§8.2 rows confirmed; each is
+Analytics purpose, tracking no):
+
+| Type | Linked | What produces it |
+|---|---|---|
+| User ID | yes | `identify(<Supabase user id>)`. The transport rejects any id that is not a plain identifier (no email, phone, token or free text). 11.08 wires the calls |
+| Product Interaction | yes | §9.5 catalog events, after the allow-list and redaction, and `$screen` (11.08) |
+| Other Usage Data | yes | The SDK's `Application Installed/Updated/Opened/Backgrounded` events (`version`, `build`, `previous_version`, `previous_build`, `from_background`) and its default context properties (OS, app version, device type, locale, session id) |
+
+**Decisions left to 11.09:**
+- **Financial Info / Purchase History:** the catalog sends money amounts (`amount`,
+  `balanceRemaining`; §10.1 allows them). `subscription_purchased` records that a purchase
+  happened, with no amount. Decide whether these count as "Other Financial Info" and
+  "Purchase History". §8.2 does not list either.
+- **Device ID:** PostHog stores an anonymous distinct id, a random UUID per install kept
+  in UserDefaults. `reset()` rotates it. It is not the IDFA and not `identifierForVendor`.
+  PostHog's own manifest does not declare Device ID. Decide whether to declare it.
+
+**Never collected by analytics:** email, name, phone, address, contacts, location, customer
+PII, message bodies, document bytes, credentials. §10.1 denies them and the transport
+enforces it (§9.7).
+
+**Required-reason APIs from the SDK** (read from the built
+`TradeReadyNative.app/PostHog_PostHog.bundle/PrivacyInfo.xcprivacy`; it matches §7):
+UserDefaults `CA92.1`, System Boot Time `35F9.1`, File Timestamp `C617.1`.
+- The package also bundles `PostHog_PHPLCrashReporter.bundle/PrivacyInfo.xcprivacy`, which
+  §7 did not list. It declares no API types and collects Crash Data and Other Diagnostic
+  Data (linked no, App Functionality).
+- That crash reporter is never installed: `errorTrackingConfig.autoCapture = false`
+  (§9.2), so Sentry stays the only crash reporter. Its manifest still ships in the app
+  bundle.
+
+**Required-reason APIs from our own analytics code:** none. `NativeAnalytics.swift`,
+`NativeAnalyticsConfiguration.swift` and `NativeAnalyticsPostHog.swift` use no
+UserDefaults, file timestamp, boot time or disk-space API. The §8.1 app rows are unchanged.
 
 ---
 
@@ -1058,6 +1108,71 @@ with the no-op `NativeNoOpAnalytics`. It is injected into `AppStore` at
 and the enum conforms to the literal protocols. Existing call sites keep compiling
 through a `[String: String]` convenience overload. 11.08 migrates them to typed values.
 The protocol also gains `identify(_ userID: String)`, `reset()` and `screen(_ name: String)`.
+
+### 9.7 11.07 implementation notes (2026-09-24)
+
+**Seam** (`N/NativeAnalytics.swift`):
+- `NativeAnalyticsValue` has four cases: `bool`, `number`, `string` and `strings`. It
+  conforms to the literal protocols.
+- Both `track` forms are protocol requirements, and each default forwards to the other,
+  so a conformer implements at least one of them.
+  - The `[String: String]` form wraps each value as `.string`.
+  - The typed form stringifies for legacy string-only conformers: arrays are
+    comma-joined, and integral numbers have no `.0`. The existing recording fakes in
+    `native/StoreIntegrationTests` and `native/DeepLinkRoutingTests` compile unchanged.
+- `identify`, `reset` and `screen` default to no-ops.
+- `AppStore()` gained `analytics:`, which defaults to the no-op. `TradeReadyNativeApp`
+  passes `NativeAnalyticsTransport.live()`. No call site changed.
+
+**Choke point** (`NativeAnalyticsTransport.track`, via `NativeAnalyticsPrivacyPolicy`):
+- The allow-list is parsed from the §9.5 fixture embedded verbatim. A test proves it is
+  byte-identical to the block in this document.
+- Among an event's variants, the transport keeps the one that keeps the most properties;
+  on a tie, the one with the fewest missing required keys.
+- An event outside the catalog is dropped. Debug asserts through an injectable hook.
+- **Value rules:**
+  - A key in no variant is stripped.
+  - A wrong type, a value outside its enum, `duplicated: false` or a non-finite number is
+    stripped. The event still sends.
+- **Free `string`/`string[]` values** (the ids and `provider`) must be plain identifiers:
+  `[A-Za-z0-9_.:-]`, at most 128 bytes, at most 64 array items. The transport strips:
+  - credential prefixes (Anthropic/OpenAI `sk-`; Stripe `sk_`/`rk_`/`pk_`/`whsec_`; Groq
+    `gsk_`; RevenueCat `appl_`/`goog_`/`amzn_`/`strp_`/`rcb_`; PostHog `phc_`/`phx_`;
+    Supabase `sb_secret_`/`sb_publishable_`; Google `AIza`; JWT `eyJ`; GitHub tokens), plus
+    `Bearer `, `authorization:`, `access_token` and `refresh_token`;
+  - URLs and `data:` URIs (documents and tokenized links);
+  - `@` (emails);
+  - phone-like values: 7–15 digits with phone punctuation, or a bare run of 7–12 digits.
+    RN ids start with a 13-digit `Date.now()`, so they pass;
+  - any other character (free text such as names, addresses and notes).
+- A sanitized payload over 4,096 bytes of JSON is rejected whole.
+- **Diagnostics:**
+  - carry the operation, a sanitized event name, and at most 8 (key, reason) pairs plus
+    an omitted count;
+  - are capped at 512 characters;
+  - classify stripped keys as secure, personal-data, document or unknown;
+  - never include a value, a user id or an error description;
+  - go to `os.Logger` at debug level (category `analytics`).
+- `identify` accepts only a plain identifier of at most 128 bytes. `screen` accepts only a
+  route-name identifier of at most 64 bytes.
+- Every adapter throw is swallowed.
+
+**Gate** (`N/NativeAnalyticsConfiguration.swift`): exactly §9.2.
+- Info.plist maps `TradeReadyPostHogAPIKey` → `$(TRADEREADY_POSTHOG_API_KEY)` and
+  `TradeReadyPostHogHost` → `$(TRADEREADY_POSTHOG_HOST)`.
+- Neither build configuration sets either value, so the Debug (development) and Release
+  (staging) builds both resolve to disabled. A reporting release supplies the key at build
+  time. The RN production key is never copied into native config.
+- A non-empty host that is not a bare `https` origin disables analytics.
+- A disabled gate never builds the SDK adapter and logs one setup diagnostic.
+
+**SDK options** (`N/NativeAnalyticsPostHog.swift`), beyond §9.2:
+- rage-click autocapture is off (`rageClickConfig.enabled`, default on in 3.81.0); it is
+  element-interaction autocapture;
+- push-token upload and push-open capture are off;
+- feature-flag preload and `$feature_flag_called` are off;
+- a `beforeSend` hook drops every SDK event except catalog events, `$screen`,
+  `$identify` and the four `Application …` lifecycle events.
 
 ---
 

@@ -10,6 +10,7 @@
 		A00000000000000000000020 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000030 /* GoogleSignIn */; };
 		A00000000000000000000021 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000031 /* GoogleSignInSwift */; };
 		A00000000000000000000022 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000033 /* RevenueCat */; };
+		A00000000000000000000023 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000035 /* PostHog */; };
 		C11000000000000000000002 /* TradeReadyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C11000000000000000000001 /* TradeReadyWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B00000000000000000000001 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* TestSupport.swift */; };
 		B00000000000000000000002 /* CanonicalModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* CanonicalModelTests.swift */; };
@@ -89,6 +90,7 @@
 				A00000000000000000000020 /* GoogleSignIn in Frameworks */,
 				A00000000000000000000021 /* GoogleSignInSwift in Frameworks */,
 				A00000000000000000000022 /* RevenueCat in Frameworks */,
+				A00000000000000000000023 /* PostHog in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -177,6 +179,7 @@
 				A00000000000000000000030 /* GoogleSignIn */,
 				A00000000000000000000031 /* GoogleSignInSwift */,
 				A00000000000000000000033 /* RevenueCat */,
+				A00000000000000000000035 /* PostHog */,
 			);
 			productName = TradeReadyNative;
 			productReference = A00000000000000000000008 /* TradeReadyNative.app */;
@@ -262,6 +265,7 @@
 			packageReferences = (
 				A00000000000000000000029 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				A00000000000000000000032 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+				A00000000000000000000034 /* XCRemoteSwiftPackageReference "posthog-ios" */,
 			);
 			productRefGroup = A00000000000000000000004 /* Products */;
 			projectDirPath = "";
@@ -593,6 +597,14 @@
 				version = 5.83.2;
 			};
 		};
+		A00000000000000000000034 /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/PostHog/posthog-ios";
+			requirement = {
+				kind = exactVersion;
+				version = 3.81.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -610,6 +622,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A00000000000000000000032 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
 			productName = RevenueCat;
+		};
+		A00000000000000000000035 /* PostHog */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000034 /* XCRemoteSwiftPackageReference "posthog-ios" */;
+			productName = PostHog;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

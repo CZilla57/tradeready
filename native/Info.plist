@@ -22,6 +22,8 @@
     <key>TradeReadyEmailConfirmationURL</key><string>$(TRADEREADY_EMAIL_CONFIRMATION_URL)</string>
     <key>TradeReadyRevenueCatAPIKey</key><string>$(TRADEREADY_REVENUECAT_API_KEY)</string>
     <key>TradeReadyRevenueCatEntitlementID</key><string>$(TRADEREADY_REVENUECAT_ENTITLEMENT_ID)</string>
+    <key>TradeReadyPostHogAPIKey</key><string>$(TRADEREADY_POSTHOG_API_KEY)</string>
+    <key>TradeReadyPostHogHost</key><string>$(TRADEREADY_POSTHOG_HOST)</string>
     <key>GIDClientID</key><string>$(TRADEREADY_GOOGLE_IOS_CLIENT_ID)</string>
     <key>GIDServerClientID</key><string>$(TRADEREADY_GOOGLE_SERVER_CLIENT_ID)</string>
     <key>NSCameraUsageDescription</key><string>TradeReady uses the camera to add job photos.</string>

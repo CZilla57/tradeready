@@ -411,7 +411,9 @@ final class AppStore: ObservableObject {
         let underlying: Error
     }
 
-    convenience init() {
+    /// Task 11.07: `analytics` is the app's `NativeAnalyticsTransport.live()`;
+    /// the no-op default keeps every other caller unchanged.
+    convenience init(analytics: NativeAnalytics = NativeNoOpAnalytics()) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let directory = base.appending(path: "TradeReadyNative", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -419,7 +421,8 @@ final class AppStore: ObservableObject {
             fileURL: directory.appending(path: "store.json"),
             seedIfMissing: false,
             automaticallyMigrateLegacyData: true,
-            pendingOpenURLConsumer: .live()
+            pendingOpenURLConsumer: .live(),
+            analytics: analytics
         )
     }
 

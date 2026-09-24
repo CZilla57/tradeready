@@ -8,7 +8,9 @@ struct TradeReadyNativeApp: App {
     private let backgroundRefreshScheduler: NativeBackgroundRefreshScheduler
 
     init() {
-        let store = AppStore()
+        // Task 11.07 (contract §9.2): the analytics transport. Debug, a
+        // missing key or a `PLACEHOLDER` key yields one that emits nothing.
+        let store = AppStore(analytics: NativeAnalyticsTransport.live())
         _store = StateObject(wrappedValue: store)
         let coordinator = NativeEstimateFollowUpNotificationCoordinator(
             center: NativeSystemEstimateFollowUpNotificationCenter(),

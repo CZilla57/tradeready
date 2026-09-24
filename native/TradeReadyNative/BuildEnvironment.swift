@@ -68,6 +68,22 @@ enum BuildEnvironment {
         configuredString(for: "TradeReadyRevenueCatEntitlementID")
     }
 
+    /// PostHog project key (task 11.07, contract §9.2), from the build setting
+    /// `TRADEREADY_POSTHOG_API_KEY`. Neither committed configuration sets it,
+    /// so analytics stays off until a release build supplies one; the RN
+    /// production key (`app.json` `expo.extra.posthogApiKey`) is never
+    /// copied into native config. `NativeAnalyticsGate` applies the Debug and
+    /// `PLACEHOLDER` rules.
+    static var postHogAPIKey: String? {
+        configuredString(for: "TradeReadyPostHogAPIKey")
+    }
+
+    /// PostHog ingestion host override (`TRADEREADY_POSTHOG_HOST`); empty
+    /// means `NativeAnalyticsGate.defaultHost`.
+    static var postHogHost: String? {
+        configuredString(for: "TradeReadyPostHogHost")
+    }
+
     private static func configuredURL(for key: String) -> URL? {
         guard let value = configuredString(for: key) else { return nil }
         return URL(string: value)

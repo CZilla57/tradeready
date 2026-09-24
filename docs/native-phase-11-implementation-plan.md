@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05 and 11.06 done (2026-09-24); implementation tasks 11.07–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06 and 11.07 done (2026-09-24); implementation tasks 11.08–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -784,7 +784,7 @@ complete / Phase 12 evidence deferred**.
 | 11.04 | A1, A2, A3 | Done (code complete 2026-09-23; Siri/device proof deferred to Phase 12) | 11.01 | All ten App Intents + Siri + action queue |
 | 11.05 | W4 | Done (code complete 2026-09-24; item 4 routing-after-sign-in handed to 11.06; device/Siri/widget proof deferred to Phase 12) | 11.01-11.04 | Owner/stale/sign-in correctness |
 | 11.06 | L1, L2 | Done (code complete 2026-09-24; C11/P8 resolved; device proof deferred to Phase 12) | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
-| 11.07 | P1, P4 | Pending | 11.00 | Analytics transport + privacy |
+| 11.07 | P1, P4 | Done (code complete 2026-09-24; PostHog iOS 3.81.0 linked, app target only; no key committed, so analytics is off until a release key is supplied; device proof deferred to Phase 12) | 11.00 | Analytics transport + privacy |
 | 11.08 | P2, P3 | Pending | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Pending | 11.07 | Crash reporting + redaction + app manifest |
 | 11.15 | P4, R2 | Pending | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
@@ -1896,3 +1896,151 @@ through the `NativeAnalytics` seam).
   app-intent-queue, store-integration and app-group-pending-open-url all pass. The Release
   generic `xcodebuild` gives `** BUILD SUCCEEDED **`, and
   `sh native/run-doc-reference-check.sh` reports 0 missing.
+
+### 11.07 — Analytics transport and privacy controls (2026-09-24)
+
+**Outcome:** code complete for P1 and P4. The Phase 10 seam `N/NativeAnalytics.swift` was
+widened in place (ruling P6), and every existing call site is unchanged. The real
+transport sits behind that seam:
+- the §9.2 gate;
+- one `track` choke point enforcing the §9.5 allow-list and the §10.1 analytics column;
+- PostHog iOS behind a Foundation-only adapter.
+
+Debug emits nothing. A missing or `PLACEHOLDER` key disables analytics without a crash.
+Adapter failures are swallowed. Sentry is not touched (11.09); no screen or identity
+instrumentation was added (11.08).
+
+**Final SDK pin:** PostHog iOS `https://github.com/PostHog/posthog-ios` **3.81.0**,
+`exactVersion` (revision `2771b92c2e7b5471c196d24d5bc4997e26cafbcd`).
+- The re-check found no 3.81.x patch. 3.82.0 exists but is a new minor and was not
+  adopted (contract §7).
+- The product `PostHog` is linked to the app target only. The widget extension links no
+  package: its binary has no PostHog symbols.
+
+**Key configuration:**
+- The RN key (`app.json` `expo.extra.posthogApiKey`) is a real `phc_` production project
+  key. It was read to learn the mechanism and was **not** copied.
+- The native path mirrors that mechanism: Info.plist `TradeReadyPostHogAPIKey` ←
+  `$(TRADEREADY_POSTHOG_API_KEY)` and `TradeReadyPostHogHost` ← `$(TRADEREADY_POSTHOG_HOST)`,
+  read by `BuildEnvironment.postHogAPIKey`/`postHogHost`.
+- Neither build configuration defines either setting (no pbxproj build-setting edit), so
+  the Debug and the Release (staging, `https://staging.invalid`) builds both resolve to
+  disabled.
+- A reporting release supplies `TRADEREADY_POSTHOG_API_KEY=<key>` at build time (for
+  example on the `xcodebuild` command line or in an uncommitted xcconfig). The staging
+  config leaves it empty (§9.2).
+
+**Files:**
+- Edited:
+  - `native/TradeReadyNative/NativeAnalytics.swift` (in place): `NativeAnalyticsValue`,
+    the widened protocol, the embedded §9.5 fixture, `NativeAnalyticsEventCatalog`,
+    `NativeAnalyticsPrivacyPolicy`, `NativeAnalyticsDiagnostic`,
+    `NativeAnalyticsSDKAdapter` and `NativeAnalyticsTransport`.
+  - `native/TradeReadyNative/BuildEnvironment.swift`: the two config accessors.
+  - `native/TradeReadyNative/AppStore.swift`: the convenience `init(analytics:)`,
+    defaulting to the no-op.
+  - `native/TradeReadyNative/TradeReadyNativeApp.swift`:
+    `AppStore(analytics: NativeAnalyticsTransport.live())`.
+  - `native/Info.plist`: the two keys.
+  - `native/TradeReadyNative.xcodeproj/project.pbxproj` (ruling P7): the package
+    reference, the product dependency and the app Frameworks build file only.
+  - `native/TradeReadyNative.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
+  - `native/run-all-domain-tests.sh`: registration after the deep-link runner.
+- New:
+  - `native/TradeReadyNative/NativeAnalyticsConfiguration.swift`: the pure gate and
+    `makeTransport`.
+  - `native/TradeReadyNative/NativeAnalyticsPostHog.swift`: the only `import PostHog`,
+    plus `NativeAnalyticsTransport.live()`.
+  - `native/AnalyticsTransportTests/main.swift`.
+  - `native/run-analytics-transport-tests.sh`.
+- Docs: contract §1 (C12 and C16 status), §7 re-check, §8.3 and §9.7; this plan (status,
+  §6 row, this entry).
+
+**Interface handoff:**
+- **11.08:**
+  - Inject nothing new: `AppStore.analytics` is already the live transport.
+  - Call `analytics.identify(<Supabase user id>)`, `analytics.reset()` and
+    `analytics.screen(<RN route name>)` on the seam.
+  - Send typed values (`["days": 30]`, `["kinds": ["due_soon"]]`).
+  - Until the call sites migrate, the stringified `doneCount`, `days`, `kinds` and `ids`
+    are **stripped** as `wrongType` (the event still sends), as the host test pins. The
+    Debug assertion fires on any event name outside the catalog.
+- **11.09:**
+  - Contract §8.3 has the analytics collected-data types.
+  - It lists two decisions: Financial Info/Purchase History for amounts and
+    `subscription_purchased`, and Device ID for PostHog's anonymous install id.
+  - It records the PostHog required-reason APIs (UserDefaults `CA92.1`, System Boot Time
+    `35F9.1`, File Timestamp `C617.1`, confirmed from the built bundle) and the
+    unlisted-but-inert `PostHog_PHPLCrashReporter.bundle` manifest (Crash Data, Other
+    Diagnostic Data).
+  - PostHog exception autocapture is off; Sentry stays the only crash reporter.
+  - The `NativeAnalyticsPrivacyPolicy` value screens (credential prefixes, email/phone,
+    URL/data URI, identifier charset) are reusable input for `NativeErrorRedaction`.
+
+**Recorded deviations and additions** (contract §9.7):
+- **SDK options beyond §9.2,** each off because it sends data the catalog does not
+  declare:
+  - rage-click autocapture (default on in 3.81.0);
+  - push-token upload and push-open capture;
+  - feature-flag preload and `$feature_flag_called`;
+  - a `beforeSend` event-name allow-list.
+- A non-empty invalid PostHog host disables analytics (fail closed).
+- Catalog `string` values are held to an identifier grammar. A bare 7–12-digit value is
+  treated as a phone number.
+- A sanitized payload over 4,096 bytes of JSON is rejected whole.
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-analytics-transport-tests.sh` → "Analytics transport
+  tests passed (225 checks)". It covers:
+  - the §9.5 fixture byte-identical to the contract and parsed (52 events);
+  - the gate matrix: Debug; missing, blank or unexpanded key; `PLACEHOLDER`; invalid host.
+    Each gives zero emits, an SDK adapter that is never built, and one setup diagnostic;
+  - an adapter setup failure;
+  - the Info.plist and pbxproj config: no key committed, 3.81.0 `exactVersion`, app-only
+    link;
+  - exact payloads for a configured release (15 events, with variants, optional keys and
+    arrays) plus identify, screen and reset;
+  - 27 secure, PII, document and oversize value classes and 13 secure, PII and document
+    key classes, stripped and diagnosed, never observed in payloads or logs;
+  - the diagnostic bound (8 issues + omitted count, ≤ 512 characters);
+  - the 4 KB payload rejection; unknown events dropped and flagged;
+  - identify and screen validation;
+  - the `beforeSend` allow-list;
+  - every adapter throw swallowed;
+  - a legacy string-only conformer, and the verbatim AppStore call-site shapes;
+  - the real `AppStore` call sites firing through the transport.
+- Mutation checks: 9, each applied, run and restored, then confirmed identical with
+  `cmp`. All were killed:
+  - the Debug gate, the `PLACEHOLDER` guard, the secret screen, the PII screen and the
+    payload cap;
+  - raw properties passed to the SDK, `beforeSend` allowing everything, unknown keys
+    kept, and `identify` unvalidated.
+- `TZ=America/Phoenix`: build-environment, deep-link-routing (legacy recording fake) and
+  store-integration (legacy `@MainActor` recording fake) pass. Its `ConformanceIsolation`
+  warning is pre-existing and reproduces against the HEAD seam.
+- RN oracle: `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/analytics.test.ts`
+  → 9 passed.
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -resolvePackageDependencies` →
+  PostHog resolved @ 3.81.0.
+- `xcodebuild ... -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`, with no warning in the new files. The app bundle carries
+  `PostHog_PostHog.bundle` and `PostHog_PHPLCrashReporter.bundle`. `nm` on the widget
+  extension finds 0 PostHog symbols.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0 (every suite passed, including `Analytics transport tests passed (225 checks)`; only pre-existing compiler warnings).
+- `sh native/run-doc-reference-check.sh` → 1431 path references checked: 0 missing, 28 planned.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- A Release build with a real key sends catalog events, `Application Opened`/`Backgrounded`
+  and `$identify` to the PostHog project. A Debug build and a keyless Release build send
+  nothing (proxy or PostHog live view).
+- No `$autocapture`, `$rageclick`, `$exception`, push or feature-flag event arrives from a
+  device session.
+
+**Concerns:**
+- The four stringified Phase 10 properties are stripped until 11.08 migrates them.
+- 11.09 owns the Financial Info and Device ID manifest decisions (§8.3).
+- The Release build logged a non-fatal `appintentsnltrainingprocessor` "Could not
+  archive SSU artifacts" line. It comes from App Intents metadata, not these files.
+
+**Next ready:** 11.08 (event parity and identity lifecycle) and 11.09 (crash reporting),
+both unblocked by 11.07.
