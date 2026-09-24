@@ -332,7 +332,7 @@ struct TodayView: View {
         busyBookingRequestIDs.insert(row.request.id)
         Task {
             _ = await store.declineBookingRequest(requestID: row.request.id)
-            await MainActor.run { busyBookingRequestIDs.remove(row.request.id) }
+            await MainActor.run { _ = busyBookingRequestIDs.remove(row.request.id) }
         }
     }
 
@@ -358,7 +358,7 @@ struct TodayView: View {
             if case .proofReady(let proof) = prepareOutcome {
                 _ = await store.resolveBookingReschedule(requestID: row.request.id, proof: proof)
             }
-            await MainActor.run { busyBookingRequestIDs.remove(row.request.id) }
+            await MainActor.run { _ = busyBookingRequestIDs.remove(row.request.id) }
         }
     }
 }

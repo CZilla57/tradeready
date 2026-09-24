@@ -7,12 +7,41 @@ import SwiftUI
 /// generated are real receivables and are never touched by rule edits.
 struct NativeRecurringInvoicesView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var editingRule: Canonical.RecurringInvoice?
-    @State private var showingEditor = false
+    @State private var editorTarget: PlanEditorTarget?
     @State private var actionRule: Canonical.RecurringInvoice?
     @State private var confirmingDelete = false
     @State private var confirmingCancel = false
     @State private var saveError: String?
+
+    /// The open plan editor. One `sheet(item:)` carries the plan with the
+    /// presentation (Task 11.11 fix round 1): the old `sheet(isPresented:)`
+    /// read a separate `editingRule`, which the "+" action (or ⌘N under the
+    /// sheet) set to nil, turning an open edit into a create on Save.
+    private enum PlanEditorTarget: Identifiable {
+        case new
+        case edit(Canonical.RecurringInvoice)
+
+        var id: String {
+            switch self {
+            case .new: "new"
+            case .edit(let rule): "edit-\(rule.id)"
+            }
+        }
+
+        var rule: Canonical.RecurringInvoice? {
+            if case .edit(let rule) = self { rule } else { nil }
+        }
+    }
+
+    /// Task 11.11 fix round 1: anything this screen presents over itself.
+    private var isPresentingAnything: Bool {
+        editorTarget != nil || actionRule != nil || confirmingCancel || confirmingDelete
+    }
+
+    /// ⌘N (new plan) never fires under the editor, the plan actions or their alerts.
+    private var newShortcut: KeyboardShortcut? {
+        isPresentingAnything ? nil : KeyboardShortcut("n", modifiers: .command)
+    }
 
     private static let cadenceLabels: [(RecurrenceCadence, String)] = [
         (.daily, "Daily"), (.weekly, "Weekly"), (.monthly, "Monthly"),
@@ -60,12 +89,15 @@ struct NativeRecurringInvoicesView: View {
         .tradeReadyListStyle()
         .navigationTitle("Maintenance plans")
         .toolbar {
-            Button { editingRule = nil; showingEditor = true } label: { Image(systemName: "plus") }
+            Button {
+                guard !isPresentingAnything else { return }
+                editorTarget = .new
+            } label: { Image(systemName: "plus") }
                 .accessibilityLabel(NativeAccessibilityAudit.Label.addMaintenancePlan)
-                .keyboardShortcut("n", modifiers: .command)
+                .keyboardShortcut(newShortcut)
         }
-        .sheet(isPresented: $showingEditor) {
-            NativeRecurringInvoiceEditor(rule: editingRule)
+        .sheet(item: $editorTarget) { target in
+            NativeRecurringInvoiceEditor(rule: target.rule)
         }
         .confirmationDialog(
             actionRule?.customerName ?? "Plan",
@@ -80,8 +112,7 @@ struct NativeRecurringInvoicesView: View {
                 actionRule = nil
             }
             Button("Edit plan") {
-                editingRule = rule
-                showingEditor = true
+                editorTarget = .edit(rule)
                 actionRule = nil
             }
             Button("Cancel plan", role: .destructive) {

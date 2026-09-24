@@ -23,9 +23,13 @@ import Foundation
 //     orientations, launch screen, universal device family;
 //   * no `UIScreen` sizing, no keyboard safe-area opt-out, no fixed width that
 //     cannot fit Slide Over, no hand-rolled width cap outside the allowlist;
-//   * hardware keyboard: Esc on every Cancel/Done/Close, ⌘S on save, ⌘N on the
-//     existing toolbar "new" actions, nothing on destructive actions, and no
-//     custom command menus.
+//   * hardware keyboard: Esc on every Cancel/Done/Close, ⌘S on save (every
+//     confirmation title is classified; an unlisted one fails), ⌘N on the
+//     existing toolbar "new" actions, nothing on destructive actions, no
+//     custom command menus, and nothing removed from keyboard focus;
+//   * ⌘N gating (fix round 1): each ⌘N owner's shortcut is nil while anything
+//     it presents is up (every presentation's driving state must be in its
+//     `isPresentingAnything`) and while a screen is pushed over its root.
 // Split View, Slide Over, Stage Manager, rotation and hardware-keyboard proof
 // on a device stays Phase 12 (runsheet rows in the plan's 11.11 entry).
 // Run with TZ=America/Phoenix.
@@ -255,16 +259,29 @@ enum Shortcut {
     static let confirm = ".return, modifiers: .command"
 }
 
-/// The shortcut policy (contract §12.1 A11): what a toolbar button must carry.
-func expectedShortcut(_ button: ToolbarButton) -> String? {
-    if button.isDestructive { return nil }
-    if button.placement == "cancellationAction" { return Shortcut.cancel }
-    switch button.title {
-    case "Done", "Close": return Shortcut.cancel
-    case "Confirm": return Shortcut.confirm
-    default: return Shortcut.save
-    }
+/// Every non-destructive `.confirmationAction` title and its shortcut. A title
+/// that is not listed fails the suite (review M2): a new confirmation action
+/// must be classified here, never defaulted to ⌘S.
+let confirmationShortcutPolicy: [String: String] = [
+    "Done": Shortcut.cancel,
+    "Close": Shortcut.cancel,
+    "Confirm": Shortcut.confirm,
+    "Save": Shortcut.save,
+    "isEditing ? \"Save Changes\" : \"Add Trip\"": Shortcut.save,
+    "saveLabel, action: save": Shortcut.save,
+]
+
+/// The shortcut policy (contract §12.1 A11): what a toolbar button must
+/// carry. `nil` means no shortcut (destructive); an unlisted confirmation
+/// title returns `.failure` so the caller reports it.
+func expectedShortcut(_ button: ToolbarButton) -> Result<String?, UnlistedTitle> {
+    if button.isDestructive { return .success(nil) }
+    if button.placement == "cancellationAction" { return .success(Shortcut.cancel) }
+    guard let shortcut = confirmationShortcutPolicy[button.title] else { return .failure(UnlistedTitle()) }
+    return .success(shortcut)
 }
+
+struct UnlistedTitle: Error {}
 
 // MARK: - Tests: width math
 
@@ -765,7 +782,10 @@ func testKeyboardShortcuts(sources: [SourceFile]) {
 
     var verified = 0
     for item in toolbar {
-        let expected = expectedShortcut(item)
+        guard case .success(let expected) = expectedShortcut(item) else {
+            expect(false, "confirmation title '\(item.title)' at \(item.button.location) is listed in confirmationShortcutPolicy")
+            continue
+        }
         if let expected {
             expectEqual(item.shortcuts, [expected],
                         "\(item.placement) '\(item.title)' at \(item.button.location) has .keyboardShortcut(\(expected))")
@@ -781,8 +801,8 @@ func testKeyboardShortcuts(sources: [SourceFile]) {
             .filter { b in !constructs(in: f, keyword: "Button").contains { $0.start > b.start && $0.end <= b.end && f.rawSlice($0.start..<$0.end).contains(marker) } }
         expectEqual(buttons.count, 1, "one toolbar button for \(marker) in N/\(path)")
         if let button = buttons.first {
-            expectEqual(button.modifiers.filter { $0.name == "keyboardShortcut" }.map(\.args), [Shortcut.new],
-                        "\(marker) (N/\(path)) has ⌘N")
+            expectEqual(button.modifiers.filter { $0.name == "keyboardShortcut" }.map(\.args), ["newShortcut"],
+                        "\(marker) (N/\(path)) has the gated ⌘N (.keyboardShortcut(newShortcut))")
             verified += 1
         }
     }
@@ -798,6 +818,140 @@ func testKeyboardShortcuts(sources: [SourceFile]) {
         }
     }
     expectEqual(total, verified, "every .keyboardShortcut in N/ is one the policy checked")
+
+    // Tab/Shift-Tab focus order (review M3): nothing in N/ removes a control
+    // from keyboard focus, so the system order is the audited order.
+    for f in scanned {
+        for banned in ["focusable", "focusDisabled", "focusEffectDisabled"] {
+            for hit in f.occurrences(of: banned) where f.code[hit - 1] == "." {
+                expect(false, "no .\(banned) (keyboard focus stays on) at N/\(f.relativePath):\(f.line(of: hit))")
+            }
+        }
+    }
+    checks += 1
+}
+
+// MARK: - Tests: ⌘N gating (11.11 fix round 1, review I1 and M4)
+
+/// Modifiers through which a view presents something over itself.
+let presentationModifierNames = ["sheet", "fullScreenCover", "popover", "alert", "confirmationDialog",
+                                 "nativeConfirmation", "fileImporter", "fileExporter", "photosPicker", "inspector"]
+
+/// The state that drives a presentation, read from its code-masked arguments:
+/// `isPresented: $x` / `item: $x` / `$x` → `x`; `Binding(get: { x != nil } …)`
+/// → `x`; `Binding(get: { store.y }` → `store.y`. `nil` when unreadable, which
+/// the caller reports (a new presentation shape must be taught here).
+func presentationDriver(_ codeArgs: String) -> String? {
+    let ident = "[A-Za-z_][A-Za-z0-9_]*"
+    for pattern in ["(?:isPresented|item):\\s*\\$(\(ident))", "^\\s*\\$(\(ident))",
+                    "get:\\s*\\{\\s*((?:store\\.)?\(ident))"] {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: codeArgs, range: NSRange(codeArgs.startIndex..., in: codeArgs)),
+              let range = Range(match.range(at: 1), in: codeArgs) else { continue }
+        return String(codeArgs[range])
+    }
+    return nil
+}
+
+/// The brace body of `var <name>` declared directly in `scope` (empty if missing).
+func computedPropertyBody(_ file: SourceFile, in scope: TypeScope, _ name: String) -> String? {
+    for hit in file.occurrences(of: name) where scope.range.contains(hit) {
+        guard hit >= 4, file.codeSlice((hit - 4)..<hit) == "var ",
+              let brace = (hit..<scope.range.upperBound).first(where: { file.code[$0] == "{" }),
+              let close = file.matching(brace) else { continue }
+        return file.codeSlice((brace + 1)..<close)
+    }
+    return nil
+}
+
+func mentions(_ body: String, _ token: String) -> Bool {
+    body.range(of: "(?<![A-Za-z0-9_.])\(NSRegularExpression.escapedPattern(for: token))(?![A-Za-z0-9_])",
+               options: .regularExpression) != nil
+}
+
+/// A ⌘N owner must never fire under something it presents (a live editor's
+/// state would be replaced: a maintenance-plan edit turned into a create) or
+/// while another screen is pushed over it (the hidden toolbar's ⌘N wins over
+/// the visible screen's; both measured on iPadOS 26.5 with hardware-key input).
+func testNewShortcutGating(sources: [SourceFile]) {
+    for (path, marker) in newShortcutSites {
+        guard let f = file(sources, path) else { continue }
+        let scopes = typeScopes(f)
+        let all = constructs(in: f, keyword: "Button")
+        let matching = all.filter { f.rawSlice($0.start..<$0.end).contains(marker) }
+        guard let button = matching.max(by: { $0.start < $1.start }) else {
+            expect(false, "⌘N button \(marker) found in N/\(path)"); continue
+        }
+        let ownerName = enclosingType(scopes, button.start)
+        guard let owner = scopes.filter({ $0.range.contains(button.start) }).min(by: { $0.range.count < $1.range.count }) else {
+            expect(false, "⌘N owner of \(marker) found"); continue
+        }
+        let label = "\(ownerName) (N/\(path))"
+
+        // 1. The action refuses to run under a presentation (defense in depth).
+        let action = button.closures.first.map { f.codeSlice($0.range) } ?? ""
+        expect(action.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("guard !isPresentingAnything else { return }"),
+               "\(label): the ⌘N action starts with guard !isPresentingAnything")
+
+        // 2. Every presentation the owner makes is in isPresentingAnything.
+        guard let gate = computedPropertyBody(f, in: owner, "isPresentingAnything") else {
+            expect(false, "\(label) declares var isPresentingAnything"); continue
+        }
+        var nested: [Range<Int>] = []
+        var presentations: [Construct] = []
+        for name in presentationModifierNames {
+            for c in constructs(in: f, keyword: name, memberAccess: true) where owner.range.contains(c.start) {
+                presentations.append(c)
+                nested.append(contentsOf: c.closures.map(\.range))
+            }
+        }
+        let own = presentations.filter { p in !nested.contains { $0.contains(p.start) } }
+        expect(!own.isEmpty, "\(label) presents something (found \(own.count))")
+        for p in own {
+            guard let driver = presentationDriver(p.codeArgs) else {
+                expect(false, "\(label): the driver of .\(p.keyword) at \(p.location) is readable"); continue
+            }
+            expect(mentions(gate, driver), "\(label): isPresentingAnything gates .\(p.keyword)(\(driver)) at \(p.location)")
+        }
+        if ownerName == "InvoicesView" {
+            expect(mentions(gate, "bulkQueue"), "\(label): isPresentingAnything covers the gap between bulk-reminder sheets")
+        }
+
+        // 3. The shortcut exists only while the owner's root is on top.
+        guard let shortcut = computedPropertyBody(f, in: owner, "newShortcut") else {
+            expect(false, "\(label) declares var newShortcut"); continue
+        }
+        let ownerText = f.codeSlice(owner.range)
+        expect(mentions(shortcut, "isPresentingAnything"), "\(label): newShortcut is nil while anything is presented")
+        expect(f.rawSlice(owner.range).contains("KeyboardShortcut(\(Shortcut.new))"), "\(label): newShortcut is ⌘N")
+        if let regex = try? NSRegularExpression(pattern: "NavigationStack\\(path:\\s*\\$([A-Za-z_][A-Za-z0-9_]*)"),
+           let match = regex.firstMatch(in: ownerText, range: NSRange(ownerText.startIndex..., in: ownerText)),
+           let range = Range(match.range(at: 1), in: ownerText) {
+            let pathName = String(ownerText[range])
+            expect(shortcut.contains("\(pathName).isEmpty"), "\(label): newShortcut is nil while \(pathName) holds a pushed screen")
+        }
+        let pushes = ownerText.contains("NavigationLink") || ownerText.contains("navigationDestination")
+        if pushes {
+            expect(mentions(shortcut, "isRootVisible"), "\(label): newShortcut is nil while any screen is pushed over the root")
+            let appears = constructs(in: f, keyword: "onAppear", memberAccess: true).filter { owner.range.contains($0.start) }
+            let disappears = constructs(in: f, keyword: "onDisappear", memberAccess: true).filter { owner.range.contains($0.start) }
+            expect(appears.contains { c in c.closures.contains { f.codeSlice($0.range).contains("isRootVisible = true") } },
+                   "\(label): .onAppear sets isRootVisible = true")
+            expect(disappears.contains { c in c.closures.contains { f.codeSlice($0.range).contains("isRootVisible = false") } },
+                   "\(label): .onDisappear sets isRootVisible = false")
+        }
+    }
+
+    // The driver reader itself.
+    expectEqual(presentationDriver("isPresented: $showingEditor"), "showingEditor", "driver: isPresented binding")
+    expectEqual(presentationDriver("item: $editorTarget"), "editorTarget", "driver: item binding")
+    expectEqual(presentationDriver("$confirmationRequest"), "confirmationRequest", "driver: nativeConfirmation binding")
+    expectEqual(presentationDriver("\"xxxx\", isPresented: Binding(get: { actionRule != nil }, set: { _ in })"), "actionRule",
+                "driver: Binding(get:)")
+    expectEqual(presentationDriver("item: Binding(get: { store.notice }, set: { _ in })"), "store.notice", "driver: store binding")
+    expectEqual(presentationDriver("\"xxxx\""), nil, "driver: unreadable shape is reported")
+    expect(mentions("a || editorTarget != nil", "editorTarget") && !mentions("a || editorTargetX", "editorTarget")
+           && !mentions("store.editorTarget", "editorTarget"), "mentions() matches whole identifiers only")
 }
 
 // MARK: - Tests: scanner fixture
@@ -826,6 +980,7 @@ func testScannerFixture() {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { }.keyboardShortcut(.cancelAction) }
         ToolbarItem(placement: .confirmationAction) { Button("Save") { } }
         ToolbarItem(placement: .confirmationAction) { Button("Delete", role: .destructive) { } }
+        ToolbarItem(placement: .confirmationAction) { Button("Publish") { } }
     } } }
     """
     let f = SourceFile(relativePath: "Fixture.swift", text: text)
@@ -843,9 +998,16 @@ func testScannerFixture() {
     expect(hostedSites.allSatisfy { s in !presented.contains { $0.contains(s) } },
            "fixture: Hosted in navigationDestination is not a presentation (would fail the host rule)")
     let buttons = toolbarButtons(f)
-    expectEqual(buttons.map(\.title), ["Cancel", "Save", "Delete"], "fixture: toolbar buttons")
-    expectEqual(buttons.map { expectedShortcut($0) }, [Shortcut.cancel, Shortcut.save, nil], "fixture: shortcut policy")
-    expectEqual(buttons.map(\.shortcuts), [[Shortcut.cancel], [], []], "fixture: shortcuts read from each button's own chain")
+    expectEqual(buttons.map(\.title), ["Cancel", "Save", "Delete", "Publish"], "fixture: toolbar buttons")
+    let policy: [String] = buttons.map {
+        switch expectedShortcut($0) {
+        case .success(let shortcut): return shortcut ?? "none"
+        case .failure: return "unlisted"
+        }
+    }
+    expectEqual(policy, [Shortcut.cancel, Shortcut.save, "none", "unlisted"],
+                "fixture: shortcut policy (an unlisted confirmation title is reported, not defaulted to ⌘S)")
+    expectEqual(buttons.map(\.shortcuts), [[Shortcut.cancel], [], [], []], "fixture: shortcuts read from each button's own chain")
 }
 
 // MARK: - Entry
@@ -868,6 +1030,7 @@ struct LayoutMetricsTests {
         testHostRunners(root: root, sources: sources)
         testFixedWidths(sources: sources)
         testKeyboardShortcuts(sources: sources)
+        testNewShortcutGating(sources: sources)
 
         if failures > 0 {
             print("layout-metrics tests: \(failures) of \(checks) checks FAILED")

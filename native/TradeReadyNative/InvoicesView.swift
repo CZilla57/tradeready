@@ -38,6 +38,22 @@ struct InvoicesView: View {
     @State private var bulkCurrent: BulkOutreachItem?
     @State private var bulkSkipped = 0
     @State private var bulkChannelName = "email"
+    @State private var isRootVisible = true
+
+    /// Task 11.11 fix round 1: anything this screen presents over itself,
+    /// including the gap between two bulk-reminder composer sheets.
+    private var isPresentingAnything: Bool {
+        showingEditor || settleRequest != nil || mutationError != nil || confirmationRequest != nil
+            || showingBulkChannel || confirmingBulkSettle || bulkCurrent != nil || bulkNotice != nil
+            || !bulkQueue.isEmpty
+    }
+
+    /// ⌘N (new invoice) only while the list is on top: never under a sheet
+    /// or dialog this screen presents, nor under a pushed invoice or the
+    /// pushed maintenance plans (whose own ⌘N must win there).
+    private var newShortcut: KeyboardShortcut? {
+        isPresentingAnything || !path.isEmpty || !isRootVisible ? nil : KeyboardShortcut("n", modifiers: .command)
+    }
 
     private var invoices: [Invoice] {
         store.invoices.filter { invoice in
@@ -133,9 +149,12 @@ struct InvoicesView: View {
                     Button(selecting ? "Done" : "Select") { selecting ? exitSelectMode() : (selecting = true) }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingEditor = true } label: { Image(systemName: "plus") }
+                    Button {
+                        guard !isPresentingAnything else { return }
+                        showingEditor = true
+                    } label: { Image(systemName: "plus") }
                         .accessibilityLabel(NativeAccessibilityAudit.Label.addInvoice)
-                        .keyboardShortcut("n", modifiers: .command)
+                        .keyboardShortcut(newShortcut)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -157,7 +176,9 @@ struct InvoicesView: View {
             .onChange(of: store.deepLinkedInvoiceID) { _, id in
                 openRequestedInvoice(id)
             }
+            .onDisappear { isRootVisible = false }
             .onAppear {
+                isRootVisible = true
                 openRequestedInvoice(store.deepLinkedInvoiceID)
             }
             .confirmationDialog(

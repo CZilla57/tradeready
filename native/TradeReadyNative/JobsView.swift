@@ -9,6 +9,19 @@ struct JobsView: View {
     @State private var showingRecurringJobs = false
     @State private var path: [String] = []
     @State private var confirmationRequest: NativeConfirmationRequest?
+    @State private var isRootVisible = true
+
+    /// Task 11.11 fix round 1: anything this screen presents over itself.
+    private var isPresentingAnything: Bool {
+        showingNewJob || showingRecurringJobs || editingJob != nil || confirmationRequest != nil
+    }
+
+    /// ⌘N (new job) only while the list is on top: never under a sheet or
+    /// dialog this screen presents, nor under a pushed job detail (a hidden
+    /// toolbar's shortcut otherwise wins over the visible screen's).
+    private var newShortcut: KeyboardShortcut? {
+        isPresentingAnything || !path.isEmpty || !isRootVisible ? nil : KeyboardShortcut("n", modifiers: .command)
+    }
 
     private var listState: NativeJobListState {
         NativeJobList.state(items: store.jobListItems, selectedFilter: filter, query: search)
@@ -90,9 +103,12 @@ struct JobsView: View {
                     Button("Recurring", systemImage: "repeat") { showingRecurringJobs = true }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button { showingNewJob = true } label: { Image(systemName: "plus") }
+                    Button {
+                        guard !isPresentingAnything else { return }
+                        showingNewJob = true
+                    } label: { Image(systemName: "plus") }
                         .accessibilityLabel(NativeAccessibilityAudit.Label.addJob)
-                        .keyboardShortcut("n", modifiers: .command)
+                        .keyboardShortcut(newShortcut)
                 }
             }
             .navigationDestination(for: String.self) { id in
@@ -110,7 +126,9 @@ struct JobsView: View {
                     store.deepLinkedJobID = nil
                 }
             }
+            .onDisappear { isRootVisible = false }
             .onAppear {
+                isRootVisible = true
                 if let id = store.deepLinkedJobID, store.jobs.contains(where: { $0.id == id }) {
                     path = [id]
                     store.deepLinkedJobID = nil

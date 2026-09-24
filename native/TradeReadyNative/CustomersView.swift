@@ -12,6 +12,16 @@ struct CustomersView: View {
     @State private var showingEditor = false
     @State private var showingArchived = false
     @State private var path: [NativeCustomerRoute] = []
+    @State private var isRootVisible = true
+
+    /// Task 11.11 fix round 1: anything this screen presents over itself.
+    private var isPresentingAnything: Bool { showingEditor }
+
+    /// ⌘N (new customer) only while the list is on top: never under the
+    /// editor sheet, nor under a pushed customer.
+    private var newShortcut: KeyboardShortcut? {
+        isPresentingAnything || !path.isEmpty || !isRootVisible ? nil : KeyboardShortcut("n", modifiers: .command)
+    }
 
     private var allCustomers: [NativeCustomerListEntry] {
         NativeCustomerIdentity.buildList(invoices: store.invoices, customers: store.customers)
@@ -140,12 +150,13 @@ struct CustomersView: View {
             .searchable(text: $search)
             .toolbar {
                 Button {
+                    guard !isPresentingAnything else { return }
                     showingEditor = true
                 } label: {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel(NativeAccessibilityAudit.Label.addCustomer)
-                .keyboardShortcut("n", modifiers: .command)
+                .keyboardShortcut(newShortcut)
             }
             .navigationDestination(for: NativeCustomerRoute.self) {
                 CustomerDetailView(customerID: $0.id, fallbackName: $0.name)
@@ -156,7 +167,9 @@ struct CustomersView: View {
             .onChange(of: store.deepLinkedCustomerID) { _, id in
                 openRequestedCustomer(id)
             }
+            .onDisappear { isRootVisible = false }
             .onAppear {
+                isRootVisible = true
                 openRequestedCustomer(store.deepLinkedCustomerID)
             }
             // On the stack's root content, not the stack, so a pop back re-sends it.

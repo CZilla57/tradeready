@@ -37,6 +37,14 @@ struct CoachView: View {
     /// until after the network call already returned).
     @State private var activeSendTask: Task<Void, Never>?
 
+    /// Task 11.11 fix round 1: anything this screen presents over itself.
+    private var isPresentingAnything: Bool { copiedAlertText != nil }
+
+    /// ⌘N (new chat) never fires under the Copied alert.
+    private var newShortcut: KeyboardShortcut? {
+        isPresentingAnything ? nil : KeyboardShortcut("n", modifiers: .command)
+    }
+
     private var quickPrompts: [NativeCoachQuickPrompt] {
         NativeCoachQuickPrompts.quickPrompts(snapshot: store.coachBusinessSnapshot())
     }
@@ -59,13 +67,14 @@ struct CoachView: View {
                     // transcript — a reply that resolves after this point
                     // must never append to the fresh, empty transcript.
                     Button("New chat") {
+                        guard !isPresentingAnything else { return }
                         activeSendTask?.cancel()
                         activeSendTask = nil
                         store.bumpCoachConversationGeneration()
                         messages = []
                         sending = false
                     }
-                    .keyboardShortcut("n", modifiers: .command)
+                    .keyboardShortcut(newShortcut)
                 }
             }
             .onAppear { consumePrefillIfNeeded() }

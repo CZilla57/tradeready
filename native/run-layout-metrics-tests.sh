@@ -2,9 +2,10 @@
 set -eu
 
 # Task 11.11 (H2; contract §12.1 A11): iPad layouts, multitasking, rotation
-# and hardware keyboard. Compiles the Foundation-only NativeLayoutMetrics
-# policy (RN `layout.contentColumn`, 700pt; the SwiftUI modifiers in the same
-# file are UIKit-only and excluded here) with the shared source model, and
+# and hardware keyboard. Compiles the NativeLayoutMetrics policy (RN
+# `layout.contentColumn`, 700pt; its width math is Foundation-only, and the
+# SwiftUI modifiers in the same file, guarded by canImport(SwiftUI), compile
+# here too but are not driven) with the shared source model, and
 # drives: the column width math for phone, iPad, Split View, Slide Over, Stage
 # Manager and landscape safe areas; source scans over every N/ view (every
 # List/Form/ScrollView screen root applies the column, fixed chrome is capped,
