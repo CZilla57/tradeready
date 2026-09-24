@@ -1,10 +1,5 @@
 import CryptoKit
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 
 enum NativeWidgetActionBatchError: Error, Equatable {
     case invalidAccountBinding
@@ -38,7 +33,13 @@ struct NativeWidgetActionBatch: Equatable {
     let accountBinding: String
     let sourceDigest: String
     let sourceBytes: Data
+    /// Only the actions stamped with `hash(accountBinding)` (contract §4.5).
     let actions: [Action]
+    /// Task 11.05 (§4.5): entries dropped before type dispatch because their
+    /// `ownerTag` is missing or belongs to another owner (or the entry is not
+    /// an object, so it carries no owner at all). They are acknowledged with
+    /// the claim and never applied. A count only: no ids, no payload.
+    var ownerDroppedCount: Int = 0
 }
 
 /// Strict, loss-preserving preparation boundary for the untrusted App Group
@@ -63,12 +64,23 @@ enum NativeWidgetActionBatchPlanner {
             throw NativeWidgetActionBatchError.tooManyActions
         }
 
+        // Task 11.05 (contract §4.5): the owner check runs BEFORE any field
+        // validation or type dispatch. An untagged or foreign entry, of any
+        // type (including an unknown one), is dropped and acknowledged; it can
+        // neither be applied to this owner nor wedge this owner's batch.
+        let expectedOwnerTag = NativeWidgetOwnerTag.make(binding: verifiedAccountBinding)
         var identifiers = Set<String>()
         var actions: [NativeWidgetActionBatch.Action] = []
+        var ownerDropped = 0
         actions.reserveCapacity(values.count)
         for (index, value) in values.enumerated() {
             guard case let .object(fields) = value,
-                  let id = string("id", fields),
+                  string("ownerTag", fields) == expectedOwnerTag
+            else {
+                ownerDropped += 1
+                continue
+            }
+            guard let id = string("id", fields),
                   let type = string("type", fields),
                   let at = string("at", fields),
                   validIdentifier(id), validIdentifier(type), validInstant(at)
@@ -125,7 +137,8 @@ enum NativeWidgetActionBatchPlanner {
             accountBinding: verifiedAccountBinding,
             sourceDigest: digest(source),
             sourceBytes: source,
-            actions: actions
+            actions: actions,
+            ownerDroppedCount: ownerDropped
         )
     }
 
@@ -245,8 +258,13 @@ enum NativeWidgetActionReplayer {
               var jobs = snapshot.payload.jobs,
               let index = jobs.firstIndex(where: { $0.id == jobID })
         else { return false }
+        // Task 11.05 (§3.3): a stale widget/Siri snapshot can name a job that
+        // was archived since. The exact id is re-resolved here and an
+        // archived job fails closed (ignored), matching the projection's own
+        // rule that archived work is never offered (RN `!j.archivedAt`).
         guard !hasMarker(action.id, jobs: jobs),
               !doneStatuses.contains(jobs[index].status),
+              !isArchived(jobs[index]),
               !hasActiveSession(jobs[index])
         else { return false }
 
@@ -333,6 +351,11 @@ enum NativeWidgetActionReplayer {
         return true
     }
 
+    private static func isArchived(_ job: Canonical.Job) -> Bool {
+        guard let archivedAt = job.archivedAt else { return false }
+        return !archivedAt.isEmpty
+    }
+
     private static func hasActiveSession(_ job: Canonical.Job) -> Bool {
         job.timeSessions?.last?.end == nil && job.timeSessions?.isEmpty == false
     }
@@ -380,12 +403,12 @@ protocol NativeWidgetActionQueueBacking {
 }
 
 final class NativeUserDefaultsWidgetActionQueue: NativeWidgetActionQueueBacking {
-    static let suiteName = "group.com.gettradereadyapp.tradeready"
-    static let key = "widgetActions"
+    /// Task 11.05: the one App Group id and key (`WidgetAppGroup`, §2.1).
+    static let key = WidgetAppGroup.actionsKey
 
     private let defaults: UserDefaults?
 
-    init(defaults: UserDefaults? = UserDefaults(suiteName: suiteName)) {
+    init(defaults: UserDefaults? = WidgetAppGroup.liveDefaults()) {
         self.defaults = defaults
     }
 
@@ -420,13 +443,60 @@ struct NativeWidgetActionClaim: Codable, Equatable {
     var rawValue: String? { String(data: sourceBytes, encoding: .utf8) }
 }
 
+/// Task 11.05 (decision C8): why a shared queue was set aside. Coarse on
+/// purpose: no action id or field value is recorded in the reason.
+enum NativeWidgetActionQuarantineReason: String, Codable, Equatable {
+    case malformedQueue
+    case tooManyActions
+    case malformedAction
+    case duplicateActionID
+    case invalidAction
+
+    /// Every planner rejection of the queue's content quarantines. An invalid
+    /// account binding is the caller's error, never the queue's, so it does not.
+    init?(_ error: NativeWidgetActionBatchError) {
+        switch error {
+        case .invalidAccountBinding: return nil
+        case .malformedQueue: self = .malformedQueue
+        case .tooManyActions: self = .tooManyActions
+        case .malformedAction: self = .malformedAction
+        case .duplicateActionID: self = .duplicateActionID
+        case .invalidAction: self = .invalidAction
+        }
+    }
+}
+
+/// Task 11.05 (C8): the app-private record of a queue that can never be
+/// prepared for its owner. Owner-scoped by filename and envelope, like a claim.
+struct NativeWidgetActionQuarantine: Codable, Equatable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let accountBinding: String
+    let reason: NativeWidgetActionQuarantineReason
+    let sourceDigest: String
+    let sourceByteCount: Int
+    /// The exact bytes, kept only up to `maximumQuarantinedBytes` so a hostile
+    /// or runaway queue cannot grow app storage without bound.
+    let sourceBytes: Data?
+}
+
 /// Cross-process claim transport for the App Group action queue. The app and
 /// every extension writer coordinate on the same advisory lock file. The app
 /// first publishes and verifies a private write-ahead claim, then removes only
 /// the claimed prefix from the shared queue. A crash at any point leaves either
 /// the original queue, a recoverable claim, or both.
+///
+/// Task 11.05: the lock is `WidgetAppGroupLock` on `WidgetAppGroup.lockFileName`,
+/// the one implementation the mirror, the scrubber and the extension writers
+/// use (§4.2). This type keeps no lock file name or `flock` of its own.
 struct NativeWidgetActionClaimTransport {
-    static let lockFileName = ".tradeready-widget-actions.lock"
+    static let claimFilePrefix = "claim-"
+    static let quarantineFilePrefix = "quarantine-"
+    /// C8: at most this many quarantined queues are kept per owner; the oldest
+    /// is evicted first.
+    static let maximumQuarantineFilesPerOwner = 4
+    static let maximumQuarantinedBytes = 1 << 20
 
     let queue: any NativeWidgetActionQueueBacking
     let claimDirectory: URL
@@ -436,24 +506,32 @@ struct NativeWidgetActionClaimTransport {
         fileManager: FileManager = .default,
         queue: any NativeWidgetActionQueueBacking = NativeUserDefaultsWidgetActionQueue()
     ) throws -> NativeWidgetActionClaimTransport {
-        guard let appGroup = fileManager.containerURL(
-            forSecurityApplicationGroupIdentifier: NativeUserDefaultsWidgetActionQueue.suiteName
-        ) else { throw NativeWidgetActionClaimError.unavailable }
+        guard let lockFile = WidgetAppGroup.liveLockFile() else {
+            throw NativeWidgetActionClaimError.unavailable
+        }
         guard let support = fileManager.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first else { throw NativeWidgetActionClaimError.unavailable }
         return .init(
             queue: queue,
             claimDirectory: support.appendingPathComponent("WidgetActionClaims", isDirectory: true),
-            lockFile: appGroup.appendingPathComponent(Self.lockFileName)
+            lockFile: lockFile
         )
     }
 
     /// Returns the existing unacknowledged claim first. Otherwise it claims the
     /// current shared queue. The verified account binding is part of both the
     /// durable envelope and its filename, preventing cross-account recovery.
+    ///
+    /// Task 11.05 (old-binding claims): a claim or quarantine file keyed by
+    /// any OTHER binding is discarded first, unread. It can only be left over
+    /// from a previous account (the account scrub removes this directory) or
+    /// from before the replay gate moved to `O`; its actions are stamped for
+    /// that other owner, so §4.5 would drop every one of them anyway.
     func claim(verifiedAccountBinding: String) throws -> NativeWidgetActionClaim? {
-        try withLock {
+        try Self.requireBinding(verifiedAccountBinding)
+        return try withLock {
+            try discardFiles(notOwnedBy: verifiedAccountBinding)
             if let existing = try loadClaim(accountBinding: verifiedAccountBinding) {
                 try removeClaimedPrefixFromQueue(existing)
                 return existing
@@ -472,6 +550,67 @@ struct NativeWidgetActionClaimTransport {
             try persist(claim)
             try removeClaimedPrefixFromQueue(claim)
             return claim
+        }
+    }
+
+    /// Task 11.05 (C8): sets the shared queue aside when, re-read inside this
+    /// lock hold, it still cannot be prepared for this owner. The raw bytes
+    /// move into an owner-scoped quarantine file (verified) and only then leave
+    /// the shared queue, so later actions are no longer wedged behind them.
+    /// Returns nil, touching nothing, when the queue is absent or prepares
+    /// cleanly now.
+    func quarantineUnpreparableQueue(
+        verifiedAccountBinding: String
+    ) throws -> NativeWidgetActionQuarantineReason? {
+        try Self.requireBinding(verifiedAccountBinding)
+        return try withLock {
+            guard let raw = try queue.read() else { return nil }
+            let reason: NativeWidgetActionQuarantineReason
+            do {
+                _ = try NativeWidgetActionBatchPlanner.prepare(
+                    rawValue: raw,
+                    verifiedAccountBinding: verifiedAccountBinding
+                )
+                return nil
+            } catch let error as NativeWidgetActionBatchError {
+                guard let mapped = NativeWidgetActionQuarantineReason(error) else { throw error }
+                reason = mapped
+            }
+            let source = Data(raw.utf8)
+            let record = NativeWidgetActionQuarantine(
+                schemaVersion: NativeWidgetActionQuarantine.currentSchemaVersion,
+                accountBinding: verifiedAccountBinding,
+                reason: reason,
+                sourceDigest: Self.digest(source),
+                sourceByteCount: source.count,
+                sourceBytes: source.count <= Self.maximumQuarantinedBytes ? source : nil
+            )
+            try persist(record)
+            try replaceQueue(with: nil)
+            return reason
+        }
+    }
+
+    /// The quarantine records kept for `accountBinding` (diagnostics/tests).
+    func quarantinedQueues(accountBinding: String) throws -> [NativeWidgetActionQuarantine] {
+        try Self.requireBinding(accountBinding)
+        return try files(prefix: Self.quarantineFilePrefix + accountBinding + "-").map { url in
+            do {
+                return try JSONDecoder().decode(NativeWidgetActionQuarantine.self, from: Data(contentsOf: url))
+            } catch { throw NativeWidgetActionClaimError.invalidClaim }
+        }
+    }
+
+    /// Task 11.05: the account scrub removes every claim and quarantine file
+    /// (they hold the scrubbed account's actions). App-private storage that
+    /// only the app's main actor touches, so no App Group lock is needed and
+    /// the scrub gains no new dependency on the container.
+    func removeAllAccountClaims() throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: claimDirectory.path) else { return }
+        do { try manager.removeItem(at: claimDirectory) } catch { throw NativeWidgetActionClaimError.writeFailed }
+        guard !manager.fileExists(atPath: claimDirectory.path) else {
+            throw NativeWidgetActionClaimError.verificationFailed
         }
     }
 
@@ -496,13 +635,29 @@ struct NativeWidgetActionClaimTransport {
     }
 
     private func persist(_ claim: NativeWidgetActionClaim) throws {
+        try persist(Self.encode(claim), to: claimURL(claim))
+    }
+
+    private func persist(_ record: NativeWidgetActionQuarantine) throws {
+        let destination = claimDirectory.appendingPathComponent(
+            "\(Self.quarantineFilePrefix)\(record.accountBinding)-\(record.sourceDigest).json"
+        )
+        // Bounded retention: evict this owner's oldest records first.
+        let existing = try files(prefix: Self.quarantineFilePrefix + record.accountBinding + "-")
+            .filter { $0.lastPathComponent != destination.lastPathComponent }
+            .sorted { Self.modificationDate($0) < Self.modificationDate($1) }
+        for url in existing.prefix(max(0, existing.count - (Self.maximumQuarantineFilesPerOwner - 1))) {
+            do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
+        }
+        try persist(Self.encode(record), to: destination)
+    }
+
+    private func persist(_ bytes: Data, to destination: URL) throws {
         do {
             try FileManager.default.createDirectory(
                 at: claimDirectory, withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            let bytes = try Self.encode(claim)
-            let destination = claimURL(claim)
             if FileManager.default.fileExists(atPath: destination.path) {
                 guard try Data(contentsOf: destination) == bytes else {
                     throw NativeWidgetActionClaimError.verificationFailed
@@ -520,17 +675,33 @@ struct NativeWidgetActionClaimTransport {
         }
     }
 
-    private func loadClaim(accountBinding: String) throws -> NativeWidgetActionClaim? {
-        guard accountBinding.count == 64,
-              accountBinding.allSatisfy({ $0.isHexDigit && !$0.isUppercase })
-        else { throw NativeWidgetActionBatchError.invalidAccountBinding }
-        guard FileManager.default.fileExists(atPath: claimDirectory.path) else { return nil }
-        let prefix = "claim-\(accountBinding)-"
-        let candidates = try FileManager.default.contentsOfDirectory(
+    /// Discards claim and quarantine files keyed by any other binding.
+    private func discardFiles(notOwnedBy accountBinding: String) throws {
+        let owned = [Self.claimFilePrefix, Self.quarantineFilePrefix].map { $0 + accountBinding + "-" }
+        let foreign = try files(prefix: nil).filter { url in
+            let name = url.lastPathComponent
+            let isTransportFile = name.hasPrefix(Self.claimFilePrefix) || name.hasPrefix(Self.quarantineFilePrefix)
+            return isTransportFile && !owned.contains { name.hasPrefix($0) }
+        }
+        for url in foreign {
+            do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
+        }
+    }
+
+    private func files(prefix: String?) throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: claimDirectory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(
             at: claimDirectory,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        ).filter { $0.lastPathComponent.hasPrefix(prefix) && $0.pathExtension == "json" }
+        ).filter { url in
+            url.pathExtension == "json" && (prefix.map { url.lastPathComponent.hasPrefix($0) } ?? true)
+        }
+    }
+
+    private func loadClaim(accountBinding: String) throws -> NativeWidgetActionClaim? {
+        try Self.requireBinding(accountBinding)
+        let candidates = try files(prefix: Self.claimFilePrefix + accountBinding + "-")
         guard candidates.count <= 1 else { throw NativeWidgetActionClaimError.conflictingClaims }
         guard let candidate = candidates.first else { return nil }
         let claim: NativeWidgetActionClaim
@@ -546,10 +717,14 @@ struct NativeWidgetActionClaimTransport {
               claim.rawValue != nil,
               candidate.standardizedFileURL.path == claimURL(claim).standardizedFileURL.path
         else { throw NativeWidgetActionClaimError.invalidClaim }
-        _ = try NativeWidgetActionBatchPlanner.prepare(
-            rawValue: claim.rawValue!,
-            verifiedAccountBinding: accountBinding
-        )
+        // A claim was prepared before it was written, so a planner failure
+        // here is claim corruption, never a queue to quarantine (C8).
+        do {
+            _ = try NativeWidgetActionBatchPlanner.prepare(
+                rawValue: claim.rawValue!,
+                verifiedAccountBinding: accountBinding
+            )
+        } catch { throw NativeWidgetActionClaimError.invalidClaim }
         return claim
     }
 
@@ -594,31 +769,35 @@ struct NativeWidgetActionClaimTransport {
 
     private func claimURL(_ claim: NativeWidgetActionClaim) -> URL {
         claimDirectory.appendingPathComponent(
-            "claim-\(claim.accountBinding)-\(claim.sourceDigest).json"
+            "\(Self.claimFilePrefix)\(claim.accountBinding)-\(claim.sourceDigest).json"
         )
     }
 
+    /// §4.2 through the one shared implementation. Errors thrown by `body`
+    /// pass through unchanged; a failure to take the lock is `lockFailed`.
     private func withLock<T>(_ body: () throws -> T) throws -> T {
         do {
-            try FileManager.default.createDirectory(
-                at: lockFile.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-        } catch { throw NativeWidgetActionClaimError.lockFailed }
-        let descriptor = open(lockFile.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { throw NativeWidgetActionClaimError.lockFailed }
-        defer { close(descriptor) }
-        guard flock(descriptor, LOCK_EX) == 0 else {
+            return try WidgetAppGroupLock.withExclusiveLock(at: lockFile, body)
+        } catch is WidgetAppGroupLockError {
             throw NativeWidgetActionClaimError.lockFailed
         }
-        defer { flock(descriptor, LOCK_UN) }
-        return try body()
     }
 
-    private static func encode(_ claim: NativeWidgetActionClaim) throws -> Data {
+    /// Validated before any filename is built from the binding, so an invalid
+    /// value can never match (or discard) another owner's files.
+    private static func requireBinding(_ binding: String) throws {
+        guard binding.count == 64, binding.allSatisfy({ $0.isHexDigit && !$0.isUppercase })
+        else { throw NativeWidgetActionBatchError.invalidAccountBinding }
+    }
+
+    private static func modificationDate(_ url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+    }
+
+    private static func encode<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(claim)
+        return try encoder.encode(value)
     }
 
     private static func digest(_ data: Data) -> String {
@@ -629,13 +808,37 @@ struct NativeWidgetActionClaimTransport {
 enum NativeWidgetActionReplayCommitResult {
     case nothingPending
     case retainedUnsupported(actionCount: Int)
-    case committed(snapshot: Canonical.Snapshot, changed: Int, ignored: Int)
+    /// `ownerDropped`: untagged or foreign entries acknowledged, never applied (§4.5).
+    case committed(snapshot: Canonical.Snapshot, changed: Int, ignored: Int, ownerDropped: Int)
+    /// C8: the shared queue could not be prepared and was set aside.
+    case quarantined(reason: NativeWidgetActionQuarantineReason)
+}
+
+/// Task 11.05 (§4.5, C8): bounded, payload-free replay counters. No action id,
+/// field, amount or owner value is ever recorded.
+struct NativeWidgetActionReplayDiagnostics: Equatable {
+    static let maximumCount = 9_999
+
+    private(set) var ownerDroppedActionCount = 0
+    private(set) var quarantinedQueueCount = 0
+
+    mutating func recordOwnerDropped(_ count: Int) {
+        guard count > 0 else { return }
+        ownerDroppedActionCount = min(Self.maximumCount, ownerDroppedActionCount + min(count, Self.maximumCount))
+    }
+
+    mutating func recordQuarantine() {
+        quarantinedQueueCount = min(Self.maximumCount, quarantinedQueueCount + 1)
+    }
 }
 
 /// Owns the commit ordering: durable claim, pure replay, one atomic canonical
 /// save, then exact acknowledgement. Unsupported future actions retain their
 /// claim and prevent partial application of the batch.
 struct NativeWidgetActionReplayCoordinator {
+    /// C8: the bounded, payload-free message surfaced after a quarantine.
+    static let quarantinedMessage = "Some widget or Siri actions couldn't be read and were set aside."
+
     let transport: NativeWidgetActionClaimTransport
     let repository: Canonical.SnapshotRepository
 
@@ -643,9 +846,22 @@ struct NativeWidgetActionReplayCoordinator {
         snapshot: Canonical.Snapshot,
         verifiedAccountBinding: String
     ) throws -> NativeWidgetActionReplayCommitResult {
-        guard let claim = try transport.claim(verifiedAccountBinding: verifiedAccountBinding),
-              let raw = claim.rawValue
-        else { return .nothingPending }
+        let claimed: NativeWidgetActionClaim?
+        do {
+            claimed = try transport.claim(verifiedAccountBinding: verifiedAccountBinding)
+        } catch let error as NativeWidgetActionBatchError {
+            // C8: the queue itself cannot be prepared. Retrying can never
+            // succeed and would wedge every later action, so set it aside.
+            guard NativeWidgetActionQuarantineReason(error) != nil else { throw error }
+            if let reason = try transport.quarantineUnpreparableQueue(
+                verifiedAccountBinding: verifiedAccountBinding
+            ) {
+                return .quarantined(reason: reason)
+            }
+            // The queue changed between the two lock holds and prepares now.
+            claimed = try transport.claim(verifiedAccountBinding: verifiedAccountBinding)
+        }
+        guard let claim = claimed, let raw = claim.rawValue else { return .nothingPending }
         let batch = try NativeWidgetActionBatchPlanner.prepare(
             rawValue: raw,
             verifiedAccountBinding: verifiedAccountBinding
@@ -661,7 +877,8 @@ struct NativeWidgetActionReplayCoordinator {
         return .committed(
             snapshot: result.snapshot,
             changed: result.changedActionCount,
-            ignored: result.ignoredActionCount
+            ignored: result.ignoredActionCount,
+            ownerDropped: batch.ownerDroppedCount
         )
     }
 }

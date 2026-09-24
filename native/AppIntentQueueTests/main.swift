@@ -463,25 +463,29 @@ private func testWriterRules() {
     }
     // One shared rule (fix round 1, I1): the planner refuses the signed
     // pieces too, and both sides call the same predicates.
+    // Task 11.05 (§4.5): these fixtures carry the owner's tag. An untagged
+    // entry is dropped before validation, so it could never prove a rejection.
     for date in ["+026-08-03", "2026-+8-03", "2026-08-+3", "2026-02-30", "２０２６-08-03"] {
         expect(!WidgetActionFieldRules.isValidLocalDate(date), "shared rule rejects date \(date)")
-        expect(!plan(#"[{"id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"\#(date)","amount":5,"category":"fuel"}]"#).isSuccess,
+        expect(!plan(#"[{"ownerTag":"\#(ownerTag)","id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"\#(date)","amount":5,"category":"fuel"}]"#).isSuccess,
                "the planner rejects date \(date)")
     }
     for date in ["2026-08-03", "2024-02-29", "0001-01-01"] {
         expect(WidgetActionFieldRules.isValidLocalDate(date), "shared rule accepts date \(date)")
-        expect(plan(#"[{"id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"\#(date)","amount":5,"category":"fuel"}]"#).isSuccess,
+        // Task 11.05: the kinds (not bare success) prove the owned action was
+        // kept, not dropped by the §4.5 owner gate.
+        expect(planKinds(#"[{"ownerTag":"\#(ownerTag)","id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"\#(date)","amount":5,"category":"fuel"}]"#) == [.expenseLog],
                "the planner accepts date \(date)")
     }
     expectEqual(NativeWidgetActionBatch.maximumIdentifierLength, WidgetActionFieldRules.maximumIdentifierLength,
                 "the planner's identifier cap is the shared one")
-    expect(!plan(#"[{"id":"\#(String(repeating: "x", count: 129))","type":"timer_stop","at":"2026-08-03T19:00:00Z"}]"#).isSuccess,
+    expect(!plan(#"[{"ownerTag":"\#(ownerTag)","id":"\#(String(repeating: "x", count: 129))","type":"timer_stop","at":"2026-08-03T19:00:00Z"}]"#).isSuccess,
            "the planner rejects a 129-byte id")
 
     // Why the native ceilings exist: the planner would fail the WHOLE batch.
-    expect(!plan(#"[{"id":"a","type":"trip_log","at":"2026-08-03T19:00:00Z","date":"2026-08-03","odometerStart":0,"odometerEnd":1e200}]"#).isSuccess,
+    expect(!plan(#"[{"ownerTag":"\#(ownerTag)","id":"a","type":"trip_log","at":"2026-08-03T19:00:00Z","date":"2026-08-03","odometerStart":0,"odometerEnd":1e200}]"#).isSuccess,
            "the planner cannot decode an odometer of 1e200 (would wedge the queue)")
-    expect(!plan(#"[{"id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"2026-08-03","amount":9.99e-20,"category":"fuel"}]"#).isSuccess,
+    expect(!plan(#"[{"ownerTag":"\#(ownerTag)","id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"2026-08-03","amount":9.99e-20,"category":"fuel"}]"#).isSuccess,
            "the planner rejects an amount below its floor")
 }
 

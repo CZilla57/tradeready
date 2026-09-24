@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 // MARK: - Widget snapshot projection (task 11.01, requirement W1)
 //
@@ -130,20 +129,5 @@ enum NativeWidgetSnapshotProjection {
     }
 }
 
-// MARK: - Owner tag (contract §2.3, §2.5)
-
-enum NativeWidgetOwnerTag {
-    static let prefix = "tradeready.widget.owner.v1:"
-
-    /// Lowercase hex SHA-256 of `prefix + binding`, where `binding` is the
-    /// single owner predicate `AppStore.derivedStatePublishBinding` (or, on the
-    /// seam, the publish's `expectedOwnerBinding`). Hashed again so the raw
-    /// binding never enters the App Group. 11.04 (actions, `activeTrip`, the
-    /// stash), 11.05 (replay gate) and 11.06 (pending-URL gate) compare
-    /// against this same function.
-    static func make(binding: String) -> String {
-        SHA256.hash(data: Data((prefix + binding).utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-    }
-}
+// The owner tag (`NativeWidgetOwnerTag`, contract §2.3/§2.5) lives in
+// `N/NativeWidgetOwnerGate.swift` with the replay owner gate (task 11.05).

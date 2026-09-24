@@ -52,10 +52,11 @@ private let now = ISO8601DateFormatter().date(from: "2026-08-03T19:00:00Z")!
 private let today = "2026-08-03"
 
 /// 64-hex, so the real planner's `verifiedAccountBinding` guard accepts it.
-/// `NativeWidgetActionBatchPlanner.prepare` only checks that this value is a
-/// well-formed digest — it never re-derives it from a binding — so a literal
-/// is exactly as valid an oracle input as a real `NativeWidgetOwnerTag` hash.
-private let ownerTag = String(repeating: "ab", count: 32)
+/// Task 11.05 (§4.5): the planner now keeps only actions stamped
+/// `NativeWidgetOwnerTag.make(binding:)` of the binding it plans for, so the
+/// fixture tag is derived from the binding exactly as the app mirror does.
+private let ownerBinding = String(repeating: "ab", count: 32)
+private let ownerTag = NativeWidgetOwnerTag.make(binding: ownerBinding)
 private let otherOwnerTag = String(repeating: "cd", count: 32)
 
 private func iso(_ date: Date) -> String { WidgetSnapshot.isoTimestamp(date) }
@@ -352,7 +353,7 @@ private struct EngineHarness {
 /// `native/AppIntentQueueTests/main.swift` (task 11.04) uses.
 private func plan(_ raw: String?) -> Result<NativeWidgetActionBatch, NativeWidgetActionBatchError> {
     do {
-        return .success(try NativeWidgetActionBatchPlanner.prepare(rawValue: raw ?? "[]", verifiedAccountBinding: ownerTag))
+        return .success(try NativeWidgetActionBatchPlanner.prepare(rawValue: raw ?? "[]", verifiedAccountBinding: ownerBinding))
     } catch let error as NativeWidgetActionBatchError {
         return .failure(error)
     } catch {

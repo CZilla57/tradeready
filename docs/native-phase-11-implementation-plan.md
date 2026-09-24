@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02 and 11.03 done (2026-09-24); implementation tasks 11.05–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03 and 11.05 done (2026-09-24); implementation tasks 11.06–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -782,7 +782,7 @@ complete / Phase 12 evidence deferred**.
 | 11.02 | W2 | Done (code complete 2026-09-24; device layout proof deferred to Phase 12) | 11.01 | Next Job widget |
 | 11.03 | W3 | Done (code complete 2026-09-24; device layout proof deferred to Phase 12) | 11.01, 11.04 | Job Timer widget |
 | 11.04 | A1, A2, A3 | Done (code complete 2026-09-23; Siri/device proof deferred to Phase 12) | 11.01 | All ten App Intents + Siri + action queue |
-| 11.05 | W4 | Pending | 11.01-11.04 | Owner/stale/sign-in correctness |
+| 11.05 | W4 | Done (code complete 2026-09-24; item 4 routing-after-sign-in handed to 11.06; device/Siri/widget proof deferred to Phase 12) | 11.01-11.04 | Owner/stale/sign-in correctness |
 | 11.06 | L1, L2 | Pending | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
 | 11.07 | P1, P4 | Pending | 11.00 | Analytics transport + privacy |
 | 11.08 | P2, P3 | Pending | 11.07, 10.15 | Event parity + identity lifecycle |
@@ -1522,3 +1522,119 @@ Home Screen) is deferred to Phase 12 and was not claimed as passed.
 
 **Next ready:** 11.05 (needs 11.01–11.04, done, and now also 11.02/11.03's UI-side stale
 handling as prior art).
+
+### 11.05 — Widget/Siri owner gating and stale/sign-in correctness (2026-09-24)
+
+**Outcome:** code complete for W4. Items 1–3 are closed in the app target and proven by
+host fixtures against the real `AppStore`, replay coordinator, claim transport,
+`NativeAppGroupAccountScrubber`, `NativeWidgetMirror` and the extension's
+`WidgetIntentEngine`. Item 4 (a widget deep link opened while signed out) is proven
+route-or-discard against the **existing** routing; "routes after sign-in" for a
+cold-launch link needs 11.06 (see the handoff below). Device/Siri/widget proof is
+deferred to Phase 12 and was not claimed.
+
+**Files:**
+- New: `native/TradeReadyNative/NativeWidgetOwnerGate.swift` — `NativeWidgetOwnerTag`
+  (moved here unchanged from `Domain/NativeWidgetSnapshot.swift`, plus `matches`) and
+  `NativeWidgetReplayOwnerGate.replayBinding` (O + `.signedIn` + no open account boundary).
+- Edited: `native/TradeReadyNative/NativeWidgetActionReplay.swift` (planner owner gate,
+  C8 quarantine, one lock, old-binding discard, archived-job refusal, diagnostics),
+  `native/TradeReadyNative/AppStore.swift` (replay gate on O, `scrubWidgetAccountState()`,
+  diagnostics, two test seams), `native/TradeReadyNative/Domain/NativeWidgetSnapshot.swift`.
+- Tests: new `native/WidgetOwnerGatingTests/main.swift` and
+  `native/run-widget-owner-gating-tests.sh` (registered in `native/run-all-domain-tests.sh`
+  after the Job Timer runner). Fixtures in `native/WidgetActionReplayTests/main.swift`,
+  `native/AppIntentQueueTests/main.swift` and `native/JobTimerWidgetPolicyTests/main.swift`
+  now carry the owner tag (untagged entries are dropped by design); their runners and
+  `native/run-appstore-sources-common.sh` compile the new file.
+
+**Behavior:**
+- **Write gate (item 1, §3.1):** every account scrub — sign-out, deletion, retry and
+  launch recovery — goes through one `scrubWidgetAccountState()`: wipe the App Group
+  suite under the shared lock, reload timelines **immediately** (before any later scrub
+  step or the `logOut` await), then remove the app-private replay claims and quarantine
+  files. The trailing reloads after `logOut` were removed. The snapshot writer was already
+  on O (11.01) and is re-proven for every gate and for missing/unfinished/foreign workspaces.
+- **Replay gate (item 2, §2.5/C22):** `widgetActionReplayBinding` = O
+  (`derivedStatePublishBinding`) **and** `.signedIn` **and** no open boundary (mirror
+  suspended, scrub blocked or pending). The migrated-only requirement is gone, so a
+  native-only account replays. The binding is re-checked before every claim.
+- **Owner-tag gate (§4.5):** the planner drops (and acknowledges) every entry that is
+  not an object or whose `ownerTag` is not exactly `hash(O)`, before id/type/field
+  validation and duplicate detection. Untagged and foreign unknown types are dropped;
+  only owner-tagged unknown types are retained. Counts go to the in-memory
+  `NativeWidgetActionReplayDiagnostics` (no ids, no payloads).
+- **C8 quarantine:** a queue the owner can never prepare (malformed JSON, not an array,
+  over 512 entries, an owner-tagged malformed/duplicate/invalid action) is re-read and
+  re-prepared under the lock; if it still fails, its exact bytes (or only digest and size
+  above 1 MiB) are written to an owner-scoped `quarantine-<binding>-<digest>.json` in the
+  claims directory (at most 4 per owner, oldest evicted), and only then is the shared
+  queue cleared. The app shows "Some widget or Siri actions couldn't be read and were set
+  aside." A corrupt claim file is still `invalidClaim` (never quarantined), and a queue
+  that became valid between the two holds is claimed normally.
+- **Stale and missing records (item 3, §3.3):** the engine's stale refusals and the
+  widgets' stale states are fixture-proven at 86,399/86,400/86,401 s, negative age and
+  unparseable `updatedAt`. Replay re-resolves the exact job id and ignores a start for a
+  missing, done or **archived** job (archived is a native deviation: RN does not check
+  it) and a stop for a missing job; `handle(url:)` discards a link to a missing id.
+- **One lock (deferred 11.01 minor):** the claim transport's own `flock` and lock-file
+  constant are removed; it uses `WidgetAppGroupLock` on `WidgetAppGroup.lockFileName`.
+
+**Decision — in-flight claims keyed by an old binding:** they are discarded, unread.
+`claim()` deletes, under the shared lock, every claim and quarantine file keyed by any
+binding other than the replaying O before it reads its own; and every account scrub
+removes the whole claims directory, because those files hold the scrubbed owner's
+actions. An old-binding claim is never replayed into a new owner and never kept for a
+later sign-in of the old owner (no current users: correctness over continuity).
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-widget-owner-gating-tests.sh` → "Widget owner gating
+  tests passed" (stable over 6 further runs). Includes the real scrubber race both ways
+  (writers blocked behind the scrubber's lock refuse with `signInRequired`; a mid-append
+  writer finishes first and the scrub then wipes its action).
+- Mutation checks (each applied, run, restored and verified with `cmp`), all killed:
+  migrated-only gate (19 failures), no `.signedIn` requirement (15), owner filter
+  removed (9), quarantine removed (6), reload deferred past the `logOut` await (2),
+  reload before the scrub (3), old-binding discard removed (1), archived check removed
+  (1), claims removal removed (3).
+- Also passing with `TZ=America/Phoenix`: widget-action-replay, app-intent-queue,
+  store-integration, widget-snapshot, job-timer-widget, next-job-widget,
+  app-group-pending-open-url.
+- `xcodebuild ... -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0.
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Deviations:**
+1. Replay ignores a timer start on an archived job (RN has no archived check).
+2. The claims-directory removal during a scrub takes no lock: the directory is
+   app-private and only the main actor replays.
+3. Quarantine covers the whole queue per owner, not individual entries (C8 left the
+   granularity open; per-entry would need a second parser for a queue that does not parse).
+
+**Handoff to 11.06 (item 4 — required before "routes after sign-in" holds):**
+- `consumeVerifiedPendingOpenURLIfNeeded` is still gated on the migrated owner and runs
+  once per session, so a cold-launch stash never routes for a native-only account.
+  Switch it to O + `.signedIn` and drop the once-per-session flag.
+- `NativePendingOpenURLConsumer` has no `ownerTag` check and does not take the lock or
+  remove the stash. Today a foreign stash is unreachable only because the scrub wipes it
+  and the writer reads the snapshot inside its lock hold. Add the `hash(O)` check and the
+  in-lock read-and-remove (§6.2).
+- `handle(url:)` has no auth, owner or archived gate and no parking. The 11.05 fixtures
+  assert only route-or-discard (a kept route must be the exact id in the current owner's
+  data; an account boundary clears it), so they stay valid when 11.06 adds parking.
+- Noted, not changed: `useAnotherAccount` does not scrub the App Group; the replay
+  owner-tag gate and O protect replay and the writer in that path.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- Sign out on a device with widgets on the Home Screen: both widgets clear within one
+  reload; Siri "Clock in" answers with the sign-in prompt.
+- Sign in as a second account: widgets show only that account's data; a widget action
+  queued by the first account is never applied.
+- A widget/Siri action with a deleted or archived job, and a widget left 24 h without
+  the app, fail closed with no wrong-record route.
+
+**Concerns:** item 4's "routes after sign-in" for cold links depends on 11.06.
+
+**Next ready:** 11.06 (deep-link routing and auth gates; the owner-gate API it needs is
+`NativeWidgetOwnerTag.matches` and O).

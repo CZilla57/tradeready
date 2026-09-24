@@ -332,6 +332,8 @@ final class AppStore: ObservableObject {
     private var authenticatedUserSubject: String?
     private var authenticatedEmail: String?
     private let widgetActionReplayTransport: NativeWidgetActionClaimTransport?
+    /// Task 11.05 (§4.5, C8): bounded, payload-free replay counters.
+    private(set) var widgetActionReplayDiagnostics = NativeWidgetActionReplayDiagnostics()
     private let initialSyncService: (any NativeInitialSyncServing)?
     private let subscriptionService: NativeSubscriptionServing
     private let injectedJobPhotoTransferService: (any NativeJobPhotoTransferring)?
@@ -466,7 +468,7 @@ final class AppStore: ObservableObject {
         var accountScrubRecoveryError: Error?
         if let pendingScope = repository.pendingAccountScrubScope {
             do {
-                try appGroupAccountScrubber.scrub()
+                try scrubWidgetAccountState()
                 switch pendingScope {
                 case .live: try repository.removeLiveAccountData()
                 case .all: try repository.removeAllAccountData()
@@ -488,8 +490,8 @@ final class AppStore: ObservableObject {
                 }
                 try repository.finishAccountScrub()
                 NativeGoogleSignInProvider.clearLocalCredential()
-                // Task 11.01: the recovered wipe blanks widgets immediately.
-                widgetTimelineReloader.reloadAllTimelines()
+                // Task 11.05: widgets were reloaded right after the App Group
+                // wipe inside `scrubWidgetAccountState()`.
             } catch {
                 accountScrubRecoveryError = error
             }
@@ -4192,7 +4194,8 @@ final class AppStore: ObservableObject {
         await subscriptionService.logOut()
         applyCompletedSignOutState()
         NativeGoogleSignInProvider.clearLocalCredential()
-        widgetTimelineReloader.reloadAllTimelines()
+        // Task 11.05: timelines were reloaded right after the App Group wipe
+        // (`scrubWidgetAccountState()`), before the `logOut` await above.
     }
 
     func deleteAccount() async throws {
@@ -4254,7 +4257,7 @@ final class AppStore: ObservableObject {
         await subscriptionService.logOut()
         applyCompletedSignOutState()
         NativeGoogleSignInProvider.clearLocalCredential()
-        widgetTimelineReloader.reloadAllTimelines()
+        // Task 11.05: see `signOut` — reloaded right after the wipe.
     }
 
     func retryAccountScrub() {
@@ -4263,7 +4266,7 @@ final class AppStore: ObservableObject {
             return
         }
         do {
-            try appGroupAccountScrubber.scrub()
+            try scrubWidgetAccountState()
             switch repository.pendingAccountScrubScope ?? .live {
             case .live: try repository.removeLiveAccountData()
             case .all: try repository.removeAllAccountData()
@@ -4286,8 +4289,8 @@ final class AppStore: ObservableObject {
             isAccountScrubBlocked = false
             applyCompletedSignOutState()
             NativeGoogleSignInProvider.clearLocalCredential()
-            // Task 11.01: the completed wipe blanks widgets immediately.
-            widgetTimelineReloader.reloadAllTimelines()
+            // Task 11.05: widgets were reloaded right after the App Group
+            // wipe inside `scrubWidgetAccountState()`.
         } catch {
             isAccountScrubBlocked = true
             migrationMessage = "Sign-out cleanup is still incomplete. No local account data was opened."
@@ -4315,6 +4318,7 @@ final class AppStore: ObservableObject {
         pendingOnMyWayJobID = nil
         pendingEstimateFollowUpJobID = nil
         didConsumeVerifiedPendingOpenURL = false
+        widgetActionReplayDiagnostics = NativeWidgetActionReplayDiagnostics()
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
         reviewRequestRecords = []
@@ -4343,12 +4347,26 @@ final class AppStore: ObservableObject {
         resetTodayOwnerState()
     }
 
+    /// Task 11.05 (W4, contract §3.1): the widget/Siri part of every account
+    /// scrub (sign-out, deletion, retry, launch recovery). It wipes the App
+    /// Group suite under the shared lock, then reloads widget timelines AT
+    /// ONCE — before any later scrub step or `await` — so no widget keeps
+    /// rendering the scrubbed owner's cached timeline while the boundary
+    /// completes, and no later owner can read it. It then removes the
+    /// app-private replay claims and quarantine files, which hold the scrubbed
+    /// owner's actions. A failure leaves the scrub marker pending (retried).
+    private func scrubWidgetAccountState() throws {
+        try appGroupAccountScrubber.scrub()
+        widgetTimelineReloader.reloadAllTimelines()
+        try widgetActionReplayTransport?.removeAllAccountClaims()
+    }
+
     private func performLocalAccountScrub(
         sessionStore: NativeKeychainSecureSettingsStore,
         scope: Canonical.SnapshotRepository.AccountScrubScope
     ) throws {
         try repository.beginAccountScrub(scope: scope)
-        try appGroupAccountScrubber.scrub()
+        try scrubWidgetAccountState()
         switch scope {
         case .live: try repository.removeLiveAccountData()
         case .all: try repository.removeAllAccountData()
@@ -5192,12 +5210,29 @@ final class AppStore: ObservableObject {
         resetTodayOwnerState()
     }
 
-    /// Claims and commits bounded batches only after exact legacy-owner proof.
+    /// Task 11.05 (contract §2.5 "Replay gate", C22): the binding widget/Siri
+    /// replay may run for — the single owner predicate `O`
+    /// (`derivedStatePublishBinding`) with the `.signedIn` gate, closed while
+    /// an explicit account boundary is scrubbing or a scrub is pending or
+    /// blocked. It no longer requires the migrated owner, so a native-only
+    /// account (every account: there are no current users) replays.
+    var widgetActionReplayBinding: String? {
+        NativeWidgetReplayOwnerGate.replayBinding(
+            ownerBinding: derivedStatePublishBinding,
+            isSignedIn: isSignedIn,
+            accountBoundaryOpen: widgetMirrorSuspendedForAccountBoundary
+                || isAccountScrubBlocked
+                || repository.isAccountScrubPending
+        )
+    }
+
+    /// Claims and commits bounded batches only for the exact signed-in owner.
     /// The coordinator writes all affected canonical families once before it
     /// acknowledges shared input. Unsupported future actions remain durable.
+    /// Task 11.05: actions not stamped `hash(O)` are dropped before dispatch
+    /// (§4.5) and an unpreparable queue is quarantined (C8).
     private func replayVerifiedWidgetActionsIfPossible() {
-        guard isMigratedLocalOwnerVerified,
-              let accountBinding = migratedAccountBinding,
+        guard let accountBinding = widgetActionReplayBinding,
               let widgetActionReplayTransport,
               ensurePersistenceWritable()
         else { return }
@@ -5209,6 +5244,9 @@ final class AppStore: ObservableObject {
             // Each claim contains at most 512 actions. Bound foreground work so
             // a continuously-writing extension cannot starve app activation.
             for _ in 0..<8 {
+                // The loop never suspends, but re-verify the exact owner before
+                // every claim anyway: a batch is only ever applied to `O`.
+                guard widgetActionReplayBinding == accountBinding else { return }
                 switch try coordinator.replayNext(
                     snapshot: snapshot,
                     verifiedAccountBinding: accountBinding
@@ -5218,8 +5256,12 @@ final class AppStore: ObservableObject {
                 case .retainedUnsupported(let count):
                     migrationMessage = "Kept \(count) newer widget action(s) for a compatible app update."
                     return
-                case .committed(let committed, _, _):
+                case .committed(let committed, _, _, let ownerDropped):
+                    widgetActionReplayDiagnostics.recordOwnerDropped(ownerDropped)
                     try apply(committed)
+                case .quarantined:
+                    widgetActionReplayDiagnostics.recordQuarantine()
+                    migrationMessage = NativeWidgetActionReplayCoordinator.quarantinedMessage
                 }
             }
         } catch {
@@ -9116,6 +9158,26 @@ extension AppStore {
     /// `pullDeltaIfPossible` commit path. Production never calls this.
     func testSetAuthenticationGateState(_ state: NativeAuthenticationGateState) {
         authenticationGateState = state
+    }
+
+    /// Test-only (task 11.05): seeds a NATIVE-ONLY signed-in owner: no
+    /// migrated RN owner proof (`isMigratedLocalOwnerVerified == false`,
+    /// `migratedAccountBinding == nil`), which is what every real account now
+    /// is. The §2.5 predicate `O` then holds only when a completed workspace
+    /// document bound to `binding` is on disk. Production never calls this.
+    func testSeedNativeSignedInOwner(subject: String, binding: String) {
+        authenticatedUserSubject = subject
+        verifiedAccountBinding = binding
+        isMigratedLocalOwnerVerified = false
+        migratedAccountBinding = nil
+        authenticationGateState = .signedIn(email: nil)
+    }
+
+    /// Test-only (task 11.05): runs the real widget/Siri replay trigger body
+    /// (the same private method every production trigger calls).
+    /// Production never calls this.
+    func testReplayWidgetActions() {
+        replayVerifiedWidgetActionsIfPossible()
     }
 
     /// Test-only: clears the seeded owner identity (simulates sign-out for

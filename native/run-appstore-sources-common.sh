@@ -111,6 +111,7 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeWidgetSnapshot.swift
 $ROOT_DIR/native/TradeReadyNative/NativeWidgetMirror.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAppGroupInbox.swift
 $ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetActionFieldRules.swift
+$ROOT_DIR/native/TradeReadyNative/NativeWidgetOwnerGate.swift
 $ROOT_DIR/native/TradeReadyNative/NativeWidgetActionReplay.swift
 $ROOT_DIR/native/TradeReadyNative/BuildEnvironment.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift

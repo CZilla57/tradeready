@@ -22,6 +22,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetActionQueue.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/NextJobWidgetPolicy.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/JobTimerWidgetPolicy.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeWidgetOwnerGate.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeWidgetActionReplay.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeDeepLinkParser.swift" \
   "$ROOT_DIR/native/JobTimerWidgetPolicyTests/main.swift" \

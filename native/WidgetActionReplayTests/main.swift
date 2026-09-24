@@ -15,6 +15,9 @@ private final class MemoryWidgetActionQueue: NativeWidgetActionQueueBacking {
 struct WidgetActionReplayTests {
     static func main() throws {
         var failures = 0
+        // Task 11.05 (§4.5): replay drops every action not stamped hash(O), so
+        // every fixture action carries the tag for the planning binding.
+        let tag = NativeWidgetOwnerTag.make(binding: String(repeating: "a", count: 64))
         func expect(_ condition: @autoclosure () -> Bool, _ label: String) {
             if !condition() { failures += 1; print("FAIL: \(label)") }
         }
@@ -31,11 +34,11 @@ struct WidgetActionReplayTests {
         }
 
         let raw = """
-        [{"id":"start-1","type":"timer_start","at":"2026-08-03T09:00:00.000Z","jobId":"j1","future":true},
-         {"id":"stop-1","type":"timer_stop","at":"2026-08-03T11:00:00Z","jobId":"j1"},
-         {"id":"trip-1","type":"trip_log","at":"2026-08-03T11:05:00Z","date":"2026-08-03","odometerStart":100,"odometerEnd":115},
-         {"id":"expense-1","type":"expense_log","at":"2026-08-03T11:10:00Z","date":"2026-08-03","amount":42.5,"category":"materials","description":"Lumber"},
-         {"id":"future-1","type":"future_action","at":"2026-08-03T12:00:00Z","payload":{"keep":"exact"}}]
+        [{"ownerTag":"\(tag)","id":"start-1","type":"timer_start","at":"2026-08-03T09:00:00.000Z","jobId":"j1","future":true},
+         {"ownerTag":"\(tag)","id":"stop-1","type":"timer_stop","at":"2026-08-03T11:00:00Z","jobId":"j1"},
+         {"ownerTag":"\(tag)","id":"trip-1","type":"trip_log","at":"2026-08-03T11:05:00Z","date":"2026-08-03","odometerStart":100,"odometerEnd":115},
+         {"ownerTag":"\(tag)","id":"expense-1","type":"expense_log","at":"2026-08-03T11:10:00Z","date":"2026-08-03","amount":42.5,"category":"materials","description":"Lumber"},
+         {"ownerTag":"\(tag)","id":"future-1","type":"future_action","at":"2026-08-03T12:00:00Z","payload":{"keep":"exact"}}]
         """
         let batch = try NativeWidgetActionBatchPlanner.prepare(
             rawValue: raw,
@@ -76,10 +79,10 @@ struct WidgetActionReplayTests {
         """#.utf8))
         let knownRaw = #"""
         [
-          {"id":"start-atomic","type":"timer_start","at":"2026-08-03T09:00:00Z","jobId":"j1"},
-          {"id":"stop-atomic","type":"timer_stop","at":"2026-08-03T08:00:00Z","jobId":"j1"},
-          {"id":"trip-atomic","type":"trip_log","at":"2026-08-03T11:00:00Z","date":"2026-08-03","odometerStart":120,"odometerEnd":115},
-          {"id":"expense-atomic","type":"expense_log","at":"2026-08-03T12:00:00Z","date":"2026-08-03","amount":25,"category":"future-category","description":""}
+          {"ownerTag":"\#(tag)","id":"start-atomic","type":"timer_start","at":"2026-08-03T09:00:00Z","jobId":"j1"},
+          {"ownerTag":"\#(tag)","id":"stop-atomic","type":"timer_stop","at":"2026-08-03T08:00:00Z","jobId":"j1"},
+          {"ownerTag":"\#(tag)","id":"trip-atomic","type":"trip_log","at":"2026-08-03T11:00:00Z","date":"2026-08-03","odometerStart":120,"odometerEnd":115},
+          {"ownerTag":"\#(tag)","id":"expense-atomic","type":"expense_log","at":"2026-08-03T12:00:00Z","date":"2026-08-03","amount":25,"category":"future-category","description":""}
         ]
         """#
         let knownBatch = try NativeWidgetActionBatchPlanner.prepare(
@@ -126,7 +129,7 @@ struct WidgetActionReplayTests {
         expect(initialClaimFiles.count == 1,
                "one account-bound write-ahead claim is durable")
 
-        let appended = #"{"id":"later-1","type":"timer_stop","at":"2026-08-03T13:00:00Z"}"#
+        let appended = #"{"ownerTag":"\#(tag)","id":"later-1","type":"timer_stop","at":"2026-08-03T13:00:00Z"}"#
         queue.value = String(raw.dropLast()) + "," + appended + "]"
         let recovered = try transport.claim(verifiedAccountBinding: binding)
         expect(recovered == firstClaim, "an unacknowledged claim is recovered before new input")
@@ -169,7 +172,7 @@ struct WidgetActionReplayTests {
         let failedTransport = NativeWidgetActionClaimTransport(
             queue: failedQueue,
             claimDirectory: failedRoot.appendingPathComponent("claims", isDirectory: true),
-            lockFile: failedRoot.appendingPathComponent("group/\(NativeWidgetActionClaimTransport.lockFileName)")
+            lockFile: failedRoot.appendingPathComponent("group/\(WidgetAppGroup.lockFileName)")
         )
         do {
             _ = try failedTransport.claim(verifiedAccountBinding: binding)
@@ -187,7 +190,7 @@ struct WidgetActionReplayTests {
         let commitTransport = NativeWidgetActionClaimTransport(
             queue: commitQueue,
             claimDirectory: commitRoot.appendingPathComponent("claims", isDirectory: true),
-            lockFile: commitRoot.appendingPathComponent("group/\(NativeWidgetActionClaimTransport.lockFileName)")
+            lockFile: commitRoot.appendingPathComponent("group/\(WidgetAppGroup.lockFileName)")
         )
         let commitRepository = Canonical.SnapshotRepository(
             primaryURL: commitRoot.appendingPathComponent("store.json")
@@ -196,8 +199,8 @@ struct WidgetActionReplayTests {
             transport: commitTransport,
             repository: commitRepository
         ).replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
-        if case let .committed(committedSnapshot, changed, ignored) = committed {
-            expect(changed == 4 && ignored == 0 && committedSnapshot.payload.trips?.count == 1,
+        if case let .committed(committedSnapshot, changed, ignored, ownerDropped) = committed {
+            expect(changed == 4 && ignored == 0 && ownerDropped == 0 && committedSnapshot.payload.trips?.count == 1,
                    "coordinator commits the complete multi-family result")
         } else { expect(false, "known batch reaches the committed state") }
         let persistedCommit = try commitRepository.load()
@@ -216,12 +219,12 @@ struct WidgetActionReplayTests {
 
         let futureRoot = transportRoot.appendingPathComponent("future-action", isDirectory: true)
         let futureQueue = MemoryWidgetActionQueue(
-            #"[{"id":"future-only","type":"newer_action","at":"2026-08-03T13:00:00Z","payload":{"keep":true}}]"#
+            #"[{"ownerTag":"\#(tag)","id":"future-only","type":"newer_action","at":"2026-08-03T13:00:00Z","payload":{"keep":true}}]"#
         )
         let futureTransport = NativeWidgetActionClaimTransport(
             queue: futureQueue,
             claimDirectory: futureRoot.appendingPathComponent("claims", isDirectory: true),
-            lockFile: futureRoot.appendingPathComponent("group/\(NativeWidgetActionClaimTransport.lockFileName)")
+            lockFile: futureRoot.appendingPathComponent("group/\(WidgetAppGroup.lockFileName)")
         )
         let futureRepository = Canonical.SnapshotRepository(
             primaryURL: futureRoot.appendingPathComponent("store.json")
@@ -245,19 +248,19 @@ struct WidgetActionReplayTests {
         } catch NativeWidgetActionBatchError.invalidAccountBinding {}
 
         rejects("{}", .malformedQueue, "non-array queue is rejected")
-        rejects("[{\"id\":\"\",\"type\":\"timer_stop\",\"at\":\"2026-08-03T11:00:00Z\"}]",
+        rejects("[{\"ownerTag\":\"\(tag)\",\"id\":\"\",\"type\":\"timer_stop\",\"at\":\"2026-08-03T11:00:00Z\"}]",
                 .malformedAction(index: 0), "empty identifiers are rejected")
-        rejects("[{\"id\":\"a\",\"type\":\"timer_stop\",\"at\":\"not-a-date\"}]",
+        rejects("[{\"ownerTag\":\"\(tag)\",\"id\":\"a\",\"type\":\"timer_stop\",\"at\":\"not-a-date\"}]",
                 .malformedAction(index: 0), "invalid action instants are rejected")
-        rejects("[{\"id\":\"a\",\"type\":\"timer_start\",\"at\":\"2026-08-03T11:00:00Z\"}]",
+        rejects("[{\"ownerTag\":\"\(tag)\",\"id\":\"a\",\"type\":\"timer_start\",\"at\":\"2026-08-03T11:00:00Z\"}]",
                 .invalidAction(index: 0, field: "jobId"), "timer start requires a job")
-        rejects("[{\"id\":\"a\",\"type\":\"timer_stop\",\"at\":\"2026-08-03T11:00:00Z\"},{\"id\":\"a\",\"type\":\"expense_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-08-03\",\"amount\":1}]",
+        rejects("[{\"ownerTag\":\"\(tag)\",\"id\":\"a\",\"type\":\"timer_stop\",\"at\":\"2026-08-03T11:00:00Z\"},{\"ownerTag\":\"\(tag)\",\"id\":\"a\",\"type\":\"expense_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-08-03\",\"amount\":1}]",
                 .duplicateActionID("a"), "duplicate IDs across action types reject the batch")
-        rejects("[{\"id\":\"t\",\"type\":\"trip_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-02-30\",\"odometerStart\":0,\"odometerEnd\":1}]",
+        rejects("[{\"ownerTag\":\"\(tag)\",\"id\":\"t\",\"type\":\"trip_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-02-30\",\"odometerStart\":0,\"odometerEnd\":1}]",
                 .invalidAction(index: 0, field: "date"), "impossible local dates are rejected")
-        rejects("[{\"id\":\"e\",\"type\":\"expense_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-08-03\",\"amount\":1000001}]",
+        rejects("[{\"ownerTag\":\"\(tag)\",\"id\":\"e\",\"type\":\"expense_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-08-03\",\"amount\":1000001}]",
                 .invalidAction(index: 0, field: "amount"), "expense cap is enforced")
-        rejects("[{\"id\":\"t\",\"type\":\"trip_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-08-03\",\"odometerStart\":-1,\"odometerEnd\":1}]",
+        rejects("[{\"ownerTag\":\"\(tag)\",\"id\":\"t\",\"type\":\"trip_log\",\"at\":\"2026-08-03T11:00:00Z\",\"date\":\"2026-08-03\",\"odometerStart\":-1,\"odometerEnd\":1}]",
                 .invalidAction(index: 0, field: "odometerStart"), "negative odometers are rejected")
 
         if failures == 0 { print("PASS: native widget-action batch planner tests") }
