@@ -832,6 +832,8 @@ struct AccountSettings: View {
                 try await store.deleteAccount()
                 deleteConfirmationPresented = false
             } catch {
+                // Task 11.09: RN `SettingsAccountScreen.tsx:61` reports here.
+                store.reportError(error, context: ["context": "deleteAccount"])
                 deleteConfirmationPresented = false
                 deleteFailureMessage = error.localizedDescription
                 deleteFailurePresented = true

@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07 and 11.08 done (2026-09-24); implementation tasks 11.09–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08 and 11.09 done (2026-09-24); implementation tasks 11.10–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -786,7 +786,7 @@ complete / Phase 12 evidence deferred**.
 | 11.06 | L1, L2 | Done (code complete 2026-09-24; C11/P8 resolved; device proof deferred to Phase 12) | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
 | 11.07 | P1, P4 | Done (code complete 2026-09-24; PostHog iOS 3.81.0 linked, app target only; no key committed, so analytics is off until a release key is supplied; device proof deferred to Phase 12) | 11.00 | Analytics transport + privacy |
 | 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 49 wired (the booking push opens await native push; `tax_settings_saved` is unreachable until a native tax-settings editor exists); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
-| 11.09 | R1, R2, R3, M1 | Pending | 11.07 | Crash reporting + redaction + app manifest |
+| 11.09 | R1, R2, R3, M1 | Done (code complete 2026-09-24; Sentry Cocoa 9.29.0 linked, app target only; no DSN committed, so crash reporting is off until a release DSN is supplied; app manifest written; dSYM upload script for `tradeready-3r/tradeready-ios`; device proof deferred to Phase 12) | 11.07 | Crash reporting + redaction + app manifest |
 | 11.15 | P4, R2 | Pending | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Pending | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Pending | 11.10a | iPad layouts + multitasking |
@@ -2254,3 +2254,178 @@ both unblocked by 11.07.
     - dropping the nil-`daysPastDue` open;
     - unwiring the recurring editor;
     - attaching the Jobs modifier to the stack.
+
+### 11.09 — Crash reporting and redaction (2026-09-24)
+
+**Outcome:** code complete for R1, R2, R3 and M1 (app manifest).
+- Sentry Cocoa **9.29.0** (`exactVersion`, revision
+  `d9df1c4e8d8466c7f8b3c56150378927dadf1b8e`) is linked to the app target only, following
+  the PostHog pattern of e5d3940: one package reference, one product dependency and one
+  Frameworks entry. The widget extension links nothing. 9.29.1 appeared the same day and
+  was not adopted (contract §7 re-check).
+- The DSN is wired like the PostHog key: `TradeReadySentryDSN` = `$(TRADEREADY_SENTRY_DSN)`
+  in `native/Info.plist`, read by `BuildEnvironment.sentryDSN`. No configuration sets the
+  build setting, so both builds report nothing until a release supplies a DSN. The RN DSN
+  (`app.json:100`) is not copied. Staging stays `https://staging.invalid`.
+- `NativeCrashReportingGate` disables reporting in Debug and for a missing, blank,
+  unexpanded, `PLACEHOLDER` or malformed DSN. Enabled, the adapter gets exactly the §10.2
+  options: traces 0.2, auto sessions on, `sendDefaultPii` false, no screenshot or view
+  hierarchy, replay rates 0, failed-request capture off, `environment`, and
+  `releaseName = <bundle id>@<short>+<build>`.
+- `beforeSend`, `beforeBreadcrumb` and `beforeSendSpan` run `NativeErrorRedaction`
+  (contract §10.4 lists where it is stricter than §10.2). The user is `{id}` only.
+- `reportError` parity: an `Error` is captured as is; any other value is wrapped in a
+  titled `NativeReportedError`, with `rawError` reduced to `{code, message, hint}` and the
+  extras allow-listed. Capture and `setUser` run on a private serial queue and swallow
+  every failure, so reporting is off the commit path.
+- `setUser` rides the 11.08 lifecycle in `applyAnalyticsIdentityActions`; there is no
+  second identity path.
+- Call sites wired: `pushQueue` and `pullRemote` (once per sync pass, in
+  `AppStore.applySyncStatus`) and `deleteAccount` (`SettingsView`). The other RN sites
+  are recorded, not mapped (contract §10.4).
+- The app manifest `native/TradeReadyNative/PrivacyInfo.xcprivacy` is written (below).
+
+**Decisions:**
+- **Native Sentry project slug:** `tradeready-ios` in org `tradeready-3r` (the RN slug
+  `react-native` is not reused).
+- **dSYM upload:** `native/scripts/upload-sentry-dsyms.sh <App.xcarchive | dSYMs dir>`,
+  run by hand on a Release archive. It calls `sentry-cli debug-files upload`, takes the
+  token from `SENTRY_AUTH_TOKEN` only, and exits 0 with a message when the token or the
+  slug is absent. There is no run-script build phase and no token in the repo.
+- **§8.3:** Other Financial Info and Purchase History are declared (linked, Analytics).
+  Device ID is not declared (PostHog's id is a rotating per-install UUID, not the IDFA or
+  IDFV, and flags are off). The inert `PostHog_PHPLCrashReporter.bundle` manifest is left as
+  shipped; its types are already declared.
+- **§8.1 correction:** File Timestamp `C617.1` is declared.
+  `NativeWidgetActionReplay.swift` reads `.contentModificationDateKey` of the App Group
+  claim files; the 11.00 grep missed it. The widget extension reads no timestamp, so its
+  manifest is unchanged.
+- **Final pin:** Sentry Cocoa 9.29.0; PostHog stays 3.81.0.
+
+**App manifest** (`N/PrivacyInfo.xcprivacy`): no tracking, no tracking domains.
+- APIs: UserDefaults `CA92.1` and `1C8F.1`; File Timestamp `C617.1`.
+- Collected, all tracking no:
+  - User ID: linked; Analytics and App Functionality.
+  - Product Interaction, Other Usage Data, Other Financial Info and Purchase History:
+    linked; Analytics.
+  - Crash Data, Performance Data and Other Diagnostic Data: linked; App Functionality.
+
+**Files:**
+- New:
+  - `native/TradeReadyNative/NativeErrorRedaction.swift`: `NativeSensitiveData` (shared with
+    analytics), the payload mirrors, `NativeErrorRedaction`, `NativeReportedError` and
+    `NativeCrashReportBuilder`.
+  - `native/TradeReadyNative/NativeCrashReporting.swift`: options, gate, adapter protocol,
+    the no-op and the queued reporter.
+  - `native/TradeReadyNative/NativeCrashReportingSentry.swift`: the only `import Sentry`
+    (an addition to the Own list, mirroring 11.07's `NativeAnalyticsPostHog.swift`).
+  - `native/TradeReadyNative/PrivacyInfo.xcprivacy`.
+  - `native/ErrorRedactionTests/main.swift` and `native/run-error-redaction-tests.sh`.
+  - `native/scripts/upload-sentry-dsyms.sh`.
+- Edited:
+  - `native/TradeReadyNative/NativeAnalytics.swift`: the shared screens forward to
+    `NativeSensitiveData` (the lists are unchanged).
+  - `native/TradeReadyNative/AppStore.swift`: the `crashReporting` dependency and init
+    parameter, `setUser` beside the analytics identity actions, `reportError`,
+    `applySyncStatus` (the coordinator's `statusChanged` now goes through it) and one test
+    seam.
+  - `native/TradeReadyNative/SettingsView.swift`: the `deleteAccount` report.
+  - `native/TradeReadyNative/TradeReadyNativeApp.swift`: `NativeCrashReporter.live()`
+    starts first and is injected into the store.
+  - `native/TradeReadyNative/BuildEnvironment.swift`: `sentryDSN`.
+  - `native/Info.plist`: `TradeReadySentryDSN`.
+  - `native/TradeReadyNative.xcodeproj/project.pbxproj` and `Package.resolved`: the package.
+  - `native/run-appstore-sources-common.sh` and `native/run-all-domain-tests.sh`.
+- Docs: contract (header, C12/C13/C18, §7, §8.1, §8.3, §10.2, §10.4, §15); this plan.
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-error-redaction-tests.sh` → "error-redaction tests:
+  567/567 checks passed". It covers:
+  - the gate (Debug, missing, blank, unexpanded, `PLACEHOLDER` and malformed DSNs each
+    build no adapter and report nothing) and the exact §10.2 options on the fake adapter,
+    including traces 0.2 and auto sessions on; a failed start leaves an inert reporter;
+  - every §10.1 value class in strings (credential prefixes, JWTs, bearer and API-key
+    headers, `key=value` secrets, emails, phones, portal/booking/payment URLs, query
+    strings, fragments, user info, data URIs, base64), with ids, UUIDs, dates and times
+    preserved;
+  - every deny key class, case-insensitive and nested, plus `Data`, arbitrary objects,
+    non-finite numbers, and the depth and array caps;
+  - one poisoned payload through the event (message, exception, mechanism data, extras,
+    tags, contexts, breadcrumbs, request, user, server name, transaction), a breadcrumb and
+    a span, with no secret surviving anywhere;
+  - the extras allow-list and the reduced `rawError`; the 1 KB cap on every field and on
+    keys, cut on a character boundary;
+  - the wrapper titles (`[code] message`, numeric and Bool codes, redacted JSON, `null`,
+    non-JSON types, redaction and cap), the `NSDebugDescriptionErrorKey` title and the
+    fingerprint;
+  - the reporter's ordering, id sanitizing, and a throwing adapter;
+  - `setUser` at sign-in, re-verification, sign-out, double boundary, id change,
+    `useAnotherAccount` (run for real) and deletion;
+  - a throwing adapter with commits verified on disk after relaunch, and a blocked
+    (slow) adapter while a commit and two reports return at once;
+  - the sync call sites: one report per failed or partial push or failed or partial pull,
+    none for completed passes, early exits or a republished status;
+  - source checks: the `deleteAccount` site, the launch order, one `import Sentry`, the
+    app-only link and the 9.29.0 pin, `Package.resolved`, no DSN or run-script phase, the
+    Info.plist key, staging, the dSYM script, and both manifests parsed.
+- Mutation checks: 35, each applied to a scratch copy of `native/`, run and restored. All
+  were killed. They covered each §10.2 option and gate, synchronous capture (the slow-SDK
+  test deadlocks, which is the failure it guards), id sanitizing, both `setUser` calls, the
+  sync dedupe and pull rule, the `deleteAccount` site, each string scrub, token path
+  markers, URL queries, payment hosts, the 1 KB cap, bytes, the extras allow-list, the
+  `rawError` reduction, `{id}`-only users, case-insensitive and nested keys, request
+  headers, server name, event breadcrumbs, spans, and both wrapper-title rules.
+- `TZ=America/Phoenix sh native/run-analytics-transport-tests.sh` → "Analytics transport
+  tests passed (226 checks)".
+- `TZ=America/Phoenix sh native/run-analytics-event-tests.sh` → "Analytics event tests
+  passed (536 checks)".
+- `TZ=America/Phoenix sh native/run-store-integration-tests.sh` → "PASS: canonical AppStore
+  integration tests".
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -resolvePackageDependencies -packageAuthorizationProvider netrc`
+  → resolved Sentry 9.29.0 (the default keychain provider hung, contract §7).
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`. The first build warned that the `Breadcrumb.data` setter is
+  deprecated; the adapter now uses `setData(value:key:)`, and the rebuild has no warning
+  from a file this task touched. The `appintentsnltrainingprocessor` "Could not archive
+  SSU artifacts" line does not fail the build and comes from the App Intents metadata step.
+- Built-app inspection (`Release-iphoneos/TradeReadyNative.app`):
+  - `PrivacyInfo.xcprivacy` at the bundle root, byte-identical to the source (the
+    synchronized root group picked it up with no project edit);
+  - `Frameworks/Sentry.framework/PrivacyInfo.xcprivacy` (UserDefaults `CA92.1`, System
+    Boot Time `35F9.1`, File Timestamp `C617.1`; Crash, Performance and Other Diagnostic
+    Data);
+  - `PostHog_PostHog.bundle` and `PostHog_PHPLCrashReporter.bundle` manifests present;
+  - `PlugIns/TradeReadyWidgets.appex`: its manifest is unchanged, `nm` finds no Sentry
+    symbol, and `otool -L` shows no Sentry or PostHog;
+  - `Info.plist` `TradeReadySentryDSN` expands to an empty string, so the build reports
+    nothing.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0, including "error-redaction
+  tests: 567/567 checks passed".
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- Create the Sentry project `tradeready-ios` in org `tradeready-3r`, build a Release
+  archive with `TRADEREADY_SENTRY_DSN` set, then run
+  `SENTRY_AUTH_TOKEN=… sh native/scripts/upload-sentry-dsyms.sh <App.xcarchive>`. Sentry
+  lists the app and widget dSYMs.
+- Trigger a test crash and a `deleteAccount` failure. Each arrives symbolicated with
+  `release = <bundle>@<version>+<build>`, `environment`, user `{id}` only, no email, IP or
+  device name, and a `[Filtered]` URL token.
+- An offline-then-failing sync push reports one `pushQueue` issue titled
+  `[<code>] Sync push left changes queued`.
+- Sessions appear under Release Health, and traces sample at about 20%.
+- A Debug build and a Release build without the DSN send nothing.
+- App Store Connect privacy labels match `PrivacyInfo.xcprivacy`; resolve the §8.3
+  App Functionality concern (email, synced records, photos) there.
+
+**Concerns:**
+- Contract §8.2 omits the App Functionality data the app sends to its own backend (the
+  sign-in email, synced customer and job records, job photos). The manifest follows the
+  contract; 12.01 must decide these with the App Store labels (contract §8.3).
+- Only three of about 74 RN `reportError` sites are mapped; the rest are recorded in
+  contract §10.4.
+- Sentry 9.29.1 is out and was not adopted.
+- Package resolution needs `-packageAuthorizationProvider netrc` on this machine; the
+  plain command hangs on a keychain lookup.
+
+**Next ready:** 11.15 (AI Assistant advanced key entry) and 11.10a (accessibility audit).

@@ -118,6 +118,8 @@ $ROOT_DIR/native/TradeReadyNative/BuildEnvironment.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeInsightsCardPolicy.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayBriefing.swift
+$ROOT_DIR/native/TradeReadyNative/NativeErrorRedaction.swift
+$ROOT_DIR/native/TradeReadyNative/NativeCrashReporting.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAnalytics.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeInvoiceBulk.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAnalyticsEvents.swift

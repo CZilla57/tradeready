@@ -84,6 +84,16 @@ enum BuildEnvironment {
         configuredString(for: "TradeReadyPostHogHost")
     }
 
+    /// Sentry DSN (task 11.09, contract §10.2), from the build setting
+    /// `TRADEREADY_SENTRY_DSN`. Neither committed configuration sets it, so
+    /// crash reporting stays off until a release build supplies one; the RN
+    /// DSN (`app.json` `expo.extra.sentryDsn`) is never copied into native
+    /// config. `NativeCrashReportingGate` applies the Debug, `PLACEHOLDER` and
+    /// well-formedness rules.
+    static var sentryDSN: String? {
+        configuredString(for: "TradeReadySentryDSN")
+    }
+
     private static func configuredURL(for key: String) -> URL? {
         guard let value = configuredString(for: key) else { return nil }
         return URL(string: value)

@@ -11,6 +11,7 @@
 		A00000000000000000000021 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000031 /* GoogleSignInSwift */; };
 		A00000000000000000000022 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000033 /* RevenueCat */; };
 		A00000000000000000000023 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000035 /* PostHog */; };
+		A00000000000000000000024 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000037 /* Sentry */; };
 		C11000000000000000000002 /* TradeReadyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C11000000000000000000001 /* TradeReadyWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B00000000000000000000001 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* TestSupport.swift */; };
 		B00000000000000000000002 /* CanonicalModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* CanonicalModelTests.swift */; };
@@ -91,6 +92,7 @@
 				A00000000000000000000021 /* GoogleSignInSwift in Frameworks */,
 				A00000000000000000000022 /* RevenueCat in Frameworks */,
 				A00000000000000000000023 /* PostHog in Frameworks */,
+				A00000000000000000000024 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -180,6 +182,7 @@
 				A00000000000000000000031 /* GoogleSignInSwift */,
 				A00000000000000000000033 /* RevenueCat */,
 				A00000000000000000000035 /* PostHog */,
+				A00000000000000000000037 /* Sentry */,
 			);
 			productName = TradeReadyNative;
 			productReference = A00000000000000000000008 /* TradeReadyNative.app */;
@@ -266,6 +269,7 @@
 				A00000000000000000000029 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				A00000000000000000000032 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 				A00000000000000000000034 /* XCRemoteSwiftPackageReference "posthog-ios" */,
+				A00000000000000000000036 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			productRefGroup = A00000000000000000000004 /* Products */;
 			projectDirPath = "";
@@ -605,6 +609,14 @@
 				version = 3.81.0;
 			};
 		};
+		A00000000000000000000036 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = exactVersion;
+				version = 9.29.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -627,6 +639,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A00000000000000000000034 /* XCRemoteSwiftPackageReference "posthog-ios" */;
 			productName = PostHog;
+		};
+		A00000000000000000000037 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000036 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -8,9 +8,15 @@ struct TradeReadyNativeApp: App {
     private let backgroundRefreshScheduler: NativeBackgroundRefreshScheduler
 
     init() {
+        // Task 11.09 (contract §10.2): crash reporting starts first, on the
+        // main thread, so a crash later in launch is captured (RN
+        // `Sentry.init` runs at module load, `Sentry.wrap(AppRoot)` has no
+        // native analog). Debug, a missing, `PLACEHOLDER` or malformed DSN
+        // yields a reporter that sends nothing.
+        let crashReporter = NativeCrashReporter.live()
         // Task 11.07 (contract §9.2): the analytics transport. Debug, a
         // missing key or a `PLACEHOLDER` key yields one that emits nothing.
-        let store = AppStore(analytics: NativeAnalyticsTransport.live())
+        let store = AppStore(analytics: NativeAnalyticsTransport.live(), crashReporting: crashReporter)
         _store = StateObject(wrappedValue: store)
         let coordinator = NativeEstimateFollowUpNotificationCoordinator(
             center: NativeSystemEstimateFollowUpNotificationCenter(),

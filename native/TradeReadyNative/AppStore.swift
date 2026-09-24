@@ -270,6 +270,12 @@ final class AppStore: ObservableObject {
     /// `NativeAnalyticsTransport.live()`. Every emission goes through
     /// `emitAnalytics(_:)` (task 11.08).
     private let analytics: NativeAnalytics
+    /// Task 11.09 (contract §10.2–§10.3): no-op by default; the app injects
+    /// `NativeCrashReporter.live()`. Identity rides the 11.08 lifecycle
+    /// (`applyAnalyticsIdentityActions`); errors go through `reportError`.
+    /// The reporter never throws and hands work to its own queue, so it can
+    /// neither block nor roll back a save.
+    private let crashReporting: NativeCrashReporting
     /// Task 11.08 (contract §9.4): the last identified Supabase user id.
     private var analyticsIdentity = NativeAnalyticsIdentityLifecycle()
     /// Task 11.08: `subscription_paywall_shown` fires once per paywall
@@ -426,8 +432,12 @@ final class AppStore: ObservableObject {
     }
 
     /// Task 11.07: `analytics` is the app's `NativeAnalyticsTransport.live()`;
-    /// the no-op default keeps every other caller unchanged.
-    convenience init(analytics: NativeAnalytics = NativeNoOpAnalytics()) {
+    /// the no-op default keeps every other caller unchanged. Task 11.09:
+    /// `crashReporting` is the app's `NativeCrashReporter.live()`, same rule.
+    convenience init(
+        analytics: NativeAnalytics = NativeNoOpAnalytics(),
+        crashReporting: NativeCrashReporting = NativeNoOpCrashReporting()
+    ) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let directory = base.appending(path: "TradeReadyNative", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -436,7 +446,8 @@ final class AppStore: ObservableObject {
             seedIfMissing: false,
             automaticallyMigrateLegacyData: true,
             pendingOpenURLConsumer: .live(),
-            analytics: analytics
+            analytics: analytics,
+            crashReporting: crashReporting
         )
     }
 
@@ -458,9 +469,11 @@ final class AppStore: ObservableObject {
         advisoryAITransport: (any NativeAdvisoryAITransport)? = nil,
         coachTransport: NativeCoachTransport? = nil,
         analytics: NativeAnalytics = NativeNoOpAnalytics(),
+        crashReporting: NativeCrashReporting = NativeNoOpCrashReporting(),
         widgetTimelineReloader: any NativeWidgetTimelineReloading = NativeWidgetCenterTimelineReloader()
     ) {
         self.analytics = analytics
+        self.crashReporting = crashReporting
         self.widgetTimelineReloader = widgetTimelineReloader
         self.fileURL = fileURL
         self.repository = Canonical.SnapshotRepository(primaryURL: fileURL)
@@ -6279,7 +6292,7 @@ final class AppStore: ObservableObject {
             credentialsProvider: { [weak self] in self?.currentSyncCredentials() },
             refreshSession: { [weak self] in await self?.refreshSyncSession() ?? false },
             pull: { [weak self] in await self?.pullDeltaIfPossible() ?? .skipped },
-            statusChanged: { [weak self] status in self?.syncStatus = status }
+            statusChanged: { [weak self] status in self?.applySyncStatus(status) }
         )
         syncCoordinator = coordinator
         syncStatus = coordinator.status()
@@ -9192,12 +9205,58 @@ extension AppStore {
         analyticsPaywallTracked = false
     }
 
+    /// Task 11.09 (§9.4): the one identity lifecycle drives both SDKs, like
+    /// RN's `identifyUser`/`resetUser` (PostHog identify + `Sentry.setUser({id})`,
+    /// reset + `Sentry.setUser(null)`).
     private func applyAnalyticsIdentityActions(_ actions: [NativeAnalyticsIdentityLifecycle.Action]) {
         for action in actions {
             switch action {
-            case .identify(let userID): analytics.identify(userID)
-            case .reset: analytics.reset()
+            case .identify(let userID):
+                analytics.identify(userID)
+                crashReporting.setUser(id: userID)
+            case .reset:
+                analytics.reset()
+                crashReporting.setUser(id: nil)
             }
+        }
+    }
+
+    // MARK: - Error reporting (task 11.09, contract §10.3)
+
+    /// RN `reportError(error, context)`. Call it after the commit it
+    /// describes, never inside one: the reporter swallows every failure and
+    /// runs off the caller's thread. Only the §10.3 extra keys survive.
+    func reportError(_ value: Any?, context: [String: Any]) {
+        crashReporting.reportError(value, context: context)
+    }
+
+    /// RN `utils/sync.ts` `reportError(firstError, {context: 'pushQueue'})`
+    /// and `{context: 'pullRemote'}`. The coordinator reduces failures to
+    /// bounded diagnostic codes, so the report is a PostgREST-shaped object
+    /// (`{code, message}`) that the wrapper titles `"[<code>] <message>"`.
+    /// It runs once per pass, when the coordinator's status leaves
+    /// `isSyncing`, and only for a pass that really attempted the network
+    /// (`offline`, `backoffDeferred` and the other early exits never report).
+    private func applySyncStatus(_ status: NativeSyncStatus) {
+        let passEnded = syncStatus.isSyncing && !status.isSyncing
+        syncStatus = status
+        guard passEnded else { return }
+        let code = status.diagnosticCode
+        switch status.lastOutcome {
+        case .failed(let remaining)?, .partial(_, let remaining, _)?:
+            reportError(
+                ["code": code ?? "push/unavailable", "message": "Sync push left changes queued"],
+                context: ["context": "pushQueue", "count": remaining]
+            )
+        case .completed?:
+            // The pull runs only after a completed push with an empty queue.
+            guard let pull = status.lastPullResult, pull.state == .failed || pull.state == .partial else { return }
+            reportError(
+                ["code": code ?? pull.diagnosticCode ?? "pull/unavailable", "message": "Sync pull did not complete"],
+                context: ["context": "pullRemote"]
+            )
+        default:
+            return
         }
     }
 
@@ -9781,6 +9840,14 @@ extension AppStore {
     /// here). Production never calls this.
     func testApplyAccountDeletionAnalyticsBoundary() {
         applyAnalyticsIdentityBoundary()
+    }
+
+    /// Test-only (task 11.09): feeds one sync-coordinator status through the
+    /// real `statusChanged` handler (the coordinator needs a configured
+    /// Supabase project that this host binary does not have). Production
+    /// never calls this.
+    func testApplySyncStatus(_ status: NativeSyncStatus) {
+        applySyncStatus(status)
     }
 
     /// Test-only (task 11.05): runs the real widget/Siri replay trigger body

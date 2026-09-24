@@ -11,6 +11,10 @@ schema, owner or write-semantics decision changed.
 Amended by 11.07 (2026-09-24): the PostHog pin re-check (§7), the analytics inputs for the
 app manifest (§8.3) and the implementation notes (§9.7). No gating, catalog or redaction
 decision changed.
+Amended by 11.09 (2026-09-24): the Sentry pin re-check (§7), a File Timestamp correction
+(§8.1), the §8.3 manifest decisions, the native dSYM project slug and script (§10.2), and
+the implementation notes and `reportError` call-site map (§10.4). No gating, option or
+deny-table decision changed; the redactor is stricter than §10.2 in the ways §10.4 lists.
 
 **How this was produced:**
 - Sources read in full:
@@ -53,13 +57,13 @@ characterization).
 | C9 | Intents | Ten intents, a single 17.0 floor, target membership per ruling P3 (§5) | chosen | 11.04 (types), 11.01 (membership) |
 | C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen; implemented by 11.06 with the native differences in §6.3 | 11.06 |
 | C11 | Notification `est_` archived dead tap (P8) | An archived `estimate_sent` job's delivered `est_` notification **opens** its editable follow-up review; only a missing job, an answered estimate or a non-exact/signed-out workspace fail closed (§6.3) | **resolved** by 11.06 (2026-09-24) | 11.06 |
-| C12 | SDKs | Sentry Cocoa **9.29.0** and PostHog iOS **3.81.0**, via SPM `exactVersion`, behind Foundation-only adapters (§7) | chosen; PostHog pin re-checked and kept by 11.07 (§7) | 11.07, 11.09 |
-| C13 | Privacy manifests | App and extension manifests: required-reason APIs and collected-data types (§8) | chosen | 11.01, 11.09 |
+| C12 | SDKs | Sentry Cocoa **9.29.0** and PostHog iOS **3.81.0**, via SPM `exactVersion`, behind Foundation-only adapters (§7) | chosen; PostHog pin re-checked and kept by 11.07, Sentry pin re-checked and kept by 11.09 (§7) | 11.07, 11.09 |
+| C13 | Privacy manifests | App and extension manifests: required-reason APIs and collected-data types (§8) | chosen; extension manifest by 11.01, app manifest by 11.09 (§8.1 corrected, §8.3 decided) | 11.01, 11.09 |
 | C14 | Analytics gating | Release build **and** a configured, non-`PLACEHOLDER` key. RN gated PostHog on the key only (§9.2) | chosen (recorded deviation) | 11.07 |
 | C15 | Event catalog | 52 events from 70 RN `track(` call sites; the fixture in §9.5 is exact. 11.08 asserts the event set, never a site count | chosen | 11.08 |
 | C16 | Seam property types | Widen `[String: String]` to JSON scalars and string arrays (§9.6) | chosen; implemented by 11.07 (§9.7) | 11.07 (in place, ruling P6) |
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
-| C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen | 11.07, 11.09, 11.15 |
+| C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen; crash side implemented by 11.09 (§10.4) | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen | 11.15 |
 | C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline | 11.10a/11.10b |
 | C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
@@ -759,6 +763,22 @@ adopted. The final pin is **3.81.0** (`exactVersion`, revision
 `2771b92c2e7b5471c196d24d5bc4997e26cafbcd` in `Package.resolved`). The package resolved
 over the network and links to the app target only.
 
+**Re-check (11.09, 2026-09-24):** `git ls-remote --tags https://github.com/getsentry/sentry-cocoa`
+lists **9.29.1**, published 2026-09-24 about 90 minutes before the package was added. Its
+notes cover an opt-in experimental URLSession loader, MetricKit payload retention, replay
+trace ids, a watchOS duplicate-span fix and the App Hang timeout guard. None touches an
+option §10.2 sets, so the ruling's pin was kept. The final pin is **9.29.0** (`exactVersion`,
+revision `d9df1c4e8d8466c7f8b3c56150378927dadf1b8e` in `Package.resolved`), SPM product
+`Sentry` (the static xcframework, checksum-verified by SwiftPM), linked to the app target
+only.
+- Resolution note: `xcodebuild -resolvePackageDependencies` hung on this machine inside
+  SwiftPM's keychain credential lookup for `github.com` before downloading the binary
+  artifact. It resolved with `-packageAuthorizationProvider netrc`, which skips the
+  keychain. There is no `~/.netrc`, so the download is anonymous. Nothing about the
+  project changed.
+- Moving to 9.29.1 or later is a one-line pin change plus a `Package.resolved` update;
+  record it in the execution log.
+
 ---
 
 ## 8. Privacy manifest contract (M1)
@@ -776,12 +796,19 @@ file-timestamp, boot-time or disk-space use in the extension's sources.
 | API category | App target | Widget extension | Evidence |
 |---|---|---|---|
 | UserDefaults | `CA92.1` (standard defaults) **and** `1C8F.1` (App Group shared with the extension) | `1C8F.1` | App Group suite: `N/NativeAppGroupInbox.swift`, `N/NativeWidgetActionReplay.swift:393`, `N/LegacyDataImporter.swift:235`. Standard: `N/NativeInitialSync.swift:135,677-684`, `N/NativeSupabasePush.swift:71,314-321` |
-| File timestamp | `C617.1` only if 11.01–11.12 add such a use. None today; SDKs declare their own | none | `N/NativeJobPhotoTransfer.swift:166` reads `.isRegularFileKey`/`.isSymbolicLinkKey`, which is not a required-reason key. grep: no `creationDate`/`modificationDate`/`attributesOfItem`/`stat(` in `N/` |
+| File timestamp | **`C617.1`** (corrected by 11.09: the 11.00 grep missed `contentModificationDateKey`) | none | `N/NativeWidgetActionReplay.swift` reads `.contentModificationDateKey` of the widget-action claim files in the App Group container to order and evict them. `N/NativeJobPhotoTransfer.swift:166` reads `.isRegularFileKey`/`.isSymbolicLinkKey`, which is not a required-reason key |
 | System boot time | none of our own (SDKs declare `35F9.1`) | none | grep: no `systemUptime`/`mach_absolute_time` in `N/` |
 | Disk space | none | none | grep: no `volumeAvailableCapacity` in `N/` |
 
 Each implementer re-greps before writing its manifest, and adds a row if new code
 introduces a category.
+
+**11.09 re-grep (2026-09-24)** over `N/` and `native/TradeReadyWidgets/` for
+`ModificationDate`, `creationDate`, `attributesOfItem`, `stat(`, `fstat`, `systemUptime`,
+`mach_absolute_time`, `volumeAvailableCapacity`, `identifierForVendor`,
+`activeInputModes` and the other date resource keys: the only hits are the two
+`contentModificationDateKey` reads above. No widget-extension source reads a timestamp, so
+the extension manifest is unchanged. The crash-reporting code adds no category.
 
 ### 8.2 Collected-data types (app manifest)
 
@@ -823,6 +850,32 @@ Analytics purpose, tracking no):
 - **Device ID:** PostHog stores an anonymous distinct id, a random UUID per install kept
   in UserDefaults. `reset()` rotates it. It is not the IDFA and not `identifierForVendor`.
   PostHog's own manifest does not declare Device ID. Decide whether to declare it.
+
+**Decisions (11.09, 2026-09-24; written to `N/PrivacyInfo.xcprivacy`):**
+- **Other Financial Info: declared** (linked yes, tracking no, Analytics). The catalog
+  sends `amount` and `balanceRemaining`, tied to the identified user. They are
+  business-ledger values, not the user's own payment data, but Apple's category covers
+  "other financial information", and declaring it is the conservative reading.
+- **Purchase History: declared** (linked yes, tracking no, Analytics).
+  `subscription_purchased` records that the user bought the subscription.
+- **Device ID: not declared.** PostHog's anonymous distinct id is a random per-install
+  UUID that `reset()` rotates. It is not the IDFA or `identifierForVendor`, and PostHog's
+  own manifest does not declare it. The SDK sends it as the pre-identify distinct id and,
+  on feature-flag requests only, as `$device_id`; flags are off (`preloadFeatureFlags =
+  false`, §9.2). `$device_name` is the model string (`device.model`), not the user-set
+  name. Revisit if flags are enabled or a device identifier API is ever read.
+- **`PostHog_PHPLCrashReporter.bundle` manifest: left as shipped.** It cannot be removed
+  from an SPM resource bundle without forking. It is inert (auto-capture is off, §9.2),
+  and its two types (Crash Data, Other Diagnostic Data) are already declared by the app
+  manifest for Sentry, so it adds nothing to the label.
+- The Sentry and PostHog SDK manifests ship in the app bundle; the 11.09 Release build
+  confirmed both (execution log).
+- **Concern for Phase 12 App Store Connect labels, not declared here:** the app also
+  sends the sign-in email to Supabase auth, syncs business records (customers, jobs,
+  invoices) and uploads job photos to the TradeReady backend. §8.2 does not list these
+  App Functionality types (Email Address, Name, Phone Number, Physical Address, Photos,
+  Customer Support/Other User Content). 11.09 followed the contract; 12.01 must decide
+  them with the labels.
 
 **Never collected by analytics:** email, name, phone, address, contacts, location, customer
 PII, message bodies, document bytes, credentials. §10.1 denies them and the transport
@@ -1317,6 +1370,12 @@ contexts, logs, and the widget snapshot.
 - `releaseName = <bundle id>@<CFBundleShortVersionString>+<CFBundleVersion>`.
 - dSYM upload configured for org `tradeready-3r` (RN plugin at `app.json:56`). The
   project slug is chosen in 11.09; the RN slug `react-native` is not reused for native.
+  **Chosen (11.09): `tradeready-ios`.** The upload is the checked-in script
+  `native/scripts/upload-sentry-dsyms.sh <App.xcarchive>`, run by hand on a Release
+  archive (a Phase 12 runsheet row). It no-ops with a message when `SENTRY_AUTH_TOKEN`
+  or the project slug is absent. There is no run-script build phase and no token in the
+  repo. The Sentry project `tradeready-ios` must exist in the org before the first
+  upload.
 - `sendDefaultPii = false`, `attachScreenshot = false`, `attachViewHierarchy = false`.
 - Session replay sample rates are 0.
 - `enableCaptureFailedRequests = false`, because failed-request events carry URLs that
@@ -1347,6 +1406,80 @@ contexts, logs, and the widget snapshot.
 - `Sentry.wrap(AppRoot)` has no native equivalent. SDK start happens in
   `TradeReadyNativeApp.init`.
 - A reporting failure never blocks or fails a save.
+
+### 10.4 11.09 implementation notes (2026-09-24)
+
+**Files:** `N/NativeErrorRedaction.swift` (the redactor, `NativeSensitiveData` and the
+`reportError` builder), `N/NativeCrashReporting.swift` (options, gate, adapter protocol,
+reporter), `N/NativeCrashReportingSentry.swift` (the only `import Sentry`, app target
+only; an addition to the plan's Own list, mirroring 11.07's `NativeAnalyticsPostHog.swift`).
+
+**Shared screens:** the credential-prefix list, the secure-key fragments, the phone rule
+and the identifier rule live in `NativeSensitiveData`; `NativeAnalyticsPrivacyPolicy`
+forwards to them. The analytics key lists are unchanged.
+
+**Gate:** as §10.2, plus a malformed DSN (not `https`, no public key, no project path, a
+query or fragment) disables reporting instead of failing inside the SDK, and an
+unexpanded `$(TRADEREADY_SENTRY_DSN)` counts as missing. No build configuration sets
+`TRADEREADY_SENTRY_DSN`, so both committed builds report nothing until a release supplies
+the DSN at build time. `debug = false`.
+
+**Redactor, beyond §10.2 (all stricter):**
+- `beforeSendSpan` also runs the redactor on span descriptions and data. Traces sample at
+  0.2, and the SDK's HTTP spans carry the URL plus `http.query`/`http.fragment`.
+- Request headers, cookies, query string and fragment are always removed, and
+  `serverName` (the device name, often a person's name) is dropped. The user is
+  rebuilt as `{id}` and only a plain identifier survives.
+- URLs keep scheme, host, port and path. User info is dropped. Payment hosts (Stripe
+  links, PayPal.me, Venmo, Cash App, Square) lose their whole path. A path segment after a
+  capability marker (`portal`, `booking`, `book`, `pay`, `t`, `p`, `e`, `s`, `l`, …) or a
+  token-shaped segment (a credential prefix, or 20+ URL-safe characters mixing letters and
+  digits that is not a UUID) becomes `[Filtered]`.
+- Strings are also scrubbed of JWTs, credential prefixes, `key=value` secrets, API-key
+  headers, data URIs and base64 runs of 120+ characters (`[document]`). A plain
+  alphanumeric run that long is also scrubbed, which is acceptable for diagnostics.
+- Deny keys add money (`amount`, `balance`, `total`, `price`, `payment`; §10.1 "deny in
+  extras") and request parts (`query`, `fragment`, `header`). `data`, `name`, `text`,
+  `request` and `response` are denied as whole keys; a bare `name` is kept only in the
+  SDK's `os`, `runtime` and `browser` contexts. `Data` values and objects that are not
+  JSON are dropped. Depth is capped at 8 and arrays at 100 items.
+
+**`reportError` (§10.3), native narrowing:**
+- The wrapped error is `NativeReportedError` (domain `TradeReady.ReportedError`), whose
+  `NSDebugDescriptionErrorKey` is the title. Sentry uses that as the exception value, so
+  the issue title is the real message.
+- The JSON fallback is built from the value **after** redaction, so a denied key never
+  reaches the title. A value that is not JSON is titled `Non-error value of type <T>`,
+  because Swift's `String(describing:)` would print every stored field. The title is then
+  redacted and capped.
+- `rawError` is attached only for a non-nil value and is reduced to `{code, message,
+  hint}`; a reduction with nothing left is dropped. RN attaches it even for `null`.
+- The fingerprint is `["{{ default }}", <context>]`. Capture runs off the caller's
+  thread, which makes every captured stack look alike; the context keeps call sites
+  apart.
+- Capture and `setUser` run on a private serial queue, so a slow SDK never blocks a save
+  and a throw never reaches the caller. Order between them is kept.
+- `setUser` rides the 11.08 lifecycle: `applyAnalyticsIdentityActions` pairs
+  `.identify(id)` with `setUser(id)` and `.reset` with `setUser(nil)`. There is no second
+  identity path.
+
+**Call-site map:** RN calls `reportError` at about 74 sites in 28 files. Native wires the
+API (`AppStore.reportError(_:context:)`) and these sites:
+
+| RN site | Native site |
+|---|---|
+| `utils/sync.ts:211` `{context: 'pushQueue', failedCount, tables}` | `AppStore.applySyncStatus`: once per sync pass that ends `.failed`/`.partial`, `{code: <diagnosticCode>, message}` with `{context: 'pushQueue', count: <remaining>}` (`tables` is not an allowed extra) |
+| `utils/sync.ts:312` `{context: 'pullRemote'}` | `AppStore.applySyncStatus`: once per completed push whose pull ends failed or partial |
+| `screens/SettingsAccountScreen.tsx:61` `{context: 'deleteAccount'}` | `SettingsView.performDeleteAccount` catch |
+
+The other RN sites (screen-level load/save catches, photo sync and storage, imports,
+booking and payment settings, auto-invoice, subscription, PDF and logo files, and the
+remaining `utils/sync.ts` contexts `trySyncNow`, `backfillLocalOnlyCollections`,
+`initialSync`, `pushAllLocalToCloud`) are not mapped. Native either surfaces those
+failures in the UI or folds them into the coordinator's bounded diagnostic codes. A
+later task adds a site by calling `store.reportError(error, context: ["context": "<name>"])`
+after the commit it describes. The SwiftUI ErrorBoundary analog (`componentStack`) has no
+native trigger yet; `componentStack` stays allow-listed for it.
 
 ---
 
@@ -1568,6 +1701,7 @@ created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in
   widening in place. SDK pin re-check (§7).
 - **11.08:** §9.3 screen map, §9.4 identity lifecycle, §9.5 parity including the m6 gaps.
 - **11.09:** §10.2–10.3 Sentry config, redactor and `reportError`; the app manifest (§8).
+  Done 2026-09-24 (§10.4; §8.1 and §8.3 amended).
 - **11.15:** §11.
 - **11.10a/11.11/11.12/11.10b:** §12 baseline, §13 rows.
 - **11.13/11.14:** §13 Phase 11 rows, the runsheet file, and the parity-row updates from §14.

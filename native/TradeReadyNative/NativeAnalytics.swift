@@ -409,31 +409,16 @@ struct NativeAnalyticsPrivacyPolicy {
         "Application Installed", "Application Updated", "Application Opened", "Application Backgrounded",
     ]
 
-    /// Value prefixes of the credential classes in §10.1: Anthropic/OpenAI-style
-    /// (`sk-`), Stripe secret/restricted/publishable/webhook, Groq, RevenueCat
-    /// (Apple/Google/Amazon/Stripe/web), PostHog, Supabase, Google API keys,
-    /// JWTs (Supabase access tokens), GitHub tokens.
-    static let secretValuePrefixes: [String] = [
-        "sk-", "sk_live_", "sk_test_", "rk_live_", "rk_test_", "pk_live_", "pk_test_", "whsec_",
-        "gsk_", "appl_", "goog_", "amzn_", "strp_", "rcb_", "phc_", "phx_",
-        "sb_secret_", "sb_publishable_", "AIza", "eyJ", "ghp_", "gho_", "github_pat_",
-    ]
+    /// The credential prefixes and key classes are shared with the crash
+    /// redactor (task 11.09): one definition in `NativeSensitiveData`
+    /// (`NativeErrorRedaction.swift`), forwarded here unchanged.
+    static var secretValuePrefixes: [String] { NativeSensitiveData.secretValuePrefixes }
+    static var secureKeyFragments: [String] { NativeSensitiveData.secureKeyFragments }
+    static var personalDataKeyFragments: [String] { NativeSensitiveData.personalDataKeyFragments }
+    static var documentKeyFragments: [String] { NativeSensitiveData.documentKeyFragments }
 
-    static let secureKeyFragments = [
-        "key", "token", "secret", "password", "passwd", "authorization", "bearer", "session",
-        "cookie", "credential", "dsn", "jwt", "otp",
-    ]
-    static let personalDataKeyFragments = [
-        "email", "phone", "name", "address", "street", "zip", "postal", "note", "message", "body",
-        "text", "review", "comment", "customer", "contact", "sms",
-    ]
-    static let documentKeyFragments = [
-        "pdf", "image", "photo", "picture", "receipt", "bytes", "base64", "data", "csv", "export",
-        "file", "attachment", "document", "uri", "url", "blob",
-    ]
-
-    static let asciiLetters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    static let asciiDigits = CharacterSet(charactersIn: "0123456789")
+    static var asciiLetters: CharacterSet { NativeSensitiveData.asciiLetters }
+    static var asciiDigits: CharacterSet { NativeSensitiveData.asciiDigits }
     /// Characters a catalog `string` value may contain: internal ids
     /// (`1727190000000k3j9x`, UUIDs, `labor_overrun:<id>`,
     /// `low_margin_estimate:<id>:1234.5`, `open_slot:2026-09-24`).
@@ -596,25 +581,12 @@ struct NativeAnalyticsPrivacyPolicy {
     }
 
     static func containsSecret(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if secretValuePrefixes.contains(where: { trimmed.hasPrefix($0) }) { return true }
-        let lowered = trimmed.lowercased()
-        return lowered.hasPrefix("bearer ") || lowered.contains("authorization:")
-            || lowered.contains("access_token") || lowered.contains("refresh_token")
+        NativeSensitiveData.containsSecret(text)
     }
 
-    /// A phone number as a bare value: optional `+`, then 7–15 digits with
-    /// phone punctuation and no letters. Pure digit runs of 13+ characters
-    /// are allowed because RN record ids start with `Date.now()` (13 digits).
+    /// See `NativeSensitiveData.isPhoneLike` (shared with the crash redactor).
     static func isPhoneLike(_ text: String) -> Bool {
-        let scalars = Array(text.unicodeScalars)
-        guard !scalars.isEmpty else { return false }
-        let punctuation = CharacterSet(charactersIn: "+-. ()")
-        guard scalars.allSatisfy({ asciiDigits.contains($0) || punctuation.contains($0) }) else { return false }
-        let digitCount = scalars.filter { asciiDigits.contains($0) }.count
-        let hasPunctuation = scalars.contains { punctuation.contains($0) }
-        if hasPunctuation { return (7...15).contains(digitCount) && !text.contains(":") }
-        return (7...12).contains(digitCount)
+        NativeSensitiveData.isPhoneLike(text)
     }
 
     static func classifyUnknownKey(_ key: String) -> NativeAnalyticsDiagnostic.Reason {
