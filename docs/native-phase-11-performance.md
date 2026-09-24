@@ -39,7 +39,8 @@ Rules the host suite enforces (`native/PerformanceMetricsTests/main.swift`):
   Instruments session. There is no analytics, Sentry or MetricKit upload hook.
 - **Non-invasive.** Calls are synchronous, never suspend and never trap. No call site
   adds an `await` or reorders work. `DeltaPull` and `BackgroundRefresh` wrap the
-  unchanged bodies (`pullDeltaAndCommit`, `runBackgroundRefresh`). With no recorder
+  bodies (`pullDeltaAndCommit`, `runBackgroundRefresh`) without changing them (the
+  later Finding D fix changed only `pullDeltaAndCommit`'s commit). With no recorder
   attached, `OSSignposter.isEnabled` is false and a call costs one flag read.
 - **Pinned inventory.** No other `N/` file touches `OSSignposter` or the sink types,
   and the nine call sites are an exact list, so a new interval is a deliberate test
@@ -62,20 +63,22 @@ primary-key conflict for a plain insert.
 | A. Offline → online | Offline triggers send nothing and leave the queue file byte-identical. Offline is not counted as a failure. Reconnecting drains the queue once, in queue order, including a last-writer-wins re-edit. The pull runs only after every write. Later passes and triggers coalesced during an in-flight pass never re-send. |
 | B. Throttled / timed out | A 429 gives a typed `.partial` and the bounded `http-response/jobs/429` code, with one attempt per change, nothing committed, no pull and exponential backoff (30 s, then 60 s). A timeout before the server gives `transport/jobs` and no commit. A timeout **after** the server committed keeps and replays the change, and the idempotent upsert leaves one server row and one local record. |
 | C. Mid-pass drop | A pull drop after the jobs page commits jobs and advances their cursor. The dropped tables keep their committed records and cursors, and the pull is `.partial` with a bounded code. A dead link behind optimistic reachability leaves the snapshot and cursor unchanged. One throttled table is `.partial` with its own code and keeps its record and cursor. A push drop keeps exactly the unacknowledged remainder in order. Reconnecting recovers each case without re-sending acknowledged changes. |
+| D. Edit during a pull (coordinator) | An edit saved while the pull waits on the network is kept in memory and on disk and stays queued, while a remote change to another record still applies. After a drop and reconnect the server gets the edit. |
+| E. Edit during a pull (direct caller) | Through the booking/portal-recovery entry point, a change queued before the pull and one made during it are both kept and both stay queued, and server changes to other records apply. |
+| F. Same record changed on both sides | The local pending edit wins in memory and on disk until it is pushed, and then the server, memory and disk agree. |
 
 `DeltaPull` signposts from these passes are checked for pairing and for
 count-and-outcome-only metadata. Five mutations of production code were each caught
 (the 11.12 entry in the plan's §7 lists them).
 
-**Open finding (D, not fixed in 11.12).** An edit saved while a delta pull is waiting on
-the network is reverted, in memory and on disk, when that pull commits. The pull merges
-into the snapshot it captured before its await. The edit stays queued, but if the link
-drops before the coalesced rerun pushes it, the device shows the old value, and a second
-edit to the same record replaces the queued first edit, which is then lost. This breaks
-the coordinator's rule that a pull never overwrites a record with a pending local
-mutation. Scenario D asserts that rule, and it runs only with
-`TRADEREADY_RUN_KNOWN_BUG_REPROS=1` because it fails today (3 failures). The fix is a
-sync-policy choice for the controller, so it is not made here. SOAK-3 on device should
+**Finding D (fixed in `36a08dc`, 11.12 fix round 1).** An edit saved while a delta pull
+was waiting on the network was reverted, in memory and on disk, when that pull
+committed, because the pull merged into the snapshot captured before its await. If the
+link dropped before the rerun pushed the edit, a second edit to the same record replaced
+the queued first one, which was lost. The pull commit now rebases the pulled delta onto
+the live snapshot and keeps every record with a pending mutation, so the coordinator's
+rule that a pull never overwrites a record with a pending local mutation holds.
+Scenarios D, E and F above prove it and run by default. SOAK-3 on device should still
 include an edit made during a slow pull.
 
 ## 2. Environments

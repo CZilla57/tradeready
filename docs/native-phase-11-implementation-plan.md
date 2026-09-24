@@ -790,7 +790,7 @@ complete / Phase 12 evidence deferred**.
 | 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys at sign-out, deletion, account switch and password-recovery exits (fix round 1); live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A15–A18, A22 and A24 to 11.10b; fix round 1 closed I1–I3 and m1–m6; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
-| 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 140 checks, 5/5 mutations caught; **one data-loss finding, not fixed** (an edit saved during an in-flight delta pull is reverted by the pull commit and can be lost; gated repro D, see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
+| 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`)**: the pull commit rebases onto the live snapshot and skips records with pending mutations, with scenarios D/E/F running by default (181 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Pending | 11.11, 11.12 | Accessibility re-audit (closes H1) |
 | 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
@@ -3189,13 +3189,14 @@ M5 (optional) is partly done.
 
 ### 11.12 — Performance, launch time and device soak (2026-09-24)
 
-**Status:** Done with a concern (steps 1–4). Signposts are in place, the three required
+**Status:** Done (steps 1–4). Signposts are in place, the three required
 poor-network scenarios pass, and the measurement and soak protocol names a Phase 12
-owner for every row (`docs/native-phase-11-performance.md`). No behavior changed. One
-real data-loss bug was found and is **not fixed** (the finding below; failing repro D).
-Device numbers are deferred to Phase 12 Stage A (12.04).
+owner for every row (`docs/native-phase-11-performance.md`). No behavior changed in the
+first commit (`c4e040a`). One real data-loss bug was found (the finding below) and was
+**fixed** in fix round 1 (`36a08dc`, entry below). Device numbers are deferred to
+Phase 12 Stage A (12.04).
 
-**Finding D: an edit during an in-flight delta pull is reverted and can be lost (open).**
+**Finding D: an edit during an in-flight delta pull is reverted and can be lost (fixed in `36a08dc`; see fix round 1 below).**
 - **Contract.** `N/NativeSyncCoordinator.swift`: "Never let a remote pull overwrite
   canonical records that still have a local mutation waiting to reach the server." The
   pass checks the queue *before* the pull.
@@ -3206,24 +3207,24 @@ Device numbers are deferred to Phase 12 Stage A (12.04).
   pulls it back, so the revert is transient. If the link drops first, the device shows
   the old value. A second edit to the same record is then built from the reverted
   record, and last-writer-wins replaces the queued first edit, which is lost.
-- **Evidence.** In `native/PoorNetworkTests/main.swift` scenario D (a held first page,
-  an edit, then a drop), running with `TRADEREADY_RUN_KNOWN_BUG_REPROS=1` gives
+- **Evidence (before the fix).** In `native/PoorNetworkTests/main.swift` scenario D (a
+  held first page, an edit, then a drop), then gated behind an environment switch, gave
   `poor-network tests: 3 of 150 checks FAILED`:
   - the memory title after the commit is the pre-edit value;
   - the disk title is the pre-edit value;
   - after reconnecting, the server title is the pre-edit value (the first edit is
     lost).
 
-  The default run prints a `SKIP: D …` line and stays green. The repro is gated, not
-  silently passing, so the aggregate stays usable for 11.10b.
-- **Not fixed.** Every option changes sync policy:
+  At this commit the repro was gated (a `SKIP: D …` line); fix round 1 removed the gate.
+- **Options put to the controller** (the ruling chose a variant of the second, and
+  rejected the third):
   - discard a pull whose base snapshot changed during the await, and leave the
     cursors;
   - re-apply pending queue items over the candidate before commit;
   - skip commit while the queue is non-empty (this also changes the booking/portal
     recovery callers).
 
-  This needs a controller ruling. Un-gate D in the same change as the fix.
+  Superseded by fix round 1 below.
 
 **Files:**
 - New facade: `N/NativePerformanceMetrics.swift`.
@@ -3315,9 +3316,10 @@ Device numbers are deferred to Phase 12 Stage A (12.04).
   - `TZ=America/Phoenix sh native/run-performance-metrics-tests.sh` →
     `performance-metrics tests: 171/171 checks passed`
   - `TZ=America/Phoenix sh native/run-poor-network-tests.sh` →
-    `poor-network tests: 140/140 checks passed`, plus the `SKIP: D …` line
-  - D on request (`TRADEREADY_RUN_KNOWN_BUG_REPROS=1`) →
-    `poor-network tests: 3 of 150 checks FAILED` (Finding D)
+    `poor-network tests: 140/140 checks passed`, plus the `SKIP: D …` line (at
+    `c4e040a`)
+  - D on request (the since-removed gate) →
+    `poor-network tests: 3 of 150 checks FAILED` (Finding D; fixed in `36a08dc`)
 - Neighbors, all passing:
   - two-device convergence (after the move);
   - store integration;
@@ -3360,5 +3362,88 @@ Device numbers are deferred to Phase 12 Stage A (12.04).
   at the first throttle is a policy question for Phase 12 monitoring.
 - Finding D (above) was first suspected from code reading, then proven with the
   probe that became scenario D.
+
+### 11.12 fix round 1 — Finding D (2026-09-24)
+
+**Status:** Fixed (`36a08dc`). Controller ruling: fix it in 11.12 as a bug fix that
+restores the coordinator contract ("never let a remote pull overwrite canonical records
+that still have a local mutation waiting to reach the server"). Skipping the commit
+while the queue is non-empty was rejected. The Phase 11 contract has no sync section,
+so this entry is the record of the decision.
+
+**Fix (`N/AppStore.swift`, `pullDeltaAndCommit` only).**
+- After the pull's last await (and after the existing owner/blocked-workspace guard),
+  the commit re-reads the live `snapshot` and the live `mutationQueue`, and calls the
+  new `AppStore.rebasePulledDelta(base:pulled:live:pendingKeys:)`. There is no await
+  between the rebase and the commit.
+- The rebase works per record, keyed `<table>/<id>` exactly like the queue's
+  `MutationKey` (collections by `Collection` raw value, settings as
+  `settings/settings`, customer notes as `customer_notes/<customerKey>`):
+  - a record with a pending mutation keeps its live state, including a pending
+    delete (the local pending edit wins until it is pushed, even if the server changed
+    the same record);
+  - a record the pull did not change keeps its live state (an edit made during the
+    await whose queue item was already pushed is not reverted either);
+  - every other record takes the pulled (server) state, including tombstones.
+- When nothing is pending in a table and the live collection still equals the base,
+  the pulled collection is committed unchanged, so the common case is byte-for-byte
+  today's commit.
+- `pullBase` tracks the snapshot the successful `pullDelta` call merged into (the
+  session-refresh retry reads a fresh `snapshot`).
+- Cursors advance as before.
+- **Fallback:** if the rebase throws (records are compared by sorted-key JSON
+  encoding), the candidate is discarded with `pull/local-rebase`, nothing is applied or
+  saved and the cursor is not advanced, so the next pull refetches. No caller hits
+  this in practice (Canonical records always encode), so **no caller uses the fallback**.
+
+**Caller audit (same merge/commit path).**
+- Coordinator pass (`syncCoordinatorIfConfigured` → `pullDeltaIfPossible` →
+  `pullDeltaAndCommit`): fixed. The coordinator's pre-pull queue check stays; the
+  rebase covers edits that land during the await.
+- Background refresh (`runBackgroundRefresh` → `syncNowAndWait` → coordinator): fixed
+  by the same path.
+- Booking/portal recovery (`runBookingIntakeAfterVerifiedPull` and the other direct
+  `pullDeltaIfPossible` calls after booking/portal writes): fixed by the same path.
+  These callers can pull with a non-empty queue, and pending records are now kept
+  instead of overwritten.
+- Initial sync (`NativeSupabaseInitialSyncService` via the launch gate): a separate
+  commit, and safe. It runs while RootView shows the loading screen, deep links park,
+  widget replay has no publish binding yet, and background refresh needs a completed
+  workspace, so no local edit can land during its await. Its queue precedence is
+  unchanged.
+- Two overlapping pulls can at most regress the cursor, which only causes an
+  idempotent refetch.
+
+**Tests (`native/PoorNetworkTests/main.swift`).** The environment gate is removed (no
+other repro used it). Scenario D runs by default, and two cases were added:
+- **D (coordinator):** an edit during a held pull, then writes fail. The edit is kept
+  in memory and on disk and stays queued; a concurrent remote customer rename still
+  applies. After a second edit and reconnect, the server has the edit and the queue
+  drains.
+- **E (direct caller):** one change queued before the pull and one made during it.
+  Both are kept in memory and on disk, both stay queued, the remote customer change
+  applies, and the pull is `.completed`.
+- **F (same record):** the server and the device both change one job's title. The
+  local pending title wins in memory and on disk until it is pushed, and then the
+  server, memory and disk all agree on the local title.
+
+**Commands and results (TZ=America/Phoenix):**
+- RED (fix absent, gate removed): `poor-network tests: 10 of 182 checks FAILED` (9
+  Finding D failures across D, E and F, plus one wrong assertion of mine: it read
+  `lastPullResult` after the coalesced rerun, which clears it, and it was removed).
+- GREEN: `poor-network tests: 181/181 checks passed`.
+- Mutation (drop the pending-key skip): 4 failures (E pre-queued edit, F same record),
+  restored from a copy.
+- `run-sync-coordinator-tests.sh`, `run-delta-sync-tests.sh`,
+  `run-mutation-push-tests.sh`, `run-initial-sync-tests.sh`,
+  `run-sync-backfill-tests.sh`, `run-store-integration-tests.sh`: all PASS.
+  `performance-metrics tests: 171/171 checks passed` (inventory unchanged).
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → `exit=0` (65 PASS lines,
+  including `poor-network tests: 181/181 checks passed`).
+- Release compile → `** BUILD SUCCEEDED **`.
+- `sh native/run-doc-reference-check.sh` → `1605 path references checked: 0 missing, 14 planned (not yet created).`
+
+**Unchanged rulings:** thresholds follow 12.00's absolute targets; the 429
+per-pass push behavior is carried to Phase 12 monitoring.
 
 **Next ready:** 11.10b (accessibility re-audit).
