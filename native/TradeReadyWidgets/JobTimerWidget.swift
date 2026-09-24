@@ -79,7 +79,7 @@ struct JobTimerWidgetEntryView: View {
     var entry: JobTimerEntry
 
     var body: some View {
-        JobTimerWidgetView(state: entry.state, now: entry.date, isPlaceholder: entry.isPlaceholder)
+        JobTimerWidgetView(state: entry.state, isPlaceholder: entry.isPlaceholder)
     }
 }
 

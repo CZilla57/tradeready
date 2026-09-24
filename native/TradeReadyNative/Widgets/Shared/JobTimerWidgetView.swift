@@ -20,7 +20,6 @@ struct JobTimerWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     let state: JobTimerWidgetState
-    let now: Date
     let isPlaceholder: Bool
 
     var body: some View {
