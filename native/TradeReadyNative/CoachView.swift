@@ -76,8 +76,9 @@ struct CoachView: View {
             } message: {
                 Text("Message copied to clipboard.")
             }
+            // On the stack's root content, not the stack, so a pop back re-sends it.
+            .nativeAnalyticsScreen(.coach)
         }
-        .nativeAnalyticsScreen(.coach)
     }
 
     private var emptyState: some View {

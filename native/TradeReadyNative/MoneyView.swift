@@ -85,8 +85,9 @@ struct MoneyView: View {
             } message: {
                 Text("Remove \"\(pendingExpenseDeletion?.merchant ?? "")\"?")
             }
+            // On the stack's root content, not the stack, so a pop back re-sends it.
+            .nativeAnalyticsScreen(.money)
         }
-        .nativeAnalyticsScreen(.money)
     }
 
     // MARK: Filter chips + tabs

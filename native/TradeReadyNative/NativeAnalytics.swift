@@ -138,7 +138,7 @@ enum NativeAnalyticsCatalogFixture {
     "onboarding_completed": [{"trade": "enum:TradeId"}],
     "onboarding_start_choice": [{"choice": "sample|fresh"}],
     "onboarding_step_viewed": [{"step": "welcome|business|starting_point"}],
-    "overdue_outreach_opened": [{"daysPastDue": "number"}],
+    "overdue_outreach_opened": [{"daysPastDue?": "number"}],
     "payment_link_sent": [{"provider": "string", "deposit": "bool"}],
     "payment_recorded": [{"amount": "number", "method": "enum:PaymentMethod", "balanceRemaining": "number"}],
     "payment_voided": [{"amount": "number", "method": "enum:PaymentMethod"}],

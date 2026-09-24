@@ -214,8 +214,9 @@ struct InvoicesView: View {
             } message: {
                 Text(bulkNotice ?? "")
             }
+            // On the stack's root content, not the stack, so a pop back re-sends it.
+            .nativeAnalyticsScreen(.invoiceList)
         }
-        .nativeAnalyticsScreen(.invoiceList)
     }
 
     private func openRequestedInvoice(_ id: String?) {
@@ -273,11 +274,10 @@ struct InvoicesView: View {
 
     private func advanceBulkQueue() {
         guard bulkIndex < bulkQueue.count else {
-            // Chain complete: summarize skips, then leave selection mode.
-            // Task 11.08: RN `InvoicesScreen.tsx:303` counts the composers
-            // the run opened; native counts the outreach sheets presented.
-            if let bulkChannel, bulkIndex > 0 {
-                store.recordBulkInvoiceReminders(channel: bulkChannel == .email ? .email : .text, count: bulkIndex)
+            // Chain complete: report it, summarize skips, then leave
+            // selection mode. `bulkIndex` is the sheets presented.
+            if let bulkChannel {
+                store.recordBulkInvoiceReminderRunCompleted(channel: bulkChannel, presentedCount: bulkIndex)
             }
             bulkChannel = nil
             if bulkSkipped > 0 {

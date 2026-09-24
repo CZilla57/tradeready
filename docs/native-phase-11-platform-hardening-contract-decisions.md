@@ -976,7 +976,7 @@ Types below: `bool`, `number`, `string`, `string[]`, a literal (`true`), or an e
 | `receipt_scanned` | variants: `{outcome: failed}` · `{outcome: filled\|empty, route: user_key\|backend}` | `components/money/AddExpenseModal.tsx:150`, `:158`, `:184` | — |
 | `tax_settings_saved` | `hasIncomeRate: bool`, `vehicleMethod: mileage\|actual\|unset` | `components/money/TaxSetAsideCard.tsx:61` | — |
 | `pull_to_refresh` | `screen: MoneyScreen\|JobsScreen` | `hooks/useRefresh.ts:17` | — |
-| `overdue_outreach_opened` | `daysPastDue: number` | `App.tsx:427` | — |
+| `overdue_outreach_opened` | `daysPastDue?: number` (RN passes `data.daysPastDue`, which a payload may omit) | `App.tsx:427` | — |
 | `appointment_confirm_opened` | `{}` | `App.tsx:434` | — |
 | `booking_request_opened` | `{}` | `App.tsx:466` | — |
 | `booking_update_opened` | `{}` | `App.tsx:476` | — |
@@ -1048,7 +1048,7 @@ JSON. Each event maps to a list of allowed property-shape variants.
     "onboarding_completed": [{"trade": "enum:TradeId"}],
     "onboarding_start_choice": [{"choice": "sample|fresh"}],
     "onboarding_step_viewed": [{"step": "welcome|business|starting_point"}],
-    "overdue_outreach_opened": [{"daysPastDue": "number"}],
+    "overdue_outreach_opened": [{"daysPastDue?": "number"}],
     "payment_link_sent": [{"provider": "string", "deposit": "bool"}],
     "payment_recorded": [{"amount": "number", "method": "enum:PaymentMethod", "balanceRemaining": "number"}],
     "payment_voided": [{"amount": "number", "method": "enum:PaymentMethod"}],
@@ -1222,15 +1222,25 @@ numbers, and `kinds`/`ids` are string arrays.
 names `Today` or `Invoices` that §9.3 gave as examples.
 - The table is `NativeAnalyticsScreen.routeName`. The test checks every name against
   `App.tsx`.
-- Views report through `.nativeAnalyticsScreen(_:)`, an `onAppear` hook. The store maps
-  the name and dedupes consecutive repeats.
+- Views report through `.nativeAnalyticsScreen(_:)`, an `onAppear`/`onDisappear` hook,
+  and the store maps the name.
+  - Like RN, every appearance sends. A pop back to a list and a second visit to the
+    same page both send again (fix round 1).
+  - The tab roots and Settings attach the hook to their stack's root content, so a
+    pop re-fires it.
+  - The store does not dedupe. The only dedupe is per appearance
+    (`NativeAnalyticsScreenAppearance`): SwiftUI's duplicate `onAppear` calls with no
+    `onDisappear` between them count once.
 - The gate roots (`Auth`, `Onboarding`, `Paywall`, `StartingPoint`) come from the gate
   transition.
 - Destinations with no RN route send nothing: expense and payment editors, invoice
   detail, the on-my-way, appointment and change-order reviews, booking requests, the
   portal, photos, sync settings and password recovery.
-- Difference: dismissing a sheet does not re-send the parent screen, while RN re-sends
-  it when a stack modal pops.
+- The differences that remain:
+  - Dismissing a sheet does not re-send the parent screen, while RN re-sends it when
+    a stack modal pops.
+  - RN also re-sends the focused route on any navigation-state change that keeps it
+    focused, such as a params update. Native sends only on an appearance.
 
 *Recorded native differences:*
 - `estimate_follow_up_sent` and `review_request_sent` fire only on a composer `.sent`.
@@ -1251,13 +1261,25 @@ names `Today` or `Invoices` that §9.3 gave as examples.
   - The job-detail entry passes `fromNotification: false`.
 - `bulk_invoice_reminders.count` counts the outreach sheets presented in the chain.
   RN counts the composers it opened.
+  - As in RN, the event fires once per run that had an eligible invoice, with a
+    count of 0 allowed.
+  - The rule is `NativeAnalyticsEvent.bulkInvoiceReminderRun`. The view only reports
+    the finished chain (fix round 1).
+- `overdue_outreach_opened` sends without `daysPastDue` when the payload has none. RN
+  sends `{ daysPastDue: undefined }`, which drops the key.
+  - Fix round 1 changed the §9.5 fixture key to `daysPastDue?`, an optional-key
+    change only. `catalogVersion` stays 1.
 - `subscription_paywall_shown` is always `onboarding_gate`. Native has no Settings
   upsell paywall. A purchase or retry load does not re-fire it within one presentation.
 - `booking_request_opened` and `booking_update_opened` have constructors but no emission
   site. Native has no remote-push surface; RN tracks them on push taps in `App.tsx`.
   They are wired when native push lands.
 - `tax_settings_saved` is emitted by `commitTaxSettings`, including for an unset draft
-  (RN parity). No native screen calls it yet.
+  (RN parity).
+  - No production code calls `commitTaxSettings`: native has no tax-settings editor
+    (RN `TaxSetAsideCard`). The event cannot be reached until that editor exists.
+  - So 49 of the 52 events are wired: every event except the two booking push opens
+    and this one.
 
 ---
 

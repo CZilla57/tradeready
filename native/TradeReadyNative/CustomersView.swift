@@ -155,8 +155,9 @@ struct CustomersView: View {
             .onAppear {
                 openRequestedCustomer(store.deepLinkedCustomerID)
             }
+            // On the stack's root content, not the stack, so a pop back re-sends it.
+            .nativeAnalyticsScreen(.customerList)
         }
-        .nativeAnalyticsScreen(.customerList)
     }
 
     private func openRequestedCustomer(_ id: String?) {

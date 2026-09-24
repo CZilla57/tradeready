@@ -150,6 +150,14 @@ extension NativeAnalyticsEvent {
         .init("bulk_invoice_reminders", ["channel": .string(channel.rawValue), "count": .number(Double(count))])
     }
 
+    /// A finished bulk reminder run (RN `InvoicesScreen.tsx:303`). RN tracks
+    /// once per run that had an eligible invoice, with `count` the composers
+    /// it opened (possibly 0); native's run is the outreach-sheet chain, so
+    /// `count` is the sheets it presented.
+    static func bulkInvoiceReminderRun(channel: NativeBulkRemindChannel, presentedCount: Int) -> Self {
+        .bulkInvoiceReminders(channel: channel == .email ? .email : .text, count: presentedCount)
+    }
+
     /// `method` is a native payment-method string ("Cash", "Cheque", "card",
     /// "stripe", …); it is mapped onto the catalog `PaymentMethod` enum.
     static func paymentRecorded(amount: Double, method: String, balanceRemaining: Double) -> Self {
@@ -170,8 +178,10 @@ extension NativeAnalyticsEvent {
         .init("payment_link_sent", ["provider": .string(provider), "deposit": .bool(deposit)])
     }
 
-    static func overdueOutreachOpened(daysPastDue: Int) -> Self {
-        .init("overdue_outreach_opened", ["daysPastDue": .number(Double(daysPastDue))])
+    /// RN `App.tsx:427` sends `{ daysPastDue: data.daysPastDue }`; a payload
+    /// without it sends the event with no key (§9.5 `daysPastDue?`).
+    static func overdueOutreachOpened(daysPastDue: Int?) -> Self {
+        .init("overdue_outreach_opened", daysPastDue.map { ["daysPastDue": .number(Double($0))] } ?? [:])
     }
 
     // MARK: Money and records
@@ -409,6 +419,30 @@ enum NativeAnalyticsGatePolicy {
         case .startingPoint: .startingPoint
         default: nil
         }
+    }
+}
+
+// MARK: - Screen appearance (contract §9.3)
+
+/// One destination view's appearance cycle, the only `$screen` dedupe.
+///
+/// RN sends `$screen` on every navigation state change with no dedupe, so a
+/// pop back to a list and a second visit to the same detail both send again.
+/// Native sends on `onAppear`, which SwiftUI can call more than once for a
+/// single on-screen appearance (for example while a tab or stack
+/// re-evaluates). `appear()` is `true` only for the first call since the last
+/// `disappear()`, so those duplicates are dropped and every real return is not.
+struct NativeAnalyticsScreenAppearance: Equatable, Sendable {
+    private(set) var isVisible = false
+
+    mutating func appear() -> Bool {
+        guard !isVisible else { return false }
+        isVisible = true
+        return true
+    }
+
+    mutating func disappear() {
+        isVisible = false
     }
 }
 

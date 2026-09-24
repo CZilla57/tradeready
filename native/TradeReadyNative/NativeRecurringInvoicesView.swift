@@ -216,6 +216,7 @@ private struct NativeRecurringInvoiceEditor: View {
                 Text("New invoices from this plan can be emailed automatically once generated. Invoices it already created are never emailed retroactively.")
             }
         }
+        .nativeAnalyticsScreen(.recurringInvoiceEditor)
     }
 
     private var amountBinding: Binding<Double> {

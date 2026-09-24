@@ -785,7 +785,7 @@ complete / Phase 12 evidence deferred**.
 | 11.05 | W4 | Done (code complete 2026-09-24; item 4 routing-after-sign-in handed to 11.06; device/Siri/widget proof deferred to Phase 12) | 11.01-11.04 | Owner/stale/sign-in correctness |
 | 11.06 | L1, L2 | Done (code complete 2026-09-24; C11/P8 resolved; device proof deferred to Phase 12) | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
 | 11.07 | P1, P4 | Done (code complete 2026-09-24; PostHog iOS 3.81.0 linked, app target only; no key committed, so analytics is off until a release key is supplied; device proof deferred to Phase 12) | 11.00 | Analytics transport + privacy |
-| 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 50 wired (the booking push opens await native push); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
+| 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 49 wired (the booking push opens await native push; `tax_settings_saved` is unreachable until a native tax-settings editor exists); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Pending | 11.07 | Crash reporting + redaction + app manifest |
 | 11.15 | P4, R2 | Pending | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Pending | 11.00, 10.15 | Accessibility audit + fixes |
@@ -2051,8 +2051,12 @@ both unblocked by 11.07.
 - All 52 §9.5 events have typed constructors in `N/NativeAnalyticsEvents.swift`. The
   store and views emit them through one `AppStore.emitAnalytics`, after the durable
   commit RN tracks after.
-- 50 events are wired. `booking_request_opened` and `booking_update_opened` fire on RN
-  push taps only, and native has no remote-push surface yet.
+- 49 events are wired (corrected in fix round 1; the first count was 50).
+  - `booking_request_opened` and `booking_update_opened` fire on RN push taps only,
+    and native has no remote-push surface yet.
+  - `tax_settings_saved` is emitted by `commitTaxSettings`, but nothing in
+    production calls that. It is unreachable until a native tax-settings editor
+    exists.
 - The identity lifecycle, the `$screen` map and the gate-driven onboarding/paywall
   events are in place.
 - 11.07 review findings m1–m3 are fixed, and the 11.07 handoff is closed: `doneCount` and
@@ -2189,3 +2193,64 @@ both unblocked by 11.07.
   recorded in §9.7 for the reviewer.
 
 **Next ready:** 11.09 (crash reporting, redaction, app manifest).
+
+**Fix round 1 (2026-09-24, task review of f6ffb31):**
+- **I1: `$screen` dropped pop-backs and repeat visits (fixed).**
+  - The tab roots (Today, Jobs, Invoices, Customers, Money, Coach) and Settings now
+    attach `.nativeAnalyticsScreen` to the stack's root content, not the
+    `NavigationStack`, so a pop re-fires `onAppear`.
+  - `AppStore.trackScreen` no longer dedupes consecutive repeats. The modifier holds
+    `NativeAnalyticsScreenAppearance`, a pure type in `N/NativeAnalyticsEvents.swift`.
+    It drops only SwiftUI's duplicate `onAppear` within one appearance.
+  - JobList → JobDetail(A) → back → JobDetail(B) now sends all four, as RN does.
+  - New fixtures:
+    - list → detail → back → detail;
+    - a repeat Settings → SettingsBusiness visit;
+    - a duplicate `onAppear` within one appearance;
+    - two direct `trackScreen` calls;
+    - a source check that each tab root attaches inside its stack.
+  - Contract §9.7 now lists the two differences that remain: a sheet dismissal does
+    not re-send the parent, and a same-route state change does not re-send.
+- **Spec gaps:**
+  - `NativeRecurringInvoiceEditor` now applies `.recurringInvoiceEditor`
+    (`AddRecurringInvoice`). A new check requires every signed-in destination with an
+    RN route to be applied by some view.
+  - The wired count is corrected to 49 in §6 and in the 11.08 entry.
+    `tax_settings_saved` is unreachable until a native tax-settings editor exists
+    (contract §9.7).
+- **M4:**
+  - Pull-to-refresh now has coverage.
+    - The real `performPullToRefresh` sends for Jobs and Money after the sync, and sends
+      nothing with no screen.
+    - Through `testPerformPullToRefresh`, the real private tail with its sync step
+      injected: a sign-out during the sync drops the event. So does an owner switch
+      A → B during the sync; nothing is sent under B.
+  - `testFinishInteractiveSignIn` gained `landingGate`. A sign-in that lands on
+    `.accountMismatch` emits exactly `identify(B)` and `sign_in`, then signing out
+    resets.
+- **M6:** the bulk-reminder rule moved out of `InvoicesView`.
+  - The view reports only the finished chain, through
+    `recordBulkInvoiceReminderRunCompleted(channel:presentedCount:)`.
+  - `NativeAnalyticsEvent.bulkInvoiceReminderRun` owns the channel mapping and the
+    count, and fires even at 0 (RN tracks every started run).
+  - `Domain/NativeInvoiceBulk.swift` joined `native/run-appstore-sources-common.sh`.
+- **M7:** `overdue_outreach_opened` sends with no key when the payload has no
+  `daysPastDue`. The §9.5 fixture key is now `daysPastDue?` in both the contract and
+  the embedded catalog.
+- **M9:** the unused `binding` at `AppStore.swift` (booking mirror guard) is replaced
+  by `capture.binding != nil`.
+- **Tests:**
+  - `TZ=America/Phoenix sh native/run-analytics-event-tests.sh` → `Analytics event tests passed (536 checks)`.
+  - `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0. That covers
+    transport 226 checks, store integration, deep-link routing, calendar editor and
+    schedule/booking settings.
+  - Release generic `xcodebuild` → `** BUILD SUCCEEDED **`. The unused-`binding`
+    warning is gone, and no warning comes from a line this task changed.
+  - `sh native/run-doc-reference-check.sh` → 0 missing.
+  - Mutations, each applied and then restored, all killed:
+    - reinstating the store's consecutive dedupe;
+    - removing the appearance guard;
+    - removing the pull-to-refresh owner guard;
+    - dropping the nil-`daysPastDue` open;
+    - unwiring the recurring editor;
+    - attaching the Jobs modifier to the stack.

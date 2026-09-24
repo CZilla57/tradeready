@@ -115,8 +115,9 @@ struct JobsView: View {
                 guard case .deleteJob(let recordID) = intent else { return }
                 store.deleteJob(id: recordID)
             }
+            // On the stack's root content, not the stack, so a pop back re-sends it.
+            .nativeAnalyticsScreen(.jobList)
         }
-        .nativeAnalyticsScreen(.jobList)
     }
 
     private func filterButton(_ summary: NativeJobListFilterSummary) -> some View {

@@ -275,9 +275,6 @@ final class AppStore: ObservableObject {
     /// Task 11.08: `subscription_paywall_shown` fires once per paywall
     /// presentation (RN: once per `PaywallScreen` mount).
     private var analyticsPaywallTracked = false
-    /// Task 11.08 (§9.3): the last `$screen` sent, so a SwiftUI re-appear of
-    /// the same destination does not repeat it.
-    private var analyticsLastScreen: String?
     /// Task 11.08: where the open review-request / estimate follow-up flow
     /// came from (RN route param `source`, default `notification`).
     private var reviewRequestAnalyticsSource: NativeAnalyticsEvent.MessageSource = .notification
@@ -5697,7 +5694,7 @@ final class AppStore: ObservableObject {
               invoices.contains(where: { $0.id == invoiceID })
         else { return }
         // Task 11.08: RN `App.tsx:427` (`overdue_outreach` taps open Outreach).
-        if opensOutreach, let daysPastDue {
+        if opensOutreach {
             emitAnalytics(.overdueOutreachOpened(daysPastDue: daysPastDue))
         }
         selectedTab = .invoices
@@ -6435,8 +6432,17 @@ final class AppStore: ObservableObject {
     func performPullToRefresh(
         screen: NativeAnalyticsEvent.RefreshScreen? = nil
     ) async -> NativeSyncOutcome? {
+        await performPullToRefresh(screen: screen) { await self.syncNowAndWait(trigger: .manual) }
+    }
+
+    /// The pull-to-refresh body with its sync step injected, so the host tests
+    /// can change the owner while the sync is suspended.
+    private func performPullToRefresh(
+        screen: NativeAnalyticsEvent.RefreshScreen?,
+        sync: () async -> NativeSyncOutcome?
+    ) async -> NativeSyncOutcome? {
         let owner = authenticatedUserSubject
-        let outcome = await syncNowAndWait(trigger: .manual)
+        let outcome = await sync()
         // Task 11.08: RN `hooks/useRefresh.ts:17` — after the sync and
         // reload, whatever the result, only for Money and Jobs. An owner
         // change during the await drops it so the event can never be
@@ -7826,7 +7832,7 @@ extension AppStore {
         } catch {
             return .failed(reason: "transport")
         }
-        guard scheduleBookingOwnerStillCurrent(capture), let binding = capture.binding else {
+        guard scheduleBookingOwnerStillCurrent(capture), capture.binding != nil else {
             // Committed server-side for an owner we can no longer publish
             // for: stage the mirror under the captured binding so recovery —
             // never a blind re-mint — can finish it after re-verification.
@@ -9183,7 +9189,6 @@ extension AppStore {
 
     private func applyAnalyticsIdentityBoundary() {
         applyAnalyticsIdentityActions(analyticsIdentity.boundary())
-        analyticsLastScreen = nil
         analyticsPaywallTracked = false
     }
 
@@ -9216,10 +9221,12 @@ extension AppStore {
     }
 
     /// Sends `$screen` with the RN route name (§9.3). Destinations without an
-    /// RN route send nothing; the same route twice in a row is sent once.
+    /// RN route send nothing. Like RN's `useNavigationTracker`, every call
+    /// sends: a return to a list and a repeat visit both count. The only
+    /// dedupe is per appearance (`NativeAnalyticsScreenAppearance`), for
+    /// SwiftUI's duplicate `onAppear`.
     func trackScreen(_ destination: NativeAnalyticsScreen) {
-        guard let name = destination.routeName, name != analyticsLastScreen else { return }
-        analyticsLastScreen = name
+        guard let name = destination.routeName else { return }
         analytics.screen(name)
     }
 
@@ -9274,10 +9281,11 @@ extension AppStore {
         ))
     }
 
-    /// The bulk reminder chain finished; `count` outreach sheets were
-    /// presented (RN counts the composers it opened).
-    func recordBulkInvoiceReminders(channel: NativeAnalyticsEvent.ComposerChannel, count: Int) {
-        emitAnalytics(.bulkInvoiceReminders(channel: channel, count: count))
+    /// A bulk reminder chain that started (it had an eligible invoice) has
+    /// finished after presenting `presentedCount` outreach sheets. The event
+    /// shape and count semantics live in `bulkInvoiceReminderRun`.
+    func recordBulkInvoiceReminderRunCompleted(channel: NativeBulkRemindChannel, presentedCount: Int) {
+        emitAnalytics(.bulkInvoiceReminderRun(channel: channel, presentedCount: presentedCount))
     }
 
     /// An explicit payment-link generation succeeded (RN
@@ -9728,11 +9736,14 @@ extension AppStore {
     /// live outcome, as `signIn`/Apple/Google do after their provider call.
     /// The provider calls themselves need the network and Keychain, which
     /// this host-test binary cannot drive. Production never calls this.
+    /// `landingGate` replaces the `.signedIn` landing (for example
+    /// `.accountMismatch`) to pin what the sign-in emits there.
     func testFinishInteractiveSignIn(
         subject: String,
         binding: String,
         email: String,
-        method: NativeAnalyticsEvent.SignInMethod
+        method: NativeAnalyticsEvent.SignInMethod,
+        landingGate: NativeAuthenticationGateState? = nil
     ) {
         let outcome = NativeAuthenticatedIdentityActivationOutcome(
             accountState: .noAccountState,
@@ -9746,7 +9757,23 @@ extension AppStore {
             verifiedEmail: email,
             verificationSource: .live
         )
-        finishInteractiveSignIn(outcome, email: email, method: method, gateOverride: .signedIn(email: email))
+        finishInteractiveSignIn(
+            outcome, email: email, method: method, gateOverride: landingGate ?? .signedIn(email: email)
+        )
+    }
+
+    /// Test-only (task 11.08 fix round 1): the real pull-to-refresh tail with
+    /// `duringSync` standing in for the network sync, so a test can sign out
+    /// or switch owner while the sync is suspended.
+    @discardableResult
+    func testPerformPullToRefresh(
+        screen: NativeAnalyticsEvent.RefreshScreen?,
+        duringSync: () async -> Void
+    ) async -> NativeSyncOutcome? {
+        await performPullToRefresh(screen: screen) {
+            await duringSync()
+            return nil
+        }
     }
 
     /// Test-only (task 11.08): the analytics boundary `deleteAccount` applies

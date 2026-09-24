@@ -71,13 +71,14 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .navigationDestination(for: SettingsDestination.self) { settingsDestination($0) }
+            // On the stack's root content, not the stack, so a pop back re-sends it.
+            .nativeAnalyticsScreen(.settings)
         }
         .onAppear {
             if let initialDestination, path.isEmpty {
                 path.append(initialDestination)
             }
         }
-        .nativeAnalyticsScreen(.settings)
     }
 
     private var profileHeader: some View {

@@ -119,8 +119,9 @@ struct TodayView: View {
             } message: { row in
                 Text(NativeTodayBriefing.bookingRowPresentation(row).body)
             }
+            // On the stack's root content, not the stack, so a pop back re-sends it.
+            .nativeAnalyticsScreen(.today)
         }
-        .nativeAnalyticsScreen(.today)
     }
 
     private var bookingAlertPresented: Binding<Bool> {

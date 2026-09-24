@@ -137,6 +137,9 @@ struct AnalyticsEventTests {
         await signInWorkSignOutJourney()
         await accountSwitchAndDeletion(root: root)
         contextualEvents()
+        await pullToRefreshOwnerGuard()
+        signInLandingOnAccountMismatch()
+        screenAppearances(root: root)
         throwingTransportDoesNotAffectCommits()
 
         if failures > 0 {
@@ -160,6 +163,8 @@ struct AnalyticsEventTests {
         .bookingUpdateOpened,
         .bulkInvoiceReminders(channel: .email, count: 3),
         .bulkInvoiceReminders(channel: .text, count: 1),
+        .bulkInvoiceReminderRun(channel: .email, presentedCount: 2),
+        .bulkInvoiceReminderRun(channel: .text, presentedCount: 0),
         .bulkInvoicesMarkedPaid(count: 2),
         .changeOrderCreated(amount: Decimal(string: "125.50")!),
         .changeOrderDecided(.approved),
@@ -199,6 +204,7 @@ struct AnalyticsEventTests {
         .onboardingStepViewed(.business),
         .onboardingStepViewed(.startingPoint),
         .overdueOutreachOpened(daysPastDue: 7),
+        .overdueOutreachOpened(daysPastDue: nil),
         .paymentLinkSent(provider: "stripe", deposit: true),
         .paymentRecorded(amount: 50, method: "Cheque", balanceRemaining: 25.5),
         .paymentVoided(amount: 50, method: "Venmo"),
@@ -415,7 +421,6 @@ struct AnalyticsEventTests {
         store.testSetAuthenticationGateState(.signedOut)
         store.testFinishInteractiveSignIn(subject: "user-a", binding: hexBinding("a1"), email: "a@example.com", method: .password)
         store.trackScreen(.today)
-        store.trackScreen(.today)
 
         var customer = Customer()
         customer.name = "Pat Owner"
@@ -557,7 +562,7 @@ struct AnalyticsEventTests {
         expect(recorder.diagnostics.isEmpty && recorder.violations.isEmpty, "switch: nothing stripped or outside the catalog")
     }
 
-    // MARK: 9. Contextual events (sources, opens, pull-to-refresh)
+    // MARK: 9. Contextual events (sources, opens, composer events)
 
     @MainActor
     static func contextualEvents() {
@@ -604,6 +609,9 @@ struct AnalyticsEventTests {
         // Overdue outreach opens only from the outreach notification route.
         store.requestInvoiceReminderReview(invoiceID: invoice.id, opensOutreach: true, daysPastDue: 10)
         store.requestInvoiceReminderReview(invoiceID: invoice.id, opensOutreach: false, daysPastDue: 1)
+        // M7: a payload without daysPastDue still sends, with no key (RN
+        // sends `{ daysPastDue: undefined }`).
+        store.requestInvoiceReminderReview(invoiceID: invoice.id, opensOutreach: true)
 
         // Appointment confirmation: notification taps only.
         store.requestAppointmentConfirmationReview(jobID: lead.id)
@@ -612,7 +620,11 @@ struct AnalyticsEventTests {
         // Composer-opened events and the explicit payment link.
         store.recordAppointmentComposerOpened(onMyWay: true)
         store.recordAppointmentComposerOpened(onMyWay: false)
-        store.recordBulkInvoiceReminders(channel: .email, count: 2)
+        // M6: the view reports the finished chain; the channel mapping and
+        // count semantics live in `bulkInvoiceReminderRun`. RN tracks a
+        // started run even when it opened no composer (count 0).
+        store.recordBulkInvoiceReminderRunCompleted(channel: .email, presentedCount: 2)
+        store.recordBulkInvoiceReminderRunCompleted(channel: .text, presentedCount: 0)
         store.recordPaymentLinkSent(provider: .stripe, deposit: false)
         store.recordReceiptScan(nil, state: .failed)
 
@@ -624,14 +636,192 @@ struct AnalyticsEventTests {
             .capture("review_request_sent", ["channel": "email", "source": "job_detail"]),
             .capture("review_request_sent", ["channel": "sms", "source": "notification"]),
             .capture("overdue_outreach_opened", ["daysPastDue": 10]),
+            .capture("overdue_outreach_opened", [:]),
             .capture("appointment_confirm_opened", [:]),
             .capture("on_my_way_sent", [:]),
             .capture("appointment_confirm_sent", [:]),
             .capture("bulk_invoice_reminders", ["channel": "email", "count": 2]),
+            .capture("bulk_invoice_reminders", ["channel": "text", "count": 0]),
             .capture("payment_link_sent", ["provider": "stripe", "deposit": false]),
             .capture("receipt_scanned", ["outcome": "failed"]),
         ], "context: sources, guarded opens and composer events")
         expect(recorder.diagnostics.isEmpty, "context: nothing stripped (\(recorder.diagnostics.map(\.message)))")
+    }
+
+    // MARK: 11. Pull-to-refresh and the owner guard (M4)
+
+    @MainActor
+    static func pullToRefreshOwnerGuard() async {
+        let adapter = FakeSDKAdapter()
+        let recorder = Recorder()
+        let (store, directory) = makeStore(transport(adapter, recorder), tag: "refresh")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        store.testFinishInteractiveSignIn(subject: "user-r", binding: hexBinding("e1"), email: "r@example.com", method: .password)
+        adapter.calls.removeAll()
+
+        // The real entry point: with no sync configured the sync returns
+        // nil, and the event still fires after it (RN: whatever the result).
+        await store.performPullToRefresh(screen: .jobs)
+        await store.performPullToRefresh(screen: .money)
+        await store.performPullToRefresh()
+        expectEqual(adapter.calls, [
+            .capture("pull_to_refresh", ["screen": "JobsScreen"]),
+            .capture("pull_to_refresh", ["screen": "MoneyScreen"]),
+        ], "refresh: Jobs and Money send after the sync; an untagged refresh sends nothing")
+
+        // Unchanged owner through the injected sync: sends.
+        adapter.calls.removeAll()
+        await store.testPerformPullToRefresh(screen: .jobs) {}
+        expectEqual(adapter.calls, [.capture("pull_to_refresh", ["screen": "JobsScreen"])],
+                    "refresh: an unchanged owner sends after the sync")
+
+        // Sign-out while the sync is suspended: dropped.
+        adapter.calls.removeAll()
+        await store.testPerformPullToRefresh(screen: .jobs) {
+            store.testApplyCompletedSignOutState()
+        }
+        expectEqual(adapter.calls, [.reset, .screen("Auth")], "refresh: a sign-out during the sync drops the event")
+
+        // Owner switch while the sync is suspended: dropped, so nothing is
+        // attributed to the next owner.
+        store.testFinishInteractiveSignIn(subject: "user-r", binding: hexBinding("e1"), email: "r@example.com", method: .password)
+        adapter.calls.removeAll()
+        await store.testPerformPullToRefresh(screen: .money) {
+            store.testApplyCompletedSignOutState()
+            store.testFinishInteractiveSignIn(subject: "user-s", binding: hexBinding("e2"), email: "s@example.com", method: .password)
+        }
+        expectEqual(adapter.calls, [
+            .reset,
+            .screen("Auth"),
+            .identify("user-s"),
+            .capture("sign_in", ["method": "password"]),
+        ], "refresh: an owner switch during the sync never sends pull_to_refresh under the next owner")
+        expect(recorder.diagnostics.isEmpty, "refresh: nothing stripped")
+    }
+
+    // MARK: 12. Identify, then a landing on .accountMismatch (M4)
+
+    @MainActor
+    static func signInLandingOnAccountMismatch() {
+        let adapter = FakeSDKAdapter()
+        let recorder = Recorder()
+        let (store, directory) = makeStore(transport(adapter, recorder), tag: "mismatch")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        store.testSetAuthenticationGateState(.signedOut)
+        adapter.calls.removeAll()
+
+        store.testFinishInteractiveSignIn(
+            subject: "user-b", binding: hexBinding("b9"), email: "b@example.com", method: .google,
+            landingGate: .accountMismatch
+        )
+        expect(store.authenticationGateState == .accountMismatch, "mismatch: the sign-in landed on .accountMismatch")
+        expectEqual(adapter.calls, [.identify("user-b"), .capture("sign_in", ["method": "google"])],
+                    "mismatch: after identify, sign_in is the only event under B (no screen, onboarding or paywall event)")
+
+        // Leaving the mismatch by signing out resets before anything else.
+        adapter.calls.removeAll()
+        store.testApplyCompletedSignOutState()
+        expectEqual(adapter.calls, [.reset, .screen("Auth")], "mismatch: signing out of the mismatch resets, then Auth")
+        expect(recorder.diagnostics.isEmpty && recorder.violations.isEmpty, "mismatch: nothing stripped")
+    }
+
+    // MARK: 13. $screen appearances: returns and repeat visits (I1)
+
+    /// One destination view as SwiftUI drives it: the real appearance rule
+    /// the screen modifier holds, forwarding to the real store.
+    @MainActor
+    struct SimulatedDestination {
+        let destination: NativeAnalyticsScreen
+        let store: AppStore
+        var appearance = NativeAnalyticsScreenAppearance()
+
+        mutating func onAppear() { if appearance.appear() { store.trackScreen(destination) } }
+        mutating func onDisappear() { appearance.disappear() }
+    }
+
+    @MainActor
+    static func screenAppearances(root: URL) {
+        var appearance = NativeAnalyticsScreenAppearance()
+        expect(appearance.appear(), "appearance: the first onAppear is an appearance")
+        expect(!appearance.appear(), "appearance: a duplicate onAppear in the same appearance is dropped")
+        appearance.disappear()
+        expect(appearance.appear(), "appearance: onAppear after onDisappear is a new appearance")
+
+        let adapter = FakeSDKAdapter()
+        let recorder = Recorder()
+        let (store, directory) = makeStore(transport(adapter, recorder), tag: "screens")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        store.testFinishInteractiveSignIn(subject: "user-v", binding: hexBinding("f1"), email: "v@example.com", method: .password)
+
+        // JobList -> JobDetail(A) -> back -> JobDetail(B): RN sends all four.
+        adapter.calls.removeAll()
+        var list = SimulatedDestination(destination: .jobList, store: store)
+        list.onAppear()
+        list.onAppear() // SwiftUI's duplicate onAppear for the same appearance
+        list.onDisappear() // push
+        var detailA = SimulatedDestination(destination: .jobDetail, store: store)
+        detailA.onAppear()
+        detailA.onDisappear() // pop
+        list.onAppear()
+        list.onDisappear() // push
+        var detailB = SimulatedDestination(destination: .jobDetail, store: store)
+        detailB.onAppear()
+        expectEqual(adapter.calls, [.screen("JobList"), .screen("JobDetail"), .screen("JobList"), .screen("JobDetail")],
+                    "screens: list -> detail -> back -> detail sends every step, like RN")
+
+        // A repeat visit of the same pushed page re-sends both the page and
+        // the root it returns to.
+        adapter.calls.removeAll()
+        var settings = SimulatedDestination(destination: .settings, store: store)
+        settings.onAppear()
+        settings.onDisappear()
+        var business = SimulatedDestination(destination: .settingsBusiness, store: store)
+        business.onAppear()
+        business.onDisappear()
+        settings.onAppear()
+        settings.onDisappear()
+        var businessAgain = SimulatedDestination(destination: .settingsBusiness, store: store)
+        businessAgain.onAppear()
+        expectEqual(adapter.calls, [
+            .screen("Settings"), .screen("SettingsBusiness"), .screen("Settings"), .screen("SettingsBusiness"),
+        ], "screens: a repeat visit re-sends")
+
+        // The store no longer dedupes: two calls send twice.
+        adapter.calls.removeAll()
+        store.trackScreen(.customerDetail)
+        store.trackScreen(.customerDetail)
+        expectEqual(adapter.calls, [.screen("CustomerDetail"), .screen("CustomerDetail")],
+                    "screens: trackScreen sends every call (the only dedupe is per appearance)")
+
+        // Source: every tab root and Settings attach the modifier to the
+        // stack's root content (so onAppear re-fires on a pop), never to the
+        // NavigationStack itself.
+        let views = root.appending(path: "native/TradeReadyNative")
+        func source(_ file: String) -> String {
+            (try? String(contentsOf: views.appending(path: file), encoding: .utf8)) ?? ""
+        }
+        for (file, screen) in [
+            ("TodayView.swift", "today"), ("JobsView.swift", "jobList"), ("InvoicesView.swift", "invoiceList"),
+            ("CustomersView.swift", "customerList"), ("MoneyView.swift", "money"), ("CoachView.swift", "coach"),
+            ("SettingsView.swift", "settings"),
+        ] {
+            let text = source(file)
+            expect(text.contains("            .nativeAnalyticsScreen(.\(screen))\n        }\n"),
+                   "screens: \(file) attaches .\(screen) inside its NavigationStack")
+            expect(!text.contains("        }\n        .nativeAnalyticsScreen(.\(screen))"),
+                   "screens: \(file) does not attach .\(screen) to the NavigationStack")
+        }
+
+        // Every signed-in destination with an RN route is applied by a view
+        // (the gate roots come from the gate transition instead).
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: views.path)) ?? []
+        let allSource = files.filter { $0.hasSuffix(".swift") }.map(source).joined(separator: "\n")
+        let gateRoots: Set<NativeAnalyticsScreen> = [.auth, .onboarding, .paywall, .startingPoint]
+        for screen in NativeAnalyticsScreen.allCases where screen.routeName != nil && !gateRoots.contains(screen) {
+            expect(allSource.contains(".nativeAnalyticsScreen(.\(screen.rawValue))"),
+                   "screens: .\(screen.rawValue) (\(screen.routeName ?? "")) is applied by a view")
+        }
+        expect(recorder.diagnostics.isEmpty, "screens: nothing stripped")
     }
 
     // MARK: 10. A throwing transport never affects a commit
