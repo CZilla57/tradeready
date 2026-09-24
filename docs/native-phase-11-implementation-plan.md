@@ -1623,8 +1623,13 @@ later sign-in of the old owner (no current users: correctness over continuity).
 - `handle(url:)` has no auth, owner or archived gate and no parking. The 11.05 fixtures
   assert only route-or-discard (a kept route must be the exact id in the current owner's
   data; an account boundary clears it), so they stay valid when 11.06 adds parking.
-- Noted, not changed: `useAnotherAccount` does not scrub the App Group; the replay
-  owner-tag gate and O protect replay and the writer in that path.
+- `useAnotherAccount` keeps `deepLinkedJobID` and `pendingOnMyWayJobID` from the
+  previous session (a link parked while signed out survives the account switch). The
+  11.05 fixture reports this as a known gap and does not assert it. 11.06 must clear or
+  owner-scope every held route at each account boundary (`signOut` already clears them
+  in `applyCompletedSignOutState`).
+- `handle(url:)` parks the exact id while signed out today (no auth gate); the fixture
+  pins that exact behavior, so 11.06's parking change will update it deliberately.
 
 **Runsheet rows (Phase 12; not run, not claimed):**
 - Sign out on a device with widgets on the Home Screen: both widgets clear within one
@@ -1635,6 +1640,44 @@ later sign-in of the old owner (no current users: correctness over continuity).
   the app, fail closed with no wrong-record route.
 
 **Concerns:** item 4's "routes after sign-in" for cold links depends on 11.06.
+
+**Fix round 1 (2026-09-24):**
+- **I1 — account switch is an App Group boundary:** `useAnotherAccount` now suspends
+  the mirror and replay, and after `clearSession` runs the same
+  `scrubWidgetAccountState()` (wipe, immediate timeline reload before the `logOut`
+  await, claims removal), then resets the per-owner replay diagnostics. A wipe failure
+  does not keep the cleared owner in memory; it is counted
+  (`accountSwitchScrubFailureCount`). The local workspace is retained. The earlier
+  "`useAnotherAccount` does not scrub" note is superseded.
+- **I2 — deep-link fixture asserts exact behavior:** signed out with retained data, a
+  link parks exactly `j1` (a missing id never redirects it); the **real** `signOut`
+  clears both route fields and B signing in afterwards gets no route; the real
+  `useAnotherAccount` path is driven, and its surviving route fields are reported as a
+  known 11.06 gap (handoff above), never asserted as correct; the same owner returning
+  gets exactly `j1` resolving to A's record.
+- **M-archived:** recorded in the contract §4.6 as a native difference (and C8 marked
+  resolved there).
+- **M-mainactor:** `NativeWidgetActionClaimTransport.removeAllAccountClaims()` is
+  `@MainActor`.
+- **M-matches:** the planner compares through `NativeWidgetOwnerTag.matches` (the one
+  comparison).
+- **Tests:** new fixture `testUseAnotherAccountScrubsWidgetState` drives the real
+  `useAnotherAccount` (suite empty and timelines reloaded before `logOut`, no snapshot,
+  trip or stash for A, NextJob/Outstanding/StopTrip refuse, claims removed, diagnostics
+  reset); source scan now expects 4 `scrubWidgetAccountState()` call sites and exactly
+  one `reloadAllTimelines()`.
+- **Harness:** `native/StoreIntegrationTests/main.swift`'s `seed08Store` now injects a
+  throwaway App Group suite and lock file. Its real `useAnotherAccount()` fixtures now
+  reach the App Group wipe, and the default scrubber would have touched the real
+  container on the developer Mac (the run blocked in `WidgetAppGroupLock` there).
+- **Mutation checks (17, all killed):** the 9 earlier ones plus: switch wipe removed
+  (12 failures), switch wipe moved after `logOut` (3), switch suspension removed (6),
+  switch diagnostics reset removed (1), `signOut` keeping the job route (2) or the On My
+  Way route (2), and case-insensitive `matches` (3).
+- **Commands:** widget-owner-gating, widget-action-replay, app-intent-queue,
+  store-integration and job-timer-widget runners pass with `TZ=America/Phoenix`; Release
+  generic `xcodebuild` → `** BUILD SUCCEEDED **`; `sh native/run-doc-reference-check.sh`
+  → 0 missing.
 
 **Next ready:** 11.06 (deep-link routing and auth gates; the owner-gate API it needs is
 `NativeWidgetOwnerTag.matches` and O).

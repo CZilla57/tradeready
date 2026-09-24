@@ -3856,8 +3856,25 @@ final class AppStore: ObservableObject {
             authenticationGateState = .signedOut
             return
         }
+        // Task 11.05 (fix round 1, I1): no mirror write or replay may land
+        // between the App Group wipe below and the owner teardown.
+        widgetMirrorSuspendedForAccountBoundary = true
+        defer { widgetMirrorSuspendedForAccountBoundary = false }
         do {
             try await activator.clearSession()
+            // Task 11.05 (I1, contract §3.1): an account switch is an account
+            // boundary for the widget/Siri surface even though the local
+            // workspace is retained. The extension cannot know `O`, so the
+            // previous owner's snapshot, trip and stash are wiped, timelines
+            // reloaded at once (before the `logOut` await) and the replay
+            // claims removed. Losing that owner's unreplayed actions is
+            // accepted (no current users). A wipe failure does not keep the
+            // cleared session's owner in memory; it is counted instead.
+            do {
+                try scrubWidgetAccountState()
+            } catch {
+                widgetActionReplayDiagnostics.recordAccountSwitchScrubFailure()
+            }
             await subscriptionService.logOut()
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
@@ -3883,6 +3900,9 @@ final class AppStore: ObservableObject {
             // in-memory published state so the next account never inherits
             // a dismissal, snooze, or "used once" flag.
             resetTodayOwnerState()
+            // Task 11.05 (I1): replay diagnostics are per owner. The wipe's
+            // failure count above survives the reset so it stays visible.
+            widgetActionReplayDiagnostics.resetForAccountBoundary()
         } catch {
             authenticationGateState = .unavailable
         }

@@ -68,14 +68,15 @@ enum NativeWidgetActionBatchPlanner {
         // validation or type dispatch. An untagged or foreign entry, of any
         // type (including an unknown one), is dropped and acknowledged; it can
         // neither be applied to this owner nor wedge this owner's batch.
-        let expectedOwnerTag = NativeWidgetOwnerTag.make(binding: verifiedAccountBinding)
+        // `NativeWidgetOwnerTag.matches` is the one tag comparison (a hash of
+        // ~90 bytes per entry; at most 512 entries per batch).
         var identifiers = Set<String>()
         var actions: [NativeWidgetActionBatch.Action] = []
         var ownerDropped = 0
         actions.reserveCapacity(values.count)
         for (index, value) in values.enumerated() {
             guard case let .object(fields) = value,
-                  string("ownerTag", fields) == expectedOwnerTag
+                  NativeWidgetOwnerTag.matches(string("ownerTag", fields), binding: verifiedAccountBinding)
             else {
                 ownerDropped += 1
                 continue
@@ -603,8 +604,11 @@ struct NativeWidgetActionClaimTransport {
 
     /// Task 11.05: the account scrub removes every claim and quarantine file
     /// (they hold the scrubbed account's actions). App-private storage that
-    /// only the app's main actor touches, so no App Group lock is needed and
-    /// the scrub gains no new dependency on the container.
+    /// only the app's main actor touches (every claim/replay runs from
+    /// `AppStore`, which is `@MainActor`), so no App Group lock is needed and
+    /// the scrub gains no new dependency on the container. `@MainActor`
+    /// makes that single-writer assumption a compile-time rule.
+    @MainActor
     func removeAllAccountClaims() throws {
         let manager = FileManager.default
         guard manager.fileExists(atPath: claimDirectory.path) else { return }
@@ -821,6 +825,10 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
 
     private(set) var ownerDroppedActionCount = 0
     private(set) var quarantinedQueueCount = 0
+    /// Task 11.05 fix round 1 (I1): `useAnotherAccount` could not wipe the
+    /// App Group (lock or container unavailable). Kept across the account
+    /// boundary reset so the failure stays observable.
+    private(set) var accountSwitchScrubFailureCount = 0
 
     mutating func recordOwnerDropped(_ count: Int) {
         guard count > 0 else { return }
@@ -829,6 +837,16 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
 
     mutating func recordQuarantine() {
         quarantinedQueueCount = min(Self.maximumCount, quarantinedQueueCount + 1)
+    }
+
+    mutating func recordAccountSwitchScrubFailure() {
+        accountSwitchScrubFailureCount = min(Self.maximumCount, accountSwitchScrubFailureCount + 1)
+    }
+
+    /// Clears the per-owner counters at an account switch.
+    mutating func resetForAccountBoundary() {
+        ownerDroppedActionCount = 0
+        quarantinedQueueCount = 0
     }
 }
 

@@ -1618,7 +1618,18 @@ struct StoreIntegrationTests {
             let snapshot = Canonical.Snapshot(payload: Canonical.SnapshotPayload(
                 jobs: jobs, customers: customers, settings: settings, bookingRequests: requests))
             try Canonical.SnapshotRepository(primaryURL: url).save(snapshot)
+            // Task 11.05 fix round 1: `useAnotherAccount()` now wipes the App
+            // Group (an account boundary for widgets/Siri). A host-test process
+            // must never touch the real App Group container (it can block on
+            // it, and would wipe the developer machine's suite), so every
+            // store here gets a throwaway suite + lock file.
+            let suite = "com.tradeready.phase10.tests.\(UUID().uuidString)"
             let store = AppStore(fileURL: url, seedIfMissing: false,
+                                 appGroupAccountScrubber: NativeAppGroupAccountScrubber(
+                                     suiteName: suite,
+                                     defaults: UserDefaults(suiteName: suite) ?? .standard,
+                                     lockFile: dir.appendingPathComponent("app-group.lock")
+                                 ),
                                  initialSyncService: delta,
                                  subscriptionService: StoreSubscriptionServiceStub())
             return (store, dir)

@@ -22,6 +22,8 @@ import Darwin
 // entitlement). Run with TZ=America/Phoenix.
 
 private var failures = 0
+/// Recorded gaps owned by a later task: printed, never counted as passing.
+private var knownGaps: [String] = []
 
 private func expect(_ condition: @autoclosure () -> Bool, _ label: String) {
     if !condition() {
@@ -882,8 +884,9 @@ private func testDeepLinkWhileSignedOut() async throws {
     expect(suite2.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) == nil, "the account scrub discards the stash")
 
     // (c) Expired session (no scrub): A's data is retained behind the gate.
-    // A link opened now may only ever resolve to A's exact record once A is
-    // back, and is discarded at the account boundary if B shows up instead.
+    // TODAY `handle(url:)` has no auth gate (11.06 adds it), so a link opened
+    // while signed out parks the exact id. These assertions pin that exact
+    // behavior and prove the REAL account-boundary paths clear it.
     let suite3 = TempSuite(), workspace3 = Workspace()
     defer { suite3.cleanUp(); workspace3.cleanUp() }
     try workspace3.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
@@ -891,26 +894,117 @@ private func testDeepLinkWhileSignedOut() async throws {
     let expired = makeStore(workspace3, suite: suite3)
     expired.testSetAuthenticationGateState(.signedOut)
     expired.handle(url: URL(string: "tradeready://job/j1")!)
-    expect(expired.deepLinkedJobID == nil || expired.deepLinkedJobID == "j1",
-           "signed out: the link is either discarded or parked for the exact id (never another record)")
-    // B verifies against A's retained workspace → account mismatch.
+    expectEqual(expired.deepLinkedJobID, "j1", "signed out (expired, data retained): today the link parks the exact id")
+    expired.handle(url: URL(string: "tradeready://job/not-a-job")!)
+    expectEqual(expired.deepLinkedJobID, "j1", "a link to a missing id never redirects the parked route")
+    expired.handle(url: URL(string: "tradeready://onmyway/j1")!)
+    expectEqual(expired.pendingOnMyWayJobID, "j1", "the On My Way link parks the exact id too")
+    // The REAL explicit sign-out is the account boundary: every held route
+    // from A's session is gone before any other owner can sign in.
+    try await expired.signOut(revokeRemote: false)
+    expect(expired.deepLinkedJobID == nil, "a real signOut discards the job route held from A's session")
+    expect(expired.pendingOnMyWayJobID == nil, "a real signOut discards the On My Way route held from A's session")
+    try workspace3.write(jobs: [job("j1", ["customerName": "Bob (B)"])])
+    try workspace3.bind(bindingB)
     expired.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
-    expired.testSetAuthenticationGateState(.accountMismatch)
-    expect(expired.derivedStatePublishBinding == nil && expired.widgetActionReplayBinding == nil,
-           "account mismatch: no O, so no mirror, no replay, no routing owner")
-    expectEqual(expired.refreshWidgetMirror(force: true), .skippedNoOwner, "B can never mirror A's workspace")
-    expired.testApplyCompletedSignOutState() // B resolves the mismatch through the account boundary
+    await settle()
     expect(expired.deepLinkedJobID == nil && expired.pendingOnMyWayJobID == nil,
-           "the account boundary discards any route held from A's session")
-    // Same owner back instead: the route (if kept) targets A's exact record.
-    let again = makeStore(workspace3, suite: suite3)
+           "after B signs in on the same store, A's link does not route into B's same-id j1")
+
+    // (d) Expired session, then the REAL "use another account" (the
+    // account-mismatch exit). The App Group side is covered by
+    // `testUseAnotherAccountScrubsWidgetState`. The in-memory route fields
+    // are 11.06's (§15): today they survive this boundary, which is recorded
+    // as an 11.06 handoff item and reported here, never asserted as correct.
+    let suite4 = TempSuite(), workspace4 = Workspace()
+    defer { suite4.cleanUp(); workspace4.cleanUp() }
+    try workspace4.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
+    try workspace4.bind(bindingA)
+    let switching = makeStore(workspace4, suite: suite4)
+    switching.testSetAuthenticationGateState(.signedOut)
+    switching.handle(url: URL(string: "tradeready://job/j1")!)
+    expectEqual(switching.deepLinkedJobID, "j1", "sanity: the route is parked before the account switch")
+    switching.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
+    switching.testSetAuthenticationGateState(.accountMismatch)
+    expect(switching.derivedStatePublishBinding == nil && switching.widgetActionReplayBinding == nil,
+           "account mismatch: no O, so no mirror, no replay")
+    expectEqual(switching.refreshWidgetMirror(force: true), .skippedNoOwner, "B can never mirror A's workspace")
+    switching.scheduleBookingTestSeedIdentityActivator()
+    await switching.useAnotherAccount {}
+    expectEqual(switching.authenticationGateState, .signedOut, "sanity: useAnotherAccount reached its success path")
+    if switching.deepLinkedJobID != nil || switching.pendingOnMyWayJobID != nil {
+        knownGaps.append("useAnotherAccount keeps deepLinkedJobID/pendingOnMyWayJobID from the previous session (11.06)")
+    }
+
+    // (e) The same owner comes back: the parked route is A's own exact record.
+    let again = makeStore(workspace4, suite: suite4)
     again.testSetAuthenticationGateState(.signedOut)
     again.handle(url: URL(string: "tradeready://job/j1")!)
     again.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
     await settle()
-    expect(again.deepLinkedJobID == nil
-           || (again.deepLinkedJobID == "j1" && again.jobs.contains { $0.id == "j1" && $0.customerName == "Alice (A)" }),
-           "A signs back in: route-or-discard, and a route is A's own exact record")
+    expectEqual(again.deepLinkedJobID, "j1", "A signs back in: the parked route is still the exact id")
+    expectEqual(again.jobs.first { $0.id == "j1" }?.customerName, "Alice (A)", "…and it resolves to A's own record")
+}
+
+// MARK: - 8b. Use another account is an App Group boundary (fix round 1, I1)
+
+@MainActor
+private func testUseAnotherAccountScrubsWidgetState() async throws {
+    let suite = TempSuite(), workspace = Workspace()
+    defer { suite.cleanUp(); workspace.cleanUp() }
+    let reloader = RecordingReloader()
+    let subscription = SubscriptionStub()
+    try workspace.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
+    try workspace.bind(bindingA)
+    let store = makeStore(workspace, suite: suite, reloader: reloader, subscription: subscription)
+    store.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+    await settle()
+    suite.defaults.set(queueJSON([action("b-foreign", "expense_log", tag: tagB, expenseFields)]), forKey: WidgetAppGroup.actionsKey)
+    store.testReplayWidgetActions()
+    expectEqual(store.widgetActionReplayDiagnostics.ownerDroppedActionCount, 1, "sanity: A's session counted a dropped action")
+    let engine = suite.engine()
+    guard case .nextJob(let spoken, _, _) = engine.nextJob(), spoken.customerName == "Alice (A)" else {
+        return expect(false, "sanity: Siri speaks A's next job before the switch")
+    }
+    guard case .started = engine.startTrip(odometerStart: 10) else { return expect(false, "sanity: A starts a trip") }
+    guard case .opening = engine.stashOnMyWay() else { return expect(false, "sanity: A stashes a link") }
+    _ = engine.logExpense(amount: 4, category: .fuel, description: nil)
+    _ = try suite.transport(claims: workspace.claims).claim(verifiedAccountBinding: bindingA)
+    expect(!workspace.claimFiles().isEmpty, "sanity: A has an in-flight claim")
+    expect(suite.defaults.string(forKey: WidgetAppGroup.activeTripKey) != nil
+           && suite.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) != nil,
+           "sanity: A's trip and stash are in the suite")
+
+    reloader.probe = { suite.isEmpty }
+    let reloadsBefore = reloader.count
+    var atLogOut: (Bool, Int, NativeWidgetMirrorOutcome?)?
+    subscription.onLogOut = { [weak store] in
+        atLogOut = (suite.isEmpty, reloader.count, store?.refreshWidgetMirror(force: true))
+    }
+    store.scheduleBookingTestSeedIdentityActivator()
+    await store.useAnotherAccount {}
+    expectEqual(store.authenticationGateState, .signedOut, "sanity: useAnotherAccount reached its success path")
+
+    expect(atLogOut?.0 == true, "the suite is wiped before the logOut await")
+    expect((atLogOut?.1 ?? 0) > reloadsBefore, "timelines are reloaded right after the wipe, before the logOut await")
+    expectEqual(atLogOut?.2, .skippedNoOwner, "no mirror write lands inside the account-switch boundary")
+    expect(reloader.count > reloadsBefore && reloader.suiteWasEmptyAtEveryReload,
+           "every reload came after the wipe (no widget re-renders A)")
+    expect(WidgetSnapshot.load(from: suite.defaults) == nil, "no snapshot for A remains")
+    expect(suite.defaults.string(forKey: WidgetAppGroup.activeTripKey) == nil, "no trip for A remains")
+    expect(suite.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) == nil, "no stash for A remains")
+    expect(suite.isEmpty, "the whole account key set is empty")
+    expect(workspace.claimFiles().isEmpty, "A's claims are removed")
+    expectEqual(suite.engine().nextJob(), .failed(.signInRequired), "Next Job speaks nothing of A")
+    expectEqual(suite.engine().outstanding(), .failed(.signInRequired), "Outstanding speaks nothing of A")
+    expectEqual(suite.engine().stopTrip(odometerEnd: 20), .failed(.signInRequired), "A's trip cannot be finished by anyone")
+    expectEqual(store.refreshWidgetMirror(force: true), .skippedNoOwner, "no owner after the switch → nothing re-written")
+    expectEqual(store.widgetActionReplayDiagnostics.accountSwitchScrubFailureCount, 0, "the wipe succeeded")
+    expect(store.widgetActionReplayDiagnostics.ownerDroppedActionCount == 0
+           && store.widgetActionReplayDiagnostics.quarantinedQueueCount == 0, "per-owner diagnostics are reset")
+    let local = try workspace.load()
+    expectEqual(local?.payload.jobs?.first?.customerName, "Alice (A)",
+                "the local workspace is retained (only the widget/Siri surface is an account boundary here)")
 }
 
 // MARK: - 9. The write gate (brief item 1, §3.1)
@@ -995,8 +1089,10 @@ private func testOneLock() {
     let appStore = source("AppStore.swift")
     expectEqual(appStore.components(separatedBy: "appGroupAccountScrubber.scrub()").count - 1, 1,
                 "the App Group wipe is called from exactly one place (scrubWidgetAccountState)")
-    expectEqual(appStore.components(separatedBy: "try scrubWidgetAccountState()").count - 1, 3,
-                "every scrub path (launch recovery, retry, sign-out/deletion) goes through it")
+    expectEqual(appStore.components(separatedBy: "try scrubWidgetAccountState()").count - 1, 4,
+                "every scrub path (launch recovery, retry, sign-out/deletion, use another account) goes through it")
+    expectEqual(appStore.components(separatedBy: "reloadAllTimelines()").count - 1, 1,
+                "timelines are reloaded from exactly one place (right after the wipe)")
     expect(!appStore.contains("guard isMigratedLocalOwnerVerified,\n              let accountBinding = migratedAccountBinding"),
            "the replay gate no longer requires the migrated owner")
 
@@ -1054,8 +1150,10 @@ struct WidgetOwnerGatingTests {
         testStaleWindow()
         await runAsync("stale/missing records", testStaleAndMissingRecordsFailClosed)
         await runAsync("deep link while signed out", testDeepLinkWhileSignedOut)
+        await runAsync("use another account", testUseAnotherAccountScrubsWidgetState)
         await runAsync("write gate", testWriteGate)
         testOneLock()
+        for gap in knownGaps { print("KNOWN GAP (not asserted; handed off): \(gap)") }
         if failures == 0 {
             print("Widget owner gating tests passed")
         } else {

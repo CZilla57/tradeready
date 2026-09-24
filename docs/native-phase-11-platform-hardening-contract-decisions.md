@@ -468,6 +468,12 @@ Order: claim → prepare → apply → save → acknowledge. Sources:
 - Start/stop markers `__nativeWidgetStartActionID` / `__nativeWidgetStopActionID` make
   replay idempotent. Done statuses are skipped. `scheduled` becomes `in_progress` on
   start. A stop is clamped to its start. Trips and expenses use deterministic ids.
+- **Native difference (11.05, recorded):** a `timer_start` whose job is **archived**
+  (non-empty `archivedAt`) is ignored and acknowledged, like a missing or done job.
+  RN's `utils/widgetActions.ts` has no archived check. The replayer re-resolves the
+  exact job id in the current owner's data and fails closed, matching the projection's
+  own rule that archived work is never offered (§3.3). A `timer_stop` is not affected:
+  it only closes an open session on the exact id.
 - RN's equivalent is `utils/widgetActions.ts`:
   - RN clears the queue before applying;
   - `t_siri_<id>` trips, purpose "Business trip (Siri)";
@@ -487,6 +493,12 @@ action. 11.05 must choose and test a quarantine policy. Suggested shape: move th
 offending raw queue into an owner-scoped quarantine file under the lock, surface a
 bounded message, and continue. The writer rules in §4.3 make this state unreachable
 from native writers, but it stays reachable from legacy or foreign data.
+
+**Resolved (11.05, 2026-09-24):** an unpreparable queue is re-read and re-prepared under
+the lock, then its bytes (digest and size only above 1 MiB) are written to an
+owner-scoped `quarantine-<binding>-<digest>.json` next to the claims (at most 4 per
+owner) before the shared queue is cleared. The app shows "Some widget or Siri actions
+couldn't be read and were set aside." and later actions replay. Details: plan §7, 11.05.
 
 ---
 
