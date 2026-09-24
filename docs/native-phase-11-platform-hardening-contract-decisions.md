@@ -1740,7 +1740,7 @@ tint text on that ground, so this is recorded only.
 | A8 | Week strip at AX2–AX5: seven day columns and two arrows cannot grow further on a phone | **Retained by design:** capped at `.accessibility1`. VoiceOver reads each day in full. A long press shows the Large Content Viewer for the days and arrows. **Fix round 1 (I1):** the day circle's `@ScaledMetric` sat on the strip, outside the cap, so it reached about 98pt at AX5 and pushed the arrows off-screen. The metric now lives in a day view inside the capped subtree, and the circle is clamped to 34pt (`NativeAccessibilityAudit.WeekStrip`). Seven 34pt columns fit beside both 44pt arrows on a 375pt phone: each column gets 35.3pt | Cap, placement and clamp checks; Phase 12 AX5 row |
 | A9 | Widget views (`N/Widgets/Shared/*`) use fixed-point fonts | **Retained:** fixed widget canvas, matching RN `targets/widget`. Owned by 11.02/11.03 | Scan exempts only `N/Widgets/`; Phase 12 widget AX row |
 | A10 | Remaining `lineLimit(1)` sites: names, notes, addresses, links, job titles | **Retained:** truncating a name or address does not lose meaning in a list row, the detail screen shows the full text, and VoiceOver reads it in full. The amount sites that could lose meaning now stack | Reviewed |
-| A11 | Hardware-keyboard shortcuts and iPad keyboard commands | **Done by 11.11** (§12.2): Esc on every toolbar Cancel/Done/Close, ⌘S on every toolbar save, ⌘⏎ on the change-order Confirm, ⌘N on the five existing toolbar "new" actions, no shortcut on the destructive delete, no custom command menus (RN has none). Tab traversal is the system focus order; return-key chains beyond auth and recovery stay A24 (11.10b) | `native/run-layout-metrics-tests.sh` keyboard checks; Phase 12 rows IPAD-KB-1 and IPAD-KB-2 |
+| A11 | Hardware-keyboard shortcuts and iPad keyboard commands | **Done by 11.11** (§12.2): Esc on every toolbar Cancel/Done/Close, ⌘S on every toolbar save, ⌘⏎ on the change-order Confirm, ⌘N on the five existing toolbar "new" actions (gated: never while the owner presents anything or has a screen pushed over it; fix round 1), no shortcut on the destructive delete, no custom command menus (RN has none). Tab traversal is the system focus order; return-key chains beyond auth and recovery stay A24 (11.10b) | `native/run-layout-metrics-tests.sh` keyboard checks; Phase 12 rows IPAD-KB-1 and IPAD-KB-2 |
 | A12 | Reading order: static review found no layered text out of order. The one layered text view, the calendar timeline, is already hidden from VoiceOver. No `accessibilitySortPriority` was added | **Deferred to device** (Phase 12 VoiceOver rows) | — |
 | A13 | Today job card: an "On my way" button nested inside the card button. Its VoiceOver reachability can only be confirmed on a device | **Deferred to device.** If it is unreachable, 11.10b adds an `accessibilityAction` | Phase 12 row |
 | A14 | **Corrected in fix round 1 (I3).** Money cards with `onOpen` used the label "{title}, open", which hid their figures from VoiceOver. The first pass said RN does the same, but only RN `TaxSetAsideCard` sets a label ("Tax set-aside — open settings"). RN `MileageCard` and `PricebookCard` set none, so RN VoiceOver reads their figures, and native was a regression | **Fixed:** an openable card with no RN label combines its text into one button element (`.accessibilityElement(children: .combine)` plus the button trait), so the title and figures are read. The tax card uses RN's exact label, with the reserve as the accessibility value. The native tax card has no open action today, because native has no tax-settings screen yet. It stays a static card that VoiceOver reads in full, and the RN label and value take effect when a destination is wired | Catalog parity (`taxSetAsideOpen` against RN), RN no-label checks for Mileage and Pricebook, branch checks in `NativeMoneyCard` |
@@ -1840,17 +1840,46 @@ that already exist. It adds no custom command menus, because RN has none.
 | A `.confirmationAction` button that only dismisses (Done, Close) | Esc (`.cancelAction`) | 4 |
 | A `.confirmationAction` save (Save, Save Changes/Add Trip, the change-order save label, the shared `DismissableFormToolbar` Save) | ⌘S | 9 |
 | The change-order decision Confirm | ⌘⏎ | 1 |
-| Existing toolbar "new" actions: add job, add invoice, add customer, add maintenance plan, Coach "New chat" | ⌘N | 5 |
+| Existing toolbar "new" actions: add job, add invoice, add customer, add maintenance plan, Coach "New chat" | ⌘N, gated (below) | 5 |
 | The destructive delete-account confirmation | none (a destructive action is never one keystroke) | 1 |
 
 Total: 46 shortcuts. Rules the suite enforces: every `.keyboardShortcut` in `N/` is one the policy checked, and
-`N/` has no `CommandMenu`, `CommandGroup`, `.commands` or `UIKeyCommand`. Sending
+`N/` has no `CommandMenu`, `CommandGroup`, `.commands` or `UIKeyCommand`. Every
+`.confirmationAction` title is classified in the suite's policy table; an unlisted title
+fails rather than defaulting to ⌘S. Sending
 (estimates, invoices, messages, Coach) gets no shortcut; those are form buttons, not toolbar
 actions. **Tab/Return audit:** 25 files hold text inputs. Tab and Shift-Tab move through
-them in the system focus order, and `N/` never disables focus. Return in a single-line
+them in the system focus order, and `N/` never disables focus (the suite fails on
+`.focusable`, `.focusDisabled` or `.focusEffectDisabled`). Return in a single-line
 field ends editing, and in the Coach composer (vertical axis) it inserts a newline. Only the
 auth and recovery forms have return-key chains (11.10a A7). The other editors' chains stay
 A24 for 11.10b.
+
+**⌘N gating (fix round 1, chosen).** A SwiftUI toolbar shortcut stays live while its view
+presents a sheet or dialog, and a root's toolbar shortcut stays live under a screen pushed
+without a path. Both were measured on the iPadOS 26.5 Simulator with hardware-key input
+(a throwaway probe mirroring these structures; ⌘J canary to prove delivery):
+
+| Situation (ungated) | Measured | Gated result |
+|---|---|---|
+| ⌘N with the maintenance-plan edit sheet open | The list's "+" fired and the open editor's plan became `nil`, so Save would create a second plan | ⌘N does nothing; the canary lands in the editor |
+| ⌘N on Maintenance plans pushed on the Invoices stack | The hidden Invoices "+" fired (a new invoice), not the visible plans "+" | The plans "+" fires |
+| ⌘N with a `TabView`-level sheet up (RootView's notices) | Nothing on the tab fired; the canary landed in the sheet | Same |
+| Esc with a SwiftUI or UIKit child sheet over an editor | Only the child dismissed; the editor's Cancel did not run | Same |
+| Esc in a sheet with `interactiveDismissDisabled` | The sheet's `.cancelAction` Cancel ran | Same (the delete-account Cancel is disabled while deleting) |
+| Tab away and back | Root visibility restored; ⌘N fires | Same |
+
+Rule: each ⌘N owner declares `isPresentingAnything` (every state that drives one of its
+sheets, dialogs, alerts or confirmations, plus the Invoices bulk-reminder queue between
+sheets) and `newShortcut`, which is `nil` while anything is presented, while its
+`NavigationStack` path is non-empty, or while its root is not visible (`isRootVisible`, kept by
+`onAppear`/`onDisappear` on the root, which covers pushes that the path does not record). The
+action also starts with `guard !isPresentingAnything`. The suite reads every presentation in
+each owner and fails if its driving state is not gated, if a presentation's driver cannot be
+read, or if the path or root-visibility gate is missing. The maintenance-plan editor also
+moved to one `sheet(item:)` carrying the plan: with `sheet(isPresented:)` plus a separate
+`editingRule`, the probe opened "Edit" with a `nil` plan (the create form) whenever the body
+did not otherwise read that state.
 
 **Recorded native differences (11.11):**
 

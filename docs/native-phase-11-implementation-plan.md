@@ -2897,9 +2897,10 @@ constants, the measured SwiftUI behavior, the screen disposition and the recorde
 differences.
 
 **Controller rulings applied:**
-- The shared metric is 700pt, centered, and full width below that. The policy is
-  Foundation-only in `N/NativeLayoutMetrics.swift`, and a small view modifier sits in the
-  same file (UIKit-only).
+- The shared metric is 700pt, centered, and full width below that. The width math is
+  Foundation-only in `N/NativeLayoutMetrics.swift`, and the small view modifiers sit in
+  the same file, guarded by `canImport(SwiftUI)` (so the macOS host runners that compile
+  view files compile them too).
 - The default structure is kept: one `TabView` plus a centered column, with no
   `NavigationSplitView`.
 - A11 scope: an audit, Tab/Return focus behavior, and standard shortcuts on existing
@@ -3064,17 +3065,124 @@ differences.
 | IPAD-L-4 | iOS 17 floor (iPhone SE-class; an iPad on iPadOS 17): a list wider than 740pt | Rows sit at the computed margin as measured on iOS 26; if not, open an 11.10b item |
 | IPAD-MT-1 | Split View at 1/3, 1/2 and 2/3 beside another app, in both orientations | No clipping; narrow widths are full width; one tab bar and one navigation bar |
 | IPAD-MT-2 | Slide Over (320pt): every tab plus the job, invoice and expense editors | Everything is usable without horizontal clipping |
-| IPAD-MT-3 | Stage Manager: drag a window's width slowly across 690–760pt on a list and a scroll screen | The column engages without a jump or a layout loop |
+| IPAD-MT-3 | Stage Manager: drag a window's width slowly across 690–760pt on a list and a scroll screen; also open a wide screen (and a large sheet) fresh | The column engages without a jump or a layout loop. On first appearance the column's geometry starts at zero, so the first layout pass uses the system inset and the column applies on the next pass (`onGeometryChange` reports in the same update); record any visible one-frame shift (review M6; not seeded, because the container width is unknown before layout) |
 | IPAD-ROT-1 | Rotate through all four iPad orientations with a pushed detail, an open sheet and the keyboard up | State is kept, no second navigation bar appears, the focused field stays visible, and the Coach composer rises with the keyboard |
-| IPAD-KB-1 | Hardware keyboard: Esc on Cancel/Done in editors and sheets, ⌘S to save, ⌘⏎ on the change-order Confirm, ⌘N on Jobs, Invoices, Customers, Maintenance plans and Coach | Each fires once, only for the visible screen; ⌘N does nothing while a sheet covers that tab; no key triggers the delete-account Delete |
+| IPAD-KB-1 | Hardware keyboard: Esc on Cancel/Done in editors and sheets, ⌘S to save, ⌘⏎ on the change-order Confirm, ⌘N on Jobs, Invoices, Customers, Maintenance plans and Coach. Then: ⌘N with each owner's sheets, dialogs and alerts up (the maintenance-plan edit sheet in particular); ⌘N on Maintenance plans pushed on the Invoices stack (two ⌘N buttons in one `NavigationStack`); ⌘N on a pushed job, invoice or customer; Esc with a UIKit child sheet (message composer, share sheet) over an editor | Each fires once, only for the visible screen. ⌘N does nothing while its owner presents anything or has a screen pushed over it (fix round 1 gating; Simulator-verified on iPadOS 26.5, see the fix round 1 entry), and on Maintenance plans it opens a new plan, not a new invoice. Esc dismisses only the top sheet and never runs the parent editor's Cancel. No key triggers the delete-account Delete |
 | IPAD-KB-2 | Tab and Shift-Tab through the job, invoice, customer and expense editors; Return in a single-line field and in the Coach field | Focus follows the visual order; Return ends editing (a newline in Coach). Pairs with A11-KB-1 |
 | IPAD-AX-1 | AX5 Dynamic Type on iPad in 1/2 Split View: Money cards, Today stats, editors | The column and the 11.10a AX stacks do not clip |
 
 **Concerns:**
 - SwiftUI's `contentMargins` behavior on a `List` was measured on the iOS 26 runtime only
   (row IPAD-L-4 covers the iOS 17 floor).
-- ⌘N reaches the underlying tab while a sheet is up only if the presenting controller is
-  in the responder chain. The state flag is already set, so this is harmless, and row
-  IPAD-KB-1 checks it.
+- ~~⌘N under a sheet is harmless~~ — wrong, corrected by fix round 1. The presenter's
+  ⌘N does fire under its own sheet (measured), and in the maintenance-plan editor that
+  turned an open edit into a create. Every ⌘N is now gated; see the fix round 1 entry.
+
+
+### 11.11 fix round 1 — gated ⌘N, confirmation-title allowlist, focus scan (2026-09-24)
+
+**Status:** Done. This round fixes review finding I1 (Important) and minors M1–M4 and M6.
+M5 (optional) is partly done.
+
+**I1: ⌘N under a modal was not harmless (fixed).**
+- **Measured.** The iPadOS 26.5 Simulator received real hardware-key events: System Events
+  keystrokes to the Simulator window, with the Simulator's hardware keyboard connected and
+  ⌘N and Esc unbound in its menus. The target was a throwaway probe app mirroring these
+  structures, not the signed-in app: `TabView` → Invoices `NavigationStack(path:)` →
+  Maintenance plans → shared edit/new sheet. Each scenario ran twice with a ⌘J canary that
+  logs which screen received the key.
+  - With the edit sheet open, ungated ⌘N fired the list's "+", and the open editor's plan
+    became `nil`, so Save would take the create branch.
+  - With the plans screen pushed, ungated ⌘N fired the *hidden* Invoices "+" instead of the
+    visible plans "+" (review M4). Two ⌘N buttons in one stack resolve to the root's.
+  - Gated, both cases behave correctly: nothing fires under the sheet, and the plans "+"
+    fires when pushed.
+- **Fix.** All five ⌘N owners (`JobsView`, `InvoicesView`, `CustomersView`,
+  `NativeRecurringInvoicesView` and `CoachView`) now declare:
+  - `isPresentingAnything`: every state driving one of their sheets, dialogs, alerts or
+    confirmations, plus the Invoices bulk-reminder queue between composer sheets;
+  - `newShortcut`: `nil` while anything is presented, while the stack path is non-empty,
+    or while the root is not visible.
+
+  `isRootVisible` is maintained by the root's `onAppear` and `onDisappear`, which covers
+  the path-less maintenance-plans push. The button uses `.keyboardShortcut(newShortcut)`,
+  and its action starts with `guard !isPresentingAnything else { return }`.
+- **Maintenance-plan editor.** It moved to one `sheet(item:)` carrying the plan
+  (`PlanEditorTarget.new` / `.edit(plan)`). The probe showed that `sheet(isPresented:)` with
+  a separate `editingRule` opens "Edit plan" as the create form whenever the body does not
+  otherwise read that state, which the shipped code did not (a pre-existing latent bug with
+  the same duplicate-plan outcome).
+- **Other presenters' Esc.** Esc under a SwiftUI or UIKit child sheet dismisses only the
+  child, and the parent editor's Cancel did not run (measured). Esc in a sheet with
+  `interactiveDismissDisabled` runs that sheet's `.cancelAction` Cancel. The only such
+  sheet is delete-account, whose Cancel is disabled while deleting. A `TabView`-level sheet
+  (RootView's notices) does not leak ⌘N to the tab under it. No other gating was needed.
+- **New suite check** (`testNewShortcutGating`). For each ⌘N site it reads every
+  presentation the owner makes: `sheet`, `fullScreenCover`, `popover`, `alert`,
+  `confirmationDialog`, `nativeConfirmation`, file and photo pickers, and `inspector`.
+  Presentations nested inside another presentation's content are excluded. The check
+  fails if:
+  - a presentation's driving state is not in `isPresentingAnything`;
+  - a presentation's driver cannot be read, so a new binding shape fails loudly;
+  - the path or root-visibility gate is missing;
+  - the action guard is missing.
+
+**Minors:**
+- **M1.** The stale "UIKit-only / excluded" wording in
+  `native/run-layout-metrics-tests.sh` and in the 11.11 entry now names
+  `canImport(SwiftUI)`.
+- **M2.** `expectedShortcut` uses a title allowlist (`confirmationShortcutPolicy`). An
+  unlisted `.confirmationAction` title fails instead of defaulting to ⌘S, and the scanner
+  fixture covers it.
+- **M3.** The suite fails on `.focusable`, `.focusDisabled` or `.focusEffectDisabled` in
+  `N/`. None exist, so "N/ never disables focus" is now enforced.
+- **M4.** The two ⌘N buttons in one stack are resolved by the root-visibility gate
+  (measured above). Row IPAD-KB-1 now covers them, pushed-detail ⌘N and Esc over a UIKit
+  child sheet.
+- **M6.** Recorded in IPAD-MT-3, not seeded, because the container width is unknown
+  before the first layout pass.
+- **M5 (optional).** The two unused `MainActor.run` results in `N/TodayView.swift` are
+  fixed. The `NativeChangeOrdersView` Swift 6 isolation warnings are not trivial and are
+  left as they are.
+
+**Commands and results:**
+- RED: after adding the checks, against the ungated views →
+  `layout-metrics tests: 15 of 780 checks FAILED`. The failures were five ungated ⌘N
+  sites, five missing action guards and five missing gates.
+- GREEN: `TZ=America/Phoenix sh native/run-layout-metrics-tests.sh` →
+  `layout-metrics tests: 821/821 checks passed`
+- `TZ=America/Phoenix sh native/run-accessibility-audit-tests.sh` →
+  `accessibility-audit tests: 472/472 checks passed`
+- Mutations: 11 applied in place with `perl`, run and restored with a `cmp` check. All
+  were caught, each with one failure unless noted:
+
+  | Mutation | Result |
+  |---|---|
+  | Jobs gate drops `confirmationRequest` | caught |
+  | Customers `newShortcut` ignores `path` | caught |
+  | Invoices `onDisappear` dropped | caught |
+  | Recurring action guard dropped | caught |
+  | Invoices gate drops `bulkQueue` | caught |
+  | Customers adds an ungated `.alert` | caught |
+  | Coach adds a `.sheet` with an unreadable driver | caught |
+  | Coach `newShortcut` ungated | caught |
+  | Jobs literal ⌘N | caught |
+  | M2: "Close" renamed "Dismiss" | caught (2 failures) |
+  | M3: `.focusable(false)` | caught |
+
+- Release compile (`xcodebuild … -configuration Release -destination 'generic/platform=iOS'
+  CODE_SIGNING_ALLOWED=NO build`) → `** BUILD SUCCEEDED **`, with no warnings in the six
+  touched views.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → `aggregate exit=0` (62 `PASS`
+  lines). This included the layout-metrics suite (821/821) and the accessibility suite
+  (472/472). The working tree includes other agents' uncommitted backend changes.
+- `sh native/run-doc-reference-check.sh` → `1551 path references checked: 0 missing, 17
+  planned (not yet created).`
+
+**Phase 12 (not claimed):**
+- The probe is not the signed-in app. IPAD-KB-1 repeats these cases on device in the
+  real screens.
+- A programmatic pop in the probe left no key focus in either build, so the pop-back case
+  is measured only through the tab hop. IPAD-KB-1 covers a user pop.
 
 **Next ready:** 11.12 (performance, launch time and device soak).
