@@ -8,6 +8,8 @@ struct NativePaywallView: View {
     @State private var selectedPackageID: String?
     @State private var notice: String?
     @State private var confirmSignOut = false
+    @ScaledMetric(relativeTo: .largeTitle) private var heroIconSize: CGFloat = 34
+    @ScaledMetric(relativeTo: .largeTitle) private var heroBadgeSize: CGFloat = 72
 
     private let features = [
         "Unlimited jobs, invoices & customers",
@@ -28,13 +30,13 @@ struct NativePaywallView: View {
         ScrollView {
             VStack(spacing: 20) {
                 Image(systemName: "hammer.fill")
-                    .font(.system(size: 34, weight: .bold))
+                    .font(.system(size: heroIconSize, weight: .bold))
                     .foregroundStyle(.tint)
-                    .frame(width: 72, height: 72)
+                    .frame(width: heroBadgeSize, height: heroBadgeSize)
                     .background(Color.tradeReady.opacity(0.12), in: RoundedRectangle(cornerRadius: 20))
                 VStack(spacing: 6) {
                     Text("TradeReady")
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
                     Text("Everything you need to run your trade business")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -64,7 +66,7 @@ struct NativePaywallView: View {
                 Button(selectedPackage?.trial == nil ? "Subscribe" : "Start Free Trial") {
                     purchase()
                 }
-                .buttonStyle(.borderedProminent)
+                .tradeReadyProminentButtonStyle()
                 .controlSize(.large)
                 .frame(maxWidth: .infinity)
                 .disabled(selectedPackage == nil || store.subscriptionOperationInFlight)

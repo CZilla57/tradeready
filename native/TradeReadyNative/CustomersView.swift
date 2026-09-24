@@ -6,6 +6,7 @@ private struct NativeCustomerRoute: Hashable {
 }
 
 struct CustomersView: View {
+    @ScaledMetric(relativeTo: .subheadline) private var initialsSize: CGFloat = 42
     @EnvironmentObject private var store: AppStore
     @State private var search = ""
     @State private var showingEditor = false
@@ -88,7 +89,7 @@ struct CustomersView: View {
                                 NavigationLink(value: reviewRoute) {
                                     Label("Review", systemImage: "person.2")
                                 }
-                                .buttonStyle(.borderedProminent)
+                                .tradeReadyProminentButtonStyle()
                             }
                         }
                         .padding(.vertical, 4)
@@ -142,6 +143,7 @@ struct CustomersView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .accessibilityLabel(NativeAccessibilityAudit.Label.addCustomer)
             }
             .navigationDestination(for: NativeCustomerRoute.self) {
                 CustomerDetailView(customerID: $0.id, fallbackName: $0.name)
@@ -175,7 +177,7 @@ struct CustomersView: View {
             Text(initials(for: customer.name))
                 .font(.subheadline.bold())
                 .foregroundStyle(Color.tradeReady)
-                .frame(width: 42, height: 42)
+                .frame(width: initialsSize, height: initialsSize)
                 .background(Color.tradeReady.opacity(0.12), in: Circle())
             VStack(alignment: .leading, spacing: 3) {
                 HStack {

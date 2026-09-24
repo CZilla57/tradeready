@@ -136,7 +136,7 @@ struct NativeTripEditor: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
                             .background(
-                                isSelected ? Color.tradeReady : Color.tradeInk.opacity(0.06),
+                                isSelected ? Color.tradeReadyFill : Color.tradeInk.opacity(0.06),
                                 in: Capsule()
                             )
                             .foregroundStyle(isSelected ? Color.white : Color.primary)

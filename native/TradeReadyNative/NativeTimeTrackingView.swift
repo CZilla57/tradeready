@@ -74,7 +74,7 @@ struct NativeTimeTrackingSection: View {
                     )
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(summary.isClocked ? .red : .tradeReady)
+                .tint(summary.isClocked ? .red : .tradeReadyFill)
                 .accessibilityLabel(summary.isClocked ? "Clock out" : "Clock in")
             }
             if summary.isClocked, let active = summary.activeSession {

@@ -60,7 +60,7 @@ struct InvoicesView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
-                    HStack(spacing: 10) {
+                    NativeAccessibilityAdaptiveRow(alignment: .center, spacing: 10) {
                         Button { toggleStatFilter(.unpaid) } label: {
                             MetricCard(title: "Outstanding", value: store.invoices.reduce(0) { $0 + $1.balance }.currency)
                         }.buttonStyle(.plain)
@@ -133,6 +133,7 @@ struct InvoicesView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showingEditor = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel(NativeAccessibilityAudit.Label.addInvoice)
                 }
             }
             .safeAreaInset(edge: .bottom) {

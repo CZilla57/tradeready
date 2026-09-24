@@ -119,6 +119,7 @@ struct NativeMoneySectionView<Content: View>: View {
     @ViewBuilder var content: Content
 
     @State private var expanded: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(title: String, defaultExpanded: Bool = false, @ViewBuilder content: () -> Content) {
         self.title = title
@@ -130,7 +131,9 @@ struct NativeMoneySectionView<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+                withAnimation(NativeAccessibilityAudit.allowsCustomMotion(reduceMotion: reduceMotion) ? .snappy(duration: 0.2) : nil) {
+                    expanded.toggle()
+                }
             } label: {
                 HStack {
                     Text(title)
@@ -169,14 +172,14 @@ struct NativeMoneySummaryCardView: View {
                 .textCase(.uppercase)
                 .tracking(0.4)
 
-            HStack(alignment: .top, spacing: 0) {
+            NativeAccessibilityAdaptiveRow {
                 column(
                     label: "Income",
                     amount: NativeMoneyFormat.money(card.income),
                     tone: .success,
                     change: card.incomeChangePercent
                 )
-                divider
+                NativeAccessibilityColumnDivider(height: 46, horizontalPadding: 10)
                 column(
                     label: "Expenses",
                     amount: NativeMoneyFormat.money(card.expenses),
@@ -184,7 +187,7 @@ struct NativeMoneySummaryCardView: View {
                     change: card.expensesChangePercent,
                     inverse: true
                 )
-                divider
+                NativeAccessibilityColumnDivider(height: 46, horizontalPadding: 10)
                 column(
                     label: "Net Profit",
                     amount: NativeMoneyFormat.money(card.netProfit),
@@ -207,13 +210,6 @@ struct NativeMoneySummaryCardView: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.quaternary) }
         .shadow(color: .black.opacity(0.045), radius: 8, y: 3)
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(.quaternary)
-            .frame(width: 1, height: 46)
-            .padding(.horizontal, 10)
     }
 
     private func column(
@@ -289,6 +285,7 @@ struct NativeMoneyMonthlyChartCardView: View {
 
 struct NativeMoneyExpenseCategoryCardView: View {
     let card: NativeMoneyExpenseCategoryCard
+    @ScaledMetric(relativeTo: .caption) private var iconBadgeSize: CGFloat = 22
 
     var body: some View {
         NativeMoneyCard(title: "Expenses by Category", scope: nil) {
@@ -297,7 +294,7 @@ struct NativeMoneyExpenseCategoryCardView: View {
                     Image(systemName: NativeMoneyCategorySymbol.symbol(for: row.id))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
+                        .frame(width: iconBadgeSize, height: iconBadgeSize)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -358,10 +355,10 @@ struct NativeMoneySeasonalCardView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
-            HStack(spacing: 0) {
+            NativeAccessibilityAdaptiveRow(alignment: .center) {
                 total("This Year", amount: card.trends.thisYearTotal, tone: .accent)
                 if card.trends.lastYearTotal > 0 {
-                    Rectangle().fill(.quaternary).frame(width: 1, height: 30).padding(.horizontal, 12)
+                    NativeAccessibilityColumnDivider(height: 30)
                     total("Last Year", amount: card.trends.lastYearTotal, tone: .neutral)
                 }
             }
@@ -399,6 +396,7 @@ struct NativeMoneySeasonalCardView: View {
 
 struct NativeMoneyExpenseTrendsCardView: View {
     let card: NativeMoneyExpenseTrendsCard
+    @ScaledMetric(relativeTo: .caption2) private var microSize: CGFloat = 8
 
     var body: some View {
         NativeMoneyCard(
@@ -413,20 +411,20 @@ struct NativeMoneyExpenseTrendsCardView: View {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(Color.red)
                             .frame(height: barHeight(month.total))
+                            .frame(height: 80, alignment: .bottom)
                         Text(month.label.prefix(1))
-                            .font(.system(size: 8))
+                            .font(.system(size: microSize))
                             .foregroundStyle(.secondary)
                         Text(card.monthChangeLabels[index].isEmpty ? " " : card.monthChangeLabels[index])
-                            .font(.system(size: 8).monospacedDigit())
+                            .font(.system(size: microSize).monospacedDigit())
                             .foregroundStyle(NativeMoneyPalette.color(card.monthChangeTone(index)))
                     }
                     .frame(maxWidth: .infinity)
                 }
             }
-            .frame(height: 110, alignment: .bottom)
-            HStack(spacing: 0) {
+            NativeAccessibilityAdaptiveRow(alignment: .center) {
                 total("12-Mo Total", amount: card.trends.trailingTotal, tone: .danger)
-                Rectangle().fill(.quaternary).frame(width: 1, height: 30).padding(.horizontal, 12)
+                NativeAccessibilityColumnDivider(height: 30)
                 total("Monthly Avg", amount: Decimal(card.trends.avgMonthly), tone: .neutral)
             }
         }
@@ -454,6 +452,7 @@ struct NativeMoneyExpenseTrendsCardView: View {
 
 struct NativeMoneyTopCustomersCardView: View {
     let card: NativeMoneyTopCustomersCard
+    @ScaledMetric(relativeTo: .caption) private var rankWidth: CGFloat = 16
 
     var body: some View {
         NativeMoneyCard(title: "Top Customers") {
@@ -462,7 +461,7 @@ struct NativeMoneyTopCustomersCardView: View {
                     Text("\(row.rank)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 16)
+                        .frame(width: rankWidth)
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(row.name).font(.subheadline).lineLimit(1)
@@ -486,9 +485,9 @@ struct NativeMoneyCustomerMixCardView: View {
 
     var body: some View {
         NativeMoneyCard(title: "Customer Mix") {
-            HStack(spacing: 0) {
+            NativeAccessibilityAdaptiveRow(alignment: .center) {
                 column(count: card.newCount, label: "New", revenue: card.mix.newRevenue, tone: .accent)
-                Rectangle().fill(.quaternary).frame(width: 1, height: 40).padding(.horizontal, 12)
+                NativeAccessibilityColumnDivider(height: 40)
                 column(count: card.returningCount, label: "Returning", revenue: card.mix.returningRevenue, tone: .success)
             }
             if card.totalRevenue > 0 {
@@ -572,21 +571,21 @@ struct NativeMoneyReceivablesCardView: View {
 
     var body: some View {
         NativeMoneyCard(title: "Money owed to you", scope: "All open") {
-            HStack(alignment: .top, spacing: 0) {
+            NativeAccessibilityAdaptiveRow {
                 column(
                     label: "Outstanding",
                     amount: card.receivables.outstanding,
                     sub: card.outstandingCountLabel,
                     tone: .neutral
                 )
-                Rectangle().fill(.quaternary).frame(width: 1, height: 44).padding(.horizontal, 10)
+                NativeAccessibilityColumnDivider(height: 44, horizontalPadding: 10)
                 column(
                     label: "Overdue",
                     amount: card.receivables.overdue,
                     sub: card.overdueCountLabel,
                     tone: card.overdueTone
                 )
-                Rectangle().fill(.quaternary).frame(width: 1, height: 44).padding(.horizontal, 10)
+                NativeAccessibilityColumnDivider(height: 44, horizontalPadding: 10)
                 column(
                     label: "Pipeline",
                     amount: card.receivables.pipelineValue,
@@ -615,6 +614,7 @@ struct NativeMoneyReceivablesCardView: View {
 
 struct NativeMoneyConversionFunnelCardView: View {
     let card: NativeMoneyConversionFunnelCard
+    @ScaledMetric(relativeTo: .subheadline) private var countWidth: CGFloat = 26
 
     var body: some View {
         NativeMoneyCard(
@@ -633,7 +633,7 @@ struct NativeMoneyConversionFunnelCardView: View {
                     HStack(spacing: 8) {
                         Text("\(stage.count)")
                             .font(.subheadline.monospacedDigit().weight(.semibold))
-                            .frame(width: 26, alignment: .leading)
+                            .frame(minWidth: countWidth, alignment: .leading)
                         Text(stage.label).font(.subheadline)
                     }
                     NativeMoneyTrack(
@@ -689,7 +689,7 @@ struct NativeMoneyRevenueForecastCardView: View {
             }
             .frame(height: 8)
             .clipShape(Capsule())
-            HStack(alignment: .top, spacing: 0) {
+            NativeAccessibilityAdaptiveRow {
                 breakdown(
                     label: "Likely",
                     amount: card.forecast.certainValue,
@@ -697,7 +697,7 @@ struct NativeMoneyRevenueForecastCardView: View {
                     tone: .accent,
                     outlined: false
                 )
-                Rectangle().fill(.quaternary).frame(width: 1, height: 40).padding(.horizontal, 12)
+                NativeAccessibilityColumnDivider(height: 40)
                 breakdown(
                     label: "Projected",
                     amount: card.forecast.projectedValue,
@@ -745,9 +745,9 @@ struct NativeMoneyAvgJobValueCardView: View {
         ) {
             Text(NativeMoneyFormat.money(card.heroValue))
                 .font(.system(.title2, design: .rounded, weight: .bold).monospacedDigit())
-            HStack(spacing: 0) {
+            NativeAccessibilityAdaptiveRow(alignment: .center) {
                 detail("Completed", value: card.completedLabel)
-                Rectangle().fill(.quaternary).frame(width: 1, height: 30).padding(.horizontal, 12)
+                NativeAccessibilityColumnDivider(height: 30)
                 detail("Total Value", value: NativeMoneyFormat.money(card.totalValue))
             }
             if card.showsAllTimeNote {

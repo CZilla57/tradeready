@@ -166,7 +166,7 @@ struct NativeEstimateReviewView: View {
                         )
                         .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .tradeReadyProminentButtonStyle()
                     .disabled(recipient.isEmpty || isCreatingLink)
                 } header: {
                     Text("Delivery")

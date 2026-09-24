@@ -21,6 +21,7 @@ import SwiftUI
 // `AppStore`.
 struct CoachView: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var messages: [NativeCoachTranscriptMessage] = []
     @State private var input = ""
     @State private var sending = false
@@ -130,7 +131,9 @@ struct CoachView: View {
     private func scrollToLatest(_ proxy: ScrollViewProxy) {
         let target = sending ? "typing" : messages.last?.id
         guard let target else { return }
-        withAnimation { proxy.scrollTo(target, anchor: .bottom) }
+        withAnimation(NativeAccessibilityAudit.allowsCustomMotion(reduceMotion: reduceMotion) ? .default : nil) {
+            proxy.scrollTo(target, anchor: .bottom)
+        }
     }
 
     private var composer: some View {

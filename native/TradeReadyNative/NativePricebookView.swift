@@ -34,7 +34,7 @@ struct NativePricebookView: View {
                     Text("Your Pricebook saves your standard services so you can load them into estimates with one tap instead of typing everything from scratch.")
                 } actions: {
                     Button("Add your first service") { editorTarget = .create }
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                 }
                 .padding(.horizontal, 24)
             } else {

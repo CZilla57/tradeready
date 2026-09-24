@@ -14,6 +14,7 @@ struct NativeBookingRequestsView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
 
+    @ScaledMetric(relativeTo: .largeTitle) private var emptyIconSize: CGFloat = 56
     @State private var rows: [NativeBookingAttention.Row] = []
     @State private var busyRequestIDs: Set<String> = []
     @State private var showingJobID: IdentifiableString?
@@ -53,7 +54,7 @@ struct NativeBookingRequestsView: View {
     private var emptyState: some View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 56))
+                .font(.system(size: emptyIconSize))
                 .foregroundStyle(.green)
             Text("All caught up")
                 .font(.title2.bold())
@@ -259,7 +260,7 @@ private struct RequestRowView: View {
                 }
                 contactButtons
                 Button("Resolve") { Task { await onResolveReschedule() } }
-                    .buttonStyle(.borderedProminent)
+                    .tradeReadyProminentButtonStyle()
                     .disabled(isBusy)
                 Button(role: .destructive) { Task { await onDecline() } } label: {
                     Text("Decline")
@@ -277,7 +278,7 @@ private struct RequestRowView: View {
                 }
                 contactButtons
                 Button("Done") { Task { await onMarkHandled() } }
-                    .buttonStyle(.borderedProminent)
+                    .tradeReadyProminentButtonStyle()
                     .disabled(isBusy)
 
             case .cancelled:
@@ -357,8 +358,17 @@ private struct RequestRowView: View {
                         .font(.subheadline)
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel(NativeAccessibilityAudit.Label.contact(contactVerb(target.action), name: request.name))
                 .disabled(isBusy)
             }
+        }
+    }
+
+    private func contactVerb(_ action: NativeCustomerContactAction) -> NativeAccessibilityAudit.ContactVerb {
+        switch action {
+        case .call: .call
+        case .text: .text
+        case .email: .email
         }
     }
 

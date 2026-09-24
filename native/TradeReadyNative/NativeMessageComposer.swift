@@ -132,7 +132,7 @@ struct NativeOnMyWayReviewView: View {
                                 )
                                 .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .tradeReadyProminentButtonStyle()
                         } footer: {
                             Text("Nothing is sent until you review it again and tap Send in the system composer.")
                         }
@@ -233,7 +233,7 @@ struct NativeAppointmentConfirmationReviewView: View {
                                     systemImage: draft.channel == .sms ? "message" : "envelope"
                                 ).frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .tradeReadyProminentButtonStyle()
                         } footer: {
                             Text("Nothing is sent until you review it again and tap Send in the system composer.")
                         }

@@ -44,6 +44,7 @@ struct NativeTodayWeekStripView: View {
     let onSelectDay: (String) -> Void
     let onPrevWeek: () -> Void
     let onNextWeek: () -> Void
+    @ScaledMetric(relativeTo: .subheadline) private var dayCircleSize: CGFloat = 30
 
     var body: some View {
         VStack(spacing: 6) {
@@ -53,6 +54,8 @@ struct NativeTodayWeekStripView: View {
             HStack(spacing: 0) {
                 Button(action: onPrevWeek) {
                     Text("‹").font(.title2)
+                        .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Previous week")
 
@@ -66,13 +69,13 @@ struct NativeTodayWeekStripView: View {
                                 .foregroundStyle(day.isSelected ? Color.tradeReady : .secondary)
                             ZStack {
                                 Circle()
-                                    .fill(day.isSelected ? Color.tradeReady : Color.clear)
+                                    .fill(day.isSelected ? Color.tradeReadyFill : Color.clear)
                                     .overlay {
                                         if day.isToday, !day.isSelected {
                                             Circle().stroke(Color.tradeReady, lineWidth: 1.5)
                                         }
                                     }
-                                    .frame(width: 30, height: 30)
+                                    .frame(width: dayCircleSize, height: dayCircleSize)
                                 Text("\(day.dayNumber)")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(day.isSelected ? Color.white : (day.isToday ? Color.tradeReady : .primary))
@@ -91,9 +94,14 @@ struct NativeTodayWeekStripView: View {
 
                 Button(action: onNextWeek) {
                     Text("›").font(.title2)
+                        .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Next week")
             }
+            // Seven day columns plus two arrows cannot grow past AX1 on a phone
+            // without overlapping; VoiceOver reads each day in full (11.10a).
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
@@ -114,7 +122,7 @@ struct NativeTodayStatsRowView: View {
     let onLeadsTap: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        NativeAccessibilityAdaptiveRow(alignment: .center, spacing: 12) {
             statCard(
                 label: "TODAY",
                 value: nativeTodayMoney(earnings),
@@ -198,7 +206,7 @@ struct NativeTodayHeroCardView: View {
             }
             .padding(14)
             .frame(minHeight: 64)
-            .background(Color.tradeReady, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Color.tradeReadyFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(hero.title)
@@ -451,7 +459,7 @@ struct NativeTodayEmptySchedule: View {
             Button(action: onScheduleJob) {
                 Text("+ Schedule a Job").font(.subheadline.weight(.bold)).foregroundStyle(.white)
                     .padding(.horizontal, 20).padding(.vertical, 14)
-                    .background(Color.tradeReady, in: RoundedRectangle(cornerRadius: 10))
+                    .background(Color.tradeReadyFill, in: RoundedRectangle(cornerRadius: 10))
             }
             .buttonStyle(.plain)
         }

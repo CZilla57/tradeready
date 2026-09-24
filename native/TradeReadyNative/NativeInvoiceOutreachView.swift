@@ -187,7 +187,7 @@ struct NativeInvoiceOutreachView: View {
                                     systemImage: channel == .email ? "envelope" : "message"
                                 ).frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .tradeReadyProminentButtonStyle()
                             .disabled(!canSend)
                         } footer: {
                             Text("Nothing is sent until you review it again and tap Send in the system composer.")

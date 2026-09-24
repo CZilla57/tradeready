@@ -458,12 +458,20 @@ struct LegacyNativeStoreSnapshot: Codable {
 
 enum AppTab: Hashable { case today, jobs, invoices, customers, money, coach }
 
+// Brand palette. The literals must equal `NativeAccessibilityAudit.Palette`
+// (task 11.10a; the accessibility host suite parses this block).
 extension Color {
-    static let tradeReady = Color(red: 0.114, green: 0.361, blue: 0.620)
     static let tradeInk = Color(red: 0.078, green: 0.129, blue: 0.239)
 #if os(iOS)
+    /// Tint for text, icons, outlines and graphics. Light is RN `lightColors.accent`;
+    /// dark is RN `darkColors.accent` (the light value measured 2.61:1 on the dark canvas).
+    static let tradeReady = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.357, green: 0.608, blue: 0.859, alpha: 1) : UIColor(red: 0.114, green: 0.361, blue: 0.620, alpha: 1) })
+    /// Filled surfaces under white text or icons (selected chips, prominent buttons).
+    static let tradeReadyFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.184, green: 0.471, blue: 0.769, alpha: 1) : UIColor(red: 0.114, green: 0.361, blue: 0.620, alpha: 1) })
     static let tradeCanvas = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.063, green: 0.094, blue: 0.149, alpha: 1) : UIColor(red: 0.961, green: 0.961, blue: 0.945, alpha: 1) })
 #else
+    static let tradeReady = Color(red: 0.114, green: 0.361, blue: 0.620)
+    static let tradeReadyFill = Color(red: 0.114, green: 0.361, blue: 0.620)
     static let tradeCanvas = Color(red: 0.961, green: 0.961, blue: 0.945)
 #endif
 }

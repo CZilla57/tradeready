@@ -6,6 +6,7 @@ struct NativeOnboardingView: View {
     @State private var showErrors = false
     @State private var errorMessage: String?
     @State private var isSaving = false
+    @ScaledMetric(relativeTo: .largeTitle) private var wordmarkSize: CGFloat = 42
 
     init(draft: NativeOnboardingDocument.Draft) {
         _draft = State(initialValue: draft)
@@ -37,7 +38,7 @@ struct NativeOnboardingView: View {
                 Button(draft.step == 0 ? "Let’s get started" : "Continue") {
                     continueFlow()
                 }
-                .buttonStyle(.borderedProminent)
+                .tradeReadyProminentButtonStyle()
                 .frame(maxWidth: .infinity)
                 .disabled(isSaving)
             }
@@ -50,7 +51,7 @@ struct NativeOnboardingView: View {
     private var welcome: some View {
         VStack(spacing: 24) {
             VStack(spacing: 8) {
-                Text("TradeReady").font(.system(size: 42, weight: .bold, design: .rounded))
+                Text("TradeReady").font(.system(size: wordmarkSize, weight: .bold, design: .rounded))
                 Text("Built to work. Ready to grow.").foregroundStyle(.secondary)
                 Text("Manage jobs, invoices, and customers—all in one place.")
                     .multilineTextAlignment(.center)
@@ -201,7 +202,7 @@ struct NativeStartingPointView: View {
             Label(title, systemImage: icon).font(.title3.bold())
             Text(detail).foregroundStyle(.secondary)
             Button(action) { choose(choice) }
-                .buttonStyle(.borderedProminent)
+                .tradeReadyProminentButtonStyle()
                 .frame(maxWidth: .infinity)
                 .disabled(isChoosing)
         }

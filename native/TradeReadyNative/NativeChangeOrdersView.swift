@@ -542,7 +542,7 @@ struct NativeChangeOrderReviewView: View {
                         else { Label(channel == .email ? "Continue to Mail" : "Continue to Messages", systemImage: channel == .email ? "envelope" : "message") }
                     }
                     .frame(maxWidth: .infinity)
-                    .buttonStyle(.borderedProminent)
+                    .tradeReadyProminentButtonStyle()
                     .disabled(recipient.isEmpty || isCreatingLink)
                 } header: {
                     Text("Delivery")

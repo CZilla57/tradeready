@@ -104,7 +104,7 @@ struct MoneyView: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
                             .background(
-                                filter == option ? Color.tradeReady : Color.tradeInk.opacity(0.06),
+                                filter == option ? Color.tradeReadyFill : Color.tradeInk.opacity(0.06),
                                 in: Capsule()
                             )
                             .foregroundStyle(filter == option ? Color.white : Color.primary)

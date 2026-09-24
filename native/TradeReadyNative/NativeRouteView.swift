@@ -13,6 +13,7 @@ struct NativeRouteView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
 
+    @ScaledMetric(relativeTo: .largeTitle) private var emptyIconSize: CGFloat = 56
     @State private var stops: [NativeRouteStop] = []
     @State private var preview: NativeRouteMapPreview?
     @State private var isLoadingPreview = false
@@ -55,6 +56,7 @@ struct NativeRouteView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
+                .accessibilityLabel(NativeAccessibilityAudit.Label.routeOrderMenu)
             }
         }
         .refreshable { loadRoute() }
@@ -74,7 +76,7 @@ struct NativeRouteView: View {
     private var emptyState: some View {
         VStack(spacing: 16) {
             Image(systemName: "map")
-                .font(.system(size: 56))
+                .font(.system(size: emptyIconSize))
                 .foregroundStyle(.secondary)
             Text("No jobs scheduled for today")
                 .font(.title2.bold())
@@ -368,8 +370,11 @@ private struct StopRowView: View {
                         Image(systemName: "chevron.up")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(Color.tradeReady)
+                            .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(NativeAccessibilityAudit.Label.moveStopUp)
                 }
                 Text("\(index + 1)")
                     .font(.subheadline.monospacedDigit().weight(.semibold))
@@ -380,8 +385,11 @@ private struct StopRowView: View {
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(Color.tradeReady)
+                            .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(NativeAccessibilityAudit.Label.moveStopDown)
                 }
             }
             .frame(width: 44)

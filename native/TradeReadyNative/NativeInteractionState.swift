@@ -73,7 +73,7 @@ struct NativeContentStateView: View {
             } actions: {
                 if let resetAction {
                     Button("Clear search and filters", action: resetAction)
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                 }
             }
         case .error:
@@ -84,7 +84,7 @@ struct NativeContentStateView: View {
             } actions: {
                 if let retryAction {
                     Button(retryTitle, action: retryAction)
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                 }
                 if let secondaryActionTitle, let secondaryAction {
                     Button(secondaryActionTitle, action: secondaryAction)

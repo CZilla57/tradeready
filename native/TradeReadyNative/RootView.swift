@@ -12,7 +12,7 @@ struct RootView: View {
                     Text("TradeReady is keeping local account data hidden until it can finish removing it safely.")
                 } actions: {
                     Button("Try cleanup again") { store.retryAccountScrub() }
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                     Link("Contact support", destination: URL(string: "mailto:support@gettradereadyapp.com?subject=TradeReady%20sign-out")!)
                 }
             } else if store.isLegacyMigrationBlocked {
@@ -22,7 +22,7 @@ struct RootView: View {
                     Text("We couldn't finish moving your previous-app data. Your original data is still safe.")
                 } actions: {
                     Button("Try again") { store.retryLegacyMigration() }
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                     Link("Contact support", destination: URL(string: "mailto:support@gettradereadyapp.com?subject=TradeReady%20migration")!)
                 }
             } else {
@@ -149,7 +149,7 @@ struct RootView: View {
                 Button("Return to sign in") {
                     Task { await store.dismissInvalidPasswordRecovery() }
                 }
-                .buttonStyle(.borderedProminent)
+                .tradeReadyProminentButtonStyle()
             }
         case .onboarding(let draft):
             NativeOnboardingView(draft: draft)
@@ -164,7 +164,7 @@ struct RootView: View {
                 Text("This device contains data from another account. It remains safely separated. Sign in with the matching account to continue.")
             } actions: {
                 Button("Use another account") { Task { await store.useAnotherAccount() } }
-                    .buttonStyle(.borderedProminent)
+                    .tradeReadyProminentButtonStyle()
             }
         case .unavailable:
             NativeContentStateView(

@@ -6,6 +6,7 @@ import GoogleSignInSwift
 
 struct NativeAuthView: View {
     private enum Mode { case signIn, signUp, reset }
+    private enum Field: Hashable { case email, password }
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
@@ -20,6 +21,7 @@ struct NativeAuthView: View {
     @State private var lastEmailSentAt: Date?
     @State private var emailClock = Date()
     @State private var appleRawNonce: String?
+    @FocusState private var focusedField: Field?
 
     var body: some View {
         NavigationStack {
@@ -53,6 +55,8 @@ struct NativeAuthView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .submitLabel(mode == .reset ? .go : .next)
+                            .focused($focusedField, equals: .email)
+                            .onSubmit(submitEmail)
                             .accessibilityLabel("Email address")
 
                         if mode != .reset {
@@ -60,15 +64,20 @@ struct NativeAuthView: View {
                                 Group {
                                     if showsPassword {
                                         TextField("Password", text: $password)
+                                            .focused($focusedField, equals: .password)
                                     } else {
                                         SecureField("Password", text: $password)
+                                            .focused($focusedField, equals: .password)
                                     }
                                 }
                                 .textContentType(mode == .signUp ? .newPassword : .password)
                                 .submitLabel(.go)
                                 .onSubmit(submit)
                                 Button(showsPassword ? "Hide" : "Show") {
+                                    // Swapping the field drops focus; keep the keyboard on the password.
+                                    let keepFocus = focusedField == .password
                                     showsPassword.toggle()
+                                    if keepFocus { focusedField = .password }
                                 }
                                 .font(.subheadline.weight(.semibold))
                             }
@@ -84,9 +93,9 @@ struct NativeAuthView: View {
                                 if isSubmitting { ProgressView().tint(.white) }
                                 else { Text(submitTitle).fontWeight(.semibold) }
                             }
-                            .frame(maxWidth: .infinity).frame(height: 48)
+                            .frame(maxWidth: .infinity, minHeight: 48)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                         .disabled(isSubmitting || (mode == .reset && !canSendEmail))
                         .accessibilityIdentifier("auth-submit")
 
@@ -172,6 +181,12 @@ struct NativeAuthView: View {
         mode = next
         errorMessage = nil
         noticeMessage = nil
+    }
+
+    /// The email field's return key: "Go" sends the reset link; "Next" moves
+    /// to the password field (it previously did nothing).
+    private func submitEmail() {
+        if mode == .reset { submit() } else { focusedField = .password }
     }
 
     private func submit() {

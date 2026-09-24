@@ -21,7 +21,7 @@ struct NativeSyncBanner: View {
                 if !store.syncStatus.isSyncing && !isOffline {
                     Button("Sync") { store.syncNow() }
                         .font(.subheadline.weight(.semibold))
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                         .controlSize(.small)
                 }
             }
@@ -115,7 +115,7 @@ struct NativeUndoBanner: View {
             Spacer(minLength: 4)
             Button("Undo", action: undo)
                 .font(.subheadline.weight(.bold))
-                .buttonStyle(.borderedProminent)
+                .tradeReadyProminentButtonStyle()
                 .controlSize(.small)
             Button(action: dismiss) {
                 Image(systemName: "xmark")
@@ -136,13 +136,15 @@ struct MetricCard: View {
     let value: String
     var symbol: String? = nil
     var color: Color = .tradeReady
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 14
+    @ScaledMetric(relativeTo: .body) private var badgeSize: CGFloat = 30
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
                 if let symbol {
-                    Image(systemName: symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(color)
-                        .frame(width: 30, height: 30).background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Image(systemName: symbol).font(.system(size: iconSize, weight: .semibold)).foregroundStyle(color)
+                        .frame(width: badgeSize, height: badgeSize).background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 Spacer(minLength: 0)
             }

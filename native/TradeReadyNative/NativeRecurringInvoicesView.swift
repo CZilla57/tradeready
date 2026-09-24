@@ -58,7 +58,10 @@ struct NativeRecurringInvoicesView: View {
         }
         .tradeReadyListStyle()
         .navigationTitle("Maintenance plans")
-        .toolbar { Button { editingRule = nil; showingEditor = true } label: { Image(systemName: "plus") } }
+        .toolbar {
+            Button { editingRule = nil; showingEditor = true } label: { Image(systemName: "plus") }
+                .accessibilityLabel(NativeAccessibilityAudit.Label.addMaintenancePlan)
+        }
         .sheet(isPresented: $showingEditor) {
             NativeRecurringInvoiceEditor(rule: editingRule)
         }

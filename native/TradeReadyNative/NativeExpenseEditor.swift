@@ -207,7 +207,7 @@ struct NativeExpenseEditor: View {
                             .font(.footnote.weight(.semibold))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
-                            .background(selected ? Color.tradeReady : Color.tradeInk.opacity(0.06), in: Capsule())
+                            .background(selected ? Color.tradeReadyFill : Color.tradeInk.opacity(0.06), in: Capsule())
                             .foregroundStyle(selected ? Color.white : Color.primary)
                     }
                     .buttonStyle(.plain)
@@ -251,7 +251,7 @@ struct NativeExpenseEditor: View {
             .lineLimit(1)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(selected ? Color.tradeReady : Color.tradeInk.opacity(0.06), in: Capsule())
+            .background(selected ? Color.tradeReadyFill : Color.tradeInk.opacity(0.06), in: Capsule())
             .foregroundStyle(selected ? Color.white : Color.primary)
     }
 

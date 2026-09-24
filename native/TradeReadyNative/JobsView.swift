@@ -27,7 +27,7 @@ struct JobsView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
-                    HStack(spacing: 8) {
+                    NativeAccessibilityAdaptiveRow(alignment: .center, spacing: 8) {
                         JobListStat(title: "Active jobs", value: String(listState.stats.activeCount))
                         JobListStat(title: "Open estimates", value: String(listState.stats.openEstimateCount))
                         JobListStat(title: "Pending value", value: listState.stats.pendingValue.currency, accent: true)
@@ -88,7 +88,10 @@ struct JobsView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Recurring", systemImage: "repeat") { showingRecurringJobs = true }
                 }
-                ToolbarItem(placement: .primaryAction) { Button { showingNewJob = true } label: { Image(systemName: "plus") } }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showingNewJob = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel(NativeAccessibilityAudit.Label.addJob)
+                }
             }
             .navigationDestination(for: String.self) { id in
                 if let job = store.jobs.first(where: { $0.id == id }) { JobDetailView(jobID: job.id) }
@@ -126,7 +129,7 @@ struct JobsView: View {
             Text("\(summary.filter.title)\(summary.count > 0 ? " (\(summary.count))" : "")")
                 .font(.subheadline.weight(.medium)).padding(.horizontal, 13).padding(.vertical, 7)
                 .foregroundStyle(selected ? Color.white : Color.primary)
-                .background(selected ? Color.tradeReady : Color(.secondarySystemGroupedBackground), in: Capsule())
+                .background(selected ? Color.tradeReadyFill : Color(.secondarySystemGroupedBackground), in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])

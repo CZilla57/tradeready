@@ -8,6 +8,10 @@ struct NativePasswordRecoveryView: View {
     @State private var confirmation = ""
     @State private var isSubmitting = false
     @State private var errorMessage: String?
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable { case password, confirmation }
+    @ScaledMetric(relativeTo: .largeTitle) private var iconSize: CGFloat = 40
 
     var body: some View {
         NavigationStack {
@@ -15,7 +19,7 @@ struct NativePasswordRecoveryView: View {
                 VStack(spacing: 24) {
                     VStack(spacing: 8) {
                         Image(systemName: "lock.rotation")
-                            .font(.system(size: 40, weight: .semibold))
+                            .font(.system(size: iconSize, weight: .semibold))
                             .foregroundStyle(.tint)
                         Text("Choose a new password")
                             .font(.title.bold())
@@ -35,9 +39,13 @@ struct NativePasswordRecoveryView: View {
 
                         SecureField("New password", text: $password)
                             .textContentType(.newPassword)
+                            .submitLabel(.next)
+                            .focused($focusedField, equals: .password)
+                            .onSubmit { focusedField = .confirmation }
                             .accessibilityLabel("New password")
                         SecureField("Confirm new password", text: $confirmation)
                             .textContentType(.newPassword)
+                            .focused($focusedField, equals: .confirmation)
                             .submitLabel(.go)
                             .onSubmit(submit)
                             .accessibilityLabel("Confirm new password")
@@ -51,10 +59,9 @@ struct NativePasswordRecoveryView: View {
                                 if isSubmitting { ProgressView().tint(.white) }
                                 else { Text("Update Password").fontWeight(.semibold) }
                             }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
+                            .frame(maxWidth: .infinity, minHeight: 48)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                         .disabled(isSubmitting)
                         .accessibilityIdentifier("recovery-submit")
 

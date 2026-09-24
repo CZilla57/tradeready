@@ -104,7 +104,7 @@ struct NativeEstimateFollowUpView: View {
                         )
                         .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .tradeReadyProminentButtonStyle()
                     .disabled(recipient.isEmpty || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } footer: {
                     Text("Nothing is sent automatically. Review the message again and tap Send in the system composer. Following up does not change the job status.")

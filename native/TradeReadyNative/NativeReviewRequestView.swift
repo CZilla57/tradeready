@@ -82,7 +82,7 @@ struct NativeReviewRequestView: View {
                                   systemImage: channel == .email ? "envelope" : "message")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .tradeReadyProminentButtonStyle()
                         .disabled(recipient.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.missingLink)
 
                         Button {

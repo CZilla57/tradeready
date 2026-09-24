@@ -109,9 +109,9 @@ struct NativeScheduleSettingsView: View {
                         Button { toggle(day: day) } label: {
                             Text(label)
                                 .font(.subheadline.bold())
-                                .frame(maxWidth: .infinity).frame(height: 36)
+                                .frame(maxWidth: .infinity, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
                                 .background(
-                                    workDays.contains(day) ? Color.tradeReady : Color(.tertiarySystemFill),
+                                    workDays.contains(day) ? Color.tradeReadyFill : Color(.tertiarySystemFill),
                                     in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 .foregroundStyle(workDays.contains(day) ? .white : .secondary)
                         }

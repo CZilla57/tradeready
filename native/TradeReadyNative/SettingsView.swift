@@ -84,7 +84,7 @@ struct SettingsView: View {
     private var profileHeader: some View {
         HStack(spacing: 14) {
             ZStack {
-                Circle().fill(LinearGradient(colors: [.tradeReady, .tradeInk], startPoint: .topLeading, endPoint: .bottomTrailing))
+                Circle().fill(LinearGradient(colors: [.tradeReadyFill, .tradeInk], startPoint: .topLeading, endPoint: .bottomTrailing))
                 Image(systemName: "wrench.and.screwdriver.fill").foregroundStyle(.white).font(.title2)
             }.frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: 3) {
@@ -160,10 +160,12 @@ struct SettingsRow: View {
     let title: String
     let subtitle: String
     var external = false
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .body) private var badgeSize: CGFloat = 32
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol).font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.tradeReady)
-                .frame(width: 32, height: 32).background(Color.tradeReady.opacity(0.11), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Image(systemName: symbol).font(.system(size: iconSize, weight: .semibold)).foregroundStyle(Color.tradeReady)
+                .frame(width: badgeSize, height: badgeSize).background(Color.tradeReady.opacity(0.11), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 2) { Text(title).font(.body.weight(.medium)).foregroundStyle(.primary); Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             Spacer(minLength: 8)
             Image(systemName: external ? "arrow.up.right" : "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
