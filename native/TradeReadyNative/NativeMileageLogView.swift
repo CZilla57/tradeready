@@ -91,6 +91,7 @@ struct NativeMileageLogView: View {
         } message: {
             Text("Remove this trip from your mileage log?")
         }
+        .nativeAnalyticsScreen(.mileageLog)
     }
 
     // MARK: Pieces

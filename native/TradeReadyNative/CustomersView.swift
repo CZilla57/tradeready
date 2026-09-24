@@ -156,6 +156,7 @@ struct CustomersView: View {
                 openRequestedCustomer(store.deepLinkedCustomerID)
             }
         }
+        .nativeAnalyticsScreen(.customerList)
     }
 
     private func openRequestedCustomer(_ id: String?) {
@@ -496,6 +497,7 @@ struct CustomerDetailView: View {
                 )
             }
         }
+        .nativeAnalyticsScreen(.customerDetail)
     }
 }
 
@@ -695,6 +697,7 @@ struct CustomerEditor: View {
                 }
             }
         }
+        .nativeAnalyticsScreen(.customerEditor)
     }
 }
 

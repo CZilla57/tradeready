@@ -101,6 +101,7 @@ struct NativePricebookView: View {
         } message: {
             Text("Remove \"\(pendingDeletion?.name ?? "")\" from your Pricebook?")
         }
+        .nativeAnalyticsScreen(.pricebook)
     }
 
     private var searchField: some View {

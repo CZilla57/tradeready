@@ -81,7 +81,7 @@ struct JobsView: View {
                     resetAction: { search = ""; filter = .active }
                 )
             }
-            .refreshable { await store.performPullToRefresh() }
+            .refreshable { await store.performPullToRefresh(screen: .jobs) }
             .navigationTitle("Jobs")
             .searchable(text: $search, prompt: "Jobs or customers")
             .toolbar {
@@ -116,6 +116,7 @@ struct JobsView: View {
                 store.deleteJob(id: recordID)
             }
         }
+        .nativeAnalyticsScreen(.jobList)
     }
 
     private func filterButton(_ summary: NativeJobListFilterSummary) -> some View {
@@ -271,6 +272,7 @@ struct JobDetailView: View {
                 }
             }
         }
+        .nativeAnalyticsScreen(.jobDetail)
     }
 
     /// Shared by the approved/scheduled/in-progress status rows: routes to
@@ -324,7 +326,7 @@ struct JobDetailView: View {
             }
             if !job.address.isEmpty { Label(job.address, systemImage: "mappin.and.ellipse") }
             if job.scheduledAt != nil && [.approved, .scheduled, .inProgress].contains(job.status) {
-                Button { store.requestAppointmentConfirmationReview(jobID: job.id) } label: {
+                Button { store.requestAppointmentConfirmationReview(jobID: job.id, fromNotification: false) } label: {
                     Label("Send confirmation", systemImage: "checkmark.message")
                 }
                 Button { store.requestOnMyWayReview(jobID: job.id) } label: {
@@ -384,7 +386,7 @@ struct JobDetailView: View {
                     estimateReviewDraft = store.estimateReviewDraft(jobID: job.id)
                 }
                 Button("Send follow-up", systemImage: "hourglass") {
-                    store.requestEstimateFollowUpReview(jobID: job.id)
+                    store.requestEstimateFollowUpReview(jobID: job.id, source: .jobDetail)
                 }
                 Button("Mark as approved by customer", systemImage: "checkmark.seal") {
                     store.advanceJobLifecycle(id: job.id, from: .estimateSent)
@@ -415,7 +417,7 @@ struct JobDetailView: View {
                 }
                 if !reviewSent {
                     Button("Request a review", systemImage: "star.bubble") {
-                        store.requestReviewRequestReview(jobID: job.id)
+                        store.requestReviewRequestReview(jobID: job.id, source: .jobDetail)
                     }
                 }
             case .invoiced:
@@ -429,7 +431,7 @@ struct JobDetailView: View {
                 }
                 if !reviewSent {
                     Button("Request a review", systemImage: "star.bubble") {
-                        store.requestReviewRequestReview(jobID: job.id)
+                        store.requestReviewRequestReview(jobID: job.id, source: .jobDetail)
                     }
                 }
             case .paid:
@@ -438,7 +440,7 @@ struct JobDetailView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 } else {
                     Button("Request a review", systemImage: "star.bubble") {
-                        store.requestReviewRequestReview(jobID: job.id)
+                        store.requestReviewRequestReview(jobID: job.id, source: .jobDetail)
                     }
                 }
             case .declined:
@@ -656,5 +658,6 @@ struct JobEditor: View {
                 }
             }
         }
+        .nativeAnalyticsScreen(.jobEditor)
     }
 }

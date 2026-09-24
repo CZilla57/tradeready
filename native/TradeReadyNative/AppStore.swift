@@ -191,6 +191,9 @@ final class AppStore: ObservableObject {
             // Task 11.06 (contract §6.2 step 4): entering a closed gate
             // discards a parked deep link; entering `.signedIn` applies it.
             handleDeepLinkGateChange(from: oldValue)
+            // Task 11.08 (§9.3–§9.5): onboarding steps, the paywall and the
+            // root screens are gate moments.
+            emitAnalyticsForGateChange(from: oldValue)
         }
     }
     @Published private(set) var migratedAccountState: NativeTypedAccountState?
@@ -263,8 +266,22 @@ final class AppStore: ObservableObject {
     /// Task 10.12 (D4/D5): owner-bound setup-checklist store (10.03's
     /// `NativeSetupChecklistStore`).
     private let setupChecklistStore: NativeSetupChecklistStore
-    /// Task 10.12 (ruling R5): no-op by default; Phase 11.08 owns transport.
+    /// Task 10.12 (ruling R5): no-op by default; the app injects
+    /// `NativeAnalyticsTransport.live()`. Every emission goes through
+    /// `emitAnalytics(_:)` (task 11.08).
     private let analytics: NativeAnalytics
+    /// Task 11.08 (contract §9.4): the last identified Supabase user id.
+    private var analyticsIdentity = NativeAnalyticsIdentityLifecycle()
+    /// Task 11.08: `subscription_paywall_shown` fires once per paywall
+    /// presentation (RN: once per `PaywallScreen` mount).
+    private var analyticsPaywallTracked = false
+    /// Task 11.08 (§9.3): the last `$screen` sent, so a SwiftUI re-appear of
+    /// the same destination does not repeat it.
+    private var analyticsLastScreen: String?
+    /// Task 11.08: where the open review-request / estimate follow-up flow
+    /// came from (RN route param `source`, default `notification`).
+    private var reviewRequestAnalyticsSource: NativeAnalyticsEvent.MessageSource = .notification
+    private var estimateFollowUpAnalyticsSource: NativeAnalyticsEvent.MessageSource = .notification
     /// One bounded, non-PII diagnostic per session per store (brief step 5) —
     /// tracks which stores have already logged their fail-closed diagnostic
     /// so a persistently-corrupt file does not spam.
@@ -676,6 +693,10 @@ final class AppStore: ObservableObject {
             var updated = snapshot
             var records = updated.payload.customers ?? []
             let result: Canonical.Customer
+            // Task 11.08: RN `customer_created{first}` fires for a new record
+            // only; `first` = no prior non-sample customer before this save.
+            let isNewRecord = !records.contains(where: { $0.id == value.id })
+            let isFirstRealCustomer = !records.contains(where: { !Self.isAnalyticsSampleID($0.id) })
             if let baseline = records.first(where: { $0.id == value.id }) {
                 var edit = try CanonicalUIAdapters.edit(baseline); edit.value = value
                 result = try CanonicalUIAdapters.canonical(from: edit)
@@ -685,6 +706,7 @@ final class AppStore: ObservableObject {
             try repository.save(updated)
             try apply(updated)
             enqueueUpsert(table: "customers", recordId: result.id, record: result)
+            if isNewRecord { emitAnalytics(.customerCreated(first: isFirstRealCustomer)) }
             return true
         } catch {
             migrationMessage = "Could not update customer: \(error.localizedDescription)"
@@ -1000,7 +1022,12 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func markReviewRequestSent(jobID: String, fallback: NativeReviewRequestFallbackContact?, now: Date = .now) {
+    func markReviewRequestSent(
+        jobID: String,
+        fallback: NativeReviewRequestFallbackContact?,
+        channel: NativeAnalyticsEvent.MessageChannel,
+        now: Date = .now
+    ) {
         guard let binding = verifiedAccountBinding else { return }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1013,6 +1040,8 @@ final class AppStore: ObservableObject {
         do {
             try reviewRequestStore.save(records, for: binding)
             reviewRequestRecords = records
+            // Task 11.08: RN `ReviewRequestScreen.tsx:125/139`, after the one-shot save.
+            emitAnalytics(.reviewRequestSent(channel: channel, source: reviewRequestAnalyticsSource))
         } catch {
             migrationMessage = "The review request was sent, but its one-shot record could not be saved."
         }
@@ -1044,7 +1073,10 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func requestEstimateFollowUpReview(jobID: String) {
+    func requestEstimateFollowUpReview(
+        jobID: String,
+        source: NativeAnalyticsEvent.MessageSource = .notification
+    ) {
         let job = snapshot.payload.jobs?.first { $0.id == jobID }
         guard NativeEstimateFollowUp.canOpenNotification(
             exactOwnerWorkspace: hasExactSignedInWorkspace,
@@ -1052,6 +1084,9 @@ final class AppStore: ObservableObject {
             job: job
         ), estimateFollowUpDraft(jobID: jobID) != nil
         else { return }
+        // Task 11.08: RN `App.tsx:420` / `JobDetailScreen.tsx:644`.
+        estimateFollowUpAnalyticsSource = source
+        emitAnalytics(.estimateFollowUpOpened(source: source))
         selectedTab = .jobs
         deepLinkedJobID = jobID
         pendingEstimateFollowUpJobID = jobID
@@ -1219,6 +1254,10 @@ final class AppStore: ObservableObject {
             // in `CreateInvoiceFromJobScreen.tsx`, which only fires outside its
             // `mode === "finalize"` branch. Fire-and-forget, exactly like RN.
             if draft.mode != .finalize { onInvoiceCreatedContextualPrompt?() }
+            // Task 11.08: RN `CreateInvoiceFromJobScreen.tsx:226`/`:245`.
+            emitAnalytics(draft.mode == .finalize
+                ? .invoiceFinalizedFromJob
+                : .invoiceCreatedFromJob(mode: draft.mode))
             return true
         } catch {
             migrationMessage = "Could not save this invoice: \(error.localizedDescription)"
@@ -1262,6 +1301,8 @@ final class AppStore: ObservableObject {
                     baseline: baseline,
                     at: date
                 )
+                // Task 11.08: RN `JobDetailScreen.tsx:842`.
+                emitAnalytics(.jobStatusChanged(from: expectedStatus, to: .complete))
                 return .completed
             } catch {
                 migrationMessage = "Could not complete this job: \(error.localizedDescription)"
@@ -1366,6 +1407,12 @@ final class AppStore: ObservableObject {
                 baseline: baseline,
                 at: date
             )
+            // Task 11.08: the status change, then RN `utils/autoInvoice.ts:337`.
+            emitAnalytics(.jobStatusChanged(from: expectedStatus, to: .complete))
+            emitAnalytics(.invoiceCreatedOnCompletion(
+                usedTrackedTime: breakdown.usedTrackedTime,
+                autoEmailQueued: resultInvoice.autoEmailRequestedAt != nil
+            ))
             return .autoInvoiced(invoiceID: resultInvoice.id)
         } catch {
             // Automatic preparation/delivery is optional. If customer or
@@ -1670,6 +1717,9 @@ final class AppStore: ObservableObject {
                 guard let record = snapshot.payload.jobs?.first(where: { $0.id == jobID }) else { continue }
                 enqueueUpsert(table: "jobs", recordId: jobID, record: record)
             }
+            // Task 11.08: RN `InvoicesScreen.tsx:239`/`:241`.
+            for invoice in settledPublished { emitAnalytics(.invoicePaid(amount: invoice.amount)) }
+            emitAnalytics(.bulkInvoicesMarkedPaid(count: settledPublished.count))
             return (settledPublished, skipped)
         } catch {
             migrationMessage = "Could not mark the invoices paid: \(error.localizedDescription)"
@@ -1933,7 +1983,10 @@ final class AppStore: ObservableObject {
         on date: Date = .now
     ) -> Bool {
         guard expectedStatus == .lead else { return false }
-        return stampEstimateSent(id: id, from: expectedStatus, on: date)
+        guard stampEstimateSent(id: id, from: expectedStatus, on: date) else { return false }
+        // Task 11.08: RN `SendEstimateScreen.markAsSent` / `PricingCalculatorScreen`.
+        emitAnalytics(.estimateSent)
+        return true
     }
 
     /// Records only a composer-confirmed send. The latest canonical estimate
@@ -1976,9 +2029,11 @@ final class AppStore: ObservableObject {
             review.snapshot
         ) else { return .preservedNewerState }
 
-        return stampEstimateSent(id: review.jobID, from: currentStatus, on: date)
-            ? .recorded
-            : .failed
+        guard stampEstimateSent(id: review.jobID, from: currentStatus, on: date) else { return .failed }
+        // Task 11.08: the composer-confirmed stamp is native's estimate-sent
+        // commit (contract §9.7).
+        emitAnalytics(.estimateSent)
+        return .recorded
     }
 
     private func stampEstimateSent(
@@ -2122,6 +2177,8 @@ final class AppStore: ObservableObject {
             try repository.save(updated)
             try apply(updated)
             enqueueUpsert(table: "jobs", recordId: review.jobID, record: result)
+            // Task 11.08: RN `SendEstimateScreen.createLink` success.
+            emitAnalytics(.estimateSent)
             _ = await syncNowAndWait(trigger: .localChange)
             return .success(link)
         } catch {
@@ -2387,7 +2444,7 @@ final class AppStore: ObservableObject {
         note: String,
         on date: Date = .now
     ) -> Bool {
-        mutateChangeOrderJob(jobID: jobID) { job in
+        let applied = mutateChangeOrderJob(jobID: jobID) { job in
             try NativeChangeOrders.applyingManualDecision(
                 decision,
                 to: changeOrderID,
@@ -2396,6 +2453,9 @@ final class AppStore: ObservableObject {
                 decidedAt: NativeChangeOrders.recordDateString(for: date)
             )
         }
+        // Task 11.08: RN `ChangeOrdersSection.tsx:176`, when it changed.
+        if applied { emitAnalytics(.changeOrderDecided(decision)) }
+        return applied
     }
 
     @discardableResult
@@ -2438,7 +2498,7 @@ final class AppStore: ObservableObject {
     /// already running, so a replayed widget/Siri clock-in cannot double-start.
     @discardableResult
     func clockIn(jobID: String, on date: Date = .now) -> Bool {
-        mutateJob(jobID: jobID) { job in
+        let started = mutateJob(jobID: jobID) { job in
             guard let status = JobLifecycleStatus(rawValue: job.status) else {
                 throw NativeTimeTrackingError.jobNotFound
             }
@@ -2454,6 +2514,9 @@ final class AppStore: ObservableObject {
                 + [.init(start: applied.sessions[applied.sessions.count - 1].start)]
             return updated
         }
+        // Task 11.08: RN `JobDetailScreen.tsx:1036`.
+        if started { emitAnalytics(.timeTrackingStarted(jobID: jobID)) }
+        return started
     }
 
     /// Closes the running timer. The end time clamps to the session start when
@@ -2532,6 +2595,18 @@ final class AppStore: ObservableObject {
     /// itself without a second validation model. Nothing is written when the
     /// job or the order moved on while the form was open.
     func commitChangeOrder(_ draft: NativeChangeOrderDraft) -> NativeChangeOrderCommitOutcome {
+        let outcome = performChangeOrderCommit(draft)
+        // Task 11.08: RN `AddChangeOrderScreen.tsx:118`, new orders only; the
+        // amount is the committed canonical value.
+        if case .created(let id) = outcome,
+           let order = snapshot.payload.jobs?.first(where: { $0.id == draft.jobID })?
+               .changeOrders?.first(where: { $0.id == id }) {
+            emitAnalytics(.changeOrderCreated(amount: order.amount))
+        }
+        return outcome
+    }
+
+    private func performChangeOrderCommit(_ draft: NativeChangeOrderDraft) -> NativeChangeOrderCommitOutcome {
         let outcome: Result<NativeChangeOrderCommitOutcome, Error>
         if let editingID = draft.editingID {
             outcome = Result {
@@ -2660,11 +2735,22 @@ final class AppStore: ObservableObject {
             } else {
                 result = try CanonicalUIAdapters.canonical(from: value)
             }
+            // Task 11.08: RN `job_created` (AddJobScreen.tsx:400) fires for a
+            // new record only; `first` counts prior non-sample jobs.
+            let isNewRecord = !records.contains(where: { $0.id == result.id })
+            let isFirstRealJob = !records.contains(where: { !Self.isAnalyticsSampleID($0.id) })
             replaceOrAppend(result, in: &records, id: \Canonical.Job.id)
             updated.payload.jobs = records
             try repository.save(updated)
             try apply(updated)
             enqueueUpsert(table: "jobs", recordId: result.id, record: result)
+            if isNewRecord {
+                emitAnalytics(.jobCreated(
+                    first: isFirstRealJob,
+                    customerID: result.customerId,
+                    duplicated: newRecordTemplate != nil
+                ))
+            }
             return true
         } catch {
             migrationMessage = "Could not update job: \(error.localizedDescription)"
@@ -2702,6 +2788,18 @@ final class AppStore: ObservableObject {
         opened: Invoice?,
         draft: NativeInvoiceDraft,
         calendar: Calendar = .current
+    ) -> Result<Invoice, NativeInvoiceEditRefusal> {
+        let result = performInvoiceEdit(id: id, opened: opened, draft: draft, calendar: calendar)
+        // Task 11.08: RN `AddInvoiceScreen.tsx:109`, new invoices only.
+        if case .success = result, id == nil { emitAnalytics(.invoiceCreatedManually) }
+        return result
+    }
+
+    private func performInvoiceEdit(
+        id: String?,
+        opened: Invoice?,
+        draft: NativeInvoiceDraft,
+        calendar: Calendar
     ) -> Result<Invoice, NativeInvoiceEditRefusal> {
         guard ensurePersistenceWritable() else { return .failure(.persistenceUnavailable) }
         var records = snapshot.payload.invoices ?? []
@@ -3255,7 +3353,15 @@ final class AppStore: ObservableObject {
         guard let current = invoices.first(where: { $0.id == invoiceID }) else {
             return .failure(.missingRecord)
         }
-        return commitInvoicePayment(current.applying(payment))
+        let result = commitInvoicePayment(current.applying(payment))
+        // Task 11.08: RN `InvoicesScreen.tsx:359`/`:365`. A retried submit
+        // that the ledger deduped recorded nothing, so it tracks nothing.
+        if case .success(let next) = result,
+           !current.effectivePayments.contains(where: { $0.id == payment.id }) {
+            emitAnalytics(.paymentRecorded(amount: payment.amount, method: payment.method, balanceRemaining: next.balance))
+            if next.isPaid && !current.isPaid { emitAnalytics(.invoicePaid(amount: next.amount)) }
+        }
+        return result
     }
 
     @discardableResult
@@ -3265,7 +3371,14 @@ final class AppStore: ObservableObject {
         }
         // Already settled: idempotent no-op so a repeated submit is safe.
         if current.isPaid { return .success(current) }
-        return commitInvoicePayment(current.settlingRemaining(on: date, paymentID: paymentID))
+        let result = commitInvoicePayment(current.settlingRemaining(on: date, paymentID: paymentID))
+        // Task 11.08: RN `InvoicesScreen.tsx:335`/`:340` (`method: other`,
+        // `balanceRemaining: 0`, the balance before settling as `amount`).
+        if case .success = result {
+            emitAnalytics(.paymentRecorded(amount: current.balance, method: "other", balanceRemaining: 0))
+            emitAnalytics(.invoicePaid(amount: current.amount))
+        }
+        return result
     }
 
     @discardableResult
@@ -3279,7 +3392,13 @@ final class AppStore: ObservableObject {
         }
         // Voiding restores the invoice balance but deliberately does not
         // regress a linked job that has already advanced to paid.
-        return commitInvoicePayment(current.voidingPayment(id: paymentID, on: date))
+        let voided = current.effectivePayments.first(where: { $0.id == paymentID })
+        let result = commitInvoicePayment(current.voidingPayment(id: paymentID, on: date))
+        // Task 11.08: RN `InvoicesScreen.tsx:407`.
+        if case .success = result, let voided {
+            emitAnalytics(.paymentVoided(amount: voided.amount, method: voided.method))
+        }
+        return result
     }
 
     @discardableResult
@@ -3504,7 +3623,10 @@ final class AppStore: ObservableObject {
               let next = expectedStatus.lifecycleStatus.next
         else { return false }
         job.status = JobStatus(lifecycleStatus: next)
-        return upsert(job)
+        guard upsert(job) else { return false }
+        // Task 11.08: RN `JobDetailScreen.tsx:842`, after `updateJob`.
+        emitAnalytics(.jobStatusChanged(from: expectedStatus, to: job.status))
+        return true
     }
 
     /// List-only projection of canonical job metadata. Recurrence and approved
@@ -3569,6 +3691,8 @@ final class AppStore: ObservableObject {
             pendingRecordDeleteUndo = nil
             pendingCustomerMergeUndo = result.undo
             scheduleCustomerMergeUndoExpiration(id: result.undo.id)
+            // Task 11.08: RN `CustomerDetailScreen.tsx:419`.
+            emitAnalytics(.customersMerged(jobs: result.undo.counts.jobs, invoices: result.undo.counts.invoices))
             return true
         } catch {
             migrationMessage = "The customers could not be merged safely. Nothing was changed."
@@ -3764,7 +3888,7 @@ final class AppStore: ObservableObject {
             case .job(let id): routeToJob(id)
             case .onMyWay(let id): routeToOnMyWay(id)
             }
-            analytics.track("widget_deep_link_opened", ["type": NativeDeepLinkRoutingPolicy.analyticsType(route)])
+            emitAnalytics(.widgetDeepLinkOpened(type: NativeDeepLinkRoutingPolicy.analyticsType(route)))
         case .discard(let reason):
             if reason.surfacesNotFound {
                 deepLinkUnavailableNotice = NativeDeepLinkUnavailableNotice(reason: reason)
@@ -4029,6 +4153,10 @@ final class AppStore: ObservableObject {
         // nothing parked or deep-linked in the previous session can surface
         // for whoever signs in next.
         clearDeepLinkRouteState()
+        // Task 11.08 (§9.4): an account switch is an analytics identity
+        // boundary too — reset before the first await, so nothing the next
+        // owner does can be attributed to this one.
+        applyAnalyticsIdentityBoundary()
         guard let activator = authenticatedIdentityActivator else {
             authenticationGateState = .signedOut
             return
@@ -4101,8 +4229,7 @@ final class AppStore: ObservableObject {
             responseUserSubject: session.userSubject
         )
         try NativePasswordRecoveryStore().clear()
-        didCheckMigratedAuthenticatedIdentity = true
-        applyAuthenticatedIdentityOutcome(outcome, email: session.email)
+        finishInteractiveSignIn(outcome, email: session.email, method: .password)
     }
 
     func signUp(email: String, password: String) async throws -> NativeSupabaseSignUpResult {
@@ -4126,6 +4253,9 @@ final class AppStore: ObservableObject {
             didCheckMigratedAuthenticatedIdentity = true
             applyAuthenticatedIdentityOutcome(outcome, email: session.email)
         }
+        // RN `AuthScreen.tsx:130`: after the sign-up call succeeds, in both
+        // the confirmation-pending and the signed-in case.
+        emitAnalytics(.signUp)
         return result
     }
 
@@ -4144,8 +4274,7 @@ final class AppStore: ObservableObject {
             responseUserSubject: session.userSubject
         )
         try NativePasswordRecoveryStore().clear()
-        didCheckMigratedAuthenticatedIdentity = true
-        applyAuthenticatedIdentityOutcome(outcome, email: session.email)
+        finishInteractiveSignIn(outcome, email: session.email, method: .apple)
     }
 
     func signInWithGoogle(idToken: String, rawNonce: String) async throws {
@@ -4163,8 +4292,7 @@ final class AppStore: ObservableObject {
             responseUserSubject: session.userSubject
         )
         try NativePasswordRecoveryStore().clear()
-        didCheckMigratedAuthenticatedIdentity = true
-        applyAuthenticatedIdentityOutcome(outcome, email: session.email)
+        finishInteractiveSignIn(outcome, email: session.email, method: .google)
     }
 
     func requestPasswordReset(email: String) async throws {
@@ -4257,6 +4385,7 @@ final class AppStore: ObservableObject {
             email: email,
             redirectTo: BuildEnvironment.emailConfirmationURL
         )
+        emitAnalytics(.signUpConfirmationResent)
     }
 
     func saveOnboardingDraft(_ draft: NativeOnboardingDocument.Draft) throws {
@@ -4289,6 +4418,9 @@ final class AppStore: ObservableObject {
         try commitOnboardingSettings(validated)
         document.stage = .personalized
         try store.save(document)
+        // RN `OnboardingScreen.tsx:116`: after the personalization saves,
+        // before the subscription gate.
+        emitAnalytics(.onboardingCompleted(trade: validated.trade))
         beginSubscriptionGate(destination: .startingPoint(validated.trade))
     }
 
@@ -4306,6 +4438,9 @@ final class AppStore: ObservableObject {
         do {
             let result = try await subscriptionService.purchase(packageID: packageID)
             if result.userCancelled { return .cancelled }
+            // RN `PaywallScreen.tsx:90`: `purchasePackage` resolved without a
+            // cancel or throw (RN does not re-check the entitlement first).
+            emitAnalytics(.subscriptionPurchased)
             isSubscriptionTrialing = result.entitlement.isActive && result.entitlement.isTrialing
             guard result.entitlement.isActive else { return .noActiveSubscription }
             subscriptionGateGeneration &+= 1
@@ -4353,6 +4488,8 @@ final class AppStore: ObservableObject {
         try commitStartingPoint(document)
         document.stage = .done
         try store.save(document)
+        // RN `StartingPointScreen.tsx:62`: after `completeStartChoice`.
+        emitAnalytics(.onboardingStartChoice(choice))
         authenticationGateState = .signedIn(email: authenticatedEmail)
         consumePendingDeepLinks()
         replayVerifiedWidgetActionsIfPossible()
@@ -4440,6 +4577,11 @@ final class AppStore: ObservableObject {
             }
         }
 
+        // Task 11.08 (§9.4): the server deletion is authoritative, so the
+        // deleted account's analytics identity resets now, before the local
+        // scrub, the RevenueCat logout await or any later event can run. The
+        // teardown's own boundary below is then a no-op.
+        applyAnalyticsIdentityBoundary()
         // Task 11.01: see `signOut` — suspend the mirror across the wipe.
         widgetMirrorSuspendedForAccountBoundary = true
         do {
@@ -4498,6 +4640,9 @@ final class AppStore: ObservableObject {
     }
 
     private func applyCompletedSignOutState() {
+        // Task 11.08 (§9.4): sign-out, completed deletion, the paywall
+        // sign-out and a retried scrub all end here — reset first.
+        applyAnalyticsIdentityBoundary()
         syncCoordinator?.reset()
         // Task 10.09 (B1): account boundary — clear the owner-scoped cached
         // snapshot only; observer registrations survive (the 11.01 widget
@@ -4818,6 +4963,10 @@ final class AppStore: ObservableObject {
         verifiedAccountBinding = outcome.verifiedAccountBinding
         authenticatedUserSubject = outcome.verifiedUserSubject
         authenticatedEmail = email ?? outcome.verifiedEmail ?? authenticatedEmail
+        // Task 11.08 (§9.4): identify the verified Supabase user id before
+        // any gate transition below can emit an event for this owner. A
+        // different id than the last identified one resets first.
+        applyAnalyticsIdentityVerified(outcome.verifiedUserSubject)
         authenticatedAccountState = switch outcome.accountState {
         case .noAuxiliaryArtifact, .noAccountState: .verified
         case .staged: .verifiedAndStaged
@@ -5314,6 +5463,11 @@ final class AppStore: ObservableObject {
         id.hasPrefix("native-sample-v1-")
     }
 
+    /// Task 11.08: RN `isSampleId` (legacy seed ids) or a native sample seed.
+    private static func isAnalyticsSampleID(_ id: String) -> Bool {
+        NativeTodayBriefing.isSampleId(id) || isNativeSampleID(id)
+    }
+
     private static func sampleJobTitle(for trade: NativeTypedAccountState.Trade) -> String {
         switch trade {
         case .plumbing: "Replace kitchen faucet"
@@ -5496,7 +5650,7 @@ final class AppStore: ObservableObject {
     /// Notification taps use the exact job route but intentionally do not
     /// require the visible appointment-button status gate. The review sheet
     /// still refuses to draft when contact data is unavailable.
-    func requestAppointmentConfirmationReview(jobID: String) {
+    func requestAppointmentConfirmationReview(jobID: String, fromNotification: Bool = true) {
         guard hasExactSignedInWorkspace,
               isSignedIn,
               let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
@@ -5506,6 +5660,8 @@ final class AppStore: ObservableObject {
                   job: job
               )
         else { return }
+        // Task 11.08: RN `App.tsx:434` tracks notification taps only.
+        if fromNotification { emitAnalytics(.appointmentConfirmOpened) }
         selectedTab = .jobs
         deepLinkedJobID = jobID
         pendingAppointmentConfirmationJobID = jobID
@@ -5517,11 +5673,16 @@ final class AppStore: ObservableObject {
     /// are still scheduled for archived jobs (RN `utils/archive.ts` keeps
     /// notifications seeing them) and RN's `review_request` tap navigates
     /// with no archive check, so a delivered notification is never a dead tap.
-    func requestReviewRequestReview(jobID: String) {
+    func requestReviewRequestReview(
+        jobID: String,
+        source: NativeAnalyticsEvent.MessageSource = .notification
+    ) {
         guard hasExactSignedInWorkspace,
               isSignedIn,
               snapshot.payload.jobs?.contains(where: { $0.id == jobID }) == true,
               reviewRequestDraft(jobID: jobID) != nil else { return }
+        // Task 11.08: the `source` RN passes as a ReviewRequest route param.
+        reviewRequestAnalyticsSource = source
         selectedTab = .jobs
         deepLinkedJobID = jobID
         pendingReviewRequestJobID = jobID
@@ -5530,11 +5691,15 @@ final class AppStore: ObservableObject {
     /// Phase 7 invoice-tap routing. Validates the exact workspace plus current
     /// record state before opening the review screen; stale payloads fail
     /// closed. Taps never send customer messages.
-    func requestInvoiceReminderReview(invoiceID: String, opensOutreach: Bool) {
+    func requestInvoiceReminderReview(invoiceID: String, opensOutreach: Bool, daysPastDue: Int? = nil) {
         guard hasExactSignedInWorkspace,
               isSignedIn,
               invoices.contains(where: { $0.id == invoiceID })
         else { return }
+        // Task 11.08: RN `App.tsx:427` (`overdue_outreach` taps open Outreach).
+        if opensOutreach, let daysPastDue {
+            emitAnalytics(.overdueOutreachOpened(daysPastDue: daysPastDue))
+        }
         selectedTab = .invoices
         deepLinkedInvoiceID = invoiceID
         deepLinkedOutreachInvoiceID = opensOutreach ? invoiceID : nil
@@ -6267,8 +6432,19 @@ final class AppStore: ObservableObject {
     /// reload. Native screens already observe the canonical in-memory snapshot,
     /// so the completed delta-pull publication is the reload boundary here.
     @discardableResult
-    func performPullToRefresh() async -> NativeSyncOutcome? {
-        await syncNowAndWait(trigger: .manual)
+    func performPullToRefresh(
+        screen: NativeAnalyticsEvent.RefreshScreen? = nil
+    ) async -> NativeSyncOutcome? {
+        let owner = authenticatedUserSubject
+        let outcome = await syncNowAndWait(trigger: .manual)
+        // Task 11.08: RN `hooks/useRefresh.ts:17` — after the sync and
+        // reload, whatever the result, only for Money and Jobs. An owner
+        // change during the await drops it so the event can never be
+        // attributed to the next identity (§9.4).
+        if let screen, owner != nil, owner == authenticatedUserSubject {
+            emitAnalytics(.pullToRefresh(screen))
+        }
+        return outcome
     }
 
     /// Foreground ordering matches the React Native oracle: metadata sync first,
@@ -6522,6 +6698,9 @@ final class AppStore: ObservableObject {
             verifiedAccountBinding = outcome.verifiedAccountBinding
             authenticatedUserSubject = outcome.verifiedUserSubject
             authenticatedEmail = outcome.verifiedEmail ?? authenticatedEmail
+            // Task 11.08 (§9.4): a background-verified owner is identified
+            // like a foreground one (a different id resets first).
+            applyAnalyticsIdentityVerified(outcome.verifiedUserSubject)
             activateCustomerDuplicateDismissals(
                 accountBinding: outcome.verifiedAccountBinding,
                 migratedKeys: outcome.typedAccountState?.dismissedDuplicatePairs
@@ -8054,6 +8233,21 @@ extension AppStore {
         draft: Expense,
         calendar: Calendar = .current
     ) -> Result<Expense, NativeMoneyRecordRefusal> {
+        let result = performExpenseEdit(id: id, opened: opened, draft: draft, calendar: calendar)
+        // Task 11.08: RN `useMoneyData.ts:84` / `JobProfitabilitySection.tsx:110`,
+        // new expenses only.
+        if case .success(let saved) = result, id == nil {
+            emitAnalytics(.expenseLogged(category: saved.category, linkedToJob: saved.jobId != nil))
+        }
+        return result
+    }
+
+    private func performExpenseEdit(
+        id: String?,
+        opened: Expense?,
+        draft: Expense,
+        calendar: Calendar
+    ) -> Result<Expense, NativeMoneyRecordRefusal> {
         guard ensurePersistenceWritable() else { return .failure(.persistenceUnavailable) }
         var records = snapshot.payload.expenses ?? []
         if let id {
@@ -8269,6 +8463,18 @@ extension AppStore {
         draft: NativeTripDraft,
         now: Date = Date()
     ) -> Result<Canonical.Trip, NativeMoneyRecordRefusal> {
+        let result = performTripEdit(id: id, opened: opened, draft: draft, now: now)
+        // Task 11.08: RN `AddTripScreen.tsx:115` tracks create and edit alike.
+        if case .success = result { emitAnalytics(.tripLogged) }
+        return result
+    }
+
+    private func performTripEdit(
+        id: String?,
+        opened: Canonical.Trip?,
+        draft: NativeTripDraft,
+        now: Date
+    ) -> Result<Canonical.Trip, NativeMoneyRecordRefusal> {
         guard ensurePersistenceWritable() else { return .failure(.persistenceUnavailable) }
         if let validation = NativeMileage.validationError(draft) {
             return .failure(.invalidDraft(Self.tripValidationMessage(validation)))
@@ -8375,6 +8581,18 @@ extension AppStore {
         opened: Canonical.PricebookEntry?,
         draft: NativePricebookEntryDraft,
         now: Date = Date()
+    ) -> Result<Canonical.PricebookEntry, NativeMoneyRecordRefusal> {
+        let result = performPricebookEdit(id: id, opened: opened, draft: draft, now: now)
+        // Task 11.08: RN `PricebookEntryScreen.tsx:171`, after the save.
+        if case .success = result { emitAnalytics(.pricebookEntrySaved) }
+        return result
+    }
+
+    private func performPricebookEdit(
+        id: String?,
+        opened: Canonical.PricebookEntry?,
+        draft: NativePricebookEntryDraft,
+        now: Date
     ) -> Result<Canonical.PricebookEntry, NativeMoneyRecordRefusal> {
         guard ensurePersistenceWritable() else { return .failure(.persistenceUnavailable) }
         var normalized = draft
@@ -8492,7 +8710,11 @@ extension AppStore {
         guard ensurePersistenceWritable() else { return false }
         // An unset draft is the sheet's "nothing changed" case: it writes no
         // field and therefore publishes nothing (no queue churn, no revision).
-        guard draft.taxIncomeRate != nil || draft.vehicleDeductionMethod != nil else { return true }
+        // RN still saves and tracks it, so the event fires here too.
+        guard draft.taxIncomeRate != nil || draft.vehicleDeductionMethod != nil else {
+            emitTaxSettingsSaved(draft)
+            return true
+        }
         guard let canonical = snapshot.payload.settings else { return false }
         let fields = NativeTaxSettings.applying(draft, to: NativeImportEngine.fields(canonical))
         guard let merged = NativeImportEngine.decode(Canonical.Settings.self, fields) else { return false }
@@ -8506,7 +8728,16 @@ extension AppStore {
             return false
         }
         enqueueSettingsUpsert(merged)
+        emitTaxSettingsSaved(draft)
         return true
+    }
+
+    /// RN `TaxSetAsideCard.tsx:61`, after `saveSettings`.
+    private func emitTaxSettingsSaved(_ draft: NativeTaxSettingsDraft) {
+        emitAnalytics(.taxSettingsSaved(
+            hasIncomeRate: draft.taxIncomeRate != nil,
+            vehicleMethod: draft.vehicleDeductionMethod
+        ))
     }
 
     /// The canonical tax-settings values the estimator consumes.
@@ -8702,9 +8933,7 @@ extension AppStore {
         guard let state = setupChecklistState, let binding = verifiedAccountBinding else { return }
         let optimistic = NativeSetupChecklist.dismissing(state)
         setupChecklistState = optimistic
-        analytics.track("setup_checklist_dismissed", [
-            "doneCount": String(todaySetupTasks?.filter(\.done).count ?? 0),
-        ])
+        emitAnalytics(.setupChecklistDismissed(doneCount: todaySetupTasks?.filter(\.done).count ?? 0))
         if let persisted = try? setupChecklistStore.dismiss(for: binding) {
             setupChecklistState = persisted
         }
@@ -8724,7 +8953,7 @@ extension AppStore {
         else { return }
         let optimistic = NativeSetupChecklist.markingSampleTourDone(state)
         setupChecklistState = optimistic
-        analytics.track("sample_job_opened")
+        emitAnalytics(.sampleJobOpened)
         if let persisted = try? setupChecklistStore.markSampleTourDone(for: binding) {
             setupChecklistState = persisted
         }
@@ -8736,6 +8965,7 @@ extension AppStore {
     @discardableResult
     func handleTodayHeroTap(_ hero: NativeTodayHero) -> NativeTodayRouteResult {
         markSampleTourDoneIfNeeded(for: hero)
+        trackFirstActionIfNeeded(for: hero)
         return routeToToday(hero.destination)
     }
 
@@ -8761,12 +8991,11 @@ extension AppStore {
     /// to persist it under.
     func applyInsightMute(_ insight: NativeTodayInsight, days: Int?) {
         guard let mutes = insightMutes, let binding = verifiedAccountBinding else { return }
-        analytics.track(
-            days == nil ? "insight_dismissed" : "insight_snoozed",
-            days == nil
-                ? ["kind": insight.kind.rawValue, "insightId": insight.id]
-                : ["kind": insight.kind.rawValue, "insightId": insight.id, "days": String(days!)]
-        )
+        if let days {
+            emitAnalytics(.insightSnoozed(insight.kind, insightID: insight.id, days: days))
+        } else {
+            emitAnalytics(.insightDismissed(insight.kind, insightID: insight.id))
+        }
         let now = Date()
         let liveIDs = Set(todayInsightsAll.map(\.id))
         let optimistic = NativeInsightMutes.applying(
@@ -8855,10 +9084,10 @@ extension AppStore {
     /// 'anthropic' : settings?.groqKey ? 'groq' : 'backend'` via 10.10's own
     /// provider-precedence rule, so the two can never disagree.
     func trackCoachMessageSent(sourceIsInsightPrefill: Bool) {
-        analytics.track("ai_chat_sent", [
-            "source": sourceIsInsightPrefill ? "insight_prefill" : "organic",
-            "provider": coachProviderSummary.analyticsName,
-        ])
+        emitAnalytics(.aiChatSent(
+            sourceIsInsightPrefill ? .insightPrefill : .organic,
+            provider: coachProviderSummary.analyticsName
+        ))
     }
 
     /// Final-review I4: the provider the coach will actually route to right
@@ -8913,29 +9142,160 @@ extension AppStore {
         let key = insights.map(\.id).joined(separator: ",")
         guard !key.isEmpty, key != lastShownInsightIDsKey else { return }
         lastShownInsightIDsKey = key
-        analytics.track("insight_shown", [
-            "kinds": insights.map(\.kind.rawValue).joined(separator: ","),
-            "ids": insights.map(\.id).joined(separator: ","),
-        ])
+        // Task 11.08: typed string arrays (the 11.07 handoff), not
+        // comma-joined strings.
+        emitAnalytics(.insightShown(kinds: insights.map(\.kind), ids: insights.map(\.id)))
     }
 
     func trackInsightTapped(_ insight: NativeTodayInsight) {
-        analytics.track("insight_tapped", ["kind": insight.kind.rawValue])
+        emitAnalytics(.insightTapped(insight.kind))
     }
 
     func trackInsightCoachOpened(_ insight: NativeTodayInsight) {
-        analytics.track("insight_coach_opened", ["kind": insight.kind.rawValue])
+        emitAnalytics(.insightCoachOpened(insight.kind))
     }
 
     func trackInsightReasonViewed(_ insight: NativeTodayInsight) {
-        analytics.track("insight_reason_viewed", ["kind": insight.kind.rawValue])
+        emitAnalytics(.insightReasonViewed(insight.kind))
     }
 
     /// RN `SetupChecklistCard.tsx`'s `track("setup_checklist_task_opened",
     /// {task: id})` — fired for every task tap that routes to Settings
     /// (the notifications task never reaches this; it's handled in-card).
     func trackSetupChecklistTaskOpened(_ task: NativeSetupTaskID) {
-        analytics.track("setup_checklist_task_opened", ["task": task.rawValue])
+        emitAnalytics(.setupChecklistTaskOpened(task))
+    }
+
+    // MARK: - Analytics emission and identity (task 11.08, contract §9.3–§9.5)
+    //
+    // Every event is built by a `NativeAnalyticsEvent` constructor and sent
+    // through `emitAnalytics(_:)`, after the durable commit it describes. The
+    // seam never throws and the transport swallows adapter failures, so
+    // analytics can neither block nor roll back a save.
+
+    private func emitAnalytics(_ event: NativeAnalyticsEvent) {
+        analytics.track(event)
+    }
+
+    private func applyAnalyticsIdentityVerified(_ userID: String) {
+        applyAnalyticsIdentityActions(analyticsIdentity.verified(userID))
+    }
+
+    private func applyAnalyticsIdentityBoundary() {
+        applyAnalyticsIdentityActions(analyticsIdentity.boundary())
+        analyticsLastScreen = nil
+        analyticsPaywallTracked = false
+    }
+
+    private func applyAnalyticsIdentityActions(_ actions: [NativeAnalyticsIdentityLifecycle.Action]) {
+        for action in actions {
+            switch action {
+            case .identify(let userID): analytics.identify(userID)
+            case .reset: analytics.reset()
+            }
+        }
+    }
+
+    /// The gate `didSet` hook: onboarding steps, the paywall and the root
+    /// screens (`NativeAnalyticsGatePolicy`). Entering `.signedIn` from any
+    /// other gate also re-asserts the identity, which is a no-op for the id
+    /// already identified at verification.
+    private func emitAnalyticsForGateChange(from oldValue: NativeAuthenticationGateState) {
+        let wasSignedIn = if case .signedIn = oldValue { true } else { false }
+        if !wasSignedIn, case .signedIn = authenticationGateState, let subject = authenticatedUserSubject {
+            applyAnalyticsIdentityVerified(subject)
+        }
+        let output = NativeAnalyticsGatePolicy.transition(
+            from: oldValue,
+            to: authenticationGateState,
+            paywallTracked: analyticsPaywallTracked
+        )
+        analyticsPaywallTracked = output.paywallTracked
+        if let screen = output.screen { trackScreen(screen) }
+        output.events.forEach(emitAnalytics)
+    }
+
+    /// Sends `$screen` with the RN route name (§9.3). Destinations without an
+    /// RN route send nothing; the same route twice in a row is sent once.
+    func trackScreen(_ destination: NativeAnalyticsScreen) {
+        guard let name = destination.routeName, name != analyticsLastScreen else { return }
+        analyticsLastScreen = name
+        analytics.screen(name)
+    }
+
+    /// Shared tail of the three interactive sign-in paths: apply the verified
+    /// identity (which identifies it), then `sign_in` (RN `AuthScreen.tsx:122`,
+    /// `:172`, `:181`, after the provider call succeeds).
+    private func finishInteractiveSignIn(
+        _ outcome: NativeAuthenticatedIdentityActivationOutcome,
+        email: String?,
+        method: NativeAnalyticsEvent.SignInMethod,
+        gateOverride: NativeAuthenticationGateState? = nil
+    ) {
+        didCheckMigratedAuthenticatedIdentity = true
+        applyAuthenticatedIdentityOutcome(outcome, email: email, gateOverride: gateOverride)
+        emitAnalytics(.signIn(method))
+    }
+
+    /// RN `TodayScreen.tsx:761`/`:766`: the first-action hero taps.
+    private func trackFirstActionIfNeeded(for hero: NativeTodayHero) {
+        switch hero.kind {
+        case .addCustomer: emitAnalytics(.firstActionTapped(.addCustomer))
+        case .createJob: emitAnalytics(.firstActionTapped(.createJob))
+        case .sampleTour: break
+        }
+    }
+
+    /// The composer for an on-my-way / appointment-confirmation message
+    /// opened (RN tracks only when `sendAppointmentMessage` opened one).
+    func recordAppointmentComposerOpened(onMyWay: Bool) {
+        emitAnalytics(onMyWay ? .onMyWaySent : .appointmentConfirmSent)
+    }
+
+    /// The change-order approval composer opened (RN `ChangeOrdersSection`
+    /// tracks when the composer opened). The amount is read from the
+    /// canonical change order, never from the view.
+    func recordChangeOrderComposerOpened(
+        jobID: String,
+        changeOrderID: String,
+        channel: NativeAnalyticsEvent.ComposerChannel
+    ) {
+        guard let order = snapshot.payload.jobs?.first(where: { $0.id == jobID })?
+            .changeOrders?.first(where: { $0.id == changeOrderID })
+        else { return }
+        emitAnalytics(.changeOrderSent(amount: order.amount, channel: channel))
+    }
+
+    /// The system composer reported `.sent` for an estimate follow-up.
+    func recordEstimateFollowUpSent(channel: NativeAnalyticsEvent.MessageChannel) {
+        emitAnalytics(.estimateFollowUpSent(
+            channel: channel,
+            source: estimateFollowUpAnalyticsSource
+        ))
+    }
+
+    /// The bulk reminder chain finished; `count` outreach sheets were
+    /// presented (RN counts the composers it opened).
+    func recordBulkInvoiceReminders(channel: NativeAnalyticsEvent.ComposerChannel, count: Int) {
+        emitAnalytics(.bulkInvoiceReminders(channel: channel, count: count))
+    }
+
+    /// An explicit payment-link generation succeeded (RN
+    /// `OutreachScreen.tsx:211`; automatic regeneration does not count).
+    func recordPaymentLinkSent(provider: NativePaymentProvider, deposit: Bool) {
+        emitAnalytics(.paymentLinkSent(provider: provider.rawValue, deposit: deposit))
+    }
+
+    /// A receipt scan finished and was applied (RN `AddExpenseModal.tsx:150`,
+    /// `:158`, `:184`). `result == nil` is a failed scan; otherwise the
+    /// editor's applied state decides `filled` / `empty`.
+    func recordReceiptScan(_ result: NativeReceiptScanResult?, state: NativeExpenseScanState) {
+        guard let result else {
+            emitAnalytics(.receiptScanFailed)
+            return
+        }
+        let route: NativeAnalyticsEvent.ReceiptRoute = result.route == "user_key" ? .userKey : .backend
+        emitAnalytics(.receiptScanned(state == .filled ? .filled : .empty, route: route))
     }
 
     /// RN's `setSelectedDate`. Refuses a malformed date rather than adopting
@@ -9361,6 +9721,39 @@ extension AppStore {
         isMigratedLocalOwnerVerified = false
         migratedAccountBinding = nil
         authenticationGateState = .signedIn(email: nil)
+    }
+
+    /// Test-only (task 11.08): runs the real shared tail of the three
+    /// interactive sign-in paths (`finishInteractiveSignIn`) with a verified
+    /// live outcome, as `signIn`/Apple/Google do after their provider call.
+    /// The provider calls themselves need the network and Keychain, which
+    /// this host-test binary cannot drive. Production never calls this.
+    func testFinishInteractiveSignIn(
+        subject: String,
+        binding: String,
+        email: String,
+        method: NativeAnalyticsEvent.SignInMethod
+    ) {
+        let outcome = NativeAuthenticatedIdentityActivationOutcome(
+            accountState: .noAccountState,
+            newlyStagedCount: 0,
+            alreadyStagedCount: 0,
+            typedAccountState: nil,
+            localOwnerVerified: true,
+            accountBinding: binding,
+            verifiedAccountBinding: binding,
+            verifiedUserSubject: subject,
+            verifiedEmail: email,
+            verificationSource: .live
+        )
+        finishInteractiveSignIn(outcome, email: email, method: method, gateOverride: .signedIn(email: email))
+    }
+
+    /// Test-only (task 11.08): the analytics boundary `deleteAccount` applies
+    /// once the server confirms the deletion (its network call cannot run
+    /// here). Production never calls this.
+    func testApplyAccountDeletionAnalyticsBoundary() {
+        applyAnalyticsIdentityBoundary()
     }
 
     /// Test-only (task 11.05): runs the real widget/Siri replay trigger body

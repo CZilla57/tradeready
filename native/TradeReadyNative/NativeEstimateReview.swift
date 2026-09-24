@@ -254,6 +254,7 @@ struct NativeEstimateReviewView: View {
             }
             .onDisappear { cleanupPDFExport() }
         }
+        .nativeAnalyticsScreen(.estimateReview)
     }
 
     private func copyMessage() {

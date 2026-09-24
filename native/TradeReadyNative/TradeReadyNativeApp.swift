@@ -43,8 +43,12 @@ struct TradeReadyNativeApp: App {
                     store?.requestAppointmentConfirmationReview(jobID: jobID)
                 case .reviewRequest(let jobID):
                     store?.requestReviewRequestReview(jobID: jobID)
-                case .invoiceReminder(let invoiceID, _, let opensOutreach):
-                    store?.requestInvoiceReminderReview(invoiceID: invoiceID, opensOutreach: opensOutreach)
+                case .invoiceReminder(let invoiceID, let daysPastDue, let opensOutreach):
+                    store?.requestInvoiceReminderReview(
+                        invoiceID: invoiceID,
+                        opensOutreach: opensOutreach,
+                        daysPastDue: daysPastDue
+                    )
                 case .recurringInvoiceReminder(let ruleID):
                     store?.requestRecurringInvoiceReview(ruleID: ruleID)
                 case .estimateFollowUp:

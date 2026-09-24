@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06 and 11.07 done (2026-09-24); implementation tasks 11.08–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07 and 11.08 done (2026-09-24); implementation tasks 11.09–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -785,7 +785,7 @@ complete / Phase 12 evidence deferred**.
 | 11.05 | W4 | Done (code complete 2026-09-24; item 4 routing-after-sign-in handed to 11.06; device/Siri/widget proof deferred to Phase 12) | 11.01-11.04 | Owner/stale/sign-in correctness |
 | 11.06 | L1, L2 | Done (code complete 2026-09-24; C11/P8 resolved; device proof deferred to Phase 12) | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
 | 11.07 | P1, P4 | Done (code complete 2026-09-24; PostHog iOS 3.81.0 linked, app target only; no key committed, so analytics is off until a release key is supplied; device proof deferred to Phase 12) | 11.00 | Analytics transport + privacy |
-| 11.08 | P2, P3 | Pending | 11.07, 10.15 | Event parity + identity lifecycle |
+| 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 50 wired (the booking push opens await native push); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Pending | 11.07 | Crash reporting + redaction + app manifest |
 | 11.15 | P4, R2 | Pending | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Pending | 11.00, 10.15 | Accessibility audit + fixes |
@@ -2044,3 +2044,148 @@ instrumentation was added (11.08).
 
 **Next ready:** 11.08 (event parity and identity lifecycle) and 11.09 (crash reporting),
 both unblocked by 11.07.
+
+### 11.08 — Event parity and the identity lifecycle (2026-09-24)
+
+**Outcome:** code complete for P2 and P3.
+- All 52 §9.5 events have typed constructors in `N/NativeAnalyticsEvents.swift`. The
+  store and views emit them through one `AppStore.emitAnalytics`, after the durable
+  commit RN tracks after.
+- 50 events are wired. `booking_request_opened` and `booking_update_opened` fire on RN
+  push taps only, and native has no remote-push surface yet.
+- The identity lifecycle, the `$screen` map and the gate-driven onboarding/paywall
+  events are in place.
+- 11.07 review findings m1–m3 are fixed, and the 11.07 handoff is closed: `doneCount` and
+  `days` are numbers, and `kinds`/`ids` are string arrays.
+- Nothing was built for Sentry (11.09). Analytics stays outside the commit path: the
+  seam never throws, and the transport swallows adapter failures.
+
+**Identity lifecycle** (contract §9.4, refined in §9.7):
+- `identify(<Supabase user id>)` runs when the verified subject is applied
+  (`applyAuthenticatedIdentityOutcome`, and the background activation). It is
+  re-asserted as a no-op when the gate enters `.signedIn`.
+- A different verified id resets first.
+- `reset` runs:
+  - in `applyCompletedSignOutState` (sign-out, paywall sign-out, retried scrub);
+  - in `useAnotherAccount`, before its first await;
+  - in `deleteAccount`, as soon as the server confirms (before the scrub and the
+    RevenueCat logout; this covers the scrub-failure path too).
+- Back-to-back boundaries reset once. The id is the only thing ever identified.
+
+**Files:**
+- New:
+  - `native/TradeReadyNative/NativeAnalyticsEvents.swift`: the constructors,
+    `NativeAnalyticsIdentityLifecycle`, `NativeAnalyticsGatePolicy` and
+    `NativeAnalyticsScreen`.
+  - `native/TradeReadyNative/NativeAnalyticsScreenModifier.swift`:
+    `.nativeAnalyticsScreen(_:)`, app target only.
+  - `native/AnalyticsEventTests/main.swift`.
+  - `native/run-analytics-event-tests.sh`.
+- Edited:
+  - `native/TradeReadyNative/NativeAnalytics.swift`: m1, m2 and m3.
+  - `native/TradeReadyNative/AppStore.swift`: surgical changes.
+    - the analytics state and section;
+    - the gate `didSet` hook and the identity hooks;
+    - `finishInteractiveSignIn`;
+    - emission after each commit, where the commit functions that return results gained
+      a private `perform…` core;
+    - source parameters on the review, follow-up, appointment and overdue opens;
+    - two test seams.
+  - `native/TradeReadyNative/TradeReadyNativeApp.swift`: notification `daysPastDue`.
+  - Views:
+    - `JobsView`, `MoneyView` and `InvoicesView`;
+    - `NativeMessageComposer`, `NativeReviewRequestView`, `NativeEstimateFollowUpView`,
+      `NativeChangeOrdersView`, `NativeInvoiceOutreachView` and `NativeExpenseEditor`;
+    - one screen modifier each on 42 destination views, including `SettingsView` and
+      its pages.
+  - `native/run-appstore-sources-common.sh`.
+  - `native/run-all-domain-tests.sh`: registered after the transport runner.
+  - `native/run-calendar-editor-tests.sh` and
+    `native/run-schedule-booking-settings-tests.sh`: these compile view files, so
+    they now also compile the screen modifier.
+  - Test fakes in `native/StoreIntegrationTests`, `native/DeepLinkRoutingTests` and
+    `native/AnalyticsTransportTests` (section 7 now pins the typed values).
+- Docs: contract §9.7 (the 11.08 block); this plan (status, §6 row, this entry).
+
+**Interface handoff:**
+- **11.09:**
+  - `NativeAnalyticsIdentityLifecycle` and the three boundary sites are where Sentry's
+    `setUser({id})` / `setUser(nil)` belong. RN pairs both with the PostHog calls.
+  - Add them beside `applyAnalyticsIdentityActions`. Do not add a second lifecycle.
+  - `NativeAnalyticsDiagnostic.sanitizedName` (m3) and the value screens are reusable
+    for `NativeErrorRedaction`.
+- **Native push (future):** emit `.bookingRequestOpened` / `.bookingUpdateOpened` from
+  the push-tap route.
+- **Tax settings UI (future):** `commitTaxSettings` already emits `tax_settings_saved`.
+
+**Recorded native differences** (contract §9.7):
+- Review and follow-up sends fire on `.sent` only.
+- `estimate_sent` also fires on the composer-confirmed delivery stamp.
+- The composer-opened events fire at composer presentation.
+- Notification-open events fire only when the guarded route opens.
+- `bulk_invoice_reminders.count` counts the sheets presented.
+- The paywall is always `onboarding_gate`.
+- Screens are RN leaf routes. A sheet dismissal does not re-send the parent screen.
+- Pull-to-refresh drops its event across an owner change.
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-analytics-event-tests.sh` → "Analytics event tests
+  passed (454 checks)". It covers:
+  - every event and every variant built by a constructor and sent unchanged by the
+    shipped policy, with no diagnostic; the name set equals the catalog;
+  - the value normalizations;
+  - m2 (a manual invoice carrying the auto flags keeps `source: manual`) and m3
+    (secret-shaped and long-digit names are redacted, and no diagnostic or violation
+    echoes them);
+  - the lifecycle policy, the gate policy, and every screen name found in `App.tsx`;
+  - the real AppStore journey: sign-out gate → password sign-in → Today → customers,
+    job, lifecycle advance, clock-in, expense, payment, void, settle → sign-out, asserted
+    as the exact ordered adapter sequence;
+  - apple sign-in → `useAnotherAccount` (run for real) → google sign-in, with the reset
+    before the next owner's events;
+  - a direct id change; the deletion boundary (one reset) plus a source-order check of
+    `deleteAccount`;
+  - contextual sources and opens;
+  - a throwing adapter, with commits verified on disk after a relaunch.
+- Mutation checks: 9, each applied, run and restored byte-identical. All were killed.
+  The m2 mutation first survived, because the stray-key case did not separate the two
+  rankings; the test now uses RN's two-flag case.
+  - the switch reset, the sign-out reset, the deletion early reset, and identify at
+    verification;
+  - the m2 discriminator, the m3 secret screen, and boundary idempotence;
+  - `customer_created` on edit, and a stringified `doneCount`.
+- `TZ=America/Phoenix sh native/run-analytics-transport-tests.sh` → "Analytics transport
+  tests passed (226 checks)".
+- `TZ=America/Phoenix sh native/run-store-integration-tests.sh` → "PASS: canonical
+  AppStore integration tests".
+- `sh native/run-deep-link-routing-tests.sh` → "Deep-link routing tests passed".
+- RN oracle: `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/analytics.test.ts`
+  → 9 passed.
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`. There are no new warnings; the unused-`binding` warning in
+  `AppStore.swift` is pre-existing.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0 (every suite passed, including `Analytics transport tests passed (226 checks)` and `Analytics event tests passed (454 checks)`; only pre-existing compiler warnings). The first run failed to compile `run-calendar-editor-tests.sh` (its view sources lacked the new screen modifier); fixed by adding `NativeAnalyticsScreenModifier.swift` to that runner and `run-schedule-booking-settings-tests.sh`, then the full run was repeated.
+- `sh native/run-doc-reference-check.sh` → 1445 path references checked: 0 missing, 26 planned.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- With a real key: password, Apple and Google sign-in each show `$identify` with the
+  Supabase id and `sign_in{method}` in PostHog. Sign-out, "Use another account" and
+  account deletion each show a reset (a new anonymous distinct id) before the next
+  owner's first event.
+- Navigating the tabs and detail screens sends `$screen` with the RN leaf route names.
+- A notification tap for an estimate follow-up, an overdue invoice or an appointment
+  sends its `*_opened` event once.
+- Onboarding sends `welcome` → `business` → `starting_point`, and the paywall sends
+  `subscription_paywall_shown{onboarding_gate}` once per presentation.
+
+**Concerns:**
+- `booking_request_opened` and `booking_update_opened` are constructed but unwired until
+  native push exists.
+- The real `deleteAccount` and the provider sign-ins cannot run in the host test. Their
+  analytics tails are covered through the real private methods, via seams, plus a
+  source-order check. Device proof is in Phase 12.
+- §9.4's "identify … when the gate enters `.signedIn`" is implemented as identify at
+  verification (earlier) plus a no-op re-assert at `.signedIn`, for RN parity. This is
+  recorded in §9.7 for the reviewer.
+
+**Next ready:** 11.09 (crash reporting, redaction, app manifest).

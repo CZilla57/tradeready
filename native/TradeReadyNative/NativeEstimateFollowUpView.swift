@@ -10,6 +10,7 @@ private struct NativeEstimateFollowUpNotice: Identifiable {
 
 struct NativeEstimateFollowUpView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: AppStore
     let draft: NativeEstimateFollowUpDraft
 
     @State private var channel: NativeEstimateMessageChannel
@@ -137,12 +138,14 @@ struct NativeEstimateFollowUpView: View {
                 )
             }
         }
+        .nativeAnalyticsScreen(.estimateFollowUp)
     }
 
     private func handleComposerOutcome(_ outcome: NativeMessageComposeOutcome) {
         showingComposer = false
         switch outcome {
         case .sent:
+            store.recordEstimateFollowUpSent(channel: channel == .email ? .email : .sms)
             notice = .init(
                 title: "Follow-up sent",
                 message: "Sent to \(draft.customerName) by \(channel == .email ? "email" : "text").",

@@ -24,9 +24,9 @@ enum NativeAnalyticsValue: Equatable, Sendable {
         }
     }
 
-    /// Lossy rendering for legacy `[String: String]` conformers (the 10.12
-    /// recording fakes): numbers without a trailing `.0`, arrays comma-joined
-    /// (the pre-11.07 native convention for `insight_shown`).
+    /// Lossy string rendering the 10.12/11.06 host-test recording fakes use
+    /// for their string assertions: numbers without a trailing `.0`, arrays
+    /// comma-joined. Never sent anywhere.
     var legacyStringValue: String {
         switch self {
         case .bool(let value): return value ? "true" : "false"
@@ -51,35 +51,28 @@ extension NativeAnalyticsValue: ExpressibleByStringLiteral, ExpressibleByBoolean
 /// The analytics seam every call site talks to.
 ///
 /// Task 10.12 created it as `track(_:_: [String: String])` with a no-op
-/// default. Task 11.07 widened it in place (contract §9.6): the canonical
-/// `track` takes typed values, the `[String: String]` form stays so every
-/// existing call site compiles unchanged (11.08 migrates them), and the
-/// protocol gains `identify`, `reset` and `screen`.
-///
-/// A conformer must implement at least one of the two `track` overloads: each
-/// default forwards to the other (the typed default stringifies for legacy
-/// string-only fakes; the string default wraps each value as `.string`).
+/// default. Task 11.07 widened it in place (contract §9.6) and added
+/// `identify`, `reset` and `screen`. Task 11.08 migrated every call site to
+/// typed values (`NativeAnalyticsEvent`, `N/NativeAnalyticsEvents.swift`) and
+/// removed the `[String: String]` form (review finding m1): the two `track`
+/// defaults used to forward to each other, so a conformer that implemented
+/// neither recursed forever. The typed `track` is now the only `track`
+/// requirement and has no default, so such a conformer fails to compile.
 protocol NativeAnalytics {
     func track(_ event: String, _ properties: [String: NativeAnalyticsValue])
-    func track(_ event: String, _ properties: [String: String])
     /// The Supabase user id only — never an email, name or trait (§9.4).
     func identify(_ userID: String)
     func reset()
-    /// An RN route name (§9.3; the map is 11.08's).
+    /// An RN route name (§9.3; the map is `NativeAnalyticsScreenMap`).
     func screen(_ name: String)
 }
 
 extension NativeAnalytics {
-    func track(_ event: String, _ properties: [String: String]) {
-        track(event, properties.mapValues(NativeAnalyticsValue.string))
-    }
-
-    func track(_ event: String, _ properties: [String: NativeAnalyticsValue]) {
-        track(event, properties.mapValues(\.legacyStringValue))
-    }
-
-    /// Convenience for the common zero-property call (`sample_job_opened`).
+    /// Convenience for the zero-property call. Forwards to the requirement.
     func track(_ event: String) { track(event, [String: NativeAnalyticsValue]()) }
+
+    /// A typed catalog event (task 11.08). Forwards to the requirement.
+    func track(_ event: NativeAnalyticsEvent) { track(event.name, event.properties) }
 
     func identify(_ userID: String) {}
     func reset() {}
@@ -90,7 +83,6 @@ extension NativeAnalytics {
 /// `AppStore` default and the transport host tests' control.
 struct NativeNoOpAnalytics: NativeAnalytics {
     func track(_ event: String, _ properties: [String: NativeAnalyticsValue]) {}
-    func track(_ event: String, _ properties: [String: String]) {}
 }
 
 // MARK: - Event catalog (contract §9.5, verbatim fixture)
@@ -341,14 +333,38 @@ struct NativeAnalyticsDiagnostic: Equatable, Sendable {
     /// Names are code identifiers. Anything that is not a plain identifier of
     /// at most `maxNameLength` characters (an email used as a key, a value
     /// passed as an event name) is replaced rather than echoed.
+    ///
+    /// Task 11.08 (review finding m3): the result is logged with
+    /// `privacy: .public`, and an identifier-shaped credential (`sk_live_…`,
+    /// `phc_…`, `AIza…`, a JWT header segment `eyJ…`) passes the character
+    /// check. Names are therefore also screened with the value-level
+    /// `containsSecret`, and a name carrying a run of 7+ digits (a phone
+    /// number or a record id used as a key) is replaced too.
     static func sanitizedName(_ name: String) -> String {
         guard !name.isEmpty else { return "" }
         guard name.utf8.count <= maxNameLength,
               let first = name.unicodeScalars.first,
               first == "_" || first == "$" || NativeAnalyticsPrivacyPolicy.asciiLetters.contains(first),
-              name.unicodeScalars.allSatisfy(NativeAnalyticsPrivacyPolicy.nameCharacters.contains)
+              name.unicodeScalars.allSatisfy(NativeAnalyticsPrivacyPolicy.nameCharacters.contains),
+              !NativeAnalyticsPrivacyPolicy.containsSecret(name),
+              !Self.containsLongDigitRun(name)
         else { return "<redacted>" }
         return name
+    }
+
+    static let maxNameDigitRun = 6
+
+    private static func containsLongDigitRun(_ name: String) -> Bool {
+        var run = 0
+        for scalar in name.unicodeScalars {
+            if NativeAnalyticsPrivacyPolicy.asciiDigits.contains(scalar) {
+                run += 1
+                if run > maxNameDigitRun { return true }
+            } else {
+                run = 0
+            }
+        }
+        return false
     }
 }
 
@@ -446,19 +462,36 @@ struct NativeAnalyticsPrivacyPolicy {
             )
         }
 
-        var best: (kept: [String: NativeAnalyticsValue], issues: [NativeAnalyticsDiagnostic.Issue], missing: Int)?
+        // Task 11.08 (review finding m2): a variant whose literal
+        // discriminator (`source`, `outcome`) matches the supplied value ranks
+        // first. Ranking only by kept-property count let a variant that kept
+        // more incidental keys win while stripping the discriminator itself
+        // (`invoice_created{source: manual, usedTrackedTime, autoEmailQueued}`
+        // used to send without `source`).
+        var best: (
+            discriminator: Int,
+            kept: [String: NativeAnalyticsValue],
+            issues: [NativeAnalyticsDiagnostic.Issue],
+            missing: Int
+        )?
         for variant in variants {
             let result = Self.filter(properties, against: variant)
+            let discriminator = Self.discriminatorScore(properties, against: variant)
             if let current = best {
-                if result.kept.count > current.kept.count
+                if discriminator != current.discriminator {
+                    if discriminator > current.discriminator {
+                        best = (discriminator, result.kept, result.issues, result.missing)
+                    }
+                } else if result.kept.count > current.kept.count
                     || (result.kept.count == current.kept.count && result.missing < current.missing) {
-                    best = result
+                    best = (discriminator, result.kept, result.issues, result.missing)
                 }
             } else {
-                best = result
+                best = (discriminator, result.kept, result.issues, result.missing)
             }
         }
-        let chosen = best ?? ([:], [], 0)
+        let chosen: (kept: [String: NativeAnalyticsValue], issues: [NativeAnalyticsDiagnostic.Issue]) =
+            best.map { ($0.kept, $0.issues) } ?? ([:], [])
 
         if Self.encodedSize(of: chosen.kept) > Self.maxPayloadBytes {
             return Evaluation(
@@ -472,6 +505,28 @@ struct NativeAnalyticsPrivacyPolicy {
             diagnostic: chosen.issues.isEmpty ? nil : .init(operation: .track, event: event, issues: chosen.issues),
             isCatalogViolation: false
         )
+    }
+
+    /// +1 for every required single-token literal key (`source: manual`,
+    /// `outcome: failed`) whose supplied value equals the literal, −1 for
+    /// every one supplied with a different value. Variants without literal
+    /// keys score 0, so single-variant events are unaffected.
+    static func discriminatorScore(
+        _ properties: [String: NativeAnalyticsValue],
+        against variant: NativeAnalyticsEventCatalog.Variant
+    ) -> Int {
+        var score = 0
+        for (key, spec) in variant where !spec.isOptional {
+            guard case .oneOf(let allowed) = spec.type, allowed.count == 1,
+                  let supplied = properties[key]
+            else { continue }
+            if case .string(let text) = supplied, allowed.contains(text) {
+                score += 1
+            } else {
+                score -= 1
+            }
+        }
+        return score
     }
 
     private static func filter(
@@ -668,13 +723,6 @@ final class NativeAnalyticsTransport: NativeAnalytics, @unchecked Sendable {
         } catch {
             diagnostics(.init(operation: .track, event: name, issues: [.init(key: "", reason: .transportFailure)]))
         }
-    }
-
-    /// Existing `[String: String]` call sites (11.08 migrates them to typed
-    /// values). Each value is a `.string`, so a catalog `number`/`string[]`
-    /// property sent as a string is stripped with a diagnostic.
-    func track(_ event: String, _ properties: [String: String]) {
-        track(event, properties.mapValues(NativeAnalyticsValue.string))
     }
 
     func identify(_ userID: String) {

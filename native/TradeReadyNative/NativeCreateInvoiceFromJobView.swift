@@ -74,5 +74,6 @@ struct NativeCreateInvoiceFromJobView: View {
                 }
             }
         }
+        .nativeAnalyticsScreen(.createInvoiceFromJob)
     }
 }

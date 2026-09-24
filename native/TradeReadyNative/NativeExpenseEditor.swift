@@ -344,6 +344,7 @@ struct NativeExpenseEditor: View {
             guard let result else {
                 scanBlurry = false
                 scanState = .failed
+                store.recordReceiptScan(nil, state: .failed)
                 return
             }
             let application = NativeExpenseComposer.applyingScan(
@@ -351,6 +352,8 @@ struct NativeExpenseEditor: View {
             )
             scanBlurry = application.blurry
             scanState = application.state
+            // Task 11.08: RN `AddExpenseModal.tsx:183`, after the fields apply.
+            store.recordReceiptScan(result, state: application.state)
         }
     }
 

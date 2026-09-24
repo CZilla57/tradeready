@@ -40,12 +40,14 @@ final class ThrowingSDKAdapter: NativeAnalyticsSDKAdapter {
     func screen(_ name: String) throws { attempts += 1; throw FakeTransportError() }
 }
 
-/// The 10.12/11.06 recording-fake shape, verbatim: a conformer that only
-/// knows the original `[String: String]` requirement. It must still compile
-/// and still receive every call (compile proof for the in-place widening).
-final class LegacyStringOnlyAnalytics: NativeAnalytics {
-    var events: [(String, [String: String])] = []
-    func track(_ event: String, _ properties: [String: String]) { events.append((event, properties)) }
+/// Task 11.08 (m1): a conformer that implements only the single typed
+/// requirement. Before m1 the protocol had two `track` requirements whose
+/// defaults called each other, so a conformer implementing neither compiled
+/// and recursed forever; now the typed one is the only requirement and every
+/// convenience overload funnels into it.
+final class TypedOnlyAnalytics: NativeAnalytics {
+    var events: [(String, [String: NativeAnalyticsValue])] = []
+    func track(_ event: String, _ properties: [String: NativeAnalyticsValue]) { events.append((event, properties)) }
 }
 
 struct NoopReloader: NativeWidgetTimelineReloading {
@@ -541,57 +543,49 @@ struct AnalyticsTransportTests {
                "failures: the error description is not logged")
     }
 
-    // MARK: 7. Existing call sites compile and run unchanged
+    // MARK: 7. Call sites after the 11.08 handoff (typed values, m1)
 
     @MainActor
     static func existingCallSitesUnchanged() async {
-        // (a) A legacy string-only conformer still conforms and receives typed calls.
-        let legacy = LegacyStringOnlyAnalytics()
-        let seam: NativeAnalytics = legacy
+        // (a) m1: the single typed requirement receives every overload.
+        let typed = TypedOnlyAnalytics()
+        let seam: NativeAnalytics = typed
         seam.track("sample_job_opened")
         seam.track("insight_tapped", ["kind": "due_soon"])
-        seam.track("insight_shown", ["kinds": ["due_soon", "open_slot"], "ids": ["a", "b"]] as [String: NativeAnalyticsValue])
-        seam.track("setup_checklist_dismissed", ["doneCount": 3] as [String: NativeAnalyticsValue])
+        seam.track(.insightShown(kinds: [.dueSoon, .openSlot], ids: ["a", "b"]))
+        seam.track(.setupChecklistDismissed(doneCount: 3))
         seam.identify("u"); seam.reset(); seam.screen("Today")
-        expectEqual(legacy.events.map(\.0), ["sample_job_opened", "insight_tapped", "insight_shown", "setup_checklist_dismissed"],
-                    "legacy conformer: receives every track call")
-        expectEqual(legacy.events[2].1, ["kinds": "due_soon,open_slot", "ids": "a,b"], "legacy conformer: arrays comma-joined")
-        expectEqual(legacy.events[3].1, ["doneCount": "3"], "legacy conformer: integral number without .0")
+        expectEqual(typed.events.map(\.0), ["sample_job_opened", "insight_tapped", "insight_shown", "setup_checklist_dismissed"],
+                    "typed conformer: receives every track call")
+        expectEqual(typed.events[2].1, ["kinds": ["due_soon", "open_slot"], "ids": ["a", "b"]], "typed conformer: arrays stay arrays")
+        expectEqual(typed.events[3].1, ["doneCount": 3], "typed conformer: doneCount is a number")
+        expectEqual(typed.events[3].1.mapValues(\.legacyStringValue), ["doneCount": "3"], "legacy view: integral number without .0")
         let noop: NativeAnalytics = NativeNoOpAnalytics()
-        noop.track("estimate_sent"); noop.track("x", ["k": "v"]); noop.identify("u"); noop.reset(); noop.screen("Today")
+        noop.track("estimate_sent"); noop.track("x", ["k": "v"]); noop.track(.estimateSent)
+        noop.identify("u"); noop.reset(); noop.screen("Today")
 
-        // (b) Call-site shapes of the AppStore sites that need a signed-in
-        // owner, compiled verbatim against the widened seam.
+        // (b) The 11.07 handoff is closed: the formerly stringified
+        // `doneCount`/`days` and joined `kinds`/`ids` are typed constructors
+        // now, so they reach the adapter intact with no diagnostic.
         let adapter = FakeSDKAdapter()
         let recorder = Recorder()
         let transport = enabledTransport(adapter, recorder: recorder)
         let analytics: NativeAnalytics = transport
-        let doneCount: Int? = 2
-        analytics.track("setup_checklist_dismissed", [
-            "doneCount": String(doneCount ?? 0),
-        ])
-        analytics.track("sample_job_opened")
-        let days: Int? = 30
+        analytics.track(.setupChecklistDismissed(doneCount: 2))
+        analytics.track(.sampleJobOpened)
         let insight = NativeTodayInsight(kind: .dueSoon, id: "due_soon:inv-1", title: "Invoice due",
                                          target: .invoices, reason: "Due in 2 days")
-        analytics.track(
-            days == nil ? "insight_dismissed" : "insight_snoozed",
-            days == nil
-                ? ["kind": insight.kind.rawValue, "insightId": insight.id]
-                : ["kind": insight.kind.rawValue, "insightId": insight.id, "days": String(days!)]
-        )
-        analytics.track("widget_deep_link_opened", ["type": NativeDeepLinkRoutingPolicy.analyticsType(.job(id: "j1"))])
+        analytics.track(.insightSnoozed(insight.kind, insightID: insight.id, days: 30))
+        analytics.track(.insightDismissed(insight.kind, insightID: insight.id))
+        analytics.track(.widgetDeepLinkOpened(type: NativeDeepLinkRoutingPolicy.analyticsType(.job(id: "j1"))))
         expectEqual(adapter.calls, [
-            // `doneCount`/`days` are still strings at these sites: stripped
-            // until 11.08 migrates them to numbers (§9.6 deviations).
-            .capture("setup_checklist_dismissed", [:]),
+            .capture("setup_checklist_dismissed", ["doneCount": 2]),
             .capture("sample_job_opened", [:]),
-            .capture("insight_snoozed", ["kind": "due_soon", "insightId": "due_soon:inv-1"]),
+            .capture("insight_snoozed", ["kind": "due_soon", "insightId": "due_soon:inv-1", "days": 30]),
+            .capture("insight_dismissed", ["kind": "due_soon", "insightId": "due_soon:inv-1"]),
             .capture("widget_deep_link_opened", ["type": "job"]),
-        ], "call sites: legacy shapes route through the choke point")
-        expectEqual(recorder.diagnostics.compactMap { $0.issues.first }, [
-            .init(key: "doneCount", reason: .wrongType), .init(key: "days", reason: .wrongType),
-        ], "call sites: the stringified numbers are diagnosed for 11.08")
+        ], "call sites: typed constructors keep numbers as numbers")
+        expect(recorder.diagnostics.isEmpty, "call sites: nothing is stripped once the values are typed")
 
         // (c) The real AppStore, constructed with the transport, fires its
         // unchanged call sites through it.
@@ -624,12 +618,10 @@ struct AnalyticsTransportTests {
             .capture("setup_checklist_task_opened", ["task": "rate"]),
             .capture("ai_chat_sent", ["source": "insight_prefill", "provider": "backend"]),
             .capture("ai_chat_sent", ["source": "organic", "provider": "backend"]),
-            // Comma-joined strings today; 11.08 sends string arrays.
-            .capture("insight_shown", [:]),
-        ], "AppStore: unchanged call sites emit through the transport")
-        expectEqual(recorder.diagnostics.last?.issues, [
-            .init(key: "ids", reason: .wrongType), .init(key: "kinds", reason: .wrongType),
-        ], "AppStore: insight_shown's joined strings are stripped with a diagnostic")
+            // Task 11.08: string arrays, no longer comma-joined strings.
+            .capture("insight_shown", ["kinds": ["due_soon"], "ids": ["due_soon:inv-1"]]),
+        ], "AppStore: call sites emit through the transport")
+        expect(recorder.diagnostics.isEmpty, "AppStore: insight_shown's typed arrays pass the policy unstripped")
         expect(recorder.violations.isEmpty, "AppStore: every existing event name is in the catalog")
     }
 }

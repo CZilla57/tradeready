@@ -68,6 +68,7 @@ struct NativeCalendarView: View {
                 NativeScheduleEditorView(jobID: job.id) {}
             }
         }
+        .nativeAnalyticsScreen(.calendar)
     }
 
     // MARK: - Navigation

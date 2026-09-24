@@ -68,6 +68,7 @@ struct NativeRouteView: View {
         } message: {
             Text(handoffFailureMessage)
         }
+        .nativeAnalyticsScreen(.route)
     }
 
     private var emptyState: some View {

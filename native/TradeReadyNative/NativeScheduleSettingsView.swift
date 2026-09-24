@@ -74,6 +74,7 @@ struct NativeScheduleSettingsView: View {
                     .accessibilityHint("Saves schedule settings on this device. Sync publishes them; nothing here claims public publication.")
             }
         }
+        .nativeAnalyticsScreen(.settingsSchedule)
     }
 
     // MARK: - Form

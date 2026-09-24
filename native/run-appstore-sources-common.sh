@@ -119,5 +119,6 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeInsightsCardPolicy.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayBriefing.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAnalytics.swift
+$ROOT_DIR/native/TradeReadyNative/NativeAnalyticsEvents.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 "

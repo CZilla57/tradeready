@@ -312,6 +312,7 @@ struct NativeChangeOrderEditorView: View {
                 Text(errorMessage ?? "")
             }
         }
+        .nativeAnalyticsScreen(.changeOrderEditor)
     }
 
     private func save() {
@@ -585,6 +586,12 @@ struct NativeChangeOrderReviewView: View {
                 }
                 if NativeMessageComposer.canPresent(channel == .email ? .email : .sms) {
                     showingComposer = true
+                    // Task 11.08: RN tracks `change_order_sent` once the composer opened.
+                    store.recordChangeOrderComposerOpened(
+                        jobID: draft.approval.jobID,
+                        changeOrderID: draft.approval.changeOrderID,
+                        channel: channel == .email ? .email : .text
+                    )
                 } else {
                     notice = .init(title: "Composer unavailable", message: channel == .email ? "Set up a Mail account on this device and try again." : "Messages is not available on this device.")
                 }

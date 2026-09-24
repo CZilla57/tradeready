@@ -115,7 +115,11 @@ struct NativeReviewRequestView: View {
                     showingComposer = false
                     switch outcome {
                     case .sent:
-                        store.markReviewRequestSent(jobID: jobID, fallback: draft?.fallback)
+                        store.markReviewRequestSent(
+                            jobID: jobID,
+                            fallback: draft?.fallback,
+                            channel: channel == .email ? .email : .sms
+                        )
                         notice = Notice(title: "Review request sent", message: "Sent to \(draft?.customerName ?? "the customer") by \(channel == .email ? "email" : "text").", dismissAfter: true)
                     case .saved:
                         notice = Notice(title: "Draft saved", message: "The request was not recorded as sent.", dismissAfter: false)
@@ -138,5 +142,6 @@ struct NativeReviewRequestView: View {
                 })
             }
         }
+        .nativeAnalyticsScreen(.reviewRequest)
     }
 }

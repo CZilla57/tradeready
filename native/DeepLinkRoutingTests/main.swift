@@ -142,7 +142,10 @@ private struct Workspace {
 
 private final class RecordingAnalytics: NativeAnalytics {
     var events: [(String, [String: String])] = []
-    func track(_ event: String, _ properties: [String: String]) { events.append((event, properties)) }
+    // Task 11.08 (m1): only the typed `track` is a requirement now.
+    func track(_ event: String, _ properties: [String: NativeAnalyticsValue]) {
+        events.append((event, properties.mapValues(\.legacyStringValue)))
+    }
     var deepLinkTypes: [String] {
         events.filter { $0.0 == "widget_deep_link_opened" }.compactMap { $0.1["type"] }
     }

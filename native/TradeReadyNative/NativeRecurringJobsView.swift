@@ -55,6 +55,7 @@ struct NativeRecurringJobsView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .sheet(item: $editingRule) { draft in NativeRecurringJobEditor(rule: draft.rule) }
         }
+        .nativeAnalyticsScreen(.recurringJobs)
     }
 
     private func cadenceLabel(_ value: String) -> String {

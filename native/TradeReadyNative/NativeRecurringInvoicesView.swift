@@ -109,6 +109,7 @@ struct NativeRecurringInvoicesView: View {
         } message: {
             Text("This removes the plan permanently. Invoices it already generated are not affected.")
         }
+        .nativeAnalyticsScreen(.recurringInvoices)
     }
 
     private func cadenceLabel(_ raw: String) -> String {

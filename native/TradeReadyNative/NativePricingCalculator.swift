@@ -186,6 +186,7 @@ struct NativePricingCalculatorView: View {
                 }
             }
         }
+        .nativeAnalyticsScreen(.pricingCalculator)
     }
 
     private func money(_ value: Decimal) -> String {

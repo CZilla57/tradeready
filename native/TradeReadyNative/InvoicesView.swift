@@ -33,6 +33,7 @@ struct InvoicesView: View {
     @State private var showingBulkChannel = false
     @State private var bulkNotice: String?
     @State private var bulkQueue: [String] = []
+    @State private var bulkChannel: NativeBulkRemindChannel?
     @State private var bulkIndex = 0
     @State private var bulkCurrent: BulkOutreachItem?
     @State private var bulkSkipped = 0
@@ -214,6 +215,7 @@ struct InvoicesView: View {
                 Text(bulkNotice ?? "")
             }
         }
+        .nativeAnalyticsScreen(.invoiceList)
     }
 
     private func openRequestedInvoice(_ id: String?) {
@@ -264,6 +266,7 @@ struct InvoicesView: View {
             return
         }
         bulkQueue = split.eligible.map(\.id)
+        bulkChannel = channel
         bulkIndex = 0
         advanceBulkQueue()
     }
@@ -271,6 +274,12 @@ struct InvoicesView: View {
     private func advanceBulkQueue() {
         guard bulkIndex < bulkQueue.count else {
             // Chain complete: summarize skips, then leave selection mode.
+            // Task 11.08: RN `InvoicesScreen.tsx:303` counts the composers
+            // the run opened; native counts the outreach sheets presented.
+            if let bulkChannel, bulkIndex > 0 {
+                store.recordBulkInvoiceReminders(channel: bulkChannel == .email ? .email : .text, count: bulkIndex)
+            }
+            bulkChannel = nil
             if bulkSkipped > 0 {
                 bulkNotice = "\(bulkSkipped) selected invoice(s) have no \(bulkChannelName) on file and were skipped."
             }
@@ -562,6 +571,7 @@ struct InvoiceEditor: View {
                 }
             }
         }
+        .nativeAnalyticsScreen(.invoiceEditor)
     }
 }
 

@@ -182,6 +182,7 @@ struct NativePricebookEntryView: View {
                 Text("Remove \"\(form.name)\" from your Pricebook?")
             }
         }
+        .nativeAnalyticsScreen(.pricebookEntry)
     }
 
     // MARK: Sections

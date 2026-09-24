@@ -11,6 +11,7 @@ swiftc \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
   $APPSTORE_TEST_SOURCES \
+  "$ROOT_DIR/native/TradeReadyNative/NativeAnalyticsScreenModifier.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeCalendarView.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeScheduleEditorView.swift" \
   "$ROOT_DIR/native/CalendarEditorTests/main.swift" \

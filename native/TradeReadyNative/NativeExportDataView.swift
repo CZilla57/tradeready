@@ -74,6 +74,7 @@ struct NativeExportDataView: View {
         .sheet(item: $shareItem) { item in
             NativeShareSheet(url: item.url)
         }
+        .nativeAnalyticsScreen(.exportData)
     }
 
     // MARK: Pieces

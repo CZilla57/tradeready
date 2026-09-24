@@ -73,6 +73,7 @@ struct NativeBookingSettingsView: View {
         } message: {
             Text("The current link stops working immediately. Share the new link afterwards.")
         }
+        .nativeAnalyticsScreen(.settingsBooking)
     }
 
     // MARK: - Form

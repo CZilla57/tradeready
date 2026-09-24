@@ -86,6 +86,7 @@ struct MoneyView: View {
                 Text("Remove \"\(pendingExpenseDeletion?.merchant ?? "")\"?")
             }
         }
+        .nativeAnalyticsScreen(.money)
     }
 
     // MARK: Filter chips + tabs
@@ -149,7 +150,7 @@ struct MoneyView: View {
             .padding(.bottom, 32)
         }
         .refreshable {
-            await store.performPullToRefresh()
+            await store.performPullToRefresh(screen: .money)
         }
         .background(Color.tradeCanvas)
     }
@@ -261,7 +262,7 @@ struct MoneyView: View {
             }
         }
         .refreshable {
-            await store.performPullToRefresh()
+            await store.performPullToRefresh(screen: .money)
         }
     }
 }

@@ -105,8 +105,10 @@ private final class StoreSubscriptionServiceStub: NativeSubscriptionServing {
 @MainActor
 private final class RecordingAnalytics: NativeAnalytics {
     var calls: [(event: String, properties: [String: String])] = []
-    func track(_ event: String, _ properties: [String: String]) {
-        calls.append((event, properties))
+    /// Task 11.08 (m1): the protocol requires only the typed `track`; the
+    /// legacy string view keeps these 10.12 assertions readable.
+    func track(_ event: String, _ properties: [String: NativeAnalyticsValue]) {
+        calls.append((event, properties.mapValues(\.legacyStringValue)))
     }
 }
 
@@ -2828,7 +2830,7 @@ struct StoreIntegrationTests {
 
             // 5b. Marking the request sent clears it from the plan for
             // good — the toggle-off/sent semantics are not sweep-rebuilt.
-            sweepStore.markReviewRequestSent(jobID: sweepJob.id, fallback: nil, now: expectedFire.addingTimeInterval(-60))
+            sweepStore.markReviewRequestSent(jobID: sweepJob.id, fallback: nil, channel: .sms, now: expectedFire.addingTimeInterval(-60))
             let afterSent = sweepStore.reviewRequestNotifications(now: midWindow)
             expect(afterSent.first(where: { $0.identifier == identifier }) == nil,
                    "10.07 marking the request sent removes it from every subsequent sweep")

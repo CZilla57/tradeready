@@ -1115,7 +1115,8 @@ The protocol also gains `identify(_ userID: String)`, `reset()` and `screen(_ na
 - `NativeAnalyticsValue` has four cases: `bool`, `number`, `string` and `strings`. It
   conforms to the literal protocols.
 - Both `track` forms are protocol requirements, and each default forwards to the other,
-  so a conformer implements at least one of them.
+  so a conformer implements at least one of them. *(Superseded by 11.08 m1, below: the
+  typed form is now the only requirement and the `[String: String]` form is gone.)*
   - The `[String: String]` form wraps each value as `.string`.
   - The typed form stringifies for legacy string-only conformers: arrays are
     comma-joined, and integral numbers have no `.0`. The existing recording fakes in
@@ -1128,7 +1129,8 @@ The protocol also gains `identify(_ userID: String)`, `reset()` and `screen(_ na
 - The allow-list is parsed from the §9.5 fixture embedded verbatim. A test proves it is
   byte-identical to the block in this document.
 - Among an event's variants, the transport keeps the one that keeps the most properties;
-  on a tie, the one with the fewest missing required keys.
+  on a tie, the one with the fewest missing required keys. *(Refined by 11.08 m2, below:
+  a matching literal discriminator ranks first.)*
 - An event outside the catalog is dropped. Debug asserts through an injectable hook.
 - **Value rules:**
   - A key in no variant is stripped.
@@ -1173,6 +1175,89 @@ The protocol also gains `identify(_ userID: String)`, `reset()` and `screen(_ na
 - feature-flag preload and `$feature_flag_called` are off;
 - a `beforeSend` hook drops every SDK event except catalog events, `$screen`,
   `$identify` and the four `Application …` lifecycle events.
+
+**11.08 event parity and identity (2026-09-24).**
+
+*Seam fixes (11.07 review findings):*
+- **m1.** `NativeAnalytics` now requires only `track(_:_: [String: NativeAnalyticsValue])`.
+  The `[String: String]` overload is removed from the protocol, its extension,
+  `NativeNoOpAnalytics` and the transport. Before, the two defaults called each other, so
+  a conformer implementing neither compiled and recursed forever. `track(_ event:)` and
+  `track(_ event: NativeAnalyticsEvent)` are extension conveniences that funnel into the
+  one requirement. `legacyStringValue` remains for host-test fakes only.
+- **m2.** Variants are ranked by `(discriminator score, kept count, fewer missing)`. The
+  score is +1 for each required single-token literal key (`source: manual`,
+  `outcome: failed`) whose supplied value matches, and −1 for each mismatch. A variant
+  that keeps more incidental keys can no longer win while stripping the discriminator.
+- **m3.** `NativeAnalyticsDiagnostic.sanitizedName`, which is logged `privacy: .public`,
+  also redacts a name that `containsSecret` flags (`phc_…`, `sk_live_…`, `AIza…`, `eyJ…`)
+  or that carries a run of 7 or more digits.
+
+*Typed events.* Every call site builds its payload with a constructor in
+`N/NativeAnalyticsEvents.swift` and sends it through the one `emitAnalytics` in `AppStore`,
+after the durable commit. The 11.07 handoff is closed: `doneCount` and `days` are
+numbers, and `kinds`/`ids` are string arrays.
+
+*Identity (refines §9.4).*
+- `identify` runs when the verified subject is applied
+  (`applyAuthenticatedIdentityOutcome`, and the background activation). That is before
+  the onboarding, paywall and starting-point gates. It is re-asserted, as a no-op, when
+  the gate enters `.signedIn`. This matches RN, which identifies at `getSession` or
+  `onAuthStateChange` time, so onboarding and purchase events carry the user id in
+  both apps.
+- A verified id different from the last identified one resets before identifying.
+- `reset` runs at every boundary:
+  - `applyCompletedSignOutState`: sign-out, the paywall sign-out, and a retried scrub;
+  - `useAnotherAccount`, before its first await;
+  - `deleteAccount`, as soon as the server confirms and before the local scrub. This
+    also covers the scrub-failure path.
+- Back-to-back boundaries reset once, so deletion does not reset again in its teardown.
+- As in RN, a session rejection or a password-recovery sign-out does not reset. The
+  switch rule covers the next owner.
+- Pull-to-refresh drops its event if the owner changed during the sync await.
+
+*Screens (clarifies §9.3).* `$screen` sends the RN **leaf** route name that
+`useNavigationTracker` reports (`getCurrentRoute().name`): `TodayHome`, `JobList`,
+`InvoiceList`, `CustomerList`, `MoneyHome` and `ChatHome`. It does not send the tab
+names `Today` or `Invoices` that §9.3 gave as examples.
+- The table is `NativeAnalyticsScreen.routeName`. The test checks every name against
+  `App.tsx`.
+- Views report through `.nativeAnalyticsScreen(_:)`, an `onAppear` hook. The store maps
+  the name and dedupes consecutive repeats.
+- The gate roots (`Auth`, `Onboarding`, `Paywall`, `StartingPoint`) come from the gate
+  transition.
+- Destinations with no RN route send nothing: expense and payment editors, invoice
+  detail, the on-my-way, appointment and change-order reviews, booking requests, the
+  portal, photos, sync settings and password recovery.
+- Difference: dismissing a sheet does not re-send the parent screen, while RN re-sends
+  it when a stack modal pops.
+
+*Recorded native differences:*
+- `estimate_follow_up_sent` and `review_request_sent` fire only on a composer `.sent`.
+  RN also counts `unknown`, which the Android composers report.
+- `estimate_sent` fires on:
+  - an explicit "Mark estimate as sent";
+  - a composer-confirmed delivery stamp (`recordEstimateDelivery` `.recorded`, native's
+    only other commit of the sent state);
+  - approval-link creation (RN `createLink`).
+
+  As in RN, creating a link and then marking the estimate sent counts twice.
+- `on_my_way_sent`, `appointment_confirm_sent` and `change_order_sent` fire when the
+  composer is presented, which is RN's "composer opened" moment.
+- `estimate_follow_up_opened`, `appointment_confirm_opened` and
+  `overdue_outreach_opened` fire only when the guarded native route actually opens. RN
+  tracks before navigating, even for a stale payload.
+  - `appointment_confirm_opened` is notification-only, as in RN.
+  - The job-detail entry passes `fromNotification: false`.
+- `bulk_invoice_reminders.count` counts the outreach sheets presented in the chain.
+  RN counts the composers it opened.
+- `subscription_paywall_shown` is always `onboarding_gate`. Native has no Settings
+  upsell paywall. A purchase or retry load does not re-fire it within one presentation.
+- `booking_request_opened` and `booking_update_opened` have constructors but no emission
+  site. Native has no remote-push surface; RN tracks them on push taps in `App.tsx`.
+  They are wired when native push lands.
+- `tax_settings_saved` is emitted by `commitTaxSettings`, including for an unset draft
+  (RN parity). No native screen calls it yet.
 
 ---
 

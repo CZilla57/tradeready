@@ -120,6 +120,7 @@ struct TodayView: View {
                 Text(NativeTodayBriefing.bookingRowPresentation(row).body)
             }
         }
+        .nativeAnalyticsScreen(.today)
     }
 
     private var bookingAlertPresented: Binding<Bool> {

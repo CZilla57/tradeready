@@ -228,6 +228,7 @@ struct NativeInvoiceOutreachView: View {
                      : "Messages is not available on this device.")
             }
         }
+        .nativeAnalyticsScreen(.outreach)
     }
 
     // MARK: - Message state
@@ -321,6 +322,8 @@ struct NativeInvoiceOutreachView: View {
                 provider: provider)
             paymentLink = url.absoluteString
             linkError = nil
+            // Task 11.08: RN `OutreachScreen.tsx:211` — explicit generation only.
+            if explicit { store.recordPaymentLinkSent(provider: provider, deposit: depositAsk != nil) }
             regenerate()
         } catch {
             // Best-effort downgrade: the message still asks the customer to

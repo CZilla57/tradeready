@@ -118,6 +118,7 @@ struct NativeTripEditor: View {
                 Text("Remove this trip from your mileage log?")
             }
         }
+        .nativeAnalyticsScreen(.tripEditor)
     }
 
     private func endpointChips(

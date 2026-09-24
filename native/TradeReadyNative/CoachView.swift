@@ -77,6 +77,7 @@ struct CoachView: View {
                 Text("Message copied to clipboard.")
             }
         }
+        .nativeAnalyticsScreen(.coach)
     }
 
     private var emptyState: some View {

@@ -213,6 +213,7 @@ struct NativeGlobalSearchView: View {
                 }
             }
         }
+        .nativeAnalyticsScreen(.search)
     }
 
     @ViewBuilder

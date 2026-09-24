@@ -77,6 +77,7 @@ struct SettingsView: View {
                 path.append(initialDestination)
             }
         }
+        .nativeAnalyticsScreen(.settings)
     }
 
     private var profileHeader: some View {
@@ -198,7 +199,8 @@ struct BusinessProfileSettings: View {
                 TextField("Payment due upon completion. We accept check, card, or bank transfer.", text: $store.settings.paymentNotes, axis: .vertical).lineLimit(3...7)
             }
         }
-    }) }
+    })
+    .nativeAnalyticsScreen(.settingsBusiness) }
 }
 
 struct PricingSettings: View {
@@ -224,7 +226,8 @@ struct PricingSettings: View {
         // native's bindings write continuously, so leaving this page stands
         // in for "reviewed the pricing defaults").
         store.markSetupTaskDone(.rate)
-    } }
+    }
+    .nativeAnalyticsScreen(.settingsPricing) }
     private func percent(_ title: String, _ value: Binding<Double>) -> some View { HStack { Text(title); Spacer(); TextField("0", value: value, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 70); Text("%").foregroundStyle(.secondary) } }
 }
 
@@ -238,7 +241,8 @@ struct InvoiceNumberSettings: View {
             Stepper("Numbers start at \(store.settings.invoiceStart)", value: $store.settings.invoiceStart, in: 1...999999)
         }
         Section("PREVIEW") { LabeledContent("Next invoice", value: store.nextInvoiceNumber()) }
-    }) }
+    })
+    .nativeAnalyticsScreen(.settingsInvoiceNumbering) }
 }
 
 struct ImportSettings: View {
@@ -281,7 +285,8 @@ struct ImportSettings: View {
                 Text(supportReportError).font(.caption).foregroundStyle(.red)
             }
         }
-    }).alert("Import", isPresented: $showingResult) { Button("OK") {} } message: { Text(store.migrationMessage ?? "Import finished.") } }
+    }).alert("Import", isPresented: $showingResult) { Button("OK") {} } message: { Text(store.migrationMessage ?? "Import finished.") }
+    .nativeAnalyticsScreen(.settingsImport) }
 }
 
 struct SyncSettings: View {
@@ -494,6 +499,7 @@ struct PaymentsSettings: View {
         // Returning from the browser onboarding is a refresh trigger only.
         if phase == .active { Task { await store.refreshStripeStatus() } }
     }
+    .nativeAnalyticsScreen(.settingsPayments)
     }
 
     private func connect() async {
@@ -513,7 +519,8 @@ struct AppearanceSettings: View {
     var body: some View { SettingsPage(title: "Appearance", content: Group {
         Section { ForEach(Appearance.allCases) { appearance in Button { store.settings.appearance = appearance } label: { HStack { Image(systemName: appearance == .system ? "iphone" : appearance == .light ? "sun.max.fill" : "moon.fill").frame(width: 26); Text(appearance.title); Spacer(); if store.settings.appearance == appearance { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.tradeReady) } }.foregroundStyle(.primary) } } }
         Section { Text("System follows your iPhone or iPad appearance automatically.").font(.caption).foregroundStyle(.secondary) }
-    }) }
+    })
+    .nativeAnalyticsScreen(.settingsAppearance) }
 }
 
 /// Final-review I4: the former "Use business context" toggle was an
@@ -533,6 +540,7 @@ struct AISettings: View {
                 Text("Secure provider credentials are never written to the local business-data file.").font(.caption).foregroundStyle(.secondary)
             }
         })
+        .nativeAnalyticsScreen(.settingsAI)
     }
 }
 
@@ -579,7 +587,8 @@ struct NotificationSettings: View {
             }
         }
         .task { await followUpNotifications.refreshPermissionState() }
-    }) }
+    })
+    .nativeAnalyticsScreen(.settingsNotifications) }
 }
 
 struct ReviewSettings: View {
@@ -591,7 +600,8 @@ struct ReviewSettings: View {
             Stepper("Send \(store.settings.reviewRequestDelayHours) hour\(store.settings.reviewRequestDelayHours == 1 ? "" : "s") after completion", value: $store.settings.reviewRequestDelayHours, in: 0...168)
         }
         Section("MESSAGE TEMPLATE") { TextEditor(text: $store.settings.reviewRequestTemplate).frame(minHeight: 130); Text("Available fields: {customerName}, {businessName}, {googleReviewLink}").font(.caption).foregroundStyle(.secondary) }
-    }) }
+    })
+    .nativeAnalyticsScreen(.settingsReviews) }
 }
 
 struct SubscriptionSettings: View {
@@ -649,6 +659,7 @@ struct SubscriptionSettings: View {
     } message: {
         Text(notice ?? "")
     }
+    .nativeAnalyticsScreen(.settingsSubscription)
     }
 }
 
@@ -772,6 +783,7 @@ struct AccountSettings: View {
             }
         }
     }
+    .nativeAnalyticsScreen(.settingsAccount)
     }
 
     private func performSignOut(revokeRemote: Bool) {

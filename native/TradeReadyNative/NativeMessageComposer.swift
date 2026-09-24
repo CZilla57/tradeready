@@ -76,6 +76,7 @@ struct NativeMessageComposer: UIViewControllerRepresentable {
 
 struct NativeOnMyWayReviewView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: AppStore
     let draft: NativeAppointmentMessageDraft?
     @State private var bodyText: String
     @State private var showingComposer = false
@@ -120,6 +121,7 @@ struct NativeOnMyWayReviewView: View {
                             Button {
                                 if NativeMessageComposer.canPresent(draft.channel) {
                                     showingComposer = true
+                                    store.recordAppointmentComposerOpened(onMyWay: true)
                                 } else {
                                     showingUnavailable = true
                                 }
@@ -176,6 +178,7 @@ struct NativeOnMyWayReviewView: View {
 
 struct NativeAppointmentConfirmationReviewView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: AppStore
     let draft: NativeAppointmentMessageDraft?
     @State private var bodyText: String
     @State private var showingComposer = false
@@ -220,6 +223,7 @@ struct NativeAppointmentConfirmationReviewView: View {
                             Button {
                                 if NativeMessageComposer.canPresent(draft.channel) {
                                     showingComposer = true
+                                    store.recordAppointmentComposerOpened(onMyWay: false)
                                 } else {
                                     showingUnavailable = true
                                 }
