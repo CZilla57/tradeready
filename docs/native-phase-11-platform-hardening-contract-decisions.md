@@ -1740,7 +1740,7 @@ tint text on that ground, so this is recorded only.
 | A8 | Week strip at AX2–AX5: seven day columns and two arrows cannot grow further on a phone | **Retained by design:** capped at `.accessibility1`. VoiceOver reads each day in full. A long press shows the Large Content Viewer for the days and arrows. **Fix round 1 (I1):** the day circle's `@ScaledMetric` sat on the strip, outside the cap, so it reached about 98pt at AX5 and pushed the arrows off-screen. The metric now lives in a day view inside the capped subtree, and the circle is clamped to 34pt (`NativeAccessibilityAudit.WeekStrip`). Seven 34pt columns fit beside both 44pt arrows on a 375pt phone: each column gets 35.3pt | Cap, placement and clamp checks; Phase 12 AX5 row |
 | A9 | Widget views (`N/Widgets/Shared/*`) use fixed-point fonts | **Retained:** fixed widget canvas, matching RN `targets/widget`. Owned by 11.02/11.03 | Scan exempts only `N/Widgets/`; Phase 12 widget AX row |
 | A10 | Remaining `lineLimit(1)` sites: names, notes, addresses, links, job titles | **Retained:** truncating a name or address does not lose meaning in a list row, the detail screen shows the full text, and VoiceOver reads it in full. The amount sites that could lose meaning now stack | Reviewed |
-| A11 | Hardware-keyboard shortcuts and iPad keyboard commands | **Handed off to 11.11** (controller ruling b) | — |
+| A11 | Hardware-keyboard shortcuts and iPad keyboard commands | **Done by 11.11** (§12.2): Esc on every toolbar Cancel/Done/Close, ⌘S on every toolbar save, ⌘⏎ on the change-order Confirm, ⌘N on the five existing toolbar "new" actions, no shortcut on the destructive delete, no custom command menus (RN has none). Tab traversal is the system focus order; return-key chains beyond auth and recovery stay A24 (11.10b) | `native/run-layout-metrics-tests.sh` keyboard checks; Phase 12 rows IPAD-KB-1 and IPAD-KB-2 |
 | A12 | Reading order: static review found no layered text out of order. The one layered text view, the calendar timeline, is already hidden from VoiceOver. No `accessibilitySortPriority` was added | **Deferred to device** (Phase 12 VoiceOver rows) | — |
 | A13 | Today job card: an "On my way" button nested inside the card button. Its VoiceOver reachability can only be confirmed on a device | **Deferred to device.** If it is unreachable, 11.10b adds an `accessibilityAction` | Phase 12 row |
 | A14 | **Corrected in fix round 1 (I3).** Money cards with `onOpen` used the label "{title}, open", which hid their figures from VoiceOver. The first pass said RN does the same, but only RN `TaxSetAsideCard` sets a label ("Tax set-aside — open settings"). RN `MileageCard` and `PricebookCard` set none, so RN VoiceOver reads their figures, and native was a regression | **Fixed:** an openable card with no RN label combines its text into one button element (`.accessibilityElement(children: .combine)` plus the button trait), so the title and figures are read. The tax card uses RN's exact label, with the reserve as the accessibility value. The native tax card has no open action today, because native has no tax-settings screen yet. It stays a static card that VoiceOver reads in full, and the RN label and value take effect when a destination is wired | Catalog parity (`taxSetAsideOpen` against RN), RN no-label checks for Mileage and Pricebook, branch checks in `NativeMoneyCard` |
@@ -1754,6 +1754,135 @@ tint text on that ground, so this is recorded only.
 | A22 | Fix round 1 (m4): the 44pt route move chevrons are stacked, so a middle stop's row grows from about 50pt to about 116pt at the default size | **Accepted for 11.10a:** a reliable target outweighs row density. A horizontal pair or a drag-to-reorder list is a layout change for the 11.11 layout pass, and 11.10b re-checks it | Phase 12 A11-TT-1 row |
 | A23 | Fix round 1 (m5): Show/Hide on the password swaps the field and could lose focus in the same update | **Mitigated:** the refocus now runs on the next main-actor turn. Device proof is in the A11-KB-1 and A11-SC-1 rows | Focus check |
 | A24 | Fix round 1 (m6): step 4 audited the return-key and focus chains of the auth and recovery forms only | **11.10b:** the return-key chains of the other editors (job, invoice, customer, expense, trip, pricebook, schedule) | — |
+
+
+### 12.2 11.11 iPad layouts, multitasking, rotation and hardware keyboard (2026-09-24)
+
+11.11 adds the native analog of RN `layout.contentColumn` (`utils/theme.ts`:
+`{ width: "100%", maxWidth: 700, alignSelf: "center" }`) and applies it to every list,
+form and scroll screen. The proof is `sh native/run-layout-metrics-tests.sh`
+(`native/LayoutMetricsTests/main.swift`). The policy is in `N/NativeLayoutMetrics.swift`:
+the width math is Foundation-only, and the two SwiftUI modifiers in the same file compile
+wherever SwiftUI exists (the app, and the macOS host runners that compile view files; the
+suite checks that each such runner also compiles the policy file). The host suite shares
+the 11.10a source model, which moved unchanged to
+`native/HostTestSupport/SwiftSourceScan.swift`.
+
+**Constants (chosen):**
+
+| Name | Value | Source |
+|---|---|---|
+| `NativeLayoutMetrics.contentMaxWidth` | 700pt | RN `layout.contentMaxWidth`; the suite reads `utils/theme.ts` and fails if either value changes |
+| `NativeLayoutMetrics.listMinimumSideInset` | 20pt | The system's regular-width row inset. A list column only engages once its margin clears the safe area plus 20pt, so the row edge never jumps inward |
+
+**Column rule (chosen).** The rule is width-only and never reads the size class, like RN.
+A container at or below 700pt keeps the system layout (full width). A wider one centers a
+700pt column, and its scroll area, scroll indicators and background stay full width.
+SwiftUI measures the two container kinds differently. These were measured with a
+throwaway probe app on the iOS 26 Simulator (iPad Pro 11-inch and iPhone 17 Pro Max):
+
+| Kind | Modifier | SwiftUI behavior (measured) | Margin |
+|---|---|---|---|
+| `.list` (`List`, `Form`) | `.nativeContentColumn(.list)` → `contentMargins(.horizontal, m, for: .scrollContent)` | Replaces the row inset (a margin of 0 goes edge to edge; `nil` keeps the default) and is measured from the outer edge; the row edge lands at `max(safe-area inset, m)` | `(width + safe areas − 700) / 2`, used only when ≥ max safe inset + 20; else `nil` |
+| `.scroll` (`ScrollView`) | `.nativeContentColumn(.scroll)` | Added inside the safe area; content keeps its own padding inside the column | `(width − 700) / 2` when width > 700; else `nil` |
+| Fixed chrome | `.nativeContentColumnFrame()` | `frame(maxWidth: 700)` then `frame(maxWidth: .infinity)`; a background applied after it stays full width | — |
+
+Measured results with the modifier: iPad 11-inch portrait (834pt): list rows 67…767 (700pt)
+and scroll content 83…751 (668pt, a 700pt column less 16pt padding). iPhone 17 Pro Max
+landscape (956pt, 62pt safe areas): list rows 128…828 (700pt) and scroll content 144…812
+(668pt). iPhone portrait (440pt): unchanged from before. `safeAreaPadding` was rejected
+because a `List` ignores it horizontally.
+
+**Screen disposition.** The suite holds an exact inventory. A missing target screen, an
+unknown new scroll root, a wrong kind or a column placed only on a nested view fails the run.
+
+| Group | Screens | Disposition |
+|---|---|---|
+| Tab roots (8 roots) | Today (`ScrollView`), Jobs, Invoices, Customers (`List`), Money (overview `ScrollView`, expenses `List`), Coach (empty and transcript `ScrollView`s) | Column applied |
+| Detail and list screens (11 roots) | Job, invoice and customer detail; mileage log; pricebook; export; import; booking requests; recurring invoices; Settings hub (`ScrollView`) and all 12 `SettingsPage` screens through the shared `SettingsPage` `Form` | Column applied |
+| Sheets, editors and other secondary screens (34 roots) | Job, invoice, payment, customer, merge picker, expense, trip, pricebook entry, pricing calculator, change order (editor, decision, review), estimate review and follow-up, invoice from job, outreach, on-my-way and appointment review, review request, recurring job and invoice editors, recurring jobs, schedule editor and settings, booking settings, customer portal, template and job pickers, global search, calendar (day and week), route, job profitability "What changed", delete-account confirmation | Column applied. An iPad sheet is usually narrower than 740pt, so the column is a no-op there, but it caps a large Stage Manager sheet |
+| Auth gate (5 roots) | Sign-in, password recovery, paywall, onboarding, starting point (`ScrollView`) | Column applied; the existing 520pt (auth, recovery) and 560pt (paywall, onboarding) form cards are retained inside it |
+| Fixed chrome (12 sites) | Coach composer; Money date chips and Overview/Expenses picker; calendar mode picker and day/week bar; sync banner; undo banner; Invoices bulk-select bar; onboarding footer; route map preview, its loading band and its no-address state | `.nativeContentColumnFrame()` |
+| Horizontal chip rows (10) | Jobs, Money, expense editor (2), export, import, job photos, mileage log, outreach, trip editor | Exempt: they scroll sideways inside a capped parent, and the suite fails if one takes a column margin |
+| Not scroll screens | Root gate states (`ContentUnavailableView`, `NativeContentStateView`), the job-photo viewer | Centered or full-bleed by design |
+
+**Navigation (chosen; no NavigationSplitView).** RN is a phone-style bottom-tab app that
+centers a 700pt column on iPad. It has no sidebar, split view or iPad-specific navigation.
+Native keeps the one `TabView` from `RootView` with six tabs and one `NavigationStack` per
+tab, in every size class and orientation. A split view would add a navigation structure RN
+does not have and would duplicate the tab bar's destinations. The suite enforces the rule:
+exactly one `TabView`; no `NavigationSplitView`, `NavigationView`, `.tabViewStyle` or
+`sidebarAdaptable`; and every view whose body is a `NavigationStack` is a tab root, an
+auth-gate root or a presented sheet, never pushed. A pushed stack is what shows two
+navigation bars after a rotation or size-class change. Stacks built inside a type's own
+`.sheet` closure are recognized as presented.
+
+**Multitasking manifest (checked, unchanged).** `native/Info.plist` declares all four
+iPad orientations, a `UILaunchScreen`, and iPhone portrait plus both landscapes. It has no
+`UIRequiresFullScreen`, and every target builds for device family `1,2`. Split View and
+Slide Over are therefore available. `UIApplicationSupportsMultipleScenes` stays `false`:
+multitasking needs no second scene, and RN is a single window. No capability was added.
+
+**Fixed widths and keyboard avoidance (checked).** `N/` has no `UIScreen` sizing (wrong
+under Split View) and no `.ignoresSafeArea(.keyboard)`, so SwiftUI keeps its default
+keyboard avoidance. No fixed `width:`, `minWidth:` or `idealWidth:` literal reaches 320pt
+(the Slide Over width). The only `maxWidth:` literals of 300pt or more are the four
+allowlisted form cards above. The Settings hub's hand-rolled `.frame(maxWidth: 700)` was
+replaced with the shared column. The Coach composer sits below its transcript in a
+`VStack`, so it rises with the keyboard.
+
+**Hardware keyboard (A11, chosen).** The shortcut policy applies only to toolbar actions
+that already exist. It adds no custom command menus, because RN has none.
+
+| Toolbar action | Shortcut | Sites |
+|---|---|---|
+| Any `.cancellationAction` button (Cancel, Done) | Esc (`.cancelAction`) | 27 |
+| A `.confirmationAction` button that only dismisses (Done, Close) | Esc (`.cancelAction`) | 4 |
+| A `.confirmationAction` save (Save, Save Changes/Add Trip, the change-order save label, the shared `DismissableFormToolbar` Save) | ⌘S | 9 |
+| The change-order decision Confirm | ⌘⏎ | 1 |
+| Existing toolbar "new" actions: add job, add invoice, add customer, add maintenance plan, Coach "New chat" | ⌘N | 5 |
+| The destructive delete-account confirmation | none (a destructive action is never one keystroke) | 1 |
+
+Total: 46 shortcuts. Rules the suite enforces: every `.keyboardShortcut` in `N/` is one the policy checked, and
+`N/` has no `CommandMenu`, `CommandGroup`, `.commands` or `UIKeyCommand`. Sending
+(estimates, invoices, messages, Coach) gets no shortcut; those are form buttons, not toolbar
+actions. **Tab/Return audit:** 25 files hold text inputs. Tab and Shift-Tab move through
+them in the system focus order, and `N/` never disables focus. Return in a single-line
+field ends editing, and in the Coach composer (vertical axis) it inserts a newline. Only the
+auth and recovery forms have return-key chains (11.10a A7). The other editors' chains stay
+A24 for 11.10b.
+
+**Recorded native differences (11.11):**
+
+1. **List rows.** RN's 700pt column includes its 16pt horizontal padding, so cards are
+   668pt. A native `List`/`Form` row is 700pt with the system 20pt text inset, so text is
+   660pt. `ScrollView` screens match RN exactly: 668pt content in a 700pt column.
+2. **Form-card caps retained.** Sign-in and recovery stay at 520pt, and the paywall and
+   onboarding at 560pt, inside the 700pt column. RN uses 700pt for these screens. The
+   narrower cards predate 11.11, are not stretched, and are allowlisted by the suite.
+3. **Settings hub.** Before 11.11 the content was 700pt with 16pt padding outside it; now
+   the 700pt column includes the padding (RN semantics).
+4. **Chrome backgrounds.** RN caps the chat input row and the onboarding footer including
+   their background. Native caps the content and keeps the bar background full width. The
+   sync banner, undo banner and Invoices bulk-select bar are capped the same way (RN has
+   no direct equivalents).
+5. **Calendar.** RN `CalendarScreen` does not use `contentColumn`. Native caps the calendar
+   sheet anyway, which is a no-op unless the sheet is wider than 740pt.
+6. **Tab bar placement.** On iPadOS 18 and later, a regular-width `TabView` draws its tab
+   bar at the top. This is the system presentation for the same six tabs. RN draws bottom
+   tabs. The navigation structure is unchanged.
+7. **Keyboard shortcuts** are native only (RN has none).
+8. **Column engagement at 740pt for lists.** A list column engages at 740pt (700 plus two
+   20pt insets), and a scroll column at 700pt. Between 700pt and 740pt a list keeps the
+   system inset, so its rows are 660–700pt wide.
+
+**Not changed by 11.11 (controller ruling):** A16 (cosmetic fixed icon frames), A22 (the
+stacked route chevrons) and A24 (other editors' return chains) stay with 11.10b.
+
+**Device proof (Phase 12; not claimed):** runsheet rows IPAD-L-1 to IPAD-L-4, IPAD-MT-1 to
+IPAD-MT-3, IPAD-ROT-1, IPAD-KB-1, IPAD-KB-2 and IPAD-AX-1 are listed in the plan's 11.11
+execution-log entry. They include confirming the measured `contentMargins` behavior on the
+iOS 17 floor, since the probe ran on the iOS 26 runtime.
 
 ---
 

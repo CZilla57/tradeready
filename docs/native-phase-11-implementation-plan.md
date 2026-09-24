@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15 and 11.10a done (2026-09-24); 11.11, 11.12, 11.10b, 11.13 and 11.14 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15, 11.10a and 11.11 done (2026-09-24); 11.12, 11.10b, 11.13 and 11.14 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -789,7 +789,7 @@ complete / Phase 12 evidence deferred**.
 | 11.09 | R1, R2, R3, M1 | Done (code complete 2026-09-24; Sentry Cocoa 9.29.0 linked, app target only; no DSN committed, so crash reporting is off until a release DSN is supplied; app manifest written; dSYM upload script for `tradeready-3r/tradeready-ios`; device proof deferred to Phase 12) | 11.07 | Crash reporting + redaction + app manifest |
 | 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys at sign-out, deletion, account switch and password-recovery exits (fix round 1); live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A15–A18, A22 and A24 to 11.10b; fix round 1 closed I1–I3 and m1–m6; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
-| 11.11 | H2 | Pending | 11.10a | iPad layouts + multitasking |
+| 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Pending | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Pending | 11.11, 11.12 | Accessibility re-audit (closes H1) |
 | 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
@@ -2886,3 +2886,195 @@ closed.** 11.10b re-audits after 11.11 and 11.12.
 open: 0. H1 stays open.
 
 **Next ready:** 11.11 (iPad layouts, multitasking and rotation).
+
+### 11.11 — iPad layouts, multitasking and rotation (2026-09-24)
+
+**Status:** Done (steps 1–3, plus contract §12.1 A11). The native analog of RN
+`layout.contentColumn` is on every list, form and scroll screen. The navigation structure
+and the multitasking manifest are verified. The hardware-keyboard shortcut policy is in
+place. Device proof is deferred to Phase 12 (rows below). Contract §12.2 holds the
+constants, the measured SwiftUI behavior, the screen disposition and the recorded native
+differences.
+
+**Controller rulings applied:**
+- The shared metric is 700pt, centered, and full width below that. The policy is
+  Foundation-only in `N/NativeLayoutMetrics.swift`, and a small view modifier sits in the
+  same file (UIKit-only).
+- The default structure is kept: one `TabView` plus a centered column, with no
+  `NavigationSplitView`.
+- A11 scope: an audit, Tab/Return focus behavior, and standard shortcuts on existing
+  toolbar save, cancel and new actions. No custom command menus.
+- A16, A22 and A24 stay with 11.10b. The 11.08 `$screen` modifiers are untouched.
+
+**Files:**
+- New policy file: `N/NativeLayoutMetrics.swift`. It holds `contentMaxWidth` (700),
+  `listMinimumSideInset` (20), `horizontalContentMargin(for:in:)` and
+  `columnWidth(for:in:)`. Under `#if canImport(SwiftUI)` it also defines
+  `.nativeContentColumn(.list|.scroll)` (`contentMargins` plus `onGeometryChange`) and
+  `.nativeContentColumnFrame()`.
+- New tests: `native/LayoutMetricsTests/main.swift` and
+  `native/run-layout-metrics-tests.sh`. The runner is registered in
+  `native/run-all-domain-tests.sh`. `native/run-calendar-editor-tests.sh` and
+  `native/run-schedule-booking-settings-tests.sh` compile view files on macOS, so they
+  now also compile `N/NativeLayoutMetrics.swift`.
+- New shared test support: `native/HostTestSupport/SwiftSourceScan.swift` holds
+  `SourceFile`, `SourceMasker`, `loadSources`, `read`, `functionBody` and `structText`.
+  It was moved unchanged out of `native/AccessibilityAuditTests/main.swift`, and
+  `native/run-accessibility-audit-tests.sh` compiles it.
+- Views (58 scroll roots, 12 fixed-chrome sites and 46 shortcuts, all local modifier
+  edits): `CoachView`, `Components`, `CustomersView`, `InvoicesView`, `JobsView`,
+  `MoneyView`, `NativeAuthView`, `NativeBookingRequestsView`, `NativeBookingSettingsView`,
+  `NativeCalendarView`, `NativeChangeOrdersView`, `NativeCreateInvoiceFromJobView`,
+  `NativeCustomerPortalView`, `NativeEstimateFollowUpView`, `NativeEstimateReview`,
+  `NativeExpenseEditor`, `NativeExportDataView`, `NativeGlobalSearch`, `NativeImportView`,
+  `NativeInvoiceOutreachView`, `NativeJobPhotosView`, `NativeJobProfitabilityView`,
+  `NativeMessageComposer`, `NativeMileageLogView`, `NativeOnboardingView`,
+  `NativePasswordRecoveryView`, `NativePaywallView`, `NativePricebookEntryView`,
+  `NativePricebookView`, `NativePricingCalculator`, `NativeRecurringInvoicesView`,
+  `NativeRecurringJobsView`, `NativeReviewRequestView`, `NativeRouteView`,
+  `NativeScheduleEditorView`, `NativeScheduleSettingsView`, `NativeTemplatePickerView`,
+  `NativeTripEditor`, `RootView`, `SettingsView` and `TodayView`.
+  - No view was restructured, and none holds policy.
+  - `RootView` gained only an Esc shortcut on the deep-link notice's Done.
+  - `SettingsView` lost its hand-rolled `.frame(maxWidth: 700)`.
+- Unchanged: `native/Info.plist` (checked), `project.pbxproj`, and everything under
+  `targets/`, `backend*/`, `__tests__/`, `supabase/`, `utils/` and `types/`.
+
+**Interface handoff:**
+- **New screens:**
+  - Put `.nativeContentColumn(.list)` directly on a screen's `List`/`Form`, or
+    `.nativeContentColumn(.scroll)` on its vertical `ScrollView`.
+  - Put `.nativeContentColumnFrame()` on non-scrolling chrome, before its background.
+  - Then add the root to `scrollRootInventory` in `native/LayoutMetricsTests/main.swift`.
+    The suite fails on an unknown root, a missing root, a wrong kind, or a column placed
+    only on a nested view.
+  - A host runner that compiles a view using the column must also compile
+    `N/NativeLayoutMetrics.swift`. The suite checks every `native/run-*.sh`, honoring its
+    `-D` flags.
+- **Width caps:** no new literal `maxWidth:` of 300pt or more. No fixed `width:`,
+  `minWidth:` or `idealWidth:` of 320pt or more (Slide Over). No `UIScreen` sizing and no
+  `.ignoresSafeArea(.keyboard)`.
+- **Navigation:**
+  - Keep one `TabView` and no split view.
+  - A view whose body is a `NavigationStack` may only be a tab root, a gate root or
+    presented (`.sheet`, `.fullScreenCover`, `.popover`). Never push it.
+- **Keyboard:** a new toolbar action follows the §12.2 table:
+  - Esc on cancel or dismiss;
+  - ⌘S on save;
+  - ⌘N on an existing "new" action;
+  - nothing on a destructive action.
+
+  The suite counts every `.keyboardShortcut` in `N/`, and custom command menus fail it.
+- **For 11.10b:** re-audit A16, A22 and A24 with the column in place. Return-key chains for
+  the other editors are still open (A24).
+- **For 11.12:** `onGeometryChange` runs once per scroll root on each size change. The
+  Stage Manager resize row covers layout thrash on device.
+
+**Commands and results:**
+- Probe (throwaway app in the scratchpad, iOS 26 Simulator, not committed):
+  - Before the modifier: `contentMargins` on a `List` replaces the row inset and is
+    measured from the outer edge. On a landscape Pro Max, a margin of 30 was clamped to
+    the 62pt safe area, and a margin of 100 put the row edge at 100. On a `ScrollView`
+    the margin is added inside the safe area. `safeAreaPadding` does not move `List`
+    rows.
+  - With `.nativeContentColumn`:
+    - iPad 11-inch portrait (834pt): list rows 67…767 and scroll content 83…751.
+    - Pro Max landscape: list rows 128…828 and scroll content 144…812.
+    - Phone portrait: unchanged.
+- RED: the new suite against HEAD's views, with the policy file present →
+  `layout-metrics tests: 119 of 752 checks FAILED`. The failures were 58 scroll roots, 12
+  chrome sites, the Settings literal cap, 41 toolbar shortcuts, 5 ⌘N sites and the
+  shortcut total. The inventory, navigation, manifest and fixed-width checks already
+  passed. Two scanner false positives (a `NavigationStack` inside a type's own `.sheet`)
+  were fixed in the scanner before GREEN.
+- GREEN: `TZ=America/Phoenix sh native/run-layout-metrics-tests.sh` →
+  `layout-metrics tests: 752/752 checks passed`. After the host-runner check was added
+  (see the aggregate below), the result is `757/757 checks passed`.
+- `TZ=America/Phoenix sh native/run-accessibility-audit-tests.sh` →
+  `accessibility-audit tests: 472/472 checks passed`. It was 471/471 before the
+  extraction and after it. The +1 is the per-file scan of the new
+  `N/NativeLayoutMetrics.swift` (471 with that file moved aside).
+- Mutations (applied in place with `perl`, run and restored with a `cmp` check). All 20
+  were killed:
+
+  | Mutation | Failures |
+  |---|---|
+  | Jobs list column removed | 1 |
+  | Today scroll kind → `.list` | 1 |
+  | `SettingsPage` column removed | 1 |
+  | Coach composer frame removed | 1 |
+  | Editor Save loses ⌘S | 2 |
+  | Destructive delete gets Return | 2 |
+  | Recurring jobs pushed instead of presented | 1 |
+  | Split view adopted in `RootView` | 1 |
+  | 400pt fixed width | 1 |
+  | `UIScreen` sizing | 1 |
+  | New uncapped `List` screen | 3 |
+  | Hand-rolled 700pt cap | 1 |
+  | Custom command menu | 1 |
+  | Policy: list inset floor 0 | 3 |
+  | Policy: list margin measured inside the safe area | 9 |
+  | Policy: 768pt column | 33 |
+  | `UIRequiresFullScreen` added to `Info.plist` | 1 |
+  | Coach ⌘N removed | 2 |
+  | Calendar editor runner drops `NativeLayoutMetrics.swift` | 1 |
+  | Schedule/booking settings runner drops `NativeLayoutMetrics.swift` | 1 |
+
+- Aggregate: `TZ=America/Phoenix sh native/run-all-domain-tests.sh`.
+  - First run: exit 1 at `native/run-schedule-booking-settings-tests.sh`, with `error: value
+    of type 'some View' has no member 'nativeContentColumnFrame'` (see Deviations).
+  - After the fix: `aggregate exit=0`. The run includes `accessibility-audit tests: 472/472
+    checks passed`, `layout-metrics tests: 757/757 checks passed`,
+    `ScheduleBookingSettingsTests: all checks passed` and `PASS: native calendar editor
+    tests`. The trailing node suite reports `fail 0`.
+  - The run covers the working tree, including other agents' uncommitted backend changes.
+- Release `xcodebuild … CODE_SIGNING_ALLOWED=NO build` → `** BUILD SUCCEEDED **`. The only
+  warnings in touched files are pre-existing ones on untouched lines:
+  `NativeChangeOrdersView.swift` 391/464/465/477 (Swift 6 isolation) and `TodayView.swift`
+  335/361 (unused `MainActor.run` result).
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Deviations:**
+- Native differences 1–8 are recorded in contract §12.2: list row width, the retained form
+  cards, Settings padding, chrome backgrounds, the calendar cap, tab-bar placement on
+  iPadOS 18+, native-only shortcuts, and list engagement at 740pt.
+- The source model moved into `native/HostTestSupport/SwiftSourceScan.swift`, so the
+  11.10a suite's source changed (a pure move, 471 checks unchanged). This is outside the
+  listed Own files. It keeps one masker instead of two copies.
+- The first aggregate run failed (exit 1) at
+  `native/run-schedule-booking-settings-tests.sh`. That runner and
+  `native/run-calendar-editor-tests.sh` compile `NativeCalendarView`,
+  `NativeScheduleEditorView`, `NativeScheduleSettingsView` and `NativeBookingSettingsView`
+  on macOS, where the `canImport(UIKit)` modifiers did not exist. The fix:
+  - the modifiers are now guarded by `canImport(SwiftUI)`, which is identical on iOS;
+  - both runners compile `N/NativeLayoutMetrics.swift`;
+  - the layout suite gained a host-runner check (RED: the two runner mutations above).
+
+  The second aggregate run is recorded above.
+- The change-order Confirm uses ⌘⏎ rather than a bare Return, so recording a customer's
+  decision takes a deliberate key chord.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+
+| Row | Step | Pass when |
+|---|---|---|
+| IPAD-L-1 | iPad 11-inch (portrait and landscape) and iPad mini (portrait): Today, Jobs, Invoices, Customers, Money, Coach, Settings and one editor sheet | Content is in a centered column of about 700pt; the scroll area, indicators and backgrounds are full width; nothing is clipped |
+| IPAD-L-2 | iPad 13-inch landscape, and a large sheet under Stage Manager | Sheet content is capped at 700pt, and the calendar and route sheets read correctly |
+| IPAD-L-3 | iPhone Pro Max landscape: Jobs and Today | The column is 700pt inside the safe areas, and portrait is unchanged |
+| IPAD-L-4 | iOS 17 floor (iPhone SE-class; an iPad on iPadOS 17): a list wider than 740pt | Rows sit at the computed margin as measured on iOS 26; if not, open an 11.10b item |
+| IPAD-MT-1 | Split View at 1/3, 1/2 and 2/3 beside another app, in both orientations | No clipping; narrow widths are full width; one tab bar and one navigation bar |
+| IPAD-MT-2 | Slide Over (320pt): every tab plus the job, invoice and expense editors | Everything is usable without horizontal clipping |
+| IPAD-MT-3 | Stage Manager: drag a window's width slowly across 690–760pt on a list and a scroll screen | The column engages without a jump or a layout loop |
+| IPAD-ROT-1 | Rotate through all four iPad orientations with a pushed detail, an open sheet and the keyboard up | State is kept, no second navigation bar appears, the focused field stays visible, and the Coach composer rises with the keyboard |
+| IPAD-KB-1 | Hardware keyboard: Esc on Cancel/Done in editors and sheets, ⌘S to save, ⌘⏎ on the change-order Confirm, ⌘N on Jobs, Invoices, Customers, Maintenance plans and Coach | Each fires once, only for the visible screen; ⌘N does nothing while a sheet covers that tab; no key triggers the delete-account Delete |
+| IPAD-KB-2 | Tab and Shift-Tab through the job, invoice, customer and expense editors; Return in a single-line field and in the Coach field | Focus follows the visual order; Return ends editing (a newline in Coach). Pairs with A11-KB-1 |
+| IPAD-AX-1 | AX5 Dynamic Type on iPad in 1/2 Split View: Money cards, Today stats, editors | The column and the 11.10a AX stacks do not clip |
+
+**Concerns:**
+- SwiftUI's `contentMargins` behavior on a `List` was measured on the iOS 26 runtime only
+  (row IPAD-L-4 covers the iOS 17 floor).
+- ⌘N reaches the underlying tab while a sheet is up only if the presenting controller is
+  in the responder chain. The state flag is already set, so this is harmless, and row
+  IPAD-KB-1 checks it.
+
+**Next ready:** 11.12 (performance, launch time and device soak).
