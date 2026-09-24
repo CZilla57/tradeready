@@ -116,6 +116,28 @@ struct RootView: View {
             mainTabs
                 .safeAreaInset(edge: .top, spacing: 0) { NativeSyncBanner() }
                 .safeAreaInset(edge: .bottom, spacing: 0) { NativeUndoBanner() }
+                // Task 11.06 (contract §6.2 step 6): a widget/Siri link whose
+                // job is missing, archived or finished shows the existing
+                // Jobs "Job not found" state (same title and symbol as
+                // `JobsView`'s navigation destination), never another record.
+                .sheet(item: Binding(
+                    get: { store.deepLinkUnavailableNotice },
+                    set: { if $0 == nil { store.dismissDeepLinkUnavailableNotice() } }
+                )) { _ in
+                    NavigationStack {
+                        ContentUnavailableView {
+                            Label("Job not found", systemImage: "questionmark.folder")
+                        } description: {
+                            Text("This link's job was deleted, archived or already finished.")
+                        }
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { store.dismissDeepLinkUnavailableNotice() }
+                            }
+                        }
+                    }
+                    .presentationDetents([.medium])
+                }
         case .passwordRecovery(let email):
             NativePasswordRecoveryView(email: email)
         case .invalidPasswordRecovery:

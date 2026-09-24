@@ -5,11 +5,14 @@ import Darwin
 import Glibc
 #endif
 
-/// Minimal read-only surface for cross-process handoffs. UserDefaults cannot
-/// provide an atomic compare-and-delete across the app and extensions, so this
-/// first consumer deliberately never clears or rewrites the producer's value.
+/// The App Group key/value surface the app reads cross-process handoffs from.
+/// UserDefaults cannot compare-and-delete across processes on its own, so
+/// every read-and-remove runs inside `WidgetAppGroupLock` — the one advisory
+/// lock every App Group writer holds (contract §4.2). Task 11.06 added
+/// `removeValue(forKey:)` for the `pendingOpenUrl` read-and-remove (§6.2).
 protocol NativeAppGroupInbox {
     func value(forKey key: String) -> String?
+    func removeValue(forKey key: String)
 }
 
 final class NativeUserDefaultsAppGroupInbox: NativeAppGroupInbox {
@@ -30,6 +33,11 @@ final class NativeUserDefaultsAppGroupInbox: NativeAppGroupInbox {
         return defaults?.string(forKey: key)
     }
 
+    func removeValue(forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        defaults?.removeObject(forKey: key)
+    }
 }
 
 enum NativeAppGroupAccountScrubError: Error {
@@ -83,56 +91,85 @@ struct NativeAppGroupAccountScrubber {
     }
 }
 
-enum NativePendingOpenURLConsumption: Equatable, Sendable {
-    case notAuthorized
+/// The result of one read-and-remove of the `pendingOpenUrl` stash.
+enum NativePendingOpenURLTake: Equatable, Sendable {
     case nothingPending
-    case retainedInvalid
-    case retainedMissingJob
-    case routedJob(id: String)
-    case presentedOnMyWay(id: String)
+    /// The container or the lock was unavailable: nothing was read or removed.
+    case unavailable
+    /// Read and removed, but unusable (malformed, oversized, stale, future,
+    /// untagged, or not a link we produce). Dropped with no other effect.
+    case discarded
+    /// Read and removed: fresh, tagged, and a valid route. The caller still
+    /// runs the auth/owner/record gate (`NativeDeepLinkRoutingPolicy`).
+    case pending(NativeDeepLinkParser.PendingOpenURL)
 }
 
-/// Consumes only the read-only navigation portion of the App Group contract.
-/// Mutating widget actions and active-trip state deliberately remain untouched.
+/// Task 11.06 (contract §6.2 step 3): the consumer of the cold-launch
+/// `{url, at, ownerTag}` stash that `OnMyWayIntent` writes. It reads AND
+/// removes the stash in ONE hold of the shared `WidgetAppGroupLock`, whether
+/// or not the value is valid (RN reads, then removes, then parses:
+/// `App.tsx:537-550`), so a stash is presented at most once. It never touches
+/// the action queue, the trip session or the snapshot.
 struct NativePendingOpenURLConsumer {
-    static let key = "pendingOpenUrl"
+    static let key = WidgetAppGroup.pendingOpenURLKey
 
     let inbox: any NativeAppGroupInbox
+    let lockFile: URL
 
-    func consume(
-        localOwnerVerified: Bool,
-        now: Date,
-        jobExists: (String) -> Bool,
-        routeToJob: (String) -> Void,
-        presentOnMyWay: (String) -> Void
-    ) -> NativePendingOpenURLConsumption {
-        // Reading is unnecessary until the current live identity is proven to
-        // own the migrated local data. In particular, never clear another
-        // account's handoff on mismatch, expiry, or an unavailable auth server.
-        guard localOwnerVerified else { return .notAuthorized }
-        guard let raw = inbox.value(forKey: Self.key) else { return .nothingPending }
+    /// The production App Group suite and lock file, or nil when the
+    /// entitlement/container is unavailable (then nothing is ever consumed).
+    static func live() -> NativePendingOpenURLConsumer? {
+        guard let defaults = WidgetAppGroup.liveDefaults(),
+              let lockFile = WidgetAppGroup.liveLockFile()
+        else { return nil }
+        return NativePendingOpenURLConsumer(
+            inbox: NativeUserDefaultsAppGroupInbox(defaults: defaults),
+            lockFile: lockFile
+        )
+    }
 
-        guard let pending = NativeDeepLinkParser.parsePendingOpenURL(raw, now: now) else {
-            return .retainedInvalid
+    /// Reads and removes the stash under the lock, then validates it
+    /// (size, JSON shape, freshness `0 ≤ age ≤ 300 s`, grammar, tag present).
+    func take(now: Date) -> NativePendingOpenURLTake {
+        let raw: String?
+        do {
+            raw = try WidgetAppGroupLock.withExclusiveLock(at: lockFile) { () -> String? in
+                guard let value = inbox.value(forKey: Self.key) else { return nil }
+                inbox.removeValue(forKey: Self.key)
+                return value
+            }
+        } catch {
+            return .unavailable
         }
-        let jobID = pending.route.jobID
-        guard jobExists(jobID) else {
-            return .retainedMissingJob
-        }
+        guard let raw else { return .nothingPending }
+        guard let pending = NativeDeepLinkParser.parsePendingOpenURL(raw, now: now),
+              let tag = pending.ownerTag, !tag.isEmpty
+        else { return .discarded }
+        return .pending(pending)
+    }
 
-        switch pending.route {
-        case .onMyWay:
-            // This route means "present a reviewed message", never "send".
-            // The source remains read-only; the caller owns one-shot in-memory
-            // presentation and the system composer still requires user action.
-            presentOnMyWay(jobID)
-            return .presentedOnMyWay(id: jobID)
-        case .job:
-            // The caller invokes this once at the verified startup boundary.
-            // The source remains untouched and naturally becomes ineligible
-            // after its five-minute freshness window.
-            routeToJob(jobID)
-            return .routedJob(id: jobID)
+    /// The warm-route dedupe (11.04 handoff; RN `App.tsx` removes the stash
+    /// after navigating from the live URL event). Under the lock, removes the
+    /// stash only when it names exactly `route`, and returns its `ownerTag`
+    /// (nil when nothing matched or the stash was untagged). A stash for a
+    /// different route is left for `take`.
+    func takeMatching(_ route: NativeDeepLinkParser.Route) -> (removed: Bool, ownerTag: String?) {
+        struct Loose: Decodable {
+            let url: String
+            let ownerTag: String?
+        }
+        do {
+            return try WidgetAppGroupLock.withExclusiveLock(at: lockFile) { () -> (Bool, String?) in
+                guard let raw = inbox.value(forKey: Self.key),
+                      raw.utf8.count <= NativeDeepLinkParser.maximumPendingOpenURLLength,
+                      let stash = try? JSONDecoder().decode(Loose.self, from: Data(raw.utf8)),
+                      NativeDeepLinkParser.parse(stash.url) == route
+                else { return (false, nil) }
+                inbox.removeValue(forKey: Self.key)
+                return (true, stash.ownerTag)
+            }
+        } catch {
+            return (false, nil)
         }
     }
 }

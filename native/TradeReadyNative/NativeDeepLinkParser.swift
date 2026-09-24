@@ -19,11 +19,24 @@ enum NativeDeepLinkParser {
         let url: String
         let at: Date
         let route: Route
+        /// Task 11.06 (contract §6.2): `hash(O)` stamped by `OnMyWayIntent`.
+        /// Nil for an untagged (RN-era or foreign) stash, which the consumer
+        /// discards.
+        let ownerTag: String?
     }
 
     static let pendingOpenURLMaximumAge: TimeInterval = 5 * 60
 
+    /// Task 11.06 (recorded native difference, contract §6.1): an oversized
+    /// link is dropped before any parsing. A producer's longest link is
+    /// `tradeready://onmyway/` plus a 128-byte id percent-encoded (at most
+    /// 3 × 128 bytes), far below this bound.
+    static let maximumURLLength = 1024
+    /// The same bound for the raw `pendingOpenUrl` JSON (`{url, at, ownerTag}`).
+    static let maximumPendingOpenURLLength = 4096
+
     static func parse(_ rawURL: String) -> Route? {
+        guard rawURL.utf8.count <= maximumURLLength else { return nil }
         let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = "tradeready://"
         guard trimmed.count >= prefix.count,
@@ -38,7 +51,11 @@ enum NativeDeepLinkParser {
               !components[1].contains("?"),
               !components[1].contains("#"),
               let identifier = String(components[1]).removingPercentEncoding,
-              !identifier.isEmpty
+              !identifier.isEmpty,
+              // Task 11.06: the id must also be a valid record identifier
+              // (non-empty, at most 128 UTF-8 bytes, no control characters),
+              // the same rule the widget/Siri writers and the replay planner use.
+              WidgetActionFieldRules.isValidIdentifier(identifier)
         else { return nil }
 
         switch components[0].lowercased() {
@@ -54,9 +71,11 @@ enum NativeDeepLinkParser {
         struct Payload: Decodable {
             let url: String
             let at: String
+            let ownerTag: String?
         }
 
-        guard let data = raw.data(using: .utf8),
+        guard raw.utf8.count <= maximumPendingOpenURLLength,
+              let data = raw.data(using: .utf8),
               let payload = try? JSONDecoder().decode(Payload.self, from: data),
               !payload.url.isEmpty,
               let stampedAt = parseISO8601(payload.at),
@@ -65,7 +84,7 @@ enum NativeDeepLinkParser {
 
         let age = now.timeIntervalSince(stampedAt)
         guard age >= 0, age <= pendingOpenURLMaximumAge else { return nil }
-        return PendingOpenURL(url: payload.url, at: stampedAt, route: route)
+        return PendingOpenURL(url: payload.url, at: stampedAt, route: route, ownerTag: payload.ownerTag)
     }
 
     private static func parseISO8601(_ value: String) -> Date? {

@@ -744,9 +744,15 @@ struct StoreIntegrationTests {
                    "queued settings payload never carries secure credential keys")
         } else { expect(false, "queued settings payload is an object") }
 
+        // Task 11.06 (contract §6.2): before sign-in a valid link parks and
+        // routes nothing; the exact owner signing in applies it.
         empty.handle(url: URL(string: "tradeready://job/\(job.id)")!)
-        expect(empty.selectedTab == .jobs && empty.deepLinkedJobID == job.id,
-               "strict direct deep link routes an existing job")
+        expect(empty.selectedTab == .today && empty.deepLinkedJobID == nil
+               && empty.parkedDeepLink?.route == .job(id: job.id),
+               "a direct deep link before sign-in parks and routes nothing")
+        empty.scheduleBookingTestSeedSignedInOwner(subject: "user-11.06", binding: "bind-11.06")
+        expect(empty.selectedTab == .jobs && empty.deepLinkedJobID == job.id && empty.parkedDeepLink == nil,
+               "strict direct deep link routes an existing job once the exact owner is signed in")
         empty.deepLinkedJobID = nil
         empty.handle(url: URL(string: "tradeready://onmyway/\(job.id)")!)
         expect(empty.selectedTab == .jobs && empty.deepLinkedJobID == job.id
@@ -763,6 +769,11 @@ struct StoreIntegrationTests {
         empty.handle(url: URL(string: "tradeready://job/missing-job")!)
         expect(empty.selectedTab == .today && empty.deepLinkedJobID == nil,
                "direct deep link cannot route a missing local job")
+        expect(empty.deepLinkUnavailableNotice?.reason == .missingRecord,
+               "a missing job shows the existing not-found state")
+        empty.dismissDeepLinkUnavailableNotice()
+        // Restore the signed-out identity the checks below rely on.
+        empty.scheduleBookingTestClearOwner()
 
         empty.routeToGlobalSearchResult(.customer(customer.id))
         expect(empty.selectedTab == .customers && empty.deepLinkedCustomerID == customer.id

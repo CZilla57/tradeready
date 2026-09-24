@@ -110,11 +110,21 @@ struct TradeReadyNativeApp: App {
                 .tint(.tradeReady)
                 .preferredColorScheme(store.settings.appearance.colorScheme)
                 .onOpenURL { url in
-                    if !NativeGoogleSignInProvider.handle(url) {
-                        store.handle(url: url)
-                    }
+                    // Task 11.06 (contract §6.2 step 1): Google Sign-In sees
+                    // the URL first; a claimed callback never reaches the
+                    // widget-link gate.
+                    NativeOpenURLDispatch.dispatch(
+                        url,
+                        googleSignIn: NativeGoogleSignInProvider.handle,
+                        app: { store.handle(url: $0) }
+                    )
                 }
-                .task { await store.activateMigratedAuthenticatedIdentity() }
+                .task {
+                    // Task 11.06 (§6.2 step 3): read-and-remove the cold-launch
+                    // stash first; before sign-in it parks with its owner tag.
+                    store.consumePendingOpenURLStash()
+                    await store.activateMigratedAuthenticatedIdentity()
+                }
                 .task(id: store.estimateFollowUpNotificationScheduleKey) {
                     await followUpNotifications.synchronize()
                 }
@@ -122,6 +132,8 @@ struct TradeReadyNativeApp: App {
                     switch phase {
                     case .active:
                         backgroundRefreshScheduler.cancelActive()
+                        // Task 11.06 (§2.5 gap): consume on EVERY activation.
+                        store.consumePendingOpenURLStash()
                         Task {
                             await store.activateMigratedAuthenticatedIdentity()
                             // Pull metadata before mirroring photo bytes so a
@@ -130,6 +142,9 @@ struct TradeReadyNativeApp: App {
                             await followUpNotifications.synchronize()
                         }
                     case .background:
+                        // Task 11.06 (§6.2 step 4): a route parked before the
+                        // gate opened does not survive backgrounding.
+                        store.discardParkedDeepLink()
                         backgroundRefreshScheduler.schedule()
                     case .inactive:
                         break

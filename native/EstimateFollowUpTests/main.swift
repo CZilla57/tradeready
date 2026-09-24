@@ -249,6 +249,35 @@ enum EstimateFollowUpTests {
             ),
             "owner mismatch, signed-out state, and answered estimates all fail closed"
         )
+        // Task 11.06 (P8, contract C11 resolved): an archived estimate_sent job
+        // is still scheduled for `est_` (no archive filter, like RN), so its
+        // delivered notification opens: never a dead tap.
+        var archivedJob = reminderJob
+        archivedJob.archivedAt = "2026-08-02T10:00:00.000Z"
+        expect(
+            NativeEstimateFollowUp.upcomingReminders(jobs: [archivedJob], now: now, calendar: calendar).count == 1,
+            "sanity: an archived estimate_sent job still gets an est_ reminder"
+        )
+        expect(
+            NativeEstimateFollowUp.canOpenNotification(
+                exactOwnerWorkspace: true,
+                signedIn: true,
+                job: archivedJob
+            ),
+            "P8: the archived estimate's delivered est_ notification opens (no dead tap)"
+        )
+        expect(
+            !NativeEstimateFollowUp.canOpenNotification(
+                exactOwnerWorkspace: false,
+                signedIn: true,
+                job: archivedJob
+            ) && !NativeEstimateFollowUp.canOpenNotification(
+                exactOwnerWorkspace: true,
+                signedIn: true,
+                job: nil
+            ),
+            "P8 keeps the owner gate and a missing job still fails closed"
+        )
         expect(
             NativeEstimateFollowUp.notificationJobID(userInfo: [
                 "type": "estimate_follow_up",

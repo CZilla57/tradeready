@@ -151,13 +151,21 @@ enum NativeEstimateFollowUp {
         )
     }
 
+    /// Task 11.06 (P8, contract C11 resolved): an ARCHIVED `estimate_sent`
+    /// job opens like any other. `upcomingReminders` (like RN
+    /// `selectEstimateFollowUps`) still schedules `est_` for archived jobs,
+    /// because RN `utils/archive.ts` keeps notifications seeing them, and RN's
+    /// `estimate_follow_up` tap routes with no archive check. So a delivered
+    /// `est_` notification is never a dead tap, the rule every other family
+    /// already follows (Phase 10 contract §9.6). Only a missing job, an
+    /// answered estimate or a non-exact/signed-out workspace fail closed.
     static func canOpenNotification(
         exactOwnerWorkspace: Bool,
         signedIn: Bool,
         job: Canonical.Job?
     ) -> Bool {
         guard exactOwnerWorkspace, signedIn, let job else { return false }
-        return job.status == "estimate_sent" && (job.archivedAt ?? "").isEmpty
+        return job.status == "estimate_sent"
     }
 
     static func notificationJobID(userInfo: [AnyHashable: Any]) -> String? {

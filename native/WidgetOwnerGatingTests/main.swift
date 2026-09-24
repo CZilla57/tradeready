@@ -130,6 +130,11 @@ private final class TempSuite {
         )
     }
 
+    /// Task 11.06: the real stash consumer on this suite and lock file.
+    var pendingOpenURLConsumer: NativePendingOpenURLConsumer {
+        NativePendingOpenURLConsumer(inbox: NativeUserDefaultsAppGroupInbox(defaults: defaults), lockFile: lockFile)
+    }
+
     var isEmpty: Bool { WidgetAppGroup.accountKeys.allSatisfy { defaults.object(forKey: $0) == nil } }
     var queue: String? { defaults.string(forKey: WidgetAppGroup.actionsKey) }
 
@@ -292,6 +297,7 @@ private func makeStore(
         seedIfMissing: false,
         widgetActionReplayTransport: suite.transport(claims: workspace.claims),
         appGroupAccountScrubber: suite.scrubber,
+        pendingOpenURLConsumer: suite.pendingOpenURLConsumer,
         subscriptionService: subscription ?? SubscriptionStub(),
         widgetTimelineReloader: reloader
     )
@@ -860,33 +866,49 @@ private func testDeepLinkWhileSignedOut() async throws {
            "A's tagged cold-launch stash is scrubbed at sign-out (B can never consume it)")
     store.handle(url: URL(string: "tradeready://job/j1")!)
     store.handle(url: URL(string: "tradeready://onmyway/j1")!)
-    expect(store.deepLinkedJobID == nil && store.pendingOnMyWayJobID == nil, "signed out: the widget link is discarded")
+    expect(store.deepLinkedJobID == nil && store.pendingOnMyWayJobID == nil, "signed out: the widget link sets no route")
+    expectEqual(store.parkedDeepLink?.route, .onMyWay(id: "j1"), "Task 11.06: it parks (newest wins)")
+    expect(store.parkedDeepLink?.arrivalBinding == nil, "…with no arrival owner: nobody was signed in")
     try workspace.write(jobs: [job("j1", ["customerName": "Bob (B)"])])
     try workspace.bind(bindingB)
     store.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
     await settle()
+    // §6.2 step 4: a nil-arrival warm URL may apply for the next owner, but
+    // the step-6 lookup is ONLY in the current in-memory data, which sign-out
+    // emptied; A's j1 is never what it resolves to. (A nil-arrival URL that
+    // resolves to the new owner's own record is covered in DeepLinkRoutingTests.)
+    expect(store.parkedDeepLink == nil, "B signs in: the parked link is resolved, not kept")
     expect(store.deepLinkedJobID == nil && store.pendingOnMyWayJobID == nil,
-           "after B signs in, no route from the signed-out link appears (discarded, not replayed into B's same-id record)")
+           "after B signs in, no route from the signed-out link appears (no record in the current data)")
+    expectEqual(store.deepLinkUnavailableNotice?.reason, .missingRecord, "…the existing not-found state is shown instead")
 
-    // (b) A cold-launch stash is never consumed without the exact owner.
-    let suite2 = TempSuite()
-    defer { suite2.cleanUp() }
-    let stash = try WidgetJSONValue.encodeJSON(WidgetPendingOpenURLStash(url: "tradeready://job/j1", at: iso(Date()), ownerTag: tagA))
+    // (b) Task 11.06: a cold-launch stash is read and removed under the lock
+    // whatever the gate, parks with A's tag while signed out, and is
+    // discarded (never applied) when a different owner B signs in, even
+    // though B has a same-id j1.
+    let suite2 = TempSuite(), workspace2 = Workspace()
+    defer { suite2.cleanUp(); workspace2.cleanUp() }
+    try workspace2.write(jobs: [job("j1", ["customerName": "Bob (B)"])])
+    try workspace2.bind(bindingB)
+    let coldStore = makeStore(workspace2, suite: suite2)
+    coldStore.testSetAuthenticationGateState(.signedOut)
+    let stash = try WidgetJSONValue.encodeJSON(WidgetPendingOpenURLStash(url: "tradeready://job/j1", at: iso(Date().addingTimeInterval(-1)), ownerTag: tagA))
     suite2.defaults.set(stash, forKey: WidgetAppGroup.pendingOpenURLKey)
-    var routed: [String] = []
-    let consumed = NativePendingOpenURLConsumer(inbox: NativeUserDefaultsAppGroupInbox(defaults: suite2.defaults)).consume(
-        localOwnerVerified: false, now: Date(), jobExists: { _ in true },
-        routeToJob: { routed.append($0) }, presentOnMyWay: { routed.append($0) }
-    )
-    expectEqual(consumed, .notAuthorized, "signed out / no exact owner: the stash is not consumed")
-    expect(routed.isEmpty, "…and nothing is routed")
+    coldStore.consumePendingOpenURLStash()
+    expect(suite2.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) == nil, "the stash is read and removed at once")
+    expectEqual(coldStore.parkedDeepLink?.ownerTag, tagA, "signed out: it parks with A's tag")
+    expect(coldStore.deepLinkedJobID == nil, "…and routes nothing")
+    coldStore.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
+    await settle()
+    expect(coldStore.parkedDeepLink == nil && coldStore.deepLinkedJobID == nil && coldStore.pendingOnMyWayJobID == nil,
+           "B signs in: A's tagged stash is discarded, never routed into B's same-id j1")
+    suite2.defaults.set(stash, forKey: WidgetAppGroup.pendingOpenURLKey)
     try suite2.scrubber.scrub()
     expect(suite2.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) == nil, "the account scrub discards the stash")
 
     // (c) Expired session (no scrub): A's data is retained behind the gate.
-    // TODAY `handle(url:)` has no auth gate (11.06 adds it), so a link opened
-    // while signed out parks the exact id. These assertions pin that exact
-    // behavior and prove the REAL account-boundary paths clear it.
+    // Task 11.06: a link opened while signed out PARKS (it never sets a route
+    // field); the newest link wins; the REAL explicit sign-out discards it.
     let suite3 = TempSuite(), workspace3 = Workspace()
     defer { suite3.cleanUp(); workspace3.cleanUp() }
     try workspace3.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
@@ -894,16 +916,16 @@ private func testDeepLinkWhileSignedOut() async throws {
     let expired = makeStore(workspace3, suite: suite3)
     expired.testSetAuthenticationGateState(.signedOut)
     expired.handle(url: URL(string: "tradeready://job/j1")!)
-    expectEqual(expired.deepLinkedJobID, "j1", "signed out (expired, data retained): today the link parks the exact id")
-    expired.handle(url: URL(string: "tradeready://job/not-a-job")!)
-    expectEqual(expired.deepLinkedJobID, "j1", "a link to a missing id never redirects the parked route")
+    expectEqual(expired.parkedDeepLink?.route, .job(id: "j1"), "signed out (expired, data retained): the link parks the exact id")
+    expect(expired.deepLinkedJobID == nil && expired.selectedTab == .today, "…and sets no route field or tab while parked")
+    expect(expired.parkedDeepLink?.arrivalBinding == nil, "…with no arrival owner (none was signed in)")
     expired.handle(url: URL(string: "tradeready://onmyway/j1")!)
-    expectEqual(expired.pendingOnMyWayJobID, "j1", "the On My Way link parks the exact id too")
-    // The REAL explicit sign-out is the account boundary: every held route
-    // from A's session is gone before any other owner can sign in.
+    expectEqual(expired.parkedDeepLink?.route, .onMyWay(id: "j1"), "at most one parked route: the newest wins")
+    expect(expired.pendingOnMyWayJobID == nil, "no On My Way review while parked")
+    // The REAL explicit sign-out is the account boundary.
     try await expired.signOut(revokeRemote: false)
-    expect(expired.deepLinkedJobID == nil, "a real signOut discards the job route held from A's session")
-    expect(expired.pendingOnMyWayJobID == nil, "a real signOut discards the On My Way route held from A's session")
+    expect(expired.parkedDeepLink == nil, "a real signOut discards the parked route from A's session")
+    expect(expired.deepLinkedJobID == nil && expired.pendingOnMyWayJobID == nil, "…and holds no route field")
     try workspace3.write(jobs: [job("j1", ["customerName": "Bob (B)"])])
     try workspace3.bind(bindingB)
     expired.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
@@ -911,37 +933,43 @@ private func testDeepLinkWhileSignedOut() async throws {
     expect(expired.deepLinkedJobID == nil && expired.pendingOnMyWayJobID == nil,
            "after B signs in on the same store, A's link does not route into B's same-id j1")
 
-    // (d) Expired session, then the REAL "use another account" (the
-    // account-mismatch exit). The App Group side is covered by
-    // `testUseAnotherAccountScrubsWidgetState`. The in-memory route fields
-    // are 11.06's (§15): today they survive this boundary, which is recorded
-    // as an 11.06 handoff item and reported here, never asserted as correct.
+    // (d) Task 11.06 (11.05 handoff d): the REAL "use another account" is
+    // an account boundary for every held route. A is signed in and has a
+    // live job route and an On My Way review; the gate then moves to
+    // initial-sync-unavailable (which offers "Use another account") and one
+    // more link parks.
     let suite4 = TempSuite(), workspace4 = Workspace()
     defer { suite4.cleanUp(); workspace4.cleanUp() }
-    try workspace4.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
+    try workspace4.write(jobs: [job("j1", ["customerName": "Alice (A)"]), job("j2")])
     try workspace4.bind(bindingA)
     let switching = makeStore(workspace4, suite: suite4)
-    switching.testSetAuthenticationGateState(.signedOut)
+    switching.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+    await settle()
     switching.handle(url: URL(string: "tradeready://job/j1")!)
-    expectEqual(switching.deepLinkedJobID, "j1", "sanity: the route is parked before the account switch")
-    switching.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
-    switching.testSetAuthenticationGateState(.accountMismatch)
-    expect(switching.derivedStatePublishBinding == nil && switching.widgetActionReplayBinding == nil,
-           "account mismatch: no O, so no mirror, no replay")
-    expectEqual(switching.refreshWidgetMirror(force: true), .skippedNoOwner, "B can never mirror A's workspace")
+    switching.handle(url: URL(string: "tradeready://onmyway/j1")!)
+    expectEqual(switching.deepLinkedJobID, "j1", "sanity: A's route is held before the switch")
+    expectEqual(switching.pendingOnMyWayJobID, "j1", "sanity: A's On My Way review is held before the switch")
+    switching.testSetAuthenticationGateState(.initialSyncUnavailable(message: "offline"))
+    switching.handle(url: URL(string: "tradeready://job/j2")!)
+    expectEqual(switching.parkedDeepLink?.route, .job(id: "j2"), "sanity: a link parks behind the unavailable gate")
     switching.scheduleBookingTestSeedIdentityActivator()
     await switching.useAnotherAccount {}
     expectEqual(switching.authenticationGateState, .signedOut, "sanity: useAnotherAccount reached its success path")
-    if switching.deepLinkedJobID != nil || switching.pendingOnMyWayJobID != nil {
-        knownGaps.append("useAnotherAccount keeps deepLinkedJobID/pendingOnMyWayJobID from the previous session (11.06)")
-    }
+    expect(switching.deepLinkedJobID == nil, "useAnotherAccount drops A's job route")
+    expect(switching.pendingOnMyWayJobID == nil, "useAnotherAccount drops A's On My Way review")
+    expect(switching.parkedDeepLink == nil, "useAnotherAccount drops the parked route")
 
     // (e) The same owner comes back: the parked route is A's own exact record.
-    let again = makeStore(workspace4, suite: suite4)
+    let suite5 = TempSuite(), workspace5 = Workspace()
+    defer { suite5.cleanUp(); workspace5.cleanUp() }
+    try workspace5.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
+    try workspace5.bind(bindingA)
+    let again = makeStore(workspace5, suite: suite5)
     again.testSetAuthenticationGateState(.signedOut)
     again.handle(url: URL(string: "tradeready://job/j1")!)
     again.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
     await settle()
+    expect(again.parkedDeepLink == nil, "A signs in: the parked route is applied, not kept")
     expectEqual(again.deepLinkedJobID, "j1", "A signs back in: the parked route is still the exact id")
     expectEqual(again.jobs.first { $0.id == "j1" }?.customerName, "Alice (A)", "…and it resolves to A's own record")
 }

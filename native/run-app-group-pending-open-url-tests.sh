@@ -8,6 +8,7 @@ MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-app-group-pending-open-url-module-cache
 swiftc \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
+  "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetActionFieldRules.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeDeepLinkParser.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetAppGroup.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeAppGroupInbox.swift" \

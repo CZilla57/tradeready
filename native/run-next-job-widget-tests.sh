@@ -12,6 +12,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetAppGroup.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetSnapshot.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/NextJobWidgetPolicy.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetActionFieldRules.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeDeepLinkParser.swift" \
   "$ROOT_DIR/native/NextJobWidgetPolicyTests/main.swift" \
   -o "$OUTPUT_PATH"

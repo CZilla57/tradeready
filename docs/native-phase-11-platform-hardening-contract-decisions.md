@@ -48,8 +48,8 @@ characterization).
 | C7 | Owner stamping | `ownerTag` (hash of the §2.5 binding) goes on the snapshot, on each queued action, on `activeTrip` and on the `pendingOpenUrl` stash. Extensions refuse to write when no snapshot is present. Replay drops actions whose owner is missing or mismatched (§4.5) | chosen | 11.01, 11.04, 11.05 |
 | C8 | Malformed or duplicate queue wedge | Native replay retries forever on `malformedQueue`/`duplicateActionID` (§4.6) | **blocked** until 11.05 decides the quarantine policy | 11.05 |
 | C9 | Intents | Ten intents, a single 17.0 floor, target membership per ruling P3 (§5) | chosen | 11.04 (types), 11.01 (membership) |
-| C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen | 11.06 |
-| C11 | Notification `est_` archived dead tap (P8) | Carried over and not decided here | **blocked** until 11.06 decides it (ruling P8) | 11.06 |
+| C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen; implemented by 11.06 with the native differences in §6.3 | 11.06 |
+| C11 | Notification `est_` archived dead tap (P8) | An archived `estimate_sent` job's delivered `est_` notification **opens** its editable follow-up review; only a missing job, an answered estimate or a non-exact/signed-out workspace fail closed (§6.3) | **resolved** by 11.06 (2026-09-24) | 11.06 |
 | C12 | SDKs | Sentry Cocoa **9.29.0** and PostHog iOS **3.81.0**, via SPM `exactVersion`, behind Foundation-only adapters (§7) | chosen (PostHog pin has a freshness concern) | 11.07, 11.09 |
 | C13 | Privacy manifests | App and extension manifests: required-reason APIs and collected-data types (§8) | chosen | 11.01, 11.09 |
 | C14 | Analytics gating | Release build **and** a configured, non-`PLACEHOLDER` key. RN gated PostHog on the key only (§9.2) | chosen (recorded deviation) | 11.07 |
@@ -650,8 +650,51 @@ Insurance, Software & Apps, Marketing, Other.
   check, does not take the lock, and never clears its source.
 - `consumeVerifiedPendingOpenURLIfNeeded` is gated on the migrated owner and runs once
   per session (§2.5).
-- **P8 (blocked, C11):** the parked Phase 10 "`est_` archived dead tap" decision belongs
-  to 11.06.
+- **P8 (C11):** the parked Phase 10 "`est_` archived dead tap" decision belongs
+  to 11.06. **Resolved 2026-09-24, see §6.3.**
+
+### 6.3 11.06 decisions and recorded native differences (2026-09-24)
+
+- **C11 / P8 resolved: an archived estimate's `est_` tap opens.**
+  `NativeEstimateFollowUp.canOpenNotification` no longer refuses an archived job.
+  - Why: `upcomingReminders` still schedules `est_` for an archived `estimate_sent` job
+    (like RN `selectEstimateFollowUps`; RN `utils/archive.ts` keeps notifications seeing
+    archived records), and RN's `estimate_follow_up` tap routes with no archive check.
+    Refusing it made a notification the app itself delivered a dead tap, which Phase 10
+    §9.6 rules out for every other family.
+  - The principle shared with the widget links: a surface the app is still producing
+    must route; a stale link to a record that is no longer produced fails closed.
+  - The owner gate is unchanged: exact signed-in workspace, job present, still
+    `estimate_sent`.
+- **Archived job with a running timer (native difference to step 6):** a `job` link to an
+  archived job whose last time session is open routes to that job. The Job Timer widget
+  keeps showing that running clock (§2.2 parity; `activeTimer` does not filter archived)
+  and its tap is `tradeready://job/<id>`, so refusing it would be a dead tap on the app's
+  own widget. `onmyway` never gets this exception (Next Job never selects an archived job).
+- **Oversize bound (native difference to §6.1):** a link longer than 1,024 UTF-8 bytes,
+  or a `pendingOpenUrl` value longer than 4,096 bytes, is dropped before parsing, and the
+  id must also pass `WidgetActionFieldRules.isValidIdentifier` (non-empty, at most 128
+  UTF-8 bytes, no control characters). RN has no bound; no producer comes near it.
+- **Not-found surface (step 6):** a record failure (missing, archived, or `onmyway` on a
+  done status) shows a sheet reusing the Jobs "Job not found" title and symbol. Owner and
+  freshness failures are silent, because showing anything would describe a link that is
+  not this owner's to open.
+- **Parking details (step 4):**
+  - "Discard when the gate reaches `.signedOut`/`.accountMismatch`/`.unavailable`" means
+    on **entering** it. A link that arrives while the gate is already there parks and is
+    decided at sign-in, like RN.
+  - The 300 s freshness window bounds every candidate, parked or not.
+  - Every other gate (loading, initial sync, subscription, paywall, starting point,
+    onboarding, password recovery) keeps the parked route.
+- **Double On My Way (11.04 handoff):** a warm `onmyway` link removes the matching stash
+  (same parsed route) in one lock hold and carries its tag as extra owner proof. The
+  intent writes the stash and hands the URL to the router on the main actor with no
+  suspension in between, so the cold consumer never sees a stash the warm route will
+  also present.
+- **Account boundaries:** sign-out, deletion, scrub retry and `useAnotherAccount` clear
+  every held route and one-shot target (`deepLinked*`, `pending*JobID`, the parked route
+  and the notice). `useAnotherAccount` clears before its first await and again after
+  its awaits.
 
 ---
 

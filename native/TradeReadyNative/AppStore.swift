@@ -164,6 +164,10 @@ final class AppStore: ObservableObject {
     /// view on appear; never auto-sends.
     @Published var deepLinkedOutreachInvoiceID: String?
     @Published private(set) var pendingOnMyWayJobID: String?
+    /// Task 11.06 (contract §6.2 step 6): the shown-once "Job not found"
+    /// notice for a widget/Siri link whose record is missing, archived or (for
+    /// `onmyway`) finished. Never names a different record.
+    @Published private(set) var deepLinkUnavailableNotice: NativeDeepLinkUnavailableNotice?
     @Published private(set) var pendingAppointmentConfirmationJobID: String?
     @Published private(set) var pendingReviewRequestJobID: String?
     @Published private(set) var pendingEstimateFollowUpJobID: String?
@@ -184,6 +188,9 @@ final class AppStore: ObservableObject {
             // Task 11.01 (contract §3.1): a gate change can open or close the
             // §2.5 owner predicate, so re-mirror (a closed gate is a no-op).
             scheduleWidgetMirrorRefresh()
+            // Task 11.06 (contract §6.2 step 4): entering a closed gate
+            // discards a parked deep link; entering `.signedIn` applies it.
+            handleDeepLinkGateChange(from: oldValue)
         }
     }
     @Published private(set) var migratedAccountState: NativeTypedAccountState?
@@ -326,7 +333,14 @@ final class AppStore: ObservableObject {
     private var authenticationOperationInFlight = false
     private var identityActivationInFlight = false
     private var identityActivationWaiters: [CheckedContinuation<Void, Never>] = []
-    private var didConsumeVerifiedPendingOpenURL = false
+    /// Task 11.06 (contract §6.2 step 4): at most one route parked across
+    /// the auth/onboarding/subscription gate (newest wins). Read-only outside
+    /// the store so host tests can observe parking.
+    private(set) var parkedDeepLink: NativeDeepLinkCandidate?
+    /// Task 11.06 (contract §6.2 step 3): the App Group `pendingOpenUrl`
+    /// consumer (read-and-remove under the shared lock). Nil in previews and
+    /// host tests unless injected, so they never touch the real container.
+    private let pendingOpenURLConsumer: NativePendingOpenURLConsumer?
     private var migratedAccountBinding: String?
     private var verifiedAccountBinding: String?
     private var authenticatedUserSubject: String?
@@ -400,7 +414,8 @@ final class AppStore: ObservableObject {
         self.init(
             fileURL: directory.appending(path: "store.json"),
             seedIfMissing: false,
-            automaticallyMigrateLegacyData: true
+            automaticallyMigrateLegacyData: true,
+            pendingOpenURLConsumer: .live()
         )
     }
 
@@ -412,6 +427,7 @@ final class AppStore: ObservableObject {
         legacyMigrationSource: LegacyMigrationSource? = nil,
         widgetActionReplayTransport: NativeWidgetActionClaimTransport? = nil,
         appGroupAccountScrubber: NativeAppGroupAccountScrubber = .init(),
+        pendingOpenURLConsumer: NativePendingOpenURLConsumer? = nil,
         initialSyncService: (any NativeInitialSyncServing)? = nil,
         subscriptionService: NativeSubscriptionServing? = nil,
         jobPhotoTransferService: (any NativeJobPhotoTransferring)? = nil,
@@ -429,6 +445,7 @@ final class AppStore: ObservableObject {
         self.repository = Canonical.SnapshotRepository(primaryURL: fileURL)
         self.widgetActionReplayTransport = widgetActionReplayTransport ?? (try? .live())
         self.appGroupAccountScrubber = appGroupAccountScrubber
+        self.pendingOpenURLConsumer = pendingOpenURLConsumer
         self.initialSyncService = initialSyncService
         self.subscriptionService = subscriptionService ?? NativeRevenueCatSubscriptionService()
         self.injectedJobPhotoTransferService = jobPhotoTransferService
@@ -3632,18 +3649,157 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func handle(url: URL) {
+    /// A warm URL: `onOpenURL` (after `NativeOpenURLDispatch` offered it to
+    /// Google Sign-In), the launch URL, or the in-process On My Way router.
+    /// Task 11.06 (contract §6.2): the password-recovery link keeps its
+    /// priority; everything else is parsed strictly (malformed or oversized →
+    /// dropped with no side effect) and then gated by
+    /// `NativeDeepLinkRoutingPolicy` — authenticate (else park), exact owner,
+    /// then a live, non-archived record in the current owner's data.
+    func handle(url: URL, now: Date = Date()) {
         if let recoveryLink = NativePasswordRecoveryLink.parse(url) {
             Task { await handlePasswordRecoveryLink(recoveryLink) }
             return
         }
-        guard let route = NativeDeepLinkParser.parse(url.absoluteString),
-              jobs.contains(where: { $0.id == route.jobID })
-        else { return }
-        switch route {
-        case .job(let id): routeToJob(id)
-        case .onMyWay(let id): routeToOnMyWay(id)
+        guard let route = NativeDeepLinkParser.parse(url.absoluteString) else { return }
+        // 11.04 handoff: `OnMyWayIntent` stashes this same link and hands it
+        // to the router. Remove the matching stash now (RN `App.tsx` drops it
+        // after navigating from the live URL) so the next activation cannot
+        // present the review a second time; the warm route keeps the stash's
+        // owner tag as extra proof.
+        var stashOwnerTag: String?
+        if case .onMyWay = route, let pendingOpenURLConsumer {
+            stashOwnerTag = pendingOpenURLConsumer.takeMatching(route).ownerTag
         }
+        resolveDeepLink(
+            NativeDeepLinkCandidate(
+                route: route,
+                source: .warmURL,
+                ownerTag: stashOwnerTag,
+                arrivalBinding: derivedStatePublishBinding,
+                at: now
+            ),
+            now: now
+        )
+    }
+
+    /// Task 11.06 (contract §6.2): reads and removes the cold-launch
+    /// `pendingOpenUrl` stash under the shared lock, whatever the gate. Not
+    /// signed in → the route parks with its owner tag (cold-launch parking);
+    /// signed in → it is gated now. `TradeReadyNativeApp` calls this at launch
+    /// and on every activation; the `.signedIn` arrivals call it too.
+    func consumePendingOpenURLStash(now: Date = Date()) {
+        guard let pendingOpenURLConsumer,
+              case .pending(let pending) = pendingOpenURLConsumer.take(now: now)
+        else { return }
+        resolveDeepLink(
+            NativeDeepLinkCandidate(
+                route: pending.route,
+                source: .coldStash,
+                ownerTag: pending.ownerTag,
+                arrivalBinding: nil,
+                at: pending.at
+            ),
+            now: now
+        )
+    }
+
+    /// §6.2 step 4: the app backgrounded before the gate opened.
+    func discardParkedDeepLink() {
+        parkedDeepLink = nil
+    }
+
+    func dismissDeepLinkUnavailableNotice() {
+        deepLinkUnavailableNotice = nil
+    }
+
+    /// The routing phase of a gate state. Exhaustive on purpose: a new gate
+    /// must decide whether it parks, discards or routes.
+    static func deepLinkGatePhase(_ gate: NativeAuthenticationGateState) -> NativeDeepLinkGatePhase {
+        switch gate {
+        case .signedIn:
+            .signedIn
+        case .signedOut, .accountMismatch, .unavailable:
+            .closed
+        case .loading, .initialSyncLoading, .initialSyncUnavailable, .subscriptionLoading,
+             .passwordRecovery, .invalidPasswordRecovery, .onboarding, .paywall, .startingPoint:
+            .pending
+        }
+    }
+
+    /// Decides and applies one candidate. Synchronous on the main actor: the
+    /// gate phase, `O` and the record are read at the same instant the route
+    /// is applied, with no suspension point in between.
+    private func resolveDeepLink(_ candidate: NativeDeepLinkCandidate, now: Date) {
+        let decision = NativeDeepLinkRoutingPolicy.decide(
+            candidate,
+            phase: Self.deepLinkGatePhase(authenticationGateState),
+            ownerBinding: derivedStatePublishBinding,
+            now: now,
+            record: { [snapshot] id in
+                guard let job = snapshot.payload.jobs?.first(where: { $0.id == id }) else { return nil }
+                let sessions = (job.timeSessions ?? []).map { NativeTimeSession(start: $0.start, end: $0.end) }
+                return NativeDeepLinkRecord(
+                    isArchived: !(job.archivedAt ?? "").isEmpty,
+                    status: job.status,
+                    hasRunningTimer: NativeTimeTracking.activeSession(in: sessions) != nil
+                )
+            }
+        )
+        switch decision {
+        case .park:
+            // At most one parked route; the newest arrival wins (RN
+            // `pendingDeepLinkRef`).
+            parkedDeepLink = candidate
+        case .apply(let route):
+            deepLinkUnavailableNotice = nil
+            switch route {
+            case .job(let id): routeToJob(id)
+            case .onMyWay(let id): routeToOnMyWay(id)
+            }
+            analytics.track("widget_deep_link_opened", ["type": NativeDeepLinkRoutingPolicy.analyticsType(route)])
+        case .discard(let reason):
+            if reason.surfacesNotFound {
+                deepLinkUnavailableNotice = NativeDeepLinkUnavailableNotice(reason: reason)
+            }
+        }
+    }
+
+    /// Applies (or discards) the parked route once the gate allows; keeps it
+    /// parked while the gate is still pending.
+    private func flushParkedDeepLink(now: Date = Date()) {
+        guard let parked = parkedDeepLink else { return }
+        parkedDeepLink = nil
+        resolveDeepLink(parked, now: now)
+    }
+
+    private func handleDeepLinkGateChange(from oldValue: NativeAuthenticationGateState) {
+        let phase = Self.deepLinkGatePhase(authenticationGateState)
+        if NativeDeepLinkRoutingPolicy.discardsParked(
+            entering: phase,
+            gateChanged: oldValue != authenticationGateState
+        ) {
+            parkedDeepLink = nil
+            deepLinkUnavailableNotice = nil
+        } else if phase == .signedIn, Self.deepLinkGatePhase(oldValue) != .signedIn {
+            flushParkedDeepLink()
+        }
+    }
+
+    /// Task 11.06 (11.05 handoff d): every held route and one-shot target
+    /// from the previous session is dropped at each account boundary
+    /// (sign-out, deletion, scrub retry, use another account).
+    private func clearDeepLinkRouteState() {
+        parkedDeepLink = nil
+        deepLinkUnavailableNotice = nil
+        deepLinkedJobID = nil
+        deepLinkedCustomerID = nil
+        deepLinkedInvoiceID = nil
+        deepLinkedOutreachInvoiceID = nil
+        pendingOnMyWayJobID = nil
+        pendingAppointmentConfirmationJobID = nil
+        pendingReviewRequestJobID = nil
+        pendingEstimateFollowUpJobID = nil
     }
 
     func importLegacyData() {
@@ -3852,6 +4008,11 @@ final class AppStore: ObservableObject {
         // gate. Clear Google's Keychain-backed app credential on every exit so
         // the next attempt can actually select a different Google account.
         defer { clearGoogleCredential() }
+        // Task 11.06 (11.05 handoff d): an account switch is an account
+        // boundary for every held route. Cleared before the first await, so
+        // nothing parked or deep-linked in the previous session can surface
+        // for whoever signs in next.
+        clearDeepLinkRouteState()
         guard let activator = authenticatedIdentityActivator else {
             authenticationGateState = .signedOut
             return
@@ -3890,6 +4051,9 @@ final class AppStore: ObservableObject {
             initialSyncGateGeneration &+= 1
             authenticatedAccountState = .noMigratedSession
             authenticationGateState = .signedOut
+            // Task 11.06: and again after the awaits — a route that arrived
+            // during `clearSession`/`logOut` belonged to the cleared session.
+            clearDeepLinkRouteState()
             // Task 10.09 (B1): account boundary — clear the owner-scoped
             // cached snapshot (never the observer registrations; the 11.01
             // widget mirror registers once and must keep receiving the next
@@ -4174,7 +4338,7 @@ final class AppStore: ObservableObject {
         document.stage = .done
         try store.save(document)
         authenticationGateState = .signedIn(email: authenticatedEmail)
-        consumeVerifiedPendingOpenURLIfNeeded()
+        consumePendingDeepLinks()
         replayVerifiedWidgetActionsIfPossible()
     }
 
@@ -4332,12 +4496,7 @@ final class AppStore: ObservableObject {
         applyEmptySnapshot()
         selectedTab = .today
         todaySelectedDate = NativeTodayBriefing.todayDateString(now: Date())
-        deepLinkedJobID = nil
-        deepLinkedCustomerID = nil
-        deepLinkedInvoiceID = nil
-        pendingOnMyWayJobID = nil
-        pendingEstimateFollowUpJobID = nil
-        didConsumeVerifiedPendingOpenURL = false
+        clearDeepLinkRouteState()
         widgetActionReplayDiagnostics = NativeWidgetActionReplayDiagnostics()
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
@@ -4721,7 +4880,7 @@ final class AppStore: ObservableObject {
             }
         }
         if activateConsumers, case .signedIn = authenticationGateState {
-            consumeVerifiedPendingOpenURLIfNeeded()
+            consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
         }
     }
@@ -4926,7 +5085,7 @@ final class AppStore: ObservableObject {
             authenticationGateState = .startingPoint(trade)
         case .signedIn:
             authenticationGateState = .signedIn(email: authenticatedEmail)
-            consumeVerifiedPendingOpenURLIfNeeded()
+            consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
         }
     }
@@ -5292,19 +5451,14 @@ final class AppStore: ObservableObject {
         }
     }
 
-    private func consumeVerifiedPendingOpenURLIfNeeded(
-        inbox: any NativeAppGroupInbox = NativeUserDefaultsAppGroupInbox(),
-        now: Date = Date()
-    ) {
-        guard isMigratedLocalOwnerVerified, !didConsumeVerifiedPendingOpenURL else { return }
-        didConsumeVerifiedPendingOpenURL = true
-        _ = NativePendingOpenURLConsumer(inbox: inbox).consume(
-            localOwnerVerified: true,
-            now: now,
-            jobExists: { [jobs] id in jobs.contains(where: { $0.id == id }) },
-            routeToJob: { [weak self] id in self?.routeToJob(id) },
-            presentOnMyWay: { [weak self] id in self?.routeToOnMyWay(id) }
-        )
+    /// Task 11.06 (contract §2.5, §6.2; C22): runs at every `.signedIn`
+    /// arrival and after every activation — no once-per-session latch. The
+    /// parked route is flushed first, then the stash is read-and-removed
+    /// (the newest route applies last). Both go through the same gate: O plus
+    /// `.signedIn`, the owner tag, and the record.
+    private func consumePendingDeepLinks(now: Date = Date()) {
+        flushParkedDeepLink(now: now)
+        consumePendingOpenURLStash(now: now)
     }
 
     private func routeToJob(_ id: String) {

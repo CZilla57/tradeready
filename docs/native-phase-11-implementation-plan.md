@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03 and 11.05 done (2026-09-24); implementation tasks 11.06–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05 and 11.06 done (2026-09-24); implementation tasks 11.07–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -783,7 +783,7 @@ complete / Phase 12 evidence deferred**.
 | 11.03 | W3 | Done (code complete 2026-09-24; device layout proof deferred to Phase 12) | 11.01, 11.04 | Job Timer widget |
 | 11.04 | A1, A2, A3 | Done (code complete 2026-09-23; Siri/device proof deferred to Phase 12) | 11.01 | All ten App Intents + Siri + action queue |
 | 11.05 | W4 | Done (code complete 2026-09-24; item 4 routing-after-sign-in handed to 11.06; device/Siri/widget proof deferred to Phase 12) | 11.01-11.04 | Owner/stale/sign-in correctness |
-| 11.06 | L1, L2 | Pending | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
+| 11.06 | L1, L2 | Done (code complete 2026-09-24; C11/P8 resolved; device proof deferred to Phase 12) | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
 | 11.07 | P1, P4 | Pending | 11.00 | Analytics transport + privacy |
 | 11.08 | P2, P3 | Pending | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Pending | 11.07 | Crash reporting + redaction + app manifest |
@@ -1681,3 +1681,163 @@ later sign-in of the old owner (no current users: correctness over continuity).
 
 **Next ready:** 11.06 (deep-link routing and auth gates; the owner-gate API it needs is
 `NativeWidgetOwnerTag.matches` and O).
+
+### 11.06 — Cold and warm deep-link routing with authentication gates (2026-09-24)
+
+**Outcome:** code complete for L1 and L2. Cold (App Group `pendingOpenUrl` stash) and warm
+(`onOpenURL`, the launch URL and the in-process On My Way router) links for `job` and
+`onmyway` pass one gate, applied in this order:
+1. intercept (Google, then password recovery);
+2. parse;
+3. read and remove the stash under the lock;
+4. authenticate, else park;
+5. exact owner (O);
+6. the record exists and is not archived or finished.
+
+Any failure fails closed. The 11.05 handoffs and the 11.04 double-presentation handoff are
+closed, and C11/P8 is decided. Device, widget and Siri proof is deferred to Phase 12 and
+was not claimed.
+
+**Files:**
+- New: `native/TradeReadyNative/NativeDeepLinkRouting.swift`. It holds the pure policy
+  (`NativeDeepLinkRoutingPolicy.decide`, the parking-discard rule and the analytics type)
+  and the `NativeOpenURLDispatch` Google-first order.
+- Edited:
+  - `native/TradeReadyNative/AppStore.swift`: `handle(url:)`,
+    `consumePendingOpenURLStash`, parking on the gate `didSet`, the not-found notice,
+    `clearDeepLinkRouteState()` at every account boundary, and the consumer injection.
+  - `native/TradeReadyNative/NativeAppGroupInbox.swift`: `NativePendingOpenURLConsumer`
+    does `take` / `takeMatching` under `WidgetAppGroupLock`.
+  - `native/TradeReadyNative/NativeDeepLinkParser.swift`: `ownerTag`, size bounds and the
+    identifier rule.
+  - `native/TradeReadyNative/NativeEstimateFollowUp.swift` (P8).
+  - `native/TradeReadyNative/RootView.swift`: the "Job not found" sheet.
+  - `native/TradeReadyNative/TradeReadyNativeApp.swift`: dispatch, consume at launch and
+    on every activation, discard the parked route on background.
+- Tests:
+  - New: `native/DeepLinkRoutingTests/main.swift` and
+    `native/run-deep-link-routing-tests.sh`, registered in
+    `native/run-all-domain-tests.sh` after the owner-gating runner.
+  - Updated fixtures: `native/WidgetOwnerGatingTests/main.swift`,
+    `native/AppIntentQueueTests/main.swift`, `native/StoreIntegrationTests/main.swift`,
+    `native/AppGroupPendingOpenURLTests/main.swift` and
+    `native/EstimateFollowUpTests/main.swift`.
+  - Runner source lists: `native/run-appstore-sources-common.sh`,
+    `native/run-app-group-pending-open-url-tests.sh` and
+    `native/run-next-job-widget-tests.sh`.
+
+**P8 decision (C11 resolved):** an archived `estimate_sent` job's delivered `est_`
+notification **opens** its editable follow-up review.
+- The archive check was removed from `NativeEstimateFollowUp.canOpenNotification`.
+- Why: `upcomingReminders` still schedules `est_` for archived jobs, as RN
+  `selectEstimateFollowUps` does, and RN's tap routes with no archive check. Refusing
+  the tap made a notification the app itself delivered into a dead tap, which Phase 10
+  §9.6 rules out for every other family.
+- Still fails closed: a missing job, an answered estimate, or a workspace that is
+  signed out or not the exact owner's.
+- The same principle is used for the widget links: a surface the app is still producing
+  must route; a stale link to a record that is no longer produced fails closed.
+  Recorded in contract §6.3.
+
+**Handoff closure:**
+- **(a)** `consumeVerifiedPendingOpenURLIfNeeded` is gone.
+  - `consumePendingOpenURLStash` runs at launch, on every activation, and on each
+    `.signedIn` arrival (starting point, identity outcome, subscription gate). There is
+    no once-per-session flag.
+  - Routing requires O and `.signedIn`, so native-only accounts route.
+- **(b)** The stash is read and removed in one hold of the single `WidgetAppGroupLock`,
+  valid or not (no new lock).
+  - An untagged, stale, future, malformed or oversized stash is dropped.
+  - The tag must equal `hash(O)`.
+  - A locked-out read changes nothing.
+- **(c)** `handle(url:)` now has the full gate.
+  - Not signed in: it parks (at most one route; the newest wins). Each warm link records
+    its arrival O; a stash route keeps its tag.
+  - Entering `.signedIn` applies the parked route.
+  - Entering `.signedOut`, `.accountMismatch` or `.unavailable` discards it, as does
+    backgrounding.
+  - A route parked under A never applies under B.
+- **(d)** `useAnotherAccount` clears every held route and one-shot target (`deepLinked*`,
+  `pending*JobID`, the parked route and the notice). It clears before its first await and
+  again after its awaits. Sign-out, deletion and scrub retry share the same
+  `clearDeepLinkRouteState()`.
+- **(e)** The owner-gating fixtures were updated deliberately:
+  - (a) now asserts parking with no arrival owner, then resolution in the current
+    (emptied) data;
+  - (b) is rewritten for the new consumer: the stash is removed at once, parks with A's
+    tag, and is discarded when B signs in;
+  - (c) pins parking, newest wins and the real `signOut` discard;
+  - (d) is a hard assertion. The KNOWN GAP line is removed and nothing is printed.
+- **11.04:** a warm `onmyway` link removes the matching stash (same parsed route) under
+  the lock and carries its tag as extra owner proof. The intent writes the stash and
+  hands the URL to the router on the main actor with no suspension, so the cold consumer
+  never presents the same review again.
+  - The `native/AppIntentQueueTests/main.swift` assertion now expects the stash to be
+    removed and a following `consumePendingOpenURLStash()` not to re-present.
+  - On My Way stays an editable review and is never sent automatically; the test checks
+    that no bytes are written to the canonical file.
+
+**Deviations (recorded in contract §6.3):**
+1. A `job` link to an archived job with a running timer routes, because the Job Timer
+   widget still shows that job. `onmyway` never gets this exception.
+2. Oversize bounds: a URL over 1,024 bytes or a stash over 4,096 bytes is dropped. The id
+   must also pass `WidgetActionFieldRules.isValidIdentifier`.
+3. A record failure shows a "Job not found" sheet (the Jobs title and symbol). Owner and
+   freshness failures are silent.
+4. A closed gate discards a parked route on **entering** it. A link that arrives while
+   the gate is already closed parks until sign-in.
+5. Account boundaries also clear the customer, invoice, outreach, appointment, review and
+   estimate one-shot targets, not only the job and On My Way routes.
+6. P8 (above).
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-deep-link-routing-tests.sh` → "Deep-link routing
+  tests passed". It covers:
+  - the pure policy matrix;
+  - gate-phase mapping for every gate state;
+  - Google-first dispatch;
+  - recovery-link priority;
+  - malformed, oversized and stale links and stashes with no side effects;
+  - cold and warm × signed in, signed out, owner mismatch and no exact workspace ×
+    missing, archived, archived with a timer, and done, for both `job` and `onmyway`;
+  - the parking lifecycle;
+  - no double On My Way;
+  - `useAnotherAccount` clearing;
+  - analytics;
+  - P8 through `requestEstimateFollowUpReview`.
+- Mutation checks: 18, each applied, run, restored and verified identical with `cmp`. All
+  were killed:
+  - tag check, arrival-binding check, archived check, running-timer exception,
+    done-status check, freshness, signed-in gate, O-nil check;
+  - discard on entering a closed gate, Google-first order, warm `takeMatching`, the early
+    `useAnotherAccount` clear, flush on `.signedIn`;
+  - the not-found notice, analytics, P8 reverted, the parser size bound and the
+    identifier rule.
+- Also passing with `TZ=America/Phoenix`: widget-owner-gating, app-intent-queue,
+  store-integration, app-group-pending-open-url, estimate-follow-up,
+  estimate-follow-up-notification, appointment-notification, next-job-widget,
+  job-timer-widget, widget-snapshot and widget-action-replay.
+- RN oracle: `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/deepLinks.test.js`
+  → 39 passed.
+- `xcodebuild ... -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0.
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- A cold launch from a Next Job or Job Timer widget tap while signed in opens the exact
+  job. While signed out, the same tap opens it after the same owner signs in, and
+  signing in as a different owner opens nothing.
+- Siri "On My Way" presents one editable review (never twice, never sent automatically),
+  both warm and from a cold launch.
+- A widget tap on an archived or deleted job shows "Job not found". An archived job with
+  a running timer opens that job.
+- Google Sign-In completes while a widget link is parked.
+- An archived estimate's `est_` notification opens its follow-up review.
+
+**Concerns:** none blocking. The "Job not found" sheet is a new small surface: it reuses
+the existing title and symbol but is presented from `RootView` rather than inside Jobs
+navigation.
+
+**Next ready:** 11.07 (analytics transport; `widget_deep_link_opened {type}` now goes
+through the `NativeAnalytics` seam).

@@ -963,6 +963,10 @@ private func testAppStoreHandoffAndReplay() async throws {
         fileURL: fileURL,
         seedIfMissing: false,
         appGroupAccountScrubber: suite.scrubber,
+        pendingOpenURLConsumer: NativePendingOpenURLConsumer(
+            inbox: NativeUserDefaultsAppGroupInbox(defaults: suite.defaults),
+            lockFile: suite.lockFile
+        ),
         subscriptionService: SubscriptionStub(),
         widgetTimelineReloader: CountingReloader()
     )
@@ -1007,8 +1011,13 @@ private func testAppStoreHandoffAndReplay() async throws {
     expectEqual(try Data(contentsOf: fileURL), bytesBefore, "routing mutates no canonical data (nothing is sent or saved)")
     store.dismissPendingOnMyWay(jobID: "j9")
     expect(store.pendingOnMyWayJobID == nil, "the review can be dismissed without sending")
-    expect(suite.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) != nil,
-           "the tagged stash stays for the cold-launch consumer (11.06)")
+    // Task 11.06 (11.04 handoff): the warm route removed the matching tagged
+    // stash in the same lock hold, so the cold consumer (launch/activation)
+    // can never present the same review a second time.
+    expect(suite.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) == nil,
+           "the warm route removes the matching tagged stash")
+    store.consumePendingOpenURLStash()
+    expect(store.pendingOnMyWayJobID == nil, "the cold-launch consumer does not present the review twice")
 
     // Sign-out: the scrubber wipes everything the intents wrote; intents then refuse.
     try await store.signOut(revokeRemote: false)
