@@ -52,6 +52,8 @@ final class PoorNetworkLink: NativeInitialSyncHTTPDataLoading, NativeMutationPus
         case dropAfter(requests: Int)
         /// Only requests for this table are throttled; the rest go through.
         case throttledTable(String, status: Int)
+        /// Reads go through; every write fails as a lost connection.
+        case writesFail
     }
 
     struct Attempt: Equatable {
@@ -106,6 +108,10 @@ final class PoorNetworkLink: NativeInitialSyncHTTPDataLoading, NativeMutationPus
         case let .throttled(status):
             log(request, reachedServer: false)
             return Self.throttle(request, status: status)
+        case .writesFail:
+            guard request.httpMethod != "GET" else { return try await forward(request) }
+            log(request, reachedServer: false)
+            throw URLError(.networkConnectionLost)
         case let .throttledTable(table, status):
             guard request.url?.pathComponents.last == table else { return try await forward(request) }
             log(request, reachedServer: false)
@@ -314,13 +320,9 @@ struct PoorNetworkTests {
         try await throttledAndTimedOutTransport()
         try await midPassDropKeepsCommittedState()
         checkSignposts(signposts)
-        // Known-bug repro (11.12 finding; see the plan's 11.12 entry). It fails
-        // today, so it runs only on request and never silently passes.
-        if ProcessInfo.processInfo.environment["TRADEREADY_RUN_KNOWN_BUG_REPROS"] == "1" {
-            try await localEditDuringInFlightPullSurvives()
-        } else {
-            print("SKIP: D (local edit during an in-flight pull) is a known-bug repro; set TRADEREADY_RUN_KNOWN_BUG_REPROS=1 to run it")
-        }
+        try await coordinatorPullKeepsEditMadeDuringAwait()
+        try await directPullKeepsPendingEdits()
+        try await pendingEditWinsOverServerChangeToSameRecord()
 
         NativePerformanceMetrics.shared.replaceSink(nil)
         if failures == 0 {
@@ -675,66 +677,194 @@ struct PoorNetworkTests {
         expectEqual(h.server.liveRowCount(table: "jobs", userID: Harness.subject), 4, "C4: four distinct jobs on the server")
     }
 
-    // MARK: D. A local edit made while a pull is in flight (known-bug repro)
+    // MARK: D–F. Local edits against an in-flight pull (11.12 Finding D, fixed)
 
     /// The coordinator's contract: "Never let a remote pull overwrite canonical
     /// records that still have a local mutation waiting to reach the server."
     /// The pass checks the queue before it pulls, but a slow pull leaves a
-    /// window: an edit saved during the pull's network await is queued, and the
-    /// pull then commits a candidate built from the pre-edit snapshot. If the
-    /// link then drops, the device shows the old value until it reconnects, and
-    /// a second edit to the same record replaces the queued first edit. This
-    /// case asserts the contract. It FAILS on the current code.
+    /// window: an edit saved during the pull's network await is queued while
+    /// the pull is still merging into the snapshot it read before the await.
+    /// Finding D (fixed): the pull now rebases its delta onto the live snapshot
+    /// at commit time and skips every record with a pending mutation.
+
     @MainActor
-    static func localEditDuringInFlightPullSurvives() async throws {
-        let h = Harness(tag: "edit-during-pull")
-        defer { h.cleanup() }
-        let store = h.store
-        let customer = Customer(name: "Delta Roofing", email: "delta@example.test")
-        let job = Job(customerId: customer.id, customerName: customer.name, title: "Roof inspection", laborRate: 80)
-        expect(store.upsert(customer) && store.upsert(job), "D: the baseline saves")
-        expectEqual(await h.coordinator.sync(trigger: .manual), .completed(pushed: 2, authRefreshed: false),
-                    "D: the baseline pass commits both")
-
-        // A foreground pull starts; its first page is slow.
-        h.link.holdNextRequest = true
-        let pass = Task { await h.coordinator.sync(trigger: .foreground) }
-        for _ in 0..<500 where !h.link.isHolding { await Task.yield() }
-        expect(h.link.isHolding, "D: the pull is in flight")
-
-        // The user edits the job meanwhile (AppStore also triggers a sync,
-        // which coalesces into the in-flight pass).
-        guard var edited = store.jobs.first(where: { $0.id == job.id }) else {
-            expect(false, "D: the job is in the store")
-            return
-        }
-        edited.title = "Roof inspection + gutter repair"
-        expect(store.upsert(edited), "D: the edit saves during the pull")
-        expectEqual(await h.coordinator.sync(trigger: .localChange), .alreadyRunning, "D: the edit's trigger coalesces")
-
-        // The slow page arrives, then the link drops for the rest of the pass.
-        h.link.condition = .dropAfter(requests: 1)
-        h.link.release()
-        _ = await pass.value
-        _ = await h.coordinator.waitUntilIdle()
-        expectEqual(h.queueKeys(), ["jobs/\(job.id)"], "D: the edit is still queued (offline)")
-        expectEqual(store.jobs.first { $0.id == job.id }?.title, edited.title,
-                    "D: the pending local edit is still what the device shows after the pull commit")
-        expectEqual(h.committed()?.payload.jobs?.first { $0.id == job.id }?.title, edited.title,
-                    "D: the pending local edit is still what the device has on disk")
-
-        // Still offline, the user changes another field of what they now see.
-        guard var second = store.jobs.first(where: { $0.id == job.id }) else { return }
-        second.laborRate = 95
-        expect(store.upsert(second), "D: a second edit saves offline")
-        h.link.condition = .online
-        h.clock.advance(301)
-        _ = await h.coordinator.sync(trigger: .manual)
-        let serverTitle = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject).flatMap { row -> String? in
+    static func title(_ h: Harness, job id: String) -> (memory: String?, disk: String?, server: String?) {
+        let server = h.server.storedRow(table: "jobs", id: id, userID: Harness.subject).flatMap { row -> String? in
             guard case let .object(fields) = row.data, case let .string(title)? = fields["title"] else { return nil }
             return title
         }
-        expectEqual(serverTitle, edited.title, "D: after reconnecting, the first edit reached the server (not lost)")
+        return (h.store.jobs.first { $0.id == id }?.title,
+                h.committed()?.payload.jobs?.first { $0.id == id }?.title,
+                server)
+    }
+
+    @MainActor
+    static func customerName(_ h: Harness, _ id: String) -> (memory: String?, disk: String?) {
+        (h.store.customers.first { $0.id == id }?.name,
+         h.committed()?.payload.customers?.first { $0.id == id }?.name)
+    }
+
+    /// Another device edits a record on the server.
+    @MainActor
+    static func remoteEdit(_ h: Harness, table: String, id: String, field: String, to value: String) async throws {
+        let other = NativeSupabaseMutationPushService(
+            supabaseURL: Harness.supabaseURL, publishableKey: "publishable-key", allowsWrites: true, loader: h.server
+        )
+        let current: Canonical.JSONValue?
+        switch table {
+        case "jobs":
+            current = try h.committed()?.payload.jobs?.first { $0.id == id }.map(jsonValue)
+        default:
+            current = try h.committed()?.payload.customers?.first { $0.id == id }.map(jsonValue)
+        }
+        guard let current else { expect(false, "remote edit: \(table) record exists"); return }
+        let result = try await other.push(
+            sessionBytes: Harness.session, expectedUserSubject: Harness.subject,
+            items: [.init(table: table, op: .upsert, recordId: id,
+                          payload: replacing(current, field, with: .string(value)), ts: "2026-09-24T00:00:00.000Z")]
+        )
+        expect(result.remaining.isEmpty, "remote edit: the other device's \(table) edit reached the server")
+    }
+
+    /// A synced customer and job, as the starting point for D–F.
+    @MainActor
+    static func syncedBaseline(_ h: Harness, _ label: String) async -> (Customer, Job) {
+        let customer = Customer(name: "Delta Roofing", email: "delta@example.test")
+        let job = Job(customerId: customer.id, customerName: customer.name, title: "Roof inspection", laborRate: 80)
+        expect(h.store.upsert(customer) && h.store.upsert(job), "\(label): the baseline saves")
+        expectEqual(await h.coordinator.sync(trigger: .manual), .completed(pushed: 2, authRefreshed: false),
+                    "\(label): the baseline pass commits both")
+        return (customer, job)
+    }
+
+    /// Saves an edit to the job's title through the real AppStore write path.
+    @MainActor
+    static func editTitle(_ h: Harness, _ id: String, _ title: String, _ label: String) {
+        guard var edited = h.store.jobs.first(where: { $0.id == id }) else {
+            expect(false, "\(label): the job is in the store")
+            return
+        }
+        edited.title = title
+        expect(h.store.upsert(edited), "\(label): the edit saves")
+    }
+
+    @MainActor
+    static func waitUntilHolding(_ h: Harness, _ label: String) async {
+        for _ in 0..<500 where !h.link.isHolding { await Task.yield() }
+        expect(h.link.isHolding, "\(label): the pull is suspended on its first page")
+    }
+
+    /// D. Coordinator path (foreground, periodic and background refresh all
+    /// pull through it): an edit lands during the pull's await.
+    @MainActor
+    static func coordinatorPullKeepsEditMadeDuringAwait() async throws {
+        let h = Harness(tag: "edit-during-pull")
+        defer { h.cleanup() }
+        let (customer, job) = await syncedBaseline(h, "D")
+        try await remoteEdit(h, table: "customers", id: customer.id, field: "name", to: "Delta Roofing (remote)")
+
+        // The pull starts; its first page is slow. Meanwhile the user edits.
+        h.link.holdNextRequest = true
+        let pass = Task { await h.coordinator.sync(trigger: .foreground) }
+        await waitUntilHolding(h, "D")
+        let editedTitle = "Roof inspection + gutter repair"
+        editTitle(h, job.id, editedTitle, "D")
+        expectEqual(await h.coordinator.sync(trigger: .localChange), .alreadyRunning, "D: the edit's trigger coalesces")
+
+        // Reads still work but writes now fail, so the coalesced rerun cannot
+        // push the edit: the state after the pull commit is what the user sees.
+        h.link.condition = .writesFail
+        h.link.release()
+        _ = await pass.value
+        _ = await h.coordinator.waitUntilIdle()
+        expectEqual(h.queueKeys(), ["jobs/\(job.id)"], "D: the edit is still queued")
+        let after = title(h, job: job.id)
+        expectEqual(after.memory, editedTitle, "D (a): the pending edit is still what the device shows after the pull commit")
+        expectEqual(after.disk, editedTitle, "D (a): the pending edit is still what the device has on disk")
+        let customerAfter = customerName(h, customer.id)
+        expectEqual(customerAfter.memory, "Delta Roofing (remote)", "D (b): the server change to another record applied in memory")
+        expectEqual(customerAfter.disk, "Delta Roofing (remote)", "D (b): the server change to another record applied on disk")
+
+        // Still unable to write, the user changes another field of what they see.
+        guard var second = h.store.jobs.first(where: { $0.id == job.id }) else { return }
+        second.laborRate = 95
+        expect(h.store.upsert(second), "D: a second edit saves")
+        h.link.condition = .online
+        h.clock.advance(301)
+        _ = await h.coordinator.sync(trigger: .manual)
+        expectEqual(title(h, job: job.id).server, editedTitle,
+                    "D: after reconnecting, the first edit reached the server (not lost)")
+        expect(h.queue.load().isEmpty, "D: the queue drains after reconnecting")
+    }
+
+    /// E. The direct callers (booking intake, reschedule and response
+    /// recovery, portal recovery) call `pullDeltaIfPossible` themselves, even
+    /// with changes still queued. A change queued before the pull and an edit
+    /// saved during its await both survive; other server changes apply.
+    @MainActor
+    static func directPullKeepsPendingEdits() async throws {
+        let h = Harness(tag: "direct-pull")
+        defer { h.cleanup() }
+        let (customer, job) = await syncedBaseline(h, "E")
+        let other = Job(customerId: customer.id, customerName: customer.name, title: "Skylight quote", laborRate: 80)
+        expect(h.store.upsert(other), "E: a second job saves")
+        _ = await h.coordinator.sync(trigger: .manual)
+        try await remoteEdit(h, table: "customers", id: customer.id, field: "name", to: "Delta Roofing (remote)")
+
+        // Queued before the pull (the link cannot write, so it stays queued).
+        h.link.condition = .writesFail
+        editTitle(h, other.id, "Skylight quote (queued)", "E")
+        // The direct pull; an edit lands during its first page.
+        h.link.holdNextRequest = true
+        let pull = Task { await h.store.testPullDeltaIfPossible() }
+        await waitUntilHolding(h, "E")
+        editTitle(h, job.id, "Roof inspection (edited during pull)", "E")
+        h.link.release()
+        let result = await pull.value
+        expectEqual(result.state, .completed, "E: the direct pull completed")
+        expectEqual(Set(h.queueKeys()), ["jobs/\(other.id)", "jobs/\(job.id)"], "E: both edits are still queued")
+        let during = title(h, job: job.id)
+        expectEqual(during.memory, "Roof inspection (edited during pull)", "E (a): the edit made during the await is kept in memory")
+        expectEqual(during.disk, "Roof inspection (edited during pull)", "E (a): the edit made during the await is kept on disk")
+        let queued = title(h, job: other.id)
+        expectEqual(queued.memory, "Skylight quote (queued)", "E (a): the change queued before the pull is kept in memory")
+        expectEqual(queued.disk, "Skylight quote (queued)", "E (a): the change queued before the pull is kept on disk")
+        expectEqual(customerName(h, customer.id).memory, "Delta Roofing (remote)", "E (b): the server change to another record applied")
+        expectEqual(customerName(h, customer.id).disk, "Delta Roofing (remote)", "E (b): the server change is committed on disk")
+        expectEqual(h.committed()?.payload.jobs?.count, 2, "E: no job was lost or duplicated")
+    }
+
+    /// F. The server changed the same record the user has pending. Documented
+    /// precedence: the local pending edit wins until it is pushed; the push
+    /// then makes it the server's value (last writer).
+    @MainActor
+    static func pendingEditWinsOverServerChangeToSameRecord() async throws {
+        let h = Harness(tag: "same-record")
+        defer { h.cleanup() }
+        let (_, job) = await syncedBaseline(h, "F")
+        try await remoteEdit(h, table: "jobs", id: job.id, field: "title", to: "Roof inspection (remote)")
+
+        h.link.holdNextRequest = true
+        let pass = Task { await h.coordinator.sync(trigger: .foreground) }
+        await waitUntilHolding(h, "F")
+        editTitle(h, job.id, "Roof inspection (local)", "F")
+        _ = await h.coordinator.sync(trigger: .localChange)
+        h.link.condition = .writesFail
+        h.link.release()
+        _ = await pass.value
+        _ = await h.coordinator.waitUntilIdle()
+        let pending = title(h, job: job.id)
+        expectEqual(pending.server, "Roof inspection (remote)", "F: the server holds the other device's edit")
+        expectEqual(pending.memory, "Roof inspection (local)", "F: the pending local edit wins in memory until pushed")
+        expectEqual(pending.disk, "Roof inspection (local)", "F: the pending local edit wins on disk until pushed")
+
+        h.link.condition = .online
+        h.clock.advance(301)
+        _ = await h.coordinator.sync(trigger: .manual)
+        let pushed = title(h, job: job.id)
+        expectEqual(pushed.server, "Roof inspection (local)", "F: once pushed, the local edit is the server's value")
+        expectEqual(pushed.memory, "Roof inspection (local)", "F: after the push and pull, the device still shows it")
+        expect(h.queue.load().isEmpty, "F: the queue drains")
     }
 
     // MARK: Signposts (11.12 instrumentation on the pull commit path)

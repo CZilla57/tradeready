@@ -6386,6 +6386,9 @@ final class AppStore: ObservableObject {
         let subject = credentials.subject
         let cursor = syncCursorStore.load()
         let localSnapshot = snapshot
+        // The snapshot the pulled candidate was merged into (11.12 Finding D):
+        // the commit below rebases the delta from this base onto the live one.
+        var pullBase = localSnapshot
 
         let outcome: NativeDeltaPullOutcome
         do {
@@ -6401,11 +6404,12 @@ final class AppStore: ObservableObject {
                   fresh.subject == subject,
                   subject == authenticatedUserSubject
             else { return .failed("pull/authentication") }
+            pullBase = snapshot
             do {
                 outcome = try await service.pullDelta(
                     sessionBytes: fresh.sessionBytes,
                     expectedUserSubject: subject,
-                    localSnapshot: snapshot,
+                    localSnapshot: pullBase,
                     cursor: cursor
                 )
             } catch {
@@ -6418,9 +6422,27 @@ final class AppStore: ObservableObject {
         // The account or workspace may have changed during the network await;
         // never apply another owner's rows or write over a blocked workspace.
         guard subject == authenticatedUserSubject, !persistenceWritesBlocked else { return .skipped }
+        // 11.12 Finding D (fix): the candidate was merged into the snapshot
+        // read before the network await, and local edits may have landed since.
+        // Merge the pulled delta into the LIVE snapshot instead, skipping every
+        // record with a mutation pending in the LIVE queue (the coordinator's
+        // rule: a pull never overwrites a record waiting to reach the server).
+        // No await between here and the commit. If the rebase cannot be done,
+        // discard the candidate and keep the cursor, so the next pull refetches.
+        let committed: Canonical.Snapshot
+        do {
+            committed = try Self.rebasePulledDelta(
+                base: pullBase,
+                pulled: outcome.snapshot,
+                live: snapshot,
+                pendingKeys: Set(mutationQueue.load().map { "\($0.table)/\($0.recordId)" })
+            )
+        } catch {
+            return .failed("pull/local-rebase")
+        }
         let previous = snapshot
         do {
-            try apply(outcome.snapshot)
+            try apply(committed)
             try repository.save(snapshot)
         } catch {
             try? apply(previous)
@@ -6819,6 +6841,115 @@ final class AppStore: ObservableObject {
     private func scheduleSyncAfterLocalChange() {
         syncNow(trigger: .localChange)
     }
+
+    // MARK: 11.12 Finding D: rebase a pulled delta onto the live snapshot
+
+    /// Merges the delta a pull applied to `base` (giving `pulled`) into `live`,
+    /// the snapshot at commit time. Per record key `<table>/<id>` (the queue's
+    /// key): a record with a pending mutation keeps its live state (including
+    /// a pending delete); a record the pull did not change keeps its live state;
+    /// otherwise the pulled (server) state wins. When nothing changed locally
+    /// and nothing is pending, the result is `pulled` exactly (today's commit).
+    static func rebasePulledDelta(
+        base: Canonical.Snapshot,
+        pulled: Canonical.Snapshot,
+        live: Canonical.Snapshot,
+        pendingKeys: Set<String>
+    ) throws -> Canonical.Snapshot {
+        var result = pulled
+        let b = base.payload, p = pulled.payload, l = live.payload
+        func rebase<R: Encodable>(_ table: String, _ id: KeyPath<R, String>, _ base: [R]?, _ pulled: [R]?, _ live: [R]?) throws -> [R]?? {
+            try rebaseRecords(table: table, id: id, base: base, pulled: pulled, live: live, pendingKeys: pendingKeys)
+        }
+        if let v = try rebase("jobs", \Canonical.Job.id, b.jobs, p.jobs, l.jobs) { result.payload.jobs = v }
+        if let v = try rebase("invoices", \Canonical.Invoice.id, b.invoices, p.invoices, l.invoices) { result.payload.invoices = v }
+        if let v = try rebase("customers", \Canonical.Customer.id, b.customers, p.customers, l.customers) { result.payload.customers = v }
+        if let v = try rebase("expenses", \Canonical.Expense.id, b.expenses, p.expenses, l.expenses) { result.payload.expenses = v }
+        if let v = try rebase("pricebook", \Canonical.PricebookEntry.id, b.pricebook, p.pricebook, l.pricebook) { result.payload.pricebook = v }
+        if let v = try rebase("recurringJobs", \Canonical.RecurringJob.id, b.recurringJobs, p.recurringJobs, l.recurringJobs) { result.payload.recurringJobs = v }
+        if let v = try rebase("recurringInvoices", \Canonical.RecurringInvoice.id, b.recurringInvoices, p.recurringInvoices, l.recurringInvoices) { result.payload.recurringInvoices = v }
+        if let v = try rebase("trips", \Canonical.Trip.id, b.trips, p.trips, l.trips) { result.payload.trips = v }
+        if let v = try rebase("bookingRequests", \Canonical.BookingRequest.id, b.bookingRequests, p.bookingRequests, l.bookingRequests) { result.payload.bookingRequests = v }
+        if let v = try rebase("jobPhotos", \Canonical.JobPhoto.id, b.jobPhotos, p.jobPhotos, l.jobPhotos) { result.payload.jobPhotos = v }
+
+        // Settings: one record, keyed like its queue item.
+        let settingsKey = "settings/\(settingsMutationRecordID)"
+        if pendingKeys.contains(settingsKey) {
+            result.payload.settings = l.settings
+        } else if try !sameEncoding(l.settings, b.settings), try sameEncoding(p.settings, b.settings) {
+            result.payload.settings = l.settings
+        }
+
+        // Customer notes: keyed by customer key, like the backfill's queue items.
+        let noteKeys = Set((b.customerNotes ?? [:]).keys).union((p.customerNotes ?? [:]).keys).union((l.customerNotes ?? [:]).keys)
+        let notesTouched = noteKeys.contains { key in
+            pendingKeys.contains("customer_notes/\(key)") || l.customerNotes?[key] != b.customerNotes?[key]
+        }
+        if notesTouched {
+            var notes = p.customerNotes ?? [:]
+            for key in noteKeys where pendingKeys.contains("customer_notes/\(key)")
+                || p.customerNotes?[key] == b.customerNotes?[key] {
+                notes[key] = l.customerNotes?[key]
+            }
+            result.payload.customerNotes = (notes.isEmpty && p.customerNotes == nil && l.customerNotes == nil) ? nil : notes
+        }
+        return result
+    }
+
+    /// One collection's rebase. Returns nil (outer) when the pulled collection
+    /// can be committed unchanged: nothing pending in `table` and the live
+    /// collection still equals the base.
+    private static func rebaseRecords<R: Encodable>(
+        table: String,
+        id: KeyPath<R, String>,
+        base: [R]?,
+        pulled: [R]?,
+        live: [R]?,
+        pendingKeys: Set<String>
+    ) throws -> [R]?? {
+        let prefix = "\(table)/"
+        let hasPending = pendingKeys.contains { $0.hasPrefix(prefix) }
+        if !hasPending, try sameEncoding(live, base) { return nil }
+        func index(_ records: [R]?) -> [String: R] {
+            Dictionary((records ?? []).map { ($0[keyPath: id], $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        let baseByID = index(base), liveByID = index(live), pulledByID = index(pulled)
+        func keepsLive(_ key: String) throws -> Bool {
+            try pendingKeys.contains(prefix + key) || sameEncoding(pulledByID[key], baseByID[key])
+        }
+        var records: [R] = []
+        var seen = Set<String>()
+        for record in pulled ?? [] {
+            let key = record[keyPath: id]
+            guard seen.insert(key).inserted else { continue }
+            if try keepsLive(key) {
+                if let current = liveByID[key] { records.append(current) }
+            } else {
+                records.append(record)
+            }
+        }
+        for record in live ?? [] {
+            let key = record[keyPath: id]
+            guard seen.insert(key).inserted else { continue }
+            if try keepsLive(key) { records.append(record) }
+        }
+        if pulled == nil, live == nil { return .some(nil) }
+        return .some(records)
+    }
+
+    private static func sameEncoding<T: Encodable>(_ a: T?, _ b: T?) throws -> Bool {
+        switch (a, b) {
+        case (nil, nil): return true
+        case let (a?, b?): return try rebaseEncoder.encode(a) == rebaseEncoder.encode(b)
+        default: return false
+        }
+    }
+
+    private static let rebaseEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return encoder
+    }()
 
     // MARK: Task 11.12 signpost metadata (counts and outcome words only)
 
