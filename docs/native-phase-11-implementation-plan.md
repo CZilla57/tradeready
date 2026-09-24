@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); implementation tasks 11.02, 11.03 and 11.05–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02 done (2026-09-24); implementation tasks 11.03 and 11.05–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -779,7 +779,7 @@ complete / Phase 12 evidence deferred**.
 |---|---|---|---|---|
 | 11.00 | all | Done (contract frozen 2026-09-23; C8 → 11.05, C11/P8 → 11.06 named blockers) | — | Contract decisions + event catalog + intent inventory + baselines — [contract](native-phase-11-platform-hardening-contract-decisions.md) |
 | 11.01 | W1, M1 | Done (code complete 2026-09-23; device/extension proof deferred to Phase 12) | 11.00, 10.01, 10.09 | Widget target + snapshot contract + extension manifest |
-| 11.02 | W2 | Pending | 11.01 | Next Job widget |
+| 11.02 | W2 | Done (code complete 2026-09-24; device layout proof deferred to Phase 12) | 11.01 | Next Job widget |
 | 11.03 | W3 | Pending | 11.01, 11.04 | Job Timer widget |
 | 11.04 | A1, A2, A3 | Done (code complete 2026-09-23; Siri/device proof deferred to Phase 12) | 11.01 | All ten App Intents + Siri + action queue |
 | 11.05 | W4 | Pending | 11.01-11.04 | Owner/stale/sign-in correctness |
@@ -1279,3 +1279,112 @@ Siri, device and extension proof are deferred to Phase 12. They were not claimed
     SwiftFileList lists `WidgetActionFieldRules.swift`;
   - `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0; every runner passed;
   - `sh native/run-doc-reference-check.sh` → 0 missing.
+
+### 11.02 — Next Job widget (2026-09-24)
+
+**Status:** Done (code complete). The widget renders both families from resolved policy
+state only; state resolution, the deep-link URL and the timeline refresh date are pure
+Foundation code with host-test coverage. Device layout proof (the widget on a real Home
+Screen) is deferred to Phase 12 and was not claimed as passed.
+
+**Files:**
+- New, compiled into both targets (`N/Widgets/Shared/`):
+  - `N/Widgets/Shared/NextJobWidgetPolicy.swift`: `NextJobWidgetState`
+    (`.missing`/`.stale`/`.noUpcomingJob`/`.job`), `resolveState`, `deepLinkURL`,
+    `nextRefreshDate`, `whenLabel` — all pure Foundation, all host-tested;
+  - `N/Widgets/Shared/NextJobWidgetView.swift`: `NextJobWidgetView`, the small/medium
+    rendering. It switches on the resolved state and adds no policy of its own.
+- New, extension only (`native/TradeReadyWidgets/`):
+  - `native/TradeReadyWidgets/NextJobWidget.swift`: `NextJobEntry`, `NextJobProvider`
+    (`TimelineProvider`) and `NextJobWidget` (`StaticConfiguration`,
+    `[.systemSmall, .systemMedium]`).
+- Edited:
+  - `native/TradeReadyWidgets/TradeReadyWidgets.swift`: the `@main WidgetBundle` now
+    holds `NextJobWidget()`; the 11.01 placeholder widget/provider/view were removed
+    (11.03 adds `JobTimerWidget()` to the same bundle body).
+- Tests: `native/NextJobWidgetPolicyTests/main.swift` and
+  `native/run-next-job-widget-tests.sh` (both new). The runner is registered in
+  `native/run-all-domain-tests.sh` immediately after
+  `run-widget-action-replay-tests.sh`.
+
+**Behavior:**
+- State resolution (§3.3), checked in this order: a nil snapshot (missing key or
+  undecodable JSON — the 11.02 brief's "missing/blank") → `.missing`; `isStale(now:)` →
+  `.stale`; no `nextJob`, or a `nextJob.scheduledDate` before local today (the
+  "separately from staleness" rule) → `.noUpcomingJob`; otherwise `.job(nextJob)`.
+- `.stale` and `.missing` render no customer name, address or job link — the whole card
+  falls back to WidgetKit's default tap behavior (opens the app root) because
+  `widgetURL` is nil for every state but `.job`.
+- Deep link: `tradeready://job/<id>`, built by percent-encoding the exact projected id
+  (with `/` excluded from the allowed set so an embedded `/` cannot smuggle a third path
+  component) — never reformatted. A host test round-trips the generated URL through the
+  real `NativeDeepLinkParser.parse` for a set of ids including `/`, `?`, `#`, `%`, a
+  space, and non-ASCII characters.
+- Timeline: one entry per `getTimeline` call. The reload policy is `.after(refreshDate)`
+  where `refreshDate = min(updatedAt + 86_400, nextLocalMidnight)`, or `.never` when the
+  snapshot is missing or already stale — matching the "no self-scheduled background
+  work" requirement; the app's own mirror write still calls
+  `WidgetCenter.shared.reloadAllTimelines()` (§3.1) whenever it has fresher data.
+- `whenLabel` ports RN's `whenLabel` (`targets/widget/Widgets.swift:75-92`) with `now`
+  injected instead of read live, so "Today"/"Tomorrow"/`"EEE, MMM d"` are host-testable;
+  an unparseable `scheduledDate` falls back to the raw string.
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-next-job-widget-tests.sh` → "Next Job widget policy
+  tests passed". Covers:
+  - `.missing` for a nil snapshot;
+  - the §3.3 boundary: 86,399 s and exactly 86,400 s fresh, 86,401 s stale, a negative
+    age (future `updatedAt`) stale, an unparseable `updatedAt` stale;
+  - the "separately from staleness" rule: a fresh snapshot with no `nextJob`, with a
+    yesterday-dated `nextJob`, a today-dated one, and a future-dated one; and that
+    staleness is checked before the scheduledDate rule;
+  - the deep-link round trip through the real `NativeDeepLinkParser` for 8 ids
+    (including `/`, `?`, `#`, `%`, a space and non-ASCII characters), an empty id
+    producing no link, and the exact unencoded-id URL string;
+  - `nextRefreshDate`: nil for a missing or already-stale snapshot; the next local
+    midnight winning when earlier than `updatedAt + 86,400`; and `updatedAt + 86,400`
+    winning when earlier than the next local midnight (the contract's literal case),
+    with a sanity assertion that it is exactly 1 hour after `now`;
+  - `whenLabel`: today-with-time, tomorrow-without-time, a later date's `"EEE, MMM d"`,
+    a later date with time, and the unparseable-date fallback.
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`, 7 pre-existing warnings, none in new files. The
+  `TradeReadyWidgets` SwiftFileList is exactly `NextJobWidget.swift`,
+  `TradeReadyWidgets.swift`, and the `Widgets/Shared/*.swift` files (including
+  `NextJobWidgetPolicy.swift` and `NextJobWidgetView.swift`); the app's SwiftFileList
+  has the two `NextJobWidget*` Shared files too, and neither `NextJobWidget.swift` nor
+  `TradeReadyWidgets.swift`.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0; every runner passed,
+  including `run-next-job-widget-tests.sh` (individually confirmed passing; the
+  aggregate's `set -eu` would have halted before the later runners and the
+  `backend-workers` `npm test` tail on any failure).
+- `sh native/run-doc-reference-check.sh` → 0 missing (see the plan-wide count in this
+  entry's closing command).
+
+**Deviations:**
+1. **Placeholder removed, not layered.** The 11.01 doc comment said "11.02 and 11.03
+   replace [the placeholder]," implying both. Since a `WidgetBundle` only needs one
+   widget and `NextJobWidget` already satisfies that, this task removed the placeholder
+   outright rather than carrying it alongside `NextJobWidget` until 11.03 lands.
+   `TradeReadyWidgets.swift`'s comment now points 11.03 at the same bundle body.
+2. **`whenLabel` takes an injectable `Locale?`.** RN's formatters use the device locale
+   implicitly; the native port adds an optional `locale` parameter (default nil = device
+   locale) purely so the host test can pin `en_US_POSIX` for a deterministic time
+   string. Production call sites never pass it.
+3. **Defensive `scheduledDate` re-check.** §3.3's "separately from staleness" rule is
+   re-implemented in `NextJobWidgetPolicy` with a small local `localDateString` helper,
+   duplicated in miniature from `N/Domain/NativeWidgetSnapshot.swift` (app-target only)
+   because the widget's policy file must compile into the extension too.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- Both widget families (small, medium) appear correctly sized and legible in the
+  gallery and on a Home Screen.
+- Tapping a `.job` card opens the app at the linked job; tapping any other state opens
+  the app root.
+- The widget shows the stale state after 24 hours with the app closed, and recovers on
+  the next app-triggered reload.
+
+**Concerns:** none.
+
+**Next ready:** 11.03 (Job Timer widget; needs 11.01 and 11.04, done) and 11.05 (needs
+11.02 and 11.03).
