@@ -20,7 +20,7 @@ in Release. Release builds with `DEBUG_INFORMATION_FORMAT = dwarf-with-dsym`
 
 | Interval | Begins | Ends | Metadata |
 |---|---|---|---|
-| `Launch` | first line of `TradeReadyNativeApp.init` | the root view's first `onAppear` (once per process) | `outcome=completed` |
+| `Launch` | first line of `TradeReadyNativeApp.init` | the root view's first `onAppear` (once per process); for a background-only cold launch, the start of `performBackgroundRefresh` instead | `outcome=completed`; `outcome=skipped` for a background-only launch (not a launch-time sample) |
 | `SnapshotLoad` | before `AppStore.load(seedIfMissing:)` in `AppStore.init` | after it | record count; `failed` when the snapshot was unreadable |
 | `LegacyMigration` | around `LegacyMigrationCoordinator.migrate` at launch (only when it runs) | same call | `completed`, or `failed` when it throws |
 | `InitialSync` | the initial-sync gate starts the first full pull | the atomic commit | record count; `failed` on a thrown pull or commit; `skipped` when a stale account or generation drops the pass |
@@ -43,8 +43,18 @@ Rules the host suite enforces (`native/PerformanceMetricsTests/main.swift`):
   later Finding D fix changed only `pullDeltaAndCommit`'s commit). With no recorder
   attached, `OSSignposter.isEnabled` is false and a call costs one flag read.
 - **Pinned inventory.** No other `N/` file touches `OSSignposter` or the sink types,
-  and the nine call sites are an exact list, so a new interval is a deliberate test
+  and the ten call sites are an exact list, so a new interval is a deliberate test
   edit.
+
+Known signpost gaps (review M6, recorded):
+
+- **`JobListProjection` fires several times per render.** `JobsView.listState` is
+  read more than once per body, so one render records several intervals. PERF-8
+  reads their durations; a count of intervals is not a count of renders.
+- **Background-only cold launch (fixed in fix round 2).** A process launched only
+  for a background refresh never shows the root view, so `Launch` stayed open.
+  `performBackgroundRefresh` now ends it as `skipped` (a no-op after a foreground
+  launch). PERF-1 and PERF-2 read only `outcome=completed` launches.
 
 ### 1.2 Poor-network host suite (`native/PoorNetworkTests/main.swift`)
 
@@ -66,19 +76,23 @@ primary-key conflict for a plain insert.
 | D. Edit during a pull (coordinator) | An edit saved while the pull waits on the network is kept in memory and on disk and stays queued, while a remote change to another record still applies. After a drop and reconnect the server gets the edit. |
 | E. Edit during a pull (direct caller) | Through the booking/portal-recovery entry point, a change queued before the pull and one made during it are both kept and both stay queued, and server changes to other records apply. |
 | F. Same record changed on both sides | The local pending edit wins in memory and on disk until it is pushed, and then the server, memory and disk agree. |
+| G. Push acknowledged during a direct pull | A change queued when a booking/portal-recovery pull starts is pushed by the coordinator while that pull is in flight, and the pull's page (read before the push) carries the older server row. The commit keeps the pushed edit on screen and on disk, keeps the jobs watermark so the row is fetched again, and still applies another job's server change. After a follow-up edit and reconnect, the server keeps the edit. |
 
 `DeltaPull` signposts from these passes are checked for pairing and for
 count-and-outcome-only metadata. Five mutations of production code were each caught
 (the 11.12 entry in the plan's §7 lists them).
 
-**Finding D (fixed in `36a08dc`, 11.12 fix round 1).** An edit saved while a delta pull
+**Finding D (fixed in `36a08dc`, 11.12 fix round 1; hardened in `22f35fd`, fix round 2).** An edit saved while a delta pull
 was waiting on the network was reverted, in memory and on disk, when that pull
 committed, because the pull merged into the snapshot captured before its await. If the
 link dropped before the rerun pushed the edit, a second edit to the same record replaced
 the queued first one, which was lost. The pull commit now rebases the pulled delta onto
-the live snapshot and keeps every record with a pending mutation, so the coordinator's
-rule that a pull never overwrites a record with a pending local mutation holds.
-Scenarios D, E and F above prove it and run by default. SOAK-3 on device should still
+the live snapshot and takes the server's version only for records this device has not
+touched: not pending at the pull's start or at commit, and unchanged locally since the
+pull's base. Where it keeps a local record over a fetched server row, that table's
+watermark stays put so the next pull fetches the row again (fix round 2 added the
+pull-start and locally-changed rules for review finding I1). Scenarios D to G above and
+table-driven cases of the merge rule prove it and run by default. SOAK-3 on device should still
 include an edit made during a slow pull.
 
 ## 2. Environments
@@ -107,7 +121,7 @@ otherwise.
 | PERF-5 | Migration timing | During the 12.04 upgrade (Expo build → native, no delete), profile the first native launch. | `LegacyMigration` and `SnapshotLoad` durations and counts; migration outcome | **12.04** |
 | PERF-6 | Initial sync timing | Sign in on a fresh install for each data tier. | `InitialSync` duration, outcome and count | **12.04** |
 | PERF-7 | Delta pull and sync error rate | Foreground and manual sync on typical and large tiers; the SOAK rows below. | `DeltaPull` durations and the outcome mix; the Cloud Sync status diagnostic codes | **12.02** (monitored signal: sync errors and pending-queue growth); **12.04** (baseline) |
-| PERF-8 | List rendering | Large tier: scroll Jobs and Invoices top to bottom, type a search, switch every filter. Use Instruments Time Profiler plus Hangs (and the SwiftUI template where the Xcode version provides it). | `JobListProjection` and `InvoiceListProjection` durations and counts; hitches or hangs | **12.04** |
+| PERF-8 | List rendering | Large tier: scroll Jobs and Invoices top to bottom, type a search, switch every filter. Use Instruments Time Profiler plus Hangs (and the SwiftUI template where the Xcode version provides it). | `JobListProjection` and `InvoiceListProjection` durations (several `JobListProjection` intervals per render; see the gaps above); hitches or hangs | **12.04** |
 | PERF-9 | Crash-free sessions | From Sentry (11.09) once a release DSN is supplied. | Crash-free session rate per build | **12.02** (source); 12.04 / 12.05 (read) |
 | PERF-10 | Expo reference (optional) | On the same device, before the 12.04 upgrade, run PERF-1 and PERF-2 on the installed App Store Expo build. | App Launch time to first frame | **12.04**. A reference only, never a threshold (see [Thresholds](#thresholds)) |
 
@@ -131,14 +145,13 @@ This document sets **no numeric threshold**. Phase 12.00 owns them in the cutove
 charter (`docs/native-phase-12-cutover-charter.md`, created by 12.00), and 12.02 wires
 each one to a monitored source.
 
-**Tension to resolve in 12.00.** The Phase 11 plan (§11.12 step 4) says 12.00 sets
-provisional thresholds "from the current Expo app's production metrics". The Phase 12
-plan (12.00 step 2) says there are no production users, so no Expo production
-baseline exists and the thresholds are absolute targets. Stage A's native baselines
-(12.04 step 5, the measurements above) refine those targets, and the owner
-re-ratifies them before Stage B. This document follows the Phase 12 plan. PERF-10 can
-give a same-device Expo launch reference, but it is one team device and not a
-production metric, so it must not become a threshold without the owner's ruling.
+**Ruling (controller, 11.12): thresholds are Phase 12.00's absolute targets.** The
+Phase 11 plan (§11.12 step 4) said 12.00 would set provisional thresholds "from the
+current Expo app's production metrics". There are no production users, so no Expo
+production baseline exists, and 12.00 step 2's absolute targets govern. Stage A's
+native baselines (12.04 step 5, the measurements above) refine those targets, and the
+owner re-ratifies them before Stage B. PERF-10 gives only a same-device Expo launch
+reference from one team device; it is never a threshold.
 
 ## Phase 12 owner summary
 
