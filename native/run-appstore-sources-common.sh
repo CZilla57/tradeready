@@ -101,6 +101,8 @@ $ROOT_DIR/native/TradeReadyNative/NativeCoachTransport.swift
 $ROOT_DIR/native/TradeReadyNative/NativeReceiptOCR.swift
 $ROOT_DIR/native/TradeReadyNative/NativePricebookAI.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAITransport.swift
+$ROOT_DIR/native/TradeReadyNative/NativeAIProviderKeyPolicy.swift
+$ROOT_DIR/native/TradeReadyNative/NativeAIProviderKeyStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeImportHistory.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAccountDeletion.swift
 $ROOT_DIR/native/TradeReadyNative/NativeTypedAccountState.swift

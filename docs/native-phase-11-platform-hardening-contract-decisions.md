@@ -64,7 +64,7 @@ characterization).
 | C16 | Seam property types | Widen `[String: String]` to JSON scalars and string arrays (§9.6) | chosen; implemented by 11.07 (§9.7) | 11.07 (in place, ruling P6) |
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen; crash side implemented by 11.09 (§10.4) | 11.07, 11.09, 11.15 |
-| C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen | 11.15 |
+| C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen; implemented by 11.15 with the native differences in §11.1 | 11.15 |
 | C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline | 11.10a/11.10b |
 | C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
@@ -1530,6 +1530,30 @@ Native contract (chosen):
   - 11.15's redaction test feeds a sample key through the analytics and Sentry redactors
     and asserts it is absent.
 
+### 11.1 Implemented by 11.15 (2026-09-24): recorded native differences
+
+- **Key shape is validated.** RN stores any string. Native stores a trimmed key only when
+  it starts with the provider prefix (`gsk_`, `sk-ant-`), holds only `[A-Za-z0-9_-]` and
+  is 20–512 characters. Those are the characters `NativeErrorRedaction.secretPrefixPattern`
+  consumes after a credential prefix, so every storable key is redacted whole by the
+  shared `NativeSensitiveData` screens; a key with a `.` or a space would leave a tail.
+  Policy: `N/NativeAIProviderKeyPolicy.swift`.
+- **Save and Remove are explicit.** The native field never shows the saved key, so an
+  empty field is not a deletion: Save is disabled for a blank field and Remove clears the
+  account. The policy still maps an empty trimmed entry to a clear (above).
+- **Masked display is "Saved".** RN has no masked format (its secure field redisplays the
+  saved value as dots). Native shows the provider name with "Saved" or "Not set", and no
+  character of the key.
+- **Owner-bound writes.** A save or remove is refused unless an owner is signed in and no
+  account boundary (sign-out, deletion, a pending or blocked scrub) is running.
+- **Store injection.** `AppStore` takes one `NativeKeychainSecureSettingsStore`
+  (production: the system Keychain) for the key reads and writes and for every
+  account-scrub wipe, so the store the keys are written to is the store that is wiped.
+- **`$screen` hardening.** `NativeAnalyticsPrivacyPolicy.screenNameRejection` now also
+  applies `containsSecret`: a 56-byte Groq key passed the route-name character check.
+- **Account switch.** `useAnotherAccount` clears only the session and keeps provider keys,
+  as it always did for migrated keys; unchanged by 11.15.
+
 ---
 
 ## 12. Accessibility baseline (H1)
@@ -1709,7 +1733,7 @@ created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in
 - **11.08:** §9.3 screen map, §9.4 identity lifecycle, §9.5 parity including the m6 gaps.
 - **11.09:** §10.2–10.3 Sentry config, redactor and `reportError`; the app manifest (§8).
   Done 2026-09-24 (§10.4; §8.1 and §8.3 amended).
-- **11.15:** §11.
+- **11.15:** §11. Done 2026-09-24 (§11.1).
 - **11.10a/11.11/11.12/11.10b:** §12 baseline, §13 rows.
 - **11.13/11.14:** §13 Phase 11 rows, the runsheet file, and the parity-row updates from §14.
 

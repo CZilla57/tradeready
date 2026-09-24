@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08 and 11.09 done (2026-09-24); implementation tasks 11.10–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09 and 11.15 done (2026-09-24); implementation tasks 11.10–11.14 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -787,7 +787,7 @@ complete / Phase 12 evidence deferred**.
 | 11.07 | P1, P4 | Done (code complete 2026-09-24; PostHog iOS 3.81.0 linked, app target only; no key committed, so analytics is off until a release key is supplied; device proof deferred to Phase 12) | 11.00 | Analytics transport + privacy |
 | 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 49 wired (the booking push opens await native push; `tax_settings_saved` is unreachable until a native tax-settings editor exists); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Done (code complete 2026-09-24; Sentry Cocoa 9.29.0 linked, app target only; no DSN committed, so crash reporting is off until a release DSN is supplied; app manifest written; dSYM upload script for `tradeready-3r/tradeready-ios`; device proof deferred to Phase 12) | 11.07 | Crash reporting + redaction + app manifest |
-| 11.15 | P4, R2 | Pending | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
+| 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys; live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Pending | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Pending | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Pending | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
@@ -2450,3 +2450,129 @@ both unblocked by 11.07.
   to it.
 - `error-redaction tests: 687/687 checks passed`. The analytics runners, the aggregate
   and the Release compile pass (see the task report).
+
+### 11.15 — Settings › AI Assistant advanced key entry (2026-09-24)
+
+**Outcome:** code complete for P4 and R2 on the "Settings › AI Assistant" row; this closes
+the Phase 10 I4 carry-in. Live provider proof is deferred to Phase 12.
+- RN's intro hint and "Advanced" switch (a11y "Advanced AI settings") are on the page, with
+  RN's copy verbatim. The switch starts off on every visit, as RN's `useState(false)`
+  does. Turned on, it shows a Groq card and then an Anthropic card. Each card has the RN
+  hint, a `SecureField` (placeholder `gsk_...` / `sk-ant-...`, a11y "Groq API key" /
+  "Anthropic API key"), a status row that shows only "Saved" or "Not set", Save key,
+  Remove key (shown only when a key is saved), and the RN note "Stored only on your
+  device. Never share this key."
+- Keys are stored only through `NativeKeychainSecureSettingsStore`, in the existing
+  accounts `anthropicKey` and `groqKey` (contract §11). Saving is a verified upsert and
+  removing is a verified remove. No second Keychain wrapper exists: the store gains an
+  extension in `NativeAIProviderKeyStore.swift`.
+- A save or remove republishes `AppStore`. `coachProviderSummary`, the page's saved state
+  and the next coach request (and the receipt and pricebook Anthropic reads) follow at
+  once, with the transport's precedence (Anthropic, then Groq, then backend).
+- Owner-bound: a change is refused unless an owner is signed in and no account boundary
+  is running (`authenticationOperationInFlight`, a blocked scrub or a pending scrub).
+  `AppStore` now takes one injected `secureSettingsStore` (default: the system Keychain).
+  The key reads and writes and every scrub wipe use it: launch recovery, `retryAccountScrub`,
+  `signOut` and `deleteAccount`. So entered keys are wiped with migrated keys by
+  `clearAccountValues()` (sign-out) and `clearAllValues()` (deletion).
+
+**Decisions (contract §11.1):**
+- **Masked display:** RN has no masked format, so the page shows the provider name and
+  "Saved". It never shows the last 4 characters.
+- **Validation:** a key must be trimmed, carry the provider prefix (`gsk_` or `sk-ant-`),
+  use only `[A-Za-z0-9_-]` and be 20–512 characters long. The shared redaction screens then
+  always recognize the whole key.
+- **Clearing:** an empty trimmed entry is still a clear in the policy (contract §11). The
+  page offers only the explicit Remove, because the field never holds the saved key.
+- **Analytics hardening:** `NativeAnalyticsPrivacyPolicy.screenNameRejection` now applies
+  `containsSecret`. The 11.15 redaction test found that a 56-byte Groq key passed the
+  `$screen` route-name check and would have reached the SDK. `NativeSensitiveData` already
+  covered both key shapes and is unchanged.
+
+**Files:**
+- New:
+  - `native/TradeReadyNative/NativeAIProviderKeyPolicy.swift`: Foundation-only. It holds
+    `NativeAIProviderKeyKind`, `NativeAIProviderKeyChange` and `NativeAIProviderKeyPolicy`
+    (copy, trim and validation, the save/clear outcome, the masked status, the stored-value
+    rule and precedence).
+  - `native/TradeReadyNative/NativeAIProviderKeyStore.swift`: the
+    `NativeKeychainSecureSettingsStore` extension (read, save, clear).
+  - `native/AIProviderKeyTests/main.swift` and `native/run-ai-provider-key-tests.sh`.
+- Edited:
+  - `native/TradeReadyNative/AppStore.swift`: the `secureSettingsStore` init parameter and
+    property, the scrub sites, `advisoryAnthropicKey`/`advisoryGroqKey`,
+    `aiProviderKeyIsSaved`, `setAIProviderKey`, `clearAIProviderKey` and the owner gate.
+  - `native/TradeReadyNative/SettingsView.swift`: `AISettings` and `AIProviderKeySection`.
+  - `native/TradeReadyNative/NativeAnalytics.swift`: the screen-name secret check.
+  - `native/run-appstore-sources-common.sh` and `native/run-all-domain-tests.sh`.
+- Docs: contract (C19, §11.1, §15), `docs/native-parity-matrix.md` (row "AI Assistant")
+  and this plan.
+
+**Interface handoff:** `AppStore.setAIProviderKey(_:entry:)`, `clearAIProviderKey(_:)` and
+`aiProviderKeyIsSaved(_:)` return or read `NativeAIProviderKeyChange`/`Bool`.
+`AppStore.init(…, secureSettingsStore:)` is the injection point for host tests. 11.13
+qualifies the row with the runner below.
+
+**Commands and results:**
+- RED: `TZ=America/Phoenix sh native/run-ai-provider-key-tests.sh` failed to compile before
+  the implementation. The errors were "cannot find 'NativeAIProviderKeyKind' in scope" and
+  "value of type 'AppStore' has no member 'setAIProviderKey'". After the policy and wiring,
+  and before the view, the run failed 5 of 224 checks. Four were view checks. The fifth
+  was a real finding: "a Groq key is not a valid screen name".
+- GREEN: `TZ=America/Phoenix sh native/run-ai-provider-key-tests.sh` → "ai-provider-key
+  tests: 224/224 checks passed". It covers:
+  - the RN copy;
+  - trim and validation, and blocked changes;
+  - messages that never echo the entry;
+  - the masked display and the stored-value rule;
+  - apply with throwing stores;
+  - precedence equal to `NativeCoachTransport.provider`;
+  - the secure store over an in-memory backing (save, clear, read-back verification,
+    migrated whitespace);
+  - the owner wipe (`clearAccountValues` and `clearAllValues`, alongside a migrated key);
+  - the AppStore wiring: signed out is refused; save, remove and empty-save each change
+    the summary, and the coach request goes to Anthropic with `x-api-key`, then to Groq
+    with `Bearer`, then to the backend; a Keychain failure is surfaced;
+  - the real `signOut(revokeRemote: false)` wipe (the next owner inherits no key), and
+    the real launch recovery of a pending `.all` (deletion) scrub;
+  - analytics: the real `ai_chat_sent` carries `provider` only; with the key in every
+    property, name, identify and screen slot, nothing reaches the adapter or diagnostics;
+  - crash payloads: reports via `NativeCrashReporter` plus `redactEvent` over each
+    report's error, extras, tags, contexts, breadcrumbs and request carry no key;
+  - storage: no key in `UserDefaults.standard`, the App Group suite, the widget snapshot,
+    the business-data files, `recordedDiagnostics` or `BusinessSettings`;
+  - source checks: no logging, defaults or telemetry in the key files, `SecureField`
+    only, and every scrub site uses the injected store.
+- Mutation checks: 4, applied in place, run and restored. All four were killed:
+  - no republish after a change (2 failures);
+  - the owner gate always open (5);
+  - no prefix check (6);
+  - no character check (4).
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0. The run includes
+  "ai-provider-key tests: 224/224 checks passed", "Analytics transport tests passed (226
+  checks)", "Analytics event tests passed (536 checks)", "error-redaction tests: 689/689
+  checks passed" and "Widget owner gating tests passed".
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`, with no warning from a file this task touched.
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- Settings › AI Assistant: switch Advanced on, save a real Groq key and then a real
+  Anthropic key. After each save the Provider row reads Groq and then "Anthropic
+  (Claude)", and a coach message is answered by that provider. Remove the Anthropic key:
+  the coach answers through Groq. Remove both: the coach uses TradeReady AI (backend).
+- VoiceOver reads "Advanced AI settings", "Groq API key" and "Anthropic API key". The
+  secure field shows dots, the status reads only "Saved", and the key is never spoken.
+- Sign out and sign back in: both keys are gone. Account deletion also leaves no key.
+- With a Release DSN and PostHog key set: after key entry and a coach send, no Sentry
+  event or PostHog event or `$screen` payload contains the key.
+
+**Concerns:**
+- `useAnotherAccount` clears only the session and keeps provider keys, as it always did
+  for migrated keys. A second account that reaches a fresh workspace on the same device
+  (for example after "Cloud data unavailable" → "Use another account") could use the
+  first owner's key through the coach, though never see it. Wiping keys there too would
+  change migrated-key behavior. This needs a controller decision.
+- `cancelPasswordRecovery` likewise clears only the session (unchanged).
+
+**Next ready:** 11.10a (accessibility audit).

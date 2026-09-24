@@ -617,11 +617,14 @@ struct NativeAnalyticsPrivacyPolicy {
     }
 
     /// RN route names (`Today`, `JobDetail`): a letter, then letters, digits
-    /// or `_`, at most `maxScreenNameBytes`.
+    /// or `_`, at most `maxScreenNameBytes`. Task 11.15: an identifier-shaped
+    /// credential (a 56-byte Groq `gsk_…` key passes the character check) is
+    /// refused through the shared `containsSecret` screen.
     static func screenNameRejection(_ name: String) -> NativeAnalyticsDiagnostic.Reason? {
         guard let first = name.unicodeScalars.first, asciiLetters.contains(first),
               name.utf8.count <= maxScreenNameBytes,
-              name.unicodeScalars.allSatisfy({ asciiLetters.contains($0) || asciiDigits.contains($0) || $0 == "_" })
+              name.unicodeScalars.allSatisfy({ asciiLetters.contains($0) || asciiDigits.contains($0) || $0 == "_" }),
+              !containsSecret(name)
         else { return .invalidScreenName }
         return nil
     }

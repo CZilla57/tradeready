@@ -307,6 +307,11 @@ final class AppStore: ObservableObject {
     /// previews/tests that never construct the coordinator.
     var onInvoiceCreatedContextualPrompt: (@MainActor () -> Void)?
     private let appGroupAccountScrubber: NativeAppGroupAccountScrubber
+    /// Task 11.15: the one secure store for the auth session and the user's
+    /// provider keys (`NativeKeychainSecureSettingsStore`, the system Keychain
+    /// in production). The account-scrub paths wipe the same store the AI
+    /// key entry writes to; host tests inject an in-memory backing.
+    private let secureSettingsStore: NativeKeychainSecureSettingsStore
     /// Task 11.01: the WidgetKit reload seam used after every App Group wipe
     /// (sign-out, account deletion, scrub retry/recovery). Injectable so host
     /// tests observe reloads.
@@ -470,9 +475,11 @@ final class AppStore: ObservableObject {
         coachTransport: NativeCoachTransport? = nil,
         analytics: NativeAnalytics = NativeNoOpAnalytics(),
         crashReporting: NativeCrashReporting = NativeNoOpCrashReporting(),
-        widgetTimelineReloader: any NativeWidgetTimelineReloading = NativeWidgetCenterTimelineReloader()
+        widgetTimelineReloader: any NativeWidgetTimelineReloading = NativeWidgetCenterTimelineReloader(),
+        secureSettingsStore: NativeKeychainSecureSettingsStore = .init()
     ) {
         self.analytics = analytics
+        self.secureSettingsStore = secureSettingsStore
         self.crashReporting = crashReporting
         self.widgetTimelineReloader = widgetTimelineReloader
         self.fileURL = fileURL
@@ -534,10 +541,9 @@ final class AppStore: ObservableObject {
                 try setupChecklistStore.removeAll()
                 try removeImportHistory()
                 try pendingScheduleBookingWorkStore().removeAll()
-                let sessionStore = NativeKeychainSecureSettingsStore()
                 switch pendingScope {
-                case .live: try sessionStore.clearAccountValues()
-                case .all: try sessionStore.clearAllValues()
+                case .live: try secureSettingsStore.clearAccountValues()
+                case .all: try secureSettingsStore.clearAllValues()
                 }
                 try repository.finishAccountScrub()
                 NativeGoogleSignInProvider.clearLocalCredential()
@@ -4516,11 +4522,10 @@ final class AppStore: ObservableObject {
         defer { authenticationOperationInFlight = false }
         defer { widgetMirrorSuspendedForAccountBoundary = false }
 
-        let sessionStore = NativeKeychainSecureSettingsStore()
         if revokeRemote {
             do {
                 let configured = try configuredAuthentication()
-                if let session = try sessionStore.readSupabaseSession() {
+                if let session = try secureSettingsStore.readSupabaseSession() {
                     try await configured.client.revoke(sessionBytes: session)
                 }
             } catch {
@@ -4532,7 +4537,7 @@ final class AppStore: ObservableObject {
         // the owner teardown in `applyCompletedSignOutState`.
         widgetMirrorSuspendedForAccountBoundary = true
         do {
-            try performLocalAccountScrub(sessionStore: sessionStore, scope: .live)
+            try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .live)
         } catch {
             isAccountScrubBlocked = repository.isAccountScrubPending
             throw NativeAccountSignOutError.localScrubFailed
@@ -4560,7 +4565,7 @@ final class AppStore: ObservableObject {
             throw NativeAccountDeletionError.invalidConfiguration
         }
         let client = NativeAccountDeletionClient(endpoint: endpoint)
-        let sessionStore = NativeKeychainSecureSettingsStore()
+        let sessionStore = secureSettingsStore
 
         func currentSession() throws -> Data {
             guard let session = try sessionStore.readSupabaseSession() else {
@@ -4595,7 +4600,7 @@ final class AppStore: ObservableObject {
         // Task 11.01: see `signOut` — suspend the mirror across the wipe.
         widgetMirrorSuspendedForAccountBoundary = true
         do {
-            try performLocalAccountScrub(sessionStore: sessionStore, scope: .all)
+            try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)
         } catch {
             // The server-side deletion is already authoritative. Hide all
             // in-memory account state until cleanup can be retried locally.
@@ -4632,10 +4637,9 @@ final class AppStore: ObservableObject {
             try insightMuteStore.removeAll()
             try setupChecklistStore.removeAll()
             try removeImportHistory()
-            let sessionStore = NativeKeychainSecureSettingsStore()
             switch repository.pendingAccountScrubScope ?? .live {
-            case .live: try sessionStore.clearAccountValues()
-            case .all: try sessionStore.clearAllValues()
+            case .live: try secureSettingsStore.clearAccountValues()
+            case .all: try secureSettingsStore.clearAllValues()
             }
             try repository.finishAccountScrub()
             isAccountScrubBlocked = false
@@ -8410,22 +8414,54 @@ extension AppStore {
     /// The user's own Anthropic key, read from the secure store (never from the
     /// business snapshot). Nil means "no client key" — the transport then takes
     /// the backend bearer path.
-    var advisoryAnthropicKey: String? {
-        guard let bytes = try? NativeKeychainSecureSettingsStore().backend.read(key: "anthropicKey"),
-              let value = String(data: bytes, encoding: .utf8)
-        else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
+    var advisoryAnthropicKey: String? { secureSettingsStore.readAIProviderKey(.anthropic) }
 
     /// The user's own Groq key, read from the secure store — mirrors
     /// `advisoryAnthropicKey` exactly (task 10.13, coach provider routing).
-    var advisoryGroqKey: String? {
-        guard let bytes = try? NativeKeychainSecureSettingsStore().backend.read(key: "groqKey"),
-              let value = String(data: bytes, encoding: .utf8)
-        else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    var advisoryGroqKey: String? { secureSettingsStore.readAIProviderKey(.groq) }
+
+    // MARK: AI provider key entry (task 11.15)
+
+    /// Settings › AI Assistant: whether a key is saved (the page shows only
+    /// "Saved", never the key).
+    func aiProviderKeyIsSaved(_ kind: NativeAIProviderKeyKind) -> Bool {
+        secureSettingsStore.readAIProviderKey(kind) != nil
+    }
+
+    /// Saves (or, for an empty entry, clears) a user key in the secure store
+    /// the coach reads. The page, `coachProviderSummary` and the next coach
+    /// send all follow at once. Policy: `NativeAIProviderKeyPolicy`.
+    func setAIProviderKey(_ kind: NativeAIProviderKeyKind, entry: String) -> NativeAIProviderKeyChange {
+        applyAIProviderKey(NativeAIProviderKeyPolicy.outcome(for: entry, kind: kind, canChange: canChangeAIProviderKeys), kind: kind)
+    }
+
+    /// The explicit Remove action.
+    func clearAIProviderKey(_ kind: NativeAIProviderKeyKind) -> NativeAIProviderKeyChange {
+        applyAIProviderKey(NativeAIProviderKeyPolicy.clearOutcome(canChange: canChangeAIProviderKeys), kind: kind)
+    }
+
+    /// Keys are owner-bound: they change only for a signed-in owner and never
+    /// while an account boundary (sign-out, deletion, scrub) is running, so a
+    /// write cannot land after the boundary's wipe.
+    private var canChangeAIProviderKeys: Bool {
+        isSignedIn && !authenticationOperationInFlight && !isAccountScrubBlocked
+            && !repository.isAccountScrubPending
+    }
+
+    private func applyAIProviderKey(
+        _ outcome: NativeAIProviderKeyPolicy.Outcome,
+        kind: NativeAIProviderKeyKind
+    ) -> NativeAIProviderKeyChange {
+        let store = secureSettingsStore
+        let change = NativeAIProviderKeyPolicy.apply(
+            outcome,
+            kind: kind,
+            save: { try store.saveAIProviderKey($0, kind: kind) },
+            clear: { try store.clearAIProviderKey(kind) }
+        )
+        // `coachProviderSummary` and `aiProviderKeyIsSaved` read the store.
+        objectWillChange.send()
+        return change
     }
 
     /// Advisory receipt extraction. NEVER throws and never writes: nil means the

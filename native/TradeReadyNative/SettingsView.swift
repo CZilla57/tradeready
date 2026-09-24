@@ -530,11 +530,29 @@ struct AppearanceSettings: View {
 /// privacy control, so it is removed and the privacy copy says what is sent.
 /// The provider rows come from `AppStore.coachProviderSummary`, the same
 /// precedence the coach transport routes by.
+///
+/// Task 11.15: RN's "Advanced" switch reveals Groq and Anthropic key entry
+/// (secure fields, RN copy). Keys go only to the Keychain through
+/// `AppStore.setAIProviderKey` / `clearAIProviderKey`; the page shows only
+/// "Saved" for a stored key. Policy: `NativeAIProviderKeyPolicy`.
 struct AISettings: View {
     @EnvironmentObject private var store: AppStore
+    /// RN `useState(false)`: Advanced starts collapsed on every visit.
+    @State private var showAdvanced = false
     var body: some View {
         let provider = store.coachProviderSummary
         SettingsPage(title: "AI Assistant", content: Group {
+            Section {
+                Text(NativeAIProviderKeyPolicy.introHint).font(.caption).foregroundStyle(.secondary)
+                Toggle(NativeAIProviderKeyPolicy.advancedTitle, isOn: $showAdvanced)
+                    .tint(Color.tradeReady)
+                    .accessibilityLabel(NativeAIProviderKeyPolicy.advancedAccessibilityLabel)
+            }
+            if showAdvanced {
+                ForEach(NativeAIProviderKeyKind.allCases, id: \.self) { kind in
+                    AIProviderKeySection(kind: kind)
+                }
+            }
             Section("PROVIDER") { LabeledContent("Service", value: provider.service); LabeledContent("Connection", value: provider.connection) }
             Section("PRIVACY") {
                 Text("Each coach message includes a summary of your business data (revenue, outstanding and overdue invoices, active jobs, top customers, tax estimate) so the coach can answer questions about your business. It is sent to the provider above.").font(.caption).foregroundStyle(.secondary)
@@ -542,6 +560,53 @@ struct AISettings: View {
             }
         })
         .nativeAnalyticsScreen(.settingsAI)
+    }
+}
+
+/// One provider's key card. The typed key lives only in this view's state
+/// until Save; a completed save or remove empties the field.
+private struct AIProviderKeySection: View {
+    @EnvironmentObject private var store: AppStore
+    let kind: NativeAIProviderKeyKind
+    @State private var entry = ""
+    @State private var feedback: NativeAIProviderKeyChange?
+
+    var body: some View {
+        let isSaved = store.aiProviderKeyIsSaved(kind)
+        Section {
+            Text(kind.hint).font(.caption).foregroundStyle(.secondary)
+            LabeledContent(NativeAIProviderKeyPolicy.statusTitle(for: kind), value: NativeAIProviderKeyPolicy.savedStatus(isSaved: isSaved))
+            SecureField(kind.placeholder, text: $entry)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .onSubmit(save)
+                .accessibilityLabel(kind.accessibilityLabel)
+            Button(NativeAIProviderKeyPolicy.saveButtonTitle, action: save)
+                .disabled(!NativeAIProviderKeyPolicy.canSubmit(entry))
+            if isSaved {
+                Button(NativeAIProviderKeyPolicy.removeButtonTitle, role: .destructive) {
+                    finish(store.clearAIProviderKey(kind))
+                }
+            }
+            if let feedback {
+                Text(feedback.message)
+                    .font(.caption)
+                    .foregroundStyle(feedback.isError ? Color.red : Color.secondary)
+            }
+        } footer: {
+            Text(NativeAIProviderKeyPolicy.storageNote)
+        }
+    }
+
+    private func save() {
+        guard NativeAIProviderKeyPolicy.canSubmit(entry) else { return }
+        finish(store.setAIProviderKey(kind, entry: entry))
+    }
+
+    private func finish(_ change: NativeAIProviderKeyChange) {
+        if change.clearsEntry { entry = "" }
+        feedback = change
     }
 }
 
