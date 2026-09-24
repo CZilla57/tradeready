@@ -21,6 +21,7 @@ swiftc \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeAccessibilityAudit.swift" \
+  "$ROOT_DIR/native/HostTestSupport/SwiftSourceScan.swift" \
   "$ROOT_DIR/native/AccessibilityAuditTests/main.swift" \
   -o "$OUTPUT_PATH"
 
