@@ -184,12 +184,24 @@ final class NativePerformanceMetrics: @unchecked Sendable {
     /// Ends the launch interval at the root view's first appearance. Later
     /// appearances (scene reconnects, window changes) are no-ops.
     func endLaunch() {
+        finishLaunch(.completed)
+    }
+
+    /// Ends the launch interval as `skipped` when the process was launched
+    /// for background work and no root view has appeared (review M6): a
+    /// background-only cold launch never draws a first frame, so it is not a
+    /// launch-time sample. A no-op once the launch has ended.
+    func endLaunchInBackground() {
+        finishLaunch(.skipped)
+    }
+
+    private func finishLaunch(_ outcome: NativePerformanceOutcome) {
         lock.lock()
         let token = launchToken
         launchToken = nil
         lock.unlock()
         guard let token else { return }
-        end(token, outcome: .completed)
+        end(token, outcome: outcome)
     }
 
     /// The only metadata a signpost carries: `count=<0…999999999>` and/or

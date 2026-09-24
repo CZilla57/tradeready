@@ -165,6 +165,20 @@ struct PerformanceMetricsTests {
         metrics.beginLaunch()
         expectEqual(sink.records.count, 2, "launch never restarts after it ended")
         expectEqual(sink.openCount, 0, "no interval is left open")
+        metrics.endLaunchInBackground()
+        expectEqual(sink.records.count, 2, "a background end after a foreground launch is a no-op")
+
+        // Review M6: a background-only cold launch ends as skipped.
+        let backgroundSink = RecordingSignpostSink()
+        let background = NativePerformanceMetrics(sink: backgroundSink)
+        background.beginLaunch()
+        background.endLaunchInBackground()
+        background.endLaunch()
+        expectEqual(backgroundSink.records, [
+            .init(phase: .begin, interval: .launch, metadata: ""),
+            .init(phase: .end, interval: .launch, metadata: "outcome=skipped"),
+        ], "a background-only launch ends once, as skipped, and a later root view does not re-end it")
+        expectEqual(backgroundSink.openCount, 0, "a background-only launch leaves no interval open")
     }
 
     static func testDisabledAndAbsentSinks() {
@@ -312,7 +326,7 @@ struct PerformanceMetricsTests {
                                    "\(file.relativePath):\(file.line(of: hit)) measures synchronous work only")
                         }
                     }
-                case "beginLaunch", "endLaunch":
+                case "beginLaunch", "endLaunch", "endLaunchInBackground":
                     expect(arguments.trimmingCharacters(in: .whitespaces).isEmpty,
                            "\(file.relativePath):\(file.line(of: hit)) \(method) takes no arguments")
                     inventory.append("\(file.relativePath) \(method)")
@@ -328,6 +342,7 @@ struct PerformanceMetricsTests {
             "AppStore.swift begin .deltaPull",
             "AppStore.swift begin .initialSync",
             "AppStore.swift begin .snapshotLoad",
+            "AppStore.swift endLaunchInBackground",
             "AppStore.swift measure .legacyMigration",
             "InvoicesView.swift measure .invoiceListProjection",
             "JobsView.swift measure .jobListProjection",

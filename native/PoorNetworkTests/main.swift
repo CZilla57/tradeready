@@ -75,6 +75,9 @@ final class PoorNetworkLink: NativeInitialSyncHTTPDataLoading, NativeMutationPus
     private(set) var reachabilityChecks = 0
     /// When set, the next request suspends until `release()`.
     var holdNextRequest = false
+    /// When set, the next GET is served now (it reads the server as it is at
+    /// this moment) and its response is held until `release()`.
+    var holdNextResponse = false
     private(set) var isHolding = false
     private var held: CheckedContinuation<Void, Never>?
 
@@ -94,6 +97,13 @@ final class PoorNetworkLink: NativeInitialSyncHTTPDataLoading, NativeMutationPus
     }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if holdNextResponse, condition == .online || condition == .writesFail, request.httpMethod == "GET" {
+            holdNextResponse = false
+            let response = try await forward(request)
+            isHolding = true
+            await withCheckedContinuation { held = $0 }
+            return response
+        }
         if holdNextRequest {
             holdNextRequest = false
             isHolding = true
@@ -244,7 +254,9 @@ struct Harness {
         cursorStore = Canonical.NativeSyncCursorStore(fileURL: dir.appendingPathComponent("sync-cursor.json"))
         let clock = clock
         let store = store
-        // `AppStore.syncCoordinatorIfConfigured`, minus BuildEnvironment.
+        // Mirrors `AppStore.syncCoordinatorIfConfigured` (keep the two in
+        // step), minus BuildEnvironment: the link stands in for the push
+        // loader and reachability, and a test clock and backoff drive retries.
         coordinator = NativeSyncCoordinator(
             push: NativeSupabaseMutationPushService(
                 supabaseURL: Self.supabaseURL, publishableKey: "publishable-key",
@@ -255,6 +267,7 @@ struct Harness {
             credentialsProvider: { credentials },
             refreshSession: { false },
             pull: { await store.testPullDeltaIfPossible() },
+            statusChanged: { status in store.testApplySyncStatus(status) },
             now: { clock.now },
             baseBackoff: Self.baseBackoff,
             maxBackoff: 300
@@ -323,6 +336,8 @@ struct PoorNetworkTests {
         try await coordinatorPullKeepsEditMadeDuringAwait()
         try await directPullKeepsPendingEdits()
         try await pendingEditWinsOverServerChangeToSameRecord()
+        try await directPullKeepsEditPushedDuringIt()
+        rebaseRules()
 
         NativePerformanceMetrics.shared.replaceSink(nil)
         if failures == 0 {
@@ -832,6 +847,194 @@ struct PoorNetworkTests {
         expectEqual(customerName(h, customer.id).memory, "Delta Roofing (remote)", "E (b): the server change to another record applied")
         expectEqual(customerName(h, customer.id).disk, "Delta Roofing (remote)", "E (b): the server change is committed on disk")
         expectEqual(h.committed()?.payload.jobs?.count, 2, "E: no job was lost or duplicated")
+    }
+
+    /// G. Review I1: a direct-caller pull is not single-flight with the
+    /// coordinator. A change queued at the pull's start is pushed by the
+    /// coordinator while the pull is in flight; the pull's first page, read
+    /// before the push, carries the older server row (the cursor overlap
+    /// refetches it). The pull commit must keep the pushed edit, and a
+    /// follow-up edit and reconnect must not lose it on the server.
+    @MainActor
+    static func directPullKeepsEditPushedDuringIt() async throws {
+        let h = Harness(tag: "pushed-during-direct-pull")
+        defer { h.cleanup() }
+        let (customer, job) = await syncedBaseline(h, "G")
+        let other = Job(customerId: customer.id, customerName: customer.name, title: "Skylight quote", laborRate: 80)
+        expect(h.store.upsert(other), "G: a second job saves")
+        _ = await h.coordinator.sync(trigger: .manual)
+        let local = "Roof inspection (pushed during pull)"
+        editTitle(h, job.id, local, "G")
+        expectEqual(h.queueKeys(), ["jobs/\(job.id)"], "G: the edit is queued when the direct pull starts")
+
+        let jobsWatermarkBefore = h.cursorStore.load().tables["jobs"]
+        expect(jobsWatermarkBefore != nil, "G: the baseline advanced the jobs watermark")
+        // Another device changes the other job, so the pull's jobs page is newer than the watermark.
+        try await remoteEdit(h, table: "jobs", id: other.id, field: "title", to: "Skylight quote (remote)")
+        // The direct pull reads its first page (jobs) now; the response is slow.
+        h.link.holdNextResponse = true
+        let pull = Task { await h.store.testPullDeltaIfPossible() }
+        await waitUntilHolding(h, "G")
+        // Meanwhile the coordinator pushes the edit (and runs its own pull).
+        expectEqual(await h.coordinator.sync(trigger: .manual), .completed(pushed: 1, authRefreshed: false),
+                    "G: the coordinator pushes the edit while the direct pull is in flight")
+        expect(h.queue.load().isEmpty, "G: the edit is acknowledged, so it is no longer pending")
+        expectEqual(title(h, job: job.id).server, local, "G: the server has the edit")
+
+        h.link.release()
+        let result = await pull.value
+        expectEqual(result.state, .completed, "G: the direct pull completed")
+        let after = title(h, job: job.id)
+        expectEqual(after.memory, local, "G: the pushed edit is still what the device shows after the direct pull commit")
+        expectEqual(after.disk, local, "G: the pushed edit is still what the device has on disk")
+        expectEqual(title(h, job: other.id).memory, "Skylight quote (remote)", "G: the server change to another job applied")
+        expectEqual(h.cursorStore.load().tables["jobs"], jobsWatermarkBefore,
+                    "G: the jobs watermark stays at its pre-pull value, so the next pull refetches the row it did not take")
+
+        // A follow-up edit is built from what the device shows; then reconnect.
+        guard var second = h.store.jobs.first(where: { $0.id == job.id }) else { return }
+        second.laborRate = 95
+        expect(h.store.upsert(second), "G: a follow-up edit saves")
+        h.clock.advance(301)
+        _ = await h.coordinator.sync(trigger: .manual)
+        let final = title(h, job: job.id)
+        expectEqual(final.server, local, "G: after the follow-up edit and reconnect, the server still has the edit")
+        expectEqual(final.memory, local, "G: after reconnecting, the device shows the edit")
+        expectEqual(final.disk, local, "G: after reconnecting, the edit is on disk")
+        let serverRate = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject).flatMap { row -> Decimal? in
+            guard case let .object(fields) = row.data, case let .number(rate)? = fields["laborRate"] else { return nil }
+            return rate
+        }
+        expectEqual(serverRate, Decimal(95), "G: the follow-up edit reached the server too")
+        expect(h.queue.load().isEmpty, "G: the queue drains")
+    }
+
+    /// Review M1: the pure three-way merge the pull commit uses
+    /// (`AppStore.rebasePulledDelta`), table-driven. Each case derives
+    /// `pulled` (the pull's candidate) and `live` (the snapshot at commit)
+    /// from one base, with the protected keys (pending at the pull's start
+    /// or at commit) the commit would pass.
+    @MainActor
+    static func rebaseRules() {
+        let h = Harness(tag: "rebase-rules")
+        defer { h.cleanup() }
+        let customer = Customer(name: "Delta Roofing", email: "delta@example.test")
+        let names = ["A", "B", "C"]
+        let jobs = names.map { Job(customerId: customer.id, customerName: customer.name, title: "Job \($0)", laborRate: 80) }
+        expect(h.store.upsert(customer), "rebase: the customer saves")
+        for job in jobs { expect(h.store.upsert(job), "rebase: job saves") }
+        guard var base = h.committed() else { expect(false, "rebase: a committed base exists"); return }
+        let nameByID = Dictionary(uniqueKeysWithValues: zip(jobs.map(\.id), names))
+        let idOf = Dictionary(uniqueKeysWithValues: zip(names, jobs.map(\.id)))
+        // Normalize the base: jobs A, B, C in that order; settings; two notes.
+        base.payload.jobs = names.compactMap { name in base.payload.jobs?.first { $0.id == idOf[name] } }
+        expect(base.payload.settings != nil, "rebase: the base has settings")
+        base.payload.settings?.businessName = "Base Co"
+        base.payload.customerNotes = ["k1": "note 1", "k2": "note 2"]
+
+        func key(_ name: String) -> String { "jobs/\(idOf[name] ?? name)" }
+        func titled(_ snapshot: Canonical.Snapshot, _ name: String, _ title: String) -> Canonical.Snapshot {
+            var copy = snapshot
+            copy.payload.jobs = copy.payload.jobs?.map { job in
+                guard job.id == idOf[name] else { return job }
+                var edited = job
+                edited.title = title
+                return edited
+            }
+            return copy
+        }
+        func removing(_ snapshot: Canonical.Snapshot, _ name: String) -> Canonical.Snapshot {
+            var copy = snapshot
+            copy.payload.jobs = copy.payload.jobs?.filter { $0.id != idOf[name] }
+            return copy
+        }
+        func adding(_ snapshot: Canonical.Snapshot, _ name: String, first: Bool) -> Canonical.Snapshot {
+            var copy = snapshot
+            guard var job = base.payload.jobs?.first else { return copy }
+            job.id = "new-\(name)"
+            job.title = "Job \(name)"
+            copy.payload.jobs = first ? [job] + (copy.payload.jobs ?? []) : (copy.payload.jobs ?? []) + [job]
+            return copy
+        }
+        func rows(_ snapshot: Canonical.Snapshot) -> [String] {
+            (snapshot.payload.jobs ?? []).map { "\(nameByID[$0.id] ?? $0.id)=\($0.title)" }
+        }
+
+        struct Case {
+            let name: String
+            let pulled: Canonical.Snapshot
+            let live: Canonical.Snapshot
+            let protected: Set<String>
+            let jobs: [String]
+            let held: Set<String>
+        }
+        let cases: [Case] = [
+            Case(name: "nothing touched locally: the pulled snapshot as is",
+                 pulled: titled(removing(base, "C"), "B", "B server"), live: base, protected: [],
+                 jobs: ["A=Job A", "B=B server"], held: []),
+            Case(name: "pending delete against a server update: the delete wins, the cursor holds",
+                 pulled: titled(base, "A", "A server"), live: removing(base, "A"), protected: [key("A")],
+                 jobs: ["B=Job B", "C=Job C"], held: ["jobs"]),
+            Case(name: "create during the pull: kept first (live order), server changes elsewhere apply, a new remote row follows",
+                 pulled: adding(titled(base, "B", "B server"), "R", first: false),
+                 live: adding(base, "X", first: true), protected: ["jobs/new-X"],
+                 jobs: ["new-X=Job X", "A=Job A", "B=B server", "C=Job C", "new-R=Job R"], held: []),
+            Case(name: "server tombstone against a pending upsert: the upsert wins, the cursor holds",
+                 pulled: removing(base, "A"), live: titled(base, "A", "A local"), protected: [key("A")],
+                 jobs: ["A=A local", "B=Job B", "C=Job C"], held: ["jobs"]),
+            Case(name: "server tombstone for an untouched record: removed",
+                 pulled: removing(base, "C"), live: titled(base, "A", "A local"), protected: [key("A")],
+                 jobs: ["A=A local", "B=Job B"], held: []),
+            Case(name: "pending at start and pushed during the pull (review I1): the local edit is kept, the cursor holds",
+                 pulled: titled(base, "A", "A older server"), live: base, protected: [key("A")],
+                 jobs: ["A=Job A", "B=Job B", "C=Job C"], held: ["jobs"]),
+            Case(name: "edited during the pull and already pushed (not pending): kept, the cursor holds",
+                 pulled: titled(base, "A", "A older server"), live: titled(base, "A", "A local"), protected: [],
+                 jobs: ["A=A local", "B=Job B", "C=Job C"], held: ["jobs"]),
+            Case(name: "kept record the server already agrees with: no cursor hold",
+                 pulled: titled(base, "A", "A local"), live: titled(base, "A", "A local"), protected: [key("A")],
+                 jobs: ["A=A local", "B=Job B", "C=Job C"], held: []),
+        ]
+        for c in cases {
+            do {
+                let merged = try AppStore.rebasePulledDelta(base: base, pulled: c.pulled, live: c.live, protectedKeys: c.protected)
+                expectEqual(rows(merged.snapshot), c.jobs, "rebase: \(c.name) (jobs)")
+                expectEqual(merged.heldCursorTables, c.held, "rebase: \(c.name) (held cursors)")
+            } catch {
+                expect(false, "rebase: \(c.name) threw")
+            }
+        }
+
+        // Settings: pending wins; untouched takes the server; changed locally (pushed) is kept.
+        var serverSettings = base
+        serverSettings.payload.settings?.businessName = "Server Co"
+        var localSettings = base
+        localSettings.payload.settings?.businessName = "Local Co"
+        let settingsCases: [(String, Canonical.Snapshot, Set<String>, String)] = [
+            ("pending settings win over the server", localSettings, ["settings/settings"], "Local Co"),
+            ("untouched settings take the server", base, [], "Server Co"),
+            ("settings changed during the pull (pushed) are kept", localSettings, [], "Local Co"),
+        ]
+        for (name, live, protected, expected) in settingsCases {
+            let merged = try? AppStore.rebasePulledDelta(base: base, pulled: serverSettings, live: live, protectedKeys: protected)
+            expectEqual(merged?.snapshot.payload.settings?.businessName, expected, "rebase: \(name)")
+        }
+
+        // Customer notes: per key.
+        var serverNotes = base
+        serverNotes.payload.customerNotes = ["k1": "note 1 server", "k2": "note 2 server", "k3": "note 3 server"]
+        var localNotes = base
+        localNotes.payload.customerNotes = ["k1": "note 1 local"]
+        let notes = try? AppStore.rebasePulledDelta(
+            base: base, pulled: serverNotes, live: localNotes,
+            protectedKeys: ["customer_notes/k1", "customer_notes/k2"]
+        )
+        expectEqual(notes?.snapshot.payload.customerNotes,
+                    ["k1": "note 1 local", "k3": "note 3 server"],
+                    "rebase: notes: a pending edit and a pending delete win, a new server note applies")
+        let untouched = try? AppStore.rebasePulledDelta(base: base, pulled: serverNotes, live: base, protectedKeys: [])
+        expectEqual(untouched?.snapshot.payload.customerNotes, serverNotes.payload.customerNotes,
+                    "rebase: notes: untouched notes take the server's")
     }
 
     /// F. The server changed the same record the user has pending. Documented

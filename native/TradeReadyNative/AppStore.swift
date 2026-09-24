@@ -6342,6 +6342,8 @@ final class AppStore: ObservableObject {
             pull: { [weak self] in await self?.pullDeltaIfPossible() ?? .skipped },
             statusChanged: { [weak self] status in self?.applySyncStatus(status) }
         )
+        // Mirrored by the poor-network host harness (native/PoorNetworkTests,
+        // `Harness.init`), which has no BuildEnvironment: keep the two in step.
         syncCoordinator = coordinator
         syncStatus = coordinator.status()
         return coordinator
@@ -6389,6 +6391,11 @@ final class AppStore: ObservableObject {
         // The snapshot the pulled candidate was merged into (11.12 Finding D):
         // the commit below rebases the delta from this base onto the live one.
         var pullBase = localSnapshot
+        // Keys with a change waiting to reach the server when this pull read
+        // its base (11.12 fix round 2, review I1). A direct caller is not
+        // single-flight with the coordinator, so one of these can be pushed,
+        // and leave the queue, while this pull is in flight.
+        var pendingAtStart = pendingMutationKeys()
 
         let outcome: NativeDeltaPullOutcome
         do {
@@ -6405,6 +6412,7 @@ final class AppStore: ObservableObject {
                   subject == authenticatedUserSubject
             else { return .failed("pull/authentication") }
             pullBase = snapshot
+            pendingAtStart.formUnion(pendingMutationKeys())
             do {
                 outcome = try await service.pullDelta(
                     sessionBytes: fresh.sessionBytes,
@@ -6422,33 +6430,42 @@ final class AppStore: ObservableObject {
         // The account or workspace may have changed during the network await;
         // never apply another owner's rows or write over a blocked workspace.
         guard subject == authenticatedUserSubject, !persistenceWritesBlocked else { return .skipped }
-        // 11.12 Finding D (fix): the candidate was merged into the snapshot
-        // read before the network await, and local edits may have landed since.
-        // Merge the pulled delta into the LIVE snapshot instead, skipping every
-        // record with a mutation pending in the LIVE queue (the coordinator's
-        // rule: a pull never overwrites a record waiting to reach the server).
-        // No await between here and the commit. If the rebase cannot be done,
-        // discard the candidate and keep the cursor, so the next pull refetches.
-        let committed: Canonical.Snapshot
+        // 11.12 Finding D (fix rounds 1 and 2): the candidate was merged into
+        // the snapshot read before the network await, and local edits (or a
+        // push of a queued edit) may have happened since. Merge the pulled
+        // delta into the LIVE snapshot instead. The server's version of a record
+        // is taken only when this device has not touched it: not pending at
+        // this pull's start or now, and unchanged locally since the base (the
+        // coordinator's rule: a pull never overwrites a record waiting to reach
+        // the server, or one that just reached it). Where a local record is kept
+        // over a server row this pull fetched, that table's watermark stays
+        // where it was, so the next pull fetches the row again. No await between
+        // here and the commit. If the rebase cannot be done, discard the
+        // candidate and keep the cursor, so the next pull refetches.
+        let rebase: PulledDeltaRebase
         do {
-            committed = try Self.rebasePulledDelta(
+            rebase = try Self.rebasePulledDelta(
                 base: pullBase,
                 pulled: outcome.snapshot,
                 live: snapshot,
-                pendingKeys: Set(mutationQueue.load().map { "\($0.table)/\($0.recordId)" })
+                protectedKeys: pendingAtStart.union(pendingMutationKeys())
             )
         } catch {
             return .failed("pull/local-rebase")
         }
+        var committedCursor = outcome.cursor
+        for table in rebase.heldCursorTables {
+            committedCursor.tables[table] = cursor.tables[table]
+        }
         let previous = snapshot
         do {
-            try apply(committed)
+            try apply(rebase.snapshot)
             try repository.save(snapshot)
         } catch {
             try? apply(previous)
             return .failed("pull/local-commit")
         }
-        do { try syncCursorStore.save(outcome.cursor) }
+        do { try syncCursorStore.save(committedCursor) }
         catch { return .failed("pull/cursor-commit") }
         // Sync completion is the generation trigger (mirrors RN app-open /
         // foreground): pulled rules and jobs are in the snapshot, so due
@@ -6721,6 +6738,9 @@ final class AppStore: ObservableObject {
     /// unbound snapshot while no foreground is present.
     func performBackgroundRefresh() async -> NativeBackgroundRefreshOutcome {
         // Task 11.12: a BackgroundRefresh signpost around the unchanged pass.
+        // A background-only cold launch has no root view to end the Launch
+        // interval; end it here as skipped (a no-op after a foreground launch).
+        NativePerformanceMetrics.shared.endLaunchInBackground()
         let backgroundRefresh = NativePerformanceMetrics.shared.begin(.backgroundRefresh)
         let outcome = await runBackgroundRefresh()
         NativePerformanceMetrics.shared.end(backgroundRefresh, outcome: Self.performanceOutcome(outcome))
@@ -6844,22 +6864,44 @@ final class AppStore: ObservableObject {
 
     // MARK: 11.12 Finding D: rebase a pulled delta onto the live snapshot
 
-    /// Merges the delta a pull applied to `base` (giving `pulled`) into `live`,
-    /// the snapshot at commit time. Per record key `<table>/<id>` (the queue's
-    /// key): a record with a pending mutation keeps its live state (including
-    /// a pending delete); a record the pull did not change keeps its live state;
-    /// otherwise the pulled (server) state wins. When nothing changed locally
-    /// and nothing is pending, the result is `pulled` exactly (today's commit).
+    /// The keys (`<table>/<recordId>`, the queue's `MutationKey`) of every
+    /// change still waiting to reach the server.
+    private func pendingMutationKeys() -> Set<String> {
+        Set(mutationQueue.load().map { "\($0.table)/\($0.recordId)" })
+    }
+
+    struct PulledDeltaRebase {
+        var snapshot: Canonical.Snapshot
+        /// Collection tables (cursor keys) whose watermark must stay at its
+        /// pre-pull value: the commit kept a local record over a server row
+        /// this pull fetched, so the next pull must fetch that row again.
+        var heldCursorTables: Set<String>
+    }
+
+    /// A three-way merge of a pull's delta onto the live snapshot. `base` is
+    /// the snapshot the pull merged into, `pulled` its candidate, `live` the
+    /// snapshot at commit time. Per record key `<table>/<id>` (the queue's
+    /// key; settings `settings/settings`, notes `customer_notes/<key>`), the
+    /// pulled (server) state is taken only when this device has not touched
+    /// the record: the key is not in `protectedKeys` (pending at the pull's
+    /// start or at commit) and its live state still equals the base. Every
+    /// other record keeps its live state, including a pending delete and a
+    /// local create. Records keep their live order; rows only the pull has
+    /// (new remote rows) follow in pulled order. With nothing protected or
+    /// changed locally in a table, that table is `pulled` exactly.
     static func rebasePulledDelta(
         base: Canonical.Snapshot,
         pulled: Canonical.Snapshot,
         live: Canonical.Snapshot,
-        pendingKeys: Set<String>
-    ) throws -> Canonical.Snapshot {
+        protectedKeys: Set<String>
+    ) throws -> PulledDeltaRebase {
         var result = pulled
+        var held = Set<String>()
         let b = base.payload, p = pulled.payload, l = live.payload
         func rebase<R: Encodable>(_ table: String, _ id: KeyPath<R, String>, _ base: [R]?, _ pulled: [R]?, _ live: [R]?) throws -> [R]?? {
-            try rebaseRecords(table: table, id: id, base: base, pulled: pulled, live: live, pendingKeys: pendingKeys)
+            let merged = try rebaseRecords(table: table, id: id, base: base, pulled: pulled, live: live, protectedKeys: protectedKeys)
+            if merged.holdsCursor { held.insert(table) }
+            return merged.records
         }
         if let v = try rebase("jobs", \Canonical.Job.id, b.jobs, p.jobs, l.jobs) { result.payload.jobs = v }
         if let v = try rebase("invoices", \Canonical.Invoice.id, b.invoices, p.invoices, l.invoices) { result.payload.invoices = v }
@@ -6872,69 +6914,80 @@ final class AppStore: ObservableObject {
         if let v = try rebase("bookingRequests", \Canonical.BookingRequest.id, b.bookingRequests, p.bookingRequests, l.bookingRequests) { result.payload.bookingRequests = v }
         if let v = try rebase("jobPhotos", \Canonical.JobPhoto.id, b.jobPhotos, p.jobPhotos, l.jobPhotos) { result.payload.jobPhotos = v }
 
-        // Settings: one record, keyed like its queue item.
-        let settingsKey = "settings/\(settingsMutationRecordID)"
-        if pendingKeys.contains(settingsKey) {
-            result.payload.settings = l.settings
-        } else if try !sameEncoding(l.settings, b.settings), try sameEncoding(p.settings, b.settings) {
+        // Settings and customer notes have no cursor: every pass refetches them.
+        if try protectedKeys.contains("settings/\(settingsMutationRecordID)") || !sameEncoding(l.settings, b.settings) {
             result.payload.settings = l.settings
         }
-
-        // Customer notes: keyed by customer key, like the backfill's queue items.
         let noteKeys = Set((b.customerNotes ?? [:]).keys).union((p.customerNotes ?? [:]).keys).union((l.customerNotes ?? [:]).keys)
-        let notesTouched = noteKeys.contains { key in
-            pendingKeys.contains("customer_notes/\(key)") || l.customerNotes?[key] != b.customerNotes?[key]
-        }
-        if notesTouched {
-            var notes = p.customerNotes ?? [:]
-            for key in noteKeys where pendingKeys.contains("customer_notes/\(key)")
-                || p.customerNotes?[key] == b.customerNotes?[key] {
-                notes[key] = l.customerNotes?[key]
+        var notes = p.customerNotes ?? [:]
+        var notesChanged = false
+        for key in noteKeys {
+            let local = l.customerNotes?[key], original = b.customerNotes?[key]
+            let takesServer = !protectedKeys.contains("customer_notes/\(key)") && local == original
+            if !takesServer, notes[key] != local {
+                notes[key] = local
+                notesChanged = true
             }
-            result.payload.customerNotes = (notes.isEmpty && p.customerNotes == nil && l.customerNotes == nil) ? nil : notes
         }
-        return result
+        if notesChanged {
+            result.payload.customerNotes = (notes.isEmpty && p.customerNotes == nil) ? l.customerNotes : notes
+        }
+        return PulledDeltaRebase(snapshot: result, heldCursorTables: held)
     }
 
-    /// One collection's rebase. Returns nil (outer) when the pulled collection
-    /// can be committed unchanged: nothing pending in `table` and the live
-    /// collection still equals the base.
+    /// One collection's rebase. `records` is nil (outer) when the pulled
+    /// collection can be committed unchanged: nothing protected in `table` and
+    /// the live collection still equals the base.
     private static func rebaseRecords<R: Encodable>(
         table: String,
         id: KeyPath<R, String>,
         base: [R]?,
         pulled: [R]?,
         live: [R]?,
-        pendingKeys: Set<String>
-    ) throws -> [R]?? {
+        protectedKeys: Set<String>
+    ) throws -> (records: [R]??, holdsCursor: Bool) {
         let prefix = "\(table)/"
-        let hasPending = pendingKeys.contains { $0.hasPrefix(prefix) }
-        if !hasPending, try sameEncoding(live, base) { return nil }
+        if !protectedKeys.contains(where: { $0.hasPrefix(prefix) }), try sameEncoding(live, base) {
+            return (nil, false)
+        }
         func index(_ records: [R]?) -> [String: R] {
             Dictionary((records ?? []).map { ($0[keyPath: id], $0) }, uniquingKeysWith: { first, _ in first })
         }
         let baseByID = index(base), liveByID = index(live), pulledByID = index(pulled)
-        func keepsLive(_ key: String) throws -> Bool {
-            try pendingKeys.contains(prefix + key) || sameEncoding(pulledByID[key], baseByID[key])
+        // The server's version wins only for a record this device has not touched.
+        func takesServer(_ key: String) throws -> Bool {
+            try !protectedKeys.contains(prefix + key) && sameEncoding(liveByID[key], baseByID[key])
+        }
+        // A kept local record over a server row this pull fetched: hold the cursor.
+        var holdsCursor = false
+        func keptOverServer(_ key: String) throws {
+            if try !sameEncoding(pulledByID[key], baseByID[key]), try !sameEncoding(pulledByID[key], liveByID[key]) {
+                holdsCursor = true
+            }
         }
         var records: [R] = []
         var seen = Set<String>()
-        for record in pulled ?? [] {
-            let key = record[keyPath: id]
-            guard seen.insert(key).inserted else { continue }
-            if try keepsLive(key) {
-                if let current = liveByID[key] { records.append(current) }
-            } else {
-                records.append(record)
-            }
-        }
         for record in live ?? [] {
             let key = record[keyPath: id]
             guard seen.insert(key).inserted else { continue }
-            if try keepsLive(key) { records.append(record) }
+            if try takesServer(key) {
+                if let server = pulledByID[key] { records.append(server) } // absent: a server tombstone
+            } else {
+                records.append(record)
+                try keptOverServer(key)
+            }
         }
-        if pulled == nil, live == nil { return .some(nil) }
-        return .some(records)
+        for record in pulled ?? [] {
+            let key = record[keyPath: id]
+            guard seen.insert(key).inserted else { continue }
+            if try takesServer(key) {
+                records.append(record)
+            } else {
+                try keptOverServer(key) // deleted on this device (pending or pushed)
+            }
+        }
+        if pulled == nil, live == nil { return (.some(nil), holdsCursor) }
+        return (.some(records), holdsCursor)
     }
 
     private static func sameEncoding<T: Encodable>(_ a: T?, _ b: T?) throws -> Bool {
