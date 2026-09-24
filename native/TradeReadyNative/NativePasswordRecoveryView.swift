@@ -82,6 +82,7 @@ struct NativePasswordRecoveryView: View {
                 .padding(.vertical, 48)
                 .frame(maxWidth: .infinity)
             }
+            .nativeContentColumn(.scroll)
             .background(Color.tradeCanvas)
         }
     }

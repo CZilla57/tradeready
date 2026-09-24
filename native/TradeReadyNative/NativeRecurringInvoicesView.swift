@@ -56,11 +56,13 @@ struct NativeRecurringInvoicesView: View {
                 }
             }
         }
+        .nativeContentColumn(.list)
         .tradeReadyListStyle()
         .navigationTitle("Maintenance plans")
         .toolbar {
             Button { editingRule = nil; showingEditor = true } label: { Image(systemName: "plus") }
                 .accessibilityLabel(NativeAccessibilityAudit.Label.addMaintenancePlan)
+                .keyboardShortcut("n", modifiers: .command)
         }
         .sheet(isPresented: $showingEditor) {
             NativeRecurringInvoiceEditor(rule: editingRule)
@@ -204,12 +206,13 @@ private struct NativeRecurringInvoiceEditor: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(isEditing ? "Edit plan" : "New plan")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.keyboardShortcut("s", modifiers: .command) }
             }
             .onAppear(perform: hydrate)
             .confirmationDialog("Email invoices automatically?", isPresented: $confirmingAutoSend, titleVisibility: .visible) {

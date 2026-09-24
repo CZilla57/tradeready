@@ -185,6 +185,7 @@ struct NativeGlobalSearchView: View {
                     actionSection
                 }
             }
+            .nativeContentColumn(.list)
             .tradeReadyListStyle()
             .refreshable { await store.performPullToRefresh() }
             .navigationTitle("Search")
@@ -196,7 +197,7 @@ struct NativeGlobalSearchView: View {
             )
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
             }
             .sheet(item: $action) { selected in

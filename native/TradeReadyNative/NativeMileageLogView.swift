@@ -58,6 +58,7 @@ struct NativeMileageLogView: View {
                 }
             }
         }
+        .nativeContentColumn(.list)
         .tradeReadyListStyle()
         .overlay {
             if rows.isEmpty {

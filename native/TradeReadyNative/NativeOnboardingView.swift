@@ -29,6 +29,7 @@ struct NativeOnboardingView: View {
                 .padding(24)
                 .frame(maxWidth: .infinity)
             }
+            .nativeContentColumn(.scroll)
 
             HStack {
                 if draft.step > 0 {
@@ -42,6 +43,7 @@ struct NativeOnboardingView: View {
                 .frame(maxWidth: .infinity)
                 .disabled(isSaving)
             }
+            .nativeContentColumnFrame()
             .padding(20)
             .background(.background)
         }
@@ -188,6 +190,7 @@ struct NativeStartingPointView: View {
             .padding(24)
             .frame(maxWidth: .infinity)
         }
+        .nativeContentColumn(.scroll)
         .background(Color.tradeCanvas)
     }
 

@@ -294,15 +294,16 @@ struct NativeChangeOrderEditorView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(draft.isEditing ? "Edit Change Order" : "Add Change Order")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(saveLabel, action: save).fontWeight(.semibold)
+                    Button(saveLabel, action: save).fontWeight(.semibold).keyboardShortcut("s", modifiers: .command)
                 }
             }
             .onChange(of: draft) { _, _ in errorMessage = nil }
@@ -434,16 +435,18 @@ private struct ChangeOrderDecisionSheet: View {
                     Text("Record how the customer decided — e.g. \u{201C}verbal OK on site\u{201D}.")
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(prompt.decision == .approved ? "Mark approved" : "Mark declined")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: cancel)
+                    Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Confirm", action: confirm)
                         .fontWeight(.semibold)
+                        .keyboardShortcut(.return, modifiers: .command)
                 }
             }
         }
@@ -550,10 +553,11 @@ struct NativeChangeOrderReviewView: View {
                     Text("The approval link is created before the system composer opens. Nothing is sent until you tap Send there.")
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle("Send for approval")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .sheet(isPresented: $showingComposer) {
                 NativeMessageComposer(
                     draft: .init(channel: channel == .email ? .email : .sms, recipient: recipient, subject: channel == .email ? emailSubject : nil, body: channel == .email ? emailBody : textBody),

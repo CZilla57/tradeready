@@ -76,6 +76,7 @@ struct NativePricebookView: View {
                         }
                     }
                 }
+                .nativeContentColumn(.list)
                 .tradeReadyListStyle()
                 .refreshable { await store.performPullToRefresh() }
             }

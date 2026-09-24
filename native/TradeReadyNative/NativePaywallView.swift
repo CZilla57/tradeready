@@ -95,6 +95,7 @@ struct NativePaywallView: View {
             .padding(24)
             .frame(maxWidth: .infinity)
         }
+        .nativeContentColumn(.scroll)
         .background(Color.tradeCanvas)
         .overlay {
             if store.subscriptionOperationInFlight {

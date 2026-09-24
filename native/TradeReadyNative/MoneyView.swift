@@ -116,6 +116,7 @@ struct MoneyView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
+        .nativeContentColumnFrame()
     }
 
     private var tabPicker: some View {
@@ -127,6 +128,7 @@ struct MoneyView: View {
         .pickerStyle(.segmented)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .nativeContentColumnFrame()
         .accessibilityLabel("Money view")
     }
 
@@ -150,6 +152,7 @@ struct MoneyView: View {
             .padding(.top, 4)
             .padding(.bottom, 32)
         }
+        .nativeContentColumn(.scroll)
         .refreshable {
             await store.performPullToRefresh(screen: .money)
         }
@@ -251,6 +254,7 @@ struct MoneyView: View {
                     }
             }
         }
+        .nativeContentColumn(.list)
         .tradeReadyListStyle()
         .overlay {
             if rows.isEmpty {

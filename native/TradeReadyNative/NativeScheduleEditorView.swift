@@ -82,10 +82,12 @@ struct NativeScheduleEditorView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .accessibilityLabel("Cancel without saving")
+                        .keyboardShortcut(.cancelAction)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
                         .disabled(!didLoad || isMissing || isSaving || !issues.isEmpty)
+                        .keyboardShortcut("s", modifiers: .command)
                 }
             }
             .onAppear(perform: load)
@@ -176,6 +178,7 @@ struct NativeScheduleEditorView: View {
                 }
             }
         }
+        .nativeContentColumn(.list)
         .disabled(isSaving)
     }
 

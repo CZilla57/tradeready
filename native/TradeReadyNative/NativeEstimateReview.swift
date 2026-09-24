@@ -187,12 +187,13 @@ struct NativeEstimateReviewView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
             .navigationTitle("Send Estimate")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
             .sheet(isPresented: $showingComposer) {
                 NativeMessageComposer(

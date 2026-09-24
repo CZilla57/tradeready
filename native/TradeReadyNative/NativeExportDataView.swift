@@ -63,6 +63,7 @@ struct NativeExportDataView: View {
                 }
             }
         }
+        .nativeContentColumn(.list)
         .tradeReadyListStyle()
         .navigationTitle("Export data")
         .navigationBarTitleDisplayMode(.inline)

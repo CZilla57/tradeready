@@ -133,6 +133,7 @@ struct CustomersView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .tradeReadyListStyle()
             .refreshable { await store.performPullToRefresh() }
             .navigationTitle("Customers")
@@ -144,6 +145,7 @@ struct CustomersView: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel(NativeAccessibilityAudit.Label.addCustomer)
+                .keyboardShortcut("n", modifiers: .command)
             }
             .navigationDestination(for: NativeCustomerRoute.self) {
                 CustomerDetailView(customerID: $0.id, fallbackName: $0.name)
@@ -439,6 +441,7 @@ struct CustomerDetailView: View {
                         }
                     }
                 }
+                .nativeContentColumn(.list)
                 .tradeReadyListStyle()
                 .refreshable { await store.performPullToRefresh() }
                 .navigationTitle("Customer")
@@ -560,13 +563,14 @@ private struct NativeCustomerMergePicker: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .tradeReadyListStyle()
             .navigationTitle("Merge \(loser.name)")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
             }
             .nativeConfirmation($confirmationRequest) { intent in
@@ -655,6 +659,7 @@ struct CustomerEditor: View {
                         .lineLimit(3...8)
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
             .navigationTitle(customer.name.isEmpty ? "New Customer" : "Edit Customer")

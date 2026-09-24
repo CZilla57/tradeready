@@ -110,12 +110,13 @@ struct NativeEstimateFollowUpView: View {
                     Text("Nothing is sent automatically. Review the message again and tap Send in the system composer. Following up does not change the job status.")
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
             .navigationTitle("Estimate Follow-Up")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
             .sheet(isPresented: $showingComposer) {
                 NativeMessageComposer(draft: composerDraft, onFinish: handleComposerOutcome)

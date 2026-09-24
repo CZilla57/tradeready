@@ -132,7 +132,7 @@ struct RootView: View {
                         }
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { store.dismissDeepLinkUnavailableNotice() }
+                                Button("Done") { store.dismissDeepLinkUnavailableNotice() }.keyboardShortcut(.cancelAction)
                             }
                         }
                     }

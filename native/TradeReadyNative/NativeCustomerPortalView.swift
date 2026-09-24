@@ -41,7 +41,7 @@ struct NativeCustomerPortalView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }
         .confirmationDialog(
@@ -154,6 +154,7 @@ struct NativeCustomerPortalView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .nativeContentColumn(.list)
     }
 
     private var stateDot: some View {

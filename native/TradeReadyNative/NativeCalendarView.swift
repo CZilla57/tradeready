@@ -47,6 +47,7 @@ struct NativeCalendarView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding([.horizontal, .top])
+                .nativeContentColumnFrame()
 
                 navigationBar
 
@@ -61,7 +62,7 @@ struct NativeCalendarView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
             .refreshable { await refresh() }
             .sheet(item: editorBinding) { job in
@@ -91,6 +92,7 @@ struct NativeCalendarView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+        .nativeContentColumnFrame()
     }
 
     private func shift(by days: Int) {
@@ -179,6 +181,7 @@ struct NativeCalendarView: View {
 
             queueSection
         }
+        .nativeContentColumn(.list)
         #if os(iOS)
         .listStyle(.insetGrouped)
         #endif
@@ -333,6 +336,7 @@ struct NativeCalendarView: View {
 
             queueSection
         }
+        .nativeContentColumn(.list)
         #if os(iOS)
         .listStyle(.insetGrouped)
         #endif

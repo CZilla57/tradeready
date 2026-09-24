@@ -151,6 +151,7 @@ struct NativeAuthView: View {
                 .padding(.bottom, 40)
                 .frame(maxWidth: .infinity)
             }
+            .nativeContentColumn(.scroll)
             .background(Color.tradeCanvas)
             .task {
                 while !Task.isCancelled {

@@ -114,6 +114,7 @@ struct InvoicesView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .tradeReadyListStyle()
             .overlay {
                 NativeContentStateView(
@@ -134,6 +135,7 @@ struct InvoicesView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showingEditor = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel(NativeAccessibilityAudit.Label.addInvoice)
+                        .keyboardShortcut("n", modifiers: .command)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -144,6 +146,7 @@ struct InvoicesView: View {
                         Button("Remind") { showingBulkChannel = true }.disabled(selectedIDs.isEmpty)
                         Button("Mark paid") { confirmingBulkSettle = true }.disabled(selectedIDs.isEmpty)
                     }
+                    .nativeContentColumnFrame()
                     .padding(.horizontal)
                     .padding(.vertical, 10)
                     .background(.bar)
@@ -410,6 +413,7 @@ struct InvoiceDetailView: View {
                         }
                     }
                 }
+                .nativeContentColumn(.list)
                 .tradeReadyListStyle()
                 .navigationTitle(invoice.number)
                 .toolbar { Button("Edit") { editing = true } }
@@ -538,6 +542,7 @@ struct InvoiceEditor: View {
                 Section("Details") { TextField("Invoice number", text: $invoice.number); CurrencyField(title: "Amount", value: $invoice.amount); DatePicker("Due", selection: $invoice.due, displayedComponents: .date); TextField("Description of work", text: $invoice.description, axis: .vertical) }
                 Section("Contact") { TextField("Email", text: $invoice.email).keyboardType(.emailAddress).textInputAutocapitalization(.never); TextField("Phone", text: $invoice.phone).keyboardType(.phonePad) }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(invoice.customer.isEmpty ? "New Invoice" : "Edit Invoice")
             .navigationBarTitleDisplayMode(.inline)
@@ -612,6 +617,7 @@ struct PaymentEditor: View {
                     TextField("Note", text: $note)
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle("Record Payment")
             .navigationBarTitleDisplayMode(.inline)

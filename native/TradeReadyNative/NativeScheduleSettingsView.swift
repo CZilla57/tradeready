@@ -67,11 +67,13 @@ struct NativeScheduleSettingsView: View {
                 Button("Cancel") { dismiss() }
                     .accessibilityLabel("Discard schedule changes")
                     .accessibilityHint("Closes without saving anything")
+                    .keyboardShortcut(.cancelAction)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }
                     .disabled(!didLoad || isSaving || !validationErrors.isEmpty)
                     .accessibilityHint("Saves schedule settings on this device. Sync publishes them; nothing here claims public publication.")
+                    .keyboardShortcut("s", modifiers: .command)
             }
         }
         .nativeAnalyticsScreen(.settingsSchedule)
@@ -270,6 +272,7 @@ struct NativeScheduleSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .nativeContentColumn(.list)
         .onAppear {
             // Touch the published sync state so the pending-sync notice
             // invalidates when the queue drains.

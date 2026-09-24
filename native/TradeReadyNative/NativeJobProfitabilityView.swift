@@ -87,11 +87,12 @@ struct NativeJobProfitabilitySection: View {
                                 .foregroundStyle(toneColor(item.tone))
                         }
                     }
+                    .nativeContentColumn(.list)
                     .navigationTitle("What changed on this job")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Close") { showingWhatChanged = false }
+                            Button("Close") { showingWhatChanged = false }.keyboardShortcut(.cancelAction)
                         }
                     }
                 }

@@ -60,7 +60,7 @@ struct NativeBookingSettingsView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }
         .confirmationDialog(
@@ -94,6 +94,7 @@ struct NativeBookingSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .nativeContentColumn(.list)
         .refreshable { await refresh(clearMessage: false) }
         .onAppear {
             _ = store.syncStatus

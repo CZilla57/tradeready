@@ -25,6 +25,7 @@ struct NativeSyncBanner: View {
                         .controlSize(.small)
                 }
             }
+            .nativeContentColumnFrame()
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background(accentColor.opacity(0.12))
@@ -125,6 +126,7 @@ struct NativeUndoBanner: View {
             .buttonStyle(.plain)
             .accessibilityLabel(dismissLabel)
         }
+        .nativeContentColumnFrame()
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.regularMaterial)
@@ -335,8 +337,8 @@ struct DismissableFormToolbar: ToolbarContent {
     let save: () -> Void
 
     var body: some ToolbarContent {
-        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
         ToolbarItem(placement: .principal) { Text(title).font(.headline) }
-        ToolbarItem(placement: .confirmationAction) { Button("Save", action: save).fontWeight(.semibold) }
+        ToolbarItem(placement: .confirmationAction) { Button("Save", action: save).fontWeight(.semibold).keyboardShortcut("s", modifiers: .command) }
     }
 }

@@ -100,11 +100,12 @@ struct NativeReviewRequestView: View {
                     ContentUnavailableView("Review request unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
             .navigationTitle("Request a review")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .onAppear {
                 guard let draft, message.isEmpty else { return }
                 message = draft.message

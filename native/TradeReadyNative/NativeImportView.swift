@@ -48,6 +48,7 @@ struct NativeImportView: View {
                 reportSection
             }
         }
+        .nativeContentColumn(.list)
         .tradeReadyListStyle()
         .navigationTitle(NativeImportCopy.title)
         .navigationBarTitleDisplayMode(.inline)

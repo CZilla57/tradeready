@@ -41,11 +41,12 @@ struct NativeTemplatePickerView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .tradeReadyListStyle()
             .navigationTitle("Start from a template")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
         }
     }
@@ -96,6 +97,7 @@ struct NativePricebookJobPickerView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Use for \(job.title)")
                     }
+                    .nativeContentColumn(.list)
                     .tradeReadyListStyle()
                 }
             }
@@ -103,7 +105,7 @@ struct NativePricebookJobPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: "Search jobs")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
         }
     }

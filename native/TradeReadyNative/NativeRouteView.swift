@@ -47,7 +47,7 @@ struct NativeRouteView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -93,11 +93,13 @@ struct NativeRouteView: View {
             // Map preview section
             if let preview, !preview.legs.isEmpty || !preview.failures.isEmpty {
                 MapPreviewView(preview: preview, stops: stops)
+                    .nativeContentColumnFrame()
             } else if isLoadingPreview {
                 ProgressView("Building route preview…")
                     .frame(height: 200)
                     .frame(maxWidth: .infinity)
                     .background(Color(.systemGray6))
+                    .nativeContentColumnFrame()
             } else if stops.allSatisfy({ !$0.hasUsableAddress }) {
                 ContentUnavailableView {
                     Label("No addresses to preview", systemImage: "map.slash")
@@ -105,6 +107,7 @@ struct NativeRouteView: View {
                     Text("Add addresses to jobs to see the route preview.")
                 }
                 .frame(height: 200)
+                .nativeContentColumnFrame()
             }
 
             // Stop list section
@@ -127,6 +130,7 @@ struct NativeRouteView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .listStyle(.plain)
         }
     }

@@ -64,6 +64,7 @@ struct NativeCreateInvoiceFromJobView: View {
                     TextField("Phone", text: $draft.phone).keyboardType(.phonePad)
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(copy.title)
             .navigationBarTitleDisplayMode(.inline)

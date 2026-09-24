@@ -71,6 +71,7 @@ struct JobsView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .tradeReadyListStyle()
             .overlay {
                 NativeContentStateView(
@@ -91,6 +92,7 @@ struct JobsView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button { showingNewJob = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel(NativeAccessibilityAudit.Label.addJob)
+                        .keyboardShortcut("n", modifiers: .command)
                 }
             }
             .navigationDestination(for: String.self) { id in
@@ -224,6 +226,7 @@ struct JobDetailView: View {
                 List {
                     detailSections(job)
                 }
+                .nativeContentColumn(.list)
                 .tradeReadyListStyle()
                 .navigationTitle(job.title)
                 .navigationBarTitleDisplayMode(.inline)
@@ -638,6 +641,7 @@ struct JobEditor: View {
                     LabeledField(label: "Notes") { TextField("Anything worth remembering", text: $job.notes, axis: .vertical) }
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(
                 duplicateTemplate != nil ? "Duplicate Job" : isNewRecord ? "New Job" : "Edit Job"

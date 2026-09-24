@@ -39,7 +39,7 @@ struct NativeBookingRequestsView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }
         .refreshable { refreshRows() }
@@ -81,6 +81,7 @@ struct NativeBookingRequestsView: View {
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             }
         }
+        .nativeContentColumn(.list)
         .listStyle(.plain)
     }
 

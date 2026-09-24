@@ -141,14 +141,15 @@ struct NativePricebookEntryView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.fontWeight(.semibold)
+                    Button("Save") { save() }.fontWeight(.semibold).keyboardShortcut("s", modifiers: .command)
                 }
             }
             .alert(alert?.title ?? "", isPresented: showingAlert, presenting: alert) { _ in

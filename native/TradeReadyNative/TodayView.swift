@@ -79,6 +79,7 @@ struct TodayView: View {
                 }
                 .padding()
             }
+            .nativeContentColumn(.scroll)
             .background(Color.tradeCanvas)
             .navigationTitle(store.settings.businessName)
             .refreshable { await store.performPullToRefresh() }

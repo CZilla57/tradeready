@@ -91,15 +91,17 @@ struct NativeTripEditor: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isEditing ? "Save Changes" : "Add Trip") { save() }
                         .fontWeight(.semibold)
+                        .keyboardShortcut("s", modifiers: .command)
                 }
             }
             .alert(alert?.title ?? "", isPresented: showingAlert, presenting: alert) { _ in

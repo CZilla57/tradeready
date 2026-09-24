@@ -65,8 +65,9 @@ struct SettingsView: View {
                     Text("TradeReady Native · 1.0 foundation")
                         .font(.caption).foregroundStyle(.tertiary).frame(maxWidth: .infinity).padding(.bottom, 24)
                 }
-                .frame(maxWidth: 700).padding(.horizontal, 16).padding(.top, 10).frame(maxWidth: .infinity)
+                .padding(.horizontal, 16).padding(.top, 10)
             }
+            .nativeContentColumn(.scroll)
             .background(Color.tradeCanvas)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
@@ -178,7 +179,7 @@ private struct SettingsPage<Content: View>: View {
     let title: String
     let content: Content
     var body: some View {
-        Form { content }.navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        Form { content }.nativeContentColumn(.list).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas).onDisappear { store.save() }
     }
 }
@@ -833,6 +834,7 @@ struct AccountSettings: View {
                         .accessibilityLabel("Type DELETE to confirm account deletion")
                 }
             }
+            .nativeContentColumn(.list)
             .navigationTitle("Delete account")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(isDeleting)
@@ -840,6 +842,7 @@ struct AccountSettings: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { deleteConfirmationPresented = false }
                         .disabled(isDeleting)
+                        .keyboardShortcut(.cancelAction)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Delete", role: .destructive) { performDeleteAccount() }

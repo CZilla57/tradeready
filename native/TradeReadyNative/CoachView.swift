@@ -65,6 +65,7 @@ struct CoachView: View {
                         messages = []
                         sending = false
                     }
+                    .keyboardShortcut("n", modifiers: .command)
                 }
             }
             .onAppear { consumePrefillIfNeeded() }
@@ -98,6 +99,7 @@ struct CoachView: View {
             .padding(.horizontal, 24)
             .padding(.top, 48)
         }
+        .nativeContentColumn(.scroll)
     }
 
     /// RN uses an inverted `FlatList` over the reversed message array purely
@@ -122,6 +124,7 @@ struct CoachView: View {
                 }
                 .padding()
             }
+            .nativeContentColumn(.scroll)
             .onChange(of: messages.count) { _, _ in scrollToLatest(proxy) }
             .onChange(of: sending) { _, _ in scrollToLatest(proxy) }
             .onAppear { scrollToLatest(proxy) }
@@ -153,6 +156,7 @@ struct CoachView: View {
             .accessibilityLabel("Send message")
         }
         .padding()
+        .nativeContentColumnFrame()
         .background(.bar)
     }
 

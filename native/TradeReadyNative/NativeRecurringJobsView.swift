@@ -50,9 +50,10 @@ struct NativeRecurringJobsView: View {
                     }
                 }
             }
+            .nativeContentColumn(.list)
             .tradeReadyListStyle()
             .navigationTitle("Recurring jobs")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .sheet(item: $editingRule) { draft in NativeRecurringJobEditor(rule: draft.rule) }
         }
         .nativeAnalyticsScreen(.recurringJobs)
@@ -108,6 +109,7 @@ struct NativeRecurringJobEditor: View {
                     LabeledContent("Next due", value: rule.nextDueDate)
                 }
             }
+            .nativeContentColumn(.list)
             .navigationTitle("Repeat \(rule.title)")
             .toolbar {
                 DismissableFormToolbar(title: "Save") {

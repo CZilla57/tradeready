@@ -193,6 +193,7 @@ struct NativeInvoiceOutreachView: View {
                             Text("Nothing is sent until you review it again and tap Send in the system composer.")
                         }
                     }
+                    .nativeContentColumn(.list)
                 } else {
                     VStack(spacing: 8) {
                         Image(systemName: "doc.text.magnifyingglass").font(.largeTitle).foregroundStyle(.secondary)
@@ -202,7 +203,7 @@ struct NativeInvoiceOutreachView: View {
             }
             .navigationTitle("Request payment")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .onAppear {
                 if providerID.isEmpty { providerID = store.settings.paymentProvider }
                 restoreCachedLink()

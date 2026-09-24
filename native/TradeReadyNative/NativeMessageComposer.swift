@@ -137,6 +137,7 @@ struct NativeOnMyWayReviewView: View {
                             Text("Nothing is sent until you review it again and tap Send in the system composer.")
                         }
                     }
+                    .nativeContentColumn(.list)
                 } else {
                     ContentUnavailableView {
                         Label("No contact info", systemImage: "person.crop.circle.badge.exclamationmark")
@@ -147,7 +148,7 @@ struct NativeOnMyWayReviewView: View {
             }
             .navigationTitle("On my way")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .sheet(isPresented: $showingComposer) {
                 if let draft {
                     NativeMessageComposer(
@@ -238,6 +239,7 @@ struct NativeAppointmentConfirmationReviewView: View {
                             Text("Nothing is sent until you review it again and tap Send in the system composer.")
                         }
                     }
+                    .nativeContentColumn(.list)
                 } else {
                     ContentUnavailableView {
                         Label("No contact info", systemImage: "person.crop.circle.badge.exclamationmark")
@@ -248,7 +250,7 @@ struct NativeAppointmentConfirmationReviewView: View {
             }
             .navigationTitle("Appointment confirmation")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .sheet(isPresented: $showingComposer) {
                 if let draft {
                     NativeMessageComposer(
