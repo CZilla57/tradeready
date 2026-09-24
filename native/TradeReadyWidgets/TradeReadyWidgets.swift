@@ -10,11 +10,12 @@ import WidgetKit
 //
 // 11.02 replaced the 11.01 placeholder widget with `NextJobWidget`
 // (`native/TradeReadyWidgets/NextJobWidget.swift`). 11.03 adds
-// `JobTimerWidget` to the bundle body below.
+// `JobTimerWidget` (`native/TradeReadyWidgets/JobTimerWidget.swift`) below.
 
 @main
 struct TradeReadyWidgets: WidgetBundle {
     var body: some Widget {
         NextJobWidget()
+        JobTimerWidget()
     }
 }

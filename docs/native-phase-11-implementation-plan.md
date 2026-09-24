@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02 done (2026-09-24); implementation tasks 11.03 and 11.05–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02 and 11.03 done (2026-09-24); implementation tasks 11.05–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -780,7 +780,7 @@ complete / Phase 12 evidence deferred**.
 | 11.00 | all | Done (contract frozen 2026-09-23; C8 → 11.05, C11/P8 → 11.06 named blockers) | — | Contract decisions + event catalog + intent inventory + baselines — [contract](native-phase-11-platform-hardening-contract-decisions.md) |
 | 11.01 | W1, M1 | Done (code complete 2026-09-23; device/extension proof deferred to Phase 12) | 11.00, 10.01, 10.09 | Widget target + snapshot contract + extension manifest |
 | 11.02 | W2 | Done (code complete 2026-09-24; device layout proof deferred to Phase 12) | 11.01 | Next Job widget |
-| 11.03 | W3 | Pending | 11.01, 11.04 | Job Timer widget |
+| 11.03 | W3 | Done (code complete 2026-09-24; device layout proof deferred to Phase 12) | 11.01, 11.04 | Job Timer widget |
 | 11.04 | A1, A2, A3 | Done (code complete 2026-09-23; Siri/device proof deferred to Phase 12) | 11.01 | All ten App Intents + Siri + action queue |
 | 11.05 | W4 | Pending | 11.01-11.04 | Owner/stale/sign-in correctness |
 | 11.06 | L1, L2 | Pending | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
@@ -1388,3 +1388,137 @@ Screen) is deferred to Phase 12 and was not claimed as passed.
 
 **Next ready:** 11.03 (Job Timer widget; needs 11.01 and 11.04, done) and 11.05 (needs
 11.02 and 11.03).
+
+### 11.03 — Job Timer widget (2026-09-24)
+
+**Status:** Done (code complete). The widget renders from resolved policy state only;
+state resolution (including the owner-tagged pending-action precedence), the deep-link
+fallback URL and the timeline refresh date are pure Foundation code with host-test
+coverage. It uses 11.04's `StartTimerIntent`/`StopTimerIntent` as-is and defines no
+`AppIntent` type of its own. Device layout/interactivity proof (the widget on a real
+Home Screen) is deferred to Phase 12 and was not claimed as passed.
+
+**Files:**
+- New, compiled into both targets (`N/Widgets/Shared/`):
+  - `N/Widgets/Shared/JobTimerWidgetPolicy.swift`: `JobTimerWidgetState`
+    (`.missing`/`.running`/`.pendingStop`/`.pendingStart`/`.idle`/`.noJob`/
+    `.syncNeeded`), `resolveState`, `lastPendingTimerType`, `deepLinkURL`,
+    `nextRefreshDate` — all pure Foundation, all host-tested;
+  - `N/Widgets/Shared/JobTimerWidgetView.swift`: `JobTimerWidgetView`, the small/medium
+    rendering. `Button(intent: StartTimerIntent(jobId:))` /
+    `Button(intent: StopTimerIntent(jobId:))` (11.04, same folder) are the only writes;
+    the live elapsed time is `Text(since, style: .timer)`. The view switches on the
+    resolved state and adds no policy of its own.
+- New, extension only (`native/TradeReadyWidgets/`):
+  - `native/TradeReadyWidgets/JobTimerWidget.swift`: `JobTimerEntry`, `JobTimerProvider`
+    (`TimelineProvider`) and `JobTimerWidget` (`StaticConfiguration`,
+    `[.systemSmall, .systemMedium]`).
+- Edited:
+  - `native/TradeReadyWidgets/TradeReadyWidgets.swift`: the `@main WidgetBundle` body now
+    holds `NextJobWidget()` and `JobTimerWidget()`.
+- Tests: `native/JobTimerWidgetPolicyTests/main.swift` and
+  `native/run-job-timer-widget-tests.sh` (both new). The runner is registered in
+  `native/run-all-domain-tests.sh` immediately after `run-next-job-widget-tests.sh`.
+
+**Behavior:**
+- State resolution precedence (highest first), matching RN `JobTimer.swift`'s
+  `JobTimerState`/`lastPendingTimerType` plus the native-only staleness rule (§3.3):
+  1. no snapshot (missing key or undecodable JSON) → `.missing`;
+  2. the most recent owner-tagged queued timer action for this snapshot's `ownerTag`
+     (§4.5 "last one wins", filtered to this owner because replay drops every other
+     entry unapplied) → `.pendingStop` / `.pendingStart`;
+  3. `snapshot.timer` present → `.running(timer, since:)`, **even when the snapshot is
+     stale** (§3.3: "a running timer stays visible and Stop stays enabled");
+  4. stale with no timer → `.syncNeeded` ("Open app to sync"; the idle Start button is
+     suppressed even when a `nextJob` is present, per §3.3);
+  5. fresh with no timer: an upcoming `nextJob` (§3.3's "separately from staleness"
+     scheduledDate rule, same as 11.02) → `.idle(job)`, else `.noJob`.
+- `Button(intent: StopTimerIntent(jobId:))` stays present (and thus tappable) for both
+  `.running` cases — fresh and stale — matching §3.3; `WidgetIntentEngine.stopTimer`
+  itself already allows a stale snapshot (11.04), so the button is never wired to a
+  refusal path.
+- Deep link fallback (§6.1): `.running` links its own job, `.idle` links the upcoming
+  job, every other state opens the app root (`widgetURL` nil, WidgetKit's default).
+  Reuses `NextJobWidgetPolicy.deepLinkURL(jobID:)` — no second encoder.
+- `nextRefreshDate` calls `NextJobWidgetPolicy.nextRefreshDate` directly: the
+  staleness-deadline/next-midnight math is snapshot-generic, not Next-Job-specific, so
+  this is reuse, not a second implementation.
+- Timeline: `.never` unless a refresh date is scheduled, exactly like 11.02. A button tap
+  additionally reloads timelines itself via 11.04's `WidgetIntentTimelines.reloadIfNeeded`
+  (outside the lock); the live countup needs no new entry (`Text(_:style:.timer)`).
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-job-timer-widget-tests.sh` → "Job Timer widget tests
+  passed". Covers:
+  - `.missing` for a nil snapshot;
+  - a running timer stays `.running` at both a fresh and a stale `updatedAt` (§3.3);
+  - stale with no timer is `.syncNeeded` whether or not a `nextJob` is present, and
+    exactly 86,400 s stays fresh (11.02 boundary parity);
+  - `.idle` for a fresh snapshot with an upcoming job, `.noJob` for no job and for a
+    yesterday-dated job (the "separately from staleness" rule);
+  - owner-tagged pending-action precedence: a queued stop overrides a running snapshot,
+    a queued start overrides an idle snapshot, a foreign-owner-tagged action is ignored,
+    and "last one wins" both directions (start-then-stop, stop-then-start);
+  - `lastPendingTimerType` degrades to nil (not a crash) for a malformed queue, a nil
+    queue, or a nil owner tag;
+  - the deep-link fallback for `.running` and `.idle` round-trips through the real
+    `NativeDeepLinkParser.parse` to the expected job id; every other state produces no
+    link;
+  - `nextRefreshDate` matches `NextJobWidgetPolicy.nextRefreshDate` exactly (same
+    delegated call) and is nil for a missing snapshot;
+  - start and stop each produce exactly one `timer_start`/`timer_stop` action, driven
+    through the real 11.04 `WidgetIntentEngine` (not a reimplementation) and accepted by
+    the real `NativeWidgetActionBatchPlanner.prepare` (`batch.actions.map(\.kind) ==
+    [.timerStart, .timerStop]`);
+  - a double tap (same fixed action id) on Start, and separately on Stop, is idempotent:
+    the second `WidgetIntentEngine` call returns `.alreadyQueued`, the queue holds
+    exactly one entry, and that entry alone still plans successfully.
+- `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`, 0 errors (pre-existing warnings elsewhere in the tree, none
+  in the new files). The `TradeReadyWidgets` SwiftFileList includes
+  `JobTimerWidget.swift`, `NextJobWidget.swift`, `TradeReadyWidgets.swift`, and the
+  `Widgets/Shared/*.swift` files (including `JobTimerWidgetPolicy.swift` and
+  `JobTimerWidgetView.swift`); the app's SwiftFileList has the two `JobTimerWidget*`
+  Shared files too, and neither `JobTimerWidget.swift` (the extension-only provider) nor
+  `TradeReadyWidgets.swift`.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0; every runner passed,
+  including `run-job-timer-widget-tests.sh` and `run-next-job-widget-tests.sh`
+  (individually confirmed passing above; the aggregate's `set -eu` would have halted
+  before the later runners and the `backend-workers` `npm test` tail on any failure).
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Deviations:**
+1. **Two native-only states beyond RN's five.** RN's `JobTimerState` has no concept of a
+   stale mirror (it never reads `updatedAt`). This task adds `.missing` (parity with
+   11.02's own addition) and `.syncNeeded` (§3.3's stale-with-no-timer rule) on top of
+   RN's `running`/`pendingStop`/`pendingStart`/`idle`/`empty` (renamed `.noJob` here for
+   clarity against `.noUpcomingJob` in the sibling widget).
+2. **Pending-action read is owner-tag filtered, unlike the plain RN `lastPendingTimerType`.**
+   RN's version has no owner concept and simply reads the last queued timer type. The
+   native version only counts entries whose `ownerTag` matches the snapshot's, because
+   §4.5 makes an untagged or foreign-tagged action one that replay will drop unapplied —
+   counting it as "pending" would show a state the app will never actually reach.
+3. **`isUpcoming`'s local-date compare is duplicated a third time.** It now exists in
+   `WidgetIntentEngine.upcomingJob` (11.04, private), `NextJobWidgetPolicy` (11.02, its
+   own case) and here — each a small, two-line, Foundation-only compare, and no existing
+   file is a shared, cross-target home for it. Noted rather than introduced as a new
+   shared file, per the brief's "one clear responsibility per file" and YAGNI guidance;
+   flagged here in case a later task wants to consolidate it.
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- Both widget families (small, medium) render correctly sized and legible in the gallery
+  and on a Home Screen, in every one of the seven states.
+- Tapping Start/Stop on a real device queues the action, the widget shows the pending
+  state within one reload, and the app replays it into canonical state on next
+  foreground/launch.
+- A double tap on a real device (two rapid taps before the first reload lands) never
+  produces two applied timer transitions.
+- The widget shows the stale-but-running and stale-with-no-timer states after 24 hours
+  with the app closed, and recovers on the next app-triggered reload.
+- The whole-card fallback tap (when interactive widgets are unavailable, e.g. StandBy)
+  opens the correct job or the app root.
+
+**Concerns:** none.
+
+**Next ready:** 11.05 (needs 11.01–11.04, done, and now also 11.02/11.03's UI-side stale
+handling as prior art).
