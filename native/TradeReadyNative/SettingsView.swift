@@ -572,10 +572,10 @@ private struct AIProviderKeySection: View {
     @State private var feedback: NativeAIProviderKeyChange?
 
     var body: some View {
-        let isSaved = store.aiProviderKeyIsSaved(kind)
+        let state = store.aiProviderKeyState(kind)
         Section {
             Text(kind.hint).font(.caption).foregroundStyle(.secondary)
-            LabeledContent(NativeAIProviderKeyPolicy.statusTitle(for: kind), value: NativeAIProviderKeyPolicy.savedStatus(isSaved: isSaved))
+            LabeledContent(NativeAIProviderKeyPolicy.statusTitle(for: kind), value: NativeAIProviderKeyPolicy.savedStatus(state))
             SecureField(kind.placeholder, text: $entry)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -584,7 +584,7 @@ private struct AIProviderKeySection: View {
                 .accessibilityLabel(kind.accessibilityLabel)
             Button(NativeAIProviderKeyPolicy.saveButtonTitle, action: save)
                 .disabled(!NativeAIProviderKeyPolicy.canSubmit(entry))
-            if isSaved {
+            if NativeAIProviderKeyPolicy.offersRemove(state) {
                 Button(NativeAIProviderKeyPolicy.removeButtonTitle, role: .destructive) {
                     finish(store.clearAIProviderKey(kind))
                 }

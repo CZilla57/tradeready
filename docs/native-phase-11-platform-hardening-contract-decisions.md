@@ -1537,22 +1537,39 @@ Native contract (chosen):
   is 20–512 characters. Those are the characters `NativeErrorRedaction.secretPrefixPattern`
   consumes after a credential prefix, so every storable key is redacted whole by the
   shared `NativeSensitiveData` screens; a key with a `.` or a space would leave a tail.
-  Policy: `N/NativeAIProviderKeyPolicy.swift`.
+  Policy: `N/NativeAIProviderKeyPolicy.swift`. **Adding a provider** (fix round 1, M3)
+  means updating both `NativeAIProviderKeyKind.requiredPrefix` and
+  `NativeSensitiveData.secretValuePrefixes` (`N/NativeErrorRedaction.swift`); a prefix in
+  the first but not the second would store a key the redaction screens do not recognize.
 - **Save and Remove are explicit.** The native field never shows the saved key, so an
   empty field is not a deletion: Save is disabled for a blank field and Remove clears the
   account. The policy still maps an empty trimmed entry to a clear (above).
 - **Masked display is "Saved".** RN has no masked format (its secure field redisplays the
   saved value as dots). Native shows the provider name with "Saved" or "Not set", and no
-  character of the key.
+  character of the key. A Keychain read error (for example before first unlock) shows
+  "Unavailable" and still offers Remove (fix round 1, M5); the coach treats an unreadable
+  key as absent and routes to the backend.
 - **Owner-bound writes.** A save or remove is refused unless an owner is signed in and no
-  account boundary (sign-out, deletion, a pending or blocked scrub) is running.
+  account boundary (sign-out, deletion, account switch, password recovery, a pending or
+  blocked scrub) is running. `useAnotherAccount` holds `accountSwitchInFlight` for the
+  whole switch, because the gate stays `.signedIn` across its awaits.
 - **Store injection.** `AppStore` takes one `NativeKeychainSecureSettingsStore`
-  (production: the system Keychain) for the key reads and writes and for every
-  account-scrub wipe, so the store the keys are written to is the store that is wiped.
+  (production: the system Keychain) for the key reads and writes, every account-scrub
+  wipe, every session read and the identity activator, so the store the keys are written
+  to is the store that is wiped (fix round 1, M1: no AppStore path builds its own store).
 - **`$screen` hardening.** `NativeAnalyticsPrivacyPolicy.screenNameRejection` now also
   applies `containsSecret`: a 56-byte Groq key passed the route-name character check.
-- **Account switch.** `useAnotherAccount` clears only the session and keeps provider keys,
-  as it always did for migrated keys; unchanged by 11.15.
+- **Account switch and password recovery wipe keys** (fix round 1, controller ruling
+  2026-09-24; reverses the first round's "keys kept"). Provider keys are bound to their
+  owner. `anthropicKey` and `groqKey`, entered or migrated, are removed through the
+  injected store:
+  - by `useAnotherAccount`, before its first await and again after its last;
+  - by both password-recovery exits (`updateRecoveredPassword`, `cancelPasswordRecovery`),
+    in `applyRecoverySignedOutState`;
+  - by `dismissInvalidPasswordRecovery` when it drops an active recovery session.
+
+  Sign-out and deletion keep wiping them through the full scrub. There are no current
+  users, so no one loses a key they expect to keep.
 
 ---
 

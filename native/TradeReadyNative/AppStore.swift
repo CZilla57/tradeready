@@ -356,6 +356,11 @@ final class AppStore: ObservableObject {
     private var didCheckMigratedAuthenticatedIdentity = false
     private var authenticatedIdentityActivator: NativeAuthenticatedIdentityActivator?
     private var authenticationOperationInFlight = false
+    /// Task 11.15 fix round 1: `useAnotherAccount` does not hold
+    /// `authenticationOperationInFlight`, and the gate stays `.signedIn` across
+    /// its `clearSession`/`logOut` awaits. This closes the AI provider key
+    /// gate for the whole switch.
+    private var accountSwitchInFlight = false
     private var identityActivationInFlight = false
     private var identityActivationWaiters: [CheckedContinuation<Void, Never>] = []
     /// Task 11.06 (contract §6.2 step 4): at most one route parked across
@@ -4069,6 +4074,7 @@ final class AppStore: ObservableObject {
         } else {
             let created = NativeAuthenticatedIdentityActivator(
                 snapshotURL: fileURL,
+                sessionStore: secureSettingsStore,
                 verifier: verifier,
                 refresher: verifier
             )
@@ -4173,6 +4179,13 @@ final class AppStore: ObservableObject {
         // boundary too — reset before the first await, so nothing the next
         // owner does can be attributed to this one.
         applyAnalyticsIdentityBoundary()
+        // Task 11.15 fix round 1 (controller ruling): AI provider keys are
+        // owner-bound, and the switch can end with a different owner. No key
+        // may be saved for the whole switch, and both keys (entered or
+        // migrated) are wiped before the first await and again after the last.
+        accountSwitchInFlight = true
+        defer { accountSwitchInFlight = false }
+        wipeAIProviderKeysForAccountBoundary()
         guard let activator = authenticatedIdentityActivator else {
             authenticationGateState = .signedOut
             return
@@ -4197,6 +4210,9 @@ final class AppStore: ObservableObject {
                 widgetActionReplayDiagnostics.recordAccountSwitchScrubFailure()
             }
             await subscriptionService.logOut()
+            // Task 11.15 fix round 1: and again after the awaits — a key that
+            // landed during `clearSession`/`logOut` belonged to the old owner.
+            wipeAIProviderKeysForAccountBoundary()
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
         reviewRequestRecords = []
@@ -4348,7 +4364,7 @@ final class AppStore: ObservableObject {
         guard let subject = try recoveryStore.read()?.activeUserSubject else {
             throw NativePasswordRecoveryError.expiredLink
         }
-        let sessionStore = NativeKeychainSecureSettingsStore()
+        let sessionStore = secureSettingsStore
         guard let session = try sessionStore.readSupabaseSession() else {
             throw NativePasswordRecoveryError.expiredLink
         }
@@ -4371,7 +4387,7 @@ final class AppStore: ObservableObject {
         guard !authenticationOperationInFlight else { return }
         authenticationOperationInFlight = true
         defer { authenticationOperationInFlight = false }
-        let sessionStore = NativeKeychainSecureSettingsStore()
+        let sessionStore = secureSettingsStore
         if let session = try? sessionStore.readSupabaseSession(),
            let configured = try? configuredAuthentication()
         {
@@ -4387,7 +4403,10 @@ final class AppStore: ObservableObject {
     func dismissInvalidPasswordRecovery() async {
         let recoveryStore = NativePasswordRecoveryStore()
         if (try? recoveryStore.read()?.activeUserSubject) != nil {
-            try? NativeKeychainSecureSettingsStore().clearSupabaseSession()
+            try? secureSettingsStore.clearSupabaseSession()
+            // Task 11.15 fix round 1: dropping the recovery session is an
+            // account boundary too (same rule as the two recovery exits).
+            wipeAIProviderKeysForAccountBoundary()
         }
         try? recoveryStore.clear()
         didCheckMigratedAuthenticatedIdentity = false
@@ -4768,6 +4787,7 @@ final class AppStore: ObservableObject {
         } else {
             let created = NativeAuthenticatedIdentityActivator(
                 snapshotURL: fileURL,
+                sessionStore: secureSettingsStore,
                 verifier: verifier,
                 refresher: verifier
             )
@@ -5079,7 +5099,7 @@ final class AppStore: ObservableObject {
         }
         guard let supabaseURL = BuildEnvironment.supabaseURL,
               let publishableKey = BuildEnvironment.supabasePublishableKey,
-              let sessionBytes = try? NativeKeychainSecureSettingsStore().readSupabaseSession()
+              let sessionBytes = try? secureSettingsStore.readSupabaseSession()
         else {
             authenticationGateState = .initialSyncUnavailable(
                 message: NativeInitialSyncError.invalidConfiguration.localizedDescription
@@ -5563,6 +5583,10 @@ final class AppStore: ObservableObject {
         isSubscriptionTrialing = false
         authenticatedAccountState = .noMigratedSession
         authenticationGateState = .signedOut
+        // Task 11.15 fix round 1 (controller ruling): both recovery exits
+        // (`updateRecoveredPassword`, `cancelPasswordRecovery`) end here and
+        // tear down the account boundary, so the next owner may differ.
+        wipeAIProviderKeysForAccountBoundary()
         // Task 10.09 (B1): account boundary — clear the owner-scoped cached
         // snapshot only; observer registrations survive (see
         // `applyCompletedSignOutState`'s identical comment).
@@ -6698,6 +6722,7 @@ final class AppStore: ObservableObject {
             )
             let created = NativeAuthenticatedIdentityActivator(
                 snapshotURL: fileURL,
+                sessionStore: secureSettingsStore,
                 verifier: verifier,
                 refresher: verifier
             )
@@ -6813,7 +6838,7 @@ final class AppStore: ObservableObject {
     private func currentSyncCredentials() -> NativeSyncCredentials? {
         if let scheduleBookingTestCredentials { return scheduleBookingTestCredentials }
         guard let subject = authenticatedUserSubject,
-              let sessionBytes = try? NativeKeychainSecureSettingsStore().readSupabaseSession()
+              let sessionBytes = try? secureSettingsStore.readSupabaseSession()
         else { return nil }
         return NativeSyncCredentials(subject: subject, sessionBytes: sessionBytes)
     }
@@ -7243,20 +7268,20 @@ extension AppStore {
     private func scheduleBookingSessionBytes(explicit: Data?) -> Data? {
         if let explicit { return explicit }
         if let scheduleBookingSessionOverride { return scheduleBookingSessionOverride }
-        return try? NativeKeychainSecureSettingsStore().readSupabaseSession()
+        return try? secureSettingsStore.readSupabaseSession()
     }
 
     /// Returns the current Supabase session bytes for schedule/booking/portal transports.
     /// Used by tests and views that need to call owner transports directly.
     func scheduleBookingSessionBytes() async throws -> Data {
         if let scheduleBookingSessionOverride { return scheduleBookingSessionOverride }
-        if let bytes = try? NativeKeychainSecureSettingsStore().readSupabaseSession() { return bytes }
+        if let bytes = try? secureSettingsStore.readSupabaseSession() { return bytes }
         throw NativeBookingAdminError.malformedSession
     }
 
     private func scheduleBookingRefreshedSession(excluding used: Data) async -> Data? {
         guard await refreshSyncSession(),
-              let fresh = try? NativeKeychainSecureSettingsStore().readSupabaseSession(),
+              let fresh = try? secureSettingsStore.readSupabaseSession(),
               fresh != used
         else { return nil }
         return fresh
@@ -8428,6 +8453,11 @@ extension AppStore {
         secureSettingsStore.readAIProviderKey(kind) != nil
     }
 
+    /// The status row's state; a Keychain read error is `.unreadable`.
+    func aiProviderKeyState(_ kind: NativeAIProviderKeyKind) -> NativeAIProviderKeyPolicy.SavedState {
+        secureSettingsStore.aiProviderKeyState(kind)
+    }
+
     /// Saves (or, for an empty entry, clears) a user key in the secure store
     /// the coach reads. The page, `coachProviderSummary` and the next coach
     /// send all follow at once. Policy: `NativeAIProviderKeyPolicy`.
@@ -8444,8 +8474,20 @@ extension AppStore {
     /// while an account boundary (sign-out, deletion, scrub) is running, so a
     /// write cannot land after the boundary's wipe.
     private var canChangeAIProviderKeys: Bool {
-        isSignedIn && !authenticationOperationInFlight && !isAccountScrubBlocked
-            && !repository.isAccountScrubPending
+        isSignedIn && !authenticationOperationInFlight && !accountSwitchInFlight
+            && !isAccountScrubBlocked && !repository.isAccountScrubPending
+    }
+
+    /// Task 11.15 fix round 1: removes both provider keys (entered or migrated)
+    /// from the injected secure store at an account boundary that does not run
+    /// the full scrub (account switch, password-recovery exits). Each account
+    /// is removed independently with a verified remove; a failure is not fatal
+    /// to the boundary (the switch's second wipe retries it).
+    private func wipeAIProviderKeysForAccountBoundary() {
+        for kind in NativeAIProviderKeyKind.allCases {
+            try? secureSettingsStore.clearAIProviderKey(kind)
+        }
+        objectWillChange.send()
     }
 
     private func applyAIProviderKey(
@@ -9918,6 +9960,7 @@ extension AppStore {
         }
         authenticatedIdentityActivator = NativeAuthenticatedIdentityActivator(
             snapshotURL: fileURL,
+            sessionStore: secureSettingsStore,
             verifier: NoopVerifier()
         )
     }

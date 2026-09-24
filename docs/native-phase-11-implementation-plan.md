@@ -787,7 +787,7 @@ complete / Phase 12 evidence deferred**.
 | 11.07 | P1, P4 | Done (code complete 2026-09-24; PostHog iOS 3.81.0 linked, app target only; no key committed, so analytics is off until a release key is supplied; device proof deferred to Phase 12) | 11.00 | Analytics transport + privacy |
 | 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 49 wired (the booking push opens await native push; `tax_settings_saved` is unreachable until a native tax-settings editor exists); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Done (code complete 2026-09-24; Sentry Cocoa 9.29.0 linked, app target only; no DSN committed, so crash reporting is off until a release DSN is supplied; app manifest written; dSYM upload script for `tradeready-3r/tradeready-ios`; device proof deferred to Phase 12) | 11.07 | Crash reporting + redaction + app manifest |
-| 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys; live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
+| 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys at sign-out, deletion, account switch and password-recovery exits (fix round 1); live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
 | 11.10a | H1 | Pending | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Pending | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Pending | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
@@ -2564,15 +2564,98 @@ qualifies the row with the runner below.
 - VoiceOver reads "Advanced AI settings", "Groq API key" and "Anthropic API key". The
   secure field shows dots, the status reads only "Saved", and the key is never spoken.
 - Sign out and sign back in: both keys are gone. Account deletion also leaves no key.
+- Fix round 1: save both keys. Then take "Use another account" from "Cloud data
+  unavailable" and sign in as a second account: the page shows "Not set" for both keys
+  and the Provider row reads TradeReady AI. Repeat with the password-recovery link:
+  cancel it (and, separately, finish it with a new password). No key survives either
+  exit.
 - With a Release DSN and PostHog key set: after key entry and a coach send, no Sentry
   event or PostHog event or `$screen` payload contains the key.
 
 **Concerns:**
-- `useAnotherAccount` clears only the session and keeps provider keys, as it always did
-  for migrated keys. A second account that reaches a fresh workspace on the same device
-  (for example after "Cloud data unavailable" → "Use another account") could use the
-  first owner's key through the coach, though never see it. Wiping keys there too would
-  change migrated-key behavior. This needs a controller decision.
-- `cancelPasswordRecovery` likewise clears only the session (unchanged).
+- ~~`useAnotherAccount` and `cancelPasswordRecovery` clear only the session and keep
+  provider keys.~~ **Resolved by fix round 1 (below).** The controller ruled that keys are
+  owner-bound, so both paths now wipe them.
+
+**Next ready:** 11.10a (accessibility audit).
+
+### 11.15 fix round 1 — owner-bound keys across switch and recovery (2026-09-24)
+
+**Controller ruling:** AI provider keys are owner-bound, and migrated keys follow the same
+rule. There are no current users, so correctness wins.
+
+**I1 (Important), fixed:**
+- `useAnotherAccount` removes `anthropicKey` and `groqKey` through the injected store
+  before its first await and again after its last.
+- It also holds a new `accountSwitchInFlight` flag for the whole switch, and
+  `canChangeAIProviderKeys` refuses a save while it is set. The gate stayed `.signedIn`
+  across `clearSession`/`logOut`, so a save could land mid-switch.
+- `applyRecoverySignedOutState` wipes both keys. It is where both
+  `updateRecoveredPassword` and `cancelPasswordRecovery` end.
+- `dismissInvalidPasswordRecovery` wipes them when it drops an active recovery session.
+- The first round's "keys kept" entries are reversed in contract §11.1, the parity row
+  and the 11.15 concerns above.
+
+**Minors:**
+- **M1:** every remaining `NativeKeychainSecureSettingsStore()` in AppStore now uses the
+  injected store. That covers the recovery session reads, the initial-sync and push
+  session reads, and the schedule/booking session reads. The three production activator
+  constructions and the test activator seam now pass `sessionStore: secureSettingsStore`.
+- **M2:** the deletion fixture seeds `auxiliary-account-binding-key.v1` before the
+  relaunch. The sign-out fixture now asserts the key survives (`.live`).
+- **M3:** contract §11.1 notes that a new provider prefix must go into both
+  `requiredPrefix` and `NativeSensitiveData.secretValuePrefixes`.
+- **M4:** the status row makes one Keychain read per provider per render
+  (`aiProviderKeyState`). Left as is: there are two small reads and no cache that
+  could go stale.
+- **M5:** new `NativeAIProviderKeyPolicy.SavedState` (`saved`, `notSet`, `unreadable`).
+  A Keychain read error shows "Unavailable", not "Not set", and Remove is still offered.
+  The coach still treats the key as absent.
+- **M6:** the source scan brace-matches each function body to its end, skipping the
+  parameter list, which can hold a default closure. It now also covers
+  `useAnotherAccount`, both recovery exits and `dismissInvalidPasswordRecovery`.
+
+**Tests (AppStore level):**
+- **`useAnotherAccount`** (real success path, with the `scheduleBookingTestSeedIdentityActivator`
+  seam):
+  - owner A has an entered Anthropic key and an untrimmed migrated Groq key;
+  - inside the `logOut` await, both keys are already gone and the summary is backend;
+  - a save attempted there returns `.rejected(.groq, .unavailable)`;
+  - a key written straight to the backing mid-switch is wiped after the awaits;
+  - owner B inherits no key, the summary is backend, and B can then save.
+- **`cancelPasswordRecovery`:** both keys wiped, summary backend, owner B inherits none.
+- **`updateRecoveredPassword`:** covered by source check only. Its success path needs a
+  live-configured auth client. The check proves it ends in `applyRecoverySignedOutState`,
+  which wipes the keys.
+
+**Commands and results:**
+- Mutations (each applied in place, run and restored with a `cmp` check). All six were
+  killed:
+
+  | Mutation | Failures |
+  |---|---|
+  | Gate ignores the switch | 2 |
+  | No wipe after the awaits | 5 |
+  | No wipe before the first await | 3 |
+  | No recovery wipe | 4 |
+  | A read error shown as Not set | 1 |
+  | An own store in `signOut` | 2 |
+
+- `TZ=America/Phoenix sh native/run-ai-provider-key-tests.sh` → `ai-provider-key tests: 274/274 checks passed`
+- `TZ=America/Phoenix sh native/run-widget-owner-gating-tests.sh` → `Widget owner gating tests passed`
+- `TZ=America/Phoenix sh native/run-store-integration-tests.sh` → `PASS: canonical AppStore integration tests`
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0. The output includes
+  `Analytics transport tests passed (226 checks)`,
+  `Analytics event tests passed (536 checks)`,
+  `error-redaction tests: 689/689 checks passed`, `ai-provider-key tests: 274/274 checks passed`
+  and node `fail 0`.
+- Release `xcodebuild … CODE_SIGNING_ALLOWED=NO build` → `** BUILD SUCCEEDED **`, with no
+  warnings from touched files.
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Residual concern:** the boundary wipe uses `try?` for each account, so a Keychain
+remove failure is not fatal to the switch or the recovery exit. The switch's second wipe
+retries it. A persistent remove failure would leave the key until the next sign-out or
+deletion scrub, which does fail closed.
 
 **Next ready:** 11.10a (accessibility audit).

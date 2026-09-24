@@ -221,6 +221,36 @@ enum NativeAIProviderKeyPolicy {
 
     static func savedStatus(isSaved: Bool) -> String { isSaved ? "Saved" : "Not set" }
 
+    /// Task 11.15 fix round 1 (M5): what the status row can say about a saved
+    /// key. A Keychain read that throws (for example before first unlock) is
+    /// `.unreadable`, not "Not set" — the page must not claim no key exists
+    /// when one may. The coach still treats an unreadable key as absent and
+    /// takes the backend path (it never guesses).
+    enum SavedState: Equatable {
+        case saved
+        case notSet
+        case unreadable
+    }
+
+    static func savedState(read: () throws -> Data?) -> SavedState {
+        do {
+            return storedKey(from: try read()) == nil ? .notSet : .saved
+        } catch {
+            return .unreadable
+        }
+    }
+
+    static func savedStatus(_ state: SavedState) -> String {
+        switch state {
+        case .saved: savedStatus(isSaved: true)
+        case .notSet: savedStatus(isSaved: false)
+        case .unreadable: "Unavailable"
+        }
+    }
+
+    /// Remove is offered whenever a key may exist, including an unreadable one.
+    static func offersRemove(_ state: SavedState) -> Bool { state != .notSet }
+
     /// The provider the coach routes to for these saved keys: exactly
     /// `NativeCoachTransport.provider` (Anthropic, then Groq, then backend).
     static func provider(savedAnthropicKey: String?, savedGroqKey: String?) -> NativeCoachProvider {

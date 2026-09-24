@@ -71,6 +71,8 @@ final class MemorySecureBackend: NativeSecureKeyValueBacking {
     var values: [String: Data] = [:]
     var failUpsert = false
     var failRemove = false
+    /// A Keychain read error (for example before first unlock).
+    var failRead = false
     /// Returns different bytes on read-back (a Keychain that did not persist).
     var corruptReads = false
     func upsert(_ value: Data, key: String) throws {
@@ -78,6 +80,7 @@ final class MemorySecureBackend: NativeSecureKeyValueBacking {
         values[key] = value
     }
     func read(key: String) throws -> Data? {
+        if failRead { throw NativeSecureSettingsStoreError.writeFailed(key: key, status: -25308) }
         guard let value = values[key] else { return nil }
         return corruptReads ? Data("x".utf8) : value
     }
@@ -152,6 +155,8 @@ struct NoopReloader: NativeWidgetTimelineReloading {
 
 @MainActor
 final class SubscriptionStub: NativeSubscriptionServing {
+    /// Runs inside `useAnotherAccount`'s `logOut` await (mid-switch).
+    var onLogOut: (@MainActor () -> Void)?
     func prepare(appUserID: String, apiKey: String, entitlementID: String) async throws -> NativeSubscriptionEntitlement {
         .init(isActive: false, isTrialing: false)
     }
@@ -160,7 +165,7 @@ final class SubscriptionStub: NativeSubscriptionServing {
         .init(entitlement: .init(isActive: false, isTrialing: false), userCancelled: false)
     }
     func restore() async throws -> NativeSubscriptionEntitlement { .init(isActive: false, isTrialing: false) }
-    func logOut() async {}
+    func logOut() async { onLogOut?() }
 }
 
 struct TempAppGroup {
@@ -201,7 +206,8 @@ func makeStore(
     directory existing: URL? = nil,
     loader: FakeCoachLoader = FakeCoachLoader(),
     analytics: NativeAnalytics = NativeNoOpAnalytics(),
-    crashReporting: NativeCrashReporting = NativeNoOpCrashReporting()
+    crashReporting: NativeCrashReporting = NativeNoOpCrashReporting(),
+    subscription: SubscriptionStub? = nil
 ) -> (AppStore, URL) {
     let directory = existing ?? FileManager.default.temporaryDirectory
         .appending(path: "tradeready-1115-\(tag)-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -210,7 +216,7 @@ func makeStore(
         fileURL: directory.appending(path: "store.json"),
         seedIfMissing: true,
         appGroupAccountScrubber: group.scrubber,
-        subscriptionService: SubscriptionStub(),
+        subscriptionService: subscription ?? SubscriptionStub(),
         coachTransport: NativeCoachTransport(backendBaseURL: URL(string: "https://backend.example.test/"), loader: loader),
         analytics: analytics,
         crashReporting: crashReporting,
@@ -332,6 +338,16 @@ func testMaskedDisplay() {
     expectEqual(P.savedStatus(isSaved: true), "Saved", "a saved key shows only \"Saved\"")
     expectEqual(P.savedStatus(isSaved: false), "Not set", "no key shows \"Not set\"")
     expectNoLeak(P.statusTitle(for: .anthropic) + P.statusTitle(for: .groq) + P.savedStatus(isSaved: true), "masked display")
+    // Fix round 1 (M5): a Keychain read error is not "Not set".
+    struct ReadError: Error {}
+    expectEqual(P.savedState { Data(groqKey.utf8) }, .saved, "a readable key → saved")
+    expectEqual(P.savedState { nil }, .notSet, "no item → not set")
+    expectEqual(P.savedState { Data("  ".utf8) }, .notSet, "whitespace item → not set")
+    expectEqual(P.savedState { throw ReadError() }, .unreadable, "a read error → unreadable")
+    expectEqual(P.savedStatus(.saved), "Saved", "saved state copy")
+    expectEqual(P.savedStatus(.notSet), "Not set", "not-set state copy")
+    expectEqual(P.savedStatus(.unreadable), "Unavailable", "unreadable is not shown as Not set")
+    expect(P.offersRemove(.saved) && P.offersRemove(.unreadable) && !P.offersRemove(.notSet), "Remove is offered whenever a key may exist")
 }
 
 func testStoredValueRule() {
@@ -519,6 +535,16 @@ func testAppStoreWiring() async {
     expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .failed(.groq, removing: false), "Keychain failure surfaces")
     expectEqual(store.coachProviderSummary.analyticsName, "backend", "a failed save leaves the provider unchanged")
     backend.failUpsert = false
+
+    // Fix round 1 (M5): an unreadable Keychain shows "Unavailable", and the
+    // coach treats the key as absent (backend).
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "save Groq again")
+    expectEqual(store.aiProviderKeyState(.groq), .saved, "state saved")
+    expectEqual(store.aiProviderKeyState(.anthropic), .notSet, "state not set")
+    backend.failRead = true
+    expectEqual(store.aiProviderKeyState(.groq), .unreadable, "a read error is unreadable, not Not set")
+    expectEqual(store.coachProviderSummary.analyticsName, "backend", "an unreadable key routes to the backend")
+    backend.failRead = false
 }
 
 @MainActor
@@ -533,7 +559,9 @@ func testAppStoreOwnerWipe() async {
         store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
         expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
         expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "owner A saves Groq")
+        backend.values["auxiliary-account-binding-key.v1"] = Data("device-binding".utf8)
         do { try await store.signOut(revokeRemote: false) } catch { expect(false, "signOut threw \(error)") }
+        expect(backend.values["auxiliary-account-binding-key.v1"] != nil, "sign-out is the .live scope (device binding kept)")
         expectEqual(store.advisoryAnthropicKey, nil, "sign-out wipes the entered Anthropic key")
         expectEqual(store.advisoryGroqKey, nil, "sign-out wipes the entered Groq key")
         expect(backend.values["anthropicKey"] == nil && backend.values["groqKey"] == nil, "no key account survives sign-out")
@@ -559,12 +587,75 @@ func testAppStoreOwnerWipe() async {
         } catch {
             expect(false, "could not stage a pending deletion scrub: \(error)")
         }
+        // Fix round 1 (M2): seed the device binding so the scope check can fail.
+        backend.values["auxiliary-account-binding-key.v1"] = Data("device-binding".utf8)
         let (relaunched, _) = makeStore("delete", backend: backend, group: group, directory: directory)
         expect(!relaunched.isAccountScrubBlocked, "the deletion scrub finished at launch")
         expect(backend.values["anthropicKey"] == nil && backend.values["groqKey"] == nil, "deletion scrub wipes both keys")
         expect(backend.values["auxiliary-account-binding-key.v1"] == nil, "deletion scrub is the .all scope")
         expectEqual(relaunched.coachProviderSummary.analyticsName, "backend", "after deletion the summary is backend")
     }
+}
+
+// Fix round 1 (I1, controller ruling): keys are owner-bound across the
+// account switch and both password-recovery exits.
+@MainActor
+func testAppStoreAccountSwitchWipesKeys() async {
+    let group = TempAppGroup("switch")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let subscription = SubscriptionStub()
+    let (store, directory) = makeStore("switch", backend: backend, group: group, subscription: subscription)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    store.scheduleBookingTestSeedIdentityActivator()
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
+    // A migrated key (written by the importer, untrimmed) follows the same rule.
+    backend.values["groqKey"] = Data(" \(groqKey)\n".utf8)
+    expectEqual(store.coachProviderSummary.analyticsName, "anthropic", "sanity: owner A routes to Anthropic")
+
+    var midSwitchSave: NativeAIProviderKeyChange?
+    var midSwitchSaved = true
+    var midSwitchSummary = ""
+    subscription.onLogOut = { [unowned store] in
+        // Already wiped before the first await.
+        midSwitchSaved = store.aiProviderKeyIsSaved(.anthropic) || store.aiProviderKeyIsSaved(.groq)
+        midSwitchSummary = store.coachProviderSummary.analyticsName
+        // The gate is still `.signedIn` here; the switch must refuse a save.
+        midSwitchSave = store.setAIProviderKey(.groq, entry: groqKey)
+        // A key landing by any other path during the awaits is wiped after them.
+        backend.values["anthropicKey"] = Data(anthropicKey.utf8)
+    }
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    expectEqual(store.authenticationGateState, .signedOut, "sanity: useAnotherAccount reached its success path")
+    expect(!midSwitchSaved, "keys are wiped before the switch's first await")
+    expectEqual(midSwitchSummary, "backend", "mid-switch the summary is already backend")
+    expectEqual(midSwitchSave, .rejected(.groq, .unavailable), "a save attempted mid-switch is refused")
+    expect(backend.values["anthropicKey"] == nil && backend.values["groqKey"] == nil, "no key survives the account switch (entered, migrated or mid-switch)")
+    expectEqual(store.coachProviderSummary.analyticsName, "backend", "after the switch the summary is backend")
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+    expect(!store.aiProviderKeyIsSaved(.anthropic) && !store.aiProviderKeyIsSaved(.groq), "owner B inherits no key after the switch")
+    expectEqual(store.coachProviderSummary.analyticsName, "backend", "owner B's summary is backend")
+    // The gate reopens for owner B.
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "owner B can save after the switch")
+}
+
+@MainActor
+func testAppStoreRecoveryExitWipesKeys() async {
+    let group = TempAppGroup("recovery")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("recovery", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "owner A saves Groq")
+    await store.cancelPasswordRecovery()
+    expectEqual(store.authenticationGateState, .signedOut, "sanity: cancelPasswordRecovery reached the recovery sign-out")
+    expect(backend.values["anthropicKey"] == nil && backend.values["groqKey"] == nil, "cancelPasswordRecovery wipes both keys")
+    expectEqual(store.coachProviderSummary.analyticsName, "backend", "after recovery cancel the summary is backend")
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+    expect(!store.aiProviderKeyIsSaved(.anthropic) && !store.aiProviderKeyIsSaved(.groq), "owner B inherits no key after recovery")
 }
 
 // MARK: - 4. Redaction and storage
@@ -706,6 +797,36 @@ func testKeysNeverReachDefaultsAppGroupWidgetOrFiles() async {
 
 // MARK: - 5. Source checks
 
+/// The body of the first function declared by `marker`, brace-matched to its
+/// end (fix round 1, M6: replaces a fixed 4,000-character window).
+func functionBody(_ text: String, _ marker: String) -> String? {
+    guard let start = text.range(of: marker) else { return nil }
+    // Skip the parameter list (a default argument may hold a closure).
+    var bodySearch = start.upperBound
+    if marker.hasSuffix("(") {
+        var parens = 1
+        while bodySearch < text.endIndex, parens > 0 {
+            if text[bodySearch] == "(" { parens += 1 }
+            if text[bodySearch] == ")" { parens -= 1 }
+            bodySearch = text.index(after: bodySearch)
+        }
+    }
+    guard let open = text[bodySearch...].firstIndex(of: "{") else { return nil }
+    var depth = 0
+    var index = open
+    while index < text.endIndex {
+        switch text[index] {
+        case "{": depth += 1
+        case "}":
+            depth -= 1
+            if depth == 0 { return String(text[start.lowerBound...index]) }
+        default: break
+        }
+        index = text.index(after: index)
+    }
+    return nil
+}
+
 func testSources(root: URL) {
     func source(_ path: String) -> String {
         (try? String(contentsOf: root.appending(path: path), encoding: .utf8)) ?? ""
@@ -742,11 +863,37 @@ func testSources(root: URL) {
 
     // Every account-scrub site uses the injected secure store (the same one
     // the keys are written to), never a fresh default.
-    for marker in ["func signOut(", "func deleteAccount(", "func retryAccountScrub("] {
-        guard let start = appStore.range(of: marker) else { expect(false, "\(marker) found"); continue }
-        let tail = appStore[start.lowerBound...]
-        let body = tail.prefix(4_000)
+    for marker in ["func signOut(", "func deleteAccount(", "func retryAccountScrub(", "func useAnotherAccount(",
+                   "func updateRecoveredPassword(", "func cancelPasswordRecovery(", "func dismissInvalidPasswordRecovery("] {
+        guard let body = functionBody(appStore, marker) else { expect(false, "\(marker) found"); continue }
+        expect(body.count > 200 && body.hasSuffix("}"), "\(marker) body scanned to its end")
         expect(!body.contains("NativeKeychainSecureSettingsStore()"), "\(marker) uses the injected secure store")
+    }
+    // Fix round 1 (M1): no AppStore path builds its own secure store.
+    expect(!appStore.contains("NativeKeychainSecureSettingsStore()"), "AppStore never constructs its own secure store")
+    // Fix round 1 (I1): the switch wipes before its first await and after its last.
+    if let body = functionBody(appStore, "func useAnotherAccount(") {
+        let wipe = "wipeAIProviderKeysForAccountBoundary()"
+        let first = body.range(of: wipe)
+        let last = body.range(of: wipe, options: .backwards)
+        let clear = body.range(of: "await activator.clearSession()")
+        let logOut = body.range(of: "await subscriptionService.logOut()")
+        if let first, let last, let clear, let logOut {
+            expect(first.lowerBound < clear.lowerBound, "switch wipes keys before the first await")
+            expect(last.lowerBound > logOut.upperBound, "switch wipes keys after the last await")
+        } else {
+            expect(false, "switch wipe and awaits found")
+        }
+        expect(body.contains("accountSwitchInFlight = true"), "switch closes the key gate")
+    }
+    if let gate = functionBody(appStore, "private var canChangeAIProviderKeys") {
+        expect(gate.contains("!accountSwitchInFlight"), "the key gate is closed during an account switch")
+    }
+    if let recovery = functionBody(appStore, "private func applyRecoverySignedOutState(") {
+        expect(recovery.contains("wipeAIProviderKeysForAccountBoundary()"), "recovery sign-out wipes keys")
+    }
+    for marker in ["func updateRecoveredPassword(", "func cancelPasswordRecovery("] {
+        expect(functionBody(appStore, marker)?.contains("applyRecoverySignedOutState()") == true, "\(marker) ends in the recovery sign-out")
     }
     expect(appStore.contains("case .live: try secureSettingsStore.clearAccountValues()"), "launch recovery / retry wipe via the injected store")
     expect(appStore.contains("performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .live)"), "sign-out scrub uses the injected store")
@@ -775,6 +922,8 @@ struct AIProviderKeyTests {
         testOwnerWipe()
         await testAppStoreWiring()
         await testAppStoreOwnerWipe()
+        await testAppStoreAccountSwitchWipesKeys()
+        await testAppStoreRecoveryExitWipesKeys()
         await testAnalyticsNeverCarriesAKey()
         await testCrashPayloadsNeverCarryAKey()
         await testKeysNeverReachDefaultsAppGroupWidgetOrFiles()
