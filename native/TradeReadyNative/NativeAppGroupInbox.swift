@@ -154,15 +154,10 @@ struct NativePendingOpenURLConsumer {
     /// (nil when nothing matched or the stash was untagged). A stash for a
     /// different route is left for `take`.
     func takeMatching(_ route: NativeDeepLinkParser.Route) -> (removed: Bool, ownerTag: String?) {
-        struct Loose: Decodable {
-            let url: String
-            let ownerTag: String?
-        }
         do {
             return try WidgetAppGroupLock.withExclusiveLock(at: lockFile) { () -> (Bool, String?) in
                 guard let raw = inbox.value(forKey: Self.key),
-                      raw.utf8.count <= NativeDeepLinkParser.maximumPendingOpenURLLength,
-                      let stash = try? JSONDecoder().decode(Loose.self, from: Data(raw.utf8)),
+                      let stash = NativeDeepLinkParser.decodePendingOpenURLPayload(raw),
                       NativeDeepLinkParser.parse(stash.url) == route
                 else { return (false, nil) }
                 inbox.removeValue(forKey: Self.key)

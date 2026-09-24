@@ -65,18 +65,26 @@ enum NativeDeepLinkParser {
         }
     }
 
+    /// The raw `pendingOpenUrl` value `{url, at, ownerTag}`, size-bounded and
+    /// decoded with no freshness or grammar check. The one decoder for both
+    /// the cold consumer and the warm-route dedupe (`takeMatching`).
+    struct PendingOpenURLPayload: Decodable, Equatable, Sendable {
+        let url: String
+        let at: String
+        let ownerTag: String?
+    }
+
+    static func decodePendingOpenURLPayload(_ raw: String) -> PendingOpenURLPayload? {
+        guard raw.utf8.count <= maximumPendingOpenURLLength,
+              let data = raw.data(using: .utf8)
+        else { return nil }
+        return try? JSONDecoder().decode(PendingOpenURLPayload.self, from: data)
+    }
+
     /// Validates the App Group cold-launch handoff as one boundary: payload
     /// shape, freshness, and URL grammar must all pass before a route escapes.
     static func parsePendingOpenURL(_ raw: String, now: Date) -> PendingOpenURL? {
-        struct Payload: Decodable {
-            let url: String
-            let at: String
-            let ownerTag: String?
-        }
-
-        guard raw.utf8.count <= maximumPendingOpenURLLength,
-              let data = raw.data(using: .utf8),
-              let payload = try? JSONDecoder().decode(Payload.self, from: data),
+        guard let payload = decodePendingOpenURLPayload(raw),
               !payload.url.isEmpty,
               let stampedAt = parseISO8601(payload.at),
               let route = parse(payload.url)

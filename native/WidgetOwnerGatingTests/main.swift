@@ -880,7 +880,9 @@ private func testDeepLinkWhileSignedOut() async throws {
     expect(store.parkedDeepLink == nil, "B signs in: the parked link is resolved, not kept")
     expect(store.deepLinkedJobID == nil && store.pendingOnMyWayJobID == nil,
            "after B signs in, no route from the signed-out link appears (no record in the current data)")
-    expectEqual(store.deepLinkUnavailableNotice?.reason, .missingRecord, "…the existing not-found state is shown instead")
+    // Fix round 1 (M1, deliberate): the link arrived with no owner, so B is
+    // not told "Job not found" for a tap B did not make; it is dropped silently.
+    expect(store.deepLinkUnavailableNotice == nil, "…and B sees no not-found state for A's tap")
 
     // (b) Task 11.06: a cold-launch stash is read and removed under the lock
     // whatever the gate, parks with A's tag while signed out, and is

@@ -337,6 +337,10 @@ final class AppStore: ObservableObject {
     /// the auth/onboarding/subscription gate (newest wins). Read-only outside
     /// the store so host tests can observe parking.
     private(set) var parkedDeepLink: NativeDeepLinkCandidate?
+    /// Fix round 1 (I1): an owner (O) was active at some gate since the last
+    /// closed-gate boundary. Only leaving such a session discards a parked
+    /// route; the launch resolution `.loading` → `.signedOut` does not.
+    private var deepLinkOwnerWasActive = false
     /// Task 11.06 (contract §6.2 step 3): the App Group `pendingOpenUrl`
     /// consumer (read-and-remove under the shared lock). Nil in previews and
     /// host tests unless injected, so they never touch the real container.
@@ -3775,13 +3779,22 @@ final class AppStore: ObservableObject {
 
     private func handleDeepLinkGateChange(from oldValue: NativeAuthenticationGateState) {
         let phase = Self.deepLinkGatePhase(authenticationGateState)
+        let gateChanged = oldValue != authenticationGateState
         if NativeDeepLinkRoutingPolicy.discardsParked(
             entering: phase,
-            gateChanged: oldValue != authenticationGateState
+            gateChanged: gateChanged,
+            ownerWasActive: deepLinkOwnerWasActive
         ) {
             parkedDeepLink = nil
             deepLinkUnavailableNotice = nil
-        } else if phase == .signedIn, Self.deepLinkGatePhase(oldValue) != .signedIn {
+        }
+        if phase == .closed, gateChanged {
+            // The boundary is consumed; a later closed gate needs a new owner.
+            deepLinkOwnerWasActive = false
+        } else if derivedStatePublishBinding != nil {
+            deepLinkOwnerWasActive = true
+        }
+        if phase == .signedIn, Self.deepLinkGatePhase(oldValue) != .signedIn {
             flushParkedDeepLink()
         }
     }

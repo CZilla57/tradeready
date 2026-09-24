@@ -153,6 +153,16 @@ struct AppGroupPendingOpenURLTests {
                "the matching stash is removed and its tag returned")
         let jobVsOnMyWay = MemoryInbox([key: good])
         expect(!consumer(jobVsOnMyWay).takeMatching(.job(id: "j1")).removed, "job/j1 does not match onmyway/j1")
+        // Fix round 1 (M2): the dedupe uses the parser's one payload decoder
+        // and size bound, so an oversized stash naming the same route, or one
+        // with no `at`, is left for `take` to discard.
+        let oversizedOnMyWay = String(padded.replacingOccurrences(of: "tradeready://job/j1", with: "tradeready://onmyway/j1"))
+        let oversizedInbox = MemoryInbox([key: oversizedOnMyWay])
+        expect(!consumer(oversizedInbox).takeMatching(.onMyWay(id: "j1")).removed && oversizedInbox.values[key] == oversizedOnMyWay,
+               "an oversized stash is never matched by the warm dedupe")
+        let noAt = #"{"url":"tradeready://onmyway/j1","ownerTag":"\#(tag)"}"#
+        let noAtInbox = MemoryInbox([key: noAt])
+        expect(!consumer(noAtInbox).takeMatching(.onMyWay(id: "j1")).removed, "a stash without `at` is not the payload shape")
 
         // The take waits for another holder of the SAME lock file (§4.2).
         try? FileManager.default.createDirectory(at: lockDir, withIntermediateDirectories: true)

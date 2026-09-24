@@ -15,7 +15,9 @@ import Foundation
 //      effect);
 //   3. the stash is read AND removed under the shared lock
 //      (`NativePendingOpenURLConsumer.take`);
-//   4. not `.signedIn` → park (at most one, newest wins);
+//   4. not `.signedIn` → park (at most one, newest wins; discarded only when
+//      the gate leaves a state in which an owner was active, never by the
+//      launch resolution `.loading` → `.signedOut`);
 //   5. exact owner: `O != nil`, the stash tag equals `hash(O)`, a warm URL's
 //      arrival binding is nil or equals `O`;
 //   6. record: the job exists in the CURRENT owner's data, is not archived
@@ -78,6 +80,11 @@ enum NativeDeepLinkDiscardReason: Equatable, Sendable {
     /// Older than `pendingOpenURLMaximumAge`, or stamped in the future.
     case stale
     case missingRecord
+    /// Fix round 1 (M1): a warm link that arrived with NO owner signed in
+    /// (arrival binding nil, no stash tag) names a record the current owner
+    /// does not have. It may have been another owner's tap, so it is dropped
+    /// silently rather than telling this owner "Job not found".
+    case missingRecordUnownedArrival
     case archivedRecord
     /// `onmyway` for a job in a done status (native deviation, §6.2 step 6).
     case finishedRecord
@@ -88,7 +95,7 @@ enum NativeDeepLinkDiscardReason: Equatable, Sendable {
     var surfacesNotFound: Bool {
         switch self {
         case .missingRecord, .archivedRecord, .finishedRecord: true
-        case .noExactOwner, .ownerMismatch, .stale: false
+        case .noExactOwner, .ownerMismatch, .stale, .missingRecordUnownedArrival: false
         }
     }
 }
@@ -142,7 +149,11 @@ enum NativeDeepLinkRoutingPolicy {
         }
         // Step 6: the record, in the current owner's data only.
         let id = candidate.route.jobID
-        guard let found = record(id) else { return .discard(.missingRecord) }
+        guard let found = record(id) else {
+            let unownedArrival = candidate.source == .warmURL
+                && candidate.arrivalBinding == nil && candidate.ownerTag == nil
+            return .discard(unownedArrival ? .missingRecordUnownedArrival : .missingRecord)
+        }
         // Archived fails closed, with ONE recorded exception (contract §6.2,
         // native difference): the Job Timer widget keeps showing a running
         // clock on an archived job (§2.2 parity, `activeTimer` does not filter
@@ -161,11 +172,20 @@ enum NativeDeepLinkRoutingPolicy {
         return .apply(candidate.route)
     }
 
-    /// §6.2 step 4: a parked route is discarded when the gate ENTERS
-    /// `.signedOut`, `.accountMismatch` or `.unavailable`. A route that
-    /// arrived while the gate was already there stays parked until sign-in.
-    static func discardsParked(entering newPhase: NativeDeepLinkGatePhase, gateChanged: Bool) -> Bool {
-        newPhase == .closed && gateChanged
+    /// §6.2 step 4 (fix round 1, I1 controller ruling): a parked route is
+    /// discarded only when the gate ENTERS `.signedOut`, `.accountMismatch`
+    /// or `.unavailable` out of a session in which an owner was active
+    /// (sign-out, account switch, scrub, deletion, a mismatch or outage after
+    /// sign-in). The launch resolution `.loading` → `.signedOut` is not a
+    /// boundary: the route stays parked for the sign-in that follows, where
+    /// the stash tag and the freshness window still gate it. A route that
+    /// arrived while the gate was already closed also stays parked.
+    static func discardsParked(
+        entering newPhase: NativeDeepLinkGatePhase,
+        gateChanged: Bool,
+        ownerWasActive: Bool
+    ) -> Bool {
+        newPhase == .closed && gateChanged && ownerWasActive
     }
 
     /// `widget_deep_link_opened {type}` (§9.5; RN `App.tsx:503`).

@@ -1834,6 +1834,9 @@ notification **opens** its editable follow-up review.
   a running timer opens that job.
 - Google Sign-In completes while a widget link is parked.
 - An archived estimate's `est_` notification opens its follow-up review.
+- The "Job not found" sheet is presented from `RootView` while another sheet is already
+  up (an On My Way review, an estimate follow-up, a job editor): it appears on top or
+  after that sheet closes, never silently lost, and Done dismisses only it.
 
 **Concerns:** none blocking. The "Job not found" sheet is a new small surface: it reuses
 the existing title and symbol but is presented from `RootView` rather than inside Jobs
@@ -1841,3 +1844,55 @@ navigation.
 
 **Next ready:** 11.07 (analytics transport; `widget_deep_link_opened {type}` now goes
 through the `NativeAnalytics` seam).
+
+**Fix round 1 (2026-09-24):**
+- **I1: a cold launch while signed out dropped the parked route (fixed).** The store
+  starts at `.loading`, so a launch stash or launch URL parked, and activation's
+  `.loading` → `.signedOut` then counted as entering a closed gate and discarded it.
+  - Controller ruling (the brief wins over the §6.2 wording): only leaving a session in
+    which an owner was active discards a parked route. That covers sign-out, account
+    switch, scrub, deletion, and a mismatch or outage reached after sign-in. The launch
+    resolution is not a boundary.
+  - `NativeDeepLinkRoutingPolicy.discardsParked` takes `ownerWasActive`.
+    `AppStore.deepLinkOwnerWasActive` is set whenever `O` holds at a gate change and is
+    reset by the boundary.
+  - The tag check and the 300 s window still protect the owner. Contract §6.2 step 4 and
+    §6.3 are amended. Deviation 4 above is superseded.
+  - New fixtures, for both the stash and the launch-URL paths:
+    - `.loading → park → .signedOut → .signedIn(A)` opens A's record, once;
+    - the same sequence with `.signedIn(B)` discards silently;
+    - a route older than 300 s at apply time discards;
+    - launch → `.accountMismatch` keeps the parked route;
+    - leaving an active owner's session for `.signedOut`, `.accountMismatch` or
+      `.unavailable` (including `signedIn → .loading → .signedOut`) discards, and the
+      flag is consumed by that boundary.
+- **Spec gap:** the §2.5 11.06 bullet, the §4 OnMyWay gap bullet, the §6.2 "Gaps 11.06
+  must close" list and the C22 row are marked closed, each citing what closed it.
+- **M1:** a warm link that arrived with no owner (arrival binding nil, no stash tag),
+  whose record the signing-in owner lacks, is dropped silently
+  (`missingRecordUnownedArrival`). A missing record under `O` still shows not-found.
+  The owner-gating fixture (a) expectation was updated deliberately.
+- **M2:** `takeMatching` reuses `NativeDeepLinkParser.decodePendingOpenURLPayload`, the
+  one payload decoder and size bound (the `Loose` decoder is gone). New assertions: an
+  oversized stash, or one without `at`, is never matched.
+- **M3:** the malformed-URL loop fails on an entry `URL(string:)` rejects, and asserts
+  the handled count (22 = 11 × 2).
+- **M4:** a new fixture sends a link from inside `logOut`, between `clearSession` and the
+  owner teardown. The link is applied mid-switch, and the clear after the awaits removes
+  it.
+- **M5:** a Phase 12 runsheet row for the not-found sheet over another sheet (above).
+- **Mutation checks (7, all caught; each restored and confirmed identical with `cmp`):**
+
+  | Mutation | Failures caught |
+  |---|---|
+  | never discard on a closed gate | 9 |
+  | `ownerWasActive` ignored (launch resolution discards) | 12 |
+  | owner flag never set | 8 |
+  | owner flag never reset | 1 |
+  | M1 reverted | deep-link 3, owner-gating 1 |
+  | second `useAnotherAccount` clear removed | 1 |
+  | shared payload size bound removed | 2 |
+- **Commands (`TZ=America/Phoenix`):** deep-link-routing, widget-owner-gating,
+  app-intent-queue, store-integration and app-group-pending-open-url all pass. The Release
+  generic `xcodebuild` gives `** BUILD SUCCEEDED **`, and
+  `sh native/run-doc-reference-check.sh` reports 0 missing.

@@ -162,7 +162,10 @@ private final class SubscriptionStub: NativeSubscriptionServing {
         .init(entitlement: .init(isActive: false, isTrialing: false), userCancelled: false)
     }
     func restore() async throws -> NativeSubscriptionEntitlement { .init(isActive: false, isTrialing: false) }
-    func logOut() async {}
+    /// Fix round 1 (M4): runs inside `useAnotherAccount`, between its
+    /// `clearSession` and the owner teardown.
+    var onLogOut: () -> Void = {}
+    func logOut() async { onLogOut() }
 }
 
 @MainActor
@@ -178,6 +181,7 @@ private final class Harness {
     let suite = TempSuite()
     let workspace = Workspace()
     let analytics = RecordingAnalytics()
+    let subscription = SubscriptionStub()
     let store: AppStore
 
     init(bound binding: String = bindingA, jobs: [Canonical.Job] = fixtureJobs,
@@ -194,7 +198,7 @@ private final class Harness {
             ),
             appGroupAccountScrubber: suite.scrubber,
             pendingOpenURLConsumer: suite.consumer,
-            subscriptionService: SubscriptionStub(),
+            subscriptionService: subscription,
             analytics: analytics,
             widgetTimelineReloader: NoopReloader()
         )
@@ -272,7 +276,12 @@ private func testPolicyMatrix() {
         expectEqual(decide(candidate(route, .warmURL, tag: tagA, arrival: bindingA)), .apply(route),
                     "\(name) warm: a carried matching stash tag routes")
         // Record, in the current owner's data.
-        expectEqual(decide(candidate(route, .warmURL), record: nil), .discard(.missingRecord), "\(name): a missing job")
+        expectEqual(decide(candidate(route, .warmURL, arrival: bindingA), record: nil), .discard(.missingRecord),
+                    "\(name): a missing job for a link that arrived under O")
+        expectEqual(decide(candidate(route, .coldStash, tag: tagA), record: nil), .discard(.missingRecord),
+                    "\(name): a missing job for O's own tagged stash")
+        expectEqual(decide(candidate(route, .warmURL), record: nil), .discard(.missingRecordUnownedArrival),
+                    "\(name): a missing job for a link that arrived with no owner (M1)")
         expectEqual(decide(candidate(route, .warmURL), record: .init(isArchived: true, status: "scheduled", hasRunningTimer: false)),
                     .discard(.archivedRecord), "\(name): an archived job")
         // The owner is checked BEFORE the record: another owner's link never learns whether a record exists.
@@ -298,14 +307,20 @@ private func testPolicyMatrix() {
     }
     // Which failures surface the not-found state.
     let surfaced: [NativeDeepLinkDiscardReason] = [.missingRecord, .archivedRecord, .finishedRecord]
-    let silent: [NativeDeepLinkDiscardReason] = [.noExactOwner, .ownerMismatch, .stale]
+    let silent: [NativeDeepLinkDiscardReason] = [.noExactOwner, .ownerMismatch, .stale, .missingRecordUnownedArrival]
     expect(surfaced.allSatisfy(\.surfacesNotFound), "record failures surface the not-found state")
     expect(!silent.contains(where: \.surfacesNotFound), "owner and freshness failures are silent")
     // Parking discard rule.
-    expect(NativeDeepLinkRoutingPolicy.discardsParked(entering: .closed, gateChanged: true), "entering a closed gate discards")
-    expect(!NativeDeepLinkRoutingPolicy.discardsParked(entering: .closed, gateChanged: false), "staying closed keeps it")
-    expect(!NativeDeepLinkRoutingPolicy.discardsParked(entering: .pending, gateChanged: true), "a pending gate keeps it")
-    expect(!NativeDeepLinkRoutingPolicy.discardsParked(entering: .signedIn, gateChanged: true), "signing in never discards")
+    expect(NativeDeepLinkRoutingPolicy.discardsParked(entering: .closed, gateChanged: true, ownerWasActive: true),
+           "leaving an owner's session for a closed gate discards")
+    expect(!NativeDeepLinkRoutingPolicy.discardsParked(entering: .closed, gateChanged: true, ownerWasActive: false),
+           "the launch resolution (no owner yet) into a closed gate keeps it (I1)")
+    expect(!NativeDeepLinkRoutingPolicy.discardsParked(entering: .closed, gateChanged: false, ownerWasActive: true),
+           "staying closed keeps it")
+    expect(!NativeDeepLinkRoutingPolicy.discardsParked(entering: .pending, gateChanged: true, ownerWasActive: true),
+           "a pending gate keeps it")
+    expect(!NativeDeepLinkRoutingPolicy.discardsParked(entering: .signedIn, gateChanged: true, ownerWasActive: true),
+           "signing in never discards")
     expectEqual(NativeDeepLinkRoutingPolicy.analyticsType(.job(id: "x")), "job", "analytics type: job")
     expectEqual(NativeDeepLinkRoutingPolicy.analyticsType(.onMyWay(id: "x")), "onmyway", "analytics type: onmyway")
 }
@@ -379,11 +394,16 @@ private func testMalformedAndOversized() throws {
         "tradeready://job/\(longID)", "tradeready://onmyway/%00live", "tradeready://job/%E2%80",
         "tradeready://job/" + String(repeating: "a", count: 1020),
     ]
+    var tested = 0
     for signedIn in [false, true] {
         if signedIn { h.signIn() } else { h.store.testSetAuthenticationGateState(.signedOut) }
         h.suite.writeStash("tradeready://onmyway/live", tag: tagA)
         for raw in bad {
-            guard let url = URL(string: raw) else { continue }
+            guard let url = URL(string: raw) else {
+                expect(false, "fixture: \(raw.prefix(60)) must be a constructible URL (else it tests nothing)")
+                continue
+            }
+            tested += 1
             h.store.handle(url: url)
             expect(h.noRoute && h.store.parkedDeepLink == nil && h.store.deepLinkUnavailableNotice == nil,
                    "signedIn=\(signedIn): \(raw.prefix(60)) is dropped with no route, park or notice")
@@ -392,6 +412,7 @@ private func testMalformedAndOversized() throws {
         expect(h.analytics.events.isEmpty, "signedIn=\(signedIn): no analytics for dropped links")
         h.suite.defaults.removeObject(forKey: WidgetAppGroup.pendingOpenURLKey)
     }
+    expectEqual(tested, bad.count * 2, "every malformed link was actually handled, signed out and signed in (M3)")
     // Malformed / untagged / stale / oversized stashes: removed, nothing routed.
     h.signIn()
     let badStashes: [(String, String)] = [
@@ -682,6 +703,118 @@ private func testUseAnotherAccountClears() async throws {
     expectEqual(h.store.authenticationGateState, .signedOut, "sanity: signed out")
 }
 
+// MARK: - 6b. Launch resolution is not an account boundary (fix round 1, I1)
+
+private enum LaunchPath: String, CaseIterable { case stash, launchURL }
+
+/// The real launch order: the store starts at `.loading`, the stash is
+/// consumed (or the launch URL delivered) BEFORE activation resolves, then
+/// activation with no session sets `.signedOut`, then an owner signs in.
+@MainActor
+private func launch(_ h: Harness, _ path: LaunchPath, _ route: String, tag: String = tagA,
+                    at: Date = Date().addingTimeInterval(-1), consumedAt: Date = Date()) {
+    switch path {
+    case .stash:
+        h.suite.writeStash("tradeready://\(route)", at: at, tag: tag)
+        h.store.consumePendingOpenURLStash(now: consumedAt)
+    case .launchURL:
+        h.store.handle(url: URL(string: "tradeready://\(route)")!, now: consumedAt)
+    }
+}
+
+@MainActor
+private func testLaunchResolutionKeepsParkedRoute() throws {
+    for path in LaunchPath.allCases {
+        // .loading → park → .signedOut → .signedIn(A): A's record opens.
+        let a = try Harness()
+        expectEqual(a.store.authenticationGateState, .loading, "\(path): sanity: a fresh store starts at .loading")
+        launch(a, path, "job/live")
+        expect(a.store.parkedDeepLink != nil && a.noRoute, "\(path): parks during .loading")
+        a.store.testSetAuthenticationGateState(.signedOut)
+        expectEqual(a.store.parkedDeepLink?.route, .job(id: "live"),
+                    "\(path): the launch resolution .loading → .signedOut keeps the parked route (I1)")
+        a.signIn(bindingA)
+        expectEqual(a.store.deepLinkedJobID, "live", "\(path): A signs in → A's record opens")
+        expectEqual(a.analytics.deepLinkTypes, ["job"], "\(path): …exactly once")
+        a.cleanUp()
+
+        // The same sequence with B signing in: discarded, silently. B's data
+        // has no `live` (only A had it); the stash is A-tagged.
+        let b = try Harness(bound: bindingB, jobs: [job("b-only")])
+        launch(b, path, "job/live")
+        b.store.testSetAuthenticationGateState(.signedOut)
+        expect(b.store.parkedDeepLink != nil, "\(path) B: still parked after the launch resolution")
+        b.signIn(bindingB)
+        expect(b.noRoute && b.store.parkedDeepLink == nil, "\(path) B: B signing in gets no route")
+        expect(b.store.deepLinkUnavailableNotice == nil,
+               "\(path) B: …and no \"Job not found\" for a tap B did not make (M1 / owner mismatch)")
+        expect(b.analytics.events.isEmpty, "\(path) B: no analytics")
+        b.cleanUp()
+
+        // Older than the freshness window when it is finally applied.
+        let stale = try Harness()
+        launch(stale, path, "job/live", at: Date().addingTimeInterval(-400), consumedAt: Date().addingTimeInterval(-350))
+        expect(stale.store.parkedDeepLink != nil, "\(path) stale: fresh when it arrived, so it parks")
+        stale.store.testSetAuthenticationGateState(.signedOut)
+        stale.signIn(bindingA)
+        expect(stale.noRoute && stale.store.parkedDeepLink == nil && stale.store.deepLinkUnavailableNotice == nil,
+               "\(path) stale: past 300 s at apply time → discarded silently")
+        stale.cleanUp()
+
+        // A launch that resolves to .accountMismatch is not a boundary either.
+        let mismatch = try Harness()
+        launch(mismatch, path, "job/live")
+        mismatch.store.testSetAuthenticationGateState(.accountMismatch)
+        expect(mismatch.store.parkedDeepLink != nil, "\(path): launch → .accountMismatch keeps the parked route")
+        mismatch.cleanUp()
+    }
+
+    // Leaving a session in which an owner WAS active is a boundary.
+    let h = try Harness()
+    defer { h.cleanUp() }
+    for closed in [NativeAuthenticationGateState.signedOut, .accountMismatch, .unavailable] {
+        h.signIn(bindingA)
+        h.store.testSetAuthenticationGateState(.subscriptionLoading)
+        h.store.handle(url: URL(string: "tradeready://job/live")!)
+        expect(h.store.parkedDeepLink != nil, "sanity: parked behind .subscriptionLoading with O = A")
+        h.store.testSetAuthenticationGateState(closed)
+        expect(h.store.parkedDeepLink == nil, "after A was active, entering \(closed) discards the parked route")
+    }
+    // The owner flag survives an intermediate pending gate (signedIn → loading → signedOut).
+    h.signIn(bindingA)
+    h.store.testSetAuthenticationGateState(.loading)
+    h.store.handle(url: URL(string: "tradeready://job/live")!)
+    h.store.testSetAuthenticationGateState(.signedOut)
+    expect(h.store.parkedDeepLink == nil, "signedIn → .loading → .signedOut still discards (A was active)")
+    // …and is consumed by that boundary: the next launch-like resolution keeps a new route.
+    h.store.testSetAuthenticationGateState(.loading)
+    h.store.handle(url: URL(string: "tradeready://job/live")!)
+    h.store.testSetAuthenticationGateState(.signedOut)
+    expect(h.store.parkedDeepLink != nil, "after the boundary, a new .loading → .signedOut keeps a new route")
+}
+
+// MARK: - 6c. The second useAnotherAccount clear (fix round 1, M4)
+
+@MainActor
+private func testUseAnotherAccountSecondClear() async throws {
+    let h = try Harness()
+    defer { h.cleanUp() }
+    h.signIn(bindingA)
+    var heldDuringSwitch: String?
+    h.subscription.onLogOut = { [weak store = h.store] in
+        // A link arrives after `clearSession` and the first clear, while A's
+        // owner fields are still set (the teardown runs after `logOut`).
+        store?.handle(url: URL(string: "tradeready://onmyway/live")!)
+        heldDuringSwitch = store?.pendingOnMyWayJobID
+    }
+    h.store.scheduleBookingTestSeedIdentityActivator()
+    await h.store.useAnotherAccount {}
+    expectEqual(heldDuringSwitch, "live", "sanity: the mid-switch link was applied while A's fields were still set")
+    expectEqual(h.store.authenticationGateState, .signedOut, "sanity: the switch reached its success path")
+    expect(h.store.pendingOnMyWayJobID == nil && h.store.deepLinkedJobID == nil && h.store.parkedDeepLink == nil,
+           "the clear after the awaits drops a route that arrived between clearSession and logOut")
+}
+
 // MARK: - 7. P8: an archived estimate's est_ notification opens
 
 @MainActor
@@ -726,6 +859,8 @@ struct DeepLinkRoutingTests {
         run("no double On My Way", testNoDoubleOnMyWay)
         await runAsync("use another account", testUseAnotherAccountClears)
         run("P8", testP8ArchivedEstimateNotification)
+        run("launch resolution", testLaunchResolutionKeepsParkedRoute)
+        await runAsync("second useAnotherAccount clear", testUseAnotherAccountSecondClear)
         if failures == 0 {
             print("Deep-link routing tests passed")
         } else {

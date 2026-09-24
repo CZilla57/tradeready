@@ -59,7 +59,7 @@ characterization).
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen | 11.15 |
 | C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline | 11.10a/11.10b |
-| C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; gaps owned by 11.05 (replay) and 11.06 (deep link + pending-URL consumer) | 11.01, 11.05, 11.06 |
+| C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
 
 ---
@@ -229,6 +229,10 @@ every future account is native-only, so a gate on them never opens.
   It also runs only once per session (`didConsumeVerifiedPendingOpenURL`), so a later
   warm stash is ignored. Switch it to `O` and to the §6.2 lock/tag rules, and consume on
   every activation.
+  **Closed by 11.06 (2026-09-24):** the function and its once-per-session flag are gone.
+  `AppStore.consumePendingOpenURLStash` runs at launch, on every activation and on each
+  `.signedIn` arrival; routing requires `O` and `.signedIn`; the stash is read and
+  removed under `WidgetAppGroupLock` and its tag must equal `hash(O)` (§6.3).
 
 ---
 
@@ -540,6 +544,9 @@ Sources: `siriIsOnTheClock` at `targets/widget/_shared/SiriIntents.swift:238`,
 - Gap for 11.04/11.06: `consumeVerifiedPendingOpenURLIfNeeded` consumes only once per
   session (`didConsumeVerifiedPendingOpenURL`, `N/AppStore.swift:5190-5204`). The warm
   path must therefore route directly rather than rely on the stash.
+  **Closed by 11.06 (2026-09-24):** the once-per-session consume is gone (see §2.5), and
+  a warm `onmyway` route removes its matching stash under the lock (`takeMatching`), so
+  the cold consumer never presents the same review twice (§6.3).
 - The route ends in `routeToOnMyWay` → `requestOnMyWayReview`
   (`N/AppStore.swift:5210-5213`): an editable review that is **never auto-sent**.
 
@@ -631,6 +638,14 @@ Insurance, Software & Apps, Marketing, Other.
      `.signedIn` with `hash(O) == ownerTag`.
    - Discard it when the tag differs, when the gate reaches `.signedOut`,
      `.accountMismatch` or `.unavailable`, or when the app backgrounds first.
+   - **Amended by the 11.06 fix round 1 controller ruling (the brief wins over the
+     wording above):** "reaches a closed gate" means leaving a session in which an owner
+     was active (`O` held at some gate since the last boundary): sign-out, account
+     switch, scrub, deletion, or a mismatch/outage reached after sign-in. The initial
+     launch resolution `.loading` → `.signedOut` (or `.accountMismatch`/`.unavailable`)
+     is **not** a boundary and keeps the parked route for the sign-in that follows. The
+     tag check (a stash for another owner is discarded at apply time) and the freshness
+     window still protect the owner.
    - A parked warm URL applies when `.signedIn`, and only if its arrival binding was nil
      or equals `O`. The record lookup in step 6 is always in the current owner's data.
 5. **Exact owner:** the §2.5 predicate `O` is non-nil and the gate is `.signedIn`.
@@ -650,6 +665,11 @@ Insurance, Software & Apps, Marketing, Other.
   check, does not take the lock, and never clears its source.
 - `consumeVerifiedPendingOpenURLIfNeeded` is gated on the migrated owner and runs once
   per session (§2.5).
+- **All three closed by 11.06 (2026-09-24):** `handle(url:)` runs the whole gate through
+  `NativeDeepLinkRoutingPolicy` (auth → park, exact owner, live non-archived record);
+  `NativePendingOpenURLConsumer` reads and removes under the lock, checks freshness and
+  the tag, and the record check runs at apply time; the migrated-only, once-per-session
+  consume is replaced (§2.5). Details in §6.3.
 - **P8 (C11):** the parked Phase 10 "`est_` archived dead tap" decision belongs
   to 11.06. **Resolved 2026-09-24, see §6.3.**
 
@@ -681,8 +701,17 @@ Insurance, Software & Apps, Marketing, Other.
   not this owner's to open.
 - **Parking details (step 4):**
   - "Discard when the gate reaches `.signedOut`/`.accountMismatch`/`.unavailable`" means
-    on **entering** it. A link that arrives while the gate is already there parks and is
+    on **entering** it **out of a session in which an owner was active** (fix round 1, I1:
+    `AppStore.deepLinkOwnerWasActive`, set when `O` holds at a gate change and consumed
+    by the boundary). The launch resolution `.loading` → `.signedOut` keeps the route, so
+    a widget tap or stash that cold-launches a signed-out app opens after the same owner
+    signs in. A link that arrives while the gate is already closed also parks and is
     decided at sign-in, like RN.
+  - A warm link that arrived with no owner signed in (arrival binding nil, no stash tag)
+    and whose record the signing-in owner does not have is dropped **silently**
+    (`missingRecordUnownedArrival`, fix round 1 M1): that owner is never told "Job not
+    found" for a tap another owner may have made. A missing record for a link that
+    arrived under `O`, or for `O`'s own tagged stash, still shows not-found.
   - The 300 s freshness window bounds every candidate, parked or not.
   - Every other gate (loading, initial sync, subscription, paywall, starting point,
     onboarding, password recovery) keeps the parked route.
