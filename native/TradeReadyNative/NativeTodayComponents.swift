@@ -44,7 +44,6 @@ struct NativeTodayWeekStripView: View {
     let onSelectDay: (String) -> Void
     let onPrevWeek: () -> Void
     let onNextWeek: () -> Void
-    @ScaledMetric(relativeTo: .subheadline) private var dayCircleSize: CGFloat = 30
 
     var body: some View {
         VStack(spacing: 6) {
@@ -58,38 +57,12 @@ struct NativeTodayWeekStripView: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Previous week")
+                .accessibilityShowsLargeContentViewer()
 
                 ForEach(Array(strip.days.enumerated()), id: \.element.date) { index, day in
-                    Button {
+                    NativeTodayWeekDayButton(day: day, letter: nativeTodayDayLetters[index]) {
                         onSelectDay(day.date)
-                    } label: {
-                        VStack(spacing: 4) {
-                            Text(nativeTodayDayLetters[index])
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(day.isSelected ? Color.tradeReady : .secondary)
-                            ZStack {
-                                Circle()
-                                    .fill(day.isSelected ? Color.tradeReadyFill : Color.clear)
-                                    .overlay {
-                                        if day.isToday, !day.isSelected {
-                                            Circle().stroke(Color.tradeReady, lineWidth: 1.5)
-                                        }
-                                    }
-                                    .frame(width: dayCircleSize, height: dayCircleSize)
-                                Text("\(day.dayNumber)")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(day.isSelected ? Color.white : (day.isToday ? Color.tradeReady : .primary))
-                            }
-                            Circle()
-                                .fill(day.hasJobs ? Color.tradeReady : Color.clear)
-                                .frame(width: 4, height: 4)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(nativeTodayDayLetters[index]), \(day.dayNumber)\(day.hasJobs ? ", has jobs" : "")")
-                    .accessibilityAddTraits(day.isSelected ? [.isSelected] : [])
                 }
 
                 Button(action: onNextWeek) {
@@ -98,15 +71,60 @@ struct NativeTodayWeekStripView: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Next week")
+                .accessibilityShowsLargeContentViewer()
             }
             // Seven day columns plus two arrows cannot grow past AX1 on a phone
-            // without overlapping; VoiceOver reads each day in full (11.10a).
+            // without overlapping; VoiceOver reads each day in full, and a long
+            // press shows the Large Content Viewer (11.10a).
             .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
         .background(.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.quaternary) }
+    }
+}
+
+/// One week-strip day. Its own view so the `@ScaledMetric` is read inside the
+/// strip's AX1 cap (a metric on the strip itself sees the uncapped size); the
+/// circle is also clamped so seven columns fit beside both arrows.
+private struct NativeTodayWeekDayButton: View {
+    let day: NativeWeekDay
+    let letter: String
+    let onSelect: () -> Void
+    @ScaledMetric(relativeTo: .subheadline) private var dayCircleSize: CGFloat = NativeAccessibilityAudit.WeekStrip.dayCircleDefault
+
+    var body: some View {
+        let circle = NativeAccessibilityAudit.WeekStrip.dayCircleSize(scaled: dayCircleSize)
+        Button(action: onSelect) {
+            VStack(spacing: 4) {
+                Text(letter)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(day.isSelected ? Color.tradeReady : .secondary)
+                ZStack {
+                    Circle()
+                        .fill(day.isSelected ? Color.tradeReadyFill : Color.clear)
+                        .overlay {
+                            if day.isToday, !day.isSelected {
+                                Circle().stroke(Color.tradeReady, lineWidth: 1.5)
+                            }
+                        }
+                        .frame(width: circle, height: circle)
+                    Text("\(day.dayNumber)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(day.isSelected ? Color.white : (day.isToday ? Color.tradeReady : .primary))
+                }
+                Circle()
+                    .fill(day.hasJobs ? Color.tradeReady : Color.clear)
+                    .frame(width: 4, height: 4)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(letter), \(day.dayNumber)\(day.hasJobs ? ", has jobs" : "")")
+        .accessibilityAddTraits(day.isSelected ? [.isSelected] : [])
+        .accessibilityShowsLargeContentViewer()
     }
 }
 
@@ -199,7 +217,7 @@ struct NativeTodayHeroCardView: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(hero.title).font(.subheadline.weight(.bold)).foregroundStyle(.white)
-                    Text(hero.subtitle).font(.caption).foregroundStyle(.white.opacity(0.85))
+                    Text(hero.subtitle).font(.caption).foregroundStyle(.white)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").foregroundStyle(.white)

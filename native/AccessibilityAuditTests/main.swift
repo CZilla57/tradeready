@@ -316,6 +316,9 @@ struct ControlConstruct {
     let file: SourceFile
     let kind: String
     let start: Int
+    /// Where the construct's own modifier chain begins (after its trailing
+    /// closures): content-closure modifiers belong to nested views.
+    let chainStart: Int
     let end: Int
     let hasTitle: Bool
     let labelCode: String?
@@ -355,7 +358,23 @@ struct ControlConstruct {
         return true
     }
 
-    var hasAccessibilityLabel: Bool { code.contains(".accessibilityLabel(") }
+    /// A non-empty `.accessibilityLabel(...)` on the construct's own modifier
+    /// chain or inside its label closure. A label on a view nested in the
+    /// action or content closure (a `Button` inside a `Menu`) does not label
+    /// the construct, and `.accessibilityLabel("")` labels nothing.
+    var hasAccessibilityLabel: Bool {
+        var regions: [Range<Int>] = [chainStart..<end]
+        if let labelRange { regions.append(labelRange) }
+        for hit in file.occurrences(of: "accessibilityLabel") where hit > 0 && file.code[hit - 1] == "." {
+            guard regions.contains(where: { $0.contains(hit) }) else { continue }
+            let open = file.skipSpace(hit + "accessibilityLabel".count)
+            guard open < file.code.count, file.code[open] == "(", let close = file.matching(open) else { continue }
+            let argument = file.rawSlice((open + 1)..<close).trimmingCharacters(in: .whitespacesAndNewlines)
+            if argument.isEmpty || argument == "\"\"" || argument == "Text(\"\")" { continue }
+            return true
+        }
+        return false
+    }
 }
 
 func scanControls(_ file: SourceFile) -> [ControlConstruct] {
@@ -412,7 +431,7 @@ func scanControls(_ file: SourceFile) -> [ControlConstruct] {
             if trailing.closures.isEmpty && argsRange == nil { continue }
             let labelCode = labelRange.map { file.rawSlice($0) }
             result.append(ControlConstruct(
-                file: file, kind: kind, start: start, end: end,
+                file: file, kind: kind, start: start, chainStart: trailing.end, end: end,
                 hasTitle: hasTitle, labelCode: labelCode, labelRange: labelRange
             ))
         }
@@ -473,6 +492,60 @@ func testContrastRequirements() {
     expect(requirements.contains { $0.role == .text && $0.name.contains("dark canvas") }, "dark canvas text row present")
     expect(requirements.contains { $0.role == .nonText && $0.name.contains("dark canvas") }, "dark canvas UI row present")
     expect(requirements.contains { $0.name == "white text on fill (dark)" }, "white-on-fill dark row present")
+    expect(requirements.contains { $0.name == "Today hero subtitle: white caption on fill (dark)" }, "hero subtitle row present")
+    expect(requirements.contains { $0.name == "Today hero icon: white on 18% white disc over fill (dark)" }, "hero icon row present")
+    // Fix round 1 (I2): the old 85% white subtitle failed on the dark fill.
+    let p = Audit.Palette.self
+    let oldSubtitle = Audit.composite(p.white, alpha: 0.85, over: p.tradeReadyFillDark)
+    let oldRatio = Audit.contrastRatio(oldSubtitle, p.tradeReadyFillDark)
+    expectClose(oldRatio, 3.76, "baseline: 85% white caption on the dark fill measured 3.76")
+    expect(oldRatio < Audit.Threshold.text, "85% white text fails on the dark fill (why the subtitle is solid)")
+}
+
+/// No translucent white text or glyph outside the widget canvas: every white
+/// foreground in `N/` sits on the fill or a photo scrim and must be solid, or be
+/// added to `contrastRequirements` with its composite.
+func testTranslucentWhite(sources: [SourceFile]) {
+    let pattern = try! NSRegularExpression(pattern: #"foreground(?:Style|Color)\((?:Color)?\.white\.opacity\("#)
+    for source in sources where !source.relativePath.hasPrefix("Widgets/") {
+        let text = source.codeText
+        let ns = text as NSString
+        for match in pattern.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            expect(false, "translucent white foreground at N/\(source.relativePath):\(source.line(of: match.range.location))")
+        }
+    }
+    if let today = file(sources, "NativeTodayComponents.swift") {
+        expect(String(today.raw).contains("Text(hero.subtitle).font(.caption).foregroundStyle(.white)"),
+               "Today hero subtitle is solid white")
+    }
+}
+
+// MARK: - Tests: Money card VoiceOver (fix round 1, I3)
+
+func testMoneyCardLabels(root: URL, sources: [SourceFile]) {
+    guard let money = file(sources, "NativeMoneyCards.swift") else { return }
+    let text = String(money.raw)
+    expect(!text.contains("\\(title), open"), "no card replaces its figures with \"{title}, open\"")
+    let shell = structText(money, "NativeMoneyCard")
+    let unlabelled = shell.range(of: "} else if let onOpen {").map { String(shell[$0.upperBound...].prefix(300)) } ?? ""
+    expect(unlabelled.contains(".accessibilityElement(children: .combine)"), "openable card without an RN label reads its text in full")
+    expect(unlabelled.contains(".accessibilityAddTraits(.isButton)"), "openable card keeps the button trait")
+    let beforeElse = unlabelled.components(separatedBy: "} else {").first ?? ""
+    expect(!beforeElse.contains(".accessibilityLabel("), "the read-in-full branch sets no label")
+    let labelled = shell.range(of: "if let onOpen, let openLabel {").map { String(shell[$0.upperBound...].prefix(300)) } ?? ""
+    expect(labelled.contains(".accessibilityLabel(openLabel)") && labelled.contains(".accessibilityValue(openValue"),
+           "RN-labelled card carries the label and the figure as its value")
+
+    for (card, rnPath) in Audit.moneyCardsReadInFull {
+        guard let rn = read(root, rnPath) else { expect(false, "RN \(rnPath) readable"); continue }
+        expect(!rn.contains("accessibilityLabel"), "RN parity: \(rnPath) sets no accessibilityLabel (VoiceOver reads the figures)")
+        let view = structText(money, card)
+        expect(!view.isEmpty, "N/NativeMoneyCards.swift: \(card) found")
+        expect(view.contains("onOpen: onOpen") && !view.contains("openLabel:"), "\(card) is openable and reads in full")
+    }
+    let tax = structText(money, "NativeMoneyTaxCardView")
+    expect(tax.contains("openLabel: NativeAccessibilityAudit.Label.taxSetAsideOpen"), "tax card uses RN's exact label")
+    expect(tax.contains("openValue: card.reserveText"), "tax card exposes the reserve as the value")
 }
 
 /// Extracts `(red, green, blue)` literal triples from `UIColor(red:…)` /
@@ -557,6 +630,28 @@ func testAccentColorAsset(root: URL) {
     let dark = colors.first(where: isDark).flatMap(rgb)
     expectEqual(light, Audit.Palette.tradeReadyLight, "AccentColor any-appearance = tradeReady light")
     expectEqual(dark, Audit.Palette.tradeReadyDark, "AccentColor dark appearance = tradeReady dark")
+}
+
+/// The brace-matched body of `func <name>(` in `file` (empty if missing).
+func functionBody(_ file: SourceFile, _ name: String) -> String {
+    for hit in file.occurrences(of: name) where hit >= 5 && file.codeSlice((hit - 5)..<hit) == "func " {
+        guard let paren = (hit..<file.code.count).first(where: { file.code[$0] == "(" }),
+              let parenClose = file.matching(paren),
+              let brace = ((parenClose + 1)..<file.code.count).first(where: { file.code[$0] == "{" }),
+              let close = file.matching(brace) else { return "" }
+        return file.rawSlice((brace + 1)..<close).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return ""
+}
+
+/// The brace-matched text of `struct <name>` in `file` (empty if missing).
+func structText(_ file: SourceFile, _ name: String) -> String {
+    for hit in file.occurrences(of: name) where hit >= 7 && file.codeSlice((hit - 7)..<hit) == "struct " {
+        guard let brace = (hit..<file.code.count).first(where: { file.code[$0] == "{" }),
+              let close = file.matching(brace) else { return "" }
+        return file.rawSlice(hit..<(close + 1))
+    }
+    return ""
 }
 
 // MARK: - Tests: labels
@@ -645,14 +740,20 @@ func testIconOnlyControls(sources: [SourceFile]) {
             Button { go() } label: { HStack { Image(systemName: "star"); Circle() } }
                 .buttonStyle(.plain)
             Button(action: go, label: { Image(systemName: "gear") }).accessibilityLabel("Settings \\(name)")
+            Button { go() } label: { Image(systemName: "xmark") }.accessibilityLabel("")
+            Menu {
+                Button { go() } label: { Image(systemName: "a") }.accessibilityLabel("A")
+            } label: { Image(systemName: "ellipsis") }
+            Button { go(); Text("x").accessibilityLabel("Nope") } label: { Image(systemName: "b") }
         }
     }
     """)
     let fx = scanControls(fixture)
     let fxIcon = fx.filter(\.isIconOnly)
-    expectEqual(fx.count, 7, "fixture: 7 controls (6 Buttons + 1 Menu; nested menu button counted)")
-    expectEqual(fxIcon.count, 4, "fixture: 4 icon-only")
-    expectEqual(fxIcon.filter { !$0.hasAccessibilityLabel }.map(\.line), [12, 15], "fixture: unlabeled at lines 12 and 15")
+    expectEqual(fx.count, 11, "fixture: 11 controls (9 Buttons + 2 Menus; nested menu buttons counted)")
+    expectEqual(fxIcon.count, 8, "fixture: 8 icon-only")
+    expectEqual(fxIcon.filter { !$0.hasAccessibilityLabel }.map(\.line), [12, 15, 18, 19, 22],
+                "fixture: unlabeled at 12, 15, 18 (empty label), 19 (only its nested button is labelled), 22 (label in the action)")
     expect(fxIcon.first?.hasAccessibilityLabel == true, "fixture: label found after a multi-line chain and a trailing closure modifier")
 }
 
@@ -680,9 +781,14 @@ func testReduceMotion(sources: [SourceFile]) {
             sites.append((file, start, file.rawSlice((open + 1)..<close)))
         }
     }
+    // The policy's argument must be the environment value, not a literal.
+    let policyCall = try! NSRegularExpression(pattern: #"allowsCustomMotion\(reduceMotion: *reduceMotion *\)"#)
     for (file, start, args) in sites {
-        expect(args.contains("allowsCustomMotion(reduceMotion:"),
-               "animation honors Reduce Motion at N/\(file.relativePath):\(file.line(of: start))")
+        let ns = args as NSString
+        let honors = policyCall.firstMatch(in: args, range: NSRange(location: 0, length: ns.length)) != nil
+        expect(honors, "animation passes the environment Reduce Motion value at N/\(file.relativePath):\(file.line(of: start))")
+        expect(String(file.raw).contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"),
+               "N/\(file.relativePath) binds reduceMotion to the environment")
     }
     // The two §12 findings must still be found (and so be checked above).
     for (path, marker) in [("CoachView.swift", "scrollTo"), ("NativeMoneyCards.swift", "expanded.toggle()")] {
@@ -790,6 +896,41 @@ func testTouchTargets(sources: [SourceFile]) {
         }
         expect(String(today.raw).contains(".dynamicTypeSize(...DynamicTypeSize.accessibility1)"),
                "week strip caps at AX1 (seven columns cannot grow further on a phone)")
+        // Fix round 1 (I1): the scaled circle must sit inside the capped subtree
+        // and be clamped, or it escapes the cap and widens every column.
+        let strip = structText(today, "NativeTodayWeekStripView")
+        let day = structText(today, "NativeTodayWeekDayButton")
+        expect(!strip.isEmpty && !day.isEmpty, "week strip and day button views found")
+        expect(!strip.contains("@ScaledMetric"), "week strip itself reads no uncapped @ScaledMetric")
+        if let dayCall = strip.range(of: "NativeTodayWeekDayButton("),
+           let cap = strip.range(of: ".dynamicTypeSize(...DynamicTypeSize.accessibility1)") {
+            expect(dayCall.lowerBound < cap.lowerBound, "day buttons are inside the capped HStack")
+        } else {
+            expect(false, "week strip builds day buttons under the AX1 cap")
+        }
+        expect(day.contains("@ScaledMetric(relativeTo: .subheadline) private var dayCircleSize"), "day circle scales inside the cap")
+        expect(day.contains("NativeAccessibilityAudit.WeekStrip.dayCircleSize(scaled: dayCircleSize)"), "day circle is clamped")
+        expect(day.contains(".frame(width: circle, height: circle)"), "day circle draws the clamped size")
+        expect(day.contains(".accessibilityShowsLargeContentViewer()"), "day buttons offer the Large Content Viewer")
+        expectEqual(strip.components(separatedBy: ".accessibilityShowsLargeContentViewer()").count - 1, 2,
+                    "both week arrows offer the Large Content Viewer")
+    }
+    let week = Audit.WeekStrip.self
+    let narrowColumn = week.dayColumnWidth(screenWidth: week.narrowestPhoneWidth)
+    expect(week.dayCircleMaximum <= narrowColumn,
+           "clamped circle \(week.dayCircleMaximum)pt fits a \(String(format: "%.1f", narrowColumn))pt column on a 375pt phone")
+    expect(week.dayCircleMaximum <= week.dayColumnWidth(screenWidth: 393), "clamped circle fits on a 393pt phone")
+    expect(week.dayCircleMaximum >= week.dayCircleDefault, "the clamp never shrinks the default circle")
+    expectEqual(week.dayCircleSize(scaled: 30), 30, "default size is unchanged")
+    expectEqual(week.dayCircleSize(scaled: 98), week.dayCircleMaximum, "an AX5-sized metric (~98pt) is clamped")
+    expectEqual(week.horizontalChrome, 40, "chrome: TodayView padding 16×2 + card padding 4×2")
+
+    // Fix round 1 (m3): the remaining glyph-sized icon buttons.
+    for (path, marker) in [("Components.swift", "Image(systemName: \"xmark\")"), ("NativeScheduleSettingsView.swift", "Image(systemName: \"trash\")")] {
+        guard let source = file(sources, path) else { continue }
+        let matches = scanControls(source).filter { ($0.labelCode ?? "").contains(marker) }
+        expectEqual(matches.count, 1, "N/\(path): \(marker) button found")
+        expect(matches.first?.raw.contains(minimumFrame) == true, "N/\(path): \(marker) button has a 44×44 target")
     }
     if let route = file(sources, "NativeRouteView.swift") {
         for key in ["moveStopUp", "moveStopDown"] {
@@ -870,13 +1011,25 @@ func testFocusOrder(sources: [SourceFile]) {
         let email = text.range(of: "TextField(\"Email\"")
         let emailTail = email.map { String(text[$0.lowerBound...].prefix(700)) } ?? ""
         expect(emailTail.contains(".onSubmit(submitEmail)"), "email Next/Go has an action")
-        expect(text.contains("focusedField = .password"), "email Next focuses the password")
+        // The action itself (Show/Hide also sets the password focus, so a
+        // file-wide search would pass with an empty submitEmail).
+        let body = functionBody(auth, "submitEmail").replacingOccurrences(of: " ", with: "")
+        expect(body.contains("ifmode==.reset{submit()}else{focusedField=.password}"),
+               "submitEmail: reset submits, otherwise Next focuses the password (\(body))")
+        let toggle = text.range(of: "Button(showsPassword ? \"Hide\" : \"Show\")")
+        let toggleTail = toggle.map { String(text[$0.lowerBound...].prefix(500)) } ?? ""
+        expect(toggleTail.contains("Task { @MainActor in focusedField = .password }"),
+               "Show/Hide refocuses the swapped password field on the next turn")
     }
     if let recovery = file(sources, "NativePasswordRecoveryView.swift") {
         let text = String(recovery.raw)
         expect(text.contains("@FocusState"), "recovery form tracks focus")
-        expect(text.contains(".submitLabel(.next)"), "new password shows Next")
-        expect(text.contains("focusedField = .confirmation"), "new password Next focuses confirmation")
+        let field = text.range(of: "SecureField(\"New password\"")
+        let fieldTail = field.map { String(text[$0.lowerBound...].prefix(400)) } ?? ""
+        let fieldChain = fieldTail.components(separatedBy: "SecureField(\"Confirm").first ?? ""
+        expect(fieldChain.contains(".submitLabel(.next)"), "new password shows Next")
+        expect(fieldChain.contains(".onSubmit { focusedField = .confirmation }"), "new password Next focuses confirmation")
+        expect(text.contains(".focused($focusedField, equals: .confirmation)"), "confirmation field is focusable")
     }
 }
 
@@ -901,6 +1054,8 @@ struct AccessibilityAuditTests {
         testTouchTargets(sources: sources)
         testFills(sources: sources)
         testFocusOrder(sources: sources)
+        testTranslucentWhite(sources: sources)
+        testMoneyCardLabels(root: root, sources: sources)
 
         if failures > 0 {
             print("accessibility-audit tests: \(failures) of \(checks) checks FAILED")

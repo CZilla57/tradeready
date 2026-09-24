@@ -1717,6 +1717,13 @@ The `AccentColor` asset now carries the same light and dark tint. It used to be
 | Tint text on the light canvas / white / light grouped / 12% wash | 6.24 / 6.82 / 6.11 / 5.69 | 4.5 |
 | White text on the fill (light / dark) | 6.82 / 4.56 | 4.5 |
 | Fill as UI on the dark canvas / black / `#1c1c1e` / `#2c2c2e` | 3.91 / 4.61 / 3.74 / 3.06 | 3.0 |
+| Today hero subtitle: solid white caption on the fill (light / dark); it was 85% white, which measured 3.76 on the dark fill | 6.82 / 4.56 | 4.5 |
+| Today hero icon: white on an 18% white disc over the fill (light / dark) | 4.53 / 3.34 | 3.0 |
+
+The scanner's label check (tightened in fix round 1, m2) counts only a non-empty
+`.accessibilityLabel` on the control's own modifier chain or inside its label closure. A
+labelled `Button` nested in an icon-only `Menu`'s content no longer labels the `Menu`. An
+animation must pass the environment's `reduceMotion` to the policy, not a literal.
 
 Tint text on the elevated tertiary ground `#3a3a3c` measures 3.87:1. No `N/` view puts
 tint text on that ground, so this is recorded only.
@@ -1730,18 +1737,23 @@ tint text on that ground, so this is recorded only.
 | A5 | **Blocking 4.** Fixed fonts and frames did not scale | **Fixed:** all ten non-widget `.font(.system(size:))` literals now use `@ScaledMetric` or `.largeTitle`. Money cards: the 110pt expense-trend chart no longer clips its labels; the rank, count and icon columns scale; seven multi-column rows stack at AX sizes (`NativeAccessibilityAdaptiveRow`) instead of shrinking or truncating amounts. The Today stats, Jobs stats and Invoices metrics rows also stack. The auth and recovery submit buttons use `minHeight: 48`. Customer initials, the week-strip day circles and the `SettingsRow`/`MetricCard` badges scale | No fixed-point font outside `N/Widgets/`, `@ScaledMetric` present per file, site checks |
 | A6 | Found: the working-day toggles were 36pt tall, and the week-strip arrows were glyph-sized | **Fixed:** 44pt minimum | Touch-target checks |
 | A7 | Found (step 4): the auth email field showed "Next", which did nothing. The recovery "New password" field had no return action | **Fixed:** `@FocusState`. Email Next moves to the password (Go still sends a reset). Show/Hide keeps focus. New password Next moves to confirmation, then Go submits. RN uses "done" (dismiss) on email, so this is a native difference | Focus checks |
-| A8 | Week strip at AX2–AX5: seven day columns and two arrows cannot grow further on a phone | **Retained by design:** capped at `.accessibility1`; VoiceOver reads each day in full | Cap check; Phase 12 AX5 row |
+| A8 | Week strip at AX2–AX5: seven day columns and two arrows cannot grow further on a phone | **Retained by design:** capped at `.accessibility1`. VoiceOver reads each day in full. A long press shows the Large Content Viewer for the days and arrows. **Fix round 1 (I1):** the day circle's `@ScaledMetric` sat on the strip, outside the cap, so it reached about 98pt at AX5 and pushed the arrows off-screen. The metric now lives in a day view inside the capped subtree, and the circle is clamped to 34pt (`NativeAccessibilityAudit.WeekStrip`). Seven 34pt columns fit beside both 44pt arrows on a 375pt phone: each column gets 35.3pt | Cap, placement and clamp checks; Phase 12 AX5 row |
 | A9 | Widget views (`N/Widgets/Shared/*`) use fixed-point fonts | **Retained:** fixed widget canvas, matching RN `targets/widget`. Owned by 11.02/11.03 | Scan exempts only `N/Widgets/`; Phase 12 widget AX row |
 | A10 | Remaining `lineLimit(1)` sites: names, notes, addresses, links, job titles | **Retained:** truncating a name or address does not lose meaning in a list row, the detail screen shows the full text, and VoiceOver reads it in full. The amount sites that could lose meaning now stack | Reviewed |
 | A11 | Hardware-keyboard shortcuts and iPad keyboard commands | **Handed off to 11.11** (controller ruling b) | — |
 | A12 | Reading order: static review found no layered text out of order. The one layered text view, the calendar timeline, is already hidden from VoiceOver. No `accessibilitySortPriority` was added | **Deferred to device** (Phase 12 VoiceOver rows) | — |
 | A13 | Today job card: an "On my way" button nested inside the card button. Its VoiceOver reachability can only be confirmed on a device | **Deferred to device.** If it is unreachable, 11.10b adds an `accessibilityAction` | Phase 12 row |
-| A14 | Money cards with `onOpen` use the label "{title}, open", which hides their figures from VoiceOver. RN `TaxSetAsideCard` does the same | **11.10b** (not blocking; matches RN) | — |
+| A14 | **Corrected in fix round 1 (I3).** Money cards with `onOpen` used the label "{title}, open", which hid their figures from VoiceOver. The first pass said RN does the same, but only RN `TaxSetAsideCard` sets a label ("Tax set-aside — open settings"). RN `MileageCard` and `PricebookCard` set none, so RN VoiceOver reads their figures, and native was a regression | **Fixed:** an openable card with no RN label combines its text into one button element (`.accessibilityElement(children: .combine)` plus the button trait), so the title and figures are read. The tax card uses RN's exact label, with the reserve as the accessibility value. The native tax card has no open action today, because native has no tax-settings screen yet. It stays a static card that VoiceOver reads in full, and the RN label and value take effect when a destination is wired | Catalog parity (`taxSetAsideOpen` against RN), RN no-label checks for Mileage and Pricebook, branch checks in `NativeMoneyCard` |
 | A15 | The Money charts (monthly, seasonal, expense trends) have no accessibility summary; VoiceOver reads each month letter separately | **11.10b** (not blocking; the totals under each chart are readable text) | — |
 | A16 | Cosmetic fixed icon frames: `MoneyView` category badge, `SettingsView` sync-status badge and avatar, Today hero circle, job-photo thumbnail, route index column, booking-request kind column (56pt; text wraps at AX5) | **11.10b** with the 11.11 layout pass (not blocking: icons overflow their frame without clipping, and the text wraps rather than disappearing) | — |
 | A17 | The job-photo error badge is not announced | **11.10b** (not blocking) | — |
 | A18 | The clock-out `.borderedProminent` uses system red: white on dark `#ff453a` measures about 3.4:1 | **11.10b** (not blocking: the system destructive color, with a semibold label) | — |
 | A19 | Switch Control, full VoiceOver, AX5 layout, Increase Contrast | **Deferred to device** (Phase 12; runsheet rows in the plan's 11.10a entry) | — |
+| A20 | Found in fix round 1 (I2): the Today hero subtitle was `.white.opacity(0.85)` on the fill, which measured 3.76:1 in dark mode | **Fixed:** solid white. No translucent white foreground remains outside `N/Widgets/` | Contrast rows above; the translucent-white scan |
+| A21 | Found in fix round 1 (m3): glyph-sized icon buttons, namely the undo banner's dismiss `xmark` and the time-off `trash` in Schedule settings | **Fixed:** 44×44 target | Touch-target checks |
+| A22 | Fix round 1 (m4): the 44pt route move chevrons are stacked, so a middle stop's row grows from about 50pt to about 116pt at the default size | **Accepted for 11.10a:** a reliable target outweighs row density. A horizontal pair or a drag-to-reorder list is a layout change for the 11.11 layout pass, and 11.10b re-checks it | Phase 12 A11-TT-1 row |
+| A23 | Fix round 1 (m5): Show/Hide on the password swaps the field and could lose focus in the same update | **Mitigated:** the refocus now runs on the next main-actor turn. Device proof is in the A11-KB-1 and A11-SC-1 rows | Focus check |
+| A24 | Fix round 1 (m6): step 4 audited the return-key and focus chains of the auth and recovery forms only | **11.10b:** the return-key chains of the other editors (job, invoice, customer, expense, trip, pricebook, schedule) | — |
 
 ---
 

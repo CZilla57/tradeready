@@ -788,7 +788,7 @@ complete / Phase 12 evidence deferred**.
 | 11.08 | P2, P3 | Done (code complete 2026-09-24; all 52 catalog events have typed constructors, 49 wired (the booking push opens await native push; `tax_settings_saved` is unreachable until a native tax-settings editor exists); identity lifecycle and m1–m3 fixed; device proof deferred to Phase 12) | 11.07, 10.15 | Event parity + identity lifecycle |
 | 11.09 | R1, R2, R3, M1 | Done (code complete 2026-09-24; Sentry Cocoa 9.29.0 linked, app target only; no DSN committed, so crash reporting is off until a release DSN is supplied; app manifest written; dSYM upload script for `tradeready-3r/tradeready-ios`; device proof deferred to Phase 12) | 11.07 | Crash reporting + redaction + app manifest |
 | 11.15 | P4, R2 | Done (code complete 2026-09-24; Groq/Anthropic key entry behind RN's "Advanced" switch, Keychain-only through `NativeKeychainSecureSettingsStore`, owner-wiped with migrated keys at sign-out, deletion, account switch and password-recovery exits (fix round 1); live provider proof deferred to Phase 12) | 11.00, 11.09 | Settings › AI Assistant advanced key entry |
-| 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A14–A18 to 11.10b; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
+| 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A15–A18, A22 and A24 to 11.10b; fix round 1 closed I1–I3 and m1–m6; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Pending | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Pending | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Pending | 11.11, 11.12 | Accessibility re-audit (closes H1) |
@@ -2797,5 +2797,92 @@ closed.** 11.10b re-audits after 11.11 and 11.12.
 - Device-only proof (VoiceOver, Switch Control, AX5, Increase Contrast) is deferred to
   Phase 12, as the rows above record. None is claimed as passed.
 - A14–A18 are non-blocking and go to 11.10b.
+
+**Next ready:** 11.11 (iPad layouts, multitasking and rotation).
+
+### 11.10a fix round 1 — week-strip cap, hero contrast, Money card VoiceOver (2026-09-24)
+
+**I1 (Important), fixed:**
+- The day circle's `@ScaledMetric` sat on `NativeTodayWeekStripView`, outside the
+  `.dynamicTypeSize(...accessibility1)` cap on the inner HStack. At AX5 it reached about
+  98pt and pushed the arrows off-screen.
+- Each day is now a `NativeTodayWeekDayButton` built inside the capped subtree, and the
+  metric lives there. The circle is also clamped:
+  `NativeAccessibilityAudit.WeekStrip.dayCircleSize(scaled:)` has a 34pt maximum.
+- The clamp is sized for a 375pt phone: 375 − 40pt of chrome (16×2 screen padding and
+  4×2 card padding) − two 44pt arrows leaves 247pt, and 247 ÷ 7 = 35.3pt per column. On a
+  393pt phone each column gets 37.9pt.
+- The days and both arrows now use `.accessibilityShowsLargeContentViewer()`.
+
+**I2 (Important), fixed:**
+- The Today hero subtitle is solid white. At 85% it measured 3.76:1 on the dark fill.
+- New `contrastRequirements` rows: hero subtitle on the fill (light 6.82, dark 4.56) and
+  the hero icon on its 18% white disc (4.53 and 3.34, against the 3:1 UI minimum).
+- New scan: no translucent white foreground anywhere outside `N/Widgets/`. The only other
+  site in the diff was the hero disc, which is a fill and is covered by the icon row.
+
+**I3 (Important), fixed; A14 corrected in contract §12.1:**
+- `NativeMoneyCard` has two open branches:
+  - with an RN label: `.accessibilityLabel` plus `.accessibilityValue`;
+  - without one: `.accessibilityElement(children: .combine)` plus the button trait, so
+    the title and figures are read.
+- Mileage and Pricebook use the second branch. RN `MileageCard.tsx` and
+  `PricebookCard.tsx` set no label, and the test asserts that.
+- The tax card passes RN's exact "Tax set-aside — open settings" label
+  (`Label.taxSetAsideOpen`, catalog-checked against `components/money/TaxSetAsideCard.tsx`),
+  with `card.reserveText` as the value.
+- The native tax card has no open action yet, because there is no native tax-settings
+  screen. It stays a static card that VoiceOver reads in full. The label takes effect once
+  a destination is wired.
+
+**Minors:**
+- **m1:** the test asserts the body of `submitEmail()`. The file-wide
+  `focusedField = .password` search is gone, because Show/Hide also contains that
+  assignment.
+- **m2:**
+  - Every animation must pass `allowsCustomMotion(reduceMotion: reduceMotion)` with the
+    environment binding.
+  - `hasAccessibilityLabel` counts only a non-empty label on the control's own chain or
+    label closure, so `""`, a label on a Button nested in a Menu, and a label in the
+    action closure do not count.
+  - The fixture grew to 11 controls, 8 icon-only, and unlabeled lines
+    [12, 15, 18, 19, 22].
+- **m3:** fixed rather than deferred. The undo-banner dismiss and the time-off trash
+  button now have 44×44 targets (A21).
+- **m4:** recorded as A22. The rows grow and the layout is accepted for now; the 11.11
+  layout pass handles it and 11.10b re-checks.
+- **m5:** the Show/Hide refocus runs in `Task { @MainActor in … }`, the next turn (A23).
+  Device proof is in rows A11-KB-1 and A11-SC-1.
+- **m6:** A24 records that step 4 audited only the auth and recovery forms. The other
+  editors' return-key chains go to 11.10b.
+
+**Commands and results:**
+- Mutations (applied in place with `perl`, run and restored with a `cmp` check). All 11
+  were killed:
+
+  | Mutation | Failures |
+  |---|---|
+  | Clamp removed | 1 |
+  | Clamp at 40pt | 2 |
+  | Metric back on the strip | 1 |
+  | Subtitle at 85% | 2 |
+  | "{title}, open" label restored | 4 |
+  | Tax label dropped | 2 |
+  | `submitEmail` gutted | 1 |
+  | Coach passes a literal `false` | 1 |
+  | `addJob` label `""` | 4 |
+  | Trash back to glyph size | 1 |
+  | Refocus in the same update | 1 |
+
+- `TZ=America/Phoenix sh native/run-accessibility-audit-tests.sh` →
+  `accessibility-audit tests: 471/471 checks passed`
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0. The output includes `accessibility-audit tests: 471/471 checks passed`,
+  `ScheduleBookingSettingsTests: all checks passed` and node `fail 0`.
+- Release `xcodebuild … CODE_SIGNING_ALLOWED=NO build` → `** BUILD SUCCEEDED **`, with no
+  warnings from touched files.
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Open for 11.10b:** A15–A18, A22 and A24 (all non-blocking). Release-blocking findings
+open: 0. H1 stays open.
 
 **Next ready:** 11.11 (iPad layouts, multitasking and rotation).

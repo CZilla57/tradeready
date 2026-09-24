@@ -29,6 +29,11 @@ struct NativeMoneyCard<Content: View>: View {
     var badgeTone: NativeMoneyCardTone = .muted
     var scope: String?
     var onOpen: (() -> Void)?
+    /// RN-matching label for an openable card (with the figure as its value).
+    /// Without one, the openable card reads its title and figures in full, as
+    /// RN does for cards with no `accessibilityLabel` (11.10a fix round 1).
+    var openLabel: String?
+    var openValue: String?
     @ViewBuilder var content: Content
 
     init(
@@ -37,6 +42,8 @@ struct NativeMoneyCard<Content: View>: View {
         badgeTone: NativeMoneyCardTone = .muted,
         scope: String? = nil,
         onOpen: (() -> Void)? = nil,
+        openLabel: String? = nil,
+        openValue: String? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
@@ -44,14 +51,22 @@ struct NativeMoneyCard<Content: View>: View {
         self.badgeTone = badgeTone
         self.scope = scope
         self.onOpen = onOpen
+        self.openLabel = openLabel
+        self.openValue = openValue
         self.content = content()
     }
 
     var body: some View {
-        if let onOpen {
+        if let onOpen, let openLabel {
             Button(action: onOpen) { card }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(title), open")
+                .accessibilityLabel(openLabel)
+                .accessibilityValue(openValue ?? "")
+        } else if let onOpen {
+            Button(action: onOpen) { card }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
         } else {
             card
         }
@@ -840,7 +855,12 @@ struct NativeMoneyTaxCardView: View {
     var onOpen: (() -> Void)?
 
     var body: some View {
-        NativeMoneyCard(title: "Tax set-aside", onOpen: onOpen) {
+        NativeMoneyCard(
+            title: "Tax set-aside",
+            onOpen: onOpen,
+            openLabel: NativeAccessibilityAudit.Label.taxSetAsideOpen,
+            openValue: card.reserveText
+        ) {
             Text(card.reserveText)
                 .font(.system(.title3, design: .rounded, weight: .bold).monospacedDigit())
             Text(card.breakdown.periodSummaryText).font(.caption).foregroundStyle(.secondary)

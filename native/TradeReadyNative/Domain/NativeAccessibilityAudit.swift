@@ -129,6 +129,8 @@ enum NativeAccessibilityAudit {
         let tintWashDarkRow = composite(p.tradeReadyDark, alpha: 0.12, over: p.secondaryGroupedDark)
         let borderedDark = composite(p.tradeReadyDark, alpha: 0.15, over: p.tradeCanvasDark)
         let tintWashLight = composite(p.tradeReadyLight, alpha: 0.12, over: p.white)
+        let heroDiscLight = composite(p.white, alpha: 0.18, over: p.tradeReadyFillLight)
+        let heroDiscDark = composite(p.white, alpha: 0.18, over: p.tradeReadyFillDark)
         return [
             // Tint as text/icon (links, toolbar items, `.foregroundStyle(Color.tradeReady)`).
             .init(name: "tint text on light canvas", foreground: p.tradeReadyLight, background: p.tradeCanvasLight, role: .text),
@@ -156,6 +158,13 @@ enum NativeAccessibilityAudit {
             .init(name: "fill UI on dark list row", foreground: p.tradeReadyFillDark, background: p.secondaryGroupedDark, role: .nonText),
             .init(name: "fill UI on dark sheet list row", foreground: p.tradeReadyFillDark, background: p.elevatedGroupedDark, role: .nonText),
             .init(name: "fill UI on light canvas", foreground: p.tradeReadyFillLight, background: p.tradeCanvasLight, role: .nonText),
+            // Today hero card (fix round 1, I2): the subtitle is solid white;
+            // at 85% it measured 3.76:1 on the dark fill.
+            .init(name: "Today hero subtitle: white caption on fill (light)", foreground: p.white, background: p.tradeReadyFillLight, role: .text),
+            .init(name: "Today hero subtitle: white caption on fill (dark)", foreground: p.white, background: p.tradeReadyFillDark, role: .text),
+            // Today hero icon: a white glyph on an 18% white disc over the fill.
+            .init(name: "Today hero icon: white on 18% white disc over fill (light)", foreground: p.white, background: heroDiscLight, role: .nonText),
+            .init(name: "Today hero icon: white on 18% white disc over fill (dark)", foreground: p.white, background: heroDiscDark, role: .nonText),
         ]
     }()
 
@@ -172,6 +181,36 @@ enum NativeAccessibilityAudit {
 
     /// Apple HIG minimum hit target, in points.
     static let minimumTouchTarget: Double = 44
+
+    /// The Today week strip (fix round 1, I1). Seven day columns and two
+    /// 44pt arrows share one row, so the strip is capped at AX1 and the day
+    /// circle is clamped: an `@ScaledMetric` reaches ~98pt at AX5 and would
+    /// widen every column past the card.
+    enum WeekStrip {
+        static let dayColumns: Double = 7
+        static let arrowCount: Double = 2
+        /// `TodayView`'s `.padding()` (16pt each side) plus the strip card's
+        /// 4pt horizontal padding each side.
+        static let horizontalChrome: Double = 16 * 2 + 4 * 2
+        /// The narrowest supported iPhone width (iPhone SE 2nd/3rd generation,
+        /// 12/13 mini), in points.
+        static let narrowestPhoneWidth: Double = 375
+        /// Default (Large) circle size; the `@ScaledMetric` base value.
+        static let dayCircleDefault: Double = 30
+        /// The largest circle that still fits seven columns beside both arrows
+        /// on the narrowest phone.
+        static let dayCircleMaximum: Double = 34
+
+        /// The width one day column gets on a phone `screenWidth` points wide.
+        static func dayColumnWidth(screenWidth: Double) -> Double {
+            (screenWidth - horizontalChrome - arrowCount * minimumTouchTarget) / dayColumns
+        }
+
+        /// The circle size to draw for a scaled metric value.
+        static func dayCircleSize(scaled: Double) -> Double {
+            min(scaled, dayCircleMaximum)
+        }
+    }
 
     // MARK: Labels
 
@@ -193,6 +232,10 @@ enum NativeAccessibilityAudit {
         static let routeOrderMenu = "Route order options"
         static let moveStopUp = "Move stop up"
         static let moveStopDown = "Move stop down"
+        /// RN `TaxSetAsideCard` labels its settings button with this exact text
+        /// and hides the figure; native keeps the label and exposes the reserve
+        /// as the accessibility value (fix round 1, I3).
+        static let taxSetAsideOpen = "Tax set-aside — open settings"
 
         /// RN `CustomerDetailScreen` labels its contact actions
         /// `Call ${name}` / `Email ${name}`; RN has no text action there, so
@@ -203,6 +246,14 @@ enum NativeAccessibilityAudit {
             return "\(verb.rawValue) \(trimmed.isEmpty ? "customer" : trimmed)"
         }
     }
+
+    /// Money cards whose RN component sets no `accessibilityLabel`, so RN
+    /// VoiceOver reads their title and figures. Native combines the card's text
+    /// into one button element and must not replace it with a bare title.
+    static let moneyCardsReadInFull: [(card: String, rnSource: String)] = [
+        ("NativeMoneyMileageCardView", "components/money/MileageCard.tsx"),
+        ("NativeMoneyPricebookCardView", "components/money/PricebookCard.tsx"),
+    ]
 
     enum ContactVerb: String, CaseIterable {
         case call = "Call"
@@ -218,6 +269,7 @@ enum NativeAccessibilityAudit {
         .init(key: "routeOrderMenu", text: Label.routeOrderMenu, rnSource: nil),
         .init(key: "moveStopUp", text: Label.moveStopUp, rnSource: "screens/RouteScreen.tsx"),
         .init(key: "moveStopDown", text: Label.moveStopDown, rnSource: "screens/RouteScreen.tsx"),
+        .init(key: "taxSetAsideOpen", text: Label.taxSetAsideOpen, rnSource: "components/money/TaxSetAsideCard.tsx"),
         // Labelled before 11.10a; kept in the catalog so parity stays proven.
         .init(key: "openCalendar", text: "Open calendar", rnSource: "screens/TodayScreen.tsx"),
         .init(key: "searchEverything", text: "Search everything", rnSource: "screens/TodayScreen.tsx"),

@@ -74,10 +74,11 @@ struct NativeAuthView: View {
                                 .submitLabel(.go)
                                 .onSubmit(submit)
                                 Button(showsPassword ? "Hide" : "Show") {
-                                    // Swapping the field drops focus; keep the keyboard on the password.
+                                    // Swapping the field drops focus; refocus the new field
+                                    // on the next main-actor turn, once it exists.
                                     let keepFocus = focusedField == .password
                                     showsPassword.toggle()
-                                    if keepFocus { focusedField = .password }
+                                    if keepFocus { Task { @MainActor in focusedField = .password } }
                                 }
                                 .font(.subheadline.weight(.semibold))
                             }

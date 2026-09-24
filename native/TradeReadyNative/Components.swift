@@ -119,6 +119,8 @@ struct NativeUndoBanner: View {
                 .controlSize(.small)
             Button(action: dismiss) {
                 Image(systemName: "xmark")
+                    .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(dismissLabel)

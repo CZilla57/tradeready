@@ -223,6 +223,8 @@ struct NativeScheduleSettingsView: View {
                             Spacer()
                             Button { removeBlackout(id: entry.id) } label: {
                                 Image(systemName: "trash")
+                                    .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Remove time off \(entry.start) to \(entry.end)")
