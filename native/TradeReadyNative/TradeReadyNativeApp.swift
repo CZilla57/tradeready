@@ -86,6 +86,14 @@ struct TradeReadyNativeApp: App {
         // also mirrors after canonical writes, gate changes and foreground/
         // background refresh, always gated on the §2.5 owner predicate.
         store.installWidgetMirror(.live())
+        // Task 11.04 (A1, contract §5.1): `OnMyWayIntent` runs in this process
+        // (`openAppWhenRun`) and hands `tradeready://onmyway/<id>` to this
+        // router, which feeds the same `handle(url:)` path as `.onOpenURL`
+        // (→ `routeToOnMyWay`, an editable review that is never auto-sent).
+        // A URL that arrived before this line is held and delivered now.
+        NativeIntentURLRouter.shared.install { [weak store] url in
+            store?.handle(url: url)
+        }
         let scheduler = NativeBackgroundRefreshScheduler { [weak store] in
             guard let store else { return .skipped }
             return await store.performBackgroundRefresh()

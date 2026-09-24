@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 done (2026-09-23); implementation tasks 11.02–11.15 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); implementation tasks 11.02, 11.03 and 11.05–11.15 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -781,7 +781,7 @@ complete / Phase 12 evidence deferred**.
 | 11.01 | W1, M1 | Done (code complete 2026-09-23; device/extension proof deferred to Phase 12) | 11.00, 10.01, 10.09 | Widget target + snapshot contract + extension manifest |
 | 11.02 | W2 | Pending | 11.01 | Next Job widget |
 | 11.03 | W3 | Pending | 11.01, 11.04 | Job Timer widget |
-| 11.04 | A1, A2, A3 | Pending | 11.01 | All ten App Intents + Siri + action queue |
+| 11.04 | A1, A2, A3 | Done (code complete 2026-09-23; Siri/device proof deferred to Phase 12) | 11.01 | All ten App Intents + Siri + action queue |
 | 11.05 | W4 | Pending | 11.01-11.04 | Owner/stale/sign-in correctness |
 | 11.06 | L1, L2 | Pending | 11.00, 11.05 (owner-gate API) | Deep-link routing + auth gates |
 | 11.07 | P1, P4 | Pending | 11.00 | Analytics transport + privacy |
@@ -1116,3 +1116,125 @@ the owner tag) and 11.02 (Next Job widget). 11.03 needs 11.04, and 11.05 needs 1
 - **Deferred by the controller (not addressed):** `flock` on the main actor, the
   visibility of the raw binding accessor, the scrub-race test's manual wipe, and the
   second `lockFileName` constant (→ 11.05).
+
+### 11.04 — App Intents, Siri, and the action-queue contract (2026-09-23)
+
+**Status:** Done (code complete). All ten intents exist once each, the eight Siri
+shortcuts carry the §5.2 phrases, and every queue write follows §4.3 under the single §4.2
+lock. Host tests prove that every action the intents write passes the real
+`NativeWidgetActionBatchPlanner`, and that it replays through `NativeWidgetActionReplayer`.
+Siri, device and extension proof are deferred to Phase 12. They were not claimed as passed.
+
+**Files:**
+- New, compiled into both targets (`N/Widgets/Shared/`):
+  - `N/Widgets/Shared/WidgetActionQueue.swift`: `WidgetIntentEngine`, which holds all intent
+    policy and is Foundation-only;
+  - `N/Widgets/Shared/WidgetIntents.swift`: `StartTimerIntent` and `StopTimerIntent`.
+- New, app only:
+  - `N/NativeAppIntents.swift`: `TradeReadyShortcuts`, the single `AppShortcutsProvider`;
+  - `N/Intents/JobActionIntents.swift`: seven Siri intents plus `SiriExpenseCategory`
+    (§5.3);
+  - `N/Intents/OnMyWayIntent.swift`;
+  - `N/Intents/SiriIntentDialogs.swift`: the spoken text;
+  - `N/Intents/NativeIntentURLRouter.swift`: the in-process hand-off to `AppStore.handle(url:)`.
+- Edited: `N/TradeReadyNativeApp.swift` installs the router after the widget mirror.
+- Tests: `native/AppIntentQueueTests/main.swift` and `native/run-app-intent-queue-tests.sh`
+  (both new). The runner is registered in `native/run-all-domain-tests.sh`.
+
+**Behavior:**
+- Stale rule (§3.3):
+  - Next Job, Clock In, On My Way and Outstanding refuse a snapshot older than 86,400 s
+    ("Open TradeReady to refresh your schedule.");
+  - Clock Out, Start Trip, Stop Trip and Log Expense are not refused;
+  - a `nextJob` dated before local today is never "next".
+- Owner rule (§4.5):
+  - every writer reads the snapshot's `ownerTag` inside the same lock hold as its write;
+  - with no snapshot or no tag it refuses ("Open TradeReady and sign in first.") and writes
+    nothing;
+  - the extension never derives a tag.
+- Writer rules (§4.3):
+  - refuse at 512 entries;
+  - an exact duplicate id is an idempotent success, and a differing duplicate fails;
+  - a malformed queue is never overwritten;
+  - the new action is validated before the append;
+  - existing entries keep their exact bytes (the new entry is spliced in).
+- Trip session (§4.4): `activeTrip` is stamped with the owner. Stop persists
+  id/stopAt/odometerEnd first, appends, and then removes the session. A session older than
+  86,400 s is replaced on start or discarded on stop, and never logged. A session belonging
+  to another owner (or an untagged one) is discarded.
+- Read-only intents: Next Job and Outstanding read only `widgetSnapshot`, take no lock
+  and write nothing.
+- On My Way:
+  - it stashes `{url, at, ownerTag}` to `pendingOpenUrl` in the same lock hold as the
+    snapshot read;
+  - it opens the app, and the router calls `AppStore.handle(url:)`, which presents the
+    existing editable `NativeOnMyWayReviewView`;
+  - nothing is ever sent automatically.
+
+**Interface handoff:**
+- **11.03 (Job Timer widget):** use `Button(intent: StartTimerIntent(jobId:))` and
+  `StopTimerIntent`. Both reload timelines outside the lock only when the queue was written
+  (`WidgetIntentTimelines.reloadIfNeeded`).
+- **11.05:**
+  - the writer only appends actions for this owner, so replay gating can rely on
+    `ownerTag`;
+  - an untagged or foreign queued `timer_start` is ignored by the "on the clock" check;
+  - replay is still migrated-only (`replayVerifiedWidgetActionsIfPossible`);
+  - the second `lockFileName` constant is still open.
+- **11.06:**
+  - the stash is also written on the warm route (the direct router path), so a consumer that
+    runs on every activation should clear or dedupe it rather than show the review twice;
+  - the existing consumer ignores the extra `ownerTag` key, and the owner gate is 11.06's to
+    add.
+
+**Commands:**
+- `TZ=America/Phoenix sh native/run-app-intent-queue-tests.sh` → "App intent queue tests
+  passed".
+- Mutation checks, each restored byte-identical:
+  - cap raised to 513 → 4 failures;
+  - expense floor removed → 3 failures;
+  - Clock In stale check removed → 2 failures;
+  - trip owner check removed → 4 failures.
+- Release generic `xcodebuild` (`CODE_SIGNING_ALLOWED=NO`) → BUILD SUCCEEDED, with no new
+  warnings. The SwiftFileLists show both targets compiling `WidgetActionQueue.swift` and
+  `WidgetIntents.swift`, and only the app compiling `Intents/` and `NativeAppIntents.swift`.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0; every runner passed.
+- `sh native/run-doc-reference-check.sh` → 0 missing.
+
+**Deviations:**
+1. **Policy module.** Intent policy lives in `N/Widgets/Shared/WidgetActionQueue.swift`
+   (Foundation-only), and the intents are thin wrappers. The brief's Own list did not name
+   it, nor `SiriIntentDialogs.swift` or `NativeIntentURLRouter.swift`.
+2. **Duplicated validation.** The writer re-implements the planner's field rules instead of
+   calling the planner. The planner is app-only (it depends on `Canonical.JSONValue` and
+   CryptoKit), and the timer intents must compile into the extension. The tests run the
+   writer's output and boundary vectors through the real planner, so the two cannot drift
+   silently.
+3. **Native bounds.**
+   - Odometers are capped at 10,000,000 miles. Larger values decode as `Decimal` failures
+     in the planner (at 1e128 and above), which would fail the whole batch.
+   - Expense amounts must be at least 1e-19, the planner's floor.
+   - RN had neither bound.
+4. **Read failures.** Next Job and Outstanding say "couldn't check that" on a container
+   failure, not "couldn't save".
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+- All eight shortcuts appear in the Shortcuts app, and each §5.2 phrase triggers its intent
+  through Siri.
+- The Start/Stop timer buttons in the widget queue an action and the app replays it on
+  foreground.
+- Start Trip → Stop Trip through Siri logs one trip with the right miles, once.
+- Log Expense through Siri shows the §5.3 category labels, and replays with the spoken
+  amount.
+- On My Way through Siri, cold and warm, opens the review sheet for the next job and sends
+  nothing.
+- After sign-out, every writing intent says "Open TradeReady and sign in first." and the
+  container stays empty.
+
+**Concerns:**
+- On My Way takes the `flock` on the main actor for a brief hold. This is the same class of
+  issue as the deferred 11.01 minor.
+- `WidgetActionQueue.swift` is about 840 lines, which is larger than the plan implied.
+
+**Next ready:** 11.03 (Job Timer widget; needs 11.01 and 11.04) and 11.02. 11.05 needs
+11.02 and 11.03.
