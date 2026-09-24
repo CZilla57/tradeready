@@ -11,6 +11,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/SnapshotRepository.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Widgets/Shared/WidgetActionFieldRules.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeWidgetActionReplay.swift" \
   "$ROOT_DIR/native/WidgetActionReplayTests/main.swift" \
   -o "$OUTPUT_PATH"

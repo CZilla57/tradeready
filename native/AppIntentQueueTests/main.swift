@@ -442,6 +442,8 @@ private func testWriterRules() {
         ("unknown category", action(expense.merging(["category": .string("snacks")]) { $1 }), "category"),
         ("impossible date", action(expense.merging(["date": .string("2026-02-30")]) { $1 }), "date"),
         ("non-strict date", action(expense.merging(["date": .string("2026-8-03")]) { $1 }), "date"),
+        ("signed year", action(expense.merging(["date": .string("+026-08-03")]) { $1 }), "date"),
+        ("signed month", action(expense.merging(["date": .string("2026-+8-03")]) { $1 }), "date"),
         ("odometer past the ceiling", action(trip.merging(["odometerEnd": .number(1e200)]) { $1 }, type: "trip_log"), "odometerEnd"),
         ("negative odometer", action(trip.merging(["odometerStart": .number(-1)]) { $1 }, type: "trip_log"), "odometerStart"),
         ("missing ownerTag", action(expense.merging(["ownerTag": .null]) { $1 }), "ownerTag"),
@@ -459,6 +461,23 @@ private func testWriterRules() {
             expectEqual(error as? WidgetIntentFailure, .invalidAction(field: field), "writer rejects \(label) on \(field)")
         }
     }
+    // One shared rule (fix round 1, I1): the planner refuses the signed
+    // pieces too, and both sides call the same predicates.
+    for date in ["+026-08-03", "2026-+8-03", "2026-08-+3", "2026-02-30", "２０２６-08-03"] {
+        expect(!WidgetActionFieldRules.isValidLocalDate(date), "shared rule rejects date \(date)")
+        expect(!plan(#"[{"id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"\#(date)","amount":5,"category":"fuel"}]"#).isSuccess,
+               "the planner rejects date \(date)")
+    }
+    for date in ["2026-08-03", "2024-02-29", "0001-01-01"] {
+        expect(WidgetActionFieldRules.isValidLocalDate(date), "shared rule accepts date \(date)")
+        expect(plan(#"[{"id":"a","type":"expense_log","at":"2026-08-03T19:00:00Z","date":"\#(date)","amount":5,"category":"fuel"}]"#).isSuccess,
+               "the planner accepts date \(date)")
+    }
+    expectEqual(NativeWidgetActionBatch.maximumIdentifierLength, WidgetActionFieldRules.maximumIdentifierLength,
+                "the planner's identifier cap is the shared one")
+    expect(!plan(#"[{"id":"\#(String(repeating: "x", count: 129))","type":"timer_stop","at":"2026-08-03T19:00:00Z"}]"#).isSuccess,
+           "the planner rejects a 129-byte id")
+
     // Why the native ceilings exist: the planner would fail the WHOLE batch.
     expect(!plan(#"[{"id":"a","type":"trip_log","at":"2026-08-03T19:00:00Z","date":"2026-08-03","odometerStart":0,"odometerEnd":1e200}]"#).isSuccess,
            "the planner cannot decode an odometer of 1e200 (would wedge the queue)")
@@ -552,6 +571,18 @@ private func testTripSession() throws {
     expectEqual(retryMiles, 40, "the retry reuses the persisted odometerEnd, not the new reading")
     expectEqual(h.queue.count, 1, "the retry is idempotent (exact duplicate id)")
     expect(h.trip == nil, "the retry clears the session")
+
+    // Crash retry with a bad NEW reading (fix round 1, M2): the persisted
+    // odometerEnd is what gets logged, so the new value is not validated.
+    for bad in [.nan, 1e200, -3] as [Double] {
+        h = Harness(extra: [WidgetAppGroup.activeTripKey: persisted])
+        let retry = h.engine.stopTrip(odometerEnd: bad)
+        guard case .logged(let persistedMiles, _) = retry else {
+            expect(false, "a crash retry with reading \(bad) logs the persisted trip (got \(retry))"); continue
+        }
+        expectEqual(persistedMiles, 40, "the retry with reading \(bad) logs the persisted 540")
+        expect(h.trip == nil && plan(h.queueRaw).isSuccess, "…clears the session and stays planner-valid")
+    }
 
     // Persisted but not yet appended → appends with the persisted values.
     h = Harness(extra: [WidgetAppGroup.activeTripKey: persisted])
@@ -712,7 +743,7 @@ private func testOnMyWayStash() {
 private func testReadOnlyIntents() {
     func dialogNext(_ h: Harness) -> String {
         // `.short` time style emits U+202F before AM/PM on current ICU; normalize for comparison.
-        SiriIntentDialogs.nextJob(h.engine.nextJob(), now: now, timeZone: phoenix, locale: posix)
+        SiriIntentDialogs.nextJob(h.engine.nextJob(), locale: posix)
             .replacingOccurrences(of: "\u{202F}", with: " ")
     }
     var h = Harness()
@@ -722,6 +753,8 @@ private func testReadOnlyIntents() {
     expectEqual(SiriIntentDialogs.outstanding(h.engine.outstanding()), "You're owed $160 in outstanding invoices.",
                 "Outstanding speaks outstandingTotal")
     expect(h.store.writes.isEmpty, "Next Job and Outstanding write nothing")
+    expectEqual(h.engine.nextJob(), .nextJob(j9, now: now, timeZone: phoenix),
+                "the outcome carries the engine's own clock and zone (fix round 1, M4)")
     expectEqual(Set(h.store.reads), [WidgetAppGroup.snapshotKey], "they read only the snapshot key (no queue, trip or records)")
     expectEqual(h.store.values, before, "the App Group is unchanged")
 
@@ -732,6 +765,15 @@ private func testReadOnlyIntents() {
     h = Harness(snapshot: snapshotJSON(nextJob: later))
     expectEqual(dialogNext(h), "Your next job is Fence repair for Alice Johnson, Monday, August 10 at 2:30 PM, at 12 Oak St.",
                 "a later day is spelled out")
+    // Seconds before local midnight: the engine's upcoming check and the
+    // spoken day both use the engine clock, so a job dated today is "today".
+    var tonight = j9; tonight.scheduledDate = "2026-08-03"; tonight.scheduledStartTime = nil
+    h = Harness(snapshot: snapshotJSON(updatedAt: now, nextJob: tonight),
+                at: ISO8601DateFormatter().date(from: "2026-08-04T06:59:59Z")!) // 23:59:59 Phoenix
+    expectEqual(dialogNext(h), "Your next job is Fence repair for Alice Johnson, today, at 12 Oak St.",
+                "at 23:59:59 local, today's job is still spoken as today")
+    h.clock.date = ISO8601DateFormatter().date(from: "2026-08-04T07:00:01Z")! // 00:00:01 the next day
+    expectEqual(dialogNext(h), "You have no upcoming jobs scheduled.", "after local midnight it is no longer next")
     var past = j9; past.scheduledDate = "2026-08-02"
     h = Harness(snapshot: snapshotJSON(nextJob: past))
     expectEqual(dialogNext(h), "You have no upcoming jobs scheduled.", "a past nextJob is never 'next'")
@@ -1040,6 +1082,17 @@ private func testDeclarations() {
         expectEqual(floors, declarations, "\(path): every App Intents type carries exactly @available(iOS 17.0, *)")
         let availabilities = Set(matches(#"@available\(([^)]*)\)"#, in: text).map { $0[1] })
         expect(availabilities.isSubset(of: ["iOS 17.0, *"]), "\(path): no other availability floor (\(availabilities))")
+    }
+
+    // Fix round 1 (I1): the string field rules exist once, in the shared file.
+    let actionQueueFiles: Set<String> = [
+        "NativeWidgetActionReplay.swift", "Widgets/Shared/WidgetActionQueue.swift",
+        "Widgets/Shared/WidgetIntents.swift", "Intents/JobActionIntents.swift", "Intents/OnMyWayIntent.swift",
+    ]
+    expectEqual(Set(sources.map(\.path)).intersection(actionQueueFiles), actionQueueFiles, "scan sees the action-queue files")
+    for (path, text) in sources where actionQueueFiles.contains(path) {
+        expect(!text.contains("CharacterSet.controlCharacters.contains") && !text.contains("rebuilt.year == year"),
+               "\(path) does not re-implement the action field rules")
     }
 
     // Phrases, short titles and symbols (§5.2), in provider order.

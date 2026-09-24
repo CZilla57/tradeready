@@ -35,17 +35,14 @@ enum SiriIntentDialogs {
         failure == .signInRequired ? signInFirst : couldNotRead
     }
 
-    static func nextJob(
-        _ outcome: WidgetNextJobOutcome,
-        now: Date,
-        timeZone: TimeZone = .current,
-        locale: Locale = .current
-    ) -> String {
+    /// Uses the engine's `now` and time zone from the outcome, so "today"
+    /// and "tomorrow" agree with the engine's upcoming check at midnight.
+    static func nextJob(_ outcome: WidgetNextJobOutcome, locale: Locale = .current) -> String {
         switch outcome {
         case .failed(let failure): return readFailure(failure)
         case .stale: return refreshSchedule
         case .noUpcomingJob: return noUpcomingJobs
-        case .nextJob(let job):
+        case .nextJob(let job, let now, let timeZone):
             var message = "Your next job is \(job.title) for \(job.customerName), "
                 + whenLabel(job, now: now, timeZone: timeZone, locale: locale)
             if !job.address.isEmpty { message += ", at \(job.address)" }

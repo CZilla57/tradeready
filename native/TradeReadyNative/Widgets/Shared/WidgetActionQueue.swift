@@ -14,7 +14,8 @@ import Foundation
 // - §4.2 lock protocol (only `WidgetAppGroupLock`, never a second flock);
 // - §4.3 writer rules: refuse at 512, exact-duplicate ids are idempotent and
 //   differing duplicates fail, never overwrite a malformed queue, validate the
-//   new action with the planner's field rules before appending;
+//   new action before appending (string rules shared with the planner via
+//   `WidgetActionFieldRules`; numeric ranges pinned to it by tests);
 // - §4.4 the private `activeTrip` session;
 // - §4.5 owner stamping: every snapshot read used to build an action (the
 //   `ownerTag`, `nextJob`, `timer`, and the queue's last pending timer type)
@@ -267,7 +268,9 @@ enum WidgetOnMyWayOutcome: Equatable {
 }
 
 enum WidgetNextJobOutcome: Equatable {
-    case nextJob(WidgetSnapshot.NextJob)
+    /// Carries the engine's clock and zone so the spoken "today"/"tomorrow"
+    /// uses the same instant as the upcoming check.
+    case nextJob(WidgetSnapshot.NextJob, now: Date, timeZone: TimeZone)
     case noUpcomingJob
     case stale
     case failed(WidgetIntentFailure)
@@ -327,8 +330,6 @@ struct WidgetPendingOpenURLStash: Codable, Equatable {
 struct WidgetIntentEngine {
     /// Contract §4.3.
     static let maximumQueueCount = 512
-    /// Mirrors `NativeWidgetActionBatch.maximumIdentifierLength`.
-    static let maximumIdentifierLength = 128
     /// RN `siriStaleActiveTripInterval` (§3.3, §4.4): one shared day boundary.
     static let staleTripInterval: TimeInterval = 86_400
     /// RN `expenseFromAction` ceiling (§4.1).
@@ -456,9 +457,11 @@ struct WidgetIntentEngine {
                 try Self.removeTrip(store)
                 return .discardedStale
             }
-            guard Self.isValidOdometer(odometerEnd), Self.isValidOdometer(trip.odometerStart) else {
-                return .invalidOdometer
-            }
+            // A crash retry logs the persisted reading, so the new one is
+            // only validated when there is no persisted `odometerEnd` yet.
+            guard Self.isValidOdometer(trip.odometerStart),
+                  trip.odometerEnd != nil || Self.isValidOdometer(odometerEnd)
+            else { return .invalidOdometer }
             // Persist a stable completion payload first so a retry after a
             // crash reuses the same id, stop time and odometer (RN parity).
             if trip.id == nil { trip.id = environment.makeActionID() }
@@ -520,7 +523,7 @@ struct WidgetIntentEngine {
             let now = environment.now()
             if owned.snapshot.isStale(now: now) { return .stale }
             guard let job = upcomingJob(owned.snapshot, now: now) else { return .noUpcomingJob }
-            guard Self.isValidIdentifier(job.id),
+            guard WidgetActionFieldRules.isValidIdentifier(job.id),
                   let url = Self.onMyWayURL(jobID: job.id)
             else { throw WidgetIntentFailure.invalidAction(field: "jobId") }
             let stash = WidgetPendingOpenURLStash(
@@ -558,7 +561,7 @@ struct WidgetIntentEngine {
             let now = environment.now()
             if snapshot.isStale(now: now) { return .stale }
             guard let job = upcomingJob(snapshot, now: now) else { return .noUpcomingJob }
-            return .nextJob(job)
+            return .nextJob(job, now: now, timeZone: environment.timeZone)
         }
     }
 
@@ -717,12 +720,12 @@ struct WidgetIntentEngine {
         return true
     }
 
-    // MARK: Validation (the planner's field rules, §4.1)
+    // MARK: Validation (§4.1; string rules shared with the planner via `WidgetActionFieldRules`)
 
     static func validate(_ action: WidgetPendingAction) throws {
         let fields = action.fields
         func requireIdentifier(_ key: String) throws {
-            guard let value = fields[key]?.stringValue, isValidIdentifier(value) else {
+            guard let value = fields[key]?.stringValue, WidgetActionFieldRules.isValidIdentifier(value) else {
                 throw WidgetIntentFailure.invalidAction(field: key)
             }
         }
@@ -762,15 +765,9 @@ struct WidgetIntentEngine {
     }
 
     private static func requireLocalDate(_ fields: [String: WidgetJSONValue]) throws {
-        guard let date = fields["date"]?.stringValue, isValidLocalDate(date) else {
+        guard let date = fields["date"]?.stringValue, WidgetActionFieldRules.isValidLocalDate(date) else {
             throw WidgetIntentFailure.invalidAction(field: "date")
         }
-    }
-
-    static func isValidIdentifier(_ value: String) -> Bool {
-        !value.isEmpty
-            && value.utf8.count <= maximumIdentifierLength
-            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
 
     /// RN `siriIsValidOdometer` (finite, ≥ 0) plus the native ceiling.
@@ -781,22 +778,6 @@ struct WidgetIntentEngine {
     /// RN `expenseFromAction` (finite, > 0, ≤ 1,000,000), with the planner's floor.
     static func isValidExpenseAmount(_ value: Double) -> Bool {
         value.isFinite && value >= minimumExpenseAmount && value <= maximumExpenseAmount
-    }
-
-    /// Strict `yyyy-MM-dd` that names a real calendar day (planner rule).
-    static func isValidLocalDate(_ value: String) -> Bool {
-        let pieces = value.split(separator: "-", omittingEmptySubsequences: false)
-        guard pieces.count == 3, pieces[0].count == 4, pieces[1].count == 2, pieces[2].count == 2,
-              pieces.allSatisfy({ $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }),
-              let year = Int(pieces[0]), let month = Int(pieces[1]), let day = Int(pieces[2])
-        else { return false }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
-            return false
-        }
-        let rebuilt = calendar.dateComponents([.year, .month, .day], from: date)
-        return rebuilt.year == year && rebuilt.month == month && rebuilt.day == day
     }
 
     /// The local `yyyy-MM-dd` of an instant (FA-039: never the UTC day).

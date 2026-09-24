@@ -17,7 +17,7 @@ enum NativeWidgetActionBatchError: Error, Equatable {
 
 struct NativeWidgetActionBatch: Equatable {
     static let maximumActionCount = 512
-    static let maximumIdentifierLength = 128
+    static let maximumIdentifierLength = WidgetActionFieldRules.maximumIdentifierLength
 
     enum Kind: Equatable {
         case timerStart
@@ -154,9 +154,7 @@ enum NativeWidgetActionBatchPlanner {
     }
 
     private static func validIdentifier(_ value: String) -> Bool {
-        !value.isEmpty
-            && value.utf8.count <= NativeWidgetActionBatch.maximumIdentifierLength
-            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        WidgetActionFieldRules.isValidIdentifier(value)
     }
 
     private static func validInstant(_ value: String) -> Bool {
@@ -166,15 +164,7 @@ enum NativeWidgetActionBatchPlanner {
     }
 
     private static func validLocalDate(_ value: String) -> Bool {
-        let pieces = value.split(separator: "-", omittingEmptySubsequences: false)
-        guard pieces.count == 3, pieces[0].count == 4, pieces[1].count == 2, pieces[2].count == 2,
-              let year = Int(pieces[0]), let month = Int(pieces[1]), let day = Int(pieces[2])
-        else { return false }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else { return false }
-        let rebuilt = calendar.dateComponents([.year, .month, .day], from: date)
-        return rebuilt.year == year && rebuilt.month == month && rebuilt.day == day
+        WidgetActionFieldRules.isValidLocalDate(value)
     }
 
     private static func isDigest(_ value: String) -> Bool {

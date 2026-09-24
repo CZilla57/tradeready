@@ -1,6 +1,5 @@
 import AppIntents
 import Foundation
-import WidgetKit
 
 // Task 11.04 (A1–A3): the Siri-only intents. App target only (`N/Intents/`),
 // registered by `TradeReadyShortcuts` in `N/NativeAppIntents.swift`.
@@ -26,7 +25,7 @@ struct NextJobIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let outcome = WidgetIntentEngine().nextJob()
-        return .result(dialog: "\(SiriIntentDialogs.nextJob(outcome, now: Date()))")
+        return .result(dialog: "\(SiriIntentDialogs.nextJob(outcome))")
     }
 }
 
@@ -102,10 +101,10 @@ enum SiriExpenseCategory: String, AppEnum {
     case marketing
     case other
 
-    static var typeDisplayRepresentation: TypeDisplayRepresentation =
+    static let typeDisplayRepresentation: TypeDisplayRepresentation =
         TypeDisplayRepresentation(name: "Expense Category")
 
-    static var caseDisplayRepresentations: [SiriExpenseCategory: DisplayRepresentation] = [
+    static let caseDisplayRepresentations: [SiriExpenseCategory: DisplayRepresentation] = [
         .materials: DisplayRepresentation(title: "Materials"),
         .tools: DisplayRepresentation(title: "Tools & Equipment"),
         .fuel: DisplayRepresentation(title: "Fuel & Transport"),

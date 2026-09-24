@@ -1205,11 +1205,12 @@ Siri, device and extension proof are deferred to Phase 12. They were not claimed
 1. **Policy module.** Intent policy lives in `N/Widgets/Shared/WidgetActionQueue.swift`
    (Foundation-only), and the intents are thin wrappers. The brief's Own list did not name
    it, nor `SiriIntentDialogs.swift` or `NativeIntentURLRouter.swift`.
-2. **Duplicated validation.** The writer re-implements the planner's field rules instead of
-   calling the planner. The planner is app-only (it depends on `Canonical.JSONValue` and
-   CryptoKit), and the timer intents must compile into the extension. The tests run the
-   writer's output and boundary vectors through the real planner, so the two cannot drift
-   silently.
+2. **Shared field rules.** The string rules (identifier, local date) live once, in
+   `N/Widgets/Shared/WidgetActionFieldRules.swift`, and both the writer and the planner call
+   them (see fix round 1). The numeric ranges stay on each side, because the planner is
+   app-only (it depends on `Canonical.JSONValue` and CryptoKit) and uses `Decimal`. The tests
+   run the writer's output and boundary vectors through the real planner, so the two sides
+   cannot drift silently.
 3. **Native bounds.**
    - Odometers are capped at 10,000,000 miles. Larger values decode as `Decimal` failures
      in the planner (at 1e128 and above), which would fail the whole batch.
@@ -1238,3 +1239,43 @@ Siri, device and extension proof are deferred to Phase 12. They were not claimed
 
 **Next ready:** 11.03 (Job Timer widget; needs 11.01 and 11.04) and 11.02. 11.05 needs
 11.02 and 11.03.
+
+**Fix round 1 (2026-09-24, task review of 3ef7e88):**
+- **I1 (duplicated planner rules).** New file
+  `N/Widgets/Shared/WidgetActionFieldRules.swift` (Foundation-only, both targets). It holds
+  the one copy of `isValidIdentifier`, `isValidLocalDate` and `maximumIdentifierLength`.
+  - The planner's `validIdentifier` and `validLocalDate` now call it, and
+    `NativeWidgetActionBatch.maximumIdentifierLength` aliases it. The writer calls it
+    directly.
+  - Choice: the planner adopts the stricter ASCII-digit date check. Before this, `Int(_:)`
+    let signed pieces through, so `+026-08-03` was accepted as year 26. No writer has ever
+    produced such a date (the RN writer used zero-padded digits), and there are no current
+    users, so one strict rule costs nothing.
+  - `native/run-appstore-sources-common.sh` and `native/run-widget-action-replay-tests.sh`
+    compile the new file.
+- **M2.** On a crash retry, Stop Trip no longer validates the new reading when a persisted
+  `odometerEnd` exists. The persisted value is the one that gets logged.
+- **M4.** `WidgetNextJobOutcome.nextJob` carries the engine's `now` and time zone, and
+  `SiriIntentDialogs.nextJob` uses them. The spoken day therefore always matches the
+  engine's upcoming check.
+- **M5.** Removed the unused `import WidgetKit`.
+- **M6.** The `AppEnum` display representations are now `static let`.
+- **Tests (added to `native/AppIntentQueueTests/main.swift`):**
+  - signed-date vectors, rejected by the writer, the shared rule and the planner;
+  - accepted-date vectors;
+  - the identifier cap is the shared one;
+  - a source scan finding no second copy of the rules;
+  - crash retry with NaN, 1e200 and -3 readings logs the persisted 540;
+  - the outcome carries the engine clock and zone;
+  - 23:59:59 local speaks "today", and 00:00:01 gives no upcoming job.
+- **Mutation checks:**
+  - reverting M2 → 3 failures;
+  - removing the digit check → 6 failures.
+  The sources were restored byte-identical.
+- **Commands:**
+  - `TZ=America/Phoenix sh native/run-app-intent-queue-tests.sh` → passed;
+  - `sh native/run-widget-action-replay-tests.sh` → PASS;
+  - Release generic `xcodebuild` → BUILD SUCCEEDED, and the `TradeReadyWidgets`
+    SwiftFileList lists `WidgetActionFieldRules.swift`;
+  - `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0; every runner passed;
+  - `sh native/run-doc-reference-check.sh` → 0 missing.
