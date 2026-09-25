@@ -65,7 +65,7 @@ characterization).
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen; crash side implemented by 11.09 (§10.4) | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen; implemented by 11.15 with the native differences in §11.1 | 11.15 |
-| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audits and closes H1 | 11.10a/11.10b |
+| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audited after 11.11 and 11.12 (§12.3): A13, A15–A18 and A24–A28 fixed, A22 accepted; A29 (success, warning and status colors as text) is open pending an owner decision, so H1 is not closed | 11.10a/11.10b |
 | C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
 
@@ -1691,7 +1691,9 @@ up by marker, and a missing marker fails the run. The policy is in
 policy, RN label catalog). The view helpers are in `N/NativeAccessibilityViews.swift`.
 
 **Release-blocking findings open: 0.** H1 stays open until 11.10b re-audits after
-11.11 and 11.12.
+11.11 and 11.12. **11.10b update:** see §12.3. The re-audit fixed A13 and A15–A18,
+found and fixed A25–A28, and recorded A29 (success, warning and status colors used as
+text) as open pending an owner decision. H1 is therefore still not closed.
 
 **Palette decision (native difference).** `tradeReady` is now dynamic:
 
@@ -1742,18 +1744,23 @@ tint text on that ground, so this is recorded only.
 | A10 | Remaining `lineLimit(1)` sites: names, notes, addresses, links, job titles | **Retained:** truncating a name or address does not lose meaning in a list row, the detail screen shows the full text, and VoiceOver reads it in full. The amount sites that could lose meaning now stack | Reviewed |
 | A11 | Hardware-keyboard shortcuts and iPad keyboard commands | **Done by 11.11** (§12.2): Esc on every toolbar Cancel/Done/Close, ⌘S on every toolbar save, ⌘⏎ on the change-order Confirm, ⌘N on the five existing toolbar "new" actions (gated: never while the owner presents anything or has a screen pushed over it; fix round 1), no shortcut on the destructive delete, no custom command menus (RN has none). Tab traversal is the system focus order; return-key chains beyond auth and recovery stay A24 (11.10b) | `native/run-layout-metrics-tests.sh` keyboard checks; Phase 12 rows IPAD-KB-1 and IPAD-KB-2 |
 | A12 | Reading order: static review found no layered text out of order. The one layered text view, the calendar timeline, is already hidden from VoiceOver. No `accessibilitySortPriority` was added | **Deferred to device** (Phase 12 VoiceOver rows) | — |
-| A13 | Today job card: an "On my way" button nested inside the card button. Its VoiceOver reachability can only be confirmed on a device | **Deferred to device.** If it is unreachable, 11.10b adds an `accessibilityAction` | Phase 12 row |
+| A13 | Today job card: an "On my way" button nested inside the card button. Its VoiceOver reachability can only be confirmed on a device | **Fixed in 11.10b** without waiting for the device. The card also offers "On my way to {name}" (the RN `TodayScreen` label) as a VoiceOver custom action, so it is reachable whether or not the nested button is its own element. Device proof stays in A11-VO-2 | `testReAuditSites` (card action, RN label parity) |
 | A14 | **Corrected in fix round 1 (I3).** Money cards with `onOpen` used the label "{title}, open", which hid their figures from VoiceOver. The first pass said RN does the same, but only RN `TaxSetAsideCard` sets a label ("Tax set-aside — open settings"). RN `MileageCard` and `PricebookCard` set none, so RN VoiceOver reads their figures, and native was a regression | **Fixed:** an openable card with no RN label combines its text into one button element (`.accessibilityElement(children: .combine)` plus the button trait), so the title and figures are read. The tax card uses RN's exact label, with the reserve as the accessibility value. The native tax card has no open action today, because native has no tax-settings screen yet. It stays a static card that VoiceOver reads in full, and the RN label and value take effect when a destination is wired | Catalog parity (`taxSetAsideOpen` against RN), RN no-label checks for Mileage and Pricebook, branch checks in `NativeMoneyCard` |
-| A15 | The Money charts (monthly, seasonal, expense trends) have no accessibility summary; VoiceOver reads each month letter separately | **11.10b** (not blocking; the totals under each chart are readable text) | — |
-| A16 | Cosmetic fixed icon frames: `MoneyView` category badge, `SettingsView` sync-status badge and avatar, Today hero circle, job-photo thumbnail, route index column, booking-request kind column (56pt; text wraps at AX5) | **11.10b** with the 11.11 layout pass (not blocking: icons overflow their frame without clipping, and the text wraps rather than disappearing) | — |
-| A17 | The job-photo error badge is not announced | **11.10b** (not blocking) | — |
-| A18 | The clock-out `.borderedProminent` uses system red: white on dark `#ff453a` measures about 3.4:1 | **11.10b** (not blocking: the system destructive color, with a semibold label) | — |
+| A15 | The Money charts (monthly, seasonal, expense trends) have no accessibility summary; VoiceOver reads each month letter separately | **Fixed in 11.10b.** Each bar area is one element labelled "{title} chart". Its value reads every month with its figures, for example "April: Income $1,200.00, Expenses $300.00. …". Expense trends add "down 12% from the previous month". The legends are hidden because the value names each series. Native only: RN charts have no accessibility label | `testChartSummaries` (pure summary text plus the three card sites) |
+| A16 | Cosmetic fixed icon frames: `MoneyView` category badge, `SettingsView` sync-status badge and avatar, Today hero circle, job-photo thumbnail, route index column, booking-request kind column (56pt; text wraps at AX5) | **Fixed in 11.10b.** The badges, the avatar (capped at 96pt), the hero disc and the photo thumbnail use `@ScaledMetric`. The thumbnail is clamped to 112–168pt by `NativeAccessibilityAudit.PhotoThumbnail`. The route number and reorder columns use minimum widths. At AX sizes, the booking kind column and the Today schedule time column (52pt, found by the re-audit) move above their row. Every remaining literal width of 20pt or more is on a reviewed allowlist with its reason | `testFixedFrames` (no fixed square of 20pt or more, per-file width allowlist, site checks) |
+| A17 | The job-photo error badge is not announced | **Fixed in 11.10b:** the thumbnail's accessibility value is the error text | `testReAuditSites` |
+| A18 | The clock-out `.borderedProminent` uses system red: white on dark `#ff453a` measures about 3.4:1 | **Fixed in 11.10b** with `tradeDangerFill`. Light is `#b8432b` (RN `lightColors.danger`; white text 5.42:1). Dark is `#cc4a30` (native only; 4.58:1) | Contrast table rows, palette literals parsed from `N/Models.swift`, the time-tracking tint check |
 | A19 | Switch Control, full VoiceOver, AX5 layout, Increase Contrast | **Deferred to device** (Phase 12; runsheet rows in the plan's 11.10a entry) | — |
 | A20 | Found in fix round 1 (I2): the Today hero subtitle was `.white.opacity(0.85)` on the fill, which measured 3.76:1 in dark mode | **Fixed:** solid white. No translucent white foreground remains outside `N/Widgets/` | Contrast rows above; the translucent-white scan |
 | A21 | Found in fix round 1 (m3): glyph-sized icon buttons, namely the undo banner's dismiss `xmark` and the time-off `trash` in Schedule settings | **Fixed:** 44×44 target | Touch-target checks |
-| A22 | Fix round 1 (m4): the 44pt route move chevrons are stacked, so a middle stop's row grows from about 50pt to about 116pt at the default size | **Accepted for 11.10a:** a reliable target outweighs row density. A horizontal pair or a drag-to-reorder list is a layout change for the 11.11 layout pass, and 11.10b re-checks it | Phase 12 A11-TT-1 row |
+| A22 | Fix round 1 (m4): the 44pt route move chevrons are stacked, so a middle stop's row grows from about 50pt to about 116pt at the default size | **Accepted in 11.10b, with rationale.** RN `RouteScreen` stacks its move buttons the same way (`reorderCol`: 32pt buttons with a 6pt gap), so the stacked column is parity, and 11.11 did not change it. The native column now has a 44pt minimum width instead of a fixed one, so the stop number can grow. Row density is the cost of reliable targets. A drag-to-reorder list would be a new interaction that RN does not have | Phase 12 A11-TT-1 |
 | A23 | Fix round 1 (m5): Show/Hide on the password swaps the field and could lose focus in the same update | **Mitigated:** the refocus now runs on the next main-actor turn. Device proof is in the A11-KB-1 and A11-SC-1 rows | Focus check |
-| A24 | Fix round 1 (m6): step 4 audited the return-key and focus chains of the auth and recovery forms only | **11.10b:** the return-key chains of the other editors (job, invoice, customer, expense, trip, pricebook, schedule) | — |
+| A24 | Fix round 1 (m6): step 4 audited the return-key and focus chains of the auth and recovery forms only | **Resolved in 11.10b.** *Return keys:* RN `Field` gives every single-line input "done", which dismisses the keyboard, and has no Next chains in the editors. A single-line SwiftUI field ends editing on Return the same way, so no chain is added. The scan fails any Next or Continue key without an `.onSubmit`. *Keyboard dismissal:* pad and multi-line keyboards have no key that dismisses them. RN mounts `KeyboardDoneBar` for them ("Done", labelled "Dismiss keyboard"). Native now has `.nativeKeyboardDoneBar()` on all 25 screens with such a field, and the scan fails a new one without it | `testReturnKeysAndDismissal`, `testRunnersCompileDoneBar` |
+| A25 | Found by 11.10b: the Today card's "On my way" link was glyph-sized (RN pads it with `hitSlop` 8) | **Fixed:** 44×44 minimum target | `testReAuditSites` |
+| A26 | Found by 11.10b: the route map's stop number was white text directly on the map tiles | **Fixed:** it sits on a `tradeReadyFill` capsule (4.56:1 or better) | `testReAuditSites`, contrast row |
+| A27 | Found by 11.10b: the route preview's loading and empty bands were a fixed 200pt, which clips AX5 text | **Fixed:** 200pt minimum height | `testFixedFrames` |
+| A28 | Found by 11.10b: error, validation and destructive text used system red. It measures 3.55:1 on a white list row in light mode and 4.09:1 on a dark sheet row. The danger money tone, the booking "Cancelled" kind, overdue amounts and the coach error wash used it too | **Fixed** with `tradeDangerText`. Light is `#b8432b` (RN `lightColors.danger`, the color RN gives error text): 5.42:1 on white, 4.86:1 on grouped gray. Dark is `#eb7d63` (native only): 5.07:1 on `#2c2c2e`, where RN's `#e06a4f` measures 4.21:1. No system red remains in a non-widget view | `testDangerText` (no `.red`/`Color.red` token), contrast rows, palette literals |
+| A29 | Found by 11.10b: success, warning and status colors used as text measure below 4.5:1 on white in light mode. System green is 2.22, orange 2.20, mint 2.12, cyan 2.54, blue 4.02 and purple 4.13, across about 110 uses (Money tones, job status pills, overdue and lead counts, booking kinds). Dark mode passes. RN has the same class of failure: `lightColors.success` 4.20, `warning` 3.21 and most `status*` colors 2.15–3.68 | **Open: owner decision needed.** The fix is darker light-mode text colors that differ from RN's palette, which the brief says to raise rather than decide. It is the same kind of failure as §12 blocking candidate 1, so H1 is not closed | Ratios computed with the suite's WCAG math; recorded in §12.3 |
 
 
 ### 12.2 11.11 iPad layouts, multitasking, rotation and hardware keyboard (2026-09-24)
@@ -1914,6 +1921,49 @@ execution-log entry. They include confirming the measured `contentMargins` behav
 iOS 17 floor, since the probe ran on the iOS 26 runtime.
 
 ---
+
+### 12.3 11.10b accessibility re-audit (2026-09-24)
+
+11.10b re-audited HEAD `7da61a2`, after 11.11 (`e8db202..dc305bd`) and 11.12
+(`c4e040a..7da61a2`). It resolved the §12.1 items handed forward and extended the 11.10a
+scanner. The proof is still `sh native/run-accessibility-audit-tests.sh`.
+
+**Release-blocking findings open: 1 (A29, pending an owner decision). H1 is not closed.**
+Every other §12.1 row is fixed, accepted with a rationale, or a Phase 12 device row
+(A12 and A19).
+
+**Scanner coverage.**
+- The suite pins an inventory of the 59 files that declare SwiftUI UI: `View`,
+  `ViewModifier`, a representable, `App`, `Widget` or `ToolbarContent`.
+- The inventory covers every such file under `N/` and the widget extension's own files
+  in `native/TradeReadyWidgets/`, which the 11.10a scans did not load.
+- A new view file fails the run until it is reviewed and added to the inventory, and so
+  does a file that disappears. The icon-only, shortcut, translucent-white and fixed-frame
+  scans now include the widget target.
+
+**Regressions checked in 11.11 and 11.12.**
+
+| Check | Result |
+|---|---|
+| Do keyboard shortcuts change VoiceOver labels? | No. `.keyboardShortcut` does not touch the accessibility label, and every labelled control keeps its label. |
+| Do the ⌘N "+" buttons have a title for the iPad shortcut HUD (hold ⌘)? | They did not, which was a regression. The four buttons now use `Label(<RN label>, systemImage: "plus")` with `.labelStyle(.iconOnly)`. The scan requires a text title on all 46 shortcut controls. |
+| Does the content column (`nativeContentColumn`, `contentMargins`, `frame(maxWidth:)`) clip at AX5? | No. It limits width only and never height, and the AX stacking rows are unchanged. |
+| Did 11.11 or 11.12 add controls without labels? | No. The icon-only scan finds no unlabelled control. |
+| Did they add animations? | No new animation. The Reduce Motion scan still passes. |
+| Did they add focus changes? | No new `.focusable`, `.focusDisabled` or `@FocusState`. |
+| Where do the 11.11 Money picker label and the 11.12 signposts sit? | The Money picker label sits after the column frame. The 11.12 signposts wrap computed properties only, with no view-tree change. |
+| New contrast pairs? | None from 11.11 or 11.12. The re-audit found A26, A28 and A29 in older code. |
+
+**Native differences recorded.**
+- **Done bar scope.** The keyboard Done bar belongs to the screen in SwiftUI, so it also
+  shows above that screen's text keyboards. RN shows it for pad and multi-line inputs
+  only. It only adds a way to dismiss the keyboard.
+- **Return key.** Single-line fields show "return", not "Done". They behave like RN's
+  "done": editing ends.
+- **Chart summaries.** These are native only.
+- **Dark danger colors.** `tradeDangerFill` `#cc4a30` and `tradeDangerText` `#eb7d63` are
+  native only. RN's dark `#e06a4f` fails under white text and on the sheet list row.
+- **Error text color.** Error text moved from system red to RN's rust.
 
 ## 13. Device matrix (H2–H4; roadmap verification deferral 2026-09-16)
 

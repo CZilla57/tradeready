@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15, 11.10a, 11.11 and 11.12 done (2026-09-24); 11.10b, 11.13 and 11.14 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15, 11.10a, 11.11 and 11.12 done (2026-09-24); 11.10b code complete (2026-09-24), with H1 open on A29 pending an owner decision; 11.13 and 11.14 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -791,7 +791,7 @@ complete / Phase 12 evidence deferred**.
 | 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A15–A18, A22 and A24 to 11.10b; fix round 1 closed I1–I3 and m1–m6; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`) and round 2 (`22f35fd`, review I1: a push acknowledged during a direct-caller pull)**: the pull commit rebases onto the live snapshot and takes the server's version only for records the device has not touched (pending at start or commit, or changed locally), holding a table's cursor where it keeps a local record over a fetched row, with scenarios D–G and table-driven merge cases running by default (229 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
-| 11.10b | H1 | Pending | 11.11, 11.12 | Accessibility re-audit (closes H1) |
+| 11.10b | H1 | Code complete (2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A28 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. **H1 is not closed:** A29 (success, warning and status colors as text, below 4.5:1 in light mode, as in RN) needs an owner decision. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
 | 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
 
@@ -3622,3 +3622,108 @@ queued, and it is generated again under a new id.
 - `sh native/run-doc-reference-check.sh` → `1608 path references checked: 0 missing, 14 planned (not yet created).`
 
 **Next ready:** 11.10b (accessibility re-audit).
+
+### 11.10b — Accessibility re-audit (2026-09-24)
+
+**Status:** Code complete. The re-audit after 11.11 and 11.12 is done, and the §12.1 items
+handed forward are resolved (contract §12.3):
+
+- **Fixed:** A13, A15, A16, A17, A18 and A24.
+- **Accepted with a rationale:** A22, because RN stacks its route move buttons the same way.
+- **Found and fixed:** A25–A28.
+
+**H1 is not closed.** A29 is open. Success, warning and status colors used as text measure
+2.1–4.1:1 in light mode. RN's own palette fails the same way (success 4.20, warning 3.21,
+status colors 2.15–3.68). The fix would move native's light-mode colors away from RN's
+palette, so it needs an owner decision. A12 and A19 stay Phase 12 device rows.
+
+**Regressions checked in 11.11 and 11.12** (contract §12.3 table):
+- **Found:** the four ⌘N "+" buttons had no text title for the iPad shortcut HUD. Fixed:
+  `Label(<RN label>, systemImage: "plus")` with `.labelStyle(.iconOnly)`, and every one of
+  the 46 shortcut controls must have a text title.
+- **Not found:**
+  - label changes from shortcuts;
+  - AX5 clipping from the content column (it limits width only);
+  - new unlabelled controls, animations or focus changes.
+
+**Files:**
+- New: `N/NativeKeyboardDoneBar.swift`. It adds `.nativeKeyboardDoneBar()`, RN
+  `KeyboardDoneBar`: a "Done" button labelled "Dismiss keyboard" above the keyboard,
+  which resigns first responder.
+- Policy: `N/Domain/NativeAccessibilityAudit.swift`.
+  - Palette: `dangerFill*`, `dangerText*`, `systemRed*`.
+  - 15 new contrast rows.
+  - `PhotoThumbnail` clamp.
+  - Chart summary API: `ChartPoint`, `chartSummary`, `spokenMonth`, `changePhrase`.
+  - Labels: `onMyWay`, `chart`, `dismissKeyboard`, plus the catalog entry checked
+    against RN.
+- Palette: `N/Models.swift` gains `tradeDangerFill` and `tradeDangerText`.
+- Tests: `native/AccessibilityAuditTests/main.swift`. New tests:
+  - view inventory, including the widget-target sources;
+  - shortcut titles;
+  - return keys and the keyboard Done bar;
+  - the runner compile check;
+  - chart summaries;
+  - fixed frames;
+  - re-audit sites;
+  - danger text.
+- Runner: `native/run-schedule-booking-settings-tests.sh` compiles the Done bar, because
+  `NativeScheduleSettingsView` uses it.
+- Views, by concern:
+  - **⌘N titles:** `JobsView`, `InvoicesView`, `CustomersView`,
+    `NativeRecurringInvoicesView`.
+  - **Charts:** `NativeMoneyCards`.
+  - **Frames:** `MoneyView`, `SettingsView`, `NativeTodayComponents`,
+    `NativeJobPhotosView`, `NativeRouteView`, `NativeBookingRequestsView`.
+  - **Today card:** `NativeTodayComponents`.
+  - **Danger colors:** 22 files where system red was replaced, including the
+    `NativeTimeTrackingView` clock-out tint.
+  - **Done bar:** 25 screens in 20 files.
+
+**Commands and results (TZ=America/Phoenix):**
+- RED, with the tests written before the view changes:
+  `accessibility-audit tests: 88 of 1103 checks FAILED`. That covers the ⌘N titles,
+  inventory, Done bar, charts, frames, photo error, Today card, map number and A18 tint.
+  - The runner-compile check failed before the runner line was added:
+    `1 of 1131 checks FAILED`.
+  - The A28 scan was written after the replacement. Its RED is the mutation below.
+- GREEN: `accessibility-audit tests: 1131/1131 checks passed`.
+- Mutations, each restored from a copy (`accessibility-audit` unless noted):
+  - system red put back in `NativeAuthView`: 1 failure;
+  - card action removed: 1 failure;
+  - duplicate Done bar: 1 failure;
+  - new unreviewed view file: 1 failure;
+  - new decimal-pad field with no Done bar: 2 failures;
+  - one chart value removed: 1 failure;
+  - ⌘N "+" back to an image label: 4 failures.
+- `layout-metrics tests: 817/817 checks passed`.
+- `ScheduleBookingSettingsTests: all checks passed`.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → `exit=0` (65 PASS lines, backend-workers `fail 0`).
+- Release compile → `** BUILD SUCCEEDED **`.
+- `sh native/run-doc-reference-check.sh` → `1616 path references checked: 0 missing, 14 planned (not yet created).`
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+
+| Row | Step | Pass when |
+|---|---|---|
+| A11B-KB-1 | iPad with a hardware keyboard: hold ⌘ on Jobs, Invoices, Customers, Maintenance plans and Coach | The shortcut HUD lists "Add new job", "Add new invoice", "Add new customer", "Add maintenance plan" and "New chat", not a blank entry |
+| A11B-KB-2 | Done bar: a price, rate or phone field, and a notes field, in the job, invoice, expense, trip and pricebook editors and in Settings → Pricing | "Done" shows above the keyboard, VoiceOver reads "Dismiss keyboard", tapping it dismisses the keyboard, and exactly one Done button shows |
+| A11B-VO-1 | VoiceOver on the Money charts (Last 6 Months, 12-Month Trend, Expense Trends) | One element per chart reads "{title} chart" followed by every month with its figures |
+| A11B-VO-2 | VoiceOver on the Today job card: swipe up or down for actions | "On my way to {name}" is offered and sends the message |
+| A11B-VO-3 | VoiceOver on a job photo whose delete or visibility change failed | The error text is read after "Open job photo" |
+| A11B-DARK-1 | Dark mode: clock out, error text in a sheet form, the Money danger tone, the booking "Cancelled" kind | Rust text and fills are legible, and white text sits on the fill |
+| A11B-AX5-1 | AX5: Today schedule, booking requests, route list and preview, job photos, the Settings avatar and sync badge | The time and kind sit above their rows, nothing clips, and at least one photo fits the row |
+| A11B-TT-1 | Tap the Today card's "On my way" at its edge | It sends "On my way" rather than opening the job |
+
+**Concerns:**
+- A29 is open and blocks closing H1. It needs an owner decision on light-mode success,
+  warning and status text colors that would differ from RN.
+- Visible changes:
+  - Error and destructive text moved from system red to RN's rust.
+  - The Today card's status row is 44pt tall because of the "On my way" target.
+- Device proof stays in Phase 12 (the rows above and the 11.10a rows).
+- Not fixed here, per the brief: the `NativeRecurringInvoicesView` "Cancel plan" /
+  "Delete plan" `actionRule` bug is still flagged for the final review.
+
+**Next ready:** the owner's A29 decision closes H1. After that come 11.13 (qualification)
+and 11.14 (closeout).
