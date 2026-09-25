@@ -415,22 +415,26 @@ private func testPlannerOwnerGate() throws {
     expect(foreignUnknown.actions.isEmpty && foreignUnknown.ownerDroppedCount == 2,
            "an untagged or foreign unknown type is dropped, not retained (it cannot hold the claim)")
 
-    // A foreign malformed entry can never wedge the owner's batch…
+    // A foreign malformed entry can never wedge the owner's batch, and is
+    // never set aside for the owner (it is dropped first)…
     do {
-        _ = try NativeWidgetActionBatchPlanner.prepare(
+        let foreignBad = try NativeWidgetActionBatchPlanner.prepare(
             rawValue: queueJSON([action("", "timer_start", tag: tagA), action("b1", "expense_log", tag: tagB, expenseFields)]),
             verifiedAccountBinding: bindingB
         )
+        expect(foreignBad.actions.map(\.id) == ["b1"] && foreignBad.ownerDroppedCount == 1 && foreignBad.rejected.isEmpty,
+               "a foreign malformed entry is owner-dropped, not set aside")
     } catch { expect(false, "a foreign malformed entry must not fail the owner's batch (\(error))") }
-    // …but the owner's own malformed entry still fails preparation (→ C8).
+    // …and the owner's own invalid entry is reported on the batch, to be set
+    // aside alone (Phase 12 12.00b.2-C, L130; it no longer fails the batch).
     do {
-        _ = try NativeWidgetActionBatchPlanner.prepare(
-            rawValue: queueJSON([action("b1", "timer_start", tag: tagB)]), verifiedAccountBinding: bindingB
+        let ownBad = try NativeWidgetActionBatchPlanner.prepare(
+            rawValue: queueJSON([action("b1", "timer_start", tag: tagB), action("b2", "expense_log", tag: tagB, expenseFields)]),
+            verifiedAccountBinding: bindingB
         )
-        expect(false, "an owner-tagged invalid action still fails preparation")
-    } catch let error as NativeWidgetActionBatchError {
-        expectEqual(error, .invalidAction(index: 0, field: "jobId"), "the owner's invalid action is reported")
-    }
+        expectEqual(ownBad.rejected.map(\.error), [.invalidAction(index: 0, field: "jobId")], "the owner's invalid action is reported")
+        expectEqual(ownBad.actions.map(\.id), ["b2"], "…and the owner's valid action beside it is kept")
+    } catch { expect(false, "an owner-tagged invalid action no longer fails preparation (\(error))") }
 }
 
 // MARK: - 3. The replay gate in AppStore: native-only owner (the §2.5 gap)
@@ -709,13 +713,10 @@ private func testQuarantine() throws {
         NativeWidgetActionClaimTransport(queue: queue, claimDirectory: root.appendingPathComponent("claims"), lockFile: lockFile)
     }
 
+    // Phase 12 12.00b.2-C: only bytes that are not a list are set aside whole.
     let wedges: [(String, String, NativeWidgetActionQuarantineReason)] = [
         ("malformed queue", "{not json", .malformedQueue),
         ("non-array queue", #"{"id":"x"}"#, .malformedQueue),
-        ("duplicate owned ids", queueJSON([action("d", "timer_stop", tag: tagB), action("d", "timer_stop", tag: tagB)]), .duplicateActionID),
-        ("owned invalid action", queueJSON([action("s", "timer_start", tag: tagB)]), .invalidAction),
-        ("owned malformed action", queueJSON([action("", "timer_stop", tag: tagB)]), .malformedAction),
-        ("more than 512 entries", queueJSON((0..<513).map { action("f\($0)", "timer_stop", tag: tagA) }), .tooManyActions),
     ]
     for (label, raw, reason) in wedges {
         let queue = MemoryQueue(raw)
@@ -730,11 +731,66 @@ private func testQuarantine() throws {
                "\(label): the exact bytes are kept in an owner-scoped quarantine file")
         // Not wedged: the owner's next action applies.
         queue.value = queueJSON([action("next-\(label.count)", "timer_start", tag: tagB, ["jobId": "j1"])])
-        guard case .committed(_, 1, 0, 0) = try replay.replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
+        guard case .committed(_, 1, 0, 0, 0) = try replay.replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
             expect(false, "\(label): a later action is no longer blocked"); continue
         }
     }
-    // Bounded retention: at most 4 records per owner, oldest evicted.
+
+    // Phase 12 12.00b.2-C (L130): a bad owned entry is set aside ALONE; the
+    // owner's valid action beside it applies in the same batch, and a foreign
+    // entry is still owner-dropped first (§4.5).
+    let entryCases: [(String, [String: Any], NativeWidgetActionQuarantineReason)] = [
+        ("owned invalid action", action("s", "timer_start", tag: tagB), .invalidAction),
+        ("owned malformed action", action("", "timer_stop", tag: tagB), .malformedAction),
+        ("different entry reusing an applied id", action("ok", "timer_stop", tag: tagB), .duplicateActionID),
+    ]
+    for (label, bad, reason) in entryCases {
+        let ok = action("ok", "timer_start", tag: tagB, ["jobId": "j1"])
+        let queue = MemoryQueue(queueJSON([ok, action("", "timer_stop", tag: tagA), bad]))
+        let replay = coordinator(queue, root, lockFile: lockFile)
+        guard case .committed(let committed, 1, 0, 1, 1) = try replay.replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
+            expect(false, "\(label): the valid action applies and only the bad entry is set aside"); continue
+        }
+        expectEqual(committed.payload.jobs?.first?.timeSessions?.count, 1, "\(label): the valid clock-in is applied")
+        expect(queue.value == nil, "\(label): the batch is acknowledged")
+        let kept = try transport(queue).quarantinedQueues(accountBinding: bindingB)
+        expect(kept.contains { $0.sourceBytes == Data(queueJSON([bad]).utf8) && $0.reason == reason
+                   && $0.entryReasons == [reason] && $0.accountBinding == bindingB },
+               "\(label): only the bad entry's exact bytes are kept, owner-scoped")
+        queue.value = queueJSON([action("later", "timer_stop", tag: tagB, ["jobId": "j1"])])
+        guard case .committed(_, 1, 0, 0, 0) = try replay.replayNext(snapshot: committed, verifiedAccountBinding: bindingB) else {
+            expect(false, "\(label): replay continues"); continue
+        }
+    }
+
+    // An identical re-append of an action is the same action: applied once,
+    // nothing set aside.
+    let identical = MemoryQueue(queueJSON([action("d", "timer_start", tag: tagB, ["jobId": "j1"]),
+                                           action("d", "timer_start", tag: tagB, ["jobId": "j1"])]))
+    let identicalRoot = tempDirectory("quarantine-identical")
+    defer { try? FileManager.default.removeItem(at: identicalRoot) }
+    guard case .committed(let identicalSnapshot, 1, 0, 0, 0) = try coordinator(identical, identicalRoot, lockFile: lockFile)
+        .replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
+        return expect(false, "an identical duplicate applies once and is not set aside")
+    }
+    expectEqual(identicalSnapshot.payload.jobs?.first?.timeSessions?.count, 1, "…one session")
+
+    // More than 512 entries (here all foreign): claimed a 512-entry prefix at
+    // a time, nothing set aside, nothing lost.
+    let many = MemoryQueue(queueJSON((0..<513).map { action("f\($0)", "timer_stop", tag: tagA) }))
+    let manyRoot = tempDirectory("quarantine-many")
+    defer { try? FileManager.default.removeItem(at: manyRoot) }
+    let manyReplay = coordinator(many, manyRoot, lockFile: lockFile)
+    guard case .committed(_, 0, 0, 512, 0) = try manyReplay.replayNext(snapshot: base, verifiedAccountBinding: bindingB),
+          case .committed(_, 0, 0, 1, 0) = try manyReplay.replayNext(snapshot: base, verifiedAccountBinding: bindingB),
+          case .nothingPending = try manyReplay.replayNext(snapshot: base, verifiedAccountBinding: bindingB)
+    else { return expect(false, "a 513-entry queue replays as 512 then 1, never quarantined") }
+    let manyKept = try NativeWidgetActionClaimTransport(queue: many, claimDirectory: manyRoot.appendingPathComponent("claims"), lockFile: lockFile)
+        .quarantinedQueues(accountBinding: bindingB)
+    expect(manyKept.isEmpty, "…and no quarantine file is written")
+
+    // Bounded retention: at most 4 records per owner, oldest evicted (2 whole
+    // queues and 3 set-aside entries were recorded above).
     expectEqual(try transport(MemoryQueue()).quarantinedQueues(accountBinding: bindingB).count,
                 NativeWidgetActionClaimTransport.maximumQuarantineFilesPerOwner, "quarantine retention is bounded per owner")
 
@@ -753,7 +809,7 @@ private func testQuarantine() throws {
     let mixed = MemoryQueue(queueJSON([action("", "timer_start", tag: tagA), 7, action("ok", "timer_start", tag: tagB, ["jobId": "j1"])]))
     let mixedRoot = tempDirectory("quarantine-mixed")
     defer { try? FileManager.default.removeItem(at: mixedRoot) }
-    guard case .committed(_, 1, 0, 2) = try coordinator(mixed, mixedRoot, lockFile: lockFile)
+    guard case .committed(_, 1, 0, 2, 0) = try coordinator(mixed, mixedRoot, lockFile: lockFile)
         .replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
         return expect(false, "foreign junk is dropped and the owner's action applies")
     }
@@ -764,7 +820,7 @@ private func testQuarantine() throws {
     racing.scriptedFirstRead = "{broken"
     let racingRoot = tempDirectory("quarantine-race")
     defer { try? FileManager.default.removeItem(at: racingRoot) }
-    guard case .committed(_, 1, 0, 0) = try coordinator(racing, racingRoot, lockFile: lockFile)
+    guard case .committed(_, 1, 0, 0, 0) = try coordinator(racing, racingRoot, lockFile: lockFile)
         .replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
         return expect(false, "a queue that became valid is claimed, not quarantined")
     }
@@ -773,6 +829,9 @@ private func testQuarantine() throws {
     expect(racingKept.isEmpty, "…and no quarantine file is written")
 
     // A corrupt claim WAL is claim corruption, never a queue to quarantine.
+    // Phase 12 12.00b.2-C (L131): the claim file itself is set aside (exact
+    // bytes kept) instead of being retried forever, and the queue behind it
+    // is untouched and replays next.
     let corruptRoot = tempDirectory("quarantine-corrupt-claim")
     defer { try? FileManager.default.removeItem(at: corruptRoot) }
     let pending = queueJSON([action("c1", "timer_stop", tag: tagB)])
@@ -783,13 +842,35 @@ private func testQuarantine() throws {
     _ = try corruptTransport.claim(verifiedAccountBinding: bindingB)
     let claimFile = try FileManager.default.contentsOfDirectory(at: corruptRoot.appendingPathComponent("claims"), includingPropertiesForKeys: nil).first!
     try Data("corrupt".utf8).write(to: claimFile)
-    corruptQueue.value = queueJSON([action("c2", "timer_stop", tag: tagB)])
-    do {
-        _ = try coordinator(corruptQueue, corruptRoot, lockFile: lockFile).replayNext(snapshot: base, verifiedAccountBinding: bindingB)
-        expect(false, "a corrupt claim fails closed")
-    } catch NativeWidgetActionClaimError.invalidClaim {
-        expect(corruptQueue.value != nil, "…and the shared queue is left untouched (not quarantined)")
+    let pendingNext = queueJSON([action("c2", "timer_start", tag: tagB, ["jobId": "j1"])])
+    corruptQueue.value = pendingNext
+    let corruptReplay = coordinator(corruptQueue, corruptRoot, lockFile: lockFile)
+    guard case .quarantined(.invalidClaim) = try corruptReplay.replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
+        return expect(false, "a corrupt claim is set aside instead of retried forever")
     }
+    expect(corruptQueue.value == pendingNext, "…and the shared queue is left untouched (not quarantined)")
+    let corruptKept = try corruptTransport.quarantinedQueues(accountBinding: bindingB)
+    expect(corruptKept.count == 1 && corruptKept.first?.reason == .invalidClaim
+           && corruptKept.first?.sourceBytes == Data("corrupt".utf8), "…with the claim file's exact bytes kept")
+    let corruptFiles = try FileManager.default.contentsOfDirectory(atPath: corruptRoot.appendingPathComponent("claims").path)
+    expect(corruptFiles.allSatisfy { !$0.hasPrefix("claim-") }, "…and the claim file removed")
+    guard case .committed(_, 1, 0, 0, 0) = try corruptReplay.replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
+        return expect(false, "the owner's replay continues after the claim is set aside")
+    }
+    // Owner gating is unchanged: another owner's claim is discarded unread,
+    // never set aside for (or applied to) B.
+    let foreignClaimRoot = tempDirectory("quarantine-foreign-claim")
+    defer { try? FileManager.default.removeItem(at: foreignClaimRoot) }
+    let foreignClaimQueue = MemoryQueue(queueJSON([action("a1", "timer_start", tag: tagA, ["jobId": "j1"])]))
+    _ = try NativeWidgetActionClaimTransport(
+        queue: foreignClaimQueue, claimDirectory: foreignClaimRoot.appendingPathComponent("claims"), lockFile: lockFile
+    ).claim(verifiedAccountBinding: bindingA)
+    guard case .nothingPending = try coordinator(foreignClaimQueue, foreignClaimRoot, lockFile: lockFile)
+        .replayNext(snapshot: base, verifiedAccountBinding: bindingB) else {
+        return expect(false, "A's claim is not replayed for B")
+    }
+    expect(((try? FileManager.default.contentsOfDirectory(atPath: foreignClaimRoot.appendingPathComponent("claims").path)) ?? [])
+        .isEmpty, "…and it is discarded, not quarantined for B")
 }
 
 @MainActor
@@ -800,24 +881,90 @@ private func testQuarantineInAppStore() async throws {
     try workspace.bind(bindingB)
     let store = makeStore(workspace, suite: suite, installMirror: false)
     store.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
-    suite.defaults.set(queueJSON([action("d", "timer_stop", tag: tagB), action("d", "timer_stop", tag: tagB)]),
+    // Phase 12 12.00b.2-C (L130): one bad entry beside a valid one. The
+    // valid expense applies; only the bad entry is set aside and counted.
+    suite.defaults.set(queueJSON([action("e1", "expense_log", tag: tagB, expenseFields),
+                                  action("d", "timer_start", tag: tagB)]),
                        forKey: WidgetAppGroup.actionsKey)
     store.testReplayWidgetActions()
-    expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.quarantinedMessage, "a bounded message is surfaced")
+    expectEqual(try workspace.load()?.payload.expenses?.map(\.id), ["e_siri_e1"], "the valid action beside the bad one applies")
+    expectEqual(store.migrationMessage, "1 widget or Siri action couldn't be applied and was set aside.",
+                "an accurate, bounded message is surfaced")
+    expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.setAsideMessage(actionCount: 1), "…from the coordinator")
     expect(store.migrationMessage?.contains("\"d\"") == false && store.migrationMessage?.contains(tagB) == false,
            "the message carries no id or owner value")
-    expectEqual(store.widgetActionReplayDiagnostics.quarantinedQueueCount, 1, "the quarantine is counted")
-    expect(suite.queue == nil, "the wedged queue left the shared suite")
+    expectEqual(store.widgetActionReplayDiagnostics.setAsideActionCount, 1, "the set-aside entry is counted")
+    expectEqual(store.widgetActionReplayDiagnostics.quarantinedQueueCount, 0, "no whole queue was set aside")
+    expect(suite.queue == nil, "the batch left the shared suite")
     expectEqual(workspace.claimFiles().filter { $0.hasPrefix("quarantine-\(bindingB)-") }.count, 1,
                 "one owner-scoped quarantine file")
+
+    // A clean pass shows no message.
+    store.migrationMessage = nil
+    suite.defaults.set(queueJSON([action("e2", "expense_log", tag: tagB, expenseFields)]), forKey: WidgetAppGroup.actionsKey)
+    store.testReplayWidgetActions()
+    expect(store.migrationMessage == nil, "nothing set aside → no message")
+    expectEqual(try workspace.load()?.payload.expenses?.count, 2, "…and the action applied")
+
+    // Two bad entries in one pass, across two claims (a 520-entry queue is
+    // claimed as 512 + 8): the message counts both.
+    var long = (0..<520).map { action("L\($0)", "expense_log", tag: tagB, expenseFields) }
+    long[3] = action("L3", "expense_log", tag: tagB, ["date": "2026-08-03", "amount": -1])
+    long[515] = action("L515", "trip_log", tag: tagB, ["date": "2026-02-30", "odometerStart": 1, "odometerEnd": 2])
+    suite.defaults.set(queueJSON(long), forKey: WidgetAppGroup.actionsKey)
+    store.testReplayWidgetActions()
+    expectEqual(store.migrationMessage, "2 widget or Siri actions couldn't be applied and were set aside.",
+                "the pass counts every set-aside entry")
+    expectEqual(try workspace.load()?.payload.expenses?.count, 2 + 518, "every valid entry of both claims applied once")
+    expectEqual(store.widgetActionReplayDiagnostics.setAsideActionCount, 3, "set-aside entries accumulate")
+    expect(suite.queue == nil, "the whole queue was replayed")
+
+    // A whole queue that is not a list still quarantines, with the C8 message.
+    suite.defaults.set("{not json", forKey: WidgetAppGroup.actionsKey)
+    store.testReplayWidgetActions()
+    expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.quarantinedMessage, "an unreadable queue keeps the C8 message")
+    expectEqual(store.widgetActionReplayDiagnostics.quarantinedQueueCount, 1, "the quarantine is counted")
+    expect(suite.queue == nil, "the wedged queue left the shared suite")
+
+    // L131: a corrupt claim is set aside and the SAME pass replays the queue
+    // behind it.
+    try FileManager.default.createDirectory(at: workspace.claims, withIntermediateDirectories: true)
+    try Data("corrupt".utf8).write(
+        to: workspace.claims.appendingPathComponent("claim-\(bindingB)-\(String(repeating: "0", count: 64)).json")
+    )
+    suite.defaults.set(queueJSON([action("e3", "expense_log", tag: tagB, expenseFields)]), forKey: WidgetAppGroup.actionsKey)
+    store.migrationMessage = nil
+    store.testReplayWidgetActions()
+    expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.quarantinedMessage(for: .invalidClaim),
+                "a set-aside claim is reported")
+    expectEqual(store.widgetActionReplayDiagnostics.quarantinedClaimCount, 1, "the claim quarantine is counted apart")
+    expect(!workspace.claimFiles().contains { $0.hasPrefix("claim-") }, "the corrupt claim is gone")
+    expectEqual(try workspace.load()?.payload.expenses?.contains { $0.id == "e_siri_e3" }, true,
+                "the queue behind the bad claim replays in the same pass (not wedged)")
     // Not wedged: the next Siri action replays on the next activation.
     try suite.defaults.set(WidgetSnapshot(updatedAt: iso(Date()), nextJob: nil, timer: nil, outstandingTotal: 0, ownerTag: tagB)
         .encodedJSON(), forKey: WidgetAppGroup.snapshotKey)
+    let expensesBefore = try workspace.load()?.payload.expenses?.count ?? 0
     guard case .logged = suite.engine().logExpense(amount: 7, category: .fuel, description: nil) else {
         return expect(false, "B logs an expense after the quarantine")
     }
     store.testReplayWidgetActions()
-    expectEqual(try workspace.load()?.payload.expenses?.count, 1, "the later action applies (the queue is no longer wedged)")
+    expectEqual(try workspace.load()?.payload.expenses?.count, expensesBefore + 1,
+                "the later action applies (the queue is no longer wedged)")
+    // R21 (Task 6 review M3): behind a busy lock the transport logs its busy
+    // line and replay keeps its existing behavior: nothing is claimed or set
+    // aside, the queue stays, and the message says it is still queued.
+    let busyQueue = queueJSON([action("busy-1", "expense_log", tag: tagB, expenseFields)])
+    suite.defaults.set(busyQueue, forKey: WidgetAppGroup.actionsKey)
+    let holder = LockHolder(at: suite.lockFile, releaseAfter: 2)
+    store.testReplayWidgetActions()
+    expectEqual(store.migrationMessage, "Widget actions are still safely queued and will be retried.",
+                "a busy lock keeps the retry message")
+    expectEqual(suite.queue, busyQueue, "…and the queue is untouched")
+    holder.release()
+    store.testReplayWidgetActions()
+    expect(suite.queue == nil, "…and the next pass claims it")
+    expectEqual(try workspace.load()?.payload.expenses?.contains { $0.id == "e_siri_busy-1" }, true, "…and applies it")
     // Sign-out removes the quarantine with the claims (it is B's data).
     try await store.signOut(revokeRemote: false)
     expect(workspace.claimFiles().isEmpty, "sign-out removes the quarantine files")
@@ -1102,7 +1249,9 @@ private func testUseAnotherAccountScrubsWidgetState() async throws {
     expectEqual(store.refreshWidgetMirror(force: true), .skippedNoOwner, "no owner after the switch → nothing re-written")
     expectEqual(store.widgetActionReplayDiagnostics.accountSwitchScrubFailureCount, 0, "the wipe succeeded")
     expect(store.widgetActionReplayDiagnostics.ownerDroppedActionCount == 0
-           && store.widgetActionReplayDiagnostics.quarantinedQueueCount == 0, "per-owner diagnostics are reset")
+           && store.widgetActionReplayDiagnostics.quarantinedQueueCount == 0
+           && store.widgetActionReplayDiagnostics.setAsideActionCount == 0
+           && store.widgetActionReplayDiagnostics.quarantinedClaimCount == 0, "per-owner diagnostics are reset")
     let local = try workspace.load()
     expectEqual(local?.payload.jobs?.first?.customerName, "Alice (A)",
                 "the local workspace is retained (only the widget/Siri surface is an account boundary here)")
@@ -1502,6 +1651,18 @@ private func testOneLock() {
     expect(!replay.contains("flock("), "the claim transport has no flock of its own")
     expect(!replay.contains("static let lockFileName"), "the claim transport has no lock file name of its own")
     expect(replay.contains("WidgetAppGroupLock.withExclusiveLock"), "the claim transport takes the one shared lock")
+    // Phase 12 12.00b.2-C (Task 6 review M3, R21): the transport logs one
+    // payload-free busy line (a fixed literal) and still fails as lockFailed.
+    // The host suites have no stdout seam, so this is a source check.
+    expectEqual(replay.components(separatedBy: "catch WidgetAppGroupLockError.busy {").count - 1, 1,
+                "the claim transport catches busy once (withLock)")
+    expectEqual(replay.components(separatedBy: #"print("TradeReadyWidgetLock stage=busy site=replay")"#).count - 1, 1,
+                "…and logs one fixed replay line")
+    expect(replay.contains("""
+            } catch WidgetAppGroupLockError.busy {
+                print("TradeReadyWidgetLock stage=busy site=replay")
+                throw NativeWidgetActionClaimError.lockFailed
+    """), "…then fails as lockFailed, as before")
     let appStore = source("AppStore.swift")
     expectEqual(appStore.components(separatedBy: "appGroupAccountScrubber.scrub()").count - 1, 1,
                 "the App Group wipe is called from exactly one place (scrubWidgetAccountState)")

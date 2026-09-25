@@ -175,12 +175,17 @@ private struct Harness {
     }
 }
 
-/// Runs the REAL planner over the stored queue text.
+/// Runs the REAL planner over the stored queue text. Phase 12 12.00b.2-C
+/// (L130): a bad entry no longer fails the batch; it is reported in
+/// `rejected` and set aside alone. The first one is this helper's failure,
+/// so "the planner rejects X" still means X would never be applied.
 private func plan(_ raw: String?) -> Result<NativeWidgetActionBatch, NativeWidgetActionBatchError> {
     do {
-        return .success(try NativeWidgetActionBatchPlanner.prepare(
+        let batch = try NativeWidgetActionBatchPlanner.prepare(
             rawValue: raw ?? "[]", verifiedAccountBinding: ownerBinding
-        ))
+        )
+        if let first = batch.rejected.first { return .failure(first.error) }
+        return .success(batch)
     } catch let error as NativeWidgetActionBatchError {
         return .failure(error)
     } catch {
@@ -358,7 +363,7 @@ private func testWriterRules() {
     expectEqual(SiriIntentDialogs.clockOut(.failed(.queueFull)),
                 "TradeReady has too many pending actions \u{2014} open the app to sync.", "the §4.3 cap dialog")
     expectEqual(plan(before512.map { String($0.dropLast()) + "," + taggedEntry(999) + "]" }).failureValue,
-                .tooManyActions, "why: the planner rejects the whole 513-entry batch")
+                .tooManyActions, "why: one planner batch never holds 513 entries (replay claims a 512-entry prefix at a time)")
 
     // An oversized foreign queue is refused too.
     let q600 = "[" + (0..<600).map(taggedEntry).joined(separator: ",") + "]"

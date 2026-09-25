@@ -53,7 +53,7 @@ characterization).
 | C5 | Seam observer input | Add a `(canonical, output, expectedOwnerBinding)` register overload. The current observer receives only `NativeBusinessSnapshot` (§3.2) | chosen; Own-list addition for 11.01 | 11.01 |
 | C6 | Action queue | Four types, fixed JSON shapes, `flock` protocol, 512 cap, duplicate-id handling, never overwrite a malformed queue (§4) | chosen | 11.04 |
 | C7 | Owner stamping | `ownerTag` (hash of the §2.5 binding) goes on the snapshot, on each queued action, on `activeTrip` and on the `pendingOpenUrl` stash. Extensions refuse to write when no snapshot is present. Replay drops actions whose owner is missing or mismatched (§4.5) | chosen | 11.01, 11.04, 11.05 |
-| C8 | Malformed or duplicate queue wedge | Native replay retries forever on `malformedQueue`/`duplicateActionID` (§4.6) | **resolved** by 11.05: existing native behavior, recorded (§4.6). Phase 12 12.00b.2 changes the whole-batch quarantine (plan §7 L130); §4.6 is amended by that task | 11.05 |
+| C8 | Malformed or duplicate queue wedge | Native replay retries forever on `malformedQueue`/`duplicateActionID` (§4.6) | **resolved** by 11.05: existing native behavior, recorded (§4.6). **Amended by Phase 12 12.00b.2-C (2026-09-25; charter L130, L131):** only the bad entries of a list are set aside and the rest apply; a queue over 512 entries is claimed 512 at a time; only bytes that are not a list are set aside whole; an unusable claim file is set aside so replay continues (§4.3, §4.6) | 11.05, 12.00b.2-C |
 | C9 | Intents | Ten intents, a single 17.0 floor, target membership per ruling P3 (§5) | chosen | 11.04 (types), 11.01 (membership) |
 | C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen; implemented by 11.06 with the native differences in §6.3 | 11.06 |
 | C11 | Notification `est_` archived dead tap (P8) | An archived `estimate_sent` job's delivered `est_` notification **opens** its editable follow-up review; only a missing job, an answered estimate or a non-exact/signed-out workspace fail closed (§6.3) | **resolved** by 11.06 (2026-09-24) | 11.06 |
@@ -414,9 +414,10 @@ it claims a prefix.
     not extend the window and a success does not close it. Off-main acquires never use
     it.
   - Each main-thread busy site logs one fixed, payload-free line:
-    `TradeReadyWidgetLock stage=busy site=mirror|intent|stash|scrub`. The mirror also
-    reports `widget-lock/busy` (§3.1). The claim transport's busy line is deferred to
-    Tasks 12.00b.2-C and -D, which own `N/NativeWidgetActionReplay.swift`.
+    `TradeReadyWidgetLock stage=busy site=mirror|intent|stash|scrub|replay`. The mirror
+    also reports `widget-lock/busy` (§3.1). The claim transport's line (`site=replay`,
+    from its `withLock` for claim, acknowledge and both quarantines) was added by
+    12.00b.2-C (2026-09-25).
   - A busy intent (`WidgetIntentFailure.busy`) writes nothing and reports failure with
     its existing failure dialog: "TradeReady couldn't save that" for the shared writer
     refusal, the trip intents' own failure lines, and "I couldn't open that. Open
@@ -449,6 +450,17 @@ must, inside the lock:
 - **Validate before append:** the new action must pass the same field rules the planner
   enforces (§4.1).
 - Never write canonical data from an extension.
+
+**Amended by Phase 12 12.00b.2-C (2026-09-25; charter L130).** The planner no longer
+rejects whole batches. `prepare` throws only for bytes that are not a JSON list
+(`malformedQueue`), an invalid binding, or more than 512 entries (`tooManyActions`,
+which the transport never passes: it claims a 512-entry prefix, §4.6). A bad owned
+entry (`malformedAction`, `invalidAction`, or a different entry reusing an accepted id,
+`duplicateActionID`) is listed in the batch's `rejected` entries and set aside alone;
+every other entry applies. An entry that exactly repeats an accepted one (same
+sorted-key digest) is skipped: it is the idempotent re-append this section allows.
+The writer rules above are unchanged and still required: they keep bad entries out of
+the queue, so nothing needs to be set aside, and the cap still bounds the queue.
 
 ### 4.4 `activeTrip` private session
 
@@ -556,6 +568,88 @@ the lock, then its bytes (digest and size only above 1 MiB) are written to an
 owner-scoped `quarantine-<binding>-<digest>.json` next to the claims (at most 4 per
 owner) before the shared queue is cleared. The app shows "Some widget or Siri actions
 couldn't be read and were set aside." and later actions replay. Details: plan §7, 11.05.
+
+**Amended by Phase 12 12.00b.2-C (2026-09-25; charter L130, L131).** Only what cannot
+be applied is set aside; everything else replays. Sources: `NativeWidgetActionBatchPlanner`,
+`NativeWidgetActionClaimTransport` and `NativeWidgetActionReplayCoordinator` in
+`N/NativeWidgetActionReplay.swift`; the replay loop in `N/AppStore.swift`
+(`replayVerifiedWidgetActionsIfPossible`).
+
+- **What RN does (the spec).** RN `parsePendingActions` (`utils/widgetActions.ts:62-76`)
+  reads `null`, `""`, malformed JSON and a non-array as `[]`, and filters out entries
+  that are not objects or lack a string `id`, `type` or `at`. The timer guards
+  (`:101-120`), `tripFromAction` (`:136-151`) and `expenseFromAction` (`:186-202`) drop
+  a bad action and dedupe on `t_siri_<id>` / `e_siri_<id>`. `replayWidgetActions`
+  removes the key before parsing (`:247-253`), so a bad entry, or a whole unparseable
+  queue, is lost. There is no cap. RN tests: `__tests__/widgetActions.test.js:70-100`
+  ("drops entries missing id, type, or at; keeps valid ones") and `:484-495`. Native
+  matches RN on the valid entries (they apply) and differs only in keeping the bad
+  bytes instead of losing them.
+- **A list with bad entries.** The owner check still runs first (§4.5): an untagged,
+  foreign or non-object entry is owner-dropped and never set aside for this owner.
+  Each owned entry is then checked alone. A bad one is left out of the batch and every
+  valid one applies, in order. When the claim is acknowledged, the bad entries are
+  written, in the same lock hold and verified BEFORE the claim file is removed, to one
+  `quarantine-<binding>-<digest>.json` record: `sourceBytes` is a JSON list of those
+  entries with their exact bytes from the claim, `reason` is the first entry's reason
+  and `entryReasons` lists one per entry (`malformedAction`, `invalidAction`,
+  `duplicateActionID`). The digest names the set-aside bytes.
+- **Duplicate ids.** The first valid entry of an id applies. A later entry that is
+  exactly the same action (same sorted-key digest) is skipped, not set aside: it is the
+  writer's idempotent re-append (§4.3), and the idempotency markers would ignore it
+  anyway. A later entry that differs is set aside: it can never apply under that id,
+  and keeping its bytes loses nothing. An entry that is itself set aside does not take
+  its id.
+- **More than 512 entries.** A claim takes the first 512 entries, each with its exact
+  bytes (`NativeWidgetActionBatchPlanner.claimablePrefix`). Removing the claimed prefix
+  leaves the rest in the shared queue, in order and with their exact bytes (canonical
+  sorted-key JSON only if the bytes cannot be split and verified). The next claim, in
+  the same pass or the next activation, takes the next prefix. Nothing is set aside
+  for size, so `tooManyActions` is no longer written; it stays decodable for 11.x
+  records.
+- **Bytes that are not a JSON list.** Unchanged: the whole queue is set aside
+  (`malformedQueue`) with its exact bytes, as resolved by 11.05.
+- **Claim files (L131).** A claim file that fails validation (it does not decode, its
+  schema, owner, digest or file name do not match, or its bytes are not a list) is set
+  aside as `invalidClaim`, keeping the file's exact bytes. Two or more valid claims for
+  one owner are all set aside as `conflictingClaims`. The protocol never makes two
+  (one writer under the §4.2 lock, and a claim is returned before another is taken),
+  so a pair comes from outside it: a restore, a copy or a version skew. Nothing orders
+  them and either may already be applied, so applying one or both could reorder timers
+  or repeat an action. Setting both aside applies nothing twice and loses nothing. An
+  invalid claim beside one valid claim: only the invalid one is set aside, and the
+  valid one then replays. A claim file that cannot be read is left in place and the
+  pass fails as before ("still safely queued"): its bytes could not be kept, and the
+  read may succeed later (data protection). Each record is verified before its claim
+  file is removed. Another owner's claim is still discarded unread (§4.5). The pass
+  continues with the next claim.
+- **At most once.** A valid action is applied only from a claim, and the claim file is
+  removed only after the canonical save, the outbound enqueue and the set-aside record
+  (all verified). A crash before removal leaves the claim; the retry applies the same
+  bytes again, and the idempotency markers and deterministic ids make every valid
+  action a no-op, while the record is rewritten under the same name. A record that
+  already exists under that name with other bytes is replaced (the name is the digest
+  of the set-aside bytes, so those bytes are the same). A set-aside claim is never
+  applied. A long queue is claimed in disjoint prefixes, and the prefix is removed from
+  the queue by value, so no entry is claimed twice.
+- **Bounds.** The per-owner limit of 4 records (oldest evicted) and the 1 MiB byte
+  limit apply to every record: whole queue, set-aside entries and claim files.
+- **Message and diagnostics.** A message appears only when something was set aside.
+  Entries set aside while their batch applied: "1 widget or Siri action couldn't be
+  applied and was set aside." or "N widget or Siri actions couldn't be applied and were
+  set aside.", counting the whole pass. A whole queue or an invalid claim keeps "Some
+  widget or Siri actions couldn't be read and were set aside."; conflicting claims show
+  "Some widget or Siri actions couldn't be applied and were set aside." These take
+  precedence within a pass. Counts only, reset at an account boundary:
+  `setAsideActionCount`, `quarantinedQueueCount`, `quarantinedClaimCount`.
+- **Not changed.** Owner gating (§4.5, the replay binding), the idempotency markers,
+  the 8-claim bound per activation, and the retention of unsupported future types (a
+  claim holding one is kept whole, its set-aside entries included, until a compatible
+  update).
+- Evidence: `native/WidgetActionReplayTests/main.swift` (`testPartialQuarantine`,
+  `testClaimQuarantine`), `native/WidgetOwnerGatingTests/main.swift` (`testQuarantine`,
+  `testQuarantineInAppStore`, `testOneLock`), Q2 in
+  `native/Phase11QualificationTests/main.swift`.
 
 ---
 
@@ -2166,7 +2260,7 @@ disappears.
 | Area | Added by 11.13 (cross-client) | Suites cited (all run with `TZ=America/Phoenix`) | Result | Gaps and owners |
 |---|---|---|---|---|
 | Q1 Widget snapshot parity (§2) | RN `BridgeSnapshot` and `SiriSnapshot` decode F1–F5. F6 is rejected by RN's widget and by native, and Siri degrades it to "no address". Three native projections (empty; next job + timer; no start time + empty address), stored by the real `NativeWidgetMirror`, decode with both RN decoders field for field. The native stored fields equal RN's 15 plus `ownerTag: String?` only. The verbatim copy in `WidgetSnapshotTests` is checked against the working tree | `run-widget-snapshot`, `run-next-job-widget`, `run-job-timer-widget`, `run-widget-owner-gating` | All pass | None |
-| Q2 Action batch replay (§4) | The pure-function vectors of `__tests__/widgetActions.test.js` run through the real planner and replayer: `parsePendingActions`, timer start/stop/pair, done statuses, the stop fallback, trip and expense records, dedupe, the category list parsed from `utils/moneyUtils.ts`, and the description fallback. A retry of the same claim is included. The `replayWidgetActions` vectors run through the real claim transport and coordinator: an empty queue, a timer, trip, expense or mixed batch, and a malformed queue. **Fix round 1:** the `null` and `""` vectors were missing and are now added; `""` changed to match RN (§4.6). A completeness guard parses every RN `test(`/`test.each(` title and table size and pins each to the checks that transcribe it, so a new RN vector fails the suite | `run-widget-action-replay`, `run-app-intent-queue` (native writer → replay → AppStore), `run-widget-owner-gating` | All pass | None. Recorded differences, asserted per vector: RN drops only an invalid action, while native rejects the whole batch (§4.3); malformed or non-array JSON is quarantined (C8). `NaN`/`Infinity` cannot be written as JSON, so they surface as `malformedQueue`. The two "never throws" RN vectors are cited (`run-widget-action-replay`, `run-widget-snapshot`) |
+| Q2 Action batch replay (§4) | The pure-function vectors of `__tests__/widgetActions.test.js` run through the real planner and replayer: `parsePendingActions`, timer start/stop/pair, done statuses, the stop fallback, trip and expense records, dedupe, the category list parsed from `utils/moneyUtils.ts`, and the description fallback. A retry of the same claim is included. The `replayWidgetActions` vectors run through the real claim transport and coordinator: an empty queue, a timer, trip, expense or mixed batch, and a malformed queue. **Fix round 1:** the `null` and `""` vectors were missing and are now added; `""` changed to match RN (§4.6). A completeness guard parses every RN `test(`/`test.each(` title and table size and pins each to the checks that transcribe it, so a new RN vector fails the suite | `run-widget-action-replay`, `run-app-intent-queue` (native writer → replay → AppStore), `run-widget-owner-gating` | All pass | None. Recorded differences, asserted per vector: RN drops only an invalid action, while native rejects the whole batch (§4.3; superseded by 12.00b.2-C, 2026-09-25: native now sets aside only that entry, bytes kept, §4.6); malformed or non-array JSON is quarantined (C8). `NaN`/`Infinity` cannot be written as JSON, so they surface as `malformedQueue`. The two "never throws" RN vectors are cited (`run-widget-action-replay`, `run-widget-snapshot`) |
 | Q3 Deep-link matrices (§6) | Every `__tests__/deepLinks.test.js` vector with a Swift form, job and on-my-way, runs through `NativeDeepLinkParser.parse` and `parsePendingOpenURL` (the freshness window and 10 malformed stashes). The RN `null`/`undefined` rows have no Swift form, because both functions take a `String`; the completeness guard records them. The same guard pins every RN vector | `run-deep-link-routing` (auth, owner and record gates), `run-app-group-pending-open-url` | All pass | None. For `otherapp://evil`, RN returns the raw URL and its parser then rejects it; native rejects it at one boundary. The end result is the same (§6.3) |
 | Q4 Event catalog vs call sites (§9.5, §9.7) | RN `track(` sites (70 sites across `App.tsx`, `screens`, `components`, `hooks`, `utils` and `context`, a literal or a two-literal ternary, anything else fails) must equal the 52-event catalog. Every catalog event has a typed constructor. A call graph over `N/` counts an `AppStore` emission as live only if its enclosing function is reachable from a root: a reference in another `N/` file, or one outside every `func` body. Gate-policy events count through `output.events.forEach(emitAnalytics)`. 49/52 are live, and the unwired set must equal the exclusion list exactly | `run-analytics-event`, `run-analytics-transport` | All pass | Three named exclusions; see §17.2, G1 and G2 |
 | Q5 Redaction denylist (§10.1) | RN `SECURE_FIELDS`, parsed from `utils/storage/keys.ts`, is `secureKey` to analytics and denied by the crash redactor. The §10.1 deny keys are parsed from the table (33 keys). Each is dropped by `redactDictionary`, reduced to allow-listed extras by `redactExtras`, and stripped from a catalog event by the analytics policy. Five credential prefixes are scrubbed from text. **Fix round 1:** `NativeSensitiveData` now recognises Square access tokens (`EAAA`, `sq0atp-`, `sq0atb-`) and application secrets (`sq0csp-`, `sq0csb-`). Q5 proves that `containsSecret`, `redactString` and the analytics policy stop them, and that every link `isSquarePaymentLink` accepts stays a non-secret and still configures Square. No widget-snapshot key is secure-shaped, and a secret planted in job notes never reaches the snapshot | `run-error-redaction` (Square cases added), `run-analytics-transport`, `run-ai-provider-key`, `run-store-integration` (fix round 2) | All pass | None. **Fix round 2** fixed G4 and G5 (§17.2): Settings refuses a Square value that is not a payment link, and RN `scrubLegacySquareToken` is ported to sign-in and every synced-settings commit |

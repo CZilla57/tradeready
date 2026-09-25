@@ -40,6 +40,17 @@ struct NativeWidgetActionBatch: Equatable {
     /// an object, so it carries no owner at all). They are acknowledged with
     /// the claim and never applied. A count only: no ids, no payload.
     var ownerDroppedCount: Int = 0
+    /// Phase 12 12.00b.2-C (L130): owner-matched entries this batch cannot
+    /// apply (malformed, invalid, or a different entry reusing an applied id),
+    /// in queue order. They never block the valid actions: the transport sets
+    /// them aside, exact bytes kept, when it acknowledges the claim (§4.6).
+    var rejected: [Rejected] = []
+
+    struct Rejected: Equatable {
+        let index: Int
+        let error: NativeWidgetActionBatchError
+        let value: Canonical.JSONValue
+    }
 }
 
 /// Strict, loss-preserving preparation boundary for the untrusted App Group
@@ -73,6 +84,8 @@ enum NativeWidgetActionBatchPlanner {
         } catch {
             throw NativeWidgetActionBatchError.malformedQueue
         }
+        // The transport only ever prepares a `claimablePrefix`, so this is a
+        // guard on the batch size, never a reason to set a queue aside.
         guard values.count <= NativeWidgetActionBatch.maximumActionCount else {
             throw NativeWidgetActionBatchError.tooManyActions
         }
@@ -83,8 +96,16 @@ enum NativeWidgetActionBatchPlanner {
         // neither be applied to this owner nor wedge this owner's batch.
         // `NativeWidgetOwnerTag.matches` is the one tag comparison (a hash of
         // ~90 bytes per entry; at most 512 entries per batch).
-        var identifiers = Set<String>()
+        //
+        // Phase 12 12.00b.2-C (L130, §4.3): a bad owned entry is recorded in
+        // `rejected` and skipped; every other entry still applies. Ids are
+        // taken by accepted actions only. A later entry with an accepted id is
+        // skipped when it is the same action (same canonical digest: the
+        // writer's idempotent re-append, which the first entry applies) and
+        // set aside when it differs (it can never apply under that id).
+        var acceptedDigests: [String: String] = [:]
         var actions: [NativeWidgetActionBatch.Action] = []
+        var rejected: [NativeWidgetActionBatch.Rejected] = []
         var ownerDropped = 0
         actions.reserveCapacity(values.count)
         for (index, value) in values.enumerated() {
@@ -94,66 +115,218 @@ enum NativeWidgetActionBatchPlanner {
                 ownerDropped += 1
                 continue
             }
-            guard let id = string("id", fields),
-                  let type = string("type", fields),
-                  let at = string("at", fields),
-                  validIdentifier(id), validIdentifier(type), validInstant(at)
-            else { throw NativeWidgetActionBatchError.malformedAction(index: index) }
-            guard identifiers.insert(id).inserted else {
-                throw NativeWidgetActionBatchError.duplicateActionID(id)
+            let action: NativeWidgetActionBatch.Action
+            do {
+                action = try validatedAction(fields, index: index)
+            } catch let error as NativeWidgetActionBatchError {
+                rejected.append(.init(index: index, error: error, value: value))
+                continue
             }
-
-            let kind: NativeWidgetActionBatch.Kind
-            switch type {
-            case "timer_start":
-                guard let jobID = string("jobId", fields), validIdentifier(jobID) else {
-                    throw NativeWidgetActionBatchError.invalidAction(index: index, field: "jobId")
+            if let acceptedDigest = acceptedDigests[action.id] {
+                if acceptedDigest != action.digest {
+                    rejected.append(.init(index: index, error: .duplicateActionID(action.id), value: value))
                 }
-                kind = .timerStart
-            case "timer_stop":
-                if let jobIDValue = fields["jobId"] {
-                    guard case let .string(jobID) = jobIDValue, validIdentifier(jobID) else {
-                        throw NativeWidgetActionBatchError.invalidAction(index: index, field: "jobId")
-                    }
-                }
-                kind = .timerStop
-            case "trip_log":
-                try validateDateAndNumbers(
-                    fields, index: index,
-                    numberFields: ["odometerStart", "odometerEnd"],
-                    range: 0...Decimal.greatestFiniteMagnitude
-                )
-                kind = .tripLog
-            case "expense_log":
-                try validateDateAndNumbers(
-                    fields, index: index,
-                    numberFields: ["amount"],
-                    range: Decimal(string: "0.0000000000000000001")!...Decimal(1_000_000)
-                )
-                for optionalString in ["category", "description"] {
-                    if let field = fields[optionalString], case .string = field {} else if fields[optionalString] != nil {
-                        throw NativeWidgetActionBatchError.invalidAction(index: index, field: optionalString)
-                    }
-                }
-                kind = .expenseLog
-            default:
-                // Preserve future actions exactly. A later client may know how
-                // to replay them after it claims these same source bytes.
-                kind = .unknown(type)
+                continue
             }
-            actions.append(.init(
-                id: id, kind: kind, at: at, fields: fields,
-                digest: digest(try encode(.object(fields)))
-            ))
+            acceptedDigests[action.id] = action.digest
+            actions.append(action)
         }
 
-        return NativeWidgetActionBatch(
+        var batch = NativeWidgetActionBatch(
             accountBinding: verifiedAccountBinding,
             sourceDigest: digest(source),
             sourceBytes: source,
             actions: actions,
             ownerDroppedCount: ownerDropped
         )
+        batch.rejected = rejected
+        return batch
+    }
+
+    /// One owned entry's checks, in the order the batch used to apply them:
+    /// id/type/instant (`malformedAction`), then the per-type fields
+    /// (`invalidAction`). Unknown types are kept exactly for a later client.
+    private static func validatedAction(
+        _ fields: [String: Canonical.JSONValue],
+        index: Int
+    ) throws -> NativeWidgetActionBatch.Action {
+        guard let id = string("id", fields),
+              let type = string("type", fields),
+              let at = string("at", fields),
+              validIdentifier(id), validIdentifier(type), validInstant(at)
+        else { throw NativeWidgetActionBatchError.malformedAction(index: index) }
+
+        let kind: NativeWidgetActionBatch.Kind
+        switch type {
+        case "timer_start":
+            guard let jobID = string("jobId", fields), validIdentifier(jobID) else {
+                throw NativeWidgetActionBatchError.invalidAction(index: index, field: "jobId")
+            }
+            kind = .timerStart
+        case "timer_stop":
+            if let jobIDValue = fields["jobId"] {
+                guard case let .string(jobID) = jobIDValue, validIdentifier(jobID) else {
+                    throw NativeWidgetActionBatchError.invalidAction(index: index, field: "jobId")
+                }
+            }
+            kind = .timerStop
+        case "trip_log":
+            try validateDateAndNumbers(
+                fields, index: index,
+                numberFields: ["odometerStart", "odometerEnd"],
+                range: 0...Decimal.greatestFiniteMagnitude
+            )
+            kind = .tripLog
+        case "expense_log":
+            try validateDateAndNumbers(
+                fields, index: index,
+                numberFields: ["amount"],
+                range: Decimal(string: "0.0000000000000000001")!...Decimal(1_000_000)
+            )
+            for optionalString in ["category", "description"] {
+                if let field = fields[optionalString], case .string = field {} else if fields[optionalString] != nil {
+                    throw NativeWidgetActionBatchError.invalidAction(index: index, field: optionalString)
+                }
+            }
+            kind = .expenseLog
+        default:
+            // Preserve future actions exactly. A later client may know how
+            // to replay them after it claims these same source bytes.
+            kind = .unknown(type)
+        }
+        return .init(
+            id: id, kind: kind, at: at, fields: fields,
+            digest: digest(try encode(.object(fields)))
+        )
+    }
+
+    /// Phase 12 12.00b.2-C (L130): the part of the shared queue one claim
+    /// takes. A blank queue or a list of at most `maximumActionCount` entries
+    /// is claimed byte for byte. A longer list is claimed as its first
+    /// `maximumActionCount` entries, each with its exact bytes; the rest stays
+    /// queued for the next claim (`removeClaimedPrefixFromQueue`), in order.
+    /// Throws `malformedQueue` when the queue is not a JSON list at all.
+    static func claimablePrefix(of rawValue: String) throws -> String {
+        if rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return rawValue }
+        let source = Data(rawValue.utf8)
+        let values: [Canonical.JSONValue]
+        do {
+            values = try JSONDecoder().decode([Canonical.JSONValue].self, from: source)
+        } catch {
+            throw NativeWidgetActionBatchError.malformedQueue
+        }
+        let limit = NativeWidgetActionBatch.maximumActionCount
+        guard values.count > limit else { return rawValue }
+        let prefix = Array(values.prefix(limit))
+        let bytes: Data
+        if let entries = exactEntries(of: source, matching: values) {
+            bytes = joinedList(entries.prefix(limit))
+        } else {
+            bytes = try encode(.array(prefix))
+        }
+        guard (try? JSONDecoder().decode([Canonical.JSONValue].self, from: bytes)) == prefix,
+              let claimable = String(data: bytes, encoding: .utf8)
+        else { throw NativeWidgetActionBatchError.malformedQueue }
+        return claimable
+    }
+
+    /// Phase 12 12.00b.2-C (L130): the set-aside entries of `batch` as one JSON
+    /// list, each entry with the exact bytes it had in the claimed source
+    /// (canonical sorted-key JSON only if those bytes cannot be recovered).
+    static func rejectedEntryBytes(of batch: NativeWidgetActionBatch) throws -> Data {
+        let values = batch.rejected.map(\.value)
+        guard !values.isEmpty else { return Data("[]".utf8) }
+        if let all = try? JSONDecoder().decode([Canonical.JSONValue].self, from: batch.sourceBytes),
+           let entries = exactEntries(of: batch.sourceBytes, matching: all),
+           batch.rejected.allSatisfy({ all.indices.contains($0.index) && all[$0.index] == $0.value }) {
+            return joinedList(batch.rejected.map { entries[$0.index] })
+        }
+        return try encode(.array(values))
+    }
+
+    /// The exact bytes of each top-level entry of `source`, but only when
+    /// every one of them decodes to the matching entry of `values`.
+    static func exactEntries(of source: Data, matching values: [Canonical.JSONValue]) -> [Data]? {
+        guard let entries = rawEntries(of: source), entries.count == values.count else { return nil }
+        for (entry, value) in zip(entries, values) {
+            guard (try? JSONDecoder().decode([Canonical.JSONValue].self, from: joinedList([entry]))) == [value]
+            else { return nil }
+        }
+        return entries
+    }
+
+    /// Splits a JSON list into the exact bytes of each top-level entry
+    /// (surrounding whitespace trimmed). A syntactic scan only: string escapes
+    /// and nesting are tracked, nothing is validated, so callers compare the
+    /// result with a real decode (`exactEntries`). Nil when `source` is not
+    /// shaped like one list.
+    static func rawEntries(of source: Data) -> [Data]? {
+        let bytes = [UInt8](source)
+        let space: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0D]
+        var index = 0
+        func skipSpace() { while index < bytes.count, space.contains(bytes[index]) { index += 1 } }
+        skipSpace()
+        guard index < bytes.count, bytes[index] == UInt8(ascii: "[") else { return nil }
+        index += 1
+        skipSpace()
+        var entries: [Data] = []
+        if index < bytes.count, bytes[index] == UInt8(ascii: "]") {
+            index += 1
+            skipSpace()
+            return index == bytes.count ? entries : nil
+        }
+        while index < bytes.count {
+            let start = index
+            var depth = 0
+            var inString = false
+            var escaped = false
+            scan: while index < bytes.count {
+                let byte = bytes[index]
+                if inString {
+                    if escaped { escaped = false }
+                    else if byte == UInt8(ascii: "\\") { escaped = true }
+                    else if byte == UInt8(ascii: "\"") { inString = false }
+                } else {
+                    switch byte {
+                    case UInt8(ascii: "\""): inString = true
+                    case UInt8(ascii: "["), UInt8(ascii: "{"): depth += 1
+                    case UInt8(ascii: "]"), UInt8(ascii: "}"):
+                        if depth == 0 { break scan }
+                        depth -= 1
+                    case UInt8(ascii: ","):
+                        if depth == 0 { break scan }
+                    default: break
+                    }
+                }
+                index += 1
+            }
+            guard index < bytes.count else { return nil }
+            var end = index
+            while end > start, space.contains(bytes[end - 1]) { end -= 1 }
+            guard end > start else { return nil }
+            entries.append(Data(bytes[start..<end]))
+            if bytes[index] == UInt8(ascii: ",") {
+                index += 1
+                skipSpace()
+                continue
+            }
+            guard bytes[index] == UInt8(ascii: "]") else { return nil }
+            index += 1
+            skipSpace()
+            return index == bytes.count ? entries : nil
+        }
+        return nil
+    }
+
+    /// `entries` as one JSON list, byte for byte, with no added whitespace.
+    static func joinedList<S: Sequence>(_ entries: S) -> Data where S.Element == Data {
+        var list = Data("[".utf8)
+        for (offset, entry) in entries.enumerated() {
+            if offset > 0 { list.append(UInt8(ascii: ",")) }
+            list.append(entry)
+        }
+        list.append(UInt8(ascii: "]"))
+        return list
     }
 
     private static func validateDateAndNumbers(
@@ -513,31 +686,57 @@ struct NativeWidgetActionClaim: Codable, Equatable {
     var rawValue: String? { String(data: sourceBytes, encoding: .utf8) }
 }
 
-/// Task 11.05 (decision C8): why a shared queue was set aside. Coarse on
-/// purpose: no action id or field value is recorded in the reason.
+/// Task 11.05 (decision C8): why a shared queue, entry or claim was set
+/// aside. Coarse on purpose: no action id or field value is recorded in the
+/// reason.
+///
+/// Phase 12 12.00b.2-C: `malformedQueue` is the one whole-queue reason (the
+/// bytes are not a JSON list). `malformedAction`, `invalidAction` and
+/// `duplicateActionID` now name single entries (L130), and `invalidClaim` /
+/// `conflictingClaims` name claim files set aside so replay continues (L131).
+/// `tooManyActions` is no longer written (a long queue is claimed in 512-entry
+/// prefixes); it stays decodable for records written by 11.x builds.
 enum NativeWidgetActionQuarantineReason: String, Codable, Equatable {
     case malformedQueue
     case tooManyActions
     case malformedAction
     case duplicateActionID
     case invalidAction
+    case invalidClaim
+    case conflictingClaims
 
-    /// Every planner rejection of the queue's content quarantines. An invalid
-    /// account binding is the caller's error, never the queue's, so it does not.
+    /// Only a queue that is not a list at all is set aside whole. An invalid
+    /// account binding is the caller's error, never the queue's, and the
+    /// per-entry errors never fail a batch, so none of them maps.
     init?(_ error: NativeWidgetActionBatchError) {
         switch error {
-        case .invalidAccountBinding: return nil
         case .malformedQueue: self = .malformedQueue
-        case .tooManyActions: self = .tooManyActions
-        case .malformedAction: self = .malformedAction
-        case .duplicateActionID: self = .duplicateActionID
-        case .invalidAction: self = .invalidAction
+        case .invalidAccountBinding, .tooManyActions, .malformedAction, .duplicateActionID, .invalidAction:
+            return nil
         }
     }
+
+    /// L130: the reason recorded for one set-aside entry.
+    init(entry error: NativeWidgetActionBatchError) {
+        switch error {
+        case .duplicateActionID: self = .duplicateActionID
+        case .invalidAction: self = .invalidAction
+        case .malformedAction, .malformedQueue, .tooManyActions, .invalidAccountBinding: self = .malformedAction
+        }
+    }
+
+    /// The claim-file reasons (L131), counted apart from queue content.
+    var isClaimReason: Bool { self == .invalidClaim || self == .conflictingClaims }
 }
 
 /// Task 11.05 (C8): the app-private record of a queue that can never be
 /// prepared for its owner. Owner-scoped by filename and envelope, like a claim.
+///
+/// Phase 12 12.00b.2-C: `sourceBytes` is what was set aside, by `reason`:
+/// the whole queue (`malformedQueue`); a JSON list of the set-aside entries
+/// with their exact bytes (a per-entry reason, one per entry in
+/// `entryReasons`, L130); or the exact claim file (`invalidClaim`,
+/// `conflictingClaims`, L131).
 struct NativeWidgetActionQuarantine: Codable, Equatable {
     static let currentSchemaVersion = 1
 
@@ -549,6 +748,9 @@ struct NativeWidgetActionQuarantine: Codable, Equatable {
     /// The exact bytes, kept only up to `maximumQuarantinedBytes` so a hostile
     /// or runaway queue cannot grow app storage without bound.
     let sourceBytes: Data?
+    /// L130: each set-aside entry's reason, in `sourceBytes` order. Nil for
+    /// a whole queue or a claim file.
+    var entryReasons: [NativeWidgetActionQuarantineReason]? = nil
 }
 
 /// Cross-process claim transport for the App Group action queue. The app and
@@ -602,13 +804,15 @@ struct NativeWidgetActionClaimTransport {
         try Self.requireBinding(verifiedAccountBinding)
         return try withLock {
             try discardFiles(notOwnedBy: verifiedAccountBinding)
-            if let existing = try loadClaim(accountBinding: verifiedAccountBinding) {
+            if let (existing, _) = try loadClaim(accountBinding: verifiedAccountBinding) {
                 try removeClaimedPrefixFromQueue(existing)
                 return existing
             }
             guard let raw = try queue.read() else { return nil }
+            // 12.00b.2-C (L130): at most one 512-entry prefix per claim; the
+            // rest stays queued. Only a queue that is not a list throws here.
             let batch = try NativeWidgetActionBatchPlanner.prepare(
-                rawValue: raw,
+                rawValue: NativeWidgetActionBatchPlanner.claimablePrefix(of: raw),
                 verifiedAccountBinding: verifiedAccountBinding
             )
             let claim = NativeWidgetActionClaim(
@@ -629,6 +833,10 @@ struct NativeWidgetActionClaimTransport {
     /// the shared queue, so later actions are no longer wedged behind them.
     /// Returns nil, touching nothing, when the queue is absent or prepares
     /// cleanly now.
+    ///
+    /// Phase 12 12.00b.2-C (L130): only bytes that are not a JSON list reach
+    /// this. A bad entry is set aside alone, at acknowledgement, and a long
+    /// list is claimed a prefix at a time.
     func quarantineUnpreparableQueue(
         verifiedAccountBinding: String
     ) throws -> NativeWidgetActionQuarantineReason? {
@@ -638,7 +846,7 @@ struct NativeWidgetActionClaimTransport {
             let reason: NativeWidgetActionQuarantineReason
             do {
                 _ = try NativeWidgetActionBatchPlanner.prepare(
-                    rawValue: raw,
+                    rawValue: NativeWidgetActionBatchPlanner.claimablePrefix(of: raw),
                     verifiedAccountBinding: verifiedAccountBinding
                 )
                 return nil
@@ -658,6 +866,56 @@ struct NativeWidgetActionClaimTransport {
             try persist(record)
             try replaceQueue(with: nil)
             return reason
+        }
+    }
+
+    /// Phase 12 12.00b.2-C (L131): sets aside this owner's claim files that
+    /// replay can never use, so later actions are no longer wedged behind
+    /// them. Inside one lock hold:
+    /// 1. every claim that fails `validatedClaim` is set aside as
+    ///    `invalidClaim`;
+    /// 2. if more than one valid claim remains, all of them are set aside as
+    ///    `conflictingClaims`. The protocol never makes two (one writer under
+    ///    this lock, and `claim` returns an existing claim before it takes
+    ///    another), so a pair came from outside it (a restore, a copy, a
+    ///    version skew). Nothing orders them, and either may already be
+    ///    applied, so applying one or both could reorder timers or repeat an
+    ///    action. Setting both aside applies nothing twice and loses nothing.
+    /// Each file is read once; those bytes decide its validity and are what
+    /// the record keeps (up to `maximumQuarantinedBytes`). The record is
+    /// verified before the claim file is removed. A claim file that cannot be
+    /// read fails the pass (`unavailable`) and nothing is removed: its bytes
+    /// could not be kept, and the read may succeed later (data protection).
+    /// Returns nil, touching nothing, when the claims load cleanly now.
+    func quarantineUnusableClaims(verifiedAccountBinding: String) throws -> NativeWidgetActionQuarantineReason? {
+        try Self.requireBinding(verifiedAccountBinding)
+        return try withLock {
+            try discardFiles(notOwnedBy: verifiedAccountBinding)
+            let candidates = try files(prefix: Self.claimFilePrefix + verifiedAccountBinding + "-")
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            var valid: [(url: URL, bytes: Data)] = []
+            var invalid: [(url: URL, bytes: Data)] = []
+            for candidate in candidates {
+                let bytes: Data
+                do { bytes = try Data(contentsOf: candidate) } catch { throw NativeWidgetActionClaimError.unavailable }
+                if (try? validatedClaim(bytes, at: candidate, accountBinding: verifiedAccountBinding)) != nil {
+                    valid.append((candidate, bytes))
+                } else {
+                    invalid.append((candidate, bytes))
+                }
+            }
+            for file in invalid {
+                try setAsideClaimFile(file.url, bytes: file.bytes, reason: .invalidClaim, accountBinding: verifiedAccountBinding)
+            }
+            if valid.count > 1 {
+                for file in valid {
+                    try setAsideClaimFile(
+                        file.url, bytes: file.bytes, reason: .conflictingClaims, accountBinding: verifiedAccountBinding
+                    )
+                }
+                return .conflictingClaims
+            }
+            return invalid.isEmpty ? nil : .invalidClaim
         }
     }
 
@@ -689,10 +947,28 @@ struct NativeWidgetActionClaimTransport {
 
     /// Removes exactly the acknowledged durable claim. Shared bytes appended
     /// after the claim are never touched.
+    ///
+    /// Phase 12 12.00b.2-C (L130): when the claim holds entries the planner
+    /// set aside, their record (exact bytes, one reason per entry) is written
+    /// and verified BEFORE the claim is removed, in the same lock hold. A
+    /// crash in between leaves the claim: the retry re-applies nothing (every
+    /// valid action is already recorded) and rewrites the same record.
     func acknowledge(_ claim: NativeWidgetActionClaim) throws {
         try withLock {
-            guard let stored = try loadClaim(accountBinding: claim.accountBinding), stored == claim
+            guard let (stored, batch) = try loadClaim(accountBinding: claim.accountBinding), stored == claim
             else { throw NativeWidgetActionClaimError.verificationFailed }
+            if !batch.rejected.isEmpty {
+                let bytes = try NativeWidgetActionBatchPlanner.rejectedEntryBytes(of: batch)
+                try persist(NativeWidgetActionQuarantine(
+                    schemaVersion: NativeWidgetActionQuarantine.currentSchemaVersion,
+                    accountBinding: claim.accountBinding,
+                    reason: NativeWidgetActionQuarantineReason(entry: batch.rejected[0].error),
+                    sourceDigest: Self.digest(bytes),
+                    sourceByteCount: bytes.count,
+                    sourceBytes: bytes.count <= Self.maximumQuarantinedBytes ? bytes : nil,
+                    entryReasons: batch.rejected.map { NativeWidgetActionQuarantineReason(entry: $0.error) }
+                ))
+            }
             do {
                 let destination = claimURL(claim)
                 try FileManager.default.removeItem(at: destination)
@@ -722,7 +998,37 @@ struct NativeWidgetActionClaimTransport {
         for url in existing.prefix(max(0, existing.count - (Self.maximumQuarantineFilesPerOwner - 1))) {
             do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
         }
-        try persist(Self.encode(record), to: destination)
+        let bytes = try Self.encode(record)
+        // 12.00b.2-C: the name is the digest of the bytes set aside, so an
+        // existing record under it already keeps those same bytes. One that
+        // differs (another reason, or a damaged file) is replaced rather than
+        // wedging the acknowledgement behind it.
+        if let existing = try? Data(contentsOf: destination), existing != bytes {
+            do { try FileManager.default.removeItem(at: destination) } catch { throw NativeWidgetActionClaimError.writeFailed }
+        }
+        try persist(bytes, to: destination)
+    }
+
+    /// L131: records one claim file's `bytes` in an owner-scoped quarantine
+    /// record, then removes the file (verified). Called inside the lock.
+    private func setAsideClaimFile(
+        _ url: URL,
+        bytes: Data,
+        reason: NativeWidgetActionQuarantineReason,
+        accountBinding: String
+    ) throws {
+        try persist(NativeWidgetActionQuarantine(
+            schemaVersion: NativeWidgetActionQuarantine.currentSchemaVersion,
+            accountBinding: accountBinding,
+            reason: reason,
+            sourceDigest: Self.digest(bytes),
+            sourceByteCount: bytes.count,
+            sourceBytes: bytes.count <= Self.maximumQuarantinedBytes ? bytes : nil
+        ))
+        do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw NativeWidgetActionClaimError.verificationFailed
+        }
     }
 
     private func persist(_ bytes: Data, to destination: URL) throws {
@@ -772,17 +1078,30 @@ struct NativeWidgetActionClaimTransport {
         }
     }
 
-    private func loadClaim(accountBinding: String) throws -> NativeWidgetActionClaim? {
+    /// This owner's one claim and its prepared batch. More than one claim
+    /// file is `conflictingClaims`; a bad one is `invalidClaim`. Both are set
+    /// aside by `quarantineUnusableClaims` (L131).
+    private func loadClaim(
+        accountBinding: String
+    ) throws -> (claim: NativeWidgetActionClaim, batch: NativeWidgetActionBatch)? {
         try Self.requireBinding(accountBinding)
         let candidates = try files(prefix: Self.claimFilePrefix + accountBinding + "-")
         guard candidates.count <= 1 else { throw NativeWidgetActionClaimError.conflictingClaims }
         guard let candidate = candidates.first else { return nil }
+        let bytes: Data
+        do { bytes = try Data(contentsOf: candidate) } catch { throw NativeWidgetActionClaimError.invalidClaim }
+        return try validatedClaim(bytes, at: candidate, accountBinding: accountBinding)
+    }
+
+    /// `bytes` (read from `candidate`) as this owner's claim, or `invalidClaim`.
+    private func validatedClaim(
+        _ bytes: Data,
+        at candidate: URL,
+        accountBinding: String
+    ) throws -> (claim: NativeWidgetActionClaim, batch: NativeWidgetActionBatch) {
         let claim: NativeWidgetActionClaim
         do {
-            claim = try JSONDecoder().decode(
-                NativeWidgetActionClaim.self,
-                from: Data(contentsOf: candidate)
-            )
+            claim = try JSONDecoder().decode(NativeWidgetActionClaim.self, from: bytes)
         } catch { throw NativeWidgetActionClaimError.invalidClaim }
         guard claim.schemaVersion == NativeWidgetActionClaim.currentSchemaVersion,
               claim.accountBinding == accountBinding,
@@ -793,12 +1112,12 @@ struct NativeWidgetActionClaimTransport {
         // A claim was prepared before it was written, so a planner failure
         // here is claim corruption, never a queue to quarantine (C8).
         do {
-            _ = try NativeWidgetActionBatchPlanner.prepare(
+            let batch = try NativeWidgetActionBatchPlanner.prepare(
                 rawValue: claim.rawValue!,
                 verifiedAccountBinding: accountBinding
             )
+            return (claim, batch)
         } catch { throw NativeWidgetActionClaimError.invalidClaim }
-        return claim
     }
 
     /// Handles the narrow crash window after WAL publication but before shared
@@ -822,6 +1141,12 @@ struct NativeWidgetActionClaimTransport {
         let suffix = Array(currentValues.dropFirst(claimedValues.count))
         if suffix.isEmpty {
             try replaceQueue(with: nil)
+        } else if let entries = NativeWidgetActionBatchPlanner.exactEntries(
+            of: Data(current.utf8), matching: currentValues
+        ), let raw = String(data: NativeWidgetActionBatchPlanner.joinedList(entries.dropFirst(claimedValues.count)), encoding: .utf8) {
+            // 12.00b.2-C (L130): the entries left queued keep their exact
+            // bytes, so a later claim sets aside exactly what was written.
+            try replaceQueue(with: raw)
         } else {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -848,9 +1173,17 @@ struct NativeWidgetActionClaimTransport {
 
     /// §4.2 through the one shared implementation. Errors thrown by `body`
     /// pass through unchanged; a failure to take the lock is `lockFailed`.
+    ///
+    /// Phase 12 12.00b.2-C (Task 6 review M3, R21): a busy lock logs the same
+    /// payload-free line as the inbox (`N/NativeAppGroupInbox.swift`), then
+    /// fails as before: the queue and claims stay as they are and AppStore
+    /// reports the actions as still safely queued.
     private func withLock<T>(_ body: () throws -> T) throws -> T {
         do {
             return try WidgetAppGroupLock.withExclusiveLock(at: lockFile, body)
+        } catch WidgetAppGroupLockError.busy {
+            print("TradeReadyWidgetLock stage=busy site=replay")
+            throw NativeWidgetActionClaimError.lockFailed
         } catch is WidgetAppGroupLockError {
             throw NativeWidgetActionClaimError.lockFailed
         }
@@ -882,8 +1215,11 @@ enum NativeWidgetActionReplayCommitResult {
     case nothingPending
     case retainedUnsupported(actionCount: Int)
     /// `ownerDropped`: untagged or foreign entries acknowledged, never applied (§4.5).
-    case committed(snapshot: Canonical.Snapshot, changed: Int, ignored: Int, ownerDropped: Int)
-    /// C8: the shared queue could not be prepared and was set aside.
+    /// `setAside`: owned entries that could not apply, kept in a quarantine
+    /// record written before the claim was acknowledged (12.00b.2-C, L130).
+    case committed(snapshot: Canonical.Snapshot, changed: Int, ignored: Int, ownerDropped: Int, setAside: Int)
+    /// C8: the shared queue could not be prepared and was set aside, or
+    /// (12.00b.2-C, L131) an unusable claim file was.
     case quarantined(reason: NativeWidgetActionQuarantineReason)
 }
 
@@ -898,14 +1234,28 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
     /// App Group (lock or container unavailable). Kept across the account
     /// boundary reset so the failure stays observable.
     private(set) var accountSwitchScrubFailureCount = 0
+    /// 12.00b.2-C (L130): owned entries set aside while their batch applied.
+    private(set) var setAsideActionCount = 0
+    /// 12.00b.2-C (L131): replay results that set aside unusable claim files.
+    private(set) var quarantinedClaimCount = 0
 
     mutating func recordOwnerDropped(_ count: Int) {
         guard count > 0 else { return }
         ownerDroppedActionCount = min(Self.maximumCount, ownerDroppedActionCount + min(count, Self.maximumCount))
     }
 
-    mutating func recordQuarantine() {
-        quarantinedQueueCount = min(Self.maximumCount, quarantinedQueueCount + 1)
+    /// A whole queue (C8) or, for a claim reason, the claim files (L131).
+    mutating func recordQuarantine(_ reason: NativeWidgetActionQuarantineReason) {
+        if reason.isClaimReason {
+            quarantinedClaimCount = min(Self.maximumCount, quarantinedClaimCount + 1)
+        } else {
+            quarantinedQueueCount = min(Self.maximumCount, quarantinedQueueCount + 1)
+        }
+    }
+
+    mutating func recordSetAsideActions(_ count: Int) {
+        guard count > 0 else { return }
+        setAsideActionCount = min(Self.maximumCount, setAsideActionCount + min(count, Self.maximumCount))
     }
 
     mutating func recordAccountSwitchScrubFailure() {
@@ -916,6 +1266,8 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
     mutating func resetForAccountBoundary() {
         ownerDroppedActionCount = 0
         quarantinedQueueCount = 0
+        setAsideActionCount = 0
+        quarantinedClaimCount = 0
     }
 }
 
@@ -926,6 +1278,23 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
 struct NativeWidgetActionReplayCoordinator {
     /// C8: the bounded, payload-free message surfaced after a quarantine.
     static let quarantinedMessage = "Some widget or Siri actions couldn't be read and were set aside."
+
+    /// 12.00b.2-C: the message for a `.quarantined` result. Bytes that are
+    /// not a list, or a claim file that fails validation, "couldn't be read";
+    /// conflicting claims were readable but are not applied (L131).
+    static func quarantinedMessage(for reason: NativeWidgetActionQuarantineReason) -> String {
+        reason == .conflictingClaims
+            ? "Some widget or Siri actions couldn't be applied and were set aside."
+            : quarantinedMessage
+    }
+
+    /// 12.00b.2-C (L130): the message after a pass applied its valid actions
+    /// and set `actionCount` owned entries aside. A count only, no content.
+    static func setAsideMessage(actionCount: Int) -> String {
+        actionCount == 1
+            ? "1 widget or Siri action couldn't be applied and was set aside."
+            : "\(actionCount) widget or Siri actions couldn't be applied and were set aside."
+    }
 
     /// Final review C1: queues the upserts of `records` (read from the
     /// committed snapshot) for the outbound sync. Called after the canonical
@@ -960,6 +1329,16 @@ struct NativeWidgetActionReplayCoordinator {
             }
             // The queue changed between the two lock holds and prepares now.
             claimed = try transport.claim(verifiedAccountBinding: verifiedAccountBinding)
+        } catch NativeWidgetActionClaimError.invalidClaim, NativeWidgetActionClaimError.conflictingClaims {
+            // 12.00b.2-C (L131): a claim file replay can never use would
+            // otherwise be retried forever, wedging this owner's replay.
+            if let reason = try transport.quarantineUnusableClaims(
+                verifiedAccountBinding: verifiedAccountBinding
+            ) {
+                return .quarantined(reason: reason)
+            }
+            // The claims load cleanly now (a transient read failure).
+            claimed = try transport.claim(verifiedAccountBinding: verifiedAccountBinding)
         }
         guard let claim = claimed, let raw = claim.rawValue else { return .nothingPending }
         let batch = try NativeWidgetActionBatchPlanner.prepare(
@@ -981,7 +1360,8 @@ struct NativeWidgetActionReplayCoordinator {
             snapshot: result.snapshot,
             changed: result.changedActionCount,
             ignored: result.ignoredActionCount,
-            ownerDropped: batch.ownerDroppedCount
+            ownerDropped: batch.ownerDroppedCount,
+            setAside: batch.rejected.count
         )
     }
 }

@@ -5958,6 +5958,12 @@ final class AppStore: ObservableObject {
     /// Task 11.05: actions not stamped `hash(O)` are dropped before dispatch
     /// (§4.5) and an unpreparable queue is quarantined (C8).
     ///
+    /// Phase 12 12.00b.2-C: a bad owned entry is set aside alone while the
+    /// rest of its batch applies (L130), and an unusable claim file is set
+    /// aside so the pass continues (L131). A message is shown only when
+    /// something was set aside: the entry count, or the coarse quarantine
+    /// message, which takes precedence within a pass.
+    ///
     /// Final review C1: a replay is a local write like any other (RN routes
     /// it through saveJobs/saveTrips/saveExpenses, `utils/widgetActions.ts`).
     /// `apply` bypasses the per-write enqueue hooks, so the coordinator hands
@@ -5984,6 +5990,8 @@ final class AppStore: ObservableObject {
                 scheduleWidgetMirrorRefresh()
             }
         }
+        var setAsideThisPass = 0
+        var quarantinedThisPass = false
         do {
             // Each claim contains at most 512 actions. Bound foreground work so
             // a continuously-writing extension cannot starve app activation.
@@ -6000,12 +6008,21 @@ final class AppStore: ObservableObject {
                 case .retainedUnsupported(let count):
                     migrationMessage = "Kept \(count) newer widget action(s) for a compatible app update."
                     return
-                case .committed(let committed, _, _, let ownerDropped):
+                case .committed(let committed, _, _, let ownerDropped, let setAside):
                     widgetActionReplayDiagnostics.recordOwnerDropped(ownerDropped)
+                    widgetActionReplayDiagnostics.recordSetAsideActions(setAside)
+                    if setAside > 0 {
+                        setAsideThisPass += setAside
+                        if !quarantinedThisPass {
+                            migrationMessage = NativeWidgetActionReplayCoordinator
+                                .setAsideMessage(actionCount: setAsideThisPass)
+                        }
+                    }
                     try apply(committed)
-                case .quarantined:
-                    widgetActionReplayDiagnostics.recordQuarantine()
-                    migrationMessage = NativeWidgetActionReplayCoordinator.quarantinedMessage
+                case .quarantined(let reason):
+                    widgetActionReplayDiagnostics.recordQuarantine(reason)
+                    quarantinedThisPass = true
+                    migrationMessage = NativeWidgetActionReplayCoordinator.quarantinedMessage(for: reason)
                 }
             }
         } catch {

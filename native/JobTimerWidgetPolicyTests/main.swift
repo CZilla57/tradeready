@@ -351,9 +351,13 @@ private struct EngineHarness {
 
 /// Runs the REAL planner over the stored queue text — the same oracle
 /// `native/AppIntentQueueTests/main.swift` (task 11.04) uses.
+/// Phase 12 12.00b.2-C (L130): a set-aside entry (`rejected`) is this
+/// helper's failure, so "planner-valid" still means every entry applies.
 private func plan(_ raw: String?) -> Result<NativeWidgetActionBatch, NativeWidgetActionBatchError> {
     do {
-        return .success(try NativeWidgetActionBatchPlanner.prepare(rawValue: raw ?? "[]", verifiedAccountBinding: ownerBinding))
+        let batch = try NativeWidgetActionBatchPlanner.prepare(rawValue: raw ?? "[]", verifiedAccountBinding: ownerBinding)
+        if let first = batch.rejected.first { return .failure(first.error) }
+        return .success(batch)
     } catch let error as NativeWidgetActionBatchError {
         return .failure(error)
     } catch {

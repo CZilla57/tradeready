@@ -34,8 +34,9 @@ import Foundation
 //       AccessibilityAuditTests (including A30, fixed in 11.13),
 //       LayoutMetricsTests.
 //
-// Native differences asserted here, not re-litigated: the planner rejects a
-// whole batch on one invalid action (§4.3; RN drops only that action), a
+// Native differences asserted here, not re-litigated: one invalid action is
+// set aside with its bytes kept while the rest of its batch applies (§4.3,
+// Phase 12 12.00b.2-C; RN drops only that action, keeping nothing), a
 // malformed or non-array queue is quarantined (C8; RN reads it as []), and
 // `parsePendingOpenURL` vets the URL grammar at the same boundary (§6.3; RN
 // returns the raw URL and leaves the grammar to `parseWidgetDeepLink`).
@@ -293,10 +294,12 @@ private func replay(_ actions: [String], on source: Canonical.Snapshot) -> Nativ
     return try? NativeWidgetActionReplayer.apply(batch, to: source)
 }
 
+/// The whole-queue error, or (Phase 12 12.00b.2-C) the first entry the
+/// planner sets aside: either way, that entry is never applied.
 private func planError(_ raw: String) -> NativeWidgetActionBatchError? {
     do {
-        _ = try NativeWidgetActionBatchPlanner.prepare(rawValue: raw, verifiedAccountBinding: planningBinding)
-        return nil
+        return try NativeWidgetActionBatchPlanner.prepare(rawValue: raw, verifiedAccountBinding: planningBinding)
+            .rejected.first?.error
     } catch let error as NativeWidgetActionBatchError {
         return error
     } catch {
@@ -337,8 +340,12 @@ private func coordinatorReplay(_ raw: String?, on source: Canonical.Snapshot) th
     return (result, queue.value, try repository.load()?.snapshot, try transport.quarantinedQueues(accountBinding: planningBinding).count)
 }
 
-private func committed(_ result: NativeWidgetActionReplayCommitResult) -> (changed: Int, ignored: Int, ownerDropped: Int)? {
-    if case let .committed(_, changed, ignored, ownerDropped) = result { return (changed, ignored, ownerDropped) }
+private func committed(
+    _ result: NativeWidgetActionReplayCommitResult
+) -> (changed: Int, ignored: Int, ownerDropped: Int, setAside: Int)? {
+    if case let .committed(_, changed, ignored, ownerDropped, setAside) = result {
+        return (changed, ignored, ownerDropped, setAside)
+    }
     return nil
 }
 
@@ -412,7 +419,8 @@ private func testActionReplay(root: URL) throws {
     let dedupedTrip = replay([tripAction + #","odometerStart":100,"odometerEnd":115"#], on: existingTrip)
     expect(dedupedTrip?.changedActionCount == 0 && dedupedTrip?.snapshot.payload.trips?.count == 1,
            "Q2 trip_log dedupes on t_siri_<id>")
-    // RN drops just the bad action; native rejects the whole batch (§4.3).
+    // RN drops just the bad action; native sets just that entry aside, bytes
+    // kept (§4.3, Phase 12 12.00b.2-C).
     for (label, fields) in [
         ("odometerStart missing", #","odometerEnd":115"#),
         ("odometerEnd missing", #","odometerStart":100"#),
@@ -422,7 +430,7 @@ private func testActionReplay(root: URL) throws {
     ] {
         let error = planError(queue([tripAction + fields]))
         expect({ if case .invalidAction(index: 0, _)? = error { return true }; return false }(),
-               "Q2 trip_log \(label): the batch is rejected (§4.3 native difference; RN drops the action)")
+               "Q2 trip_log \(label): the entry is set aside (§4.3 native difference: bytes kept; RN drops the action)")
     }
     expect({ if case .invalidAction(index: 0, field: "date")? = planError(queue([#""id":"sa1","type":"trip_log","at":"2026-08-03T09:30:00.000Z","odometerStart":100,"odometerEnd":115"#])) { return true }; return false }(),
            "Q2 trip_log without a date is rejected")
@@ -443,7 +451,7 @@ private func testActionReplay(root: URL) throws {
     for (label, amount) in [("zero", "0"), ("negative", "-5"), ("over the 1,000,000 cap", "1000001"), ("not a number", #""42.50""#)] {
         let error = planError(queue([expenseAction + #","amount":\#(amount)"#]))
         expect({ if case .invalidAction(index: 0, field: "amount")? = error { return true }; return false }(),
-               "Q2 expense amount \(label): the batch is rejected (§4.3 native difference)")
+               "Q2 expense amount \(label): the entry is set aside (§4.3 native difference: bytes kept)")
     }
     for literal in ["NaN", "Infinity"] {
         expectEqual(planError(queue([expenseAction + #","amount":\#(literal)"#])), .malformedQueue,
@@ -470,7 +478,8 @@ private func testActionReplay(root: URL) throws {
 
     // parsePendingActions. null and "" are an empty batch in both clients (fix
     // round 1, I2: native used to quarantine ""). A structurally bad entry: RN
-    // drops it; native rejects the batch (§4.3).
+    // drops it; native sets it aside, bytes kept, and keeps the valid ones
+    // (§4.3, Phase 12 12.00b.2-C).
     if case .nothingPending? = try? coordinatorReplay(nil, on: scheduled).result {
         expect(true, "Q2 parsePendingActions null: an absent queue is nothing pending (RN [])")
     } else {
@@ -484,11 +493,18 @@ private func testActionReplay(root: URL) throws {
     expectEqual(planError("{not json"), .malformedQueue, "Q2 malformed JSON: malformedQueue")
     expectEqual(planError(#"{"id":"a1","type":"timer_start","at":"x"}"#), .malformedQueue, "Q2 a non-array: malformedQueue")
     expectEqual(planError(queue([startJ1, #""type":"timer_start","at":"2026-08-03T09:00:00.000Z""#])),
-                .malformedAction(index: 1), "Q2 an entry missing id rejects the batch (§4.3 native difference)")
+                .malformedAction(index: 1), "Q2 an entry missing id is set aside (§4.3 native difference: bytes kept)")
     expectEqual(planError(queue([#""id":"a3","at":"2026-08-03T09:00:00.000Z""#])), .malformedAction(index: 0),
-                "Q2 an entry missing type rejects the batch")
+                "Q2 an entry missing type is set aside")
     expectEqual(planError(queue([#""id":"a4","type":"timer_stop""#])), .malformedAction(index: 0),
-                "Q2 an entry missing at rejects the batch")
+                "Q2 an entry missing at is set aside")
+    // RN "keeps valid ones": the valid entries around the bad one apply.
+    let keepsValid = try? NativeWidgetActionBatchPlanner.prepare(
+        rawValue: queue([startJ1, #""type":"timer_start","at":"2026-08-03T09:00:00.000Z""#, expenseAction + #","amount":5"#]),
+        verifiedAccountBinding: planningBinding
+    )
+    expect(keepsValid?.actions.map(\.id) == ["a1", "ea1"] && keepsValid?.rejected.map(\.index) == [1],
+           "Q2 an entry missing id: the valid entries beside it are kept (RN keeps valid ones)")
     let untagged = try? NativeWidgetActionBatchPlanner.prepare(
         rawValue: #"[null,"not an object",{"id":"a1","type":"timer_start","at":"2026-08-03T09:00:00.000Z","jobId":"j1"}]"#,
         verifiedAccountBinding: planningBinding
@@ -530,6 +546,14 @@ private func testActionReplay(root: URL) throws {
     expect(committed(mixedRun.result)?.changed == 3 && mixedRun.queue == nil
            && mixedRun.saved?.payload.trips?.count == 1 && mixedRun.saved?.payload.expenses?.count == 1,
            "Q2 replay commits a mixed batch (timer + trip + expense) in one claim")
+    let partialRun = try coordinatorReplay(
+        queue([startJ1, #""type":"timer_start","at":"2026-08-03T09:00:00.000Z""#, expenseAction + #","amount":5"#]), on: scheduled
+    )
+    let partialCounts = committed(partialRun.result)
+    expect(partialCounts?.changed == 2 && partialCounts?.setAside == 1 && partialRun.queue == nil
+           && partialRun.saved?.payload.jobs?.first?.timeSessions?.count == 1
+           && partialRun.saved?.payload.expenses?.count == 1 && partialRun.quarantined == 1,
+           "Q2 replay applies the valid entries beside a bad one (RN keeps valid ones; native keeps the bad entry's bytes)")
     let badRun = try coordinatorReplay("not valid json", on: scheduled)
     if case .quarantined(reason: .malformedQueue) = badRun.result {
         expect(badRun.queue == nil && badRun.saved == nil && badRun.quarantined == 1,
@@ -720,8 +744,9 @@ private let widgetActionsTranscription: [Transcription] = [
     t("parsePendingActions", "valid JSON that isn't an array → empty array", ["Q2 a non-array: malformedQueue"],
       note: "native difference: quarantined (C8)"),
     t("parsePendingActions", "drops entries missing id, type, or at; keeps valid ones",
-      ["Q2 an entry missing id", "Q2 an entry missing type", "Q2 an entry missing at", "Q2 null, non-object and untagged"],
-      note: "native difference: the batch is rejected (§4.3)"),
+      ["Q2 an entry missing id", "Q2 an entry missing type", "Q2 an entry missing at", "Q2 null, non-object and untagged",
+       "Q2 replay applies the valid entries beside a bad one"],
+      note: "native difference: the bad entry is set aside with its bytes kept (§4.3, 12.00b.2-C)"),
     t("applyTimerActions", "timer_start clocks the matching job in",
       ["Q2 timer_start clocks", "Q2 timer_start opens", "Q2 timer_start advances"]),
     t("applyTimerActions", "timer_start with no matching job is dropped", ["Q2 timer_start for a missing job"]),
@@ -742,13 +767,13 @@ private let widgetActionsTranscription: [Transcription] = [
       ["Q2 trip miles clamp"]),
     t("tripFromAction", "dedupes: null when a trip with this id already exists", ["Q2 trip_log dedupes"]),
     t("tripFromAction", "drops the action when %s", rows: 6, ["Q2 trip_log odometer", "Q2 a non-finite odometer"],
-      note: "native difference: the batch is rejected (§4.3)"),
+      note: "native difference: the entry is set aside with its bytes kept (§4.3, 12.00b.2-C)"),
     t("tripFromAction", "drops the action when date is missing", ["Q2 trip_log without a date"]),
     t("expenseFromAction", "builds an Expense with the e_siri_<id> prefix and the exact field mapping",
       ["Q2 expense_log builds"]),
     t("expenseFromAction", "dedupes: null when an expense with this id already exists", ["Q2 expense_log dedupes"]),
     t("expenseFromAction", "drops the action when amount is %s", rows: 6, ["Q2 expense amount"],
-      note: "native difference: the batch is rejected (§4.3)"),
+      note: "native difference: the entry is set aside with its bytes kept (§4.3, 12.00b.2-C)"),
     t("expenseFromAction", "amount exactly at the 1,000,000 cap is kept", ["Q2 an amount exactly at the cap"]),
     t("expenseFromAction", "an unrecognized category falls back to 'other' rather than dropping",
       ["Q2 an unknown category"]),
