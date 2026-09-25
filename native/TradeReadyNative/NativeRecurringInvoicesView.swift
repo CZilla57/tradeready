@@ -118,10 +118,10 @@ struct NativeRecurringInvoicesView: View {
                 planActions.dismissActions()
             }
             Button("Cancel plan", role: .destructive) {
-                planActions.requestDestructive(.cancelPlan)
+                planActions.requestDestructive(.cancelPlan, for: rule)
             }
             Button("Delete plan", role: .destructive) {
-                planActions.requestDestructive(.deletePlan)
+                planActions.requestDestructive(.deletePlan, for: rule)
             }
             Button("Dismiss", role: .cancel) { planActions.dismissActions() }
         }

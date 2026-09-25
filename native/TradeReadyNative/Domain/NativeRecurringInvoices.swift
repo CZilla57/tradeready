@@ -299,9 +299,15 @@ struct NativeRecurringPlanActionState<Rule> {
     /// The dialog's `isPresented` setter and its non-destructive buttons.
     mutating func dismissActions() { actionRule = nil }
 
-    /// A destructive dialog button: moves the open plan to the confirmation.
-    mutating func requestDestructive(_ kind: DestructiveKind) {
-        guard let rule = actionRule else { return }
+    /// A destructive dialog button: moves the tapped plan to the
+    /// confirmation. Phase 12.00b.2-E (L286.2): `rule` must come from the
+    /// `confirmationDialog` closure's own `presenting:` value at the call
+    /// site, not from re-reading `actionRule` here — the same coupling that
+    /// caused the fixed I1 no-op bug. SwiftUI can clear or reassign
+    /// `actionRule` (via `dismissActions()`/`showActions(for:)`) between the
+    /// dialog opening and this handler running; the destructive request
+    /// still targets exactly the plan the dialog was showing when tapped.
+    mutating func requestDestructive(_ kind: DestructiveKind, for rule: Rule) {
         pendingDestructive = PendingDestructive(rule: rule, kind: kind)
         actionRule = nil
     }

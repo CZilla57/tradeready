@@ -126,7 +126,7 @@ do {
         var state = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
         state.showActions(for: tapped)
         expect(state.isDialogPresented && state.isPresentingAnything, "I1 \(kind): the plan actions open")
-        state.requestDestructive(kind)
+        state.requestDestructive(kind, for: tapped)
         // SwiftUI then dismisses the dialog through its isPresented setter.
         state.dismissActions()
         expect(!state.isDialogPresented, "I1 \(kind): the dialog is dismissed")
@@ -140,14 +140,41 @@ do {
     // Keep plan: the alert ends without an action; nothing is left presented.
     var kept = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
     kept.showActions(for: tapped)
-    kept.requestDestructive(.deletePlan)
+    kept.requestDestructive(.deletePlan, for: tapped)
     kept.dismissActions()
     kept.endConfirmation()
     expect(!kept.isPresentingAnything, "I1: Keep plan leaves nothing presented")
-    // A destructive request with no open dialog does nothing.
+    // L286.2 (Phase 12.00b.2-E, S3 rider): the same `actionRule` coupling
+    // that caused I1 could still target the wrong plan (or no plan at all)
+    // even after that fix — `requestDestructive` re-read the live
+    // `actionRule` instead of the `confirmationDialog` closure's captured
+    // `rule`. If `actionRule` is cleared or reassigned to a different plan
+    // between the dialog opening and the destructive button's handler
+    // running, the request must still act on the plan the closure captured,
+    // not on whatever `actionRule` now holds.
+    let other = rule(id: "rule-other", nextDue: "2026-09-01")
+    var racedClear = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
+    racedClear.showActions(for: tapped)
+    racedClear.dismissActions() // actionRule is nil by the time the handler runs.
+    racedClear.requestDestructive(.cancelPlan, for: tapped)
+    expect(racedClear.pendingDestructive?.rule.id == tapped.id,
+           "L286.2: a cleared actionRule still targets the dialog's captured rule")
+
+    var racedReassigned = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
+    racedReassigned.showActions(for: tapped)
+    racedReassigned.showActions(for: other) // actionRule now points at a different plan.
+    racedReassigned.requestDestructive(.cancelPlan, for: tapped)
+    expect(racedReassigned.pendingDestructive?.rule.id == tapped.id,
+           "L286.2: a reassigned actionRule still targets the dialog's captured rule, not the new one")
+
+    // A destructive request with no open dialog still targets the rule
+    // explicitly passed at the call site (the confirmationDialog closure
+    // always supplies one while presenting; `requestDestructive` never
+    // re-derives it from `actionRule`).
     var idle = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
-    idle.requestDestructive(.cancelPlan)
-    expect(idle.pendingDestructive == nil, "I1: no plan, no destructive target")
+    idle.requestDestructive(.cancelPlan, for: tapped)
+    expect(idle.pendingDestructive?.rule.id == tapped.id,
+           "I1/L286.2: requestDestructive targets the explicitly passed rule, not actionRule")
 
     // The screen drives both alerts from the surviving target, never from the
     // dialog's plan (which is nil by then).
