@@ -386,6 +386,7 @@ struct PoorNetworkTests {
         try await directPullKeepsEditPushedDuringIt()
         rebaseRules()
         try await recurringGenerationWaitsForInitialSync()
+        try await returningUserLaunchGeneratesBothJobsAndInvoices()
         try await widgetReplayReachesTheServer()
         try await widgetReplayMarkersStayLocal()
         try await staleServerMarkersAreDroppedOnPull()
@@ -1461,6 +1462,51 @@ struct PoorNetworkTests {
         } else {
             expect(false, "H: AppStore.swift source is readable for the call-order pin")
         }
+    }
+
+    /// L237.d (Phase 12.00b.2-E): a returning user's app-open — a device that
+    /// already completed its initial sync on a prior launch — must generate
+    /// BOTH due job occurrences and due maintenance-plan invoices, mirroring
+    /// RN's session-mount `useEffect`, which calls `checkAndGenerateRecurringJobs`
+    /// AND `checkAndGenerateRecurringInvoices` together
+    /// (`context/AuthContext.tsx:101-104`). `activateMigratedAuthenticatedIdentity()`
+    /// itself is not drivable in this host binary (its gate sits behind the
+    /// Info.plist-backed `BuildEnvironment` guard; see StoreIntegrationTests
+    /// "10.09 fix round 2"), so this exercises the real returning-user tail
+    /// of `applyAuthenticatedIdentityOutcome` through the
+    /// `testActivateReturningUserSession` seam.
+    @MainActor
+    static func returningUserLaunchGeneratesBothJobsAndInvoices() async throws {
+        let h = Harness(tag: "recurring-returning-user")
+        defer { h.cleanup() }
+        let today = NativeRecurringJobs.todayString()
+        let customer = Customer(name: "Returning User Roofing", email: "returning@example.test")
+        let seedJob = Job(customerId: customer.id, customerName: customer.name, title: "Gutter clean", laborRate: 80)
+        expect(h.store.upsert(customer) && h.store.upsert(seedJob), "L237.d fixture customer and job save")
+        guard var jobRule = h.store.recurringJobDraft(from: seedJob.id) else {
+            expect(false, "L237.d job rule draft")
+            return
+        }
+        jobRule.nextDueDate = today
+        expect(h.store.createRecurringJob(jobRule), "L237.d fixture job rule creates")
+        let invoiceRule = Canonical.RecurringInvoice(
+            id: "rinv-l237d", customerId: customer.id, customerName: customer.name,
+            description: "Maintenance", amount: 150, dueDays: 30,
+            cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+            occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: today,
+            isActive: true, createdAt: today, autoSendEnabled: false)
+        expect(h.store.createRecurringInvoice(invoiceRule), "L237.d fixture plan rule creates")
+        let jobsBefore = h.store.jobs.count
+        let invoicesBefore = h.store.invoices.count
+
+        // The returning-user app-open, with this device's prior sync already
+        // completed for this subject.
+        h.store.testActivateReturningUserSession(subject: Harness.subject, binding: Harness.binding)
+
+        expect(h.store.jobs.count == jobsBefore + 1,
+               "L237.d a returning user's app-open generates the due job occurrence")
+        expect(h.store.invoices.count == invoicesBefore + 1,
+               "L237.d a returning user's app-open ALSO generates the due plan invoice (RN calls both at mount)")
     }
 
     /// F. The server changed the same record the user has pending. Documented

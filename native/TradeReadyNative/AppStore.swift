@@ -5381,12 +5381,18 @@ final class AppStore: ObservableObject {
                 // (First syncs generate in the initial-sync task above, and
                 // every later sync generates in the pull hook.) Fix round 3:
                 // after the gate advances, since generation is gated on it.
+                // Phase 12.00b.2-E (L237.d): RN's session-mount `useEffect`
+                // calls `checkAndGenerateRecurringJobs` AND
+                // `checkAndGenerateRecurringInvoices` together
+                // (`context/AuthContext.tsx:101-104`) — this path was missing
+                // the invoice half.
                 advancePastInitialSync(
                     outcome: outcome,
                     allowUnboundWorkspaceAdoption: !outcome.verificationSource.isOfflineFallback
                         && allowUnboundWorkspaceAdoption
                 )
                 refreshRecurringJobs()
+                refreshRecurringInvoices()
                 // Fix round 2 (G5): RN runs its Square token heal on every
                 // sign-in (`App.tsx`); gated like generation, after the gate.
                 scrubLegacySquareToken()
@@ -11068,6 +11074,35 @@ extension AppStore {
             verificationSource: .live
         )
         bindInteractiveOwner(outcome, email: email, gateOverride: .signedIn(email: email))
+    }
+
+    /// Test-only (Phase 12.00b.2-E, L237.d): runs the real "returning user,
+    /// previously completed sync" tail of `applyAuthenticatedIdentityOutcome`
+    /// — the branch `activateMigratedAuthenticatedIdentity()` reaches on a
+    /// cold app-open once a prior sync has already completed for this
+    /// subject, mirroring RN's session-mount `useEffect`
+    /// (`context/AuthContext.tsx:101-104`, which calls
+    /// `checkAndGenerateRecurringJobs` AND `checkAndGenerateRecurringInvoices`
+    /// together). Marks the initial sync completed for `subject` first, since
+    /// only a real prior sync (or the offline-fallback branch) would have
+    /// before this runs. The real reactivation needs a configured Supabase
+    /// build, which this host-test binary does not have. Production never
+    /// calls this.
+    func testActivateReturningUserSession(subject: String, binding: String) {
+        initialSyncCompletedSubject = subject
+        let outcome = NativeAuthenticatedIdentityActivationOutcome(
+            accountState: .noAccountState,
+            newlyStagedCount: 0,
+            alreadyStagedCount: 0,
+            typedAccountState: nil,
+            localOwnerVerified: true,
+            accountBinding: binding,
+            verifiedAccountBinding: binding,
+            verifiedUserSubject: subject,
+            verifiedEmail: nil,
+            verificationSource: .live
+        )
+        applyAuthenticatedIdentityOutcome(outcome, email: nil)
     }
 
     /// Test-only (Phase 12, L286.7): runs the real teardown the four
