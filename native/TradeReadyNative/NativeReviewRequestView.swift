@@ -66,7 +66,7 @@ struct NativeReviewRequestView: View {
                     if draft.missingLink {
                         Section {
                             Label("Add your Google review link in Settings before sending.", systemImage: "link.badge.plus")
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(Color.tradeWarningText)
                         }
                     }
                     Section {

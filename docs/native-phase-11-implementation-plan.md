@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-21
 
-**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15, 11.10a, 11.11 and 11.12 done (2026-09-24); 11.10b code complete (2026-09-24), with H1 open on A29 pending an owner decision; 11.13 and 11.14 pending. See §7.
+**Status:** 11.00 contract frozen (2026-09-23); 11.01 and 11.04 done (2026-09-23); 11.02, 11.03, 11.05, 11.06, 11.07, 11.08, 11.09, 11.15, 11.10a, 11.11 and 11.12 done (2026-09-24); 11.10b done (2026-09-24; A29 fixed after the controller ruling, H1 closed); 11.13 and 11.14 pending. See §7.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
 **Phase entry dependency:** Phase 10 closeout (10.15) for 11.08 and 11.10a, and
@@ -791,7 +791,7 @@ complete / Phase 12 evidence deferred**.
 | 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A15–A18, A22 and A24 to 11.10b; fix round 1 closed I1–I3 and m1–m6; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`) and round 2 (`22f35fd`, review I1: a push acknowledged during a direct-caller pull)**: the pull commit rebases onto the live snapshot and takes the server's version only for records the device has not touched (pending at start or commit, or changed locally), holding a table's cursor where it keeps a local record over a fetched row, with scenarios D–G and table-driven merge cases running by default (229 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
-| 11.10b | H1 | Code complete (2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A28 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. **H1 is not closed:** A29 (success, warning and status colors as text, below 4.5:1 in light mode, as in RN) needs an owner decision. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
+| 11.10b | H1 | Done (code complete 2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A29 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. A29 (success, warning and status colors as text) is fixed with native text tokens after the controller ruling. **H1 is closed:** zero release-blocking findings remain. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
 | 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
 
@@ -3625,17 +3625,18 @@ queued, and it is generated again under a new id.
 
 ### 11.10b — Accessibility re-audit (2026-09-24)
 
-**Status:** Code complete. The re-audit after 11.11 and 11.12 is done, and the §12.1 items
+**Status:** Done. The re-audit after 11.11 and 11.12 is done, and the §12.1 items
 handed forward are resolved (contract §12.3):
 
 - **Fixed:** A13, A15, A16, A17, A18 and A24.
 - **Accepted with a rationale:** A22, because RN stacks its route move buttons the same way.
-- **Found and fixed:** A25–A28.
+- **Found and fixed:** A25–A28, and A29 after the controller ruling (see "A29 fix" below).
 
-**H1 is not closed.** A29 is open. Success, warning and status colors used as text measure
-2.1–4.1:1 in light mode. RN's own palette fails the same way (success 4.20, warning 3.21,
-status colors 2.15–3.68). The fix would move native's light-mode colors away from RN's
-palette, so it needs an owner decision. A12 and A19 stay Phase 12 device rows.
+**H1 is closed.** Zero release-blocking findings remain. A29 was the last one: success,
+warning and status colors used as text measured 2.1–4.1:1 in light mode, and RN's own
+palette fails the same way (success 4.20, warning 3.21, status colors 2.15–3.68). The
+controller ruled that native moves to darker light-mode text colors, because parity does
+not extend to inaccessible colors. A12 and A19 stay Phase 12 device rows.
 
 **Regressions checked in 11.11 and 11.12** (contract §12.3 table):
 - **Found:** the four ⌘N "+" buttons had no text title for the iPad shortcut HUD. Fixed:
@@ -3715,15 +3716,73 @@ palette, so it needs an owner decision. A12 and A19 stay Phase 12 device rows.
 | A11B-AX5-1 | AX5: Today schedule, booking requests, route list and preview, job photos, the Settings avatar and sync badge | The time and kind sit above their rows, nothing clips, and at least one photo fits the row |
 | A11B-TT-1 | Tap the Today card's "On my way" at its edge | It sends "On my way" rather than opening the job |
 
+**A29 fix (controller ruling, 2026-09-24).** The ruling: WCAG AA text contrast is a
+release requirement, parity does not extend to inaccessible colors, and native moves to
+darker light-mode text colors (the 11.10a `#2f78c4` dark fill is the precedent).
+
+- **Tokens** (`N/Models.swift`, literals mirrored in the audit palette and parsed by the
+  suite). Each is dynamic.
+  - Text: `tradeSuccessText`, `tradeWarningText`, `tradeInfoText`, `tradeMintText`,
+    `tradeIndigoText`, `tradePurpleText` and `tradeCyanText`.
+  - `tradeDangerText` light is darkened to `#a63c27`, because `#b8432b` measured 4.05:1 on
+    a 13% wash. Dark is `#ee917a`.
+  - Fills under white: `tradeSuccessFill` and `tradeWarningFill`.
+  - Every text token holds at least 4.70:1 on each light ground and its 13% wash, and at
+    least 4.71:1 on each dark ground and wash. The rows are generated in
+    `semanticColorRequirements`.
+- **Views** (29 files: 78 system-hue sites, 4 swipe tints and 6 destructive swipe tints).
+  - Every system hue became a token, including the helpers: `JobStatus.color`,
+    `NativeMoneyPalette`, the change-order tone, the booking `kindColor`, Settings
+    `statusColor`, the sync banner accent and the Today stat tint.
+  - Non-text dots, bars and the calendar conflict block take the text tokens, since
+    system green, orange, mint and cyan fail 3:1 on white.
+  - Swipe actions: Edit and Restore use `tradeReadyFill`, Archive `tradeWarningFill`, Mark
+    paid `tradeSuccessFill`, and the six destructive swipes `tradeDangerFill`.
+- **Tests:** `testSemanticColors`, plus `testPaletteLiteralsShipped` over every token. The
+  test checks:
+  - the generated rows, and baselines showing why each system hue failed;
+  - no system hue in a non-widget view, with the `.mint` portal/booking action allowlisted
+    per file;
+  - foreground styles carry only text tokens or the tint;
+  - fills, the ink and the canvas appear only inside tint, background, fill or overlay
+    calls, so a helper that returns a fill fails;
+  - no text token is used as a tint;
+  - all 10 swipe buttons have a fill tint;
+  - background washes stay at or below 13%;
+  - the detector fixtures.
+- **RED:** tests and palette written first, before the Models tokens and view changes:
+  `accessibility-audit tests: 137 of 1863 checks FAILED`.
+- **GREEN:** `accessibility-audit tests: 1873/1873 checks passed`.
+- **Mutations**, each restored:
+  - system green back in `NativeRouteView`: 1 failure;
+  - `kindColor` returning `tradeReadyFill`: 1 failure;
+  - a drifted `tradeSuccessText` literal: 1 failure;
+  - untinted destructive swipe in `MoneyView`: 1 failure;
+  - text token as a swipe tint: 2 failures;
+  - status wash at 20%: 1 failure;
+  - a fill as a foreground: 2 failures.
+- **Runs**, in order:
+  - accessibility-audit `1873/1873`;
+  - `layout-metrics tests: 817/817 checks passed`;
+  - `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → `exit=0` (65 PASS lines,
+    backend-workers `fail 0`);
+  - Release compile → `** BUILD SUCCEEDED **`;
+  - `sh native/run-doc-reference-check.sh` → `1618 path references checked: 0 missing, 14 planned (not yet created).`
+- **Phase 12 row** (not run, not claimed):
+
+| Row | Step | Pass when |
+|---|---|---|
+| A11B-LIGHT-1 | Light mode: job status pills (every status), Money success and warning tones, overdue and lead counts, booking kinds, Settings sync and subscription status, the paywall badges, and each swipe action | Every colored label is legible on its row and wash, the hue reads as before (green, orange, blue, mint, indigo, purple, cyan), and white swipe labels are legible |
+
 **Concerns:**
-- A29 is open and blocks closing H1. It needs an owner decision on light-mode success,
-  warning and status text colors that would differ from RN.
 - Visible changes:
-  - Error and destructive text moved from system red to RN's rust.
+  - Error and destructive text moved from system red to RN's rust, darkened in light mode
+    (A29).
+  - Success, warning and status text is darker in light mode than the system hues and
+    RN's palette (A29, native difference). Swipe actions use the fill tokens.
   - The Today card's status row is 44pt tall because of the "On my way" target.
 - Device proof stays in Phase 12 (the rows above and the 11.10a rows).
 - Not fixed here, per the brief: the `NativeRecurringInvoicesView` "Cancel plan" /
   "Delete plan" `actionRule` bug is still flagged for the final review.
 
-**Next ready:** the owner's A29 decision closes H1. After that come 11.13 (qualification)
-and 11.14 (closeout).
+**Next ready:** 11.13 (qualification), then 11.14 (closeout).

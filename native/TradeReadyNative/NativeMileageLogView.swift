@@ -54,6 +54,7 @@ struct NativeMileageLogView: View {
                         Button(role: .destructive) { pendingDeletion = row } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        .tint(Color.tradeDangerFill)
                     }
                 }
             }

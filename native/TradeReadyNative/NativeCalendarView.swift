@@ -120,7 +120,7 @@ struct NativeCalendarView: View {
             } else if let code = store.syncStatus.diagnosticCode {
                 Label("Could not refresh — showing your saved schedule (\(code)).",
                       systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote).foregroundStyle(.orange)
+                    .font(.footnote).foregroundStyle(Color.tradeWarningText)
                     .accessibilityLabel("Refresh failed. Showing your saved schedule.")
                     .accessibilityHint("Diagnostic code \(code). Your saved schedule is unchanged.")
             } else if store.syncStatus.pendingCount > 0 {
@@ -289,7 +289,7 @@ struct NativeCalendarView: View {
                 bufferMinutes: schedule.bufferMinutes))
         return Label("Overlaps \(hits.map(\.title).joined(separator: ", "))",
                      systemImage: "exclamationmark.triangle.fill")
-            .font(.caption).foregroundStyle(.orange)
+            .font(.caption).foregroundStyle(Color.tradeWarningText)
             .accessibilityLabel("Schedule conflict with \(hits.map(\.title).joined(separator: ", "))")
     }
 
@@ -320,7 +320,7 @@ struct NativeCalendarView: View {
                                 }
                                 if conflicts > 0 {
                                     Label("\(conflicts) conflict(s)", systemImage: "exclamationmark.triangle.fill")
-                                        .font(.caption).foregroundStyle(.orange)
+                                        .font(.caption).foregroundStyle(Color.tradeWarningText)
                                 }
                             }
                             Spacer()
@@ -476,7 +476,7 @@ private struct NativeCalendarTimeline<Job: ScheduleJobLike>: View {
     private func timelineBlock(_ block: NativeCalendar.CalendarBlock<Job>, width: CGFloat, axis: (startMinutes: Int, endMinutes: Int)) -> some View {
         let laneWidth: CGFloat = (width - 52) / CGFloat(max(block.laneCount, 1))
         let height: CGFloat = max(CGFloat(block.endMinutes - block.startMinutes) / 60 * pointsPerHour - 2, 14)
-        let fill: Color = block.inConflict ? Color.orange.opacity(0.35) : Color.accentColor.opacity(0.25)
+        let fill: Color = block.inConflict ? Color.tradeWarningText.opacity(0.35) : Color.accentColor.opacity(0.25)
         return RoundedRectangle(cornerRadius: 6, style: .continuous)
             .fill(fill)
             .frame(width: laneWidth - 4, height: height)

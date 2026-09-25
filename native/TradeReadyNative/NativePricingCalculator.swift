@@ -40,7 +40,7 @@ struct NativePricingCalculatorView: View {
                         ForEach(advisories) { advisory in
                             Label(advisory.message, systemImage: "exclamationmark.triangle")
                                 .font(.footnote)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(Color.tradeWarningText)
                         }
                     }
                 }

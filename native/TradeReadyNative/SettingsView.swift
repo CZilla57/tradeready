@@ -379,9 +379,9 @@ struct SyncSettings: View {
     }
 
     private var statusColor: Color {
-        if isOffline || store.syncStatus.diagnosticCode != nil { return .orange }
+        if isOffline || store.syncStatus.diagnosticCode != nil { return Color.tradeWarningText }
         if store.syncStatus.pendingCount > 0 || store.syncStatus.isSyncing { return .tradeReady }
-        return .green
+        return Color.tradeSuccessText
     }
 
     private var lastCompletedText: String {
@@ -432,9 +432,9 @@ struct PaymentsSettings: View {
             Section("STRIPE") {
                 if let status = store.stripeConnectStatus, status.connected {
                     HStack(spacing: 8) {
-                        Circle().fill(.green).frame(width: 8, height: 8)
+                        Circle().fill(Color.tradeSuccessText).frame(width: 8, height: 8)
                         Text(status.displayName.map { "Connected — \($0)" } ?? "Connected")
-                            .fontWeight(.semibold).foregroundStyle(.green)
+                            .fontWeight(.semibold).foregroundStyle(Color.tradeSuccessText)
                     }
                     if !status.detailsSubmitted {
                         Text("Tap below to complete your Stripe account setup before accepting payments.")
@@ -646,7 +646,7 @@ struct NotificationSettings: View {
             switch followUpNotifications.permissionState {
             case .authorized:
                 Label("Notifications enabled", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Color.tradeSuccessText)
             case .notRequested, .unknown:
                 Button("Enable notifications", systemImage: "bell.badge") {
                     Task {
@@ -695,7 +695,7 @@ struct SubscriptionSettings: View {
                     store.isSubscriptionTrialing ? "Free trial active" : "Subscription active",
                     systemImage: "checkmark.circle.fill"
                 )
-                .foregroundStyle(store.isSubscriptionTrialing ? .orange : .green)
+                .foregroundStyle(store.isSubscriptionTrialing ? Color.tradeWarningText : Color.tradeSuccessText)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical)

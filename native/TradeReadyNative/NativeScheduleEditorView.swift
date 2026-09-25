@@ -104,14 +104,14 @@ struct NativeScheduleEditorView: View {
                           ? "Saved."
                           : "Saved with \(saved.count) conflict(s): \(saved.joined(separator: ", ")).",
                           systemImage: saved.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(saved.isEmpty ? .green : .orange)
+                        .foregroundStyle(saved.isEmpty ? Color.tradeSuccessText : Color.tradeWarningText)
                         .accessibilityLabel(saved.isEmpty ? "Saved" : "Saved with conflicts: \(saved.joined(separator: ", "))")
                 }
             }
             if let stale = staleCurrent {
                 Section(header: Text("Needs review")) {
                     Text("The job changed while this schedule was open. Review the latest schedule before saving.")
-                        .font(.footnote).foregroundStyle(.orange)
+                        .font(.footnote).foregroundStyle(Color.tradeWarningText)
                     LabeledContent("Latest date", value: stale.date ?? "Unscheduled")
                     LabeledContent("Latest start", value: stale.start ?? "Untimed")
                     LabeledContent("Latest status", value: stale.status)
@@ -173,7 +173,7 @@ struct NativeScheduleEditorView: View {
                 Section(header: Text("Conflicts (warning only)")) {
                     Label("Overlaps \(conflictTitles.joined(separator: ", ")). Saving is still allowed.",
                           systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote).foregroundStyle(.orange)
+                        .font(.footnote).foregroundStyle(Color.tradeWarningText)
                         .accessibilityLabel("Warning: overlaps \(conflictTitles.joined(separator: ", ")). Saving is still allowed.")
                 }
             }

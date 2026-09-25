@@ -45,16 +45,16 @@ struct NativePaywallView: View {
                 if let trial = selectedPackage?.trial {
                     Label(trial.badge, systemImage: "gift")
                         .font(.subheadline.bold())
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Color.tradeSuccessText)
                         .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(.green.opacity(0.11), in: Capsule())
+                        .background(Color.tradeSuccessText.opacity(0.11), in: Capsule())
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(features, id: \.self) { feature in
                         Label(feature, systemImage: "checkmark.circle.fill")
                             .symbolRenderingMode(.palette)
-                            .foregroundStyle(.primary, .green)
+                            .foregroundStyle(.primary, Color.tradeSuccessText)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -160,7 +160,7 @@ struct NativePaywallView: View {
                             }
                             Spacer()
                             if package.period == .annual {
-                                Text("BEST VALUE").font(.caption2.bold()).foregroundStyle(.green)
+                                Text("BEST VALUE").font(.caption2.bold()).foregroundStyle(Color.tradeSuccessText)
                             }
                             Text(package.localizedPrice).font(.headline)
                         }

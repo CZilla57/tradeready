@@ -219,7 +219,7 @@ private struct MapPreviewView: View {
                 if preview.isPartial {
                     Label("Partial", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.tradeWarningText)
                 } else if preview.hasNoPreview {
                     Label("Unavailable", systemImage: "xmark.circle.fill")
                         .font(.caption)
@@ -227,7 +227,7 @@ private struct MapPreviewView: View {
                 } else {
                     Label("Complete", systemImage: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Color.tradeSuccessText)
                 }
             }
             .padding(.horizontal)
@@ -274,7 +274,7 @@ private struct MapPreviewView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Preview issues:")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.tradeWarningText)
                     ForEach(preview.failures, id: \.address) { failure in
                         Text("• \(failure.address)")
                             .font(.caption)

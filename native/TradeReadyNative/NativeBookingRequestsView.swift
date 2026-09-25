@@ -55,7 +55,7 @@ struct NativeBookingRequestsView: View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: emptyIconSize))
-                .foregroundStyle(.green)
+                .foregroundStyle(Color.tradeSuccessText)
             Text("All caught up")
                 .font(.title2.bold())
             Text("No booking requests need your attention right now.")
@@ -321,7 +321,7 @@ private struct RequestRowView: View {
             case .unconvertedActive:
                 Text("Needs conversion")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.tradeWarningText)
             }
             Spacer()
         }
@@ -339,11 +339,11 @@ private struct RequestRowView: View {
 
     private var kindColor: Color {
         switch kind {
-        case .rescheduleRequested: .orange
-        case .portalChange: .blue
+        case .rescheduleRequested: Color.tradeWarningText
+        case .portalChange: Color.tradeInfoText
         case .cancelled: .tradeDangerText
-        case .missingJob: .purple
-        case .unconvertedActive: .orange
+        case .missingJob: Color.tradePurpleText
+        case .unconvertedActive: Color.tradeWarningText
         }
     }
 

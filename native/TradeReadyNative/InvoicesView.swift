@@ -84,10 +84,10 @@ struct InvoicesView: View {
                             MetricCard(title: "Outstanding", value: store.invoices.reduce(0) { $0 + $1.balance }.currency)
                         }.buttonStyle(.plain)
                         Button { toggleStatFilter(.overdue) } label: {
-                            MetricCard(title: "Overdue", value: "\(store.invoices.filter(\.isOverdue).count)", color: .orange)
+                            MetricCard(title: "Overdue", value: "\(store.invoices.filter(\.isOverdue).count)", color: Color.tradeWarningText)
                         }.buttonStyle(.plain)
                         Button { toggleStatFilter(.paid) } label: {
-                            MetricCard(title: "Collected", value: store.invoices.reduce(0) { $0 + $1.amountPaid }.currency, color: .green)
+                            MetricCard(title: "Collected", value: store.invoices.reduce(0) { $0 + $1.amountPaid }.currency, color: Color.tradeSuccessText)
                         }.buttonStyle(.plain)
                     }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                 }
@@ -123,11 +123,12 @@ struct InvoicesView: View {
                                         customer: invoice.customer
                                     )
                                 } label: { Label("Delete", systemImage: "trash") }
+                                .tint(Color.tradeDangerFill)
                                 if !invoice.isPaid {
                                     Button { settleRequest = InvoiceSettleRequest(invoice: invoice, paymentID: Payment().id) } label: {
                                         Label("Paid", systemImage: "checkmark.circle")
                                     }
-                                    .tint(.green)
+                                    .tint(Color.tradeSuccessFill)
                                 }
                             }
                     }
@@ -329,7 +330,7 @@ struct InvoiceRow: View {
                 Text("\(invoice.number) · Due \(invoice.due.shortDate)").font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
                 Text(invoice.isPaid ? "Paid" : invoice.isOverdue ? "Overdue" : invoice.isPartlyPaid ? "Partial" : "Open")
-                    .font(.caption.weight(.semibold)).foregroundStyle(invoice.isPaid ? .green : invoice.isOverdue ? .orange : .blue)
+                    .font(.caption.weight(.semibold)).foregroundStyle(invoice.isPaid ? Color.tradeSuccessText : invoice.isOverdue ? Color.tradeWarningText : Color.tradeInfoText)
             }
         }.padding(.vertical, 4)
     }
@@ -363,7 +364,7 @@ struct InvoiceDetailView: View {
                 List {
                     Section {
                         VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .firstTextBaseline) { Text(invoice.balance.currency).font(.largeTitle.bold()); Spacer(); Text(invoice.isPaid ? "Paid" : invoice.isOverdue ? "Overdue" : "Open").foregroundStyle(invoice.isPaid ? .green : invoice.isOverdue ? .orange : .secondary) }
+                            HStack(alignment: .firstTextBaseline) { Text(invoice.balance.currency).font(.largeTitle.bold()); Spacer(); Text(invoice.isPaid ? "Paid" : invoice.isOverdue ? "Overdue" : "Open").foregroundStyle(invoice.isPaid ? Color.tradeSuccessText : invoice.isOverdue ? Color.tradeWarningText : .secondary) }
                             Text("of \(invoice.amount.currency) · due \(invoice.due.shortDate)").foregroundStyle(.secondary)
                             ContactButtons(phone: invoice.phone, email: invoice.email)
                         }.padding(.vertical, 5)
@@ -407,7 +408,7 @@ struct InvoiceDetailView: View {
                                     Text(payment.note).font(.caption).italic().foregroundStyle(.secondary)
                                 }
                                 if let voidedAt = payment.voidedAt {
-                                    Text("Voided \(voidedAt.shortDate)").font(.caption).foregroundStyle(.orange)
+                                    Text("Voided \(voidedAt.shortDate)").font(.caption).foregroundStyle(Color.tradeWarningText)
                                 }
                             }
                             .foregroundStyle(payment.voidedAt == nil ? .primary : .secondary)
@@ -419,12 +420,13 @@ struct InvoiceDetailView: View {
                                     Button(role: .destructive) { paymentToVoid = payment } label: {
                                         Label("Void", systemImage: "xmark.circle")
                                     }
+                                    .tint(Color.tradeDangerFill)
                                 }
                             }
                         }
                         if invoice.overpaidAmount > 0 {
                             LabeledContent("Overpaid", value: invoice.overpaidAmount.currency)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(Color.tradeWarningText)
                         }
                         if !invoice.isPaid {
                             Button { recordingPayment = true } label: { Label("Record payment", systemImage: "plus.circle.fill") }
@@ -634,9 +636,9 @@ struct PaymentEditor: View {
                     CurrencyField(title: "Amount", value: $amount)
                     if amount > invoice.balance {
                         Text("More than the \(invoice.balance.currency) balance — that's okay; the invoice will show as fully paid.")
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(.caption).foregroundStyle(Color.tradeWarningText)
                     } else if amount <= 0 {
-                        Text("Enter an amount greater than zero.").font(.caption).foregroundStyle(.orange)
+                        Text("Enter an amount greater than zero.").font(.caption).foregroundStyle(Color.tradeWarningText)
                     }
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                     Picker("Method", selection: $method) { ForEach(["Cash", "Cheque", "Card", "Other"], id: \.self) { Text($0) } }

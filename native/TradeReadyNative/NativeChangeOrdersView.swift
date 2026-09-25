@@ -85,7 +85,7 @@ struct NativeChangeOrdersSection: View {
     private func errorRow(_ message: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Color.tradeWarningText)
             Text(message)
                 .font(.footnote)
             Spacer(minLength: 4)
@@ -631,7 +631,7 @@ private struct ChangeOrderStatusBadge: View {
         switch tone {
         case .muted: .secondary
         case .accent: .tradeReady
-        case .success: .green
+        case .success: Color.tradeSuccessText
         case .danger: .tradeDangerText
         }
     }

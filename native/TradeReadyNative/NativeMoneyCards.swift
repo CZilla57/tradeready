@@ -12,8 +12,8 @@ enum NativeMoneyPalette {
     static func color(_ tone: NativeMoneyCardTone) -> Color {
         switch tone {
         case .accent: .tradeReady
-        case .success: .green
-        case .warning: .orange
+        case .success: Color.tradeSuccessText
+        case .warning: Color.tradeWarningText
         case .danger: .tradeDangerText
         case .neutral: .primary
         case .muted: .secondary
@@ -528,7 +528,7 @@ struct NativeMoneyTopCustomersCardView: View {
                             Spacer(minLength: 8)
                             Text(NativeMoneyFormat.money(row.amount))
                                 .font(.subheadline.monospacedDigit())
-                                .foregroundStyle(.green)
+                                .foregroundStyle(Color.tradeSuccessText)
                         }
                         NativeMoneyTrack(fraction: row.fraction, tone: .success, height: 5)
                     }
@@ -558,7 +558,7 @@ struct NativeMoneyCustomerMixCardView: View {
                                 .frame(width: geometry.size.width * Double(card.newPercent) / 100)
                         }
                         if card.mix.returningRevenue > 0 {
-                            Rectangle().fill(Color.green)
+                            Rectangle().fill(Color.tradeSuccessText)
                                 .frame(width: geometry.size.width * Double(card.returningPercent) / 100)
                         }
                     }
@@ -570,7 +570,7 @@ struct NativeMoneyCustomerMixCardView: View {
                         Text("\(card.newPercent)% new").font(.caption2).foregroundStyle(Color.tradeReady)
                     }
                     if card.mix.returningRevenue > 0 {
-                        Text("\(card.returningPercent)% returning").font(.caption2).foregroundStyle(.green)
+                        Text("\(card.returningPercent)% returning").font(.caption2).foregroundStyle(Color.tradeSuccessText)
                     }
                 }
             }
@@ -911,13 +911,13 @@ struct NativeMoneyTaxCardView: View {
             Text(card.breakdown.periodSummaryText).font(.caption).foregroundStyle(.secondary)
             Text(card.ytdLabel).font(.caption).foregroundStyle(.secondary)
             if let prompt = card.breakdown.vehiclePrompt {
-                Text(prompt).font(.caption).foregroundStyle(.orange)
+                Text(prompt).font(.caption).foregroundStyle(Color.tradeWarningText)
             }
             if let prompt = card.breakdown.incomeRatePrompt {
                 Text(prompt).font(.caption).foregroundStyle(.secondary)
             }
             if let note = card.breakdown.staleRatesNote {
-                Text(note).font(.caption).foregroundStyle(.orange)
+                Text(note).font(.caption).foregroundStyle(Color.tradeWarningText)
             }
             Text(card.breakdown.mileageDisclosure).font(.caption2).foregroundStyle(.secondary)
             Text(card.breakdown.disclaimer).font(.caption2).foregroundStyle(.secondary)

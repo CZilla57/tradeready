@@ -344,9 +344,8 @@ func testPaletteLiteralsShipped(root: URL) {
         ("tradeReady", p.tradeReadyDark, p.tradeReadyLight),
         ("tradeReadyFill", p.tradeReadyFillDark, p.tradeReadyFillLight),
         ("tradeCanvas", p.tradeCanvasDark, p.tradeCanvasLight),
-        ("tradeDangerFill", p.dangerFillDark, p.dangerFillLight),
-        ("tradeDangerText", p.dangerTextDark, p.dangerTextLight),
-    ]
+    ] + Audit.semanticColorTokens.map { ($0.name, dark: $0.dark, light: $0.light) }
+    expect(expectations.count >= 14, "palette expectations cover the semantic tokens (\(expectations.count))")
     for (name, dark, light) in expectations {
         let defs = paletteDefinitions(models, name)
         guard let ios = defs.ios else { expect(false, "Models.swift: iOS definition of \(name) found"); continue }
@@ -1194,6 +1193,230 @@ func testDangerText(root: URL, sources: [SourceFile]) {
     } else { expect(false, "RN AuthScreen.tsx readable") }
 }
 
+// MARK: A29 semantic text colors
+
+/// The SwiftUI system hues. None may be written in an app view: each has a
+/// semantic token whose light and dark literals are proven above.
+let systemHuePattern = #"(?:\bColor\.|(?<![\w)\]])\.)(green|orange|mint|cyan|indigo|purple|blue|yellow|teal|pink|brown)\b"#
+
+/// `.mint` also names the portal and booking-link "mint" action (an enum case,
+/// not a color). These are the audited non-color uses per file.
+let nonColorMintUses: [String: Int] = [
+    "AppStore.swift": 2,
+    "NativeBookingAdministration.swift": 2,
+    "NativeBookingSettingsView.swift": 1,
+    "NativeCustomerPortalView.swift": 3,
+    "NativePortalAdministration.swift": 2,
+]
+
+/// Identifiers of the calls enclosing `index`, innermost first (skipping
+/// array literals and ternaries; stops at the first enclosing brace).
+func enclosingCalls(_ source: SourceFile, at index: Int) -> [String] {
+    var calls: [String] = []
+    var depth = 0
+    var k = index - 1
+    while k >= 0 {
+        let c = source.code[k]
+        if c == ")" || c == "]" || c == "}" { depth += 1 }
+        else if c == "[" { if depth > 0 { depth -= 1 } }
+        else if c == "{" { if depth > 0 { depth -= 1 } else { return calls } }
+        else if c == "(" {
+            if depth > 0 { depth -= 1 } else {
+                var e = k
+                var b = e
+                while b > 0, source.code[b - 1].isLetter || source.code[b - 1].isNumber || source.code[b - 1] == "_" { b -= 1 }
+                if b < e { calls.append(String(source.code[b..<e])) } else { calls.append("") }
+                e = b
+            }
+        }
+        k -= 1
+    }
+    return calls
+}
+
+func testSemanticColors(root: URL, sources: [SourceFile]) {
+    let p = Audit.Palette.self
+    let tokens = Audit.semanticColorTokens
+    let textTokens = Set(tokens.filter { $0.kind == .text }.map(\.name))
+    let fillTokens = Set(tokens.filter { $0.kind == .fill }.map(\.name)).union(["tradeReadyFill"])
+    expectEqual(Set(tokens.map(\.name)).count, tokens.count, "semantic token names unique")
+    for name in ["tradeSuccessText", "tradeWarningText", "tradeInfoText", "tradeMintText", "tradeIndigoText",
+                 "tradePurpleText", "tradeCyanText", "tradeDangerText", "tradeSuccessFill", "tradeWarningFill", "tradeDangerFill"] {
+        expect(tokens.contains { $0.name == name }, "semantic token \(name) declared")
+    }
+
+    // Every pairing is a proven row: each text token on each ground and its
+    // 13% wash in both appearances, each fill under white in both.
+    let requirements = Audit.contrastRequirements
+    let byName = Dictionary(requirements.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+    for token in tokens {
+        let rows = requirements.filter { $0.foreground == token.light || $0.foreground == token.dark || $0.background == token.light || $0.background == token.dark }
+        switch token.kind {
+        case .text:
+            let expected = 2 * (Audit.lightTextGrounds.count + Audit.darkTextGrounds.count)
+            let textRows = rows.filter { $0.role == .text && ($0.foreground == token.light || $0.foreground == token.dark) }
+            expect(textRows.count >= expected, "\(token.name): \(textRows.count) text rows ≥ \(expected)")
+            for ground in Audit.lightTextGrounds {
+                let wash = Audit.composite(token.light, alpha: Audit.maximumTextWashAlpha, over: ground.color)
+                expect(Audit.contrastRatio(token.light, ground.color) >= Audit.Threshold.text, "\(token.name) light on \(ground.name)")
+                expect(Audit.contrastRatio(token.light, wash) >= Audit.Threshold.text, "\(token.name) light on its wash over \(ground.name)")
+            }
+            for ground in Audit.darkTextGrounds {
+                let wash = Audit.composite(token.dark, alpha: Audit.maximumTextWashAlpha, over: ground.color)
+                expect(Audit.contrastRatio(token.dark, ground.color) >= Audit.Threshold.text, "\(token.name) dark on \(ground.name)")
+                expect(Audit.contrastRatio(token.dark, wash) >= Audit.Threshold.text, "\(token.name) dark on its wash over \(ground.name)")
+            }
+            expect(token.light != token.dark, "\(token.name) is dynamic (light and dark differ)")
+        case .fill:
+            expect(Audit.contrastRatio(p.white, token.light) >= Audit.Threshold.text, "white text on \(token.name) (light)")
+            expect(Audit.contrastRatio(p.white, token.dark) >= Audit.Threshold.text, "white text on \(token.name) (dark)")
+            expect(rows.contains { $0.foreground == p.white && $0.background == token.dark && $0.role == .text }, "\(token.name): white-on-dark-fill row present")
+        }
+    }
+    expect(byName["success text on its 13% wash over light grouped background (light)"] != nil, "generated row naming")
+    expectEqual(Audit.maximumTextWashAlpha, 0.13, "wash ceiling is the status badge's 13%")
+
+    // Baselines: why the system hues left the views (light mode, white row).
+    let systemLight: [(String, String)] = [("green", "#34c759"), ("orange", "#ff9500"), ("mint", "#00c7be"), ("cyan", "#32ade6")]
+    for (hue, hex) in systemLight {
+        let color = RGB(hex: hex)!
+        expect(Audit.contrastRatio(color, p.white) < Audit.Threshold.nonText, "baseline: system \(hue) on white fails even 3:1")
+    }
+    let systemWashFails: [(String, String)] = [("blue", "#007aff"), ("indigo", "#5856d6"), ("purple", "#af52de")]
+    for (hue, hex) in systemWashFails {
+        let color = RGB(hex: hex)!
+        let wash = Audit.composite(color, alpha: Audit.maximumTextWashAlpha, over: p.systemGroupedLight)
+        expect(Audit.contrastRatio(color, wash) < Audit.Threshold.text, "baseline: system \(hue) on its wash fails text AA")
+    }
+    let rnDanger = RGB(hex: "#b8432b")!
+    expect(Audit.contrastRatio(rnDanger, Audit.composite(rnDanger, alpha: 0.13, over: p.systemGroupedLight)) < Audit.Threshold.text,
+           "baseline: RN danger #b8432b on its 13% wash fails (why A29 darkened danger text)")
+    for (hue, hex) in [("green", "#34c759"), ("orange", "#ff9500"), ("red", "#ff3b30")] {
+        expect(Audit.contrastRatio(p.white, RGB(hex: hex)!) < Audit.Threshold.text, "baseline: white on system \(hue) swipe fails text AA")
+    }
+
+    // 1. No system hue in an app view (the widget canvas and Domain excluded).
+    let hue = try! NSRegularExpression(pattern: systemHuePattern)
+    var textTokenUses: [String: Int] = [:]
+    let appSources = sources.filter { !$0.relativePath.hasPrefix("Widgets/") && !$0.relativePath.hasPrefix("Domain/") && !$0.relativePath.hasPrefix(widgetTargetPrefix) }
+    for source in appSources {
+        let text = source.codeText
+        let ns = text as NSString
+        var mint = 0
+        for match in hue.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            if ns.substring(with: match.range(at: 1)) == "mint" { mint += 1; continue }
+            expect(false, "system hue \(ns.substring(with: match.range)) at N/\(source.relativePath):\(source.line(of: match.range.location)); use a semantic token (A29)")
+        }
+        expectEqual(mint, nonColorMintUses[source.relativePath] ?? 0, "N/\(source.relativePath): .mint is only the audited portal/booking action")
+        for name in textTokens { textTokenUses[name, default: 0] += source.occurrences(of: name).count }
+    }
+    for name in textTokens.sorted() {
+        expect((textTokenUses[name] ?? 0) > 0, "\(name) is used by a view")
+    }
+
+    // 2. Foreground styles carry only text tokens (or the tint): a helper
+    //    that hands a fill, the ink or the canvas to text fails here.
+    let allowedForeground = textTokens.union(["tradeReady"])
+    let tradeIdentifier = try! NSRegularExpression(pattern: #"\btrade[A-Z]\w*"#)
+    for source in appSources {
+        for name in ["foregroundStyle", "foregroundColor"] {
+            for index in source.occurrences(of: name) {
+                let open = source.skipSpace(index + name.count)
+                guard open < source.code.count, source.code[open] == "(", let close = source.matching(open) else { continue }
+                let args = source.codeSlice(open..<(close + 1))
+                let ns = args as NSString
+                for match in tradeIdentifier.matches(in: args, range: NSRange(location: 0, length: ns.length)) {
+                    let id = ns.substring(with: match.range)
+                    expect(allowedForeground.contains(id), "N/\(source.relativePath):\(source.line(of: index)): \(name) uses \(id); text needs a text token (A29)")
+                }
+            }
+        }
+    }
+
+    // 3. Fills, the ink and the canvas only fill: every use sits inside a
+    //    tint, background or fill call (a helper returning one is caught too).
+    for source in appSources {
+        for name in fillTokens.union(["tradeInk", "tradeCanvas"]) {
+            for index in source.occurrences(of: name) {
+                // The declarations themselves (N/Models.swift).
+                if index >= 11, String(source.code[(index - 11)..<index]) == "static let " { continue }
+                let calls = enclosingCalls(source, at: index).filter { $0 != "LinearGradient" && $0 != "" }
+                let first = calls.first ?? "(none)"
+                // `overlay` is the tinted divider hairline in MoneyView.
+                expect(["tint", "background", "fill", "overlay", "scrollContentBackground", "listRowBackground", "toolbarBackground"].contains(first),
+                       "N/\(source.relativePath):\(source.line(of: index)): \(name) inside \(first); fills are surfaces only (A29)")
+            }
+        }
+        // A text token never tints a control: swipe actions and prominent
+        // buttons draw white on the tint.
+        for index in source.occurrences(of: "tint") where index > 0 && source.code[index - 1] == "." {
+            let open = source.skipSpace(index + 4)
+            guard open < source.code.count, source.code[open] == "(", let close = source.matching(open) else { continue }
+            let args = source.codeSlice(open..<(close + 1))
+            for name in textTokens where args.contains(name) {
+                expect(false, "N/\(source.relativePath):\(source.line(of: index)): .tint(\(name)); a tint under white text needs a fill token (A29)")
+            }
+        }
+    }
+
+    // 4. Every swipe action has a fill tint (white on system red, green and
+    //    orange measured 3.55, 2.22 and 2.20:1).
+    var swipeButtons = 0
+    for source in appSources {
+        for index in source.occurrences(of: "swipeActions") {
+            var open = source.skipSpace(index + "swipeActions".count)
+            if open < source.code.count, source.code[open] == "(", let close = source.matching(open) { open = source.skipSpace(close + 1) }
+            guard open < source.code.count, source.code[open] == "{", let close = source.matching(open) else {
+                expect(false, "N/\(source.relativePath):\(source.line(of: index)): swipeActions block parsed"); continue
+            }
+            let block = source.codeSlice(open..<(close + 1))
+            let buttons = block.components(separatedBy: "Button").count - 1
+            let tints = try! NSRegularExpression(pattern: #"\.tint\(([^()]*)\)"#)
+            let ns = block as NSString
+            let tintArgs = tints.matches(in: block, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range(at: 1)) }
+            expectEqual(tintArgs.count, buttons, "N/\(source.relativePath):\(source.line(of: index)): every swipe button has a tint")
+            for arg in tintArgs {
+                expect(fillTokens.contains { arg.contains($0) }, "N/\(source.relativePath):\(source.line(of: index)): swipe tint \(arg) is a fill token")
+            }
+            swipeButtons += buttons
+        }
+    }
+    expectEqual(swipeButtons, 10, "swipe buttons audited")
+
+    // 5. Tinted washes stay within the proven 13%.
+    let opacity = try! NSRegularExpression(pattern: #"\.opacity\(([0-9.]+)\)"#)
+    for source in appSources {
+        for index in source.occurrences(of: "background") where index > 0 && source.code[index - 1] == "." {
+            let open = source.skipSpace(index + "background".count)
+            guard open < source.code.count, source.code[open] == "(", let close = source.matching(open) else { continue }
+            let args = source.codeSlice(open..<(close + 1))
+            let ns = args as NSString
+            for match in opacity.matches(in: args, range: NSRange(location: 0, length: ns.length)) {
+                guard let alpha = Double(ns.substring(with: match.range(at: 1))) else { continue }
+                expect(alpha <= Audit.maximumTextWashAlpha + 1e-9,
+                       "N/\(source.relativePath):\(source.line(of: index)): background wash \(alpha) exceeds the proven \(Audit.maximumTextWashAlpha)")
+            }
+        }
+    }
+
+    // 6. The helpers that carry status colors.
+    if let models = read(root, "native/TradeReadyNative/Models.swift") {
+        let body = models.range(of: "var color: Color {").map { String(models[$0.upperBound...].prefix(500)) } ?? ""
+        for name in ["tradeInfoText", "tradeWarningText", "tradeMintText", "tradeIndigoText", "tradePurpleText", "tradeSuccessText", "tradeCyanText"] {
+            expect(body.contains(name), "JobStatus.color uses \(name)")
+        }
+    }
+
+    // The detectors themselves.
+    let fixture = "Text(a).foregroundStyle(.green)\n.tint(ok ? Color.blue : .orange)\ncase .lead: .indigo\nlet x = rgb.green + UIColor(red: 1, green: 0, blue: 0) + c.orange\nawait administer(.mint)"
+    let fixtureMatches = hue.matches(in: fixture, range: NSRange(location: 0, length: (fixture as NSString).length))
+    expectEqual(fixtureMatches.count, 5, "system-hue detector: 4 colors and the .mint action, not RGB components")
+    let helper = SourceFile(relativePath: "Fixture.swift", text: "var c: Color { ok ? .tradeSuccessFill : .secondary }\nText(a).background(ok ? Color.tradeReadyFill : .clear, in: Capsule())")
+    let helperCalls = helper.occurrences(of: "tradeSuccessFill").map { enclosingCalls(helper, at: $0).first ?? "(none)" }
+    expectEqual(helperCalls, ["(none)"], "fill detector flags a helper that returns a fill")
+    expectEqual(helper.occurrences(of: "tradeReadyFill").map { enclosingCalls(helper, at: $0).first ?? "(none)" }, ["background"], "fill detector allows a background")
+}
+
 // MARK: A17, A13, A25, A26 and the white-text allowlist
 
 func testReAuditSites(root: URL, sources: [SourceFile]) {
@@ -1286,6 +1509,7 @@ struct AccessibilityAuditTests {
         testFixedFrames(sources: allSources)
         testReAuditSites(root: root, sources: sources)
         testDangerText(root: root, sources: sources)
+        testSemanticColors(root: root, sources: sources)
 
         if failures > 0 {
             print("accessibility-audit tests: \(failures) of \(checks) checks FAILED")

@@ -167,7 +167,7 @@ struct NativeImportView: View {
                 ForEach(problems.rows, id: \.rowIndex) { outcome in
                     Text(NativeImportCopy.outcomeText(outcome))
                         .font(.caption.monospaced())
-                        .foregroundStyle(outcome.status == "flag" ? .orange : .secondary)
+                        .foregroundStyle(outcome.status == "flag" ? Color.tradeWarningText : .secondary)
                 }
                 if problems.extra > 0 {
                     Text("+\(problems.extra) more").font(.footnote).foregroundStyle(.secondary)

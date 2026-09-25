@@ -30,13 +30,13 @@ enum JobStatus: String, Codable, CaseIterable, Identifiable {
     }
     var color: Color {
         switch self {
-        case .lead: .blue
-        case .estimateSent: .orange
-        case .approved: .mint
-        case .scheduled: .indigo
-        case .inProgress: .purple
-        case .complete, .paid: .green
-        case .invoiced: .cyan
+        case .lead: .tradeInfoText
+        case .estimateSent: .tradeWarningText
+        case .approved: .tradeMintText
+        case .scheduled: .tradeIndigoText
+        case .inProgress: .tradePurpleText
+        case .complete, .paid: .tradeSuccessText
+        case .invoiced: .tradeCyanText
         case .declined: .secondary
         }
     }
@@ -469,19 +469,43 @@ extension Color {
     /// Filled surfaces under white text or icons (selected chips, prominent buttons).
     static let tradeReadyFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.184, green: 0.471, blue: 0.769, alpha: 1) : UIColor(red: 0.114, green: 0.361, blue: 0.620, alpha: 1) })
     static let tradeCanvas = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.063, green: 0.094, blue: 0.149, alpha: 1) : UIColor(red: 0.961, green: 0.961, blue: 0.945, alpha: 1) })
-    /// Destructive filled surfaces under white text (the clock-out button). Light is RN
-    /// `lightColors.danger`; dark is native only (system red measured about 3.3:1 under white).
+    /// Destructive filled surfaces under white text (the clock-out button and, from A29, the
+    /// destructive swipe actions). Light is RN `lightColors.danger`; dark is native only
+    /// (system red measured about 3.3:1 under white).
     static let tradeDangerFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.800, green: 0.290, blue: 0.188, alpha: 1) : UIColor(red: 0.722, green: 0.263, blue: 0.169, alpha: 1) })
-    /// Error and destructive text (11.10b A28). Light is RN `lightColors.danger`, the
-    /// color RN gives error text; dark is native only. System red text measured 3.55:1
-    /// on a white list row.
-    static let tradeDangerText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.922, green: 0.490, blue: 0.388, alpha: 1) : UIColor(red: 0.722, green: 0.263, blue: 0.169, alpha: 1) })
+    /// Error and destructive text (11.10b A28, darkened by A29). Light is RN's
+    /// `lightColors.danger` rust darkened to hold 4.5:1 on the 13% status washes; dark is
+    /// native only. System red text measured 3.55:1 on a white list row.
+    static let tradeDangerText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.934, green: 0.567, blue: 0.480, alpha: 1) : UIColor(red: 0.650, green: 0.237, blue: 0.152, alpha: 1) })
+    /// Semantic text colors (11.10b A29): each light variant is the system hue darkened to
+    /// hold 4.5:1 on every light ground and its own 13% wash; each dark variant is the
+    /// system dark value where that passes. Native difference from RN's palette; the
+    /// audit palette carries the same literals. Text, glyphs, dots and washes use these.
+    static let tradeSuccessText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.188, green: 0.820, blue: 0.345, alpha: 1) : UIColor(red: 0.112, green: 0.429, blue: 0.192, alpha: 1) })
+    static let tradeWarningText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 1.000, green: 0.624, blue: 0.039, alpha: 1) : UIColor(red: 0.550, green: 0.321, blue: 0.000, alpha: 1) })
+    static let tradeInfoText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.366, green: 0.682, blue: 1.000, alpha: 1) : UIColor(red: 0.000, green: 0.361, blue: 0.755, alpha: 1) })
+    static let tradeMintText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.388, green: 0.902, blue: 0.886, alpha: 1) : UIColor(red: 0.000, green: 0.421, blue: 0.402, alpha: 1) })
+    static let tradeIndigoText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.640, green: 0.636, blue: 0.944, alpha: 1) : UIColor(red: 0.321, green: 0.314, blue: 0.780, alpha: 1) })
+    static let tradePurpleText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.828, green: 0.557, blue: 0.965, alpha: 1) : UIColor(red: 0.525, green: 0.246, blue: 0.666, alpha: 1) })
+    static let tradeCyanText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.392, green: 0.824, blue: 1.000, alpha: 1) : UIColor(red: 0.116, green: 0.400, blue: 0.532, alpha: 1) })
+    /// Swipe-action fills under white text and glyphs (A29); never a text color.
+    static let tradeSuccessFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.139, green: 0.530, blue: 0.237, alpha: 1) : UIColor(red: 0.135, green: 0.515, blue: 0.230, alpha: 1) })
+    static let tradeWarningFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.674, green: 0.394, blue: 0.000, alpha: 1) : UIColor(red: 0.655, green: 0.383, blue: 0.000, alpha: 1) })
 #else
     static let tradeReady = Color(red: 0.114, green: 0.361, blue: 0.620)
     static let tradeReadyFill = Color(red: 0.114, green: 0.361, blue: 0.620)
     static let tradeCanvas = Color(red: 0.961, green: 0.961, blue: 0.945)
     static let tradeDangerFill = Color(red: 0.722, green: 0.263, blue: 0.169)
-    static let tradeDangerText = Color(red: 0.722, green: 0.263, blue: 0.169)
+    static let tradeDangerText = Color(red: 0.650, green: 0.237, blue: 0.152)
+    static let tradeSuccessText = Color(red: 0.112, green: 0.429, blue: 0.192)
+    static let tradeWarningText = Color(red: 0.550, green: 0.321, blue: 0.000)
+    static let tradeInfoText = Color(red: 0.000, green: 0.361, blue: 0.755)
+    static let tradeMintText = Color(red: 0.000, green: 0.421, blue: 0.402)
+    static let tradeIndigoText = Color(red: 0.321, green: 0.314, blue: 0.780)
+    static let tradePurpleText = Color(red: 0.525, green: 0.246, blue: 0.666)
+    static let tradeCyanText = Color(red: 0.116, green: 0.400, blue: 0.532)
+    static let tradeSuccessFill = Color(red: 0.135, green: 0.515, blue: 0.230)
+    static let tradeWarningFill = Color(red: 0.655, green: 0.383, blue: 0.000)
 #endif
 }
 

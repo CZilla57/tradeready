@@ -125,7 +125,7 @@ struct CustomersView: View {
                                             systemImage: customer.isArchived ? "arrow.uturn.backward" : "archivebox"
                                         )
                                     }
-                                    .tint(customer.isArchived ? .blue : .orange)
+                                    .tint(customer.isArchived ? Color.tradeReadyFill : Color.tradeWarningFill)
                                 }
                             }
                         }
@@ -656,7 +656,7 @@ struct CustomerEditor: View {
                     if addressLookup.state == .selected {
                         Label("Address selected", systemImage: "checkmark.circle.fill")
                             .font(.caption)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Color.tradeSuccessText)
                     } else if addressLookup.state == .noResults {
                         Text("No matching address found. You can still save what you entered.")
                             .font(.caption)

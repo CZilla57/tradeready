@@ -71,7 +71,8 @@ struct JobsView: View {
                                 Button(role: .destructive) {
                                     confirmationRequest = .deleteJob(id: job.id, title: job.title)
                                 } label: { Label("Delete", systemImage: "trash") }
-                                Button { editingJob = job } label: { Label("Edit", systemImage: "pencil") }.tint(.blue)
+                                .tint(Color.tradeDangerFill)
+                                Button { editingJob = job } label: { Label("Edit", systemImage: "pencil") }.tint(Color.tradeReadyFill)
                             }
                             .swipeActions(edge: .leading) {
                                 Button {
@@ -82,7 +83,7 @@ struct JobsView: View {
                                         systemImage: item.isArchived ? "arrow.uturn.backward" : "archivebox"
                                     )
                                 }
-                                .tint(item.isArchived ? .blue : .orange)
+                                .tint(item.isArchived ? Color.tradeReadyFill : Color.tradeWarningFill)
                             }
                     }
                 }

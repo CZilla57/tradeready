@@ -62,6 +62,7 @@ struct NativePricebookView: View {
                                     Button(role: .destructive) { pendingDeletion = row } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
+                                    .tint(Color.tradeDangerFill)
                                 }
                                 .accessibilityAction(named: "Delete \(row.name)") {
                                     pendingDeletion = row

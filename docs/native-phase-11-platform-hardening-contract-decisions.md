@@ -65,7 +65,7 @@ characterization).
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen; crash side implemented by 11.09 (§10.4) | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen; implemented by 11.15 with the native differences in §11.1 | 11.15 |
-| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audited after 11.11 and 11.12 (§12.3): A13, A15–A18 and A24–A28 fixed, A22 accepted; A29 (success, warning and status colors as text) is open pending an owner decision, so H1 is not closed | 11.10a/11.10b |
+| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audited after 11.11 and 11.12 (§12.3): A13, A15–A18 and A24–A29 fixed, A22 accepted. A29 (success, warning and status colors as text) was fixed with native text tokens after the controller ruling (2026-09-24). Zero release-blocking findings remain, so **H1 is closed** | 11.10a/11.10b |
 | C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
 
@@ -1693,7 +1693,7 @@ policy, RN label catalog). The view helpers are in `N/NativeAccessibilityViews.s
 **Release-blocking findings open: 0.** H1 stays open until 11.10b re-audits after
 11.11 and 11.12. **11.10b update:** see §12.3. The re-audit fixed A13 and A15–A18,
 found and fixed A25–A28, and recorded A29 (success, warning and status colors used as
-text) as open pending an owner decision. H1 is therefore still not closed.
+text). The controller ruled on A29 on 2026-09-24 and it is fixed. **H1 is closed.**
 
 **Palette decision (native difference).** `tradeReady` is now dynamic:
 
@@ -1759,8 +1759,8 @@ tint text on that ground, so this is recorded only.
 | A25 | Found by 11.10b: the Today card's "On my way" link was glyph-sized (RN pads it with `hitSlop` 8) | **Fixed:** 44×44 minimum target | `testReAuditSites` |
 | A26 | Found by 11.10b: the route map's stop number was white text directly on the map tiles | **Fixed:** it sits on a `tradeReadyFill` capsule (4.56:1 or better) | `testReAuditSites`, contrast row |
 | A27 | Found by 11.10b: the route preview's loading and empty bands were a fixed 200pt, which clips AX5 text | **Fixed:** 200pt minimum height | `testFixedFrames` |
-| A28 | Found by 11.10b: error, validation and destructive text used system red. It measures 3.55:1 on a white list row in light mode and 4.09:1 on a dark sheet row. The danger money tone, the booking "Cancelled" kind, overdue amounts and the coach error wash used it too | **Fixed** with `tradeDangerText`. Light is `#b8432b` (RN `lightColors.danger`, the color RN gives error text): 5.42:1 on white, 4.86:1 on grouped gray. Dark is `#eb7d63` (native only): 5.07:1 on `#2c2c2e`, where RN's `#e06a4f` measures 4.21:1. No system red remains in a non-widget view | `testDangerText` (no `.red`/`Color.red` token), contrast rows, palette literals |
-| A29 | Found by 11.10b: success, warning and status colors used as text measure below 4.5:1 on white in light mode. System green is 2.22, orange 2.20, mint 2.12, cyan 2.54, blue 4.02 and purple 4.13, across about 110 uses (Money tones, job status pills, overdue and lead counts, booking kinds). Dark mode passes. RN has the same class of failure: `lightColors.success` 4.20, `warning` 3.21 and most `status*` colors 2.15–3.68 | **Open: owner decision needed.** The fix is darker light-mode text colors that differ from RN's palette, which the brief says to raise rather than decide. It is the same kind of failure as §12 blocking candidate 1, so H1 is not closed | Ratios computed with the suite's WCAG math; recorded in §12.3 |
+| A28 | Found by 11.10b: error, validation and destructive text used system red. It measures 3.55:1 on a white list row in light mode and 4.09:1 on a dark sheet row. The danger money tone, the booking "Cancelled" kind, overdue amounts and the coach error wash used it too | **Fixed** with `tradeDangerText`, still RN's rust hue. Light is `#a63c27`: RN `lightColors.danger` `#b8432b` darkened by A29, because `#b8432b` measured 4.05:1 on a 13% status wash over the grouped background. It is now 6.36:1 on white and 5.70:1 on grouped gray. Dark is `#ee917a` (native only): 5.94:1 on `#2c2c2e`, where RN's `#e06a4f` measures 4.21:1. Every pair holds at least 4.71:1, washes included. No system red remains in a non-widget view | `testDangerText` (no `.red`/`Color.red` token), contrast rows, palette literals |
+| A29 | Found by 11.10b: success, warning and status colors used as text measure below 4.5:1 on white in light mode. System green is 2.22, orange 2.20, mint 2.12, cyan 2.54, blue 4.02 and purple 4.13, across about 110 uses (Money tones, job status pills, overdue and lead counts, booking kinds). Dark mode passes. RN has the same class of failure: `lightColors.success` 4.20, `warning` 3.21 and most `status*` colors 2.15–3.68 | **Fixed (native difference; controller ruling 2026-09-24).** Parity does not extend to inaccessible colors, the same precedent as the 11.10a dark fill. Seven dynamic text tokens replace the system hues: `tradeSuccessText` `#1d6d31`/`#30d158`, `tradeWarningText` `#8c5200`/`#ff9f0a`, `tradeInfoText` `#005cc1`/`#5daeff`, `tradeMintText` `#006b67`/`#63e6e2`, `tradeIndigoText` `#5250c7`/`#a3a2f1`, `tradePurpleText` `#863faa`/`#d38ef6` and `tradeCyanText` `#1e6688`/`#64d2ff` (light/dark). Each light value keeps the system hue, darkened. Each dark value is the system dark color where that passes; blue, indigo and purple are lightened. Every text token, `tradeDangerText` included, holds at least 4.70:1 on white, grouped gray, the canvas and its own 13% wash over each in light mode. In dark mode it holds at least 4.71:1 on black, `#1c1c1e`, `#2c2c2e`, the dark canvas, RN's surface and the washes. Non-text uses (status dots, the retention bar, the calendar conflict block, check glyphs) take the same tokens, because system green, orange, mint and cyan fail even 3:1 on white. Swipe actions drew white on system green, orange and red (2.22, 2.20 and 3.55:1). They now use `tradeSuccessFill` `#22833b`/`#23873c`, `tradeWarningFill` `#a76200`/`#ac6400`, `tradeReadyFill` and `tradeDangerFill`. Every one is at least 4.55:1 under white, and each dark fill is at least 3:1 on the dark rows | `testSemanticColors`: palette literals parsed from `N/Models.swift`, generated contrast rows, no system hue in a non-widget view (the `.mint` portal action is allowlisted per file), foreground styles carry only text tokens, fills appear only inside tint, background, fill or overlay calls (a helper returning one fails), no text token as a tint, every swipe button tinted with a fill, and washes at or below 13%. The mutations are in the plan §7 log |
 
 
 ### 12.2 11.11 iPad layouts, multitasking, rotation and hardware keyboard (2026-09-24)
@@ -1928,7 +1928,7 @@ iOS 17 floor, since the probe ran on the iOS 26 runtime.
 (`c4e040a..7da61a2`). It resolved the §12.1 items handed forward and extended the 11.10a
 scanner. The proof is still `sh native/run-accessibility-audit-tests.sh`.
 
-**Release-blocking findings open: 1 (A29, pending an owner decision). H1 is not closed.**
+**Release-blocking findings open: 0. H1 is closed** (A29 fixed after the controller ruling of 2026-09-24).
 Every other §12.1 row is fixed, accepted with a rationale, or a Phase 12 device row
 (A12 and A19).
 
@@ -1963,7 +1963,15 @@ Every other §12.1 row is fixed, accepted with a rationale, or a Phase 12 device
 - **Chart summaries.** These are native only.
 - **Dark danger colors.** `tradeDangerFill` `#cc4a30` and `tradeDangerText` `#eb7d63` are
   native only. RN's dark `#e06a4f` fails under white text and on the sheet list row.
-- **Error text color.** Error text moved from system red to RN's rust.
+- **Error text color.** Error text moved from system red to RN's rust, darkened in light
+  mode to `#a63c27` so it holds on the status washes (A29).
+- **Semantic text colors (A29).** Success, warning and status text uses native tokens:
+  the system hue darkened in light mode, and lightened in dark mode for blue, indigo and
+  purple. They are not RN's `lightColors.success`, `warning` or `status*` values, which
+  fail text AA too (2.15–4.20:1). WCAG AA text contrast is a release requirement, and
+  parity does not extend to inaccessible colors.
+- **Swipe-action fills (A29).** The swipe actions use the fill tokens, not system green,
+  orange, blue and red.
 
 ## 13. Device matrix (H2–H4; roadmap verification deferral 2026-09-16)
 

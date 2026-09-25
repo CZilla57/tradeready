@@ -26,7 +26,7 @@ struct NativeRecurringJobsView: View {
                                     }
                                     Spacer()
                                     Label(rule.isActive ? "Active" : "Paused", systemImage: rule.isActive ? "play.circle.fill" : "pause.circle.fill")
-                                        .font(.caption).foregroundStyle(rule.isActive ? .green : .secondary)
+                                        .font(.caption).foregroundStyle(rule.isActive ? Color.tradeSuccessText : .secondary)
                                 }
                                 Text("\(cadenceLabel(rule.cadence)) · \(rule.occurrenceCount) generated · next \(rule.nextDueDate)")
                                     .font(.caption).foregroundStyle(.secondary)

@@ -164,7 +164,7 @@ struct NativeTodayStatsRowView: View {
                 value: leadCount > 0 ? "\(leadCount)" : "—",
                 sub: leadCount > 0 ? "follow up" : "None pending",
                 accent: leadCount > 0,
-                tint: leadCount > 0 ? .orange : .secondary,
+                tint: leadCount > 0 ? Color.tradeWarningText : .secondary,
                 action: onLeadsTap,
                 accessibilityLabel: "Leads: \(leadCount > 0 ? "\(leadCount) to follow up" : "none pending")"
             )
@@ -252,16 +252,16 @@ struct NativeTodayBookingAttentionRow: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 10) {
-                Image(systemName: symbol).font(.subheadline).foregroundStyle(.orange)
+                Image(systemName: symbol).font(.subheadline).foregroundStyle(Color.tradeWarningText)
                 Text(NativeTodayBriefing.bookingRowLabel(row))
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.tradeWarningText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text("›").font(.title3).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Color.tradeWarningText.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(NativeTodayBriefing.bookingRowLabel(row))
@@ -314,13 +314,13 @@ struct NativeTodayOverdueInvoiceRow: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(nativeTodayMoney(invoice.amount))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(isSerious ? Color.tradeDangerText : Color.orange)
+                        .foregroundStyle(isSerious ? Color.tradeDangerText : Color.tradeWarningText)
                         .monospacedDigit()
                     Text("\(daysPastDue)d overdue")
                         .font(.caption2.monospaced())
-                        .foregroundStyle(isSerious ? Color.tradeDangerText : Color.orange)
+                        .foregroundStyle(isSerious ? Color.tradeDangerText : Color.tradeWarningText)
                         .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background((isSerious ? Color.tradeDangerText : .orange).opacity(0.12), in: Capsule())
+                        .background((isSerious ? Color.tradeDangerText : Color.tradeWarningText).opacity(0.12), in: Capsule())
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 14)

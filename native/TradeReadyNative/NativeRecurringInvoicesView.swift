@@ -79,7 +79,7 @@ struct NativeRecurringInvoicesView: View {
                             Spacer()
                             Text(rule.isActive ? "Active" : "Paused")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(rule.isActive ? .green : .orange)
+                                .foregroundStyle(rule.isActive ? Color.tradeSuccessText : Color.tradeWarningText)
                         }
                     }.buttonStyle(.plain)
                 }

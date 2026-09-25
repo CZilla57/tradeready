@@ -94,7 +94,7 @@ struct NativeScheduleSettingsView: View {
             if staleConflict {
                 Section(header: Text("Needs review")) {
                     Text("Schedule settings changed on another device. Review the latest settings before saving.")
-                        .font(.footnote).foregroundStyle(.orange)
+                        .font(.footnote).foregroundStyle(Color.tradeWarningText)
                     Button("Reload latest into this draft") { load(); staleConflict = false }
                         .accessibilityHint("Re-reads the latest settings but keeps nothing you typed")
                 }
@@ -205,7 +205,7 @@ struct NativeScheduleSettingsView: View {
                 if slotsEnabled, !NativeAvailability.isValidIANAZone(timeZoneText) {
                     Label("Enter a valid IANA zone before saving with slots enabled — slots stay off until then.",
                           systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(Color.tradeWarningText)
                 }
                 Text("Enabling slots keeps your existing valid zone, or stamps this device's zone (UTC fallback). Slot availability is separate from link enablement.")
                     .font(.caption).foregroundStyle(.secondary)

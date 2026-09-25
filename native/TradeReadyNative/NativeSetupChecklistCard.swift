@@ -43,7 +43,7 @@ struct NativeSetupChecklistCardView: View {
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: task.done ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(task.done ? .green : .secondary)
+                                .foregroundStyle(task.done ? Color.tradeSuccessText : .secondary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(task.title)
                                     .font(.subheadline.weight(.medium))

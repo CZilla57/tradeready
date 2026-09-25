@@ -111,7 +111,7 @@ struct NativeInvoiceOutreachView: View {
                                     Text("Requesting \(NativeInvoiceOutreach.formatMoney(ask.amount)) of the \(NativeInvoiceOutreach.formatMoney((invoice.balance * 100).rounded() / 100)) balance")
                                         .font(.caption).foregroundStyle(.secondary)
                                 } else if depositMode == .custom && requestedAmount <= 0 {
-                                    Text("Enter an amount greater than zero.").font(.caption).foregroundStyle(.orange)
+                                    Text("Enter an amount greater than zero.").font(.caption).foregroundStyle(Color.tradeWarningText)
                                 }
                             }
                             Section("Pay via") {

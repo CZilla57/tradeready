@@ -185,13 +185,13 @@ struct TodayView: View {
         if let row = store.todayAwaitingEstimatesRow {
             Button { handle(.jobs) } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "hourglass").font(.subheadline).foregroundStyle(.orange)
-                    Text(row.label).font(.subheadline.weight(.medium)).foregroundStyle(.orange)
+                    Image(systemName: "hourglass").font(.subheadline).foregroundStyle(Color.tradeWarningText)
+                    Text(row.label).font(.subheadline.weight(.medium)).foregroundStyle(Color.tradeWarningText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("›").font(.title3).foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Color.tradeWarningText.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(row.label)

@@ -123,14 +123,14 @@ struct NativeBookingSettingsView: View {
                 }
             } else if localDisplay.token != nil {
                 Text("The saved link is stale or unverified — refresh its status before sharing. A stale token is never shared.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Color.tradeWarningText)
                     .accessibilityLabel("Saved link is stale or unverified. Refresh before sharing.")
             }
         }
     }
 
     private var stateDot: some View {
-        let color: Color = shareURL != nil ? .green : (authority == nil ? .orange : .secondary)
+        let color: Color = shareURL != nil ? Color.tradeSuccessText : (authority == nil ? Color.tradeWarningText : .secondary)
         return Circle().fill(color).frame(width: 10, height: 10)
             .accessibilityHidden(true)
     }

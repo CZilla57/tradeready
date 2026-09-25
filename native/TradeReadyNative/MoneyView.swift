@@ -251,6 +251,7 @@ struct MoneyView: View {
                         Button(role: .destructive) { pendingExpenseDeletion = row } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        .tint(Color.tradeDangerFill)
                     }
             }
         }

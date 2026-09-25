@@ -117,14 +117,148 @@ enum NativeAccessibilityAudit {
         /// button used before 11.10b. Recorded as the A18 baseline only.
         static let systemRedLight = RGB(hex: "#ff3b30")!
         static let systemRedDark = RGB(hex: "#ff453a")!
-        /// Error and destructive text (11.10b A28). Light is RN
-        /// `lightColors.danger` `#b8432b`, the color RN gives error text.
-        /// System red text measured 3.55:1 on a white list row.
-        static let dangerTextLight = RGB(red: 0.722, green: 0.263, blue: 0.169)
-        /// Dark `#eb7d63`, native only: RN's dark danger `#e06a4f` measures
+        /// Error and destructive text (11.10b A28, darkened by A29). Light
+        /// `#a63c27` is RN's `lightColors.danger` rust `#b8432b` darkened so it
+        /// holds 4.5:1 on the 13% status washes too (`#b8432b` measured 4.05:1
+        /// on a 13% wash over the grouped background). System red text
+        /// measured 3.55:1 on a white list row.
+        static let dangerTextLight = RGB(red: 0.650, green: 0.237, blue: 0.152)
+        /// Dark `#ee917a`, native only: RN's dark danger `#e06a4f` measures
         /// 4.21:1 on a sheet list row `#2c2c2e`.
-        static let dangerTextDark = RGB(red: 0.922, green: 0.490, blue: 0.388)
+        static let dangerTextDark = RGB(red: 0.934, green: 0.567, blue: 0.480)
+
+        // Semantic text colors (11.10b A29). The system hues fail text AA in
+        // light mode (system green on white measures 2.22:1), so each light
+        // variant is the system hue darkened until it holds 4.5:1 on every
+        // light ground and its own 13% wash. Each dark variant is the system
+        // dark value where that already passes, otherwise a lighter tint of
+        // the same hue. Native difference: RN uses its own palette here.
+
+        /// Success (paid, active, synced). Dark is system green `#30d158`.
+        static let successTextLight = RGB(red: 0.112, green: 0.429, blue: 0.192)
+        static let successTextDark = RGB(red: 0.188, green: 0.820, blue: 0.345)
+        /// Warning (overdue, pending, validation hints). Dark is system orange `#ff9f0a`.
+        static let warningTextLight = RGB(red: 0.550, green: 0.321, blue: 0.000)
+        static let warningTextDark = RGB(red: 1.000, green: 0.624, blue: 0.039)
+        /// Information (the lead status, open invoices, portal changes). Native
+        /// dark: system blue `#0a84ff` measures 3.82:1 on a sheet list row.
+        static let infoTextLight = RGB(red: 0.000, green: 0.361, blue: 0.755)
+        static let infoTextDark = RGB(red: 0.366, green: 0.682, blue: 1.000)
+        /// The approved status. Dark is system mint `#63e6e2`.
+        static let mintTextLight = RGB(red: 0.000, green: 0.421, blue: 0.402)
+        static let mintTextDark = RGB(red: 0.388, green: 0.902, blue: 0.886)
+        /// The scheduled status. Light system indigo `#5856d6` measures 4.25:1
+        /// on its wash; native dark: system indigo `#5e5ce6` measures 2.75:1 on
+        /// a sheet list row.
+        static let indigoTextLight = RGB(red: 0.321, green: 0.314, blue: 0.780)
+        static let indigoTextDark = RGB(red: 0.640, green: 0.636, blue: 0.944)
+        /// The in-progress status and missing-job booking requests. Native dark:
+        /// system purple `#bf5af2` measures 3.96:1 on a sheet list row.
+        static let purpleTextLight = RGB(red: 0.525, green: 0.246, blue: 0.666)
+        static let purpleTextDark = RGB(red: 0.828, green: 0.557, blue: 0.965)
+        /// The invoiced status. Dark is system cyan `#64d2ff`.
+        static let cyanTextLight = RGB(red: 0.116, green: 0.400, blue: 0.532)
+        static let cyanTextDark = RGB(red: 0.392, green: 0.824, blue: 1.000)
+
+        /// Swipe-action fills under white text and glyphs (A29): system green
+        /// and orange measure 2.22:1 and 2.20:1 under white. Each dark variant
+        /// also stays at 3:1 or better on the dark list rows.
+        static let successFillLight = RGB(red: 0.135, green: 0.515, blue: 0.230)
+        static let successFillDark = RGB(red: 0.139, green: 0.530, blue: 0.237)
+        static let warningFillLight = RGB(red: 0.655, green: 0.383, blue: 0.000)
+        static let warningFillDark = RGB(red: 0.674, green: 0.394, blue: 0.000)
     }
+
+    // MARK: Semantic color tokens (A28, A29)
+
+    struct SemanticColorToken: Equatable {
+        enum Kind: Equatable {
+            /// Text, glyphs and other foreground marks, including tinted washes.
+            case text
+            /// A filled surface under white text or glyphs.
+            case fill
+        }
+        /// The `Color` token in `N/Models.swift`.
+        let name: String
+        let kind: Kind
+        let light: RGB
+        let dark: RGB
+    }
+
+    /// Every semantic token the views may use in place of a system hue. The
+    /// host suite checks each one's literals in `N/Models.swift` and proves each
+    /// pairing below.
+    static let semanticColorTokens: [SemanticColorToken] = {
+        let p = Palette.self
+        return [
+            .init(name: "tradeDangerText", kind: .text, light: p.dangerTextLight, dark: p.dangerTextDark),
+            .init(name: "tradeSuccessText", kind: .text, light: p.successTextLight, dark: p.successTextDark),
+            .init(name: "tradeWarningText", kind: .text, light: p.warningTextLight, dark: p.warningTextDark),
+            .init(name: "tradeInfoText", kind: .text, light: p.infoTextLight, dark: p.infoTextDark),
+            .init(name: "tradeMintText", kind: .text, light: p.mintTextLight, dark: p.mintTextDark),
+            .init(name: "tradeIndigoText", kind: .text, light: p.indigoTextLight, dark: p.indigoTextDark),
+            .init(name: "tradePurpleText", kind: .text, light: p.purpleTextLight, dark: p.purpleTextDark),
+            .init(name: "tradeCyanText", kind: .text, light: p.cyanTextLight, dark: p.cyanTextDark),
+            .init(name: "tradeDangerFill", kind: .fill, light: p.dangerFillLight, dark: p.dangerFillDark),
+            .init(name: "tradeSuccessFill", kind: .fill, light: p.successFillLight, dark: p.successFillDark),
+            .init(name: "tradeWarningFill", kind: .fill, light: p.warningFillLight, dark: p.warningFillDark),
+        ]
+    }()
+
+    /// The strongest tinted wash a semantic text color sits on: the status
+    /// badges use 12% and 13%, the Today and paywall chips 8% to 11%.
+    static let maximumTextWashAlpha = 0.13
+
+    /// The grounds semantic text sits on, by appearance.
+    static let lightTextGrounds: [(name: String, color: RGB)] = [
+        ("white list row", Palette.white),
+        ("light grouped background", Palette.systemGroupedLight),
+        ("light canvas", Palette.tradeCanvasLight),
+    ]
+    static let darkTextGrounds: [(name: String, color: RGB)] = [
+        ("dark system background", Palette.systemBackgroundDark),
+        ("dark list row", Palette.secondaryGroupedDark),
+        ("dark sheet list row", Palette.elevatedGroupedDark),
+        ("dark canvas", Palette.tradeCanvasDark),
+        ("RN dark surface", Palette.rnSurfaceDark),
+    ]
+
+    /// Each text token on each ground and on its own strongest wash over that
+    /// ground; each fill under white and against the list rows it sits in.
+    static let semanticColorRequirements: [ContrastRequirement] = {
+        let label: (String) -> String = { name in
+            // "tradeSuccessText" -> "success text"
+            let stem = name.dropFirst("trade".count)
+            var words = ""
+            for char in stem {
+                if char.isUppercase, !words.isEmpty { words += " " }
+                words += char.lowercased()
+            }
+            return words
+        }
+        var rows: [ContrastRequirement] = []
+        for token in semanticColorTokens {
+            let name = label(token.name)
+            switch token.kind {
+            case .text:
+                for (appearance, color, grounds) in [("light", token.light, lightTextGrounds), ("dark", token.dark, darkTextGrounds)] {
+                    for ground in grounds {
+                        rows.append(.init(name: "\(name) on \(ground.name)", foreground: color, background: ground.color, role: .text))
+                        let wash = composite(color, alpha: maximumTextWashAlpha, over: ground.color)
+                        rows.append(.init(name: "\(name) on its 13% wash over \(ground.name) (\(appearance))", foreground: color, background: wash, role: .text))
+                    }
+                }
+            case .fill:
+                rows.append(.init(name: "white text on \(name) (light)", foreground: Palette.white, background: token.light, role: .text))
+                rows.append(.init(name: "white text on \(name) (dark)", foreground: Palette.white, background: token.dark, role: .text))
+                rows.append(.init(name: "\(name) UI on white list row", foreground: token.light, background: Palette.white, role: .nonText))
+                for ground in darkTextGrounds {
+                    rows.append(.init(name: "\(name) UI on \(ground.name)", foreground: token.dark, background: ground.color, role: .nonText))
+                }
+            }
+        }
+        return rows
+    }()
 
     enum ContrastRole: String {
         case text
@@ -183,26 +317,12 @@ enum NativeAccessibilityAudit {
             // Today hero icon: a white glyph on an 18% white disc over the fill.
             .init(name: "Today hero icon: white on 18% white disc over fill (light)", foreground: p.white, background: heroDiscLight, role: .nonText),
             .init(name: "Today hero icon: white on 18% white disc over fill (dark)", foreground: p.white, background: heroDiscDark, role: .nonText),
-            // Clock-out button (11.10b A18): white label on the danger fill.
-            .init(name: "white text on danger fill (light)", foreground: p.white, background: p.dangerFillLight, role: .text),
-            .init(name: "white text on danger fill (dark)", foreground: p.white, background: p.dangerFillDark, role: .text),
-            .init(name: "danger fill UI on light list row", foreground: p.dangerFillLight, background: p.white, role: .nonText),
-            .init(name: "danger fill UI on dark canvas", foreground: p.dangerFillDark, background: p.tradeCanvasDark, role: .nonText),
-            .init(name: "danger fill UI on dark list row", foreground: p.dangerFillDark, background: p.secondaryGroupedDark, role: .nonText),
-            .init(name: "danger fill UI on dark sheet list row", foreground: p.dangerFillDark, background: p.elevatedGroupedDark, role: .nonText),
-            // Error and destructive text (11.10b A28): RN's danger color, on
-            // every ground a message or destructive row sits on.
-            .init(name: "danger text on white list row", foreground: p.dangerTextLight, background: p.white, role: .text),
-            .init(name: "danger text on light grouped background", foreground: p.dangerTextLight, background: p.systemGroupedLight, role: .text),
-            .init(name: "danger text on light canvas", foreground: p.dangerTextLight, background: p.tradeCanvasLight, role: .text),
-            .init(name: "danger text on dark system background", foreground: p.dangerTextDark, background: p.systemBackgroundDark, role: .text),
-            .init(name: "danger text on dark canvas", foreground: p.dangerTextDark, background: p.tradeCanvasDark, role: .text),
-            .init(name: "danger text on dark list row", foreground: p.dangerTextDark, background: p.secondaryGroupedDark, role: .text),
-            .init(name: "danger text on dark sheet list row", foreground: p.dangerTextDark, background: p.elevatedGroupedDark, role: .text),
-            .init(name: "danger text on RN dark surface", foreground: p.dangerTextDark, background: p.rnSurfaceDark, role: .text),
+            // The clock-out button (A18) and the destructive swipes (A29), white
+            // on the danger fill, and every semantic text color (A28, A29):
+            // `semanticColorRequirements`.
             // Route map stop number (11.10b A26): white on a fill capsule, not on the map.
             .init(name: "route map stop number: white on fill (dark)", foreground: p.white, background: p.tradeReadyFillDark, role: .text),
-        ]
+        ] + semanticColorRequirements
     }()
 
     // MARK: Motion

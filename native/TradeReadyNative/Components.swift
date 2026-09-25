@@ -62,7 +62,7 @@ struct NativeSyncBanner: View {
     }
 
     private var accentColor: Color {
-        isOffline || store.syncStatus.diagnosticCode != nil ? .orange : .tradeReady
+        isOffline || store.syncStatus.diagnosticCode != nil ? Color.tradeWarningText : .tradeReady
     }
 }
 
