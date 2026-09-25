@@ -49,6 +49,44 @@ struct RepositoryTests {
         let retainedLegacy = try Data(contentsOf: legacyURL)
         expect(retainedLegacy == legacy, "legacy backup is immutable across retries")
 
+        // Task 11.13 fix round 3: preserved legacy bytes (which can hold an
+        // RN-era plaintext Square token) are written with complete file
+        // protection and the LegacyBackups tree is excluded from backup.
+        // File protection is not observable on a macOS host, so the chosen
+        // options are asserted through the seam; device proof is Phase 12.
+        func excludedFromBackup(_ url: URL) -> Bool {
+            var fresh = url
+            fresh.removeAllCachedResourceValues()
+            return (try? fresh.resourceValues(forKeys: [.isExcludedFromBackupKey]))?.isExcludedFromBackup == true
+        }
+        expect(Canonical.SnapshotRepository.legacyBackupWriteOptions == [.atomic, .completeFileProtection],
+               "legacy backup writes use atomic + complete file protection")
+        expect(Canonical.SnapshotRepository.legacyBackupFileProtection == .complete,
+               "copied legacy directories are given complete file protection")
+        expect(excludedFromBackup(repository.legacyBackupDirectoryURL),
+               "preserveLegacyBytes excludes LegacyBackups from backup")
+        do {
+            let artifactRoot = root.appendingPathComponent("artifact-case", isDirectory: true)
+            let artifactRepository = Canonical.SnapshotRepository(primaryURL: artifactRoot.appendingPathComponent("store.json"))
+            _ = try artifactRepository.preserveLegacyArtifact(Data("{}".utf8), migration: .legacyNativeSnapshot,
+                                                               filename: "app-group-values.json")
+            expect(excludedFromBackup(artifactRepository.legacyBackupDirectoryURL),
+                   "preserveLegacyArtifact excludes LegacyBackups from backup")
+
+            let directoryRoot = root.appendingPathComponent("directory-case", isDirectory: true)
+            let source = directoryRoot.appendingPathComponent("rn-async-storage", isDirectory: true)
+            try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+            try Data("{\"providerKeys\":{\"square\":\"EAAA-token\"}}".utf8)
+                .write(to: source.appendingPathComponent("manifest.json"), options: .atomic)
+            let directoryRepository = Canonical.SnapshotRepository(primaryURL: directoryRoot.appendingPathComponent("store.json"))
+            let copied = try directoryRepository.preserveLegacyDirectory(source, migration: .legacyNativeSnapshot,
+                                                                         name: "AsyncStorage")
+            expect(FileManager.default.fileExists(atPath: copied.appendingPathComponent("manifest.json").path),
+                   "preserveLegacyDirectory still copies the source")
+            expect(excludedFromBackup(directoryRepository.legacyBackupDirectoryURL),
+                   "preserveLegacyDirectory excludes LegacyBackups from backup")
+        }
+
         let brokenPrimary = root.appendingPathComponent("broken.json")
         let brokenRepository = Canonical.SnapshotRepository(primaryURL: brokenPrimary)
         try Data("bad-primary".utf8).write(to: brokenPrimary, options: .atomic)

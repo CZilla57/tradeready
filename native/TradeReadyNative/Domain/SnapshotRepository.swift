@@ -32,6 +32,14 @@ extension Canonical {
             case corruptPrimaryNoUsableBackup(primary: Error, backup: Error?)
         }
 
+        /// Task 11.13 fix round 3: everything under `LegacyBackups/` is the
+        /// exact pre-conversion source, which can hold an RN-era plaintext
+        /// Square access token (contract §17.2 G6). It is written with
+        /// complete file protection, copied directories get the same class,
+        /// and the tree is excluded from device backup.
+        static let legacyBackupWriteOptions: Data.WritingOptions = [.atomic, .completeFileProtection]
+        static let legacyBackupFileProtection: FileProtectionType = .complete
+
         let primaryURL: URL
         let backupURL: URL
         let legacyBackupDirectoryURL: URL
@@ -184,13 +192,10 @@ extension Canonical {
         /// immutable so retrying a migration cannot destroy its recovery point.
         @discardableResult
         func preserveLegacyBytes(_ data: Data, migration: MigrationKind) throws -> URL {
-            try fileManager.createDirectory(
-                at: legacyBackupDirectoryURL,
-                withIntermediateDirectories: true
-            )
+            try prepareLegacyBackupDirectory(legacyBackupDirectoryURL)
             let destination = legacyBackupDirectoryURL.appendingPathComponent("\(migration.rawValue).json")
             if !fileManager.fileExists(atPath: destination.path) {
-                try atomicWrite(data, to: destination)
+                try data.write(to: destination, options: Self.legacyBackupWriteOptions)
             }
             return destination
         }
@@ -202,10 +207,10 @@ extension Canonical {
             filename: String
         ) throws -> URL {
             let directory = legacyBackupDirectoryURL.appendingPathComponent(migration.rawValue, isDirectory: true)
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try prepareLegacyBackupDirectory(directory)
             let destination = directory.appendingPathComponent(filename)
             if !fileManager.fileExists(atPath: destination.path) {
-                try atomicWrite(data, to: destination)
+                try data.write(to: destination, options: Self.legacyBackupWriteOptions)
             }
             return destination
         }
@@ -221,7 +226,7 @@ extension Canonical {
         ) throws -> URL {
             let migrationDirectory = legacyBackupDirectoryURL
                 .appendingPathComponent(migration.rawValue, isDirectory: true)
-            try fileManager.createDirectory(at: migrationDirectory, withIntermediateDirectories: true)
+            try prepareLegacyBackupDirectory(migrationDirectory)
             let destination = migrationDirectory.appendingPathComponent(name, isDirectory: true)
             if fileManager.fileExists(atPath: destination.path) { return destination }
 
@@ -229,6 +234,7 @@ extension Canonical {
                 .appendingPathComponent(".\(name)-staging-\(UUID().uuidString)", isDirectory: true)
             do {
                 try fileManager.copyItem(at: source, to: staging)
+                protectCopiedLegacyFiles(in: staging)
                 try fileManager.moveItem(at: staging, to: destination)
             } catch {
                 try? fileManager.removeItem(at: staging)
@@ -283,6 +289,33 @@ extension Canonical {
             }
             try atomicWrite(data, to: candidate)
             return candidate
+        }
+
+        /// Creates `directory` (under `LegacyBackups/`) and excludes the whole
+        /// `LegacyBackups/` tree from device backup. A failure to set the flag
+        /// never fails the import; it logs a bounded stage code only (no path).
+        private func prepareLegacyBackupDirectory(_ directory: URL) throws {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            var root = legacyBackupDirectoryURL
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            do { try root.setResourceValues(values) } catch {
+                print("TradeReadyLegacyBackup stage=exclude-from-backup")
+            }
+        }
+
+        /// A copied directory keeps the source's protection class; raise every
+        /// copied file to `legacyBackupFileProtection`. Best effort, bounded log.
+        private func protectCopiedLegacyFiles(in directory: URL) {
+            guard let files = fileManager.enumerator(at: directory, includingPropertiesForKeys: nil) else { return }
+            var failed = false
+            for case let file as URL in files where !file.hasDirectoryPath {
+                do {
+                    try fileManager.setAttributes([.protectionKey: Self.legacyBackupFileProtection],
+                                                  ofItemAtPath: file.path)
+                } catch { failed = true }
+            }
+            if failed { print("TradeReadyLegacyBackup stage=file-protection") }
         }
 
         private func atomicWrite(_ data: Data, to url: URL) throws {

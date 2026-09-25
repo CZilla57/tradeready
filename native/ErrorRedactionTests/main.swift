@@ -374,10 +374,24 @@ struct ErrorRedactionTests {
             // 11.13 fix round 1 (I1): the Square token prefixes match whole
             // tokens only, not the provider name or an EAAA-free word.
             "provider square link saved for sq0 region EAA",
+            // 11.13 fix round 3: `EAAA` needs a 20+ character token tail, so
+            // short words that merely start with it are not redacted.
+            "code EAAA and EAAAB and EAAAshortword are not tokens",
         ]
         for text in keep {
             expectEqual(redaction.redactString(text), text, "preserve: '\(text)'")
         }
+        for word in ["EAAA", "EAAAB", "EAAAshortword", " EAAA1234567890123456789 "] {
+            expectEqual(NativeSensitiveData.containsSecret(word), false, "containsSecret: '\(word)' is too short for a Square token")
+        }
+        let realistic = "EAAAl" + String(repeating: "Zx9_Kq-3", count: 7) + "abc"
+        expectEqual(realistic.count, 64, "sanity: the realistic Square token is 64 characters")
+        expectEqual(NativeSensitiveData.containsSecret(realistic), true, "containsSecret: a 64-character Square token")
+        expectEqual(NativeSensitiveData.containsSecret("EAAA" + String(repeating: "a", count: 20)), true,
+                    "containsSecret: EAAA plus a 20-character tail is the minimum token")
+        let redactedRealistic = redaction.redactString("square rejected \(realistic) today")
+        expectEqual(redactedRealistic.contains("EAAA") || redactedRealistic.contains("Zx9_Kq"), false,
+                    "redactString scrubs a realistic 64-character Square token")
         expectEqual(
             redaction.redactURL("https://abc.supabase.co/rest/v1/jobs/123e4567-e89b-12d3-a456-426614174000"),
             "https://abc.supabase.co/rest/v1/jobs/123e4567-e89b-12d3-a456-426614174000",

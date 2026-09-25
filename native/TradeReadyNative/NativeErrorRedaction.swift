@@ -19,14 +19,20 @@ enum NativeSensitiveData {
     /// JWTs (Supabase access tokens), GitHub tokens, and Square access tokens
     /// (`EAAA`) and legacy access tokens and application secrets (`sq0atp-`,
     /// `sq0atb-`, `sq0csp-`, `sq0csb-`). RN `scrubLegacySquareToken` deletes
-    /// such a value from settings at every sign-in; native has no such pass,
-    /// so these screens must recognise it (11.13 fix round 1, I1).
+    /// such a value from settings at every sign-in (native ports it in 11.13
+    /// fix round 2); these screens recognise it too (fix round 1, I1).
     static let secretValuePrefixes: [String] = [
         "sk-", "sk_live_", "sk_test_", "rk_live_", "rk_test_", "pk_live_", "pk_test_", "whsec_",
         "gsk_", "appl_", "goog_", "amzn_", "strp_", "rcb_", "phc_", "phx_",
         "sb_secret_", "sb_publishable_", "AIza", "eyJ", "ghp_", "gho_", "github_pat_",
         "EAAA", "sq0atp-", "sq0atb-", "sq0csp-", "sq0csb-",
     ]
+
+    /// Prefixes that count only with at least this many token characters
+    /// (`[A-Za-z0-9_-]`) after them (11.13 fix round 3): a Square access token
+    /// is `EAAA` plus ~60 characters, while a word like `EAAAB` is not one.
+    static let secretPrefixMinimumTail: [String: Int] = ["EAAA": 20]
+    static let secretTailCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
     /// Key fragments (lowercased, non-alphanumerics removed) naming secure
     /// fields. Analytics classifies stripped keys with them; the crash
@@ -59,7 +65,13 @@ enum NativeSensitiveData {
     /// A whole value that is (or starts with) a credential.
     static func containsSecret(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if secretValuePrefixes.contains(where: { trimmed.hasPrefix($0) }) { return true }
+        if secretValuePrefixes.contains(where: { prefix in
+            guard trimmed.hasPrefix(prefix) else { return false }
+            guard let minimum = secretPrefixMinimumTail[prefix] else { return true }
+            let tail = trimmed.unicodeScalars.dropFirst(prefix.unicodeScalars.count)
+                .prefix { secretTailCharacters.contains($0) }
+            return tail.count >= minimum
+        }) { return true }
         let lowered = trimmed.lowercased()
         return lowered.hasPrefix("bearer ") || lowered.contains("authorization:")
             || lowered.contains("access_token") || lowered.contains("refresh_token")
@@ -563,7 +575,11 @@ struct NativeErrorRedaction {
     static let jwtPattern = regex(#"\beyJ[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*){0,2}"#)
     static let secretPrefixPattern: NSRegularExpression = {
         let alternatives = NativeSensitiveData.secretValuePrefixes
-            .map(NSRegularExpression.escapedPattern(for:))
+            .map { prefix in
+                let escaped = NSRegularExpression.escapedPattern(for: prefix)
+                guard let minimum = NativeSensitiveData.secretPrefixMinimumTail[prefix] else { return escaped }
+                return "\(escaped)[A-Za-z0-9_\\-]{\(minimum),}"
+            }
             .joined(separator: "|")
         return regex("(?<![A-Za-z0-9])(?:\(alternatives))[A-Za-z0-9_\\-]*")
     }()

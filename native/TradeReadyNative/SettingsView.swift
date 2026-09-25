@@ -539,6 +539,8 @@ struct PaymentsSettings: View {
             squareDraft = value
             squareFeedback = (value.isEmpty ? "Square link cleared." : "Square link saved.", false)
         case let .reject(message):
+            // Fix round 3: a refused value (a pasted token) is not left on screen.
+            squareDraft = ""
             squareFeedback = (message, true)
         }
     }

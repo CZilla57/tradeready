@@ -4067,8 +4067,38 @@ Square access token in synced settings is a security defect, so it is fixed in 1
   first failed to compile, then `FAILED: 11` with the API stubbed. GREEN:
   `510/510 checks passed` and `PASS: canonical AppStore integration tests`. Removing the
   persist guard and the pull hook fails 8 store checks.
-- **Residual, RN-identical.** Like RN's scrub, the heal reads only `providerKeys.square`.
-  A legacy single `providerKey` holding a token under provider `square` is not deleted.
-  Settings still hides it: the projection's backfill shows it, and the persist guard
-  strips it on the next save.
+- **Residual, RN-identical (corrected in fix round 3).** Like RN's scrub, the heal reads
+  only `providerKeys.square`. The legacy single `providerKey` is not touched, and it
+  does not need to be. It is in `Canonical.SnapshotCodec.secureSettingsKeys`
+  (`native/TradeReadyNative/Domain/CanonicalSnapshot.swift`), so it is kept only in the
+  Keychain. It is never written to the snapshot and never synced, which matches RN
+  SecureStore.
 - Verification results are recorded in the report, under "Fix round 2".
+
+**Fix round 3 (2026-09-24, re-review of `9b32481..8175903`):**
+- **LegacyBackups protection (IMPORTANT 1).** `Canonical.SnapshotRepository` now protects
+  every copy it keeps of the pre-conversion source, which can hold an RN-era plaintext
+  Square token:
+  - `preserveLegacyBytes` and `preserveLegacyArtifact` write with
+    `legacyBackupWriteOptions` (`[.atomic, .completeFileProtection]`);
+  - `preserveLegacyDirectory` (the RN AsyncStorage copy) raises every copied file to
+    `legacyBackupFileProtection` (`.complete`);
+  - all three set `isExcludedFromBackup` on the `LegacyBackups/` root. A failure to set
+    that flag or the protection never fails the import; it logs a bounded stage code
+    only.
+  
+  `native/RepositoryTests/main.swift` asserts the chosen options and the exclude flag
+  for all three writers. File protection cannot be observed on a macOS host, so the
+  device proof is runsheet row Q11-P12-6. The RN app's own AsyncStorage files on an
+  upgraded device are contract §17.2 G6, owned by Phase 12.00.
+- **Minors.**
+  - The residual above is corrected: the legacy `providerKey` is Keychain-only.
+  - The contract G5 wording now says "no Settings path" and states the heal window.
+  - A rejected Square draft is cleared from the field.
+  - `EAAA` now counts as a secret only with a tail of 20 or more `[A-Za-z0-9_-]`
+    characters, in both `secretPrefixPattern` and `containsSecret`.
+- **Phase 12 runsheet row Q11-P12-6 (device).** On a device with a migrated RN install,
+  read the `LegacyBackups/` files' protection class and the backup-exclusion flag. Pass
+  when every file is `NSFileProtectionComplete` and the tree is excluded from iCloud and
+  Finder backup.
+- Verification results are recorded in the report, under "Fix round 3".
