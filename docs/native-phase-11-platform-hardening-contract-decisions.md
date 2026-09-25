@@ -2130,22 +2130,53 @@ not extend to inaccessible colors (as with A29).
 | ID | Gap | Coverage or blocker | Owner |
 |---|---|---|---|
 | G1 | `booking_request_opened`, `booking_update_opened` have no native emission (RN tracks push taps, `App.tsx`) | Named blocker: native has no remote-push surface. Q4 fails if either becomes live without the list changing, or if another event goes unwired | owner: Phase 12.00 — cutover-blocking parity gap (build or dated waiver). The build is native remote push |
-| G2 | `tax_settings_saved` is emitted only via `emitTaxSettingsSaved` ← `commitTaxSettings`, and nothing calls `commitTaxSettings` | Named blocker: native has no tax-settings editor (RN `TaxSetAsideCard`). Q4 pins the dead chain | owner: Phase 12.00 — cutover-blocking parity gap (build or dated waiver). The build is a native tax-settings editor. The parity row "Tax set-aside … ported" overstates this and is a known issue left to the final review |
+| G2 | `tax_settings_saved` is emitted only via `emitTaxSettingsSaved` ← `commitTaxSettings`, and nothing calls `commitTaxSettings` | Named blocker: native has no tax-settings editor (RN `TaxSetAsideCard`). Q4 pins the dead chain | owner: Phase 12.00 — cutover-blocking parity gap (build or dated waiver). The build is a native tax-settings editor. The parity row "Tax set-aside" was corrected by 11.14 (`d18b29c`): it is "In progress" and says the tax-settings editor is not ported |
 | G4 | RN `scrubLegacySquareToken` (`App.tsx` sign-in chain; `utils/storage/settings.ts`) deletes any stored `providerKeys.square` value that `isSquarePaymentLink` refuses, such as a pasted Square access token left by pre-2026-08 builds, then saves, which re-enqueues the cleaned blob so the cloud copy heals. Fix round 1 recorded it as not applicable; the controller ruling on G5 reversed that, because a token can also arrive in a pulled blob from another device or an old RN queue | **Fixed (fix round 2, the 11.13 commit after `f7a2e13`)**. `NativeSquareProviderKeyPolicy.scrubbed` (`N/Domain/NativeInvoicePaymentLinks.swift`) has RN's exact rule: a non-empty value `isSquarePaymentLink` refuses is deleted, and nothing is written otherwise. `AppStore.scrubLegacySquareToken()` applies it to the canonical settings, saves (rotating the repository backup too), re-projects Settings and queues one settings upsert. The settings push sends the whole `data` blob, so the heal is local and the server copy is replaced. It runs on the returning-user sign-in, after the initial-sync commit and after every delta-pull commit, gated on the exact signed-in workspace. Tests: Q5 (policy and call sites) and `run-store-integration` (a pulled token is scrubbed and queued; a second pass writes nothing; the gate) | None; fixed |
 | G5 | Fix round 1 found that "native never writes a non-link square value" did not hold: `N/SettingsView.swift` bound the Square field straight to `BusinessSettings.setProviderKey`, so a pasted token reached the canonical snapshot and the synced settings blob. RN has the same input path and relies on its sign-in scrub (G4) | **Fixed (fix round 2, the 11.13 commit after `f7a2e13`)**. The Square field is now a draft saved with **Save link**, through `AppStore.setPaymentProviderKey`, which uses `NativeSquareProviderKeyPolicy.validate`: a value `isSquarePaymentLink` refuses is rejected with RN's Square hint as the copy and is never saved; an empty entry clears the field; other providers keep RN's unvalidated save. `mergeSettingsAndSave` also strips a non-link Square value before any settings write, so no Settings path can persist or queue one. **Heal window:** a token that arrives through a pull, the initial sync or an RN import is written to `store.json` by that commit. The heal removes it at the next gated run: right after a delta-pull or initial-sync commit, or at the next sign-in for an RN import. A token that was already on disk can survive one generation in `store.json.backup` until the heal's second save rotates the backup. Tests: Q5 (policy, copy, Settings writes only through the validated save) and `run-store-integration` (a token never reaches the projection, snapshot, disk or queue; a link saves and queues; empty clears) | None; fixed |
 | G6 | `LegacyBackups/` keeps the exact pre-conversion source: the RN AsyncStorage copy, the RN App Group values and a legacy native snapshot. An RN-era plaintext Square token can sit there, and the files were written with plain `.atomic` under Application Support, with no backup exclusion | **Fixed in code (fix round 3):** `Canonical.SnapshotRepository` writes the preserved bytes with `[.atomic, .completeFileProtection]`, raises copied directory files to `.complete`, and excludes the `LegacyBackups/` tree from backup. Failures only log a bounded stage code. `run-repository` asserts the options and the exclude flag; file protection is not observable on a macOS host (runsheet row Q11-P12-6). **Residual:** on an upgraded device, the RN app's own AsyncStorage source files may still hold the token | owner: Phase 12.00 migration/recovery retention policy |
 | G3 | Siri, widget, extension and store behavior on a device | Deferred to Phase 12 (§13): home-screen rendering, interactive widgets, Siri phrases and Shortcuts, on-my-way cold and warm, Control Center, Sentry and PostHog live delivery, StoreKit, VoiceOver, AX5, and the iPad rows | Phase 12 (11.14 collects the runsheet) |
 
 **Known issues carried to the final review, not qualified by 11.13.** None of these
-is claimed as passing, and none was changed:
+was claimed as passing by 11.13. The Phase 11 final review
+(`.superpowers/sdd/native-phase-11-implementation-plan/final-fix-brief.md`) gave each
+one a disposition; its fix wave is logged in the plan §7 "Final review fix wave" entry:
 
-1. the `NativeRecurringInvoicesView` "Cancel plan"/"Delete plan" `actionRule` bug;
-2. the `NativeSupabasePush` non-auth 4xx queue wedge;
-3. the parity-matrix Tax set-aside row, which says "ported" although native has no
-   tax-settings screen (see G2);
-4. the `useAnotherAccount` scrub fail-open;
-5. the silent AI-key wipe failure;
-6. `deepLinkOwnerWasActive` keyed on O.
+1. the `NativeRecurringInvoicesView` "Cancel plan"/"Delete plan" `actionRule` bug
+   (final review I1): **fixed** in `8146cd6`. `NativeRecurringPlanActionState`
+   (`N/Domain/NativeRecurringInvoices.swift`) keeps the target through the dialog's
+   dismissal and the alerts act on `presenting:`. Test: `run-recurring-invoice`.
+   Device row: runsheet Q11-P12-7;
+2. the `NativeSupabasePush` non-auth 4xx queue wedge (final review I2): **recorded,
+   not fixed**. Owner: Phase 12.00, cutover-blocking. Non-auth 4xx (400/404/409/413/422,
+   and a 403 that repeats after refresh) is treated as transient and retained forever,
+   and `NativeSyncCoordinator`'s `guard queue.load().isEmpty` skips every pull, so one
+   poison mutation wedges inbound sync and an RLS 403 loops. Fix sketch: classify those
+   responses as `.rejected`; move rejected mutations to an app-private, owner-scoped
+   rejected store scrubbed at every account boundary; a bounded diagnostic; "N changes
+   couldn't sync" on Cloud Sync; then decide whether to relax the pull guard toward RN
+   parity (RN always pulls after push, `utils/sync.ts`), mindful of the 11.12 per-table
+   rebase;
+3. the parity-matrix Tax set-aside row, which said "ported" although native has no
+   tax-settings screen (see G2): **fixed** by 11.14 (`d18b29c`); the editor itself stays
+   with G2's owner;
+4. the `useAnotherAccount` scrub fail-open (final review 1a): **fixed** in `5f2f397`.
+   The App Group wipe runs under a durable `widget-scrub-pending` marker
+   (`Canonical.SnapshotRepository.BoundaryStep`, the account-scrub marker pattern); while
+   it is pending the mirror has no owner and replay is closed; it is retried at launch,
+   from `retryAccountScrub` and before an interactive sign-in, and a successful retry
+   reloads timelines. Test: `run-widget-owner-gating`;
+5. the silent AI-key wipe failure (final review 1b): **fixed** in `5f2f397`. The wipe
+   tries every kind under a durable `ai-key-wipe-pending` marker and counts and logs a
+   failure without key material; while pending the coach reads no client key and no key
+   can be saved; same retries. Test: `run-ai-provider-key`;
+6. `deepLinkOwnerWasActive` keyed on O (final review 2): **fixed** in `2e70415`. The
+   arrival stamp and the owner-was-active flag fall back to the verified account behind
+   pending gates, and the recovery sign-out clears held routes. Test:
+   `run-deep-link-routing`.
+
+The final review also fixed two findings outside this list: widget/Siri replay now
+enqueues its writes (C1, `2f4ed28`; `run-widget-action-replay`, `run-poor-network`),
+and an account switch is exclusive (1c, `5f2f397`; `run-widget-owner-gating`).
 
 ### 17.3 Commands and results (2026-09-24, `TZ=America/Phoenix`)
 

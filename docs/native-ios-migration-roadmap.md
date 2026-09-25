@@ -432,8 +432,8 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   which also tracks the four open gates above.
 - Phase 11: **Code complete (tasks 11.00–11.15, closed out by 11.14 on
   2026-09-24); device, extension, Siri, live-SDK and store evidence deferred to
-  Phase 12. Not `Verified`.** The Phase 11 final whole-branch review is still
-  pending. Delivered and host-tested: a WidgetKit extension
+  Phase 12. Not `Verified`.** The Phase 11 final whole-branch review's fix wave
+  is done (plan §7, "Final review fix wave"). Delivered and host-tested: a WidgetKit extension
   (`TradeReadyWidgets.appex`, embedded in the app) with Next Job (small, medium) and
   Job Timer widgets over an owner-tagged App Group snapshot that RN's own
   `BridgeSnapshot` decoder reads; all ten App Intents (eight Siri shortcuts plus the
@@ -456,8 +456,10 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   native remote push notifications (G1) and no native tax-settings screen (G2).
   Carried to Phase 12 as owned items: the RN AsyncStorage source-file retention policy
   (G6, 12.00), the first-party data in the privacy labels (12.01), the Sentry
-  `tradeready-ios` project (12.01/12.02) and the 429 push policy (12.00/12.02). Five
-  known code issues go to the Phase 11 final review (runsheet OI-4).
+  `tradeready-ios` project (12.01/12.02) and the 429 push policy (12.00/12.02). Of the
+  five known code issues sent to the final review (runsheet OI-4), four are fixed; the
+  sync-push 4xx wedge (I2) is a cutover-blocking defect owned by Phase 12.00 (see
+  Phase 12 below).
 - Phases 8–9 and 12: **Not started** (tracking note: Phase 8's contract
   decisions and Phase 9's implementation plan/device runsheet already exist as
   in-flight artifacts from earlier work on this branch; their roadmap status
@@ -1124,6 +1126,21 @@ given a dated waiver by Phase 12.00; neither may be silently dropped.
   `AppStore.commitTaxSettings`, but no screen calls it, so the income-tax rate and
   vehicle method cannot be set and `tax_settings_saved` is never emitted. Build the
   editor (RN `TaxSettingsModal`) or record a dated waiver.
+
+### Cutover-blocking defect (owned by Phase 12.00)
+
+Recorded by the Phase 11 final review (contract §17.2 "Known issues" 2; runsheet row
+I2); not fixed in Phase 11. It must be fixed before cutover.
+
+- **Sync push wedges on a non-auth 4xx (I2).** `NativeSupabasePush` treats
+  400/404/409/413/422, and a 403 that repeats after refresh, as transient and keeps the
+  mutation queued forever; `NativeSyncCoordinator` pulls only when the queue is empty,
+  so one poison mutation stops inbound sync and an RLS 403 loops. Fix sketch: classify
+  those responses as `.rejected`; move rejected mutations to an app-private,
+  owner-scoped rejected store scrubbed at every account boundary; add a bounded
+  diagnostic and an "N changes couldn't sync" line on Cloud Sync; then decide whether
+  to relax the pull guard toward RN parity (RN always pulls after push,
+  `utils/sync.ts`), keeping the 11.12 per-table rebase.
 
 ### Exit criteria
 

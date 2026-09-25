@@ -4247,3 +4247,85 @@ The Phase 12 plan's scope list now links the runsheet.
 
 **Next ready:** the Phase 11 final whole-branch review. Before Phase 12 Stage A, the owner
 must sign in to Xcode so the signed build can be re-run, and Phase 12.00 takes G1 and G2.
+
+### Final review fix wave (2026-09-24)
+
+**Status:** done. The Phase 11 final whole-branch review's fix brief
+(`.superpowers/sdd/native-phase-11-implementation-plan/final-fix-brief.md`) is implemented
+test-first; I2 is recorded, not fixed. Base `d18b29c`.
+
+**Commits (local, not pushed):**
+- `2f4ed28` C1 — widget/Siri replay enqueues its writes. `NativeWidgetActionReplayResult`
+  now carries `writtenRecords` (first-touch order, including records an earlier
+  unacknowledged attempt already wrote); the coordinator takes an injected
+  `enqueueWrittenRecords` closure and runs save → enqueue → acknowledge, so an enqueue
+  failure leaves the claim for a retry. `AppStore.enqueueWidgetReplayWrites` re-checks the
+  replay owner and queues one upsert per record through `mutationQueue.enqueueBatch` (the
+  normal save paths' payloads), then schedules a sync. The pull rebase keeps those records
+  while they are pending. Planner and coordinator stay Foundation-only.
+- `8146cd6` I1 — maintenance plan Cancel/Delete confirm acts on the plan.
+  `NativeRecurringPlanActionState` keeps the destructive target after the dialog clears its
+  selection; the alerts present it.
+- `2e70415` item 2 — deep links bind to the verified account behind pending gates. The
+  arrival stamp and `deepLinkOwnerWasActive` use O, else the verified account binding
+  (never in a closed gate or `.loading`); `applyRecoverySignedOutState` clears held routes.
+- `5f2f397` 1a/1b/1c — account-switch boundary steps fail closed and are exclusive.
+  `Canonical.SnapshotRepository.BoundaryStep` adds `widget-scrub-pending` and
+  `ai-key-wipe-pending` markers beside the account-scrub marker (same pattern);
+  `AppStore.runDurableBoundaryStep` writes the marker, runs the step and removes it only on
+  success. The widget scrub (1a) and the AI-key wipe (1b) run under it; while pending the
+  mirror has no owner and replay is closed (1a), and the advisory keys are nil and keys
+  cannot change (1b). `retryPendingBoundarySteps` runs at launch, from `retryAccountScrub`
+  and before an interactive sign-in. A failed AI-key wipe is counted
+  (`aiProviderKeyWipeFailureCount`, capped) and logged without key material. 1c:
+  `useAnotherAccount` returns at once while a switch or auth operation is running and holds
+  `authenticationOperationInFlight` throughout; `signIn` refuses during a switch.
+- The docs commit — contract §17.2 (G2 cell; each known issue's disposition), the roadmap
+  (Phase 11 progress; a Phase 12 "Cutover-blocking defect" section for I2), the runsheet
+  (row I2, OI-4 dispositions, Q11-P12-7 for I1, Q11-P12-8 for C1, exit checklist) and this
+  entry.
+
+**Test-first evidence (RED before each fix, `TZ=America/Phoenix`):**
+- C1: `run-poor-network` `10 of 277 checks FAILED` (the replayed records never queued and
+  never reached the server; the pull dropped the widget's session); `run-widget-action-replay`
+  failed to compile against the base (`enqueueWrittenRecords`, `writtenRecords`,
+  `NativeWidgetActionReplayEnqueueError` missing).
+- I1: `run-recurring-invoice` compile failure (`NativeRecurringPlanActionState` missing),
+  then 3 source-scan failures.
+- Item 2: `run-deep-link-routing` `6 failure(s)`.
+- 1a/1c: `run-widget-owner-gating` `12 failure(s)`.
+- 1b: `run-ai-provider-key` compile failure (`aiProviderKeyWipeFailureCount` missing), and
+  with that one assertion elided, `9 of 290 checks FAILED`.
+
+**Pinned fixtures updated:** `WidgetOwnerGatingTests` `testOneLock` counts five
+`try scrubWidgetAccountState()` sites (the pending-step retry is the fifth);
+`WidgetActionReplayTests` expects a retried batch to report `changed == 0, ignored == 4`
+while still re-enqueueing; `WidgetOwnerGatingTests` asserts the replay's queued writes.
+
+**GREEN (focused, `TZ=America/Phoenix`):** `widget-owner-gating` passed;
+`ai-provider-key` `291/291`; `deep-link-routing` passed; `store-integration` PASS;
+`poor-network` `277/277`; `widget-action-replay` PASS; `phase11-qualification` `510/510`;
+`recurring-invoice` PASS; `layout-metrics` `817/817`; `accessibility-audit` `1860/1860`.
+
+**Aggregate, compile and doc check:**
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0; 347 output lines, 65
+  `PASS` lines, no `FAIL` or `error:` line (`widget-owner-gating`, `deep-link-routing`,
+  `ai-provider-key` `291/291`, `poor-network` `277/277`, `phase11-qualification` `510/510`;
+  backend-workers tail `tests 26, pass 26, fail 0`, over the working tree).
+- Unsigned Release compile (`xcodebuild … -configuration Release -destination
+  'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`) → `** BUILD SUCCEEDED **`, exit 0, with 4
+  `warning:` lines (the existing concurrency warnings in `N/NativeChangeOrdersView.swift`).
+- `1705 path references checked: 0 missing, 13
+  planned (not yet created).`
+
+**Deviations and notes:**
+- I2 was not touched (`NativeSupabasePush`, `NativeSyncCoordinator`'s pull guard).
+- No `project.pbxproj` edit and no new runner; nothing under `targets/`, `backend*/`,
+  `__tests__/`, `supabase/`, `utils/`, `types/` or `.gitignore` was staged.
+- While a boundary step is pending, Settings › AI Assistant still reads the Keychain for
+  its "Saved" row, so it can show the previous owner's key as saved (never the key); the
+  coach does not use it and it cannot be changed until the retry succeeds.
+- During a switch, `signOut` and `deleteAccount` are refused by their existing
+  `authenticationOperationInFlight` guard, with their existing error copy.
+
+**Next ready:** Phase 12.00 (G1, G2, I2 and the owned items in the runsheet).
