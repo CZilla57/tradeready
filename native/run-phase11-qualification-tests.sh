@@ -9,7 +9,12 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT_DIR/native/run-appstore-sources-common.sh"
 OUTPUT_PATH="${TMPDIR:-/tmp}/tradeready-phase11-qualification-tests"
 MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-phase11-qualification-module-cache"
-RN_DECODERS="${TMPDIR:-/tmp}/tradeready-phase11-rn-decoders.swift"
+# A private directory per run (fix round 1, M9): concurrent runs never share
+# the extracted decoders. swiftc needs the .swift extension, so the file sits
+# inside a mktemp directory rather than being the mktemp file itself.
+DECODER_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tradeready-phase11-rn-decoders.XXXXXX")
+trap 'rm -rf "$DECODER_DIR"' EXIT
+RN_DECODERS="$DECODER_DIR/rn-decoders.swift"
 
 {
   echo "import Foundation"

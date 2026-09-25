@@ -172,6 +172,12 @@ let poison: [(label: String, text: String, leak: String)] = [
     ("stripe secret", "key sk_live_51Habc123DEF456", "sk_live_51Habc123DEF456"),
     ("openai key", "sk-proj-abcdef1234567890", "sk-proj-abcdef1234567890"),
     ("github token", "ghp_abcdefghijklmnop123456", "ghp_abcdefghijklmnop123456"),
+    // 11.13 fix round 1 (I1): Square access tokens and application secrets,
+    // the values RN `scrubLegacySquareToken` purges from settings.
+    ("square access token", "square said EAAAEOuLQObrVwJvCvoio3qx9Bi7MEZ2Ymv2nUx8m2cVYzAh8Kx5yGQZ", "EAAAEOuLQObrVwJvCvoio3qx9Bi7MEZ2Ymv2nUx8m2cVYzAh8Kx5yGQZ"),
+    ("square legacy token", "token sq0atp-3_Wb0zJnNx7lzM1nb2eP0g rejected", "sq0atp-3_Wb0zJnNx7lzM1nb2eP0g"),
+    ("square sandbox token", "token sq0atb-Hx7lzM1nb2eP0g_3Wb0zJ rejected", "sq0atb-Hx7lzM1nb2eP0g_3Wb0zJ"),
+    ("square app secret", "secret sq0csp-Q2lnbmF0dXJlX2V4YW1wbGU rejected", "sq0csp-Q2lnbmF0dXJlX2V4YW1wbGU"),
     ("jwt", "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJl", "eyJhbGciOiJIUzI1NiJ9"),
     ("bearer", "Authorization: Bearer abc.def-ghi_123", "abc.def-ghi_123"),
     ("bearer lowercase", "sent bearer QWERTY987654", "QWERTY987654"),
@@ -365,6 +371,9 @@ struct ErrorRedactionTests {
             "count 42 remaining 3",
             "PGRST116 JSON object requested, multiple (or no) rows returned",
             "https://abc.supabase.co/rest/v1/jobs",
+            // 11.13 fix round 1 (I1): the Square token prefixes match whole
+            // tokens only, not the provider name or an EAAA-free word.
+            "provider square link saved for sq0 region EAA",
         ]
         for text in keep {
             expectEqual(redaction.redactString(text), text, "preserve: '\(text)'")

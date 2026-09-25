@@ -16,11 +16,16 @@ enum NativeSensitiveData {
     /// Value prefixes of the credential classes in §10.1: Anthropic/OpenAI-style
     /// (`sk-`), Stripe secret/restricted/publishable/webhook, Groq, RevenueCat
     /// (Apple/Google/Amazon/Stripe/web), PostHog, Supabase, Google API keys,
-    /// JWTs (Supabase access tokens), GitHub tokens.
+    /// JWTs (Supabase access tokens), GitHub tokens, and Square access tokens
+    /// (`EAAA`) and legacy access tokens and application secrets (`sq0atp-`,
+    /// `sq0atb-`, `sq0csp-`, `sq0csb-`). RN `scrubLegacySquareToken` deletes
+    /// such a value from settings at every sign-in; native has no such pass,
+    /// so these screens must recognise it (11.13 fix round 1, I1).
     static let secretValuePrefixes: [String] = [
         "sk-", "sk_live_", "sk_test_", "rk_live_", "rk_test_", "pk_live_", "pk_test_", "whsec_",
         "gsk_", "appl_", "goog_", "amzn_", "strp_", "rcb_", "phc_", "phx_",
         "sb_secret_", "sb_publishable_", "AIza", "eyJ", "ghp_", "gho_", "github_pat_",
+        "EAAA", "sq0atp-", "sq0atb-", "sq0csp-", "sq0csb-",
     ]
 
     /// Key fragments (lowercased, non-alphanumerics removed) naming secure

@@ -9,36 +9,45 @@ import Foundation
 //
 //   Q1  Widget snapshot: RN `BridgeSnapshot` (targets/widget/Widgets.swift) and
 //       RN `SiriSnapshot` (targets/widget/_shared/SiriIntents.swift), both
-//       extracted from the working tree by the runner, decode F1–F6 and the
-//       native writer's output. Cited: WidgetSnapshotTests (schema, projection,
-//       writer, lock), NextJobWidgetTests, JobTimerWidgetTests.
-//   Q2  Action replay: every RN `__tests__/widgetActions.test.js` vector through
-//       the real planner and replayer. Cited: WidgetActionReplayTests (claim WAL,
+//       extracted from the working tree by the runner, decode F1–F6 (parsed
+//       from contract §2.4) and the native writer's output. Cited:
+//       WidgetSnapshotTests (schema, projection, writer, lock),
+//       NextJobWidgetTests, JobTimerWidgetTests.
+//   Q2  Action replay: the RN `__tests__/widgetActions.test.js` vectors through
+//       the real planner, replayer and coordinator. A completeness guard pins
+//       every RN vector to its checks. Cited: WidgetActionReplayTests (claim WAL,
 //       coordinator), AppIntentQueueTests (native writer → replay → AppStore),
 //       WidgetOwnerGatingTests (untagged/foreign drop).
-//   Q3  Deep links: every RN `__tests__/deepLinks.test.js` vector through
+//   Q3  Deep links: every RN `__tests__/deepLinks.test.js` vector with a Swift
+//       form (the guard records the null/undefined rows) through
 //       `NativeDeepLinkParser`. Cited: DeepLinkRoutingTests (auth/owner/record
 //       gates), AppGroupPendingOpenURLTests (cold-launch consumer).
 //   Q4  Analytics: the RN `track(` call sites equal the §9.5 catalog, and every
 //       catalog event has a reachable native emission or a named exclusion.
 //       Cited: AnalyticsEventTests (payload parity), AnalyticsTransportTests.
-//   Q5  Redaction: RN `SECURE_FIELDS` and the §10.1 deny table through the
-//       analytics policy, the crash redactor and the widget snapshot. Cited:
-//       ErrorRedactionTests, AnalyticsTransportTests, AIProviderKeyTests.
-//   Q6  Accessibility/layout: no §12.1 row is still open. Cited:
+//   Q5  Redaction: RN `SECURE_FIELDS`, the §10.1 deny table (parsed) and the
+//       Square token shapes through the analytics policy, the crash redactor
+//       and the widget snapshot. Cited: ErrorRedactionTests,
+//       AnalyticsTransportTests, AIProviderKeyTests.
+//   Q6  Accessibility/layout: every §12.1 status is on the closed allow-list.
+//       Cited:
 //       AccessibilityAuditTests (including A30, fixed in 11.13),
 //       LayoutMetricsTests.
 //
 // Native differences asserted here, not re-litigated: the planner rejects a
-// whole batch on one invalid action (§4.3; RN drops only that action), and
+// whole batch on one invalid action (§4.3; RN drops only that action), a
+// malformed or non-array queue is quarantined (C8; RN reads it as []), and
 // `parsePendingOpenURL` vets the URL grammar at the same boundary (§6.3; RN
 // returns the raw URL and leaves the grammar to `parseWidgetDeepLink`).
 
 private var failures = 0
 private var checks = 0
+/// Every check label that ran, for the RN-vector completeness guard (Q2/Q3).
+private var executedLabels: [String] = []
 
 private func expect(_ condition: @autoclosure () -> Bool, _ label: String) {
     checks += 1
+    executedLabels.append(label)
     if !condition() {
         failures += 1
         print("FAIL: \(label)")
@@ -47,6 +56,7 @@ private func expect(_ condition: @autoclosure () -> Bool, _ label: String) {
 
 private func expectEqual<T: Equatable>(_ actual: T?, _ expected: T?, _ label: String) {
     checks += 1
+    executedLabels.append(label)
     if actual != expected {
         failures += 1
         print("FAIL: \(label) — expected \(String(describing: expected)), got \(String(describing: actual))")
@@ -84,12 +94,17 @@ private func merged(_ base: String, _ overrides: String) -> Data {
 
 // MARK: - Q1 Widget snapshot (contract §2)
 
-private let fixtureF1 = #"{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":null,"timer":null,"outstandingTotal":0}"#
-private let fixtureF2 = #"{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":{"id":"j9","customerName":"Alice Johnson","title":"Fence repair","scheduledDate":"2026-08-04","scheduledStartTime":"10:30","address":"12 Oak St"},"timer":{"jobId":"j2","jobTitle":"Deck build","customerName":"Bob Smith","startedAt":"2026-08-03T10:00:00.000Z"},"outstandingTotal":160}"#
-private let fixtureF3 = #"{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":{"id":"j5","customerName":"Dana Lee","title":"Gutter clean","scheduledDate":"2026-08-05","scheduledStartTime":null,"address":""},"timer":null,"outstandingTotal":1234.56}"#
-private let fixtureF4 = #"{"nextJob":{"address":"1420 Maple Ave","customerName":"Alex Morgan","id":"sample","scheduledDate":"2026-01-01","scheduledStartTime":"09:00","title":"Water heater replacement"},"outstandingTotal":0,"ownerTag":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","timer":null,"updatedAt":"2026-01-01T08:00:00.000Z","version":1}"#
-private let fixtureF5 = #"{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":null,"timer":null,"futureField":{"x":1}}"#
-private let fixtureF6 = #"{"version":1,"updatedAt":"2026-08-03T19:00:00.000Z","nextJob":{"id":"j5","customerName":"Dana Lee","title":"Gutter clean","scheduledDate":"2026-08-05","scheduledStartTime":null,"address":null},"timer":null,"outstandingTotal":0}"#
+/// F1–F6, parsed from contract §2.4 ("Fixtures (verbatim; ruling P4)") rather
+/// than hand-copied, so a contract edit reaches this suite (fix round 1, M5).
+private func contractFixtures(_ contract: String) -> [String: String] {
+    let section = contract.components(separatedBy: "### 2.4 Fixtures").dropFirst().first?
+        .components(separatedBy: "\n## ").first ?? ""
+    var fixtures: [String: String] = [:]
+    for match in matches(#"(?s)\*\*(F[1-6]) — .*?```json\n(.*?)\n```"#, in: section) {
+        fixtures[match[1]] = match[2]
+    }
+    return fixtures
+}
 
 private func rnWidget(_ json: String) -> BridgeSnapshot? {
     try? JSONDecoder().decode(BridgeSnapshot.self, from: Data(json.utf8))
@@ -147,8 +162,14 @@ private func storedProperties(_ text: String) -> [String] {
 }
 
 private func testWidgetSnapshot(root: URL, sources: [SourceFile]) throws {
-    // F1–F6 through both RN decoders and the native one.
-    for (name, fixture) in [("F1", fixtureF1), ("F2", fixtureF2), ("F3", fixtureF3), ("F4", fixtureF4), ("F5", fixtureF5)] {
+    // F1–F6 (contract §2.4) through both RN decoders and the native one.
+    let fixtures = contractFixtures(readOrFail(root, "docs/native-phase-11-platform-hardening-contract-decisions.md"))
+    expectEqual(fixtures.keys.sorted(), ["F1", "F2", "F3", "F4", "F5", "F6"], "Q1 contract §2.4 yields F1–F6")
+    let fixtureF6 = fixtures["F6"] ?? ""
+    expect(fixtureF6.contains(#""address":null"#), "Q1 contract F6 is the address: null fixture")
+    expect(fixtures["F4"]?.contains(#""ownerTag":""#) == true, "Q1 contract F4 is the native writer shape (ownerTag)")
+    for name in ["F1", "F2", "F3", "F4", "F5"] {
+        let fixture = fixtures[name] ?? ""
         expect(rnWidget(fixture) != nil, "Q1 RN BridgeSnapshot decodes \(name)")
         expect(rnSiri(fixture) != nil, "Q1 RN SiriSnapshot decodes \(name)")
         expect(WidgetSnapshot.decode(json: fixture) != nil, "Q1 native WidgetSnapshot decodes \(name)")
@@ -287,9 +308,43 @@ private func encoded(_ snapshot: Canonical.Snapshot) -> Data? {
     try? Canonical.SnapshotCodec.encode(snapshot)
 }
 
+/// The App Group queue in memory (RN `getWidgetSharedItem`/`removeWidgetSharedItem`).
+private final class MemoryActionQueue: NativeWidgetActionQueueBacking {
+    var value: String?
+    init(_ value: String?) { self.value = value }
+    func read() -> String? { value }
+    func write(_ value: String?) { self.value = value }
+}
+
+/// One `replayNext` through the real claim transport and coordinator (RN
+/// `replayWidgetActions`): the result, the shared queue afterwards, what was
+/// saved, and how many quarantine records the owner holds.
+private func coordinatorReplay(_ raw: String?, on source: Canonical.Snapshot) throws -> (
+    result: NativeWidgetActionReplayCommitResult, queue: String?, saved: Canonical.Snapshot?, quarantined: Int
+) {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tradeready-1113-replay-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let queue = MemoryActionQueue(raw)
+    let transport = NativeWidgetActionClaimTransport(
+        queue: queue,
+        claimDirectory: root.appendingPathComponent("claims", isDirectory: true),
+        lockFile: root.appendingPathComponent("group/\(WidgetAppGroup.lockFileName)")
+    )
+    let repository = Canonical.SnapshotRepository(primaryURL: root.appendingPathComponent("store.json"))
+    let result = try NativeWidgetActionReplayCoordinator(transport: transport, repository: repository)
+        .replayNext(snapshot: source, verifiedAccountBinding: planningBinding)
+    return (result, queue.value, try repository.load()?.snapshot, try transport.quarantinedQueues(accountBinding: planningBinding).count)
+}
+
+private func committed(_ result: NativeWidgetActionReplayCommitResult) -> (changed: Int, ignored: Int, ownerDropped: Int)? {
+    if case let .committed(_, changed, ignored, ownerDropped) = result { return (changed, ignored, ownerDropped) }
+    return nil
+}
+
 private let startJ1 = #""id":"a1","type":"timer_start","at":"2026-08-03T09:00:00.000Z","jobId":"j1""#
 
-private func testActionReplay(root: URL) {
+private func testActionReplay(root: URL) throws {
     // applyTimerActions
     let scheduled = snapshot(jobs: [#""id":"j1""#])
     let started = replay([startJ1], on: scheduled)
@@ -408,16 +463,30 @@ private func testActionReplay(root: URL) {
     }
     for (label, fields) in [("empty", #","amount":5,"description":"""#), ("missing", #","amount":5"#)] {
         expectEqual(replay([expenseAction + fields], on: snapshot())?.snapshot.payload.expenses?.first?.description,
-                    "Logged via Siri", "Q2 an \(label) description falls back to Logged via Siri")
+                    "Logged via Siri", "Q2 description \(label): falls back to Logged via Siri")
     }
     expect({ if case .invalidAction(index: 0, field: "date")? = planError(queue([#""id":"ea1","type":"expense_log","at":"2026-08-03T09:30:00.000Z","amount":5"#])) { return true }; return false }(),
            "Q2 expense_log without a date is rejected")
 
-    // parsePendingActions: RN drops a structurally bad entry; native rejects the batch.
+    // parsePendingActions. null and "" are an empty batch in both clients (fix
+    // round 1, I2: native used to quarantine ""). A structurally bad entry: RN
+    // drops it; native rejects the batch (§4.3).
+    if case .nothingPending? = try? coordinatorReplay(nil, on: scheduled).result {
+        expect(true, "Q2 parsePendingActions null: an absent queue is nothing pending (RN [])")
+    } else {
+        expect(false, "Q2 parsePendingActions null: an absent queue is nothing pending (RN [])")
+    }
+    for (label, raw) in [("empty string", ""), ("whitespace only", " \n\t ")] {
+        let batch = try? NativeWidgetActionBatchPlanner.prepare(rawValue: raw, verifiedAccountBinding: planningBinding)
+        expect(batch != nil && batch?.actions.isEmpty == true && batch?.ownerDroppedCount == 0,
+               "Q2 parsePendingActions \(label): prepares an empty batch (RN []), not malformedQueue")
+    }
     expectEqual(planError("{not json"), .malformedQueue, "Q2 malformed JSON: malformedQueue")
     expectEqual(planError(#"{"id":"a1","type":"timer_start","at":"x"}"#), .malformedQueue, "Q2 a non-array: malformedQueue")
     expectEqual(planError(queue([startJ1, #""type":"timer_start","at":"2026-08-03T09:00:00.000Z""#])),
                 .malformedAction(index: 1), "Q2 an entry missing id rejects the batch (§4.3 native difference)")
+    expectEqual(planError(queue([#""id":"a3","at":"2026-08-03T09:00:00.000Z""#])), .malformedAction(index: 0),
+                "Q2 an entry missing type rejects the batch")
     expectEqual(planError(queue([#""id":"a4","type":"timer_stop""#])), .malformedAction(index: 0),
                 "Q2 an entry missing at rejects the batch")
     let untagged = try? NativeWidgetActionBatchPlanner.prepare(
@@ -434,6 +503,40 @@ private func testActionReplay(root: URL) {
     } else {
         expect(false, "Q2 mixed batch replays")
     }
+
+    // replayWidgetActions, through the real transport and coordinator.
+    for (label, raw) in [("empty string", ""), ("whitespace only", "  ")] {
+        let run = try coordinatorReplay(raw, on: scheduled)
+        let counts = committed(run.result)
+        expect(counts?.changed == 0 && counts?.ignored == 0 && counts?.ownerDropped == 0
+               && run.queue == nil && run.saved == nil && run.quarantined == 0,
+               "Q2 replay empty queue (\(label)): a no-op commit; nothing saved or quarantined, and the empty key is cleared")
+    }
+    let timerRun = try coordinatorReplay(queue([startJ1]), on: scheduled)
+    expect(committed(timerRun.result)?.changed == 1 && timerRun.queue == nil
+           && timerRun.saved?.payload.jobs?.first?.timeSessions?.count == 1,
+           "Q2 replay commits a timer action: claimed, removed, saved")
+    let tripRun = try coordinatorReplay(queue([tripAction + #","odometerStart":100,"odometerEnd":115"#]), on: snapshot())
+    expect(committed(tripRun.result)?.changed == 1 && tripRun.queue == nil
+           && tripRun.saved?.payload.trips?.first?.id == "t_siri_sa1",
+           "Q2 replay commits a trip_log action: claimed, removed, saved")
+    let expenseRun = try coordinatorReplay(queue([expenseAction + #","amount":42.5"#]), on: snapshot())
+    expect(committed(expenseRun.result)?.changed == 1 && expenseRun.queue == nil
+           && expenseRun.saved?.payload.expenses?.first?.id == "e_siri_ea1",
+           "Q2 replay commits an expense_log action: claimed, removed, saved")
+    let mixedRun = try coordinatorReplay(
+        queue([startJ1, tripAction + #","odometerStart":100,"odometerEnd":115"#, expenseAction + #","amount":5"#]), on: scheduled
+    )
+    expect(committed(mixedRun.result)?.changed == 3 && mixedRun.queue == nil
+           && mixedRun.saved?.payload.trips?.count == 1 && mixedRun.saved?.payload.expenses?.count == 1,
+           "Q2 replay commits a mixed batch (timer + trip + expense) in one claim")
+    let badRun = try coordinatorReplay("not valid json", on: scheduled)
+    if case .quarantined(reason: .malformedQueue) = badRun.result {
+        expect(badRun.queue == nil && badRun.saved == nil && badRun.quarantined == 1,
+               "Q2 replay quarantines a batch that fails every guard: key cleared, nothing saved (C8: bytes kept)")
+    } else {
+        expect(false, "Q2 replay quarantines a batch that fails every guard: key cleared, nothing saved (C8: bytes kept)")
+    }
 }
 
 // MARK: - Q3 Deep links (contract §6)
@@ -446,13 +549,18 @@ private func testDeepLinks() {
     expectEqual(Parser.parse("tradeready://onmyway/j1722_4"), .onMyWay(id: "j1722_4"), "Q3 onmyway link")
     expectEqual(Parser.parse(" TradeReady://onmyway/abc "), .onMyWay(id: "abc"), "Q3 onmyway: case-insensitive, trimmed")
     expectEqual(Parser.parse("tradeready://onmyway/a%2Bb"), .onMyWay(id: "a+b"), "Q3 onmyway: percent-decoded id")
+    // RN's null and undefined rows have no Swift form: `parse` takes a String.
     for url in [
         "", "tradeready://job/", "tradeready://job/a/b", "tradeready://job/a?x=1", "tradeready://invoice/i1",
         "otherapp://job/j1", "https://gettradereadyapp.com/job/j1", "tradeready://job/%zz",
+    ] {
+        expect(Parser.parse(url) == nil, "Q3 job rejects \(url.isEmpty ? "\"\"" : url)")
+    }
+    for url in [
         "tradeready://onmyway/", "tradeready://onmyway/a/b", "tradeready://onmyway/a?x=1",
         "otherapp://onmyway/j1", "tradeready://onmyway/%zz",
     ] {
-        expect(Parser.parse(url) == nil, "Q3 rejects \(url.isEmpty ? "\"\"" : url)")
+        expect(Parser.parse(url) == nil, "Q3 onmyway rejects \(url)")
     }
 
     let now = ISO8601DateFormatter().date(from: "2026-08-03T18:00:00Z")!
@@ -486,13 +594,249 @@ private func testDeepLinks() {
            "Q3 a foreign URL in the stash never routes (one boundary natively, two in RN)")
 }
 
+// MARK: - Q2/Q3 RN vector completeness (fix round 1, I2)
+
+/// One RN jest vector: a `test(` (rows 1) or a `test.each(` (rows = its table
+/// length, or -1 when the table is computed, e.g. `EXPENSE_CATEGORIES.map`).
+private struct RNVector: Equatable, CustomStringConvertible {
+    let describe: String
+    let title: String
+    let rows: Int
+    var description: String { "\(describe) › \(title) ×\(rows)" }
+}
+
+/// The index just past the string literal or comment starting at `i`, or nil.
+private func skipJSLiteral(_ c: [Character], _ i: Int) -> Int? {
+    let ch = c[i]
+    if ch == "\"" || ch == "'" || ch == "`" {
+        var j = i + 1
+        while j < c.count, c[j] != ch { if c[j] == "\\" { j += 1 }; j += 1 }
+        return min(j + 1, c.count)
+    }
+    guard ch == "/", i + 1 < c.count else { return nil }
+    if c[i + 1] == "/" {
+        var j = i
+        while j < c.count, c[j] != "\n" { j += 1 }
+        return j
+    }
+    if c[i + 1] == "*" {
+        var j = i + 2
+        while j + 1 < c.count, !(c[j] == "*" && c[j + 1] == "/") { j += 1 }
+        return min(j + 2, c.count)
+    }
+    return nil
+}
+
+/// The index of the bracket closing the one at `open` (strings and comments skipped).
+private func jsClose(_ c: [Character], _ open: Int) -> Int? {
+    var depth = 0
+    var i = open
+    while i < c.count {
+        if let next = skipJSLiteral(c, i) { i = next; continue }
+        if "([{".contains(c[i]) { depth += 1 }
+        if ")]}".contains(c[i]) { depth -= 1; if depth == 0 { return i } }
+        i += 1
+    }
+    return nil
+}
+
+/// Top-level elements between `from` and `to` (an array literal's inside).
+private func jsElementCount(_ c: [Character], from: Int, to: Int) -> Int {
+    var count = 0, depth = 0, content = false, i = from
+    while i < to {
+        if let next = skipJSLiteral(c, i) {
+            if c[i] != "/" { content = true }
+            i = next; continue
+        }
+        let ch = c[i]
+        if "([{".contains(ch) { depth += 1; content = true }
+        else if ")]}".contains(ch) { depth -= 1 }
+        else if ch == ",", depth == 0 { if content { count += 1 }; content = false }
+        else if !ch.isWhitespace { content = true }
+        i += 1
+    }
+    return count + (content ? 1 : 0)
+}
+
+/// Every `describe(`/`test(`/`test.each(` vector of an RN jest file, in order.
+private func rnVectors(_ text: String) -> [RNVector] {
+    let c = Array(text)
+    func word(_ w: String, at i: Int) -> Bool {
+        let chars = Array(w)
+        guard i + chars.count <= c.count, Array(c[i..<(i + chars.count)]) == chars else { return false }
+        return i == 0 || !(c[i - 1].isLetter || c[i - 1].isNumber || c[i - 1] == "_" || c[i - 1] == ".")
+    }
+    func title(after i: Int) -> (String, Int)? {
+        var j = i
+        while j < c.count, c[j].isWhitespace { j += 1 }
+        guard j < c.count, "\"'`".contains(c[j]), let end = skipJSLiteral(c, j) else { return nil }
+        return (String(c[(j + 1)..<(end - 1)]), end)
+    }
+    var vectors: [RNVector] = []
+    var describe = ""
+    var i = 0
+    while i < c.count {
+        if word("describe(", at: i), let (name, end) = title(after: i + 9) {
+            describe = name; i = end; continue
+        }
+        if word("test.each(", at: i), let close = jsClose(c, i + 9) {
+            var j = i + 10
+            while j < close, c[j].isWhitespace { j += 1 }
+            let rows = c[j] == "[" ? jsClose(c, j).map { jsElementCount(c, from: j + 1, to: $0) } ?? -1 : -1
+            if close + 1 < c.count, c[close + 1] == "(", let (name, end) = title(after: close + 2) {
+                vectors.append(RNVector(describe: describe, title: name, rows: rows))
+                i = end; continue
+            }
+        }
+        if word("test(", at: i), let (name, end) = title(after: i + 5) {
+            vectors.append(RNVector(describe: describe, title: name, rows: 1)); i = end; continue
+        }
+        if let next = skipJSLiteral(c, i) { i = next; continue }
+        i += 1
+    }
+    return vectors
+}
+
+/// How this suite transcribes one RN vector: the check-label prefixes that
+/// must have run, how many RN rows have no Swift form, and why.
+private struct Transcription {
+    let vector: RNVector
+    let labels: [String]
+    var untranscribable = 0
+    var note = ""
+}
+
+private func t(_ describe: String, _ title: String, rows: Int = 1, _ labels: [String],
+               untranscribable: Int = 0, note: String = "") -> Transcription {
+    Transcription(vector: RNVector(describe: describe, title: title, rows: rows), labels: labels,
+                  untranscribable: untranscribable, note: note)
+}
+
+private let widgetActionsTranscription: [Transcription] = [
+    t("parsePendingActions", "null input → empty array", ["Q2 parsePendingActions null:"]),
+    t("parsePendingActions", "empty string → empty array", ["Q2 parsePendingActions empty string:"]),
+    t("parsePendingActions", "malformed JSON → empty array", ["Q2 malformed JSON: malformedQueue"],
+      note: "native difference: quarantined (C8)"),
+    t("parsePendingActions", "valid JSON that isn't an array → empty array", ["Q2 a non-array: malformedQueue"],
+      note: "native difference: quarantined (C8)"),
+    t("parsePendingActions", "drops entries missing id, type, or at; keeps valid ones",
+      ["Q2 an entry missing id", "Q2 an entry missing type", "Q2 an entry missing at", "Q2 null, non-object and untagged"],
+      note: "native difference: the batch is rejected (§4.3)"),
+    t("applyTimerActions", "timer_start clocks the matching job in",
+      ["Q2 timer_start clocks", "Q2 timer_start opens", "Q2 timer_start advances"]),
+    t("applyTimerActions", "timer_start with no matching job is dropped", ["Q2 timer_start for a missing job"]),
+    t("applyTimerActions", "timer_start on a job that's already clocked in is dropped (applyClockIn guard)",
+      ["Q2 timer_start on a clocked-in job"]),
+    t("applyTimerActions", "timer_start is dropped for a '%s' job — replay-layer policy (applyClockIn itself has no status guard; the in-app button still clocks into complete/invoiced jobs)",
+      rows: 4, ["Q2 timer_start is dropped for a"]),
+    t("applyTimerActions", "timer_stop with jobId closes that job's session", ["Q2 timer_stop with jobId"]),
+    t("applyTimerActions", "timer_stop with no jobId falls back to the single job with an active session",
+      ["Q2 timer_stop without jobId"]),
+    t("applyTimerActions", "timer_stop with nothing running anywhere is dropped", ["Q2 timer_stop with nothing running"]),
+    t("applyTimerActions", "timer_stop with an explicit jobId whose job has no active session is dropped",
+      ["Q2 timer_stop for a job with no active session"]),
+    t("applyTimerActions", "applies a start-then-stop pair for the same job in order", ["Q2 a start-then-stop pair"]),
+    t("applyTimerActions", "ignores trip_log actions entirely", ["Q2 a trip_log action never touches jobs"]),
+    t("tripFromAction", "builds a Trip with the t_siri_<id> prefix and Home/Shop endpoints", ["Q2 trip_log builds"]),
+    t("tripFromAction", "clamps miles to 0 when the end reading is before the start (bad odometer entry)",
+      ["Q2 trip miles clamp"]),
+    t("tripFromAction", "dedupes: null when a trip with this id already exists", ["Q2 trip_log dedupes"]),
+    t("tripFromAction", "drops the action when %s", rows: 6, ["Q2 trip_log odometer", "Q2 a non-finite odometer"],
+      note: "native difference: the batch is rejected (§4.3)"),
+    t("tripFromAction", "drops the action when date is missing", ["Q2 trip_log without a date"]),
+    t("expenseFromAction", "builds an Expense with the e_siri_<id> prefix and the exact field mapping",
+      ["Q2 expense_log builds"]),
+    t("expenseFromAction", "dedupes: null when an expense with this id already exists", ["Q2 expense_log dedupes"]),
+    t("expenseFromAction", "drops the action when amount is %s", rows: 6, ["Q2 expense amount"],
+      note: "native difference: the batch is rejected (§4.3)"),
+    t("expenseFromAction", "amount exactly at the 1,000,000 cap is kept", ["Q2 an amount exactly at the cap"]),
+    t("expenseFromAction", "an unrecognized category falls back to 'other' rather than dropping",
+      ["Q2 an unknown category"]),
+    t("expenseFromAction", "keeps a valid category '%s' as-is", rows: -1,
+      ["Q2 RN EXPENSE_CATEGORIES parsed", "Q2 RN category"]),
+    t("expenseFromAction", "an empty/missing description falls back to 'Logged via Siri'", ["Q2 description "]),
+    t("expenseFromAction", "drops the action when date is missing", ["Q2 expense_log without a date"]),
+    t("replayWidgetActions", "empty queue (%s): no removeSharedItem call, but exactly one snapshot refresh", rows: 2,
+      ["Q2 parsePendingActions null:", "Q2 replay empty queue"],
+      note: "native clears an empty key; the widget refresh after replay is AppStore's (not qualified here)"),
+    t("replayWidgetActions", "reads, removes, replays a timer action, saves jobs, and refreshes",
+      ["Q2 replay commits a timer action"]),
+    t("replayWidgetActions", "reads, removes, replays a trip_log action, saves trips, and refreshes",
+      ["Q2 replay commits a trip_log action"]),
+    t("replayWidgetActions", "reads, removes, replays an expense_log action, saves expenses, and refreshes",
+      ["Q2 replay commits an expense_log action"]),
+    t("replayWidgetActions", "a mixed batch (timer + trip + expense) applies all three kinds in one replay",
+      ["Q2 replay commits a mixed batch"]),
+    t("replayWidgetActions", "a batch that fails every guard still removes the key and refreshes, without saving",
+      ["Q2 replay quarantines"], note: "native difference: the bytes move to a quarantine file (C8)"),
+    t("replayWidgetActions", "never throws, even when reading the shared item rejects outright", [],
+      untranscribable: 1, note: "cited: WidgetActionReplayTests (transport failures); AppStore catches replay errors"),
+    t("replayWidgetActions", "never throws, even when the final refresh rejects", [],
+      untranscribable: 1, note: "cited: WidgetSnapshotTests (mirror write failures are results, not throws)"),
+]
+
+private let deepLinksTranscription: [Transcription] = [
+    t("parseWidgetDeepLink", "parses a widget job link", ["Q3 job link"]),
+    t("parseWidgetDeepLink", "is case-insensitive on the scheme and trims whitespace", ["Q3 job: scheme case-insensitive"]),
+    t("parseWidgetDeepLink", "decodes percent-encoded ids", ["Q3 job: percent-decoded"]),
+    t("parseWidgetDeepLink", "rejects %s", rows: 10, ["Q3 job rejects"],
+      untranscribable: 2, note: "null and undefined have no Swift form: parse takes a String"),
+    t("parseWidgetDeepLink — onmyway", "parses an on-my-way link", ["Q3 onmyway link"]),
+    t("parseWidgetDeepLink — onmyway", "is case-insensitive on the scheme and trims whitespace",
+      ["Q3 onmyway: case-insensitive"]),
+    t("parseWidgetDeepLink — onmyway", "decodes percent-encoded ids", ["Q3 onmyway: percent-decoded"]),
+    t("parseWidgetDeepLink — onmyway", "rejects %s", rows: 5, ["Q3 onmyway rejects"]),
+    t("parsePendingOpenUrl", "returns the url for a stash written moments ago", ["Q3 pending stash at 2026-08-03T17:59:58Z"]),
+    t("parsePendingOpenUrl", "accepts a stash written exactly now", ["Q3 pending stash at 2026-08-03T18:00:00Z"]),
+    t("parsePendingOpenUrl", "accepts fractional-second timestamps (the JS toISOString shape)",
+      ["Q3 pending stash at 2026-08-03T17:59:30.512Z"]),
+    t("parsePendingOpenUrl", "accepts a stash just inside the five-minute window", ["Q3 pending stash at 2026-08-03T17:55:01Z"]),
+    t("parsePendingOpenUrl", "drops a stale stash past five minutes", ["Q3 pending stash at 2026-08-03T17:54:00Z"]),
+    t("parsePendingOpenUrl", "drops a stash dated in the future", ["Q3 pending stash at 2026-08-03T18:00:05Z"]),
+    t("parsePendingOpenUrl", "drops %s", rows: 11, ["Q3 pending stash dropped:"],
+      untranscribable: 1, note: "null input has no Swift form: parsePendingOpenURL takes a String"),
+    t("parsePendingOpenUrl", "does not vet the url itself — that stays parseWidgetDeepLink's job",
+      ["Q3 a foreign URL in the stash"], note: "native difference: one boundary (§6.3)"),
+]
+
+/// Every RN vector in the two jest files is pinned above, and each pinned
+/// vector's checks ran: a new or changed RN vector fails here until it is
+/// transcribed (or its lack of a Swift form is recorded).
+private func testRNVectorCompleteness(root: URL) {
+    for (path, table) in [
+        ("__tests__/widgetActions.test.js", widgetActionsTranscription),
+        ("__tests__/deepLinks.test.js", deepLinksTranscription),
+    ] {
+        let parsed = rnVectors(readOrFail(root, path))
+        let pinned = table.map(\.vector)
+        expectEqual(parsed.count, pinned.count, "RN vectors: \(path) test count")
+        for vector in parsed where !pinned.contains(vector) {
+            expect(false, "RN vectors: \(path) has an untranscribed vector: \(vector)")
+        }
+        for vector in pinned where !parsed.contains(vector) {
+            expect(false, "RN vectors: \(path) no longer has pinned vector: \(vector)")
+        }
+        for entry in table {
+            let ran = entry.labels.map { prefix in executedLabels.filter { $0.hasPrefix(prefix) }.count }
+            let needed = max(entry.vector.rows, 1) - entry.untranscribable
+            expect(ran.allSatisfy { $0 > 0 } && ran.reduce(0, +) >= needed,
+                   "RN vectors: \(entry.vector) is transcribed (\(ran) checks for \(needed) rows)")
+            expect(entry.untranscribable == 0 || !entry.note.isEmpty,
+                   "RN vectors: \(entry.vector) records why \(entry.untranscribable) row(s) have no check")
+        }
+    }
+}
+
 // MARK: - Q4 Analytics catalog vs call sites (contract §9.5, §9.7)
 
-/// Events with no native emission, each with a named owner (contract §17).
+/// The controller's owner for every cross-client gap 11.13 records (fix round 1, M3).
+private let cutoverOwner = "owner: Phase 12.00 — cutover-blocking parity gap (build or dated waiver)"
+
+/// Events with no native emission, each with the named owner (contract §17.2).
 private let analyticsExclusions: [String: String] = [
-    "booking_request_opened": "no native remote-push surface; owner: native push notifications (Phase 12 / later push task)",
-    "booking_update_opened": "no native remote-push surface; owner: native push notifications (Phase 12 / later push task)",
-    "tax_settings_saved": "emitted only by AppStore.commitTaxSettings, which nothing calls; owner: the native tax-settings editor",
+    "booking_request_opened": "G1: no native remote-push surface; \(cutoverOwner)",
+    "booking_update_opened": "G1: no native remote-push surface; \(cutoverOwner)",
+    "tax_settings_saved": "G2: emitted only by AppStore.commitTaxSettings, which nothing calls; \(cutoverOwner)",
 ]
 
 /// Distinct event names from RN `track(` call sites (literal or a two-literal ternary).
@@ -669,10 +1013,59 @@ private func testAnalyticsCatalog(root: URL, sources: [SourceFile]) {
     expectEqual(unreachable, ["emitTaxSettingsSaved": ["tax_settings_saved"]],
                 "Q4 the only unreachable emission is tax_settings_saved (emitTaxSettingsSaved)")
     expect(!live.contains("commitTaxSettings"), "Q4 commitTaxSettings, emitTaxSettingsSaved's only caller, has no caller")
-    expect(analyticsExclusions.values.allSatisfy { $0.contains("owner:") }, "Q4 every exclusion names an owner")
+    expect(analyticsExclusions.values.allSatisfy { $0.hasSuffix("; \(cutoverOwner)") },
+           "Q4 every exclusion names the Phase 12.00 cutover owner")
+    let gaps = readOrFail(root, "docs/native-phase-11-platform-hardening-contract-decisions.md")
+        .components(separatedBy: "### 17.2").dropFirst().first ?? ""
+    // G5 (Square token writes, Q5) shares the owner.
+    for gap in Set(analyticsExclusions.values.map { String($0.prefix(2)) } + ["G5"]).sorted() {
+        let line = gaps.components(separatedBy: "\n").first { $0.hasPrefix("| \(gap) |") } ?? ""
+        expect(line.contains(cutoverOwner), "Q4 contract §17.2 \(gap) carries the same owner")
+    }
 }
 
 // MARK: - Q5 Redaction denylist (contract §10.1)
+
+/// A plausible value for each §10.1 deny-row key.
+private let denyFixtureValues: [String: Any] = [
+    "providerKey": "sk_live_provider", "providerKeys": ["venmo": "@me"], "anthropicKey": "sk-ant-x",
+    "groqKey": "gsk_x", "geminiKey": "AIzaSyX", "rcAppleApiKey": "appl_x", "rcGoogleApiKey": "goog_x",
+    "TradeReadyRevenueCatAPIKey": "appl_y", "stripeSecretKey": "sk_live_x", "stripePublishableKey": "pk_live_x",
+    "paymentLinkUrl": "https://buy.stripe.com/abc", "accessToken": "eyJhbGciOi", "refreshToken": "r",
+    "sessionToken": "s", "Authorization": "Bearer abc", "BACKEND_API_TOKEN": "t", "portalToken": "p",
+    "bookingToken": "b", "customerName": "Alice Johnson", "email": "a@example.com", "phone": "555-123-4567",
+    "address": "12 Oak St", "notes": "gate code", "messageBody": "hi", "reviewText": "great",
+    "pdfBase64": "JVBERi0", "receiptImage": "data:image/png;base64,AAAA", "jobPhoto": "file:///x.jpg",
+    "csvExport": "a,b", "requestBody": "{}", "amount": 42, "balanceRemaining": 10, "userEmail": "me@example.com",
+]
+
+/// Fixture keys for the §10.1 deny rows whose Data column names a class in
+/// prose rather than backticked keys, keyed by the row's opening words.
+private let proseDenyRowKeys: [String: [String]] = [
+    "Stripe secret or publishable keys": ["stripeSecretKey", "stripePublishableKey", "paymentLinkUrl"],
+    "Supabase access, refresh or session tokens": ["accessToken", "refreshToken", "sessionToken", "portalToken", "bookingToken"],
+    "Customer PII": ["customerName", "email", "phone", "address", "notes", "messageBody", "reviewText"],
+    "Document bytes": ["pdfBase64", "receiptImage", "jobPhoto", "csvExport", "requestBody"],
+    "Email address of the signed-in user": ["userEmail"],
+]
+
+/// The deny-row keys of contract §10.1: rows whose Sentry column denies.
+private func contractDenyKeys(_ contract: String) -> (keys: Set<String>, unmappedRows: [String]) {
+    let table = contract.components(separatedBy: "### 10.1 Allow/deny table").dropFirst().first?
+        .components(separatedBy: "### 10.2").first ?? ""
+    var keys = Set<String>()
+    var unmapped: [String] = []
+    for line in table.components(separatedBy: "\n") where line.hasPrefix("| ") && !line.hasPrefix("| Data") {
+        let columns = line.components(separatedBy: " | ")
+        guard columns.count >= 3, columns[2].contains("deny") else { continue }
+        let data = String(columns[0].dropFirst(2))
+        let named = matches(#"`(\w+)`"#, in: data).map { $0[1] }
+        let prose = proseDenyRowKeys.first { data.hasPrefix($0.key) }?.value ?? []
+        if named.isEmpty && prose.isEmpty { unmapped.append(String(data.prefix(40))) }
+        keys.formUnion(named + prose)
+    }
+    return (keys, unmapped)
+}
 
 private func testRedaction(root: URL) throws {
     let keys = readOrFail(root, "utils/storage/keys.ts")
@@ -687,18 +1080,15 @@ private func testRedaction(root: URL) throws {
         expect(redactor.isDeniedKey(field), "Q5 the crash redactor denies RN secure field \(field)")
     }
 
-    // One fixture per §10.1 deny row.
-    let denyRow: [String: Any] = [
-        "providerKey": "sk_live_provider", "providerKeys": ["venmo": "@me"], "anthropicKey": "sk-ant-x",
-        "groqKey": "gsk_x", "geminiKey": "AIzaSyX", "rcAppleApiKey": "appl_x", "rcGoogleApiKey": "goog_x",
-        "TradeReadyRevenueCatAPIKey": "appl_y", "stripeSecretKey": "sk_live_x", "stripePublishableKey": "pk_live_x",
-        "paymentLinkUrl": "https://buy.stripe.com/abc", "accessToken": "eyJhbGciOi", "refreshToken": "r",
-        "sessionToken": "s", "Authorization": "Bearer abc", "BACKEND_API_TOKEN": "t", "portalToken": "p",
-        "bookingToken": "b", "customerName": "Alice Johnson", "email": "a@example.com", "phone": "555-123-4567",
-        "address": "12 Oak St", "notes": "gate code", "messageBody": "hi", "reviewText": "great",
-        "pdfBase64": "JVBERi0", "receiptImage": "data:image/png;base64,AAAA", "jobPhoto": "file:///x.jpg",
-        "csvExport": "a,b", "requestBody": "{}", "amount": 42, "balanceRemaining": 10, "userEmail": "me@example.com",
-    ]
+    // One fixture per §10.1 deny row. The keys are parsed from the table (fix
+    // round 1, M5): the backticked names in the Data column of every row whose
+    // Sentry column denies, plus a pinned key list for each prose-only row.
+    let denyKeys = contractDenyKeys(readOrFail(root, "docs/native-phase-11-platform-hardening-contract-decisions.md"))
+    expectEqual(denyKeys.unmappedRows, [], "Q5 every §10.1 deny row maps to fixture keys")
+    expectEqual(denyKeys.keys.count, 33, "Q5 §10.1 yields 33 deny-row keys")
+    expectEqual(denyKeys.keys.subtracting(denyFixtureValues.keys).sorted(), [],
+                "Q5 every §10.1 deny-row key has a fixture value")
+    let denyRow = denyFixtureValues.filter { denyKeys.keys.contains($0.key) }
     let crash = redactor.redactDictionary(denyRow)
     expectEqual(Array(crash.keys).sorted(), [], "Q5 the crash redactor drops every §10.1 deny-row key")
     let extras = redactor.redactExtras(denyRow.merging(["jobId": "j1", "count": 3]) { $1 })
@@ -725,6 +1115,38 @@ private func testRedaction(root: URL) throws {
         expect(NativeSensitiveData.containsSecret(secret), "Q5 \(secret.prefix(5))… is a recognised secret prefix")
     }
 
+    // Fix round 1 (I1): Square access tokens. RN `scrubLegacySquareToken`
+    // (App.tsx sign-in chain; utils/storage/settings.ts) deletes any stored
+    // Square value `isSquarePaymentLink` refuses. Native has no such pass (G4,
+    // G5), so the shared screens must at least recognise the token shapes.
+    let squareTokens = [
+        "EAAAEOuLQObrVwJvCvoio3qx9Bi7MEZ2Ymv2nUx8m2cVYzAh8Kx5yGQZ", "sq0atp-3_Wb0zJnNx7lzM1nb2eP0g",
+        "sq0atb-Hx7lzM1nb2eP0g_3Wb0zJ", "sq0csp-Q2lnbmF0dXJlX2V4YW1wbGU", "sq0csb-Q2lnbmF0dXJlX2V4YW1wbGU",
+    ]
+    for token in squareTokens {
+        let tag = String(token.prefix(7))
+        expect(!NativeInvoicePaymentLinks.isSquarePaymentLink(token), "Q5 Square \(tag)… is not a payment link (RN scrubs it)")
+        expect(NativeSensitiveData.containsSecret(token), "Q5 Square \(tag)… is a recognised secret (containsSecret)")
+        expect(!redactor.redactString("square rejected \(token) today").contains(token),
+               "Q5 the crash redactor scrubs a Square \(tag)… token in text")
+        let sent = NativeAnalyticsPrivacyPolicy.standard.evaluate(
+            event: "payment_link_sent", properties: ["provider": .string(token), "deposit": .bool(false)]
+        ).decision
+        let leaked: Bool = { if case let .send(_, properties) = sent { return properties["provider"] == .string(token) }; return false }()
+        expect(!leaked, "Q5 analytics never sends a Square \(tag)… token as a catalog string value")
+    }
+    // No over-redaction of links: every value `isSquarePaymentLink` accepts
+    // (RN parity) stays a non-secret, so the Square payment link still works.
+    for link in [
+        "https://square.link/u/EAAAbc12", "square.link/u/AbC123", "www.square.link/u/AbC123",
+        "checkout.square.site/merchant/ML1/checkout/ABC", "http://example.com/pay",
+    ] {
+        expect(NativeInvoicePaymentLinks.isSquarePaymentLink(link) && !NativeSensitiveData.containsSecret(link),
+               "Q5 Square link \(link) stays a payment link and is not a secret")
+        expect(NativeInvoicePaymentLinks.isProviderConfigured(.square, key: link),
+               "Q5 Square link \(link) still configures the Square provider")
+    }
+
     // Widget snapshot keys (§10.1 column 3): no secure-looking key, no secure field.
     let snapshotJSON = try projectSnapshot([
         canonicalJob(#""id":"j9","scheduledDate":"2026-08-04","notes":"sk_live_planted""#),
@@ -748,6 +1170,13 @@ private func testRedaction(root: URL) throws {
 
 // MARK: - Q6 Accessibility and layout (contract §12)
 
+/// The §12.1 status openings that count as closed for Phase 11 (fix round 1,
+/// M6). Anything else, including "**Open", fails.
+private let closedStatuses = [
+    "**Fixed", "**Retained", "**Done by", "**Accepted", "**Mitigated", "**Resolved",
+    "**Deferred to device**",
+]
+
 private func testAccessibilityRows(root: URL) {
     let contract = readOrFail(root, "docs/native-phase-11-platform-hardening-contract-decisions.md")
     var rows = 0
@@ -757,7 +1186,8 @@ private func testAccessibilityRows(root: URL) {
         guard columns.count >= 3 else { expect(false, "Q6 §12.1 row parses: \(line.prefix(12))"); continue }
         let id = columns[0].replacingOccurrences(of: "| ", with: "")
         let status = columns[2]
-        expect(!status.hasPrefix("**Open"), "Q6 §12.1 \(id) is not open (\(status.prefix(40)))")
+        expect(closedStatuses.contains { status.hasPrefix($0) },
+               "Q6 §12.1 \(id) has a closed status (\(status.prefix(40)))")
     }
     expectEqual(rows, 31, "Q6 §12.1 lists A1–A31")
     // A30's measurements run in run-accessibility-audit-tests.sh
@@ -773,8 +1203,9 @@ struct Phase11QualificationTests {
         let sources = loadSources(root: root)
 
         try testWidgetSnapshot(root: root, sources: sources)
-        testActionReplay(root: root)
+        try testActionReplay(root: root)
         testDeepLinks()
+        testRNVectorCompleteness(root: root)
         testAnalyticsCatalog(root: root, sources: sources)
         try testRedaction(root: root)
         testAccessibilityRows(root: root)

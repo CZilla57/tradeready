@@ -54,6 +54,19 @@ enum NativeWidgetActionBatchPlanner {
             throw NativeWidgetActionBatchError.invalidAccountBinding
         }
         let source = Data(rawValue.utf8)
+        // 11.13 fix round 1 (I2): RN `parsePendingActions` returns [] for ""
+        // (and for whitespace, which `JSON.parse` rejects). An empty or
+        // whitespace-only queue is an empty batch: the coordinator commits it
+        // as a no-op and clears the key. Malformed JSON still quarantines (C8).
+        if rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return NativeWidgetActionBatch(
+                accountBinding: verifiedAccountBinding,
+                sourceDigest: digest(source),
+                sourceBytes: source,
+                actions: [],
+                ownerDroppedCount: 0
+            )
+        }
         let values: [Canonical.JSONValue]
         do {
             values = try JSONDecoder().decode([Canonical.JSONValue].self, from: source)

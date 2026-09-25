@@ -792,7 +792,7 @@ complete / Phase 12 evidence deferred**.
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`) and round 2 (`22f35fd`, review I1: a push acknowledged during a direct-caller pull)**: the pull commit rebases onto the live snapshot and takes the server's version only for records the device has not touched (pending at start or commit, or changed locally), holding a table's cursor where it keeps a local record over a fetched row, with scenarios D–G and table-driven merge cases running by default (229 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Done (code complete 2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A29 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. A29 (success, warning and status colors as text) is fixed with native text tokens after the controller ruling. Fix round 1 fixed the 12 in-row destructive buttons (I1) and minors m1–m7. A30 (PDF stamps) is owned by 11.13 and A31 (system dialogs) is accepted. **H1 is closed:** zero release-blocking findings remain. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
-| 11.13 | all | Done (code complete 2026-09-24). The six areas are qualified against RN (contract §17), and every gap has coverage or a named owner. The new suite `native/Phase11QualificationTests` (318 checks) proves four things. RN's own `BridgeSnapshot` and `SiriSnapshot` decoders, extracted from `targets/`, read every fixture and every native write. Every RN widget-action and deep-link vector runs through the native planner, replayer and parser. The RN `track(` sites equal the catalog, with 49 of 52 events live natively and 3 named exclusions. The RN secure fields and §10.1 deny rows are stripped everywhere, and no §12.1 row is open. A30 (PDF stamps and accent) is fixed as a native difference, with every pairing at 5.67:1 or better. Six known issues are carried to the final review and are not qualified. Device, extension, Siri and store proof is deferred to Phase 12 | 11.01-11.12, 11.15 | Cross-client qualification |
+| 11.13 | all | Done (code complete 2026-09-24). The six areas are qualified against RN (contract §17), and every gap has coverage or a named owner. The new suite `native/Phase11QualificationTests` (474 checks after fix round 1) proves four things. RN's own `BridgeSnapshot` and `SiriSnapshot` decoders, extracted from `targets/`, read every contract fixture and every native write. Every RN widget-action and deep-link vector with a Swift form runs through the native planner, replayer, coordinator and parser, and a completeness guard pins each RN vector. The RN `track(` sites equal the catalog, with 49 of 52 events live natively and 3 named exclusions. The RN secure fields and §10.1 deny rows are stripped everywhere, and no §12.1 row is open. A30 (PDF stamps and accent) is fixed as a native difference, with every pairing at 5.67:1 or better. Fix round 1 made an empty queue a no-op (RN parity) and added the Square token prefixes. Gaps G1, G2 and G5 are owned by Phase 12.00. Six known issues are carried to the final review and are not qualified. Device, extension, Siri and store proof is deferred to Phase 12 | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
 
 Exit criteria traceability (roadmap Phase 11):
@@ -3884,22 +3884,29 @@ store proof is deferred to Phase 12.
 - **Q1 widget snapshot.** RN `BridgeSnapshot` and `SiriSnapshot` decode F1–F5 and three
   mirror-written native projections field for field. F6 is rejected by the widget and
   degraded by Siri, as in RN. The native schema is RN's plus `ownerTag`.
-- **Q2 replay.** Every `widgetActions.test.js` vector passes through the planner and
-  replayer. Rejecting the whole batch is asserted as the §4.3 difference.
-- **Q3 deep links.** Every `deepLinks.test.js` vector passes.
+- **Q2 replay.** Every `widgetActions.test.js` vector passes through the planner,
+  replayer and coordinator, or is cited. Rejecting the whole batch is asserted as the
+  §4.3 difference. (The original claim of "every vector" missed `null` and `""`; fix
+  round 1 added them.)
+- **Q3 deep links.** Every `deepLinks.test.js` vector with a Swift form passes. The
+  three `null`/`undefined` rows have none.
 - **Q4 analytics.** RN `track(` (70 sites) equals the 52-event catalog. A call graph over
   `N/` finds 49 of 52 events live. The three wired-nowhere events:
   - `booking_request_opened` and `booking_update_opened` (G1): no native push;
   - `tax_settings_saved` (G2): its chain `emitTaxSettingsSaved` ← `commitTaxSettings`
     has no caller.
   
-  These are named exclusions whose owners 11.14 must schedule. **The 11.08 note
-  "`tax_settings_saved` is emitted by `commitTaxSettings`" is refined:** the emission
-  sits in the private helper `emitTaxSettingsSaved`. A one-hop reachability check
-  therefore missed it, and the first RED run exposed that.
-- **Q5 redaction.** RN `SECURE_FIELDS` and 33 §10.1 deny-row keys are denied by analytics,
-  the crash redactor and the widget snapshot.
-- **Q6 accessibility.** No §12.1 row is open.
+  These are named exclusions, owned by Phase 12.00 as cutover-blocking parity gaps
+  (build or dated waiver). The emission sits in the private helper
+  `emitTaxSettingsSaved`, and nothing calls `commitTaxSettings`. 11.08's count was
+  already correct. The first draft of this harness used a one-hop reachability check,
+  which wrongly counted the event as live; the transitive call graph fixed that harness
+  bug before the RED run (fix round 1, M4).
+- **Q5 redaction.** RN `SECURE_FIELDS` and the 33 deny-row keys, parsed from §10.1, are
+  denied by analytics, the crash redactor and the widget snapshot. Square token shapes
+  are recognised (fix round 1). G4 is not applicable. G5 is a named blocker: native
+  stores a pasted Square token and has no scrub pass.
+- **Q6 accessibility.** Every §12.1 status is on the closed-status allow-list.
 - **A30.** PAID 5.86:1, OUTSTANDING 5.74:1, PARTLY PAID 5.67:1, accent 6.37:1 on white and
   5.91:1 on the total wash. RN's template keeps 2.88–4.33:1, so this is a recorded native
   difference.
@@ -3917,15 +3924,18 @@ None was changed.
 **Commands and results (TZ=America/Phoenix):**
 - RN oracles (§4):
   `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/widgetBridge.test.js __tests__/widgetActions.test.js __tests__/deepLinks.test.js __tests__/analytics.test.ts`
-  → 4 suites, 123 tests passed, exit 0. There was a haste-map duplicate-mock warning
-  from a `.claude/worktrees` copy, and it did not affect the result. No failure came
-  from other agents' RN or backend edits.
+  → 4 suites, 123 tests passed, exit 0. No failure came from other agents' RN or
+  backend edits.
+- **Environment caveat (M7):** jest's haste map warns about a duplicate `__mocks__`
+  in a `.claude/worktrees` copy of the repo. The warning does not change any result.
+  Nothing under `.claude/` was deleted and the jest config was not edited; the
+  worktree's owner must clean it up.
 - A30 RED: `run-accessibility-audit-tests.sh` failed to compile, because
   `DocumentPalette` and `documentContrastRequirements` were missing. A30 GREEN:
   `accessibility-audit tests: 1859/1859 checks passed`.
 - Qualification suite:
   - first run: harness bugs (duplicate JSON keys in fixture builders, optional promotion
-    in `expectEqual`, the one-hop reachability miss above, and the diagnostic's
+    in `expectEqual`, the harness's own one-hop reachability miss, and the diagnostic's
     8-issue cap), all fixed in the test;
   - RED on the unchanged contract: `1 of 318 checks FAILED` (A30 open);
   - GREEN: `phase11-qualification tests: 318/318 checks passed`.
@@ -3955,7 +3965,10 @@ None was changed.
 - Doc check → `1659 path references checked: 0 missing, 16 planned (not yet created).` (the planned count includes the Phase 12 `docs/native-phase-11-device-runsheet.md`).
 
 **Deviations:**
-- No behavior change beyond A30. G1 and G2 are named blockers, not fixes.
+- In the first pass, nothing changed behavior beyond A30. Fix round 1 changed two
+  things. An empty or whitespace-only queue is now an empty batch, matching RN
+  (contract §4.6). `NativeSensitiveData` gained the Square token prefixes. G1, G2 and
+  G5 are named blockers, not fixes.
 - The optional simulator smoke (§13) was not run.
 
 **Phase 12 deferrals (not run, not claimed):**
@@ -3968,6 +3981,55 @@ None was changed.
 | Q11-P12-4 (store) | A StoreKit sandbox or TestFlight purchase and restore; Release PostHog and Sentry keys supplied on staging | `subscription_purchased` and the catalog events arrive with allow-listed properties only, and Sentry receives a redacted event |
 | Q11-P12-5 (PDF) | Share an invoice PDF in each status and an estimate PDF, and view them on the device and in Mail | Stamps and accent use the A30 colors and stay legible when printed |
 
-**Next ready:** 11.14 (aggregate verification and closeout). 11.14 must schedule owners
-for G1 (native remote push) and G2 (a native tax-settings editor), and collect the rows
-above into `docs/native-phase-11-device-runsheet.md`.
+**Next ready:** 11.14 (aggregate verification and closeout). G1 (native remote push), G2
+(a native tax-settings editor) and G5 (a Square token scrub pass or input validation)
+are owned by Phase 12.00 as cutover-blocking parity gaps (build or dated waiver).
+11.14 must collect the rows above into `docs/native-phase-11-device-runsheet.md`.
+
+**Fix round 1 (2026-09-24, review of `9b32481`):**
+- **I1 (Square tokens).** `NativeSensitiveData.secretValuePrefixes` gains `EAAA`,
+  `sq0atp-`, `sq0atb-`, `sq0csp-` and `sq0csb-`. Q5 and `ErrorRedactionTests` prove
+  that `containsSecret`, `redactString` and the analytics policy stop these values,
+  and that every value `isSquarePaymentLink` accepts stays a non-secret and still
+  configures Square.
+  - G4: RN `scrubLegacySquareToken` has no native equivalent. It is not applicable,
+    because there are no current users.
+  - G5: the ruling assumed native never writes a non-link Square value. It does:
+    `SettingsView` binds the field straight to `setProviderKey`. No guard was added
+    because the clause is false. This is a named blocker (contract §17.2).
+- **I2 (empty queue).** `NativeWidgetActionBatchPlanner.prepare` returns an empty
+  batch for `""` or whitespace, and malformed JSON still quarantines (contract §4.6).
+  No existing test asserted the old behavior. The App Intent writer's own refusal of
+  an existing `""` (`AppIntentQueueTests`) is unchanged; the next replay clears the key.
+  - Q2 adds the `null`, `""` and missing-type vectors, plus coordinator-level
+    `replayWidgetActions` vectors.
+  - A completeness guard parses every RN `test(`/`test.each(` title and table size in
+    `__tests__/widgetActions.test.js` and `__tests__/deepLinks.test.js`. It pins each
+    one to the checks that transcribe it, and each named check must have run.
+- **Minors:**
+  - M3: the owners of G1, G2 and G5 are now the exact Phase 12.00 string. Q4 requires
+    it in both the suite and contract §17.2.
+  - M4: the misattribution to 11.08 is reworded above.
+  - M5: F1–F6 are parsed from contract §2.4, and the deny keys from the §10.1 table.
+    Prose rows map through a pinned list, and an unmapped row fails.
+  - M6: Q6 uses a closed-status allow-list.
+  - M7: the environment caveat is recorded above.
+  - M8: the Deep links parity row cites known issue 6.
+  - M9: the runner extracts the decoders into a `mktemp -d` directory.
+- RED (before the fixes): `phase11-qualification tests: 21 of 473 checks FAILED`. That
+  was 2 empty-queue planner checks, 2 coordinator checks, 15 Square checks, and 2
+  §17.2 owner checks that went green once the docs changed. `error-redaction` had
+  12 failures (711 checks).
+- GREEN: `phase11-qualification tests: 474/474 checks passed`;
+  `error-redaction tests: 711/711 checks passed`.
+- New-guard mutations on a scratch copy, each caught; the restored copy returned
+  474/474:
+  - a new RN `test(`: 2 failures;
+  - an extra `test.each` row: 2;
+  - contract F2 edited: 3;
+  - a new prose §10.1 deny row: 1;
+  - an A-row status of `**Pending`: 1;
+  - the G5 owner changed: 1.
+- Verification results are recorded in the report
+  (`.superpowers/sdd/native-phase-11-implementation-plan/task-11.13-report.md`,
+  "Fix round 1").
