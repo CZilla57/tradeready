@@ -164,7 +164,7 @@ private final class RecordingReloader: NativeWidgetTimelineReloading {
     func reloadAllTimelines() { lock.lock(); _count += 1; lock.unlock() }
 }
 
-private final class LockedFlag {
+private final class LockedFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Bool
     init(_ value: Bool) { self.value = value }
@@ -243,6 +243,33 @@ private final class LockHolder {
 }
 
 private func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+/// Review fix M6: probes the lock with `LOCK_NB` on a fresh descriptor, so a
+/// leaked hold fails the assertion instead of hanging the runner.
+private func lockIsHeld(at url: URL) -> Bool {
+    let descriptor = open(url.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+    guard descriptor >= 0 else { return false }
+    defer { close(descriptor) }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { return true }
+    flock(descriptor, LOCK_UN)
+    return false
+}
+
+/// Review fix M5: sleeps (at most a little past one window) until no
+/// main-thread fast-fail window is open, so a test starts from the full
+/// main-thread budget.
+private func waitOutFastFailWindow() {
+    let giveUp = uptime() + WidgetAppGroupLock.mainThreadFastFailWindow + 0.5
+    while WidgetAppGroupLock.isMainThreadFastFailWindowOpen, uptime() < giveUp {
+        Thread.sleep(forTimeInterval: 0.01)
+    }
+}
+
+/// Sleeps the calling thread until `deadline` (monotonic uptime).
+private func sleepUntil(_ deadline: TimeInterval) {
+    let remaining = deadline - uptime()
+    if remaining > 0 { Thread.sleep(forTimeInterval: remaining) }
+}
 
 /// Records `reportError` calls: the diagnostic code and the context only.
 private final class RecordingCrashReporting: NativeCrashReporting {
@@ -718,12 +745,13 @@ private func makeStore(
     group: TempAppGroup,
     reloader: RecordingReloader,
     subscription: SubscriptionStub? = nil,
-    crashReporting: NativeCrashReporting = NativeNoOpCrashReporting()
+    crashReporting: NativeCrashReporting = NativeNoOpCrashReporting(),
+    storeURL: URL? = nil
 ) throws -> AppStore {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("tradeready-1101-store-\(label)-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let url = dir.appendingPathComponent("store.json")
+    let url = storeURL ?? dir.appendingPathComponent("store.json")
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Canonical.SnapshotRepository(primaryURL: url).save(
         Canonical.Snapshot(payload: Canonical.SnapshotPayload(invoices: rnOutstandingInvoices, jobs: jobs))
     )
@@ -950,6 +978,34 @@ private func testBoundedAcquireOnMainThread() {
     expectEqual(WidgetAppGroupLock.offMainThreadBudget, 2, "the off-main budget is 2 s")
     let group = TempAppGroup("bounded-main")
     defer { group.cleanUp() }
+    // Review fix M5: start from the full budget (no fast-fail window open).
+    waitOutFastFailWindow()
+
+    // (c) A short hold (an append takes a few ms) is waited out, not refused.
+    // Runs first, before any busy in this test opens the fast-fail window.
+    // Review fix M2: the holder lets go from a dedicated thread (not the
+    // shared GCD pool), and a loaded host gets one retry after the window.
+    func briefHoldIsWaitedOut() -> Bool {
+        let descriptor = holdLock(at: group.lockFile)
+        let released = DispatchSemaphore(value: 0)
+        let releaser = Thread {
+            Thread.sleep(forTimeInterval: 0.02)
+            releaseLock(descriptor)
+            released.signal()
+        }
+        releaser.qualityOfService = .userInteractive
+        releaser.start()
+        var ran = false
+        do { try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { ran = true } } catch {}
+        released.wait()
+        return ran
+    }
+    var waitedOut = briefHoldIsWaitedOut()
+    if !waitedOut {
+        waitOutFastFailWindow()
+        waitedOut = briefHoldIsWaitedOut()
+    }
+    expect(waitedOut, "a 20 ms hold is waited out on the main thread, and the body runs")
 
     // (a) Held by another open file description for longer than the budget.
     let holder = LockHolder(at: group.lockFile, releaseAfter: 1)
@@ -960,25 +1016,17 @@ private func testBoundedAcquireOnMainThread() {
     let elapsed = uptime() - start
     expectEqual(caught as? WidgetAppGroupLockError, .busy, "a lock held elsewhere past the budget → busy")
     expect(!ran, "the body never runs when the lock stays busy")
-    expect(elapsed < budget + 0.05, "busy is returned within the budget (took \(elapsed) s)")
+    expect(elapsed < 0.25, "busy is returned under the 250 ms hang threshold (took \(elapsed) s)")
     expect(elapsed >= budget * 0.8, "the acquire retries for the budget, not one attempt (took \(elapsed) s)")
     holder.release()
 
-    // (b) Released: the next acquire runs the body.
+    // (b) Released: the next acquire runs the body (inside the fast-fail
+    // window its one attempt finds the lock free).
     var ranAfterRelease = false
     do { try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { ranAfterRelease = true } } catch {
         expect(false, "the acquire succeeds after release (\(error))")
     }
     expect(ranAfterRelease, "the body runs once the lock is free")
-
-    // (c) A short hold (an append takes a few ms) is waited out, not refused.
-    let brief = LockHolder(at: group.lockFile, releaseAfter: 0.02)
-    var ranAfterBriefHold = false
-    do { try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { ranAfterBriefHold = true } } catch {
-        expect(false, "a 20 ms hold is waited out on the main thread (\(error))")
-    }
-    expect(ranAfterBriefHold, "the body runs after a brief hold")
-    brief.release()
 
     // (d) The body's own error passes through unchanged, and the lock is released.
     struct BodyError: Error, Equatable {}
@@ -988,8 +1036,96 @@ private func testBoundedAcquireOnMainThread() {
     } catch {
         expect(error is BodyError, "the body's error is not mapped to a lock error")
     }
-    let reHeld = holdLock(at: group.lockFile)
-    releaseLock(reHeld)
+    // Review fix M6: a non-blocking probe, so a leaked descriptor fails here
+    // instead of hanging the runner.
+    expect(!lockIsHeld(at: group.lockFile), "the lock is released after the body throws")
+}
+
+/// Review fix M5: after a main-thread busy, main-thread acquires make ONE
+/// `LOCK_NB` attempt for `mainThreadFastFailWindow`, so one synchronous turn
+/// cannot stack several 100 ms waits. Fast-fail busies do not extend the
+/// window; off-main callers keep their full budget; after the window the
+/// main thread gets its full budget again.
+@MainActor
+private func testMainThreadFastFailWindow() {
+    expect(Thread.isMainThread, "sanity: this test runs on the main thread")
+    expectEqual(WidgetAppGroupLock.mainThreadFastFailWindow, 1, "the fast-fail window is 1 s")
+    let budget = WidgetAppGroupLock.mainThreadBudget
+    let group = TempAppGroup("fast-fail")
+    defer { group.cleanUp() }
+    waitOutFastFailWindow()
+    expect(!WidgetAppGroupLock.isMainThreadFastFailWindowOpen, "sanity: no window is open at the start")
+
+    func attempt() -> (error: WidgetAppGroupLockError?, ran: Bool, took: TimeInterval) {
+        var ran = false
+        let start = uptime()
+        do {
+            try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { ran = true }
+            return (nil, ran, uptime() - start)
+        } catch {
+            return (error as? WidgetAppGroupLockError, ran, uptime() - start)
+        }
+    }
+
+    // 1. The first busy waits the full budget and opens the window.
+    let first = LockHolder(at: group.lockFile, releaseAfter: 5)
+    let opening = attempt()
+    let opened = uptime()
+    expectEqual(opening.error, .busy, "the first main-thread acquire behind a stuck holder → busy")
+    expect(opening.took >= budget * 0.8 && opening.took < 0.25,
+           "…after waiting out the full budget (took \(opening.took) s)")
+    expect(WidgetAppGroupLock.isMainThreadFastFailWindowOpen, "a main-thread busy opens the fast-fail window")
+
+    // 2. Inside the window, further main-thread acquires fail fast: two more
+    // in the same turn together stay well under one budget.
+    let second = attempt()
+    let third = attempt()
+    expectEqual(second.error, .busy, "a second main-thread acquire inside the window → busy")
+    expectEqual(third.error, .busy, "…and a third")
+    expect(!second.ran && !third.ran, "…without running the body")
+    expect(second.took < budget * 0.25, "the second acquire made one attempt (took \(second.took) s)")
+    expect(second.took + third.took < budget * 0.5,
+           "one turn cannot stack budgets (second + third took \(second.took + third.took) s)")
+
+    // 3. Off-main callers are unaffected: inside the window an off-main
+    // acquire still waits out a hold instead of failing fast.
+    let offMainRan = LockedFlag(false)
+    let offMainWaited = LockedFlag(false)
+    let offMainDone = DispatchSemaphore(value: 0)
+    let lockFile = group.lockFile
+    Thread {
+        let start = uptime()
+        try? WidgetAppGroupLock.withExclusiveLock(at: lockFile) { offMainRan.set(true) }
+        offMainWaited.set(uptime() - start >= 0.1)
+        offMainDone.signal()
+    }.start()
+    Thread.sleep(forTimeInterval: 0.15)
+    first.release()
+    expect(offMainDone.wait(timeout: .now() + 3) == .success, "the off-main acquire finishes")
+    expect(offMainRan.get(), "inside the window an off-main acquire waits out the hold and runs the body")
+    expect(offMainWaited.get(), "…having waited at least 100 ms, not made a single attempt")
+
+    // 4. Fast-fail busies do not extend the window.
+    let secondHolder = LockHolder(at: group.lockFile, releaseAfter: 5)
+    sleepUntil(opened + 0.5)
+    let late = attempt()
+    expectEqual(late.error, .busy, "half a window later a main-thread acquire is still fast-failed")
+    expect(late.took < budget * 0.25, "…with one attempt (took \(late.took) s)")
+    sleepUntil(opened + WidgetAppGroupLock.mainThreadFastFailWindow + 0.1)
+    expect(!WidgetAppGroupLock.isMainThreadFastFailWindowOpen,
+           "the window closes one window after the busy that opened it (fast-fail busies do not extend it)")
+
+    // 5. After the window the full budget applies again.
+    let after = attempt()
+    expectEqual(after.error, .busy, "after the window a main-thread acquire behind the holder → busy")
+    expect(after.took >= budget * 0.8 && after.took < 0.25,
+           "…after waiting out the full budget again (took \(after.took) s)")
+    secondHolder.release()
+
+    // 6. A fast-fail attempt still takes a free lock.
+    expect(WidgetAppGroupLock.isMainThreadFastFailWindowOpen, "sanity: that busy reopened the window")
+    let free = attempt()
+    expect(free.error == nil && free.ran, "inside the window a free lock is still taken on the one attempt")
 }
 
 /// Off the main thread the wait is bounded too (2 s), so a stuck holder can
@@ -1044,7 +1180,7 @@ private func testWriterBusyOnMainThread() {
                                isCurrentOwner: { _ in true }, force: true, now: now)
     let elapsed = uptime() - start
     expectEqual(outcome, .busy, "a main-thread mirror write behind a held lock → busy")
-    expect(elapsed < WidgetAppGroupLock.mainThreadBudget + 0.05, "the main thread waited at most the budget (took \(elapsed) s)")
+    expect(elapsed < 0.25, "the main thread stayed under the 250 ms hang threshold (took \(elapsed) s)")
     expectEqual(group.storedJSON, "prior", "a busy write leaves the stored snapshot untouched")
     expectEqual(reloader.count, 0, "a busy write does not reload timelines")
     holder.release()
@@ -1065,9 +1201,13 @@ private func testAppStoreRetriesBusyMirror() async throws {
     defer { group.cleanUp() }
     let reloader = RecordingReloader()
     let reporter = RecordingCrashReporting()
+    let storeURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tradeready-1101-store-busy-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("store.json")
+    defer { try? FileManager.default.removeItem(at: storeURL.deletingLastPathComponent()) }
     let store = try makeStore("busy", jobs: [
         job(#"{"id":"future","scheduledDate":"2099-01-01","scheduledStartTime":"08:00"}"#),
-    ], group: group, reloader: reloader, crashReporting: reporter)
+    ], group: group, reloader: reloader, crashReporting: reporter, storeURL: storeURL)
     expectEqual(store.widgetMirrorBusyRetryDelays, [0.5, 2, 8], "production retry schedule: 0.5 s, 2 s, 8 s")
     store.widgetMirrorBusyRetryDelays = []
     store.installWidgetMirror(group.mirror(reloader))
@@ -1147,21 +1287,38 @@ private func testAppStoreRetriesBusyMirror() async throws {
            "the next publish reaches the writer after the release (got \(String(describing: afterSeam)))")
     expect(!store.isWidgetMirrorDirty, "…and is clean")
 
-    // (e) The owner changes while the mirror is dirty: the retry re-evaluates
-    // the owner gate and never writes the previous owner's snapshot.
-    store.widgetMirrorBusyRetryDelays = [0.1]
+    // (e) Review fix M1: the owner gate closes while the mirror is dirty,
+    // with NO gate-change trigger, so only the scheduled retry can observe
+    // it. A `.widgetScrub` boundary step is left pending (the durable
+    // marker Task 4's failed widget wipe leaves), which closes
+    // `widgetMirrorOwnerBinding` without any refresh. The missed write
+    // differs from the stored snapshot (a new clock-in), so a retry that
+    // skipped the gate would write it; one that skipped only the outer gate
+    // would end `.skippedOwnerChanged` and stay dirty. The retry must go
+    // through `refreshWidgetMirror` and end `.skippedNoOwner`: nothing
+    // written or reloaded, and the dirty flag settled.
+    store.widgetMirrorBusyRetryDelays = [0.3]
     holder = LockHolder(at: group.lockFile, releaseAfter: 2)
-    expectEqual(store.refreshWidgetMirror(force: true), .busy, "busy while the owner is still signed in")
-    expect(store.isWidgetMirrorDirty, "dirty")
-    let ownerSnapshot = group.storedJSON
-    let reloadsBeforeClear = reloader.count
-    store.scheduleBookingTestClearOwner()
-    holder.release()
-    try await Task.sleep(nanoseconds: 400_000_000)
+    expect(store.clockIn(jobID: "future", on: now.addingTimeInterval(1200)), "sanity: a new clock-in commits")
     await settle()
-    expectEqual(group.storedJSON, ownerSnapshot, "the retry never writes after the owner is gone")
-    expectEqual(reloader.count, reloadsBeforeClear, "…and never reloads for the previous owner")
-    expect(!store.isWidgetMirrorDirty, "a gated-off retry settles the dirty flag (the scrubber owns the suite)")
+    expect(store.isWidgetMirrorDirty, "the new clock-in's mirror write went busy")
+    let ownerSnapshot = group.storedJSON
+    expect(group.stored?.timer == nil, "sanity: the stored snapshot predates the new clock-in")
+    let reloadsBeforeGate = reloader.count
+    let busyBeforeGate = store.widgetMirrorLockBusyCount
+    try Canonical.SnapshotRepository(primaryURL: storeURL).beginBoundaryStep(.widgetScrub)
+    holder.release()
+    await settle()
+    expect(store.isWidgetMirrorDirty,
+           "closing the gate this way runs no refresh: the mirror is still dirty until the retry fires")
+    try await Task.sleep(nanoseconds: 600_000_000)
+    await settle()
+    expect(!store.isWidgetMirrorDirty,
+           "the retry itself ran through the owner gate and ended .skippedNoOwner (the only outcome that settles without writing changed content)")
+    expectEqual(group.storedJSON, ownerSnapshot, "the gated-off retry never writes the new clock-in")
+    expectEqual(reloader.count, reloadsBeforeGate, "…and never reloads")
+    expectEqual(store.widgetMirrorLockBusyCount, busyBeforeGate, "…and never reached the lock")
+    expectEqual(store.refreshWidgetMirror(force: false), .skippedNoOwner, "sanity: the gate is closed while the step is pending")
 }
 
 // MARK: - Main
@@ -1183,6 +1340,7 @@ struct WidgetSnapshotTests {
         try await testSeamProjectsNewestCanonical()
         try await testSignOutScrubsAndReloads()
         testBoundedAcquireOnMainThread()
+        testMainThreadFastFailWindow()
         testBoundedAcquireOffMainThread()
         testWriterBusyOnMainThread()
         try await testAppStoreRetriesBusyMirror()

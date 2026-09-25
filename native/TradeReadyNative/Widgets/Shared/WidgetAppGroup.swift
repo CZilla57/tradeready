@@ -71,7 +71,9 @@ enum WidgetAppGroupLockError: Error, Equatable {
 /// frozen by the wait, and a stuck holder still ends in `.busy`). Real holds
 /// last a few ms (an append, a mirror write) up to tens of ms (a claim of
 /// ≤512 actions), so a busy result means a stuck or starved holder. There is
-/// no blocking variant.
+/// no blocking variant. After a main-thread busy, main-thread acquires make a
+/// single attempt for `mainThreadFastFailWindow` (review fix M5), so one turn
+/// never stacks several budgets.
 ///
 /// Callers must reload widget timelines OUTSIDE the lock (step 3), and must
 /// never write the suite without holding it.
@@ -89,6 +91,28 @@ enum WidgetAppGroupLock {
         onMainThread ? mainThreadBudget : offMainThreadBudget
     }
 
+    /// Phase 12 review fix (M5): after a main-thread acquire ends `.busy`,
+    /// every main-thread acquire for this long makes ONE `LOCK_NB` attempt
+    /// instead of waiting out the budget, so one synchronous main-thread turn
+    /// (e.g. activation: stash consume, then the boundary-step scrub retry,
+    /// then a replay pass) waits for a stuck holder at most once, about
+    /// 100 ms, instead of 100 ms per acquire. 1 s is ten budgets: it covers
+    /// that turn and the turns right after it (the seam write, scene-phase
+    /// handlers), whose own work is milliseconds. It is short enough that the
+    /// next user-driven write gets the full budget again: the mirror's first
+    /// busy retry (0.5 s) makes one attempt, its second (2 s) waits the full
+    /// budget. A fast-fail busy does not extend the window and a success does
+    /// not close it, so against a stuck holder the main thread waits at most
+    /// about 100 ms per 1.1 s. Off-main acquires never read or open it.
+    static let mainThreadFastFailWindow: TimeInterval = 1
+
+    /// Whether a main-thread acquire made now would make a single attempt.
+    static var isMainThreadFastFailWindowOpen: Bool {
+        fastFailWindow.isOpen(at: ProcessInfo.processInfo.systemUptime)
+    }
+
+    private static let fastFailWindow = WidgetAppGroupLockFastFailWindow()
+
     static func withExclusiveLock<T>(at lockFile: URL, _ body: () throws -> T) throws -> T {
         do {
             try FileManager.default.createDirectory(
@@ -100,13 +124,30 @@ enum WidgetAppGroupLock {
         let descriptor = open(lockFile.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else { throw WidgetAppGroupLockError.lockFailed }
         defer { close(descriptor) }
-        try acquire(descriptor, budget: budget(onMainThread: Thread.isMainThread))
+        try acquire(descriptor, onMainThread: Thread.isMainThread)
         defer { flock(descriptor, LOCK_UN) }
         return try body()
     }
 
+    /// Off the main thread: the off-main budget. On the main thread: one
+    /// attempt while the fast-fail window is open; otherwise the main-thread
+    /// budget, and a busy there opens the window.
+    private static func acquire(_ descriptor: Int32, onMainThread: Bool) throws {
+        guard onMainThread else { return try acquire(descriptor, budget: offMainThreadBudget) }
+        if fastFailWindow.isOpen(at: ProcessInfo.processInfo.systemUptime) {
+            return try acquire(descriptor, budget: 0)
+        }
+        do {
+            try acquire(descriptor, budget: mainThreadBudget)
+        } catch WidgetAppGroupLockError.busy {
+            fastFailWindow.open(until: ProcessInfo.processInfo.systemUptime + mainThreadFastFailWindow)
+            throw WidgetAppGroupLockError.busy
+        }
+    }
+
     /// `LOCK_NB` attempts with backoff until `budget` (monotonic clock) runs
-    /// out. `EINTR` is retried; any other error is `lockFailed`.
+    /// out; a zero budget is exactly one attempt. `EINTR` is retried while
+    /// budget remains; any other error is `lockFailed`.
     private static func acquire(_ descriptor: Int32, budget: TimeInterval) throws {
         let deadline = ProcessInfo.processInfo.systemUptime + budget
         var delay = firstRetryDelay
@@ -121,5 +162,24 @@ enum WidgetAppGroupLock {
             Thread.sleep(forTimeInterval: min(delay, remaining))
             delay = min(delay * 2, maximumRetryDelay)
         }
+    }
+}
+
+/// Review fix M5: the fast-fail window's one field. Only main-thread
+/// acquires read or write it; the lock keeps it safe regardless.
+private final class WidgetAppGroupLockFastFailWindow: @unchecked Sendable {
+    private let lock = NSLock()
+    private var closesAt: TimeInterval = 0
+
+    func isOpen(at now: TimeInterval) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return now < closesAt
+    }
+
+    func open(until deadline: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        closesAt = deadline
     }
 }

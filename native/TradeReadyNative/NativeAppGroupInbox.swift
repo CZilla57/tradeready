@@ -85,6 +85,11 @@ struct NativeAppGroupAccountScrubber {
             // Directory creation failed: the pre-11.01 code rethrew the
             // FileManager error, which callers treat as a failed scrub too.
             throw NativeAppGroupAccountScrubError.unavailable
+        } catch WidgetAppGroupLockError.busy {
+            // Phase 12 review fix M3: one payload-free line per busy event;
+            // still `lockFailed`, so the durable widget step stays pending.
+            print("TradeReadyWidgetLock stage=busy site=scrub")
+            throw NativeAppGroupAccountScrubError.lockFailed
         } catch {
             throw NativeAppGroupAccountScrubError.lockFailed
         }
@@ -138,6 +143,11 @@ struct NativePendingOpenURLConsumer {
                 inbox.removeValue(forKey: Self.key)
                 return value
             }
+        } catch WidgetAppGroupLockError.busy {
+            // Phase 12 review fix M3: one payload-free line per busy event;
+            // nothing was read or removed, so the stash keeps its 300 s window.
+            print("TradeReadyWidgetLock stage=busy site=stash")
+            return .unavailable
         } catch {
             return .unavailable
         }
@@ -163,6 +173,10 @@ struct NativePendingOpenURLConsumer {
                 inbox.removeValue(forKey: Self.key)
                 return (true, stash.ownerTag)
             }
+        } catch WidgetAppGroupLockError.busy {
+            // Phase 12 review fix M3: as in `take`; the stash is left for it.
+            print("TradeReadyWidgetLock stage=busy site=stash")
+            return (false, nil)
         } catch {
             return (false, nil)
         }

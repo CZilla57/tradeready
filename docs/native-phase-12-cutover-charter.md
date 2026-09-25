@@ -552,7 +552,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L110 | `.missing` and `.noUpcomingJob` share an icon; `.missing` copy is not the contract's | S3 | Open | backlog | Open |
 | L117 | Four copies of the "job not before today" local-date compare | S3 | Open | backlog; consolidate under `TZ=America/Phoenix` tests (FA-039 class) | Open |
 | L118 | Widget navy colour constant is duplicated | S3 | Open | backlog | Open |
-| L132 | Race tests assert "not finished after 0.3s", not "blocked on the flock" | S3 | Open | backlog | Fixed — 12.00b.2-B rider (`fix(native): phase 12.00b.2 - bounded App Group lock on the main actor (L74, L96)`; the anchored writer-first scrub race) |
+| L132 | Race tests assert "not finished after 0.3s", not "blocked on the flock" | S3 | Open | backlog | Fixed — 12.00b.2-B rider (`fix(native): phase 12.00b.2 - bounded App Group lock on the main actor (L74, L96)`; the anchored writer-first scrub race); other `timedOut` race sites remain (backlog: `AppGroupPendingOpenURLTests:177`, `AppIntentQueueTests:867`, `WidgetOwnerGatingTests:636`, `:1512`, `:1526`, `WidgetSnapshotTests:615`, `:641`, lines as of `c620929`) |
 | L133 | `testOneLock` counts exact source-string occurrences in `AppStore.swift` | S3 | Open | backlog | Open |
 | L140.b | `StoreIntegrationTests` comment says there is no App-Group access, but the switch now scrubs it | S3 | Open | backlog | Open |
 | L168 | Analytics-config comment names three gating conditions; the code has a fourth (invalid host) | S3 | Open | backlog | Open |

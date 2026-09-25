@@ -959,8 +959,7 @@ private func testOnMyWayStashReportsBusy() {
     let outcome = engine.stashOnMyWay()
     let elapsed = ProcessInfo.processInfo.systemUptime - start
     expectEqual(outcome, .failed(.busy), "a stash behind a held lock reports busy")
-    expect(elapsed < WidgetAppGroupLock.mainThreadBudget + 0.05,
-           "the main thread waited at most the budget (took \(elapsed) s)")
+    expect(elapsed < 0.25, "the main thread stayed under the 250 ms hang threshold (took \(elapsed) s)")
     expectEqual(busyEvents, 1, "one bounded diagnostic per busy event")
     expect(suite.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) == nil, "no stash is written while busy")
     expectEqual(suite.defaults.string(forKey: WidgetAppGroup.actionsKey), queueBefore, "the queue is untouched")

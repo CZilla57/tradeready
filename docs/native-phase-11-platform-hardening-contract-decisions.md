@@ -407,6 +407,16 @@ it claims a prefix.
   100 ms on the main thread (iOS counts 250 ms as a hang) and 2 s on any other thread.
   There is no blocking variant. The lock file, the scrub's lock order and the scrub's
   semantics are unchanged.
+  - Main-thread fast-fail window (review fix, 2026-09-25). After a main-thread acquire
+    ends `busy`, main-thread acquires for the next 1 s make one `LOCK_NB` attempt, so
+    one synchronous turn (for example activation: stash consume, boundary-step scrub
+    retry, replay pass) waits for a stuck holder at most once. A fast-fail `busy` does
+    not extend the window and a success does not close it. Off-main acquires never use
+    it.
+  - Each main-thread busy site logs one fixed, payload-free line:
+    `TradeReadyWidgetLock stage=busy site=mirror|intent|stash|scrub`. The mirror also
+    reports `widget-lock/busy` (§3.1). The claim transport's busy line is deferred to
+    Tasks 12.00b.2-C and -D, which own `N/NativeWidgetActionReplay.swift`.
   - A busy intent (`WidgetIntentFailure.busy`) writes nothing and reports failure with
     its existing failure dialog: "TradeReady couldn't save that" for the shared writer
     refusal, the trip intents' own failure lines, and "I couldn't open that. Open

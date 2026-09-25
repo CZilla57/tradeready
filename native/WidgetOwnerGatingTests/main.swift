@@ -1475,6 +1475,18 @@ private func testSignOutBehindBusyLockFailsClosed() async throws {
     expect(!lock.isEmpty, "sanity: the lock source is readable")
     expect(lock.contains("LOCK_EX | LOCK_NB"), "the shared lock acquires with LOCK_NB")
     expect(!lock.contains("LOCK_EX)"), "the shared lock has no blocking LOCK_EX acquire")
+
+    // Review fix M3: the stash consumer (take, takeMatching) and the scrubber
+    // each emit one payload-free busy line (a fixed literal, no interpolation).
+    // The host suites have no stdout seam, so this is a source check.
+    let inbox = source("NativeAppGroupInbox.swift")
+    expect(!inbox.isEmpty, "sanity: the inbox source is readable")
+    expectEqual(inbox.components(separatedBy: "catch WidgetAppGroupLockError.busy {").count - 1, 3,
+                "take, takeMatching and scrub each catch busy")
+    expectEqual(inbox.components(separatedBy: #"print("TradeReadyWidgetLock stage=busy site=stash")"#).count - 1, 2,
+                "take and takeMatching log one fixed stash line")
+    expectEqual(inbox.components(separatedBy: #"print("TradeReadyWidgetLock stage=busy site=scrub")"#).count - 1, 1,
+                "the scrubber logs one fixed scrub line")
 }
 
 // MARK: - 10. One lock (deferred 11.01 minor) and scrub-path structure
