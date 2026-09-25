@@ -37,7 +37,7 @@ struct NativeRejectedChange: Codable, Equatable, Identifiable {
     var key: String { Self.key(item) }
     var id: String { key }
 
-    static func key(_ item: Canonical.MutationItem) -> String { "\(item.table)/\(item.recordId)" }
+    static func key(_ item: Canonical.MutationItem) -> String { NativeMutationPushClassification.recordKey(item) }
 }
 
 enum NativeRejectedChangeStoreError: Error, Equatable {
@@ -170,6 +170,13 @@ struct NativeRejectedChangeStore {
     /// Removes the file (every account boundary). Idempotent.
     func removeAll() throws {
         try files.remove(fileURL)
+    }
+
+    /// Whether a file is on disk, whoever owns it (review M2: a caller with
+    /// no verified owner cannot tell whose refusals it holds). A file that
+    /// cannot be read counts as present, so the caller fails closed.
+    func fileIsPresent() -> Bool {
+        do { return !((try files.read(fileURL)) ?? Data()).isEmpty } catch { return true }
     }
 
     private func document(binding: String) throws -> [NativeRejectedChange]? {

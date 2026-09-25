@@ -4557,8 +4557,12 @@ final class AppStore: ObservableObject {
         applyRecoverySignedOutState()
     }
 
-    func dismissInvalidPasswordRecovery() async {
-        let recoveryStore = NativePasswordRecoveryStore()
+    /// `recoveryStore` is the Keychain-backed default in the app; a host test
+    /// passes an in-memory one (review fix round 1, M6), because host runners
+    /// never touch the real Keychain (`HostInMemoryKeychain`).
+    func dismissInvalidPasswordRecovery(
+        recoveryStore: NativePasswordRecoveryStore = NativePasswordRecoveryStore()
+    ) async {
         if (try? recoveryStore.read()?.activeUserSubject) != nil {
             try? secureSettingsStore.clearSupabaseSession()
             // Task 11.15 fix round 1: dropping the recovery session is an
@@ -7323,10 +7327,19 @@ final class AppStore: ObservableObject {
     /// (the coordinator re-sends it next pass), so a refusal is never lost:
     /// there must be a verified owner, and no account switch or pending
     /// boundary scrub (that file is about to be removed). An attempt with no
-    /// refusal needs no owner while none can be listed.
+    /// refusal needs no owner while no file is on disk. With a file but no
+    /// verified binding (a rejected session keeps the subject; review M2)
+    /// it throws too: the entry its accepted change clears cannot be found,
+    /// and skipping it would leave a Retry that sends the older change.
     private func settleRejectedChanges(_ settlement: NativeMutationPushSettlement) throws {
         let ownerChanging = accountSwitchInFlight || isBoundaryStepPending(.rejectedChangesScrub)
-        guard !settlement.rejected.isEmpty || (!ownerChanging && verifiedAccountBinding != nil) else { return }
+        if settlement.rejected.isEmpty {
+            guard !ownerChanging else { return }
+            guard verifiedAccountBinding != nil else {
+                if rejectedChangeStore.fileIsPresent() { throw NativeRejectedChangeStoreError.noOwner }
+                return
+            }
+        }
         guard !ownerChanging else { throw NativeRejectedChangeStoreError.noOwner }
         let dropped = try rejectedChangeStore.settle(
             rejected: settlement.rejected,
@@ -7381,9 +7394,14 @@ final class AppStore: ObservableObject {
 
     /// Every refused record's key, including one hidden while its Retry is
     /// queued. The pull keeps these records' local versions. Throws when the
-    /// store cannot be read, so the pull can fail closed.
+    /// store cannot be read, or when a file is on disk but no binding says
+    /// whose it is (review M2), so the pull can fail closed.
     private func rejectedChangeKeys() throws -> Set<String> {
-        Set(try rejectedChangeStore.load(binding: verifiedAccountBinding).map(\.key))
+        guard verifiedAccountBinding != nil else {
+            if rejectedChangeStore.fileIsPresent() { throw NativeRejectedChangeStoreError.noOwner }
+            return []
+        }
+        return Set(try rejectedChangeStore.load(binding: verifiedAccountBinding).map(\.key))
     }
 
     /// The name the Cloud Sync list shows for an entry: from the change
@@ -10984,6 +11002,13 @@ extension AppStore {
     /// here). Production never calls this.
     func testApplyAccountDeletionAnalyticsBoundary() {
         applyAnalyticsIdentityBoundary()
+    }
+
+    /// Test-only (Phase 12 12.00b.1 review fix round 1, M6): the local scrub
+    /// `deleteAccount` runs once the server confirms the deletion (its
+    /// network call cannot run here). Production never calls this.
+    func testRunAccountDeletionLocalScrub() throws {
+        try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)
     }
 
     /// Test-only (task 11.09): feeds one sync-coordinator status through the

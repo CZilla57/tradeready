@@ -22,12 +22,14 @@ enum NativeMutationPushResponse: Equatable {
 enum NativeMutationPushResponseClass: Equatable {
     /// 2xx: the server took the change; it leaves the queue.
     case accepted
-    /// 401, or a 403 before this pass refreshed the session: the coordinator
-    /// refreshes once and retries the remainder.
+    /// 401, or a 403 for a change that did not already get one before this
+    /// pass refreshed the session: the coordinator refreshes once and retries
+    /// the remainder.
     case authRejected
     /// A non-auth 4xx the server will not accept on a retry (400, 404, 409,
-    /// 413, 422, …), or a 403 that repeats after one successful refresh in the
-    /// same pass: the change leaves the queue for the rejected-change store.
+    /// 413, 422, …), or a 403 for a change that got a 403 before the pass's
+    /// one successful refresh too: the change leaves the queue for the
+    /// rejected-change store.
     case rejected
     /// 408, 425, 429, 5xx, 3xx, any other status, a transport error or a
     /// non-HTTP response: the change stays queued and retries with backoff.
@@ -40,21 +42,29 @@ enum NativeMutationPushClassification {
     static let transientClientStatuses: Set<Int> = [408, 425, 429]
 
     /// The single status → class mapping (plan 12.00b.1 step 1, controller
-    /// resolution 1). `afterAuthRefresh` is true only for the push that
-    /// follows one successful session refresh in the same pass.
+    /// resolution 1). `forbiddenBeforeRefresh` is true only for a change that
+    /// got a 403 on the attempt before this pass's one successful session
+    /// refresh (fix round 1, review M1: the rule is per change, not per pass,
+    /// so a change whose first 403 arrives on the retry is not refused).
     static func classify(
         _ response: NativeMutationPushResponse,
-        afterAuthRefresh: Bool
+        forbiddenBeforeRefresh: Bool
     ) -> NativeMutationPushResponseClass {
         guard case let .http(status) = response else { return .transient }
         switch status {
         case 200..<300: return .accepted
         case 401: return .authRejected
-        case 403: return afterAuthRefresh ? .rejected : .authRejected
+        case 403: return forbiddenBeforeRefresh ? .rejected : .authRejected
         case _ where transientClientStatuses.contains(status): return .transient
         case 400..<500: return .rejected
         default: return .transient
         }
+    }
+
+    /// A record's key, `table/recordId`: the per-change 403 rule's key and
+    /// the rejected-change store's entry id.
+    static func recordKey(_ item: Canonical.MutationItem) -> String {
+        "\(item.table)/\(item.recordId)"
     }
 }
 

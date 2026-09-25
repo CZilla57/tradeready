@@ -300,6 +300,22 @@ final class SubscriptionStub: NativeSubscriptionServing {
     func logOut() async {}
 }
 
+/// A subscription service whose `logOut` (the last await of an account
+/// switch, while `accountSwitchInFlight` is set) runs a hook.
+@MainActor
+final class LogOutHookSubscription: NativeSubscriptionServing {
+    var onLogOut: () -> Void = {}
+    func prepare(appUserID: String, apiKey: String, entitlementID: String) async throws -> NativeSubscriptionEntitlement {
+        .init(isActive: false, isTrialing: false)
+    }
+    func loadOffering() async throws -> NativeSubscriptionOffering { .init(packages: []) }
+    func purchase(packageID: String) async throws -> NativeSubscriptionPurchaseResult {
+        .init(entitlement: .init(isActive: false, isTrialing: false), userCancelled: false)
+    }
+    func restore() async throws -> NativeSubscriptionEntitlement { .init(isActive: false, isTrialing: false) }
+    func logOut() async { onLogOut() }
+}
+
 /// A throwaway App Group suite: a host test never touches the real one.
 struct TempAppGroup {
     let suiteName: String
@@ -327,12 +343,17 @@ struct TempAppGroup {
 
 /// One AppStore on `directory` (a second call on the same directory is a relaunch).
 @MainActor
-func makeAppStore(_ directory: URL, group: TempAppGroup, files: FlakyFiles) -> AppStore {
+func makeAppStore(
+    _ directory: URL, group: TempAppGroup, files: FlakyFiles,
+    initialSyncService: (any NativeInitialSyncServing)? = nil,
+    subscriptionService: (any NativeSubscriptionServing)? = nil
+) -> AppStore {
     AppStore(
         fileURL: directory.appendingPathComponent("store.json"),
         seedIfMissing: true,
         appGroupAccountScrubber: group.scrubber,
-        subscriptionService: SubscriptionStub(),
+        initialSyncService: initialSyncService,
+        subscriptionService: subscriptionService ?? SubscriptionStub(),
         widgetTimelineReloader: NoopReloader(),
         secureSettingsStore: hostTestSecureSettingsStore(),
         rejectedChangeFiles: files
@@ -435,6 +456,90 @@ func testAppStoreSettleAndOwner() async {
     }
 }
 
+/// A delta pull whose server has a newer title for every job, so any job
+/// the pull is not told to keep takes "Server title". Counts its calls.
+final class OverwritingDelta: NativeInitialSyncServing, NativeDeltaSyncServing {
+    private(set) var deltaCalls = 0
+    func pull(sessionBytes: Data, expectedUserSubject: String, localSnapshot: Canonical.Snapshot) async throws -> Canonical.Snapshot {
+        localSnapshot
+    }
+    func pullDelta(
+        sessionBytes: Data, expectedUserSubject: String,
+        localSnapshot: Canonical.Snapshot, cursor: Canonical.NativeSyncCursor
+    ) async throws -> NativeDeltaPullOutcome {
+        deltaCalls += 1
+        var pulled = localSnapshot
+        pulled.payload.jobs = pulled.payload.jobs?.map { job in
+            var job = job
+            job.title = "Server title"
+            return job
+        }
+        return NativeDeltaPullOutcome(snapshot: pulled, cursor: cursor, failedTables: [], lastDiagnosticCode: nil)
+    }
+}
+
+/// Fix round 1 (review M2): a subject with no verified account binding (a
+/// rejected session keeps the subject) cannot tell whose refused changes the
+/// store holds. The pull must not overwrite a refused record then, and a
+/// push's cleared-only settle must not silently skip the entry it clears
+/// (a later Retry would send the older, refused change over the newer one).
+@MainActor
+func testNoBindingFailsClosed() async {
+    let group = TempAppGroup("no-binding")
+    defer { group.cleanUp() }
+    let dir = tempDirectory("no-binding")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let delta = OverwritingDelta()
+    let store = makeAppStore(dir, group: group, files: FlakyFiles(), initialSyncService: delta)
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: bindingA)
+    store.scheduleBookingTestCredentials = NativeSyncCredentials(subject: "user-a", sessionBytes: Data())
+    guard store.jobs.count >= 2 else {
+        expect(false, "no-binding: sanity: the demo workspace has at least two jobs")
+        return
+    }
+    let refusedID = store.jobs[0].id, otherID = store.jobs[1].id
+    let refusedTitle = store.jobs[0].title
+    do { try store.testSettleRejectedChanges(settlement([rejection("jobs", refusedID, title: refusedTitle)])) }
+    catch { expect(false, "no-binding: seeding the refusal threw \(error)") }
+
+    // Positive control: with the binding, the pull keeps the refused record
+    // and takes the server's version of the rest.
+    let bound = await store.testPullDeltaIfPossible()
+    expectEqual(bound.state, .completed, "no-binding: sanity: the owner's pull completes")
+    expectEqual(store.jobs.first { $0.id == refusedID }?.title, refusedTitle, "no-binding: sanity: the owner's pull keeps the refused record")
+    expectEqual(store.jobs.first { $0.id == otherID }?.title, "Server title", "no-binding: sanity: the owner's pull takes the server's other rows")
+    let callsBefore = delta.deltaCalls
+
+    // The session is rejected: the subject stays, the binding is gone, and
+    // the store file (the owner's refusal) is still on disk.
+    store.testApplyRejectedSessionState()
+    expect(FileManager.default.fileExists(atPath: storeFile(dir).path), "no-binding: sanity: the store file is present")
+    let unbound = await store.testPullDeltaIfPossible()
+    expectEqual(unbound, .failed("pull/rejected-store"), "no-binding: the pull fails closed")
+    expectEqual(store.jobs.first { $0.id == refusedID }?.title, refusedTitle, "no-binding: the pull does not overwrite the refused record")
+    expectEqual(delta.deltaCalls, callsBefore, "no-binding: the pull stops before the network")
+
+    // A push that the server accepted for the refused record (a newer edit)
+    // must not settle as cleared while the entry cannot be attributed.
+    do {
+        try store.testSettleRejectedChanges(settlement([], cleared: [item("jobs", refusedID)]))
+        expect(false, "no-binding: a cleared-only settle must throw (the attempt stays queued)")
+    } catch {
+        expect(true, "no-binding: a cleared-only settle throws (the attempt stays queued)")
+    }
+    let kept = (try? NativeRejectedChangeStore(fileURL: storeFile(dir)).load(binding: bindingA))?.map(\.key)
+    expectEqual(kept, ["jobs/\(refusedID)"], "no-binding: the entry waits for the re-sent attempt")
+
+    // The binding is verified again: the re-sent attempt's settle clears it,
+    // so no stale Retry is left.
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: bindingA)
+    do { try store.testSettleRejectedChanges(settlement([], cleared: [item("jobs", refusedID)])) }
+    catch { expect(false, "no-binding: the owner's cleared settle threw \(error)") }
+    expectEqual((try? NativeRejectedChangeStore(fileURL: storeFile(dir)).load(binding: bindingA))?.count, 0,
+                "no-binding: the owner's re-sent settle clears the entry")
+    expectEqual(store.rejectedChanges, [], "no-binding: no stale Retry is listed")
+}
+
 @MainActor
 func seedEntries(_ store: AppStore) {
     store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: bindingA)
@@ -476,6 +581,21 @@ func testBoundaryScrubs() async {
         expect(!FileManager.default.fileExists(atPath: storeFile(dir).path), "deletion: the store is removed")
     }
 
+    // Deletion in process (review fix round 1, M6): the local scrub
+    // `deleteAccount` runs once the server confirms (`testSources` pins the
+    // call inside `deleteAccount`; its network call cannot run here).
+    do {
+        let group = TempAppGroup("delete-now")
+        defer { group.cleanUp() }
+        let dir = tempDirectory("delete-now")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = makeAppStore(dir, group: group, files: FlakyFiles())
+        seedEntries(store)
+        expect(FileManager.default.fileExists(atPath: storeFile(dir).path), "deletion now: sanity: entries are filed")
+        do { try store.testRunAccountDeletionLocalScrub() } catch { expect(false, "deletion now: the local scrub threw \(error)") }
+        expect(!FileManager.default.fileExists(atPath: storeFile(dir).path), "deletion now: the store is removed")
+    }
+
     // Account switch (a boundary step outside the full scrub).
     do {
         let group = TempAppGroup("switch")
@@ -505,6 +625,104 @@ func testBoundaryScrubs() async {
         expect(!FileManager.default.fileExists(atPath: storeFile(dir).path), "recovery: the store is removed")
         expectEqual(store.rejectedChanges, [], "recovery: nothing is listed")
     }
+
+    // The invalid-recovery-link exit (review fix round 1, M6). The recovery
+    // state lives in an in-memory Keychain stand-in, never the real one.
+    // (`updateRecoveredPassword` needs a configured Supabase client; it ends
+    // in the same `applyRecoverySignedOutState` as the cancel exit above, and
+    // `testSources` pins that.)
+    do {
+        let group = TempAppGroup("recovery-dismiss")
+        defer { group.cleanUp() }
+        let dir = tempDirectory("recovery-dismiss")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = makeAppStore(dir, group: group, files: FlakyFiles())
+        seedEntries(store)
+        let recovery = NativePasswordRecoveryStore(backend: HostInMemoryKeychain())
+        do { try recovery.markActive(userSubject: "user-a") } catch { expect(false, "recovery dismiss: could not mark recovery active: \(error)") }
+        expectEqual((try? recovery.read())??.activeUserSubject, "user-a", "recovery dismiss: sanity: a recovery session is active")
+        await store.dismissInvalidPasswordRecovery(recoveryStore: recovery)
+        let recoveryCleared: Bool = { do { return try recovery.read() == nil } catch { return false } }()
+        expect(recoveryCleared, "recovery dismiss: sanity: the recovery state is cleared")
+        expect(!FileManager.default.fileExists(atPath: storeFile(dir).path), "recovery dismiss: the store is removed")
+        expectEqual(store.rejectedChanges, [], "recovery dismiss: nothing is listed")
+    }
+}
+
+/// Review fix round 1 (M6): while an account switch is in flight, a settle
+/// that files a refusal throws (the attempt stays queued for the next
+/// owner's pass, and the switch's second scrub runs after), and a
+/// cleared-only settle is a no-op. Driven from the switch's last await.
+@MainActor
+func testSwitchInFlightSettle() async {
+    let group = TempAppGroup("switch-in-flight")
+    defer { group.cleanUp() }
+    let dir = tempDirectory("switch-in-flight")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let hook = LogOutHookSubscription()
+    let store = makeAppStore(dir, group: group, files: FlakyFiles(), subscriptionService: hook)
+    seedEntries(store)
+    store.scheduleBookingTestSeedIdentityActivator()
+    var refusalThrew: Bool?
+    var clearedThrew: Bool?
+    var filedMidSwitch: Bool?
+    hook.onLogOut = {
+        do { try store.testSettleRejectedChanges(settlement([rejection("jobs", "J7")])); refusalThrew = false }
+        catch { refusalThrew = true }
+        do { try store.testSettleRejectedChanges(settlement([], cleared: [item("jobs", "J1")])); clearedThrew = false }
+        catch { clearedThrew = true }
+        filedMidSwitch = FileManager.default.fileExists(atPath: storeFile(dir).path)
+    }
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    expectEqual(store.authenticationGateState, .signedOut, "switch in flight: sanity: the switch reached its success path")
+    expectEqual(refusalThrew, true, "switch in flight: a settle with a refusal throws (the attempt stays queued)")
+    expectEqual(clearedThrew, false, "switch in flight: a cleared-only settle is a no-op")
+    expectEqual(filedMidSwitch, false, "switch in flight: nothing is filed under the old owner mid-switch")
+}
+
+/// Review fix round 1 (M6): deleting a refused record on this device queues
+/// a delete, which hides the entry (it supersedes the refusal), and the
+/// pass that pushes the delete clears the entry.
+@MainActor
+func testLocalDeleteOfRefusedRecord() {
+    let group = TempAppGroup("local-delete")
+    defer { group.cleanUp() }
+    let dir = tempDirectory("local-delete")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = makeAppStore(dir, group: group, files: FlakyFiles())
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: bindingA)
+    guard let job = store.jobs.first else {
+        expect(false, "local delete: sanity: the demo workspace has a job")
+        return
+    }
+    let key = "jobs/\(job.id)"
+    func filed() -> [String]? {
+        (try? NativeRejectedChangeStore(fileURL: storeFile(dir)).load(binding: bindingA))?.map(\.key)
+    }
+    do { try store.testSettleRejectedChanges(settlement([rejection("jobs", job.id, title: job.title)])) }
+    catch { expect(false, "local delete: seeding the refusal threw \(error)") }
+    expectEqual(store.rejectedChanges.map(\.id), [key], "local delete: sanity: the refusal is listed")
+
+    expect(store.deleteJob(id: job.id), "local delete: sanity: the job is deleted on this device")
+    // The same queue file AppStore.init opened.
+    let queue = Canonical.NativeMutationQueue(fileURL: dir.appendingPathComponent("mutation-queue.json"))
+    guard let deletion = queue.load().first(where: { $0.table == "jobs" && $0.recordId == job.id }) else {
+        expect(false, "local delete: sanity: the delete is queued")
+        return
+    }
+    store.refreshRejectedChanges()
+    expectEqual(store.rejectedChanges, [], "local delete: the queued delete hides the refused entry")
+    expectEqual(filed(), [key], "local delete: the entry is kept while the delete is queued")
+
+    // The server accepts the delete: the pass settles it as cleared, then the
+    // queue commits the attempt (the coordinator's order).
+    do { try store.testSettleRejectedChanges(settlement([], cleared: [deletion])) }
+    catch { expect(false, "local delete: the accepted delete's settle threw \(error)") }
+    do { _ = try queue.reconcilePush(startedItems: [deletion], remaining: []) }
+    catch { expect(false, "local delete: sanity: the queue commit threw \(error)") }
+    store.refreshRejectedChanges()
+    expectEqual(filed(), [], "local delete: the accepted delete clears the entry")
+    expectEqual(store.rejectedChanges, [], "local delete: nothing comes back once the delete has left the queue")
 }
 
 @MainActor
@@ -605,6 +823,72 @@ func testSources() {
     expectEqual(scrubs, wipes, "source: every switch/recovery boundary that wipes AI keys also scrubs the rejected store")
     let fullScrubRemovals = appStore.components(separatedBy: "try rejectedChangeStore.removeAll()").count - 1
     expect(fullScrubRemovals >= 4, "source: the full scrub, its retry, launch recovery and the boundary step remove the store")
+
+    // Review fix round 1 (M6): the exits no host test can drive end in a path
+    // one does. `updateRecoveredPassword` needs a configured Supabase client;
+    // it ends in the recovery sign-out the cancel exit runs (tested above).
+    // `deleteAccount` needs the network; after the server deletion it runs
+    // the local scrub `testRunAccountDeletionLocalScrub` runs (tested above).
+    if let update = sourceBody(appStore, "func updateRecoveredPassword("),
+       let clear = update.range(of: "try recoveryStore.clear()"),
+       let signOut = update.range(of: "applyRecoverySignedOutState()") {
+        expect(clear.upperBound < signOut.lowerBound, "source: the recovery update ends in the recovery sign-out")
+    } else {
+        expect(false, "source: updateRecoveredPassword ends in applyRecoverySignedOutState")
+    }
+    expect(sourceBody(appStore, "private func applyRecoverySignedOutState(")?.contains("scrubRejectedChangesForAccountBoundary()") == true,
+           "source: the recovery sign-out scrubs the store")
+    if let deletion = sourceBody(appStore, "func deleteAccount("),
+       let server = deletion.range(of: "try await client.deleteAccount("),
+       let scrub = deletion.range(of: "try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)") {
+        expect(server.upperBound < scrub.lowerBound, "source: deleteAccount runs the local .all scrub after the server deletion")
+    } else {
+        expect(false, "source: deleteAccount runs the local .all scrub")
+    }
+    // Review fix round 1 (M7): Cloud Sync never reads "Up to date" (or
+    // "Ready to sync") while refused changes are listed.
+    let settings = (try? String(contentsOf: n.appendingPathComponent("SettingsView.swift"), encoding: .utf8)) ?? ""
+    for property in ["private var statusTitle:", "private var statusMessage:", "private var statusSymbol:", "private var statusColor:"] {
+        if let body = sourceBody(settings, property), let refused = body.range(of: "!store.rejectedChanges.isEmpty") {
+            let settled = [body.range(of: "lastSuccessfulSyncAt"), body.range(of: "return \"icloud.fill\""),
+                           body.range(of: "return Color.tradeSuccessText")].compactMap { $0 }
+            expect(!settled.isEmpty && settled.allSatisfy { refused.lowerBound < $0.lowerBound },
+                   "source: \(property) checks refused changes before any settled state")
+        } else {
+            expect(false, "source: \(property) accounts for refused changes")
+        }
+    }
+    expect(sourceBody(appStore, "func testRunAccountDeletionLocalScrub(")?
+            .contains("try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)") == true,
+           "source: the deletion seam runs deleteAccount's exact local scrub")
+}
+
+/// The text of the declaration that starts at `marker`, through its closing
+/// brace (the parameter list is skipped, since a default argument can hold
+/// parentheses).
+func sourceBody(_ text: String, _ marker: String) -> String? {
+    guard let start = text.range(of: marker) else { return nil }
+    var index = start.upperBound
+    if marker.hasSuffix("(") {
+        var parens = 1
+        while index < text.endIndex, parens > 0 {
+            if text[index] == "(" { parens += 1 }
+            if text[index] == ")" { parens -= 1 }
+            index = text.index(after: index)
+        }
+    }
+    guard let open = text[index...].firstIndex(of: "{") else { return nil }
+    var depth = 0
+    index = open
+    while index < text.endIndex {
+        if text[index] == "{" { depth += 1 }
+        if text[index] == "}" {
+            depth -= 1
+            if depth == 0 { return String(text[start.lowerBound...index]) }
+        }
+        index = text.index(after: index)
+    }
+    return nil
 }
 
 // MARK: - Main
@@ -623,7 +907,10 @@ struct RejectedChangesTests {
         }
         testDisplay()
         await testAppStoreSettleAndOwner()
+        await testNoBindingFailsClosed()
         await testBoundaryScrubs()
+        await testSwitchInFlightSettle()
+        testLocalDeleteOfRefusedRecord()
         await testFailedScrubFailsClosedAndRetries()
         do { try testServerRecordApply() } catch {
             failures += 1

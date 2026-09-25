@@ -381,6 +381,9 @@ struct SyncSettings: View {
         if isOffline { return "You're offline" }
         if store.syncStatus.diagnosticCode != nil { return "Sync needs attention" }
         if store.syncStatus.pendingCount > 0 { return "Changes are waiting" }
+        // Phase 12 (12.00b.1 review fix round 1, M7): never "Up to date"
+        // while the list below shows changes the cloud refused.
+        if !store.rejectedChanges.isEmpty { return "Some changes couldn't be saved" }
         if store.syncStatus.lastSuccessfulSyncAt != nil { return "Up to date" }
         return "Ready to sync"
     }
@@ -390,6 +393,7 @@ struct SyncSettings: View {
         if isOffline { return "Your changes are safe here and will retry automatically." }
         if store.syncStatus.diagnosticCode != nil { return "Try again. If it keeps failing, share the diagnostic code with support." }
         if store.syncStatus.pendingCount > 0 { return "TradeReady will retry automatically, or you can sync now." }
+        if !store.rejectedChanges.isEmpty { return "Everything else keeps syncing. Retry or discard each change below." }
         if store.syncStatus.lastSuccessfulSyncAt != nil { return "Local and cloud changes completed successfully." }
         return "No sync has completed since this app was opened."
     }
@@ -399,12 +403,14 @@ struct SyncSettings: View {
         if isOffline { return "icloud.slash.fill" }
         if store.syncStatus.diagnosticCode != nil { return "exclamationmark.triangle.fill" }
         if store.syncStatus.pendingCount > 0 { return "icloud.and.arrow.up.fill" }
+        if !store.rejectedChanges.isEmpty { return "exclamationmark.icloud.fill" }
         return "icloud.fill"
     }
 
     private var statusColor: Color {
         if isOffline || store.syncStatus.diagnosticCode != nil { return Color.tradeWarningText }
         if store.syncStatus.pendingCount > 0 || store.syncStatus.isSyncing { return .tradeReady }
+        if !store.rejectedChanges.isEmpty { return Color.tradeWarningText }
         return Color.tradeSuccessText
     }
 

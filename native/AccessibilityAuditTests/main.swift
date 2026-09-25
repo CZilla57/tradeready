@@ -589,6 +589,8 @@ func testDynamicType(sources: [SourceFile]) {
     // Multi-column figures stack at accessibility sizes instead of truncating.
     let adaptive: [(String, Int)] = [
         ("NativeMoneyCards.swift", 7), ("NativeTodayComponents.swift", 1), ("JobsView.swift", 1), ("InvoicesView.swift", 1),
+        // Phase 12 (12.00b.1 review fix round 1, M7): Retry / Discard / progress.
+        ("NativeRejectedChangesView.swift", 1),
     ]
     for (path, minimum) in adaptive {
         guard let source = file(sources, path) else { continue }

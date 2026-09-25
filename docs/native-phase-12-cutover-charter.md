@@ -483,7 +483,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
-| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable). **Residuals, rated S3 (2026-09-25):** past the 100-entry cap the oldest refused change is dropped and counted, and a later pull can then overwrite its record; the password-recovery exits scrub the store but keep the records, with the same effect. The server would never accept those edits anyway | Fixed — 12.00b.1 (host) |
+| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable). **Residuals, rated S3 (2026-09-25):** past the 100-entry cap the oldest refused change is dropped and counted, and a later pull can then overwrite its record; the password-recovery exits scrub the store but keep the records, with the same effect; so does "Use another account", which scrubs the store and keeps the workspace; and a newer change to a refused record that the push drops as unsendable (`record-contract`) counts as cleared, so its entry leaves the list. The server would never accept those edits anyway | Fixed — 12.00b.1 (host) |
 
 ### 12.00b.2 — S1/S2 code fixes (block Stage A entry) (10)
 

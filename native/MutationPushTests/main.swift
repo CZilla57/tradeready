@@ -265,9 +265,9 @@ struct MutationPushTests {
         }
 
         // Phase 12 (12.00b.1, I2): the status → class table, one pure function.
-        // A 403 is rejected only on the push that follows one successful
-        // refresh in the same pass; 408, 425, 429, 5xx, 3xx and every
-        // non-response stay transient.
+        // A 403 is rejected only for a change that got a 403 before the
+        // pass's one successful refresh (the Bool column, per change: review
+        // M1); 408, 425, 429, 5xx, 3xx and every non-response stay transient.
         typealias Class = NativeMutationPushResponseClass
         let classTable: [(NativeMutationPushResponse, Bool, Class)] = [
             (.http(statusCode: 200), false, .accepted), (.http(statusCode: 201), false, .accepted),
@@ -288,9 +288,9 @@ struct MutationPushTests {
             (.transportError, false, .transient), (.transportError, true, .transient),
             (.nonHTTP, false, .transient), (.nonHTTP, true, .transient),
         ]
-        for (response, afterRefresh, expected) in classTable {
-            let actual = NativeMutationPushClassification.classify(response, afterAuthRefresh: afterRefresh)
-            expect(actual == expected, "classify \(response) afterAuthRefresh=\(afterRefresh) is \(expected) (got \(actual))")
+        for (response, forbiddenBefore, expected) in classTable {
+            let actual = NativeMutationPushClassification.classify(response, forbiddenBeforeRefresh: forbiddenBefore)
+            expect(actual == expected, "classify \(response) forbiddenBeforeRefresh=\(forbiddenBefore) is \(expected) (got \(actual))")
         }
 
         // A rejected change leaves the remainder: it is returned once, with its
@@ -324,8 +324,8 @@ struct MutationPushTests {
         expect(rejectOutcome.lastDiagnosticCode == "rejected/invoices/422",
                "rejection: the bounded rejected/<table>/<status> diagnostic")
 
-        // The first 403 keeps the auth path; the same 403 on the push after one
-        // refresh (afterAuthRefresh) is a rejection.
+        // The first 403 keeps the auth path and reports the change's key; the
+        // same change's 403 on the push after one refresh is a rejection.
         let forbiddenLoader = PushLoader { _ in 403 }
         let forbiddenService = NativeSupabaseMutationPushService(
             supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: forbiddenLoader
@@ -336,8 +336,9 @@ struct MutationPushTests {
         )
         expect(firstForbidden.authRejected && firstForbidden.remaining == [jobItem] && firstForbidden.rejected.isEmpty,
                "403: the first 403 keeps the auth-refresh path")
+        expect(firstForbidden.forbiddenKeys == ["jobs/j1"], "403: the first 403 reports the change's record key")
         let repeatedForbidden = try await forbiddenService.push(
-            sessionBytes: session, expectedUserSubject: subject, items: [jobItem], afterAuthRefresh: true
+            sessionBytes: session, expectedUserSubject: subject, items: [jobItem], forbiddenBeforeRefresh: ["jobs/j1"]
         )
         expect(!repeatedForbidden.authRejected && repeatedForbidden.remaining.isEmpty
                && repeatedForbidden.rejected == [NativeMutationRejection(item: jobItem, statusCode: 403)],
@@ -346,9 +347,25 @@ struct MutationPushTests {
                "403: the repeated 403 reports rejected/jobs/403")
         let repeatedUnauthorized = try await NativeSupabaseMutationPushService(
             supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: PushLoader { _ in 401 }
-        ).push(sessionBytes: session, expectedUserSubject: subject, items: [jobItem], afterAuthRefresh: true)
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [jobItem], forbiddenBeforeRefresh: ["jobs/j1"])
         expect(repeatedUnauthorized.authRejected && repeatedUnauthorized.rejected.isEmpty,
                "401: a 401 after a refresh stays on the auth path (the coordinator refreshes once per pass)")
+        expect(repeatedUnauthorized.forbiddenKeys.isEmpty, "401: a 401 is not reported as a 403")
+
+        // Fix round 1 (review M1): per change. On the retry both changes get a
+        // 403, but only j1 got one before the refresh: j1 is refused, and j2's
+        // first 403 keeps the auth path (it stays queued and reports its key).
+        let secondJob = item("jobs", .upsert, "j2", jobBlob("j2"))
+        let mixedForbidden = try await forbiddenService.push(
+            sessionBytes: session, expectedUserSubject: subject, items: [jobItem, secondJob],
+            forbiddenBeforeRefresh: ["jobs/j1"]
+        )
+        expect(mixedForbidden.rejected == [NativeMutationRejection(item: jobItem, statusCode: 403)],
+               "403 per change: only the change whose 403 repeated is refused")
+        expect(mixedForbidden.remaining == [secondJob] && mixedForbidden.authRejected,
+               "403 per change: a change's first 403 on the retry stays queued on the auth path")
+        expect(mixedForbidden.forbiddenKeys == ["jobs/j2"],
+               "403 per change: the retry reports only the new 403's key")
 
         if failures == 0 { print("PASS: native mutation push tests") }
         else { exit(1) }

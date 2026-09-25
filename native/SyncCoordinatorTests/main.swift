@@ -88,13 +88,14 @@ private final class EnvironmentBlockedPush: NativeMutationPushing {
 }
 
 /// Phase 12 (12.00b.1): a push that answers from a per-call script and
-/// records whether each call followed one successful refresh.
+/// records, per call, the record keys it was told got a 403 before the
+/// pass's one successful refresh.
 private final class ScriptedPushService: NativeMutationPushing {
-    var calls: [(items: [Canonical.MutationItem], afterAuthRefresh: Bool)] = []
-    var script: (_ items: [Canonical.MutationItem], _ afterAuthRefresh: Bool, _ callIndex: Int) -> NativeMutationPushOutcome
+    var calls: [(items: [Canonical.MutationItem], forbiddenBeforeRefresh: Set<String>)] = []
+    var script: (_ items: [Canonical.MutationItem], _ forbiddenBeforeRefresh: Set<String>, _ callIndex: Int) -> NativeMutationPushOutcome
     var beforeReturn: () -> Void = {}
 
-    init(script: @escaping (_ items: [Canonical.MutationItem], _ afterAuthRefresh: Bool, _ callIndex: Int) -> NativeMutationPushOutcome) {
+    init(script: @escaping (_ items: [Canonical.MutationItem], _ forbiddenBeforeRefresh: Set<String>, _ callIndex: Int) -> NativeMutationPushOutcome) {
         self.script = script
     }
 
@@ -103,21 +104,55 @@ private final class ScriptedPushService: NativeMutationPushing {
         expectedUserSubject: String,
         items: [Canonical.MutationItem]
     ) async throws -> NativeMutationPushOutcome {
-        try await push(sessionBytes: sessionBytes, expectedUserSubject: expectedUserSubject, items: items, afterAuthRefresh: false)
+        try await push(sessionBytes: sessionBytes, expectedUserSubject: expectedUserSubject, items: items, forbiddenBeforeRefresh: [])
     }
 
     func push(
         sessionBytes: Data,
         expectedUserSubject: String,
         items: [Canonical.MutationItem],
-        afterAuthRefresh: Bool
+        forbiddenBeforeRefresh: Set<String>
     ) async throws -> NativeMutationPushOutcome {
         let index = calls.count
-        calls.append((items, afterAuthRefresh))
-        let outcome = script(items, afterAuthRefresh, index)
+        calls.append((items, forbiddenBeforeRefresh))
+        let outcome = script(items, forbiddenBeforeRefresh, index)
         beforeReturn()
         return outcome
     }
+}
+
+/// The outcome the real push builds for these per-change HTTP statuses: the
+/// shared classification, per change, with the 403 keys it reports back.
+private func classifiedOutcome(
+    _ items: [Canonical.MutationItem],
+    forbiddenBeforeRefresh: Set<String>,
+    status: (Canonical.MutationItem) -> Int
+) -> NativeMutationPushOutcome {
+    var remaining: [Canonical.MutationItem] = []
+    var rejected: [NativeMutationRejection] = []
+    var forbiddenKeys: Set<String> = []
+    var pushed = 0
+    var auth = false
+    for item in items {
+        let code = status(item)
+        let key = NativeMutationPushClassification.recordKey(item)
+        switch NativeMutationPushClassification.classify(
+            .http(statusCode: code), forbiddenBeforeRefresh: forbiddenBeforeRefresh.contains(key)
+        ) {
+        case .accepted: pushed += 1
+        case .rejected: rejected.append(.init(item: item, statusCode: code))
+        case .authRejected:
+            auth = true
+            remaining.append(item)
+            if code == 403 { forbiddenKeys.insert(key) }
+        case .transient: remaining.append(item)
+        }
+    }
+    return NativeMutationPushOutcome(
+        remaining: remaining, pushedCount: pushed,
+        failedTables: remaining.isEmpty ? [] : ["jobs"], authRejected: auth,
+        lastDiagnosticCode: nil, rejected: rejected, forbiddenKeys: forbiddenKeys
+    )
 }
 
 private struct SettleFailed: Error {}
@@ -190,17 +225,15 @@ private func rejectedChanges(
            "12.00b.1: a refusal is not a failure: no backoff, empty queue")
     expect(onlySettled.count == 1, "12.00b.1: the refusal was settled once")
 
-    // A 403 keeps the auth path once; the same 403 on the post-refresh push
-    // is refused (afterAuthRefresh), and nothing is pushed a third time.
+    // A 403 keeps the auth path once; the same change's 403 on the
+    // post-refresh push is refused, and nothing is pushed a third time.
     let forbiddenQueue = makeQueue("rejected-403")
     try seed(forbiddenQueue, ["locked"])
     let locked = forbiddenQueue.load()[0]
     var refreshes = 0
     var forbiddenSettled: [NativeMutationPushSettlement] = []
-    let forbiddenPush = ScriptedPushService { items, afterRefresh, _ in
-        afterRefresh
-            ? outcome(pushed: 0, rejected: items.map { .init(item: $0, statusCode: 403) }, code: "rejected/jobs/403")
-            : outcome(remaining: items, pushed: 0, auth: true, code: "http-response/jobs/403")
+    let forbiddenPush = ScriptedPushService { items, forbidden, _ in
+        classifiedOutcome(items, forbiddenBeforeRefresh: forbidden) { _ in 403 }
     }
     let forbidden = NativeSyncCoordinator(
         push: forbiddenPush, queue: forbiddenQueue,
@@ -211,10 +244,42 @@ private func rejectedChanges(
     )
     expect(await forbidden.sync(trigger: .foreground) == .completed(pushed: 0, authRefreshed: true),
            "12.00b.1: a repeated 403 after one refresh is refused, and the pass completes")
-    expect(forbiddenPush.calls.map(\.afterAuthRefresh) == [false, true] && refreshes == 1,
-           "12.00b.1: one refresh, one retry marked afterAuthRefresh, no third push")
+    expect(forbiddenPush.calls.map(\.forbiddenBeforeRefresh) == [[], ["jobs/locked"]] && refreshes == 1,
+           "12.00b.1: one refresh, one retry told which change got the 403, no third push")
     expect(forbiddenSettled.last?.rejected == [.init(item: locked, statusCode: 403)] && forbiddenQueue.load().isEmpty,
            "12.00b.1: the repeated 403 is set aside and leaves the queue")
+
+    // Fix round 1 (review M1): the repeated-403 rule is per change. One
+    // change gets a 503 and another a 403; after the refresh both get a 403.
+    // Only the change whose 403 repeated is refused; the other's first 403
+    // keeps the auth path and it stays queued for the next pass.
+    let mixedQueue = makeQueue("rejected-403-mixed")
+    try seed(mixedQueue, ["flaky", "locked-too"])
+    let flaky = mixedQueue.load()[0], lockedToo = mixedQueue.load()[1]
+    var mixedRefreshes = 0
+    var mixedSettled: [NativeMutationPushSettlement] = []
+    let mixedPush = ScriptedPushService { items, forbidden, index in
+        classifiedOutcome(items, forbiddenBeforeRefresh: forbidden) { item in
+            index == 0 && item.recordId == "flaky" ? 503 : 403
+        }
+    }
+    let mixed = NativeSyncCoordinator(
+        push: mixedPush, queue: mixedQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        refreshSession: { mixedRefreshes += 1; return true },
+        settleRejected: { mixedSettled.append($0) }
+    )
+    let mixedResult = await mixed.sync(trigger: .foreground)
+    expect(mixedPush.calls.count == 2 && mixedRefreshes == 1
+           && mixedPush.calls.last?.forbiddenBeforeRefresh == ["jobs/locked-too"],
+           "M1: the retry is told only the change that got the first 403")
+    expect(mixedSettled.flatMap(\.rejected) == [.init(item: lockedToo, statusCode: 403)],
+           "M1: only the change whose 403 repeated is refused")
+    expect(mixedQueue.load() == [flaky],
+           "M1: a change whose first 403 came on the retry stays queued")
+    expect(mixedResult == .partial(pushed: 0, remaining: 1, authRefreshed: true),
+           "M1: the pass is partial with the one change still queued")
 
     // A settle that throws acknowledges nothing from that attempt: every
     // started change stays queued (each write is idempotent), and the pass

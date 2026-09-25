@@ -2190,17 +2190,23 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
    **Fixed in Phase 12 12.00b.1 (2026-09-25, native/phase-12, host evidence only):**
    - Classification: `NativeMutationPushClassification.classify`
      (`N/NativeMutationPushClassification.swift`) is the one status table. 2xx is
-     accepted. 401, and a 403 before this pass refreshed, take the auth path. A 403
-     after one refresh, and every other 4xx except 408/425/429, is `.rejected`.
-     408/425/429, 5xx, other statuses, transport errors and non-HTTP responses stay
-     transient. Tests: `run-mutation-push` (the table), `run-sync-coordinator`.
+     accepted. 401, and a change's first 403 in a pass, take the auth path. A 403
+     for a change that also got one before the pass's one refresh (per change, not
+     per pass: review fix round 1, M1), and every other 4xx except 408/425/429, is
+     `.rejected`. 408/425/429, 5xx, other statuses, transport errors and non-HTTP
+     responses stay transient. Tests: `run-mutation-push` (the table),
+     `run-sync-coordinator`.
    - Store: a rejected change leaves the queue for `NativeRejectedChangeStore`
      (`N/NativeRejectedChangeStore.swift`). It is app-private next to the queue,
      tagged with a one-way hash of the owner's binding, capped at 100 entries (newest
      kept, drops counted), and never logged. It is written with after-first-unlock
      protection, like the queue and snapshot that hold the same payloads: `.complete`
      would add no confidentiality and would stop background sync while locked. A
-     settle that cannot read or write keeps every started item queued. Every account boundary
+     settle that cannot read or write keeps every started item queued. With a signed-in
+     subject but no verified binding (a rejected session keeps the subject) and a file
+     on disk, whose entries they are is unknown: the pull fails with
+     `pull/rejected-store` and a settle throws, so the attempt stays queued (review fix
+     round 1, M2). Every account boundary
      scrubs it under a durable `rejected-changes-scrub-pending` step
      (`Canonical.SnapshotRepository.BoundaryStep`, file marker plus the 12.00b.2-A
      Keychain record), and the full account scrub removes it. Test:
@@ -2210,7 +2216,8 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      entries, is `rejectedChangeCount` in `createPersistenceSupportReport` (schema v2).
      Tests: `run-error-redaction`, `run-repository`.
    - Surface (owner decision D3): Settings › Cloud Sync shows "N change(s) couldn't be
-     saved" and opens `NativeRejectedChangesView`. Each entry shows its record type,
+     saved" and opens `NativeRejectedChangesView`; while any are listed its status
+     never reads "Up to date" (review fix round 1, M7). Each entry shows its record type,
      name and when it was refused. **Retry** re-queues the change through the normal
      queue, where it coalesces; refused again, it goes back to the store once, with no
      loop in the pass. **Discard** asks for confirmation, then fetches that one record
@@ -2227,8 +2234,11 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      (the watermark reaches the newest server stamp over three passes).
    - Residuals, rated S3: past the cap the oldest refused change is dropped and
      counted, and a later pull can then overwrite its record; the password-recovery
-     exits scrub the store but keep the records, with the same effect. The server would
-     never accept those edits anyway.
+     exits scrub the store but keep the records, with the same effect; so does "Use
+     another account", which scrubs the store and keeps the workspace; and a newer
+     change to a refused record that the push drops as unsendable (`record-contract`)
+     counts as cleared, so its entry leaves the list. The server would never accept
+     those edits anyway.
    - Still owed: device rows P12-B1-1 (a poison change on a real device against STG,
      blocked while D4 is open, never waived) and P12-B1-2 (the Cloud Sync surface with
      VoiceOver and Dynamic Type), in `docs/native-phase-12-evidence-index.md` §23;

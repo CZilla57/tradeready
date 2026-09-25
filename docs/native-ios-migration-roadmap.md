@@ -1148,13 +1148,14 @@ cutover-blocking until its device rows pass (see the end of the entry below).
   `native/PoorNetworkTests/main.swift` (good items push, inbound pulls continue, and
   the poison item reaches the rejected store exactly once). Implemented by Phase 12
   12.00b.1 (`docs/native-phase-12-implementation-plan.md`).
-  **Fix (12.00b.1):** a non-auth 4xx, or a 403 that repeats after one refresh, is
+  **Fix (12.00b.1):** a non-auth 4xx, or a 403 that repeats for the same change after one refresh, is
   `.rejected` (`NativeMutationPushClassification`). The change leaves the queue for the
   owner-scoped, file-protected rejected-change store, which every account boundary
   scrubs. Settings › Cloud Sync shows "N changes couldn't be saved", with Retry
   (through the normal queue) and Discard (after a confirmation, shows the server's
   version). The count goes to the support report. The pull guard is relaxed to RN
-  parity: the coordinator pulls after every push pass. Queued and refused records no
+  parity: the coordinator pulls after every push pass that returns per-item results (a
+  push that throws skips it). Queued and refused records no
   longer hold a table's cursor, so a kept record cannot pin it. Host tests:
   `run-rejected-changes`, `run-mutation-push`, `run-sync-coordinator`, and
   `run-poor-network` scenarios P (the poison change), Q (the cursor), R (Retry) and S

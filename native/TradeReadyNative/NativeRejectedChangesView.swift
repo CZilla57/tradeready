@@ -82,7 +82,8 @@ struct NativeRejectedChangesView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(type), \(name), not saved \(when)")
-            HStack(spacing: 12) {
+            // Review fix round 1 (M7): the buttons stack at accessibility sizes.
+            NativeAccessibilityAdaptiveRow(alignment: .center, spacing: 12) {
                 Button {
                     retry(change)
                 } label: {

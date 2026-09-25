@@ -78,13 +78,14 @@ protocol NativeMutationPushing {
     ) async throws -> NativeMutationPushOutcome
 
     /// Phase 12 (12.00b.1): the push that follows one successful session
-    /// refresh in the same pass passes `afterAuthRefresh: true`, so a 403
-    /// that repeats is refused instead of retried.
+    /// refresh in the same pass passes the record keys that got a 403 before
+    /// it, so a 403 that repeats for the same change is refused instead of
+    /// retried (per change, review M1).
     func push(
         sessionBytes: Data,
         expectedUserSubject: String,
         items: [Canonical.MutationItem],
-        afterAuthRefresh: Bool
+        forbiddenBeforeRefresh: Set<String>
     ) async throws -> NativeMutationPushOutcome
 }
 
@@ -93,7 +94,7 @@ extension NativeMutationPushing {
         sessionBytes: Data,
         expectedUserSubject: String,
         items: [Canonical.MutationItem],
-        afterAuthRefresh: Bool
+        forbiddenBeforeRefresh: Set<String>
     ) async throws -> NativeMutationPushOutcome {
         try await push(sessionBytes: sessionBytes, expectedUserSubject: expectedUserSubject, items: items)
     }
@@ -368,7 +369,7 @@ final class NativeSyncCoordinator {
             sessionBytes: credentials.sessionBytes,
             expectedUserSubject: credentials.subject,
             items: items,
-            afterAuthRefresh: false
+            forbiddenBeforeRefresh: []
         )
         guard generation == accountGeneration else { throw SyncInvalidation.accountChanged }
         outcome = settle(outcome, startedItems: items)
@@ -389,12 +390,14 @@ final class NativeSyncCoordinator {
             if didRefresh, let fresh, !retryItems.isEmpty {
                 authRefreshed = true
                 // A 403 on this push, after one successful refresh, is a
-                // refusal (12.00b.1); nothing is pushed a third time.
+                // refusal (12.00b.1) only for a change that got a 403 before
+                // it (review M1: per change; a change whose first 403 is this
+                // one stays queued). Nothing is pushed a third time.
                 outcome = try await push.push(
                     sessionBytes: fresh.sessionBytes,
                     expectedUserSubject: fresh.subject,
                     items: retryItems,
-                    afterAuthRefresh: true
+                    forbiddenBeforeRefresh: outcome.forbiddenKeys
                 )
                 guard generation == accountGeneration else { throw SyncInvalidation.accountChanged }
                 outcome = settle(outcome, startedItems: retryItems)

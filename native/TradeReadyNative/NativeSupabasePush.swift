@@ -40,6 +40,10 @@ struct NativeMutationPushOutcome: Equatable {
     /// coordinator moves them to the rejected-change store before the queue
     /// drops them, and keeps them queued if it cannot.
     var rejected: [NativeMutationRejection] = []
+    /// Fix round 1 (review M1): the record keys of the changes this attempt
+    /// got a 403 for. The coordinator's one retry after a refresh passes them
+    /// back, so only a change whose 403 repeats is refused.
+    var forbiddenKeys: Set<String> = []
 }
 
 /// Phase 4 write path for the existing JSON-blob sync contract.
@@ -102,18 +106,20 @@ struct NativeSupabaseMutationPushService {
             sessionBytes: sessionBytes,
             expectedUserSubject: expectedUserSubject,
             items: items,
-            afterAuthRefresh: false
+            forbiddenBeforeRefresh: []
         )
     }
 
-    /// `afterAuthRefresh` marks the coordinator's retry after one successful
-    /// session refresh in the same pass: a 403 then is a rejection, not
-    /// another auth failure (`NativeMutationPushClassification`).
+    /// `forbiddenBeforeRefresh` holds, for the coordinator's retry after one
+    /// successful session refresh in the same pass, the record keys that got
+    /// a 403 before it (the previous outcome's `forbiddenKeys`). A 403 for one
+    /// of them is a rejection; a 403 for any other change is still an auth
+    /// failure (`NativeMutationPushClassification`, review M1).
     func push(
         sessionBytes: Data,
         expectedUserSubject: String,
         items: [Canonical.MutationItem],
-        afterAuthRefresh: Bool
+        forbiddenBeforeRefresh: Set<String>
     ) async throws -> NativeMutationPushOutcome {
         Self.clearDiagnostic()
         guard allowsWrites else { throw NativeMutationPushError.productionWriteBlocked }
@@ -138,6 +144,7 @@ struct NativeSupabaseMutationPushService {
         var failedTables: [String] = []
         var authRejected = false
         var rejected: [NativeMutationRejection] = []
+        var forbiddenKeys: Set<String> = []
 
         for item in items {
             let request: URLRequest
@@ -157,20 +164,29 @@ struct NativeSupabaseMutationPushService {
                 continue
             }
 
-            let (result, response) = await send(request, afterAuthRefresh: afterAuthRefresh)
+            let key = NativeMutationPushClassification.recordKey(item)
+            let (result, response) = await send(request, forbiddenBeforeRefresh: forbiddenBeforeRefresh.contains(key))
             switch result {
             case .accepted:
                 pushed += 1
             case .authRejected:
                 Self.reportResponse(response, table: item.table)
                 authRejected = true
+                if response == .http(statusCode: 403) { forbiddenKeys.insert(key) }
                 remaining.append(item)
                 Self.appendUnique(item.table, to: &failedTables)
             case .rejected:
                 // Phase 12 (12.00b.1, I2): the server will not take this
                 // change on a retry. It leaves the remainder, so it can no
                 // longer hold the queue; the coordinator sets it aside.
-                guard case let .http(statusCode) = response else { continue }
+                // Unreachable (`classify` returns `.rejected` only for an HTTP
+                // status), but a change is never dropped without one: keep it
+                // queued (review fix round 1, M8).
+                guard case let .http(statusCode) = response else {
+                    remaining.append(item)
+                    Self.appendUnique(item.table, to: &failedTables)
+                    continue
+                }
                 Self.reportDiagnostic(stage: "rejected", table: item.table, statusCode: statusCode)
                 rejected.append(NativeMutationRejection(item: item, statusCode: statusCode))
             case .transient:
@@ -186,13 +202,14 @@ struct NativeSupabaseMutationPushService {
             failedTables: failedTables,
             authRejected: authRejected,
             lastDiagnosticCode: Self.lastDiagnosticCode,
-            rejected: rejected
+            rejected: rejected,
+            forbiddenKeys: forbiddenKeys
         )
     }
 
     private func send(
         _ request: URLRequest,
-        afterAuthRefresh: Bool
+        forbiddenBeforeRefresh: Bool
     ) async -> (NativeMutationPushResponseClass, NativeMutationPushResponse) {
         let response: NativeMutationPushResponse
         do {
@@ -205,7 +222,7 @@ struct NativeSupabaseMutationPushService {
         } catch {
             response = .transportError
         }
-        return (NativeMutationPushClassification.classify(response, afterAuthRefresh: afterAuthRefresh), response)
+        return (NativeMutationPushClassification.classify(response, forbiddenBeforeRefresh: forbiddenBeforeRefresh), response)
     }
 
     /// The bounded diagnostic for a failed (auth or transient) response.
