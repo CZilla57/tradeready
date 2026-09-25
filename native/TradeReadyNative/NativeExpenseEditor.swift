@@ -118,7 +118,7 @@ struct NativeExpenseEditor: View {
                 if isEditing {
                     Section {
                         Button(role: .destructive) { showingDeleteConfirmation = true } label: {
-                            Label("Delete Expense", systemImage: "trash")
+                            Label("Delete Expense", systemImage: "trash").nativeDestructiveText()
                         }
                     }
                 }
@@ -290,7 +290,7 @@ struct NativeExpenseEditor: View {
             }
 
             Button(role: .destructive) { removeReceipt() } label: {
-                Label("Remove photo", systemImage: "xmark")
+                Label("Remove photo", systemImage: "xmark").nativeDestructiveText()
             }
         } else {
             Button { showingReceiptSource = true } label: {

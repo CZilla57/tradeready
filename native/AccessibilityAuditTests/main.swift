@@ -1199,14 +1199,124 @@ func testDangerText(root: URL, sources: [SourceFile]) {
 /// semantic token whose light and dark literals are proven above.
 let systemHuePattern = #"(?:\bColor\.|(?<![\w)\]])\.)(green|orange|mint|cyan|indigo|purple|blue|yellow|teal|pink|brown)\b"#
 
+/// UIKit system colors (`Color(.systemGreen)`, `UIColor.systemRed`,
+/// `Color(uiColor: .systemOrange)`): the same hues by another spelling (fix
+/// round 1, m3).
+let uikitSystemColorPattern = #"\bsystem(Red|Green|Orange|Blue|Mint|Cyan|Indigo|Purple|Yellow|Teal|Pink|Brown)\b"#
+
 /// `.mint` also names the portal and booking-link "mint" action (an enum case,
-/// not a color). These are the audited non-color uses per file.
-let nonColorMintUses: [String: Int] = [
-    "AppStore.swift": 2,
-    "NativeBookingAdministration.swift": 2,
-    "NativeBookingSettingsView.swift": 1,
-    "NativeCustomerPortalView.swift": 3,
-    "NativePortalAdministration.swift": 2,
+/// not a color). Each non-color use must sit in one of these call shapes (fix
+/// round 1, m4: matched per use, not counted per file).
+let nonColorMintPattern = #"(?:\baction: |\baction == |\badminister\(|\bbusyAction == |\bbusyAction = |\bcase )\.mint\b(?=[,:)\s])"#
+
+/// Locations of the `.mint` tokens that are the enum action, in `text`.
+func nonColorMintLocations(in text: String) -> Set<Int> {
+    let regex = try! NSRegularExpression(pattern: nonColorMintPattern)
+    let ns = text as NSString
+    var result = Set<Int>()
+    for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        let inner = ns.range(of: ".mint", options: [], range: match.range)
+        if inner.location != NSNotFound { result.insert(inner.location) }
+    }
+    return result
+}
+
+/// Every call or closure owner around `index`, innermost first. A brace
+/// reports the call it trails (`.confirmationDialog(…) {` gives
+/// "confirmationDialog") or its label (`.swipeActions {`); a function body
+/// reports "func:<name>".
+func enclosingOwners(_ source: SourceFile, at index: Int) -> [String] {
+    let code = source.code
+    func openBefore(_ close: Int) -> Int? {
+        let pairs: [Character: Character] = [")": "(", "}": "{", "]": "["]
+        guard let opener = pairs[code[close]] else { return nil }
+        var depth = 0
+        var k = close
+        while k >= 0 {
+            if code[k] == code[close] { depth += 1 }
+            else if code[k] == opener { depth -= 1; if depth == 0 { return k } }
+            k -= 1
+        }
+        return nil
+    }
+    func identifier(endingAt end: Int) -> String {
+        var b = end
+        while b > 0, code[b - 1].isLetter || code[b - 1].isNumber || code[b - 1] == "_" { b -= 1 }
+        return String(code[b..<end])
+    }
+    var owners: [String] = []
+    var k = index - 1
+    while k >= 0 {
+        let c = code[k]
+        if c == ")" || c == "}" || c == "]" {
+            guard let open = openBefore(k) else { return owners }
+            k = open - 1
+            continue
+        }
+        if c == "(" || c == "[" {
+            if c == "(" { owners.append(identifier(endingAt: k)) }
+        } else if c == "{" {
+            var j = k - 1
+            while j >= 0, code[j] == " " || code[j] == "\n" || code[j] == "\t" { j -= 1 }
+            if j >= 0, code[j] == ")", let open = openBefore(j) {
+                owners.append(identifier(endingAt: open))
+            } else if j >= 0 {
+                owners.append(identifier(endingAt: j + 1))
+            }
+            // A function body: `func name(…) -> T {`.
+            let lineStart = source.lineStarts[source.line(of: k) - 1]
+            var head = String(code[max(0, lineStart - 200)..<k])
+            if let range = head.range(of: "func ", options: .backwards) {
+                head = String(head[range.upperBound...])
+                if !head.contains("{") && !head.contains("}"), let name = head.split(separator: "(").first {
+                    owners.append("func:" + name.trimmingCharacters(in: .whitespaces))
+                }
+            }
+        }
+        k -= 1
+    }
+    return owners
+}
+
+/// Modifier lines of the chain that contains the line of `index`: the
+/// contiguous lines starting with "." above it, plus its own line.
+func chainLines(_ source: SourceFile, at index: Int) -> String {
+    let lines = String(source.code).components(separatedBy: "\n")
+    let line = source.line(of: index) - 1
+    var collected = [lines[line]]
+    var l = line - 1
+    while l >= 0, lines[l].trimmingCharacters(in: .whitespaces).hasPrefix(".") {
+        collected.append(lines[l]); l -= 1
+    }
+    return collected.joined(separator: "\n")
+}
+
+/// System-drawn containers: their destructive buttons are red text the
+/// system draws on its own material (§12.1 A31, accepted).
+let systemDrawnOwners: Set<String> = ["alert", "confirmationDialog", "swipeActions", "contextMenu"]
+
+/// Helpers whose buttons are only ever placed in a system-drawn container.
+/// Each call site is checked.
+let dialogActionHelpers: [(file: String, function: String)] = [
+    ("TodayView.swift", "bookingAlertActions"),
+    ("NativeInsightsCard.swift", "optionsActions"),
+    ("NativeInsightsCard.swift", "muteButtons"),
+    ("NativeChangeOrdersView.swift", "actions"),
+]
+
+/// Literal washes stronger than the proven 13%, each with its reason (fix
+/// round 1, m1: any context, including helpers and trailing closures).
+let strongOpacityAllowlist: [(file: String, marker: String, reason: String)] = [
+    ("NativePaywallView.swift", "Color.secondary.opacity(0.25)", "unselected plan border, non-text"),
+    ("NativeMoneyCards.swift", "Rectangle().fill(Color.tradeReady.opacity(0.25)", "forecast bar track, non-text"),
+    ("NativeTodayComponents.swift", "Circle().fill(.white.opacity(0.18)", "hero icon disc; proven row"),
+    ("NativeTodayComponents.swift", "Color.tradeDangerText.opacity(0.4)", "danger card border, non-text"),
+    ("NativeCoachComponents.swift", "Color.tradeDangerText.opacity(0.5)", "error bubble border, non-text"),
+    ("NativeCoachComponents.swift", "Color.tradeReady.opacity(0.18)", "user bubble under primary text; proven rows"),
+    ("NativeInvoiceOutreachView.swift", "Color.secondary.opacity(0.3)", "provider chip border, non-text"),
+    ("NativeCalendarView.swift", "Rectangle().fill(Color.secondary.opacity(0.2)", "hour rule in the hidden timeline graphic"),
+    ("NativeCalendarView.swift", "Color.tradeWarningText.opacity(0.35)", "conflict block in the hidden timeline graphic"),
+    ("NativeCalendarView.swift", "Color.accentColor.opacity(0.25)", "job block in the hidden timeline graphic"),
 ]
 
 /// Identifiers of the calls enclosing `index`, innermost first (skipping
@@ -1297,17 +1407,20 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
 
     // 1. No system hue in an app view (the widget canvas and Domain excluded).
     let hue = try! NSRegularExpression(pattern: systemHuePattern)
+    let uikit = try! NSRegularExpression(pattern: uikitSystemColorPattern)
     var textTokenUses: [String: Int] = [:]
     let appSources = sources.filter { !$0.relativePath.hasPrefix("Widgets/") && !$0.relativePath.hasPrefix("Domain/") && !$0.relativePath.hasPrefix(widgetTargetPrefix) }
     for source in appSources {
         let text = source.codeText
         let ns = text as NSString
-        var mint = 0
+        let mintActions = nonColorMintLocations(in: text)
         for match in hue.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            if ns.substring(with: match.range(at: 1)) == "mint" { mint += 1; continue }
+            if ns.substring(with: match.range(at: 1)) == "mint", mintActions.contains(match.range.location) { continue }
             expect(false, "system hue \(ns.substring(with: match.range)) at N/\(source.relativePath):\(source.line(of: match.range.location)); use a semantic token (A29)")
         }
-        expectEqual(mint, nonColorMintUses[source.relativePath] ?? 0, "N/\(source.relativePath): .mint is only the audited portal/booking action")
+        for match in uikit.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            expect(false, "UIKit system color \(ns.substring(with: match.range)) at N/\(source.relativePath):\(source.line(of: match.range.location)); use a semantic token (A29, m3)")
+        }
         for name in textTokens { textTokenUses[name, default: 0] += source.occurrences(of: name).count }
     }
     for name in textTokens.sorted() {
@@ -1347,14 +1460,22 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
                        "N/\(source.relativePath):\(source.line(of: index)): \(name) inside \(first); fills are surfaces only (A29)")
             }
         }
-        // A text token never tints a control: swipe actions and prominent
-        // buttons draw white on the tint.
+        // Tints (fix round 1, m2). A fill tints only what draws white on it:
+        // a swipe action or a `.borderedProminent` chain. A text token tints
+        // only a `.bordered` chain, which draws the tint as its label.
         for index in source.occurrences(of: "tint") where index > 0 && source.code[index - 1] == "." {
             let open = source.skipSpace(index + 4)
             guard open < source.code.count, source.code[open] == "(", let close = source.matching(open) else { continue }
             let args = source.codeSlice(open..<(close + 1))
+            let chain = chainLines(source, at: index)
+            let where_ = "N/\(source.relativePath):\(source.line(of: index))"
+            if fillTokens.contains(where: { args.contains($0) }) {
+                let inSwipe = enclosingOwners(source, at: index).contains("swipeActions")
+                let prominent = chain.contains(".borderedProminent") || chain.contains("tradeReadyProminentButtonStyle")
+                expect(inSwipe || prominent, "\(where_): .tint\(args) with a fill outside a swipe action or .borderedProminent chain (m2)")
+            }
             for name in textTokens where args.contains(name) {
-                expect(false, "N/\(source.relativePath):\(source.line(of: index)): .tint(\(name)); a tint under white text needs a fill token (A29)")
+                expect(chain.contains("buttonStyle(.bordered)"), "\(where_): .tint(\(name)) outside a .bordered chain; a tint under white text needs a fill token (A29)")
             }
         }
     }
@@ -1383,21 +1504,98 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     }
     expectEqual(swipeButtons, 10, "swipe buttons audited")
 
-    // 5. Tinted washes stay within the proven 13%.
+    // 5. Tinted washes stay within the proven 13% (fix round 1, m1): every
+    //    literal opacity in an app view, wherever it sits (a `.background(…)`,
+    //    a `.background { }` closure, a helper that returns the wash), unless
+    //    it is a reviewed non-text or proven use.
     let opacity = try! NSRegularExpression(pattern: #"\.opacity\(([0-9.]+)\)"#)
+    var strongSeen = Array(repeating: 0, count: strongOpacityAllowlist.count)
     for source in appSources {
-        for index in source.occurrences(of: "background") where index > 0 && source.code[index - 1] == "." {
-            let open = source.skipSpace(index + "background".count)
-            guard open < source.code.count, source.code[open] == "(", let close = source.matching(open) else { continue }
-            let args = source.codeSlice(open..<(close + 1))
-            let ns = args as NSString
-            for match in opacity.matches(in: args, range: NSRange(location: 0, length: ns.length)) {
-                guard let alpha = Double(ns.substring(with: match.range(at: 1))) else { continue }
-                expect(alpha <= Audit.maximumTextWashAlpha + 1e-9,
-                       "N/\(source.relativePath):\(source.line(of: index)): background wash \(alpha) exceeds the proven \(Audit.maximumTextWashAlpha)")
+        let text = source.codeText
+        let ns = text as NSString
+        for match in opacity.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            guard let alpha = Double(ns.substring(with: match.range(at: 1))), alpha > Audit.maximumTextWashAlpha + 1e-9 else { continue }
+            let lineNumber = source.line(of: match.range.location)
+            // The marker must end at this opacity call.
+            let end = match.range.location + match.range.length
+            let allowed = strongOpacityAllowlist.firstIndex { entry in
+                entry.file == source.relativePath && entry.marker.count <= end
+                    && ns.substring(with: NSRange(location: end - (entry.marker as NSString).length, length: (entry.marker as NSString).length)) == entry.marker
+            }
+            if let allowed { strongSeen[allowed] += 1 }
+            expect(allowed != nil, "N/\(source.relativePath):\(lineNumber): opacity \(alpha) exceeds the proven \(Audit.maximumTextWashAlpha) wash")
+        }
+    }
+    for (index, entry) in strongOpacityAllowlist.enumerated() {
+        expectEqual(strongSeen[index], 1, "strong-opacity allowlist entry used once: \(entry.file) \(entry.marker) (\(entry.reason))")
+    }
+    expect(requirements.contains { $0.name == "primary text on the 18% coach user bubble (light)" }, "coach user bubble row present")
+
+    // 7. Destructive buttons (fix round 1, I1). The role stays for VoiceOver
+    //    and the system; a button the app draws in a row sets its label to
+    //    `tradeDangerText` (system red text measured 3.55:1), and one inside an
+    //    alert, dialog, swipe or context menu is system-drawn (§12.1 A31).
+    var inRowDestructive = 0
+    for source in appSources {
+        for index in source.occurrences(of: "destructive") where index >= 7 && String(source.code[(index - 7)..<index]) == "role: ." {
+            let owners = enclosingOwners(source, at: index)
+            let where_ = "N/\(source.relativePath):\(source.line(of: index))"
+            if owners.contains(where: { systemDrawnOwners.contains($0) }) { continue }
+            if let helper = dialogActionHelpers.first(where: { $0.file == source.relativePath && owners.contains("func:" + $0.function) }) {
+                // Every call of the helper sits in a system-drawn container or another listed helper.
+                for call in source.occurrences(of: helper.function) {
+                    let next = source.skipSpace(call + helper.function.count)
+                    guard next < source.code.count, source.code[next] == "(" else { continue }
+                    if call >= 5, String(source.code[(call - 5)..<call]) == "func " { continue }
+                    let callOwners = enclosingOwners(source, at: call)
+                    let placed = callOwners.contains { systemDrawnOwners.contains($0) }
+                        || dialogActionHelpers.contains { $0.file == source.relativePath && callOwners.contains("func:" + $0.function) }
+                    expect(placed, "N/\(source.relativePath):\(source.line(of: call)): \(helper.function)(…) used outside an alert, dialog or menu")
+                }
+                continue
+            }
+            // An in-row button: `Button(…, role: .destructive) … label: { … .nativeDestructiveText() }`.
+            inRowDestructive += 1
+            guard let button = owners.firstIndex(of: "Button") else {
+                expect(false, "\(where_): in-row role: .destructive outside a Button; give it a text-token label"); continue
+            }
+            _ = button
+            let window = source.codeSlice(index..<min(source.code.count, index + 700))
+            let labelStart = window.range(of: "label: {")
+            let nextButton = window.range(of: "Button(")
+            let hasLabel = labelStart != nil && (nextButton == nil || labelStart!.lowerBound < nextButton!.lowerBound)
+            expect(hasLabel, "\(where_): in-row destructive button has no label closure; use label: { … .nativeDestructiveText() } (I1)")
+            if let labelStart {
+                let body = String(window[labelStart.upperBound...].prefix(300))
+                let closing = body.firstIndex(of: "}") ?? body.endIndex
+                expect(body[..<closing].contains(".nativeDestructiveText()"),
+                       "\(where_): in-row destructive label lacks .nativeDestructiveText(); system red text measures 3.55:1 (I1)")
             }
         }
     }
+    expectEqual(inRowDestructive, 12, "in-row destructive buttons audited")
+    if let views = file(sources, "NativeAccessibilityViews.swift") {
+        let raw = String(views.raw)
+        expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),
+               "nativeDestructiveText is the modifier")
+        expect(raw.contains("content.foregroundStyle(isEnabled ? Color.tradeDangerText : Color.secondary)"),
+               "nativeDestructiveText applies tradeDangerText, and the secondary color when disabled")
+    }
+    if let booking = file(sources, "NativeBookingRequestsView.swift") {
+        let text = String(booking.raw)
+        let decline = text.range(of: "Button(role: .destructive) { Task { await onDecline() } }").map { String(text[$0.lowerBound...].prefix(300)) } ?? ""
+        expect(decline.contains("Text(\"Decline\").nativeDestructiveText()"), "bordered Decline label is tradeDangerText")
+        expect(decline.contains(".buttonStyle(.bordered)") && decline.contains(".tint(Color.tradeDangerText)"),
+               "bordered Decline washes its own text token, proven at 15%")
+    }
+    for ground in ["white list row", "light grouped background", "dark list row", "dark sheet list row"] {
+        expect(requirements.contains { $0.name == "danger text on its 15% .bordered wash over \(ground)" }, "bordered Decline row over \(ground)")
+        expect(requirements.contains { $0.name == "danger text on a 15% system-red .bordered wash over \(ground)" }, "bordered Decline system-red row over \(ground)")
+    }
+    // A31 baseline: the reviewer's measurement of the old Decline.
+    let red = RGB(hex: "#ff3b30")!
+    expectClose(Audit.contrastRatio(red, Audit.composite(red, alpha: Audit.borderedWashAlpha, over: p.white)), 2.90, tolerance: 0.01,
+                "baseline: system red on its 15% .bordered wash measured 2.90")
 
     // 6. The helpers that carry status colors.
     if let models = read(root, "native/TradeReadyNative/Models.swift") {
@@ -1408,6 +1606,17 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     }
 
     // The detectors themselves.
+    let uikitFixture = "Color(.systemGreen)\nUIColor.systemRed\nColor(uiColor: .systemOrange)\nColor(.systemGroupedBackground)\nColor(.secondarySystemBackground)"
+    expectEqual(uikit.numberOfMatches(in: uikitFixture, range: NSRange(location: 0, length: (uikitFixture as NSString).length)), 3,
+                "UIKit system-color detector: 3 hues, not the grouped backgrounds")
+    let mintFixture = "try await mutate(action: .mint, id: 1)\nif action == .mint || x\ncase .mint:\nbusyAction = .mint\nText(a).foregroundStyle(.mint)\ncase .approved: .mint"
+    let mintNS = mintFixture as NSString
+    let mintAll = hue.matches(in: mintFixture, range: NSRange(location: 0, length: mintNS.length)).map(\.range.location)
+    let mintActions = nonColorMintLocations(in: mintFixture)
+    expectEqual(mintAll.filter { !mintActions.contains($0) }.count, 2, ".mint detector: the two color uses fail, the four action uses pass")
+    let dialogFixture = SourceFile(relativePath: "Fixture.swift", text: "x.confirmationDialog(\"t\", isPresented: $p) {\n  Button(\"Delete\", role: .destructive) {}\n}\nSection {\n  Button(\"Sign out\", role: .destructive) {}\n}")
+    let dialogRoles = dialogFixture.occurrences(of: "destructive").map { enclosingOwners(dialogFixture, at: $0).contains("confirmationDialog") }
+    expectEqual(dialogRoles, [true, false], "destructive detector: the dialog button is system-drawn, the section one is in-row")
     let fixture = "Text(a).foregroundStyle(.green)\n.tint(ok ? Color.blue : .orange)\ncase .lead: .indigo\nlet x = rgb.green + UIColor(red: 1, green: 0, blue: 0) + c.orange\nawait administer(.mint)"
     let fixtureMatches = hue.matches(in: fixture, range: NSRange(location: 0, length: (fixture as NSString).length))
     expectEqual(fixtureMatches.count, 5, "system-hue detector: 4 colors and the .mint action, not RGB components")
@@ -1432,8 +1641,17 @@ func testReAuditSites(root: URL, sources: [SourceFile]) {
         let buttons = scanControls(SourceFile(relativePath: "NativeTodayComponents.swift", text: card))
             .filter { $0.raw.hasPrefix("Button(action: onOnMyWay)") }
         expectEqual(buttons.count, 1, "Today job card On my way button found")
-        let minimumFrame = "minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget"
-        expect(buttons.first?.raw.contains(minimumFrame) == true, "On my way has a 44×44 target (A25; RN hitSlop 8)")
+        // Fix round 1 (m7): the 44pt target is a hit outset, like RN's hitSlop,
+        // so the card's status row keeps its height.
+        let raw = buttons.first?.raw ?? ""
+        expect(raw.contains(".frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget)"), "On my way is at least 44pt wide (A25)")
+        expect(raw.contains(".padding(.vertical, NativeAccessibilityAudit.InlineLink.verticalOutset)\n")
+               && raw.contains(".contentShape(Rectangle())")
+               && raw.contains(".padding(.vertical, -NativeAccessibilityAudit.InlineLink.verticalOutset)"),
+               "On my way pads its hit shape and takes the padding back out of layout (m7)")
+        expect(!raw.contains("minHeight:"), "On my way no longer grows the card row (m7)")
+        expect(Audit.InlineLink.smallestCaptionLineHeight + 2 * Audit.InlineLink.verticalOutset >= Audit.minimumTouchTarget,
+               "On my way hit height ≥ 44pt at the smallest text size (A25)")
         expect(buttons.first?.raw.contains(".accessibilityLabel(NativeAccessibilityAudit.Label.onMyWay(customerName: job.customerName))") == true,
                "On my way keeps RN's label")
         expect(card.contains(".accessibilityActions {"), "the card offers On my way as a VoiceOver action (A13)")

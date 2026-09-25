@@ -77,7 +77,9 @@ struct NativePaywallView: View {
 
                 Button("Restore purchases") { restore() }
                     .disabled(store.subscriptionOperationInFlight)
-                Button("Sign out", role: .destructive) { confirmSignOut = true }
+                Button(role: .destructive) { confirmSignOut = true } label: {
+                    Text("Sign out").nativeDestructiveText()
+                }
                     .disabled(store.subscriptionOperationInFlight)
 
                 HStack(spacing: 8) {

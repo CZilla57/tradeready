@@ -209,6 +209,10 @@ enum NativeAccessibilityAudit {
     /// badges use 12% and 13%, the Today and paywall chips 8% to 11%.
     static let maximumTextWashAlpha = 0.13
 
+    /// The system `.bordered` button wash: its tint at 15%. The old destructive
+    /// "Decline" measured 2.90:1, system red on this wash (fix round 1, I1).
+    static let borderedWashAlpha = 0.15
+
     /// The grounds semantic text sits on, by appearance.
     static let lightTextGrounds: [(name: String, color: RGB)] = [
         ("white list row", Palette.white),
@@ -222,6 +226,22 @@ enum NativeAccessibilityAudit {
         ("dark canvas", Palette.tradeCanvasDark),
         ("RN dark surface", Palette.rnSurfaceDark),
     ]
+
+    static let borderedDangerRequirements: [ContrastRequirement] = {
+        let p = Palette.self
+        let grounds: [(String, RGB, RGB, RGB)] = [
+            ("white list row", p.white, p.dangerTextLight, p.systemRedLight),
+            ("light grouped background", p.systemGroupedLight, p.dangerTextLight, p.systemRedLight),
+            ("dark list row", p.secondaryGroupedDark, p.dangerTextDark, p.systemRedDark),
+            ("dark sheet list row", p.elevatedGroupedDark, p.dangerTextDark, p.systemRedDark),
+        ]
+        return grounds.flatMap { name, ground, text, red in [
+            ContrastRequirement(name: "danger text on its 15% .bordered wash over \(name)", foreground: text,
+                                background: composite(text, alpha: borderedWashAlpha, over: ground), role: .text),
+            ContrastRequirement(name: "danger text on a 15% system-red .bordered wash over \(name)", foreground: text,
+                                background: composite(red, alpha: borderedWashAlpha, over: ground), role: .text),
+        ] }
+    }()
 
     /// Each text token on each ground and on its own strongest wash over that
     /// ground; each fill under white and against the list rows it sits in.
@@ -320,6 +340,15 @@ enum NativeAccessibilityAudit {
             // The clock-out button (A18) and the destructive swipes (A29), white
             // on the danger fill, and every semantic text color (A28, A29):
             // `semanticColorRequirements`.
+            // The bordered booking "Decline" (fix round 1, I1): danger text on the
+            // 15% wash of its own tint, and on system red's in case the role
+            // keeps the system wash.
+        ] + borderedDangerRequirements + [
+            // The coach user bubble (fix round 1, m1): primary text on an 18% tint wash.
+            .init(name: "primary text on the 18% coach user bubble (light)", foreground: RGB(red: 0, green: 0, blue: 0),
+                  background: composite(p.tradeReadyLight, alpha: 0.18, over: p.tradeCanvasLight), role: .text),
+            .init(name: "primary text on the 18% coach user bubble (dark)", foreground: p.white,
+                  background: composite(p.tradeReadyDark, alpha: 0.18, over: p.tradeCanvasDark), role: .text),
             // Route map stop number (11.10b A26): white on a fill capsule, not on the map.
             .init(name: "route map stop number: white on fill (dark)", foreground: p.white, background: p.tradeReadyFillDark, role: .text),
         ] + semanticColorRequirements
@@ -338,6 +367,17 @@ enum NativeAccessibilityAudit {
 
     /// Apple HIG minimum hit target, in points.
     static let minimumTouchTarget: Double = 44
+
+    /// An inline caption link inside a card (the Today "On my way"; fix round
+    /// 1, m7). Like RN's `hitSlop`, the hit shape is padded outward and the
+    /// padding is taken back out of layout, so the card row keeps its height.
+    enum InlineLink {
+        /// Outset above and below the caption line.
+        static let verticalOutset: Double = 16
+        /// The caption line at the smallest Dynamic Type size (11pt text,
+        /// about 13pt of line); larger sizes only grow the target.
+        static let smallestCaptionLineHeight: Double = 13
+    }
 
     /// The Today week strip (fix round 1, I1). Seven day columns and two
     /// 44pt arrows share one row, so the strip is capped at AX1 and the day

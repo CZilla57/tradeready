@@ -136,7 +136,7 @@ struct NativePricebookEntryView: View {
                 if isEditing {
                     Section {
                         Button(role: .destructive) { showingDeleteConfirmation = true } label: {
-                            Label("Delete Service", systemImage: "trash")
+                            Label("Delete Service", systemImage: "trash").nativeDestructiveText()
                         }
                     }
                 }

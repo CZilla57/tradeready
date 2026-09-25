@@ -594,8 +594,10 @@ private struct AIProviderKeySection: View {
             Button(NativeAIProviderKeyPolicy.saveButtonTitle, action: save)
                 .disabled(!NativeAIProviderKeyPolicy.canSubmit(entry))
             if NativeAIProviderKeyPolicy.offersRemove(state) {
-                Button(NativeAIProviderKeyPolicy.removeButtonTitle, role: .destructive) {
+                Button(role: .destructive) {
                     finish(store.clearAIProviderKey(kind))
+                } label: {
+                    Text(NativeAIProviderKeyPolicy.removeButtonTitle).nativeDestructiveText()
                 }
             }
             if let feedback {
@@ -756,17 +758,21 @@ struct AccountSettings: View {
         Section("PROFILE") { LabeledContent("Name", value: store.settings.contactName.isEmpty ? "Not set" : store.settings.contactName); LabeledContent("Email", value: store.settings.email.isEmpty ? "Not set" : store.settings.email); LabeledContent("Migrated session", value: store.authenticatedAccountState.displayValue) }
         Section("DATA") { Button { resetConfirmation = true } label: { Label("Reset demo data", systemImage: "arrow.counterclockwise") }.foregroundStyle(Color.tradeDangerText) }
         Section {
-            Button("Sign out", role: .destructive) {
+            Button(role: .destructive) {
                 if store.syncStatus.pendingCount > 0 {
                     unsyncedSignOutConfirmation = true
                 } else {
                     signOutConfirmation = true
                 }
+            } label: {
+                Text("Sign out").nativeDestructiveText()
             }
                 .disabled(isSigningOut)
-            Button(isDeleting ? "Deleting account…" : "Delete account", role: .destructive) {
+            Button(role: .destructive) {
                 deleteConfirmationText = ""
                 deleteConfirmationPresented = true
+            } label: {
+                Text(isDeleting ? "Deleting account…" : "Delete account").nativeDestructiveText()
             }
                 .disabled(isDeleting)
         } footer: {
@@ -851,7 +857,9 @@ struct AccountSettings: View {
                         .keyboardShortcut(.cancelAction)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Delete", role: .destructive) { performDeleteAccount() }
+                    Button(role: .destructive) { performDeleteAccount() } label: {
+                        Text("Delete").nativeDestructiveText()
+                    }
                         .disabled(
                             isDeleting
                                 || !NativeAccountDeletionConfirmation.matches(deleteConfirmationText)

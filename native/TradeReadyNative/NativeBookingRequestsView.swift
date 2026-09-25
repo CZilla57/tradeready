@@ -279,9 +279,10 @@ private struct RequestRowView: View {
                     .tradeReadyProminentButtonStyle()
                     .disabled(isBusy)
                 Button(role: .destructive) { Task { await onDecline() } } label: {
-                    Text("Decline")
+                    Text("Decline").nativeDestructiveText()
                 }
                 .buttonStyle(.bordered)
+                .tint(Color.tradeDangerText)
                 .disabled(isBusy)
 
             case .portalChange:

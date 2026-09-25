@@ -428,11 +428,13 @@ struct CustomerDetailView: View {
 
                     if let storedCustomer {
                         Section {
-                            Button("Delete customer", systemImage: "trash", role: .destructive) {
+                            Button(role: .destructive) {
                                 confirmationRequest = .deleteCustomer(
                                     id: storedCustomer.id,
                                     name: storedCustomer.name
                                 )
+                            } label: {
+                                Label("Delete customer", systemImage: "trash").nativeDestructiveText()
                             }
                         } footer: {
                             Text("Their jobs and invoices will remain in your records.")

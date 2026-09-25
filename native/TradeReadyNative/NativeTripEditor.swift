@@ -86,7 +86,7 @@ struct NativeTripEditor: View {
                 if isEditing {
                     Section {
                         Button(role: .destructive) { showingDeleteConfirmation = true } label: {
-                            Label("Delete Trip", systemImage: "trash")
+                            Label("Delete Trip", systemImage: "trash").nativeDestructiveText()
                         }
                     }
                 }

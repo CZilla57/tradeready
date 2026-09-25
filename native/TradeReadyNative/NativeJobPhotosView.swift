@@ -50,7 +50,7 @@ struct NativeJobPhotosView: View {
                             deletePhotoID = photo.id
                             showingDeleteConfirmation = true
                         } label: {
-                            Image(systemName: "trash")
+                            Image(systemName: "trash").nativeDestructiveText()
                         }
                         .accessibilityLabel("Delete photo")
                     }

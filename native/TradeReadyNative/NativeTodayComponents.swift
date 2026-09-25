@@ -426,10 +426,14 @@ struct NativeTodayJobCard: View {
                     if canSendOnMyWay {
                         Button(action: onOnMyWay) {
                             Text("On my way").font(.caption.weight(.bold)).foregroundStyle(Color.tradeReady)
-                                // 11.10b A25: RN pads this link with hitSlop 8;
-                                // native gives it the 44pt minimum target.
-                                .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                                // 11.10b A25 (fix round 1, m7): RN pads this link
+                                // with hitSlop 8. The hit shape is padded to 44pt
+                                // and the padding is taken back out of layout, so
+                                // the status row keeps its height.
+                                .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget)
+                                .padding(.vertical, NativeAccessibilityAudit.InlineLink.verticalOutset)
                                 .contentShape(Rectangle())
+                                .padding(.vertical, -NativeAccessibilityAudit.InlineLink.verticalOutset)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(NativeAccessibilityAudit.Label.onMyWay(customerName: job.customerName))

@@ -791,7 +791,7 @@ complete / Phase 12 evidence deferred**.
 | 11.10a | H1 | Done (code complete 2026-09-24; all four §12 release-blocking candidates fixed and host-tested (contract §12.1); hardware keyboard handed to 11.11; A15–A18, A22 and A24 to 11.10b; fix round 1 closed I1–I3 and m1–m6; VoiceOver/Switch Control/AX5 proof deferred to Phase 12; H1 stays open until 11.10b) | 11.00, 10.15 | Accessibility audit + fixes |
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`) and round 2 (`22f35fd`, review I1: a push acknowledged during a direct-caller pull)**: the pull commit rebases onto the live snapshot and takes the server's version only for records the device has not touched (pending at start or commit, or changed locally), holding a table's cursor where it keeps a local record over a fetched row, with scenarios D–G and table-driven merge cases running by default (229 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
-| 11.10b | H1 | Done (code complete 2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A29 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. A29 (success, warning and status colors as text) is fixed with native text tokens after the controller ruling. **H1 is closed:** zero release-blocking findings remain. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
+| 11.10b | H1 | Done (code complete 2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A29 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. A29 (success, warning and status colors as text) is fixed with native text tokens after the controller ruling. Fix round 1 fixed the 12 in-row destructive buttons (I1) and minors m1–m7. A30 (PDF stamps) is owned by 11.13 and A31 (system dialogs) is accepted. **H1 is closed:** zero release-blocking findings remain. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
 | 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
 
@@ -3786,3 +3786,74 @@ darker light-mode text colors (the 11.10a `#2f78c4` dark fill is the precedent).
   "Delete plan" `actionRule` bug is still flagged for the final review.
 
 **Next ready:** 11.13 (qualification), then 11.14 (closeout).
+
+### 11.10b fix round 1 (2026-09-24)
+
+The review found one Important issue and seven minors. All are fixed except m5, which the
+controller ruled is owned by 11.13.
+
+- **I1: in-row destructive buttons** (contract §12.1 A28 corrected, A31 added).
+  - The A28 pass removed every `.red` token but missed 12 app-drawn
+    `role: .destructive` buttons, which still rendered system red text (3.55:1). The
+    bordered booking Decline was red on a red wash (2.90:1).
+  - Each keeps its role. Its label takes `.nativeDestructiveText()`
+    (`N/NativeAccessibilityViews.swift`): `tradeDangerText`, or the secondary color while
+    disabled, applied inside the label.
+  - The buttons: Delete customer; the AI key Remove; Settings Sign out and Delete
+    account; the delete sheet's toolbar Delete (found by the new scan, not in the
+    review); paywall Sign out; Delete expense; Remove receipt photo; Delete trip; Delete
+    service; the job-photo trash; and Decline.
+  - Decline also tints its `.bordered` wash with `tradeDangerText`. There are rows for a
+    15% own wash and a 15% system-red wash, with a minimum of 4.54:1.
+  - The scan: every `role: .destructive` must be inside an alert, confirmation dialog,
+    swipe action or context menu, or inside a listed dialog-only helper whose every
+    call is checked, or else carry the label modifier. The 12 in-row buttons are pinned.
+  - A31 records the system-drawn dialog buttons as accepted.
+- **m1: washes in any context.** Every literal opacity above 13% in an app view must be
+  a reviewed non-text or proven use: 10 entries, each matched at its call. This covers
+  helper-returned washes and trailing closures. The coach user bubble's 18% wash under
+  primary text has rows.
+- **m2: tints.** A fill tint is allowed only on a swipe action or a `.borderedProminent`
+  chain. A text-token tint is allowed only on a `.bordered` chain.
+- **m3: UIKit spellings.** `systemRed`, `systemGreen` and the other hues fail the scan.
+- **m4: `.mint`.** The action is matched per use by call shape (`action: .mint`,
+  `administer(.mint`, `case .mint:` and so on), not by a per-file count.
+- **m5: PDF stamps.** Contract §12.1 A30 is owned by 11.13 and outside H1's app-view
+  scope. The measurements: PAID 2.90, OUTSTANDING 3.09, PARTLY PAID 4.28 and accent 4.02.
+  Not fixed here.
+- **m6:** the contract's dark `tradeDangerText` is corrected to `#ee917a`.
+- **m7: "On my way".**
+  - The link keeps a 44pt minimum width, and its hit shape is padded
+    `InlineLink.verticalOutset` (16pt) above and below.
+  - The padding is taken back out of layout, like RN's `hitSlop`, so the status row no
+    longer grows.
+  - The test pins the pattern, the absence of `minHeight`, and 13 + 2 × 16 ≥ 44.
+
+**Commands and results (TZ=America/Phoenix):**
+- RED, with the tests and policy written first: `accessibility-audit tests: 21 of 1800
+  checks FAILED`. Two of those were the test's own calendar allowlist markers, which
+  shared a line and were corrected to match at the opacity call.
+- GREEN: `accessibility-audit tests: 1809/1809 checks passed`.
+- Mutations, each restored:
+  - an unstyled destructive label: 1 failure;
+  - `Color(.systemGreen)`: 1 failure;
+  - `.mint` as a color: 1 failure;
+  - a fill tint on a `.bordered` chain: 1 failure;
+  - a 20% coach error wash: 1 failure;
+  - the Decline untinted: 1 failure;
+  - the "On my way" `minHeight` back: 2 failures;
+  - the booking dialog helper outside a dialog: 1 failure.
+- Runs, in order:
+  - accessibility-audit `1809/1809`;
+  - `layout-metrics tests: 817/817 checks passed`;
+  - `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → `exit=0` (65 PASS lines,
+    backend-workers `fail 0`);
+  - Release compile → `** BUILD SUCCEEDED **`;
+  - doc check → `1621 path references checked: 0 missing, 14 planned (not yet created).`
+
+**Runsheet rows (Phase 12; not run, not claimed):**
+
+| Row | Step | Pass when |
+|---|---|---|
+| A11B-FR1-1 | Light and dark mode: Settings Sign out and Delete account, the delete sheet's toolbar Delete (enabled and disabled), the paywall Sign out, the editor Delete rows, Remove receipt photo, the job-photo trash, and a booking Decline | Each label is rust, not system red. A disabled one reads as disabled, and VoiceOver still announces it as destructive |
+| A11B-FR1-2 | Tap 12pt above and below the Today card's "On my way" text | It sends "On my way", and the card's status row is no taller than a card without the link |

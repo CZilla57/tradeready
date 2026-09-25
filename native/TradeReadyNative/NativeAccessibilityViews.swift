@@ -13,6 +13,24 @@ extension View {
     func tradeReadyProminentButtonStyle() -> some View {
         buttonStyle(.borderedProminent).tint(.tradeReadyFill)
     }
+
+    /// The label of a destructive button the app draws in a row, form or
+    /// toolbar (11.10b fix round 1, I1). The role stays on the button for
+    /// VoiceOver; the label takes `tradeDangerText`, because system red text
+    /// measured 3.55:1 on a white row. It goes inside the label so the
+    /// button style's own color does not win. Disabled, it falls back to the
+    /// secondary color so the button still reads as disabled.
+    func nativeDestructiveText() -> some View {
+        modifier(NativeDestructiveText())
+    }
+}
+
+private struct NativeDestructiveText: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(isEnabled ? Color.tradeDangerText : Color.secondary)
+    }
 }
 
 /// Columns side by side at standard text sizes; stacked at accessibility sizes
