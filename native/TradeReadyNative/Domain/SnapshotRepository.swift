@@ -69,6 +69,14 @@ extension Canonical {
         private let fileManager: FileManager
         private let now: () -> Date
 
+        /// Test-only (Phase 12.00b.2-E, L267.a): forces
+        /// `protectCopiedLegacyFiles` onto its nil-enumerator failure path.
+        /// `FileManager.enumerator(at:includingPropertiesForKeys:)` is a
+        /// `@nonobjc` Swift-overlay method and cannot be overridden from
+        /// outside Foundation, so a host test has no other way to force a
+        /// real nil enumerator. Always `false` in production.
+        var testForcesNilLegacyFileProtectionEnumerator = false
+
         init(
             primaryURL: URL,
             backupURL: URL? = nil,
@@ -349,7 +357,18 @@ extension Canonical {
         /// A copied directory keeps the source's protection class; raise every
         /// copied file to `legacyBackupFileProtection`. Best effort, bounded log.
         private func protectCopiedLegacyFiles(in directory: URL) {
-            guard let files = fileManager.enumerator(at: directory, includingPropertiesForKeys: nil) else { return }
+            // Phase 12.00b.2-E (L267.a): a nil enumerator is a failure of the
+            // same kind as a per-file `setAttributes` failure below — log the
+            // same bounded diagnostic instead of returning silently. Never a
+            // throw: protection is best-effort hardening on top of the copy
+            // `preserveLegacyDirectory` already made, not a correctness gate,
+            // so a nil enumerator must not block or retry the migration.
+            guard !testForcesNilLegacyFileProtectionEnumerator,
+                  let files = fileManager.enumerator(at: directory, includingPropertiesForKeys: nil)
+            else {
+                print("TradeReadyLegacyBackup stage=file-protection")
+                return
+            }
             var failed = false
             for case let file as URL in files where !file.hasDirectoryPath {
                 do {

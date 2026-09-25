@@ -85,6 +85,69 @@ struct RepositoryTests {
                    "preserveLegacyDirectory still copies the source")
             expect(excludedFromBackup(directoryRepository.legacyBackupDirectoryURL),
                    "preserveLegacyDirectory excludes LegacyBackups from backup")
+
+            // L267.a (Phase 12.00b.2-E): `protectCopiedLegacyFiles` (the gate
+            // that raises copied `LegacyBackups/` files — which can hold the
+            // G6 legacy Square/session-token residual — to complete file
+            // protection) must treat a nil `FileManager.enumerator` the same
+            // as a per-file `setAttributes` failure: a bounded diagnostic,
+            // never a throw, never blocking the copy.
+            // `FileManager.enumerator(at:includingPropertiesForKeys:)` cannot
+            // be overridden from outside Foundation on this toolchain (it is
+            // a `@nonobjc` extension method), so there is no way to force a
+            // real nil enumerator from a host test; `testForcesNilLegacyFileProtectionEnumerator`
+            // is the small internal seam that stands in for it. Production
+            // never sets it (defaults to `false`).
+            let nilEnumeratorRoot = root.appendingPathComponent("nil-enumerator-case", isDirectory: true)
+            let nilEnumeratorSource = nilEnumeratorRoot.appendingPathComponent("rn-async-storage", isDirectory: true)
+            try FileManager.default.createDirectory(at: nilEnumeratorSource, withIntermediateDirectories: true)
+            try Data("{\"providerKeys\":{\"square\":\"EAAA-token\"}}".utf8)
+                .write(to: nilEnumeratorSource.appendingPathComponent("manifest.json"), options: .atomic)
+            var nilEnumeratorRepository = Canonical.SnapshotRepository(
+                primaryURL: nilEnumeratorRoot.appendingPathComponent("store.json")
+            )
+            nilEnumeratorRepository.testForcesNilLegacyFileProtectionEnumerator = true
+            let nilEnumeratorCopied = try nilEnumeratorRepository.preserveLegacyDirectory(
+                nilEnumeratorSource, migration: .legacyNativeSnapshot, name: "AsyncStorage"
+            )
+            expect(FileManager.default.fileExists(
+                       atPath: nilEnumeratorCopied.appendingPathComponent("manifest.json").path),
+                   "L267.a a nil enumerator does not block the legacy directory copy (best effort, same as a per-file failure)")
+
+            // The behavior above (no throw, copy still completes) is
+            // identical whether or not the diagnostic fires, so it alone
+            // cannot distinguish "logs a diagnostic" from "returns silently".
+            // Pin the actual source: the nil-enumerator guard's failure body
+            // must contain the exact same bounded log line the per-file
+            // failure path below it already uses, not a new or absent one.
+            let repositorySource = try String(
+                contentsOf: URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent("TradeReadyNative/Domain/SnapshotRepository.swift"),
+                encoding: .utf8
+            )
+            if let functionStart = repositorySource.range(of: "private func protectCopiedLegacyFiles(in directory: URL) {"),
+               let functionEnd = repositorySource.range(
+                   of: "private func atomicWrite(", range: functionStart.upperBound..<repositorySource.endIndex
+               )
+            {
+                let body = String(repositorySource[functionStart.upperBound..<functionEnd.lowerBound])
+                let perFileFailureLog = "print(\"TradeReadyLegacyBackup stage=file-protection\")"
+                expect(body.contains(perFileFailureLog),
+                       "L267.a sanity: the per-file failure path logs the bounded diagnostic")
+                if let guardStart = body.range(of: "guard "),
+                   let guardElseStart = body.range(of: "else {", range: guardStart.upperBound..<body.endIndex),
+                   let guardElseEnd = body.range(of: "}", range: guardElseStart.upperBound..<body.endIndex)
+                {
+                    let guardFailureBody = String(body[guardElseStart.upperBound..<guardElseEnd.lowerBound])
+                    expect(guardFailureBody.contains(perFileFailureLog),
+                           "L267.a a nil enumerator logs the same bounded diagnostic as a per-file failure, not a silent return")
+                } else {
+                    expect(false, "L267.a: the nil-enumerator guard-else body is locatable for the pin")
+                }
+            } else {
+                expect(false, "L267.a: SnapshotRepository.swift source is readable for the nil-enumerator pin")
+            }
         }
 
         let brokenPrimary = root.appendingPathComponent("broken.json")
