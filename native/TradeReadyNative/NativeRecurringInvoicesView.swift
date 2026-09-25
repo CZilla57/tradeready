@@ -8,9 +8,10 @@ import SwiftUI
 struct NativeRecurringInvoicesView: View {
     @EnvironmentObject private var store: AppStore
     @State private var editorTarget: PlanEditorTarget?
-    @State private var actionRule: Canonical.RecurringInvoice?
-    @State private var confirmingDelete = false
-    @State private var confirmingCancel = false
+    /// Final review I1: the plan actions dialog and its destructive
+    /// confirmation. The confirmation's target is held apart from the
+    /// dialog's plan, which SwiftUI clears as the dialog dismisses.
+    @State private var planActions = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
     @State private var saveError: String?
 
     /// The open plan editor. One `sheet(item:)` carries the plan with the
@@ -35,7 +36,7 @@ struct NativeRecurringInvoicesView: View {
 
     /// Task 11.11 fix round 1: anything this screen presents over itself.
     private var isPresentingAnything: Bool {
-        editorTarget != nil || actionRule != nil || confirmingCancel || confirmingDelete
+        editorTarget != nil || planActions.isPresentingAnything
     }
 
     /// ⌘N (new plan) never fires under the editor, the plan actions or their alerts.
@@ -67,7 +68,7 @@ struct NativeRecurringInvoicesView: View {
                     Text("No maintenance plans yet.").foregroundStyle(.secondary)
                 }
                 ForEach(store.recurringInvoiceRules, id: \.id) { rule in
-                    Button { actionRule = rule } label: {
+                    Button { planActions.showActions(for: rule) } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(rule.customerName).font(.headline)
@@ -101,49 +102,63 @@ struct NativeRecurringInvoicesView: View {
             NativeRecurringInvoiceEditor(rule: target.rule)
         }
         .confirmationDialog(
-            actionRule?.customerName ?? "Plan",
-            isPresented: Binding(get: { actionRule != nil }, set: { if !$0 { actionRule = nil } }),
+            planActions.actionRule?.customerName ?? "Plan",
+            isPresented: Binding(get: { planActions.isDialogPresented }, set: { if !$0 { planActions.dismissActions() } }),
             titleVisibility: .visible,
-            presenting: actionRule
+            presenting: planActions.actionRule
         ) { rule in
             Button(rule.isActive ? "Pause plan" : "Resume plan") {
                 if !store.setRecurringInvoiceActive(id: rule.id, isActive: !rule.isActive) {
                     saveError = "The plan could not be updated. Nothing was changed."
                 }
-                actionRule = nil
+                planActions.dismissActions()
             }
             Button("Edit plan") {
                 editorTarget = .edit(rule)
-                actionRule = nil
+                planActions.dismissActions()
             }
             Button("Cancel plan", role: .destructive) {
-                confirmingCancel = true
+                planActions.requestDestructive(.cancelPlan)
             }
             Button("Delete plan", role: .destructive) {
-                confirmingDelete = true
+                planActions.requestDestructive(.deletePlan)
             }
-            Button("Dismiss", role: .cancel) { actionRule = nil }
+            Button("Dismiss", role: .cancel) { planActions.dismissActions() }
         }
-        .alert("Cancel maintenance plan?", isPresented: $confirmingCancel) {
+        .alert(
+            "Cancel maintenance plan?",
+            isPresented: Binding(
+                get: { planActions.isConfirming(.cancelPlan) },
+                set: { if !$0 { planActions.endConfirmation() } }
+            ),
+            presenting: planActions.pendingDestructive
+        ) { target in
             Button("Cancel plan", role: .destructive) {
-                if let rule = actionRule, !store.setRecurringInvoiceActive(id: rule.id, isActive: false) {
+                if !store.setRecurringInvoiceActive(id: target.rule.id, isActive: false) {
                     saveError = "The plan could not be paused. Nothing was changed."
                 }
-                actionRule = nil
+                planActions.endConfirmation()
             }
-            Button("Keep plan", role: .cancel) { confirmingCancel = false }
-        } message: {
+            Button("Keep plan", role: .cancel) { planActions.endConfirmation() }
+        } message: { _ in
             Text("No more invoices will be generated. The plan stays in your list, paused. Invoices already created are not affected.")
         }
-        .alert("Delete maintenance plan?", isPresented: $confirmingDelete) {
+        .alert(
+            "Delete maintenance plan?",
+            isPresented: Binding(
+                get: { planActions.isConfirming(.deletePlan) },
+                set: { if !$0 { planActions.endConfirmation() } }
+            ),
+            presenting: planActions.pendingDestructive
+        ) { target in
             Button("Delete", role: .destructive) {
-                if let rule = actionRule, !store.deleteRecurringInvoice(id: rule.id) {
+                if !store.deleteRecurringInvoice(id: target.rule.id) {
                     saveError = "The plan could not be deleted. Nothing was changed."
                 }
-                actionRule = nil
+                planActions.endConfirmation()
             }
-            Button("Keep plan", role: .cancel) { confirmingDelete = false }
-        } message: {
+            Button("Keep plan", role: .cancel) { planActions.endConfirmation() }
+        } message: { _ in
             Text("This removes the plan permanently. Invoices it already generated are not affected.")
         }
         .nativeAnalyticsScreen(.recurringInvoices)

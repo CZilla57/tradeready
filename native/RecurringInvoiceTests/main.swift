@@ -115,5 +115,50 @@ do {
     expect(sequential.newInvoices.isEmpty, "generate-after-pull converges")
 }
 
+// Final review I1: "Cancel plan"/"Delete plan" on the maintenance-plan
+// screen. The confirmation dialog's `isPresented` setter clears the tapped
+// plan when the dialog dismisses (which it does right after a destructive
+// button), so an alert that read that plan always saw nil and silently did
+// nothing. The destructive target is its own state and survives the dismissal.
+do {
+    let tapped = rule(nextDue: "2026-09-01")
+    for kind in [NativeRecurringPlanActionState<Canonical.RecurringInvoice>.DestructiveKind.cancelPlan, .deletePlan] {
+        var state = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
+        state.showActions(for: tapped)
+        expect(state.isDialogPresented && state.isPresentingAnything, "I1 \(kind): the plan actions open")
+        state.requestDestructive(kind)
+        // SwiftUI then dismisses the dialog through its isPresented setter.
+        state.dismissActions()
+        expect(!state.isDialogPresented, "I1 \(kind): the dialog is dismissed")
+        expect(state.isConfirming(kind), "I1 \(kind): the confirmation alert is presented")
+        expect(!state.isConfirming(kind == .cancelPlan ? .deletePlan : .cancelPlan), "I1 \(kind): only its own alert")
+        expect(state.pendingDestructive?.rule.id == tapped.id,
+               "I1 \(kind): the confirm action receives the tapped plan after the dialog dismissed")
+        state.endConfirmation()
+        expect(state.pendingDestructive == nil && !state.isPresentingAnything, "I1 \(kind): the target clears when the alert ends")
+    }
+    // Keep plan: the alert ends without an action; nothing is left presented.
+    var kept = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
+    kept.showActions(for: tapped)
+    kept.requestDestructive(.deletePlan)
+    kept.dismissActions()
+    kept.endConfirmation()
+    expect(!kept.isPresentingAnything, "I1: Keep plan leaves nothing presented")
+    // A destructive request with no open dialog does nothing.
+    var idle = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
+    idle.requestDestructive(.cancelPlan)
+    expect(idle.pendingDestructive == nil, "I1: no plan, no destructive target")
+
+    // The screen drives both alerts from the surviving target, never from the
+    // dialog's plan (which is nil by then).
+    let viewURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("TradeReadyNative/NativeRecurringInvoicesView.swift")
+    let view = (try? String(contentsOf: viewURL, encoding: .utf8)) ?? ""
+    expect(!view.isEmpty, "I1: the plan screen source is readable")
+    expect(!view.contains("if let rule = actionRule"), "I1: no alert reads the dialog's (already cleared) plan")
+    expect(view.contains("NativeRecurringPlanActionState<Canonical.RecurringInvoice>"), "I1: the screen uses the action state")
+    expect(view.contains("presenting: planActions.pendingDestructive"), "I1: the alerts present the destructive target")
+}
+
 print(failures == 0 ? "PASS: native recurring invoice tests" : "FAILED: \(failures) native recurring invoice test(s)")
 if failures != 0 { exit(1) }

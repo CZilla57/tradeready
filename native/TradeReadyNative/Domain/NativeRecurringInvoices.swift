@@ -266,3 +266,46 @@ extension Canonical.RecurringInvoice {
         self.preservation = preservation
     }
 }
+
+/// Final review I1: the maintenance-plan screen's hand-off from the plan
+/// actions dialog to a destructive confirmation ("Cancel plan", "Delete
+/// plan"). SwiftUI clears the dialog's plan through its `isPresented` setter
+/// as the dialog dismisses, right after a destructive button runs, so the
+/// destructive target is held separately: it survives that dismissal and is
+/// what the confirmation alert acts on. Foundation-only (no view policy).
+struct NativeRecurringPlanActionState<Rule> {
+    enum DestructiveKind: Equatable {
+        case cancelPlan
+        case deletePlan
+    }
+
+    struct PendingDestructive {
+        let rule: Rule
+        let kind: DestructiveKind
+    }
+
+    /// The plan whose actions dialog is open.
+    private(set) var actionRule: Rule?
+    /// The plan a destructive action awaits confirmation for.
+    private(set) var pendingDestructive: PendingDestructive?
+
+    var isDialogPresented: Bool { actionRule != nil }
+    var isPresentingAnything: Bool { actionRule != nil || pendingDestructive != nil }
+
+    func isConfirming(_ kind: DestructiveKind) -> Bool { pendingDestructive?.kind == kind }
+
+    mutating func showActions(for rule: Rule) { actionRule = rule }
+
+    /// The dialog's `isPresented` setter and its non-destructive buttons.
+    mutating func dismissActions() { actionRule = nil }
+
+    /// A destructive dialog button: moves the open plan to the confirmation.
+    mutating func requestDestructive(_ kind: DestructiveKind) {
+        guard let rule = actionRule else { return }
+        pendingDestructive = PendingDestructive(rule: rule, kind: kind)
+        actionRule = nil
+    }
+
+    /// The alert's `isPresented` setter, its confirm and its "Keep plan".
+    mutating func endConfirmation() { pendingDestructive = nil }
+}
