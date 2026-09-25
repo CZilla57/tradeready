@@ -1580,6 +1580,13 @@ Native contract (chosen):
 
   Sign-out and deletion keep wiping them through the full scrub. There are no current
   users, so no one loses a key they expect to keep.
+- **Amended by Phase 12 12.00b.2-A (2026-09-25).** While that boundary wipe is pending
+  (§17.2 item 5), the key rows read "Not set" without reading the Keychain and offer no
+  Remove (L286.5a): the key there may be the previous owner's, and "Not set" is what a
+  kind the previous owner never saved reads. The rows cache that state and refresh it on
+  appear, after a save or remove and when a boundary step starts or finishes, never in
+  `body` (L205.g). The boundary wipe also removes the migrated legacy `providerKey` and
+  `geminiKey` fields (L205.e).
 
 ---
 
@@ -2168,7 +2175,17 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
    (`Canonical.SnapshotRepository.BoundaryStep`, the account-scrub marker pattern); while
    it is pending the mirror has no owner and replay is closed; it is retried at launch,
    from `retryAccountScrub` and before an interactive sign-in, and a successful retry
-   reloads timelines. Test: `run-widget-owner-gating`;
+   reloads timelines. Test: `run-widget-owner-gating`.
+   **Amended by Phase 12 12.00b.2-A (2026-09-25):** when a step's file marker cannot be
+   written, the step is also recorded in the native Keychain
+   (`N/NativeAccountBoundaryStepRecord.swift`), so a step that fails as well stays
+   pending across a relaunch (L286.5b); a record that cannot be read at launch keeps the
+   step's gates closed without running it until a retry can read it. A pending step
+   shows a non-blocking "Account cleanup paused" banner whose "Try cleanup again" runs
+   it through `retryAccountScrub`, on both of its branches, and sign-up's immediate
+   session retries it before binding, like sign-in (L286.4). Tests: `run-ai-provider-key`
+   and `run-widget-owner-gating` (every marker × step failure combination, then a
+   relaunch);
 5. the silent AI-key wipe failure (final review 1b): **fixed** in `5f2f397`. The wipe
    tries every kind under a durable `ai-key-wipe-pending` marker and counts and logs a
    failure without key material; while pending the coach reads no client key and no key
@@ -2176,7 +2193,9 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
 6. `deepLinkOwnerWasActive` keyed on O (final review 2): **fixed** in `2e70415`. The
    arrival stamp and the owner-was-active flag fall back to the verified account behind
    pending gates, and the recovery sign-out clears held routes. Test:
-   `run-deep-link-routing`.
+   `run-deep-link-routing`. **Amended by Phase 12 12.00b.2-A (2026-09-25, L286.7):** a
+   stored session rejected at activation also clears the verified binding and every held
+   route; the parked route follows §6.3 (the launch resolution keeps it).
 
 The final review also fixed two findings outside this list: widget/Siri replay now
 enqueues its writes (C1, `2f4ed28`; `run-widget-action-replay`, `run-poor-network`),

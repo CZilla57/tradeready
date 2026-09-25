@@ -492,20 +492,20 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L237.d | Returning-user launch runs `refreshRecurringJobs()` but not `refreshRecurringInvoices()`, while RN runs both | S2 | Open | **12.00b.2**: add the invoice refresh, with a test cross-checked against RN | Open |
 | L267.a | `protectCopiedLegacyFiles` returns silently on a nil enumerator, so the legacy AsyncStorage backup that can hold the G6 residual is never protected | S2 | Open | **12.00b.2**: treat a nil enumerator as a per-file failure (diagnostic plus journal retry); consistent with the G6 policy | Open |
 | L286.1 | Widget/Siri replay markers (`__nativeWidgetStartActionID`/`StopActionID`) sit in session `unknownFields`, are pushed to Supabase inside the job, and RN keeps them forever | S2 | Open | **12.00b.2**: first confirm replay idempotency survives a pull that replaces the job, then strip `__native*` keys from pushed payloads. The test asserts no queued payload carries one | Open |
-| L286.4 | "Try cleanup again" cannot reach a pending boundary step, and `signUp`'s immediate-session branch skips the pre-bind retry | S2 | Open | **12.00b.2**: surface pending boundary steps in the retry affordance, and route `signUp` through the pre-bind retry | Open |
-| L286.5a | `aiProviderKeyIsSaved` ignores the pending AI-key-wipe marker, so Settings can show account B "Saved" for account A's key | S2 | Open | **12.00b.2**: gate it like the advisory reads | Open |
-| L286.5b | If a boundary step's marker write and its wipe both fail, the pending state lives only in memory. After a relaunch the gates reopen over A's AI key or widget data | **S1** | Open | **12.00b.2**: fail closed durably. A step whose marker cannot be written must not let the next owner bind. Add a double-failure-then-relaunch test | Open |
+| L286.4 | "Try cleanup again" cannot reach a pending boundary step, and `signUp`'s immediate-session branch skips the pre-bind retry | S2 | Open | **12.00b.2**: surface pending boundary steps in the retry affordance, and route `signUp` through the pre-bind retry | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
+| L286.5a | `aiProviderKeyIsSaved` ignores the pending AI-key-wipe marker, so Settings can show account B "Saved" for account A's key | S2 | Open | **12.00b.2**: gate it like the advisory reads | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
+| L286.5b | If a boundary step's marker write and its wipe both fail, the pending state lives only in memory. After a relaunch the gates reopen over A's AI key or widget data | **S1** | Open | **12.00b.2**: fail closed durably. A step whose marker cannot be written must not let the next owner bind. Add a double-failure-then-relaunch test | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
 
 ### Rider — S3 fixed inside 12.00b.2 (does not block Stage A) (6)
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
-| L205.a | `canChangeAIProviderKeys` comment omits the switch and pending-wipe guards | S3 | Open | rider (with L286.5a) | Open |
-| L205.e | Switch and recovery exit wipe only the AI key kinds. The migrated `providerKey` Keychain entry survives until sign-out or delete (`clearAccountValues()`); nothing reads it after migration. (triage text corrected by plan ruling R4) | S3 | Open | rider (with L286.5b) | Open |
-| L205.g | `aiProviderKeyState` reads the Keychain synchronously in a SwiftUI `body` | S3 | Open | rider (with L286.5a) | Open |
+| L205.a | `canChangeAIProviderKeys` comment omits the switch and pending-wipe guards | S3 | Open | rider (with L286.5a) | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
+| L205.e | Switch and recovery exit wipe only the AI key kinds. The migrated `providerKey` Keychain entry survives until sign-out or delete (`clearAccountValues()`); nothing reads it after migration. (triage text corrected by plan ruling R4) | S3 | Open | rider (with L286.5b) | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
+| L205.g | `aiProviderKeyState` reads the Keychain synchronously in a SwiftUI `body` | S3 | Open | rider (with L286.5a) | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
 | L286.2 | `requestDestructive()` re-reads the stored `actionRule` instead of the dialog's `rule` (the I1 failure class) | S3 | Open | rider (take the rule from the call site) | Open |
-| L286.3 | A stale comment says `useAnotherAccount` does not hold `authenticationOperationInFlight` | S3 | Open | rider | Open |
-| L286.7 | Session-rejected reactivation keeps `verifiedAccountBinding` and deep-link route state (fail-closed today) | S3 | Open | rider (with L286.4) | Open |
+| L286.3 | A stale comment says `useAnotherAccount` does not hold `authenticationOperationInFlight` | S3 | Open | rider | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
+| L286.7 | Session-rejected reactivation keeps `verifiedAccountBinding` and deep-link route state (fail-closed today) | S3 | Open | rider (with L286.4) | Fixed — 12.00b.2-A (`fix(native): phase 12.00b.2 - account-boundary steps survive double failure (L286.5b, L286.4, L286.5a)`) |
 
 ### Doc batch — fixed in 12.00's docs-only commit (11)
 
