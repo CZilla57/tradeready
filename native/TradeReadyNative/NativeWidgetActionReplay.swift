@@ -673,6 +673,9 @@ enum NativeWidgetActionClaimError: Error, Equatable {
     case conflictingClaims
     case writeFailed
     case verificationFailed
+    /// 12.00b.2-C fix round 1 (I2b): a claim path that is a regular file
+    /// but cannot be read. Its bytes cannot be kept, so it is never removed.
+    case unreadableClaim
 }
 
 struct NativeWidgetActionClaim: Codable, Equatable {
@@ -736,7 +739,8 @@ enum NativeWidgetActionQuarantineReason: String, Codable, Equatable {
 /// the whole queue (`malformedQueue`); a JSON list of the set-aside entries
 /// with their exact bytes (a per-entry reason, one per entry in
 /// `entryReasons`, L130); or the exact claim file (`invalidClaim`,
-/// `conflictingClaims`, L131).
+/// `conflictingClaims`, L131). A claim path that is not a regular file keeps
+/// no bytes (`sourceByteCount` 0, fix round 1, I2a).
 struct NativeWidgetActionQuarantine: Codable, Equatable {
     static let currentSchemaVersion = 1
 
@@ -765,9 +769,23 @@ struct NativeWidgetActionQuarantine: Codable, Equatable {
 struct NativeWidgetActionClaimTransport {
     static let claimFilePrefix = "claim-"
     static let quarantineFilePrefix = "quarantine-"
-    /// C8: at most this many quarantined queues are kept per owner; the oldest
-    /// is evicted first.
-    static let maximumQuarantineFilesPerOwner = 4
+    /// Retention (12.00b.2-C fix round 1, I1). Only set-aside-entry records
+    /// (`entryReasons != nil`, L130) are ever evicted: at most this many per
+    /// owner, the oldest first. They hold entries that can never apply
+    /// (malformed, invalid, or a different entry under an applied id).
+    ///
+    /// Every other record may be the only copy of valid actions and is never
+    /// evicted: a whole queue (`malformedQueue`, and 11.x `tooManyActions`)
+    /// and a claim file (`invalidClaim`, `conflictingClaims`). That pool is
+    /// bounded without eviction: only the app writes claim files (this
+    /// app-private directory, one claim at a time under the §4.2 lock, and a
+    /// claim is returned before another is taken), and every native writer
+    /// writes a JSON list and refuses to overwrite a queue that is not one
+    /// (§4.3, `WidgetIntentEngine`), so each such record needs a file or queue
+    /// made outside the protocol, and setting it aside removes that source.
+    /// Each record keeps at most `maximumQuarantinedBytes`, and the account
+    /// scrub removes the whole directory.
+    static let maximumSetAsideEntryRecordsPerOwner = 4
     static let maximumQuarantinedBytes = 1 << 20
 
     let queue: any NativeWidgetActionQueueBacking
@@ -880,12 +898,18 @@ struct NativeWidgetActionClaimTransport {
     ///    another), so a pair came from outside it (a restore, a copy, a
     ///    version skew). Nothing orders them, and either may already be
     ///    applied, so applying one or both could reorder timers or repeat an
-    ///    action. Setting both aside applies nothing twice and loses nothing.
+    ///    action. Setting both aside applies nothing twice, and each claim's
+    ///    bytes stay in a record that retention never evicts (fix round 1, I1).
     /// Each file is read once; those bytes decide its validity and are what
     /// the record keeps (up to `maximumQuarantinedBytes`). The record is
-    /// verified before the claim file is removed. A claim file that cannot be
-    /// read fails the pass (`unavailable`) and nothing is removed: its bytes
-    /// could not be kept, and the read may succeed later (data protection).
+    /// verified before the claim file is removed.
+    ///
+    /// Fix round 1 (I2): a claim path that is not a regular file (a
+    /// directory, a symbolic link) has no bytes to keep, so it is removed
+    /// behind a count-only `invalidClaim` record. A regular file that cannot
+    /// be read fails the pass closed (`unreadableClaim`, counted by AppStore)
+    /// and nothing is removed: its bytes could not be kept, and the read may
+    /// succeed later (data protection).
     /// Returns nil, touching nothing, when the claims load cleanly now.
     func quarantineUnusableClaims(verifiedAccountBinding: String) throws -> NativeWidgetActionQuarantineReason? {
         try Self.requireBinding(verifiedAccountBinding)
@@ -895,14 +919,25 @@ struct NativeWidgetActionClaimTransport {
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
             var valid: [(url: URL, bytes: Data)] = []
             var invalid: [(url: URL, bytes: Data)] = []
+            var notRegular: [URL] = []
             for candidate in candidates {
+                guard let kind = try? candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else {
+                    throw NativeWidgetActionClaimError.unreadableClaim
+                }
+                guard kind.isSymbolicLink != true, kind.isRegularFile == true else {
+                    notRegular.append(candidate)
+                    continue
+                }
                 let bytes: Data
-                do { bytes = try Data(contentsOf: candidate) } catch { throw NativeWidgetActionClaimError.unavailable }
+                do { bytes = try Data(contentsOf: candidate) } catch { throw NativeWidgetActionClaimError.unreadableClaim }
                 if (try? validatedClaim(bytes, at: candidate, accountBinding: verifiedAccountBinding)) != nil {
                     valid.append((candidate, bytes))
                 } else {
                     invalid.append((candidate, bytes))
                 }
+            }
+            for path in notRegular {
+                try setAsideClaimPath(path, accountBinding: verifiedAccountBinding)
             }
             for file in invalid {
                 try setAsideClaimFile(file.url, bytes: file.bytes, reason: .invalidClaim, accountBinding: verifiedAccountBinding)
@@ -915,7 +950,7 @@ struct NativeWidgetActionClaimTransport {
                 }
                 return .conflictingClaims
             }
-            return invalid.isEmpty ? nil : .invalidClaim
+            return invalid.isEmpty && notRegular.isEmpty ? nil : .invalidClaim
         }
     }
 
@@ -991,12 +1026,16 @@ struct NativeWidgetActionClaimTransport {
         let destination = claimDirectory.appendingPathComponent(
             "\(Self.quarantineFilePrefix)\(record.accountBinding)-\(record.sourceDigest).json"
         )
-        // Bounded retention: evict this owner's oldest records first.
-        let existing = try files(prefix: Self.quarantineFilePrefix + record.accountBinding + "-")
-            .filter { $0.lastPathComponent != destination.lastPathComponent }
-            .sorted { Self.modificationDate($0) < Self.modificationDate($1) }
-        for url in existing.prefix(max(0, existing.count - (Self.maximumQuarantineFilesPerOwner - 1))) {
-            do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
+        // Bounded retention (fix round 1, I1): a set-aside-entry record evicts
+        // only this owner's oldest set-aside-entry records. Whole-queue and
+        // claim-file records are never evicted (`maximumSetAsideEntryRecordsPerOwner`).
+        if record.entryReasons != nil {
+            let entryRecords = try files(prefix: Self.quarantineFilePrefix + record.accountBinding + "-")
+                .filter { $0.lastPathComponent != destination.lastPathComponent && Self.isSetAsideEntryRecord($0) }
+                .sorted { (Self.modificationDate($0), $0.lastPathComponent) < (Self.modificationDate($1), $1.lastPathComponent) }
+            for url in entryRecords.prefix(max(0, entryRecords.count - (Self.maximumSetAsideEntryRecordsPerOwner - 1))) {
+                do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
+            }
         }
         let bytes = try Self.encode(record)
         // 12.00b.2-C: the name is the digest of the bytes set aside, so an
@@ -1027,6 +1066,27 @@ struct NativeWidgetActionClaimTransport {
         ))
         do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
         guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw NativeWidgetActionClaimError.verificationFailed
+        }
+    }
+
+    /// Fix round 1 (I2a): a claim path that is not a regular file has no
+    /// bytes to keep. A count-only `invalidClaim` record is written (no bytes,
+    /// byte count 0; its digest is of the file name, so a retry rewrites the
+    /// same record), then the path itself is removed (a directory with its
+    /// contents, a symbolic link but never its target) and verified gone.
+    /// Called inside the lock.
+    private func setAsideClaimPath(_ url: URL, accountBinding: String) throws {
+        try persist(NativeWidgetActionQuarantine(
+            schemaVersion: NativeWidgetActionQuarantine.currentSchemaVersion,
+            accountBinding: accountBinding,
+            reason: .invalidClaim,
+            sourceDigest: Self.digest(Data(url.lastPathComponent.utf8)),
+            sourceByteCount: 0,
+            sourceBytes: nil
+        ))
+        do { try FileManager.default.removeItem(at: url) } catch { throw NativeWidgetActionClaimError.writeFailed }
+        guard (try? FileManager.default.attributesOfItem(atPath: url.path)) == nil else {
             throw NativeWidgetActionClaimError.verificationFailed
         }
     }
@@ -1196,6 +1256,15 @@ struct NativeWidgetActionClaimTransport {
         else { throw NativeWidgetActionBatchError.invalidAccountBinding }
     }
 
+    /// Fix round 1 (I1): only a record that decodes and lists per-entry
+    /// reasons can be evicted. One that cannot be read or decoded is kept.
+    private static func isSetAsideEntryRecord(_ url: URL) -> Bool {
+        guard let bytes = try? Data(contentsOf: url),
+              let record = try? JSONDecoder().decode(NativeWidgetActionQuarantine.self, from: bytes)
+        else { return false }
+        return record.entryReasons != nil
+    }
+
     private static func modificationDate(_ url: URL) -> Date {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
@@ -1235,9 +1304,14 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
     /// boundary reset so the failure stays observable.
     private(set) var accountSwitchScrubFailureCount = 0
     /// 12.00b.2-C (L130): owned entries set aside while their batch applied.
+    /// Counted from `.committed`, which `replayNext` returns only after the
+    /// claim is acknowledged, so a retried claim counts its entries once.
     private(set) var setAsideActionCount = 0
     /// 12.00b.2-C (L131): replay results that set aside unusable claim files.
     private(set) var quarantinedClaimCount = 0
+    /// 12.00b.2-C fix round 1 (I2b): replay passes that failed closed on a
+    /// claim file that is a regular file but cannot be read.
+    private(set) var unreadableClaimCount = 0
 
     mutating func recordOwnerDropped(_ count: Int) {
         guard count > 0 else { return }
@@ -1258,6 +1332,10 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
         setAsideActionCount = min(Self.maximumCount, setAsideActionCount + min(count, Self.maximumCount))
     }
 
+    mutating func recordUnreadableClaim() {
+        unreadableClaimCount = min(Self.maximumCount, unreadableClaimCount + 1)
+    }
+
     mutating func recordAccountSwitchScrubFailure() {
         accountSwitchScrubFailureCount = min(Self.maximumCount, accountSwitchScrubFailureCount + 1)
     }
@@ -1268,6 +1346,7 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
         quarantinedQueueCount = 0
         setAsideActionCount = 0
         quarantinedClaimCount = 0
+        unreadableClaimCount = 0
     }
 }
 

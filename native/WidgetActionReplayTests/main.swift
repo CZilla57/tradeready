@@ -574,6 +574,31 @@ private func testPartialQuarantine(
         let recovered = counts(try crash.replay(binding, base: sourceSnapshot))
         expect(recovered?.changed == 512 && entryIDs(crash.queue.value) == (512..<600).map { "e\($0)" },
                "L130 oversize: the recovered claim trims exactly its prefix and applies once")
+        // Fix round 1 (Minor 3): a writer appends after the prefix claim is
+        // written but before the queue is trimmed. The appended entry stays
+        // queued, with its exact bytes, behind the rest, and is claimed and
+        // applied exactly once, later.
+        let late = ReplayHarness(root, "partial-oversize-late", raw600)
+        late.queue.ignoresWrites = true
+        do {
+            _ = try late.transport.claim(verifiedAccountBinding: binding)
+            expect(false, "sanity: an unverified queue trim fails the claim")
+        } catch NativeWidgetActionClaimError.verificationFailed {}
+        late.queue.ignoresWrites = false
+        let appended = expenseEntry(tag, "late-1")
+        late.queue.value = String(raw600.dropLast(2)) + ", " + appended + " ]"
+        let lateFirst = counts(try late.replay(binding, base: sourceSnapshot))
+        expect(lateFirst?.changed == 512 && entryIDs(late.queue.value) == (512..<600).map { "e\($0)" } + ["late-1"]
+               && late.queue.value?.contains(appended) == true,
+               "L130 oversize: the recovered claim trims only its prefix; the appended entry stays queued behind the rest")
+        let lateSecond = counts(try late.replay(binding, base: sourceSnapshot))
+        expect(lateSecond?.changed == 89 && late.queue.value == nil
+               && late.saved?.payload.expenses?.filter { $0.id == "e_siri_late-1" }.count == 1
+               && late.saved?.payload.expenses?.count == 601,
+               "L130 oversize: the appended entry is claimed and applied exactly once, by the next claim")
+        if case .nothingPending = try late.replay(binding, base: sourceSnapshot) {} else {
+            expect(false, "L130 oversize: nothing is left to claim a second time")
+        }
 
     }
     section("testPartialQuarantine 4") {
@@ -630,6 +655,51 @@ private func testPartialQuarantine(
         expect(pieces == [#"{"a":"x,]}\"y","b":[1,{"c":"]"}]}"#, "-1.5e3", #""s\\""#, "null", "true", "[[]]", "{}"],
                "L130: each entry's exact bytes are recovered from the list (got \(String(describing: pieces)))")
         expect(NativeWidgetActionBatchPlanner.rawEntries(of: Data("[]".utf8)) == [], "L130: an empty list has no entries")
+        // Fix round 1 (Minor 3): inputs the splitter must not split. It returns
+        // nil, and its callers fall back to canonical bytes or reject.
+        let notSplit: [(String, String)] = [
+            ("unbalanced", #"[{"a":1}"#), ("unbalanced nested", "[1,[2]"), ("extra close", "[1]]"),
+            ("trailing comma", "[1,2,]"), ("empty entry", "[1,,2]"), ("leading BOM", "\u{FEFF}[1,2]"),
+            ("trailing text", "[1] x"),
+        ]
+        for (label, raw) in notSplit {
+            expect(NativeWidgetActionBatchPlanner.rawEntries(of: Data(raw.utf8)) == nil,
+                   "L130: the splitter does not split \(label) input")
+        }
+        let long = (0..<513).map { expenseEntry(tag, "p\($0)", amount: "1") }
+        let firstValues = try JSONDecoder().decode(
+            [Canonical.JSONValue].self, from: Data(("[" + long.prefix(512).joined(separator: ",") + "]").utf8)
+        )
+        let decoderOnly: [(String, String)] = [
+            ("trailing comma", "[" + long.joined(separator: ",") + ",]"),
+            ("leading BOM", "\u{FEFF}[" + long.joined(separator: ",") + "]"),
+        ]
+        for (label, raw) in decoderOnly {
+            if (try? JSONDecoder().decode([Canonical.JSONValue].self, from: Data(raw.utf8))) != nil {
+                let prefix = try NativeWidgetActionBatchPlanner.claimablePrefix(of: raw)
+                let prefixValues = try? JSONDecoder().decode([Canonical.JSONValue].self, from: Data(prefix.utf8))
+                expect(prefixValues == firstValues,
+                       "L130: a long \(label) list the decoder accepts is claimed as canonical bytes of its first 512 entries")
+            } else {
+                do {
+                    _ = try NativeWidgetActionBatchPlanner.claimablePrefix(of: raw)
+                    expect(false, "L130: a long \(label) list the decoder rejects is not a list")
+                } catch NativeWidgetActionBatchError.malformedQueue {}
+            }
+        }
+        do {
+            _ = try NativeWidgetActionBatchPlanner.claimablePrefix(of: "[" + long.joined(separator: ","))
+            expect(false, "L130: a long unbalanced list is not a list (the whole queue is set aside)")
+        } catch NativeWidgetActionBatchError.malformedQueue {}
+        // End to end: the canonical fallback loses and repeats nothing.
+        let fallback = ReplayHarness(root, "partial-fallback", "[" + long.joined(separator: ",") + ",]")
+        if (try? JSONDecoder().decode([Canonical.JSONValue].self, from: Data((fallback.queue.value ?? "").utf8))) != nil {
+            let fallbackFirst = counts(try fallback.replay(binding, base: sourceSnapshot))
+            let fallbackSecond = counts(try fallback.replay(binding, base: sourceSnapshot))
+            expect(fallbackFirst?.changed == 512 && fallbackSecond?.changed == 1 && fallback.queue.value == nil
+                   && fallback.saved?.payload.expenses?.map(\.id) == (0..<513).map { "e_siri_p\($0)" },
+                   "L130: a long list the splitter cannot split still applies every entry once, in order")
+        }
     }
 }
 
@@ -665,19 +735,69 @@ private func testClaimQuarantine(
                "L131: replay continues with the next claim")
 
     }
-    section("testClaimQuarantine 2") {
-        // 2. A claim file that cannot be read is never removed (nothing to keep).
-        let unreadable = ReplayHarness(root, "claim-unreadable", "[" + expenseEntry(tag, "u-1") + "]")
-        let unreadablePath = unreadable.claims.appendingPathComponent("claim-\(binding)-\(String(repeating: "0", count: 64)).json")
-        try FileManager.default.createDirectory(at: unreadablePath, withIntermediateDirectories: true)
-        do {
-            _ = try unreadable.replay(binding, base: sourceSnapshot)
-            expect(false, "L131: an unreadable claim fails this pass")
-        } catch NativeWidgetActionClaimError.unavailable {
-            expect(FileManager.default.fileExists(atPath: unreadablePath.path) && unreadable.records(binding).isEmpty
-                   && entryIDs(unreadable.queue.value) == ["u-1"],
-                   "L131: an unreadable claim is left in place (its bytes could not be kept) and the queue is untouched")
+    section("testClaimQuarantine 2a") {
+        // 2a. (Fix round 1, I2a) A claim path that is not a regular file (a
+        //     directory, a symbolic link) has no bytes to keep: it is removed,
+        //     a count-only invalidClaim record is written, and replay continues.
+        let makers: [(String, (URL) throws -> Void)] = [
+            ("directory", { url in
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                try Data("inner".utf8).write(to: url.appendingPathComponent("inner"))
+            }),
+            ("dangling symbolic link", { url in
+                try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: "nowhere")
+            }),
+        ]
+        for (label, make) in makers {
+            let odd = ReplayHarness(root, "claim-not-regular-\(label.count)", "[" + expenseEntry(tag, "u-1") + "]")
+            try FileManager.default.createDirectory(at: odd.claims, withIntermediateDirectories: true)
+            let oddPath = odd.claims.appendingPathComponent("claim-\(binding)-\(String(repeating: "0", count: 64)).json")
+            try make(oddPath)
+            let oddRun = try odd.replay(binding, base: sourceSnapshot)
+            expect(quarantineReason(oddRun) == .invalidClaim,
+                   "L131 \(label): a claim path that is not a regular file is set aside (got \(String(describing: oddRun)))")
+            expect((try? FileManager.default.attributesOfItem(atPath: oddPath.path)) == nil,
+                   "L131 \(label): it is removed")
+            let oddRecords = odd.records(binding)
+            expect(oddRecords.count == 1 && oddRecords.first?.reason == .invalidClaim && oddRecords.first?.sourceBytes == nil
+                   && oddRecords.first?.sourceByteCount == 0 && oddRecords.first?.entryReasons == nil
+                   && oddRecords.first?.accountBinding == binding,
+                   "L131 \(label): a count-only, owner-scoped invalidClaim record is kept (there are no bytes to keep)")
+            expect(odd.saved == nil && entryIDs(odd.queue.value) == ["u-1"],
+                   "L131 \(label): setting it aside applies nothing and leaves the queue untouched")
+            let oddNext = counts(try odd.replay(binding, base: sourceSnapshot))
+            expect(oddNext?.changed == 1 && odd.saved?.payload.expenses?.map(\.id) == ["e_siri_u-1"],
+                   "L131 \(label): replay continues")
         }
+
+    }
+    section("testClaimQuarantine 2b") {
+        // 2b. (Fix round 1, I2b) A regular claim file that cannot be read still
+        //     fails the pass closed: it is never removed (its bytes could not be
+        //     kept) and nothing else changes; AppStore counts each such pass.
+        //     Once it is readable, it replays.
+        let locked = ReplayHarness(root, "claim-unreadable", "[" + expenseEntry(tag, "u-2") + "]")
+        _ = try locked.transport.claim(verifiedAccountBinding: binding)
+        guard let lockedFile = locked.files("claim-").first else { return expect(false, "sanity: a claim to lock") }
+        locked.queue.value = "[" + expenseEntry(tag, "u-3") + "]"
+        chmod(lockedFile.path, 0)
+        defer { chmod(lockedFile.path, 0o600) }
+        guard (try? Data(contentsOf: lockedFile)) == nil else {
+            return print("note: this user can read a mode-0 file; testClaimQuarantine 2b skipped")
+        }
+        do {
+            _ = try locked.replay(binding, base: sourceSnapshot)
+            expect(false, "L131: an unreadable claim fails this pass")
+        } catch NativeWidgetActionClaimError.unreadableClaim {}
+        expect(FileManager.default.fileExists(atPath: lockedFile.path) && locked.records(binding).isEmpty
+               && entryIDs(locked.queue.value) == ["u-3"] && locked.saved == nil,
+               "L131: an unreadable regular claim is left in place, and nothing is set aside, applied or dequeued")
+        chmod(lockedFile.path, 0o600)
+        let lockedFirst = counts(try locked.replay(binding, base: sourceSnapshot))
+        let lockedSecond = counts(try locked.replay(binding, base: sourceSnapshot))
+        expect(lockedFirst?.changed == 1 && lockedSecond?.changed == 1
+               && locked.saved?.payload.expenses?.map(\.id) == ["e_siri_u-2", "e_siri_u-3"],
+               "L131: once readable, the claim replays, then the queue behind it")
 
     }
     section("testClaimQuarantine 3") {
@@ -738,5 +858,62 @@ private func testClaimQuarantine(
             expect(false, "L131: another owner's claim is discarded, not quarantined")
         }
         expect(foreign.files("").isEmpty, "L131: nothing of the other owner's remains")
+    }
+    section("testClaimQuarantine 6") {
+        // 6. (Fix round 1, I1) Retention never deletes the only copy of valid
+        //    actions. (a) One pass that sets aside more claim files than the
+        //    set-aside-entry limit keeps every one of its records.
+        let limit = NativeWidgetActionClaimTransport.maximumSetAsideEntryRecordsPerOwner
+        let many = ReplayHarness(root, "claim-many-invalid", nil)
+        try FileManager.default.createDirectory(at: many.claims, withIntermediateDirectories: true)
+        let garbage = (0..<(limit + 2)).map { Data("garbage-\($0)".utf8) }
+        for (index, bytes) in garbage.enumerated() {
+            try bytes.write(to: many.claims.appendingPathComponent(
+                "claim-\(binding)-\(String(repeating: String(index), count: 64)).json"
+            ))
+        }
+        let manyRun = try many.replay(binding, base: sourceSnapshot)
+        expect(quarantineReason(manyRun) == .invalidClaim, "sanity: the invalid claims are set aside")
+        let manyRecords = many.records(binding)
+        expect(manyRecords.count == limit + 2 && Set(manyRecords.compactMap(\.sourceBytes)) == Set(garbage)
+               && many.files("claim-").isEmpty,
+               "L131 retention: all \(limit + 2) claim-file records of one pass are kept (got \(manyRecords.count))")
+
+        // (b) Conflicting-claim records and a whole-queue record survive more
+        //     later set-aside batches than the limit; only set-aside-entry
+        //     records are evicted, oldest first.
+        let keep = ReplayHarness(root, "claim-retention", "[" + expenseEntry(tag, "k-a") + "]")
+        _ = try keep.transport.claim(verifiedAccountBinding: binding)
+        let second = ReplayHarness(root, "claim-retention-other", "[" + expenseEntry(tag, "k-b") + "]")
+        _ = try second.transport.claim(verifiedAccountBinding: binding)
+        guard let secondFile = second.files("claim-").first else { return expect(false, "sanity: a second claim") }
+        try FileManager.default.moveItem(at: secondFile, to: keep.claims.appendingPathComponent(secondFile.lastPathComponent))
+        let conflictBytes = Set(try keep.files("claim-").map { try Data(contentsOf: $0) })
+        keep.queue.value = nil
+        let conflictRun = try keep.replay(binding, base: sourceSnapshot)
+        expect(quarantineReason(conflictRun) == .conflictingClaims, "sanity: the conflicting claims are set aside")
+        keep.queue.value = "{not json"
+        let wholeRun = try keep.replay(binding, base: sourceSnapshot)
+        expect(quarantineReason(wholeRun) == .malformedQueue, "sanity: a whole queue is set aside")
+        var badEntries: [String] = []
+        for batch in 0..<(limit + 2) {
+            Thread.sleep(forTimeInterval: 0.02) // distinct modification times
+            let bad = expenseEntry(tag, "bad-\(batch)", amount: "-1")
+            badEntries.append(bad)
+            keep.queue.value = "[" + expenseEntry(tag, "ok-\(batch)") + "," + bad + "]"
+            let run = counts(try keep.replay(binding, base: sourceSnapshot))
+            expect(run?.changed == 1 && run?.setAside == 1, "sanity: batch \(batch) applies 1 and sets 1 aside")
+        }
+        let kept = keep.records(binding)
+        expect(Set(kept.filter { $0.reason == .conflictingClaims }.compactMap(\.sourceBytes)) == conflictBytes
+               && conflictBytes.count == 2,
+               "L131 retention: both conflictingClaims records survive \(limit + 2) later set-aside batches")
+        expect(kept.contains { $0.reason == .malformedQueue && $0.sourceBytes == Data("{not json".utf8) },
+               "L130 retention: the whole-queue record survives them too")
+        let keptEntryBytes = Set(kept.filter { $0.entryReasons != nil }.compactMap(\.sourceBytes))
+        expect(keptEntryBytes == Set(badEntries.suffix(limit).map { Data(("[" + $0 + "]").utf8) }),
+               "L130 retention: only set-aside-entry records are evicted, oldest first (the newest \(limit) are kept)")
+        expect(kept.count == 2 + 1 + limit,
+               "L130 retention: 2 claim-file + 1 whole-queue + \(limit) entry records (got \(kept.count))")
     }
 }

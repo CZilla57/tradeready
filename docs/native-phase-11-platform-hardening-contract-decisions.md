@@ -598,8 +598,8 @@ be applied is set aside; everything else replays. Sources: `NativeWidgetActionBa
   exactly the same action (same sorted-key digest) is skipped, not set aside: it is the
   writer's idempotent re-append (§4.3), and the idempotency markers would ignore it
   anyway. A later entry that differs is set aside: it can never apply under that id,
-  and keeping its bytes loses nothing. An entry that is itself set aside does not take
-  its id.
+  so setting it aside (bytes kept) loses no action. An entry that is itself set aside
+  does not take its id.
 - **More than 512 entries.** A claim takes the first 512 entries, each with its exact
   bytes (`NativeWidgetActionBatchPlanner.claimablePrefix`). Removing the claimed prefix
   leaves the rest in the shared queue, in order and with their exact bytes (canonical
@@ -616,13 +616,23 @@ be applied is set aside; everything else replays. Sources: `NativeWidgetActionBa
   (one writer under the §4.2 lock, and a claim is returned before another is taken),
   so a pair comes from outside it: a restore, a copy or a version skew. Nothing orders
   them and either may already be applied, so applying one or both could reorder timers
-  or repeat an action. Setting both aside applies nothing twice and loses nothing. An
-  invalid claim beside one valid claim: only the invalid one is set aside, and the
-  valid one then replays. A claim file that cannot be read is left in place and the
-  pass fails as before ("still safely queued"): its bytes could not be kept, and the
-  read may succeed later (data protection). Each record is verified before its claim
-  file is removed. Another owner's claim is still discarded unread (§4.5). The pass
-  continues with the next claim.
+  or repeat an action. Setting both aside applies nothing twice, and each claim's
+  exact bytes stay in a record that retention never evicts (see Bounds). An invalid
+  claim beside one valid claim: only the invalid one is set aside, and the valid one
+  then replays. Each record is verified before its claim file is removed. Another
+  owner's claim is still discarded unread (§4.5). The pass continues with the next
+  claim.
+- **Unreadable claim paths (fix round 1, 2026-09-25).** A claim path that is not a
+  regular file (a directory, a symbolic link: `isRegularFileKey`) has no bytes to keep:
+  it is removed (a link, never its target) behind a count-only `invalidClaim` record
+  (`sourceBytes` nil, `sourceByteCount` 0, digest of the file name), and the pass
+  continues. **Remaining behavior:** a regular claim file that cannot be read still
+  fails the pass closed and is left in place, because its bytes could not be kept and
+  the read may succeed later (data protection). Each such pass is counted
+  (`unreadableClaimCount`) and logs one fixed, payload-free line
+  (`TradeReadyWidgetReplay stage=unreadable-claim`), with "Widget actions are still
+  safely queued and will be retried." Replay for that owner waits until the file is
+  readable; the writers keep queueing up to their 512-entry limit (§4.3).
 - **At most once.** A valid action is applied only from a claim, and the claim file is
   removed only after the canonical save, the outbound enqueue and the set-aside record
   (all verified). A crash before removal leaves the claim; the retry applies the same
@@ -632,16 +642,30 @@ be applied is set aside; everything else replays. Sources: `NativeWidgetActionBa
   of the set-aside bytes, so those bytes are the same). A set-aside claim is never
   applied. A long queue is claimed in disjoint prefixes, and the prefix is removed from
   the queue by value, so no entry is claimed twice.
-- **Bounds.** The per-owner limit of 4 records (oldest evicted) and the 1 MiB byte
-  limit apply to every record: whole queue, set-aside entries and claim files.
+- **Bounds (fix round 1, I1).** Retention never deletes a record that may hold the
+  only copy of valid actions. Only set-aside-entry records (`entryReasons` present)
+  are evicted: at most 4 per owner, the oldest first. They hold entries that can
+  never apply. Whole-queue records (`malformedQueue`, 11.x `tooManyActions`) and
+  claim-file records (`invalidClaim`, `conflictingClaims`) are never evicted, not by
+  entry records and not by each other, including when one pass writes several. That
+  pool is bounded without eviction: only the app writes claim files (app-private
+  storage, one claim at a time under the §4.2 lock), and every native writer writes
+  a JSON list and refuses to overwrite a queue that is not one (§4.3), so each such
+  record needs a file or queue made outside the protocol, and setting it aside
+  removes that source. The account scrub removes all records. The 1 MiB byte limit
+  still applies to every record (above it, digest and size only, as since 11.05).
 - **Message and diagnostics.** A message appears only when something was set aside.
   Entries set aside while their batch applied: "1 widget or Siri action couldn't be
   applied and was set aside." or "N widget or Siri actions couldn't be applied and were
   set aside.", counting the whole pass. A whole queue or an invalid claim keeps "Some
   widget or Siri actions couldn't be read and were set aside."; conflicting claims show
   "Some widget or Siri actions couldn't be applied and were set aside." These take
-  precedence within a pass. Counts only, reset at an account boundary:
-  `setAsideActionCount`, `quarantinedQueueCount`, `quarantinedClaimCount`.
+  precedence within a pass, also over a later "Kept N newer widget action(s)…" result
+  or "still safely queued" failure in the same pass (fix round 1), so the one-time
+  message is not overwritten. Counts only, reset at an account boundary:
+  `setAsideActionCount` (counted from a result returned only after the claim is
+  acknowledged, so a retried claim counts once), `quarantinedQueueCount`,
+  `quarantinedClaimCount`, `unreadableClaimCount`.
 - **Not changed.** Owner gating (§4.5, the replay binding), the idempotency markers,
   the 8-claim bound per activation, and the retention of unsupported future types (a
   claim holding one is kept whole, its set-aside entries included, until a compatible

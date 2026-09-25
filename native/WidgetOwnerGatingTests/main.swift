@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -789,10 +790,16 @@ private func testQuarantine() throws {
         .quarantinedQueues(accountBinding: bindingB)
     expect(manyKept.isEmpty, "…and no quarantine file is written")
 
-    // Bounded retention: at most 4 records per owner, oldest evicted (2 whole
-    // queues and 3 set-aside entries were recorded above).
-    expectEqual(try transport(MemoryQueue()).quarantinedQueues(accountBinding: bindingB).count,
-                NativeWidgetActionClaimTransport.maximumQuarantineFilesPerOwner, "quarantine retention is bounded per owner")
+    // Bounded retention (12.00b.2-C fix round 1, I1): 2 whole queues and 3
+    // set-aside entries were recorded above. A whole-queue record may hold
+    // the only copy of valid actions, so entry records never evict it; the
+    // entry records have their own per-owner limit.
+    let retained = try transport(MemoryQueue()).quarantinedQueues(accountBinding: bindingB)
+    expectEqual(retained.filter { $0.entryReasons == nil }.count, 2,
+                "both whole-queue records are kept: set-aside entries never evict them")
+    expectEqual(retained.filter { $0.entryReasons != nil }.count, 3,
+                "the 3 set-aside-entry records are within their own limit")
+    expect(3 <= NativeWidgetActionClaimTransport.maximumSetAsideEntryRecordsPerOwner, "sanity: the entry-record limit")
 
     // Oversized: digest and size only, never unbounded bytes.
     let huge = MemoryQueue("[" + String(repeating: " ", count: NativeWidgetActionClaimTransport.maximumQuarantinedBytes) + "x")
@@ -965,6 +972,88 @@ private func testQuarantineInAppStore() async throws {
     store.testReplayWidgetActions()
     expect(suite.queue == nil, "…and the next pass claims it")
     expectEqual(try workspace.load()?.payload.expenses?.contains { $0.id == "e_siri_busy-1" }, true, "…and applies it")
+    // Fix round 1 (Minor 1): within one pass the one-time set-aside message
+    // wins over a later retained-unsupported result.
+    var withFuture = (0..<513).map { action("F\($0)", "expense_log", tag: tagB, expenseFields) }
+    withFuture[5] = action("F5", "expense_log", tag: tagB, ["date": "2026-08-03", "amount": -1])
+    withFuture[512] = action("F512", "future_action", tag: tagB)
+    suite.defaults.set(queueJSON(withFuture), forKey: WidgetAppGroup.actionsKey)
+    store.migrationMessage = nil
+    let setAsideBeforeFuture = store.widgetActionReplayDiagnostics.setAsideActionCount
+    store.testReplayWidgetActions()
+    expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.setAsideMessage(actionCount: 1),
+                "M1: the set-aside message wins over a retained-unsupported result later in the same pass")
+    expectEqual(store.widgetActionReplayDiagnostics.setAsideActionCount, setAsideBeforeFuture + 1, "…and the entry is counted")
+    // The retained claim waits for a compatible update; clear it for what follows.
+    for name in workspace.claimFiles() where name.hasPrefix("claim-") {
+        try FileManager.default.removeItem(at: workspace.claims.appendingPathComponent(name))
+    }
+
+    // Fix round 1 (Minor 1, Minor 2): the set-aside message also wins over a
+    // failure later in the same pass (here the second claim's set-aside
+    // record cannot be written, so it is not acknowledged), and the retried
+    // claim counts its set-aside entry once.
+    var withBlocked = (0..<514).map { action("G\($0)", "expense_log", tag: tagB, expenseFields) }
+    withBlocked[7] = action("G7", "expense_log", tag: tagB, ["date": "2026-08-03", "amount": -1])
+    withBlocked[513] = action("G513", "expense_log", tag: tagB, ["date": "2026-08-03", "amount": -2])
+    let blockedRaw = queueJSON(withBlocked)
+    guard let blockedEntries = NativeWidgetActionBatchPlanner.rawEntries(of: Data(blockedRaw.utf8)),
+          blockedEntries.count == 514 else { return expect(false, "sanity: the queue splits into its entries") }
+    let blockedRecordBytes = NativeWidgetActionBatchPlanner.joinedList([blockedEntries[513]])
+    let blockedDigest = SHA256.hash(data: blockedRecordBytes).map { String(format: "%02x", $0) }.joined()
+    let blockedRecord = workspace.claims.appendingPathComponent("quarantine-\(bindingB)-\(blockedDigest).json")
+    try FileManager.default.createDirectory(at: blockedRecord, withIntermediateDirectories: true)
+    suite.defaults.set(blockedRaw, forKey: WidgetAppGroup.actionsKey)
+    store.migrationMessage = nil
+    let setAsideBeforeBlocked = store.widgetActionReplayDiagnostics.setAsideActionCount
+    store.testReplayWidgetActions()
+    expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.setAsideMessage(actionCount: 1),
+                "M1: the set-aside message wins over a failure later in the same pass")
+    expect(workspace.claimFiles().contains { $0.hasPrefix("claim-\(bindingB)-") },
+           "sanity: the second claim is still unacknowledged")
+    expectEqual(store.widgetActionReplayDiagnostics.setAsideActionCount, setAsideBeforeBlocked + 1,
+                "M2: only the acknowledged claim's entry is counted so far")
+    try FileManager.default.removeItem(at: blockedRecord)
+    store.migrationMessage = nil
+    store.testReplayWidgetActions()
+    expectEqual(store.widgetActionReplayDiagnostics.setAsideActionCount, setAsideBeforeBlocked + 2,
+                "M2: each set-aside entry is counted once, the retried claim's included")
+    expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.setAsideMessage(actionCount: 1),
+                "…and the retry reports its one entry")
+    expectEqual(try workspace.load()?.payload.expenses?.filter { $0.id == "e_siri_G512" }.count, 1,
+                "…and the retried claim's valid action is applied once")
+    expect(!workspace.claimFiles().contains { $0.hasPrefix("claim-") }, "…and the claim is acknowledged")
+
+    // Fix round 1 (I2b): a regular claim file that cannot be read fails the
+    // pass closed, counted once per pass; once readable, replay continues.
+    let lockedClaim = workspace.claims.appendingPathComponent("claim-\(bindingB)-\(String(repeating: "1", count: 64)).json")
+    try Data("corrupt".utf8).write(to: lockedClaim)
+    chmod(lockedClaim.path, 0)
+    if (try? Data(contentsOf: lockedClaim)) == nil {
+        let lockedQueue = queueJSON([action("u1", "expense_log", tag: tagB, expenseFields)])
+        suite.defaults.set(lockedQueue, forKey: WidgetAppGroup.actionsKey)
+        store.migrationMessage = nil
+        let unreadableBefore = store.widgetActionReplayDiagnostics.unreadableClaimCount
+        store.testReplayWidgetActions()
+        store.testReplayWidgetActions()
+        expectEqual(store.widgetActionReplayDiagnostics.unreadableClaimCount, unreadableBefore + 2,
+                    "I2b: each pass that fails on an unreadable claim is counted once")
+        expectEqual(store.migrationMessage, "Widget actions are still safely queued and will be retried.",
+                    "I2b: …and keeps the retry message")
+        expect(FileManager.default.fileExists(atPath: lockedClaim.path) && suite.queue == lockedQueue,
+               "I2b: the claim stays and the queue is untouched")
+        chmod(lockedClaim.path, 0o600)
+        store.testReplayWidgetActions()
+        expectEqual(store.migrationMessage, NativeWidgetActionReplayCoordinator.quarantinedMessage(for: .invalidClaim),
+                    "I2b: once readable, the corrupt claim is set aside")
+        expectEqual(try workspace.load()?.payload.expenses?.contains { $0.id == "e_siri_u1" }, true,
+                    "I2b: …and the queue behind it applies in the same pass")
+    } else {
+        chmod(lockedClaim.path, 0o600)
+        try FileManager.default.removeItem(at: lockedClaim)
+        print("note: this user can read a mode-0 file; the I2b AppStore check is skipped")
+    }
+
     // Sign-out removes the quarantine with the claims (it is B's data).
     try await store.signOut(revokeRemote: false)
     expect(workspace.claimFiles().isEmpty, "sign-out removes the quarantine files")
@@ -1251,7 +1340,8 @@ private func testUseAnotherAccountScrubsWidgetState() async throws {
     expect(store.widgetActionReplayDiagnostics.ownerDroppedActionCount == 0
            && store.widgetActionReplayDiagnostics.quarantinedQueueCount == 0
            && store.widgetActionReplayDiagnostics.setAsideActionCount == 0
-           && store.widgetActionReplayDiagnostics.quarantinedClaimCount == 0, "per-owner diagnostics are reset")
+           && store.widgetActionReplayDiagnostics.quarantinedClaimCount == 0
+           && store.widgetActionReplayDiagnostics.unreadableClaimCount == 0, "per-owner diagnostics are reset")
     let local = try workspace.load()
     expectEqual(local?.payload.jobs?.first?.customerName, "Alice (A)",
                 "the local workspace is retained (only the widget/Siri surface is an account boundary here)")
@@ -1664,6 +1754,10 @@ private func testOneLock() {
                 throw NativeWidgetActionClaimError.lockFailed
     """), "…then fails as lockFailed, as before")
     let appStore = source("AppStore.swift")
+    // 12.00b.2-C fix round 1 (I2b): one fixed, payload-free line per replay
+    // pass that fails on an unreadable claim file.
+    expectEqual(appStore.components(separatedBy: #"print("TradeReadyWidgetReplay stage=unreadable-claim")"#).count - 1, 1,
+                "replay logs one fixed line for an unreadable claim")
     expectEqual(appStore.components(separatedBy: "appGroupAccountScrubber.scrub()").count - 1, 1,
                 "the App Group wipe is called from exactly one place (scrubWidgetAccountState)")
     expectEqual(appStore.components(separatedBy: "try scrubWidgetAccountState()").count - 1, 5,

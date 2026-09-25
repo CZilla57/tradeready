@@ -5964,6 +5964,11 @@ final class AppStore: ObservableObject {
     /// something was set aside: the entry count, or the coarse quarantine
     /// message, which takes precedence within a pass.
     ///
+    /// Fix round 1: that one-time message also wins over a later
+    /// retained-unsupported result or failure in the same pass (Minor 1), and
+    /// a claim file that stays unreadable fails the pass closed, counted once
+    /// per pass with one fixed line (I2b).
+    ///
     /// Final review C1: a replay is a local write like any other (RN routes
     /// it through saveJobs/saveTrips/saveExpenses, `utils/widgetActions.ts`).
     /// `apply` bypasses the per-write enqueue hooks, so the coordinator hands
@@ -5992,6 +5997,7 @@ final class AppStore: ObservableObject {
         }
         var setAsideThisPass = 0
         var quarantinedThisPass = false
+        var passMessage: String?
         do {
             // Each claim contains at most 512 actions. Bound foreground work so
             // a continuously-writing extension cannot starve app activation.
@@ -6006,7 +6012,7 @@ final class AppStore: ObservableObject {
                 case .nothingPending:
                     return
                 case .retainedUnsupported(let count):
-                    migrationMessage = "Kept \(count) newer widget action(s) for a compatible app update."
+                    migrationMessage = passMessage ?? "Kept \(count) newer widget action(s) for a compatible app update."
                     return
                 case .committed(let committed, _, _, let ownerDropped, let setAside):
                     widgetActionReplayDiagnostics.recordOwnerDropped(ownerDropped)
@@ -6014,22 +6020,30 @@ final class AppStore: ObservableObject {
                     if setAside > 0 {
                         setAsideThisPass += setAside
                         if !quarantinedThisPass {
-                            migrationMessage = NativeWidgetActionReplayCoordinator
+                            passMessage = NativeWidgetActionReplayCoordinator
                                 .setAsideMessage(actionCount: setAsideThisPass)
+                            migrationMessage = passMessage
                         }
                     }
                     try apply(committed)
                 case .quarantined(let reason):
                     widgetActionReplayDiagnostics.recordQuarantine(reason)
                     quarantinedThisPass = true
-                    migrationMessage = NativeWidgetActionReplayCoordinator.quarantinedMessage(for: reason)
+                    passMessage = NativeWidgetActionReplayCoordinator.quarantinedMessage(for: reason)
+                    migrationMessage = passMessage
                 }
             }
         } catch {
+            if case NativeWidgetActionClaimError.unreadableClaim = error {
+                // Fix round 1 (I2b): payload-free, once per pass (the throw
+                // ends the pass). The claim stays until it can be read.
+                widgetActionReplayDiagnostics.recordUnreadableClaim()
+                print("TradeReadyWidgetReplay stage=unreadable-claim")
+            }
             // A post-commit acknowledgement failure may leave memory one step
             // behind disk. Reload the verified canonical result before retry.
             if let loaded = try? repository.load() { try? apply(loaded.snapshot) }
-            migrationMessage = "Widget actions are still safely queued and will be retried."
+            migrationMessage = passMessage ?? "Widget actions are still safely queued and will be retried."
         }
     }
 
