@@ -333,15 +333,17 @@ Expo rollback build can still read the files it reads today.
    backup-excluded `LegacyBackups/`, and heals imported copies in its own store (contract
    §17.2 G4). With no production users, only team devices that ran a pre-2026-08 Expo
    build can hold one.
-5. **Open question G6-Q1 (for 12.06 and the owner).** Permanent deletion removes the
-   journal but not the RN source files. By code reading, the next launch finds no snapshot
+5. **Open question G6-Q1 (for 12.00b.2-F (Task 9b, plan ruling R10 on 2026-09-25) and
+   the owner).** Permanent deletion removes the journal but not the RN source files. By
+   code reading, the next launch finds no snapshot
    (`shouldAttempt`, `N/AppStore.swift:588`) and no completed journal
    (`N/LegacyMigrationCoordinator.swift:628`), so it would import the deleted account's
    RN-era local data again. No host test covers this, and whether another account could
-   then see that data was not checked. 12.06 (owner of the journal rule) adds the test; if
-   confirmed, it becomes `P12-001`, classified by §2. Candidate fixes: a durable "legacy
-   source retired" marker that survives deletion, or deleting the RN source on permanent
-   deletion (a rollback build does not need a deleted account's data).
+   then see that data was not checked. 12.00b.2-F (Task 9b, plan ruling R10 on
+   2026-09-25) adds the test; if confirmed, it becomes `P12-001`, classified by §2.
+   Candidate fixes: a durable "legacy source retired" marker that survives deletion, or
+   deleting the RN source on permanent deletion (a rollback build does not need a
+   deleted account's data).
 
 ### 5.5 OI-3 — 429 push policy
 
@@ -509,17 +511,17 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
-| L65 | Contract decision table lists C22 before C21 | S3 | Open | doc batch | Open |
-| L141.a | Phase 11 plan §7 11.05 entry contradicts itself on parked-route handling | S3 | Open | doc batch | Open |
-| L141.b | Contract C8 row still says "blocked until 11.05 decides", though §4.6 resolved it | S3 | Open | doc batch | Open |
-| L205.c | Parity "AI Assistant" row omits the "Unavailable" key state | S3 | Open | doc batch (with T1) | Open |
-| L205.d | Phase 11 plan §7 repeats "Next ready: 11.10a" | S3 | Open | doc batch | Open |
-| L223.b | IPAD-KB-1 omits "cancel a swipe-back, then ⌘N" | S3 | Open | doc batch; 12.03 copies the fixed row | Open |
-| L237.a | Phase 11 plan §6 and the parity "Supabase sync" row omit round 3 and scenarios G–H | S3 | Open | doc batch | Open |
-| L249.d | Phase 11 plan still says the Today status row is 44pt | S3 | Open | doc batch | Open |
-| L274.a | Phase 11 runsheet does not explain its switch to row tables | S3 | Open | doc batch | Open |
-| L286.8 | Contract §17.2, the runsheet I2 row and the roadmap's I2 text omit the poison-item test and the `utils/sync.ts` line range | S3 | Open | doc batch (plan §3 12.00b.1 already specifies both) | Open |
-| T1 | Parity "AI Assistant" row still lists the OI-4 known issues that `5f2f397` fixed | S3 | Open | doc batch (with L205.c) | Open |
+| L65 | Contract decision table lists C22 before C21 | S3 | Open | doc batch | Closed — 12.00 doc batch (this commit) |
+| L141.a | Phase 11 plan §7 11.05 entry contradicts itself on parked-route handling | S3 | Open | doc batch | Closed — 12.00 doc batch (this commit) |
+| L141.b | Contract C8 row still says "blocked until 11.05 decides", though §4.6 resolved it | S3 | Open | doc batch | Closed — 12.00 doc batch (this commit) |
+| L205.c | Parity "AI Assistant" row omits the "Unavailable" key state | S3 | Open | doc batch (with T1) | Closed — 12.00 doc batch (this commit) |
+| L205.d | Phase 11 plan §7 repeats "Next ready: 11.10a" | S3 | Open | doc batch | Closed — 12.00 doc batch (this commit) |
+| L223.b | IPAD-KB-1 omits "cancel a swipe-back, then ⌘N" | S3 | Open | doc batch; 12.03 copies the fixed row | Closed — 12.00 doc batch (this commit) |
+| L237.a | Phase 11 plan §6 and the parity "Supabase sync" row omit round 3 and scenarios G–H | S3 | Open | doc batch | Closed — 12.00 doc batch (this commit) |
+| L249.d | Phase 11 plan still says the Today status row is 44pt | S3 | Open | doc batch | Closed — 12.00 doc batch (this commit) |
+| L274.a | Phase 11 runsheet does not explain its switch to row tables | S3 | Open | doc batch | Closed — 12.00 doc batch (this commit) |
+| L286.8 | Contract §17.2, the runsheet I2 row and the roadmap's I2 text omit the poison-item test and the `utils/sync.ts` line range | S3 | Open | doc batch (plan §3 12.00b.1 already specifies both) | Closed — 12.00 doc batch (this commit) |
+| T1 | Parity "AI Assistant" row still lists the OI-4 known issues that `5f2f397` fixed | S3 | Open | doc batch (with L205.c) | Closed — 12.00 doc batch (this commit) |
 
 ### 12.01 check (2)
 
@@ -608,7 +610,9 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L215.c | A22: stacked route-move chevrons grow a stop row to about 116pt (accepted as RN parity) | S3 | Closed (accepted) | device row A11-TT-1: first tap hits |
 | L223.e | IPAD-MT-3: Stage Manager's first frame may shift column geometry | S3 | Open | device row IPAD-MT-3 |
 | L249.e | iOS 17/18 destructive text and the "On my way" hit-test are unverified | S3 | Open | device rows A11B-FR1-1/2 |
-### New in Phase 12 (0)
+
+### New in Phase 12 (1)
 
 | ID | Item | Sev | Found (date, source) | Handling | Status |
 |---|---|---|---|---|---|
+| P12-002 | Phase 11 docs (runsheet OI-3 row; `native-phase-11-performance.md` §1.2 scenario B) stated the 429 push backoff as the poor-network test harness's 30 s/60 s values, not the app's real exponential backoff (5 s base, doubling, 300 s cap; `N/NativeSyncCoordinator.swift:140-141,388`) | S3 | 2026-09-25, Task 2 12.00 doc batch | doc batch | Closed — 12.00 doc batch (this commit) |

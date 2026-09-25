@@ -1140,7 +1140,11 @@ I2); not fixed in Phase 11. It must be fixed before cutover.
   owner-scoped rejected store scrubbed at every account boundary; add a bounded
   diagnostic and an "N changes couldn't sync" line on Cloud Sync; then decide whether
   to relax the pull guard toward RN parity (RN always pulls after push,
-  `utils/sync.ts`), keeping the 11.12 per-table rebase.
+  `utils/sync.ts` `pushQueue` lines 149–214 / `syncIfOnline` lines 316–326), keeping
+  the 11.12 per-table rebase. Test: a poor-network poison-item scenario in
+  `native/PoorNetworkTests/main.swift` (good items push, inbound pulls continue, and
+  the poison item reaches the rejected store exactly once). Implemented by Phase 12
+  12.00b.1 (`docs/native-phase-12-implementation-plan.md`).
 
 ### Exit criteria
 

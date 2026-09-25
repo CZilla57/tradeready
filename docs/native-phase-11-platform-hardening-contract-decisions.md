@@ -53,7 +53,7 @@ characterization).
 | C5 | Seam observer input | Add a `(canonical, output, expectedOwnerBinding)` register overload. The current observer receives only `NativeBusinessSnapshot` (§3.2) | chosen; Own-list addition for 11.01 | 11.01 |
 | C6 | Action queue | Four types, fixed JSON shapes, `flock` protocol, 512 cap, duplicate-id handling, never overwrite a malformed queue (§4) | chosen | 11.04 |
 | C7 | Owner stamping | `ownerTag` (hash of the §2.5 binding) goes on the snapshot, on each queued action, on `activeTrip` and on the `pendingOpenUrl` stash. Extensions refuse to write when no snapshot is present. Replay drops actions whose owner is missing or mismatched (§4.5) | chosen | 11.01, 11.04, 11.05 |
-| C8 | Malformed or duplicate queue wedge | Native replay retries forever on `malformedQueue`/`duplicateActionID` (§4.6) | **blocked** until 11.05 decides the quarantine policy | 11.05 |
+| C8 | Malformed or duplicate queue wedge | Native replay retries forever on `malformedQueue`/`duplicateActionID` (§4.6) | **resolved** by 11.05: existing native behavior, recorded (§4.6). Phase 12 12.00b.2 changes the whole-batch quarantine (plan §7 L130); §4.6 is amended by that task | 11.05 |
 | C9 | Intents | Ten intents, a single 17.0 floor, target membership per ruling P3 (§5) | chosen | 11.04 (types), 11.01 (membership) |
 | C10 | Deep links | Gate order: parse → authenticate → exact owner → record exists and is not archived. `onmyway` also refuses a done status (§6) | chosen; implemented by 11.06 with the native differences in §6.3 | 11.06 |
 | C11 | Notification `est_` archived dead tap (P8) | An archived `estimate_sent` job's delivered `est_` notification **opens** its editable follow-up review; only a missing job, an answered estimate or a non-exact/signed-out workspace fail closed (§6.3) | **resolved** by 11.06 (2026-09-24) | 11.06 |
@@ -66,8 +66,8 @@ characterization).
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen; crash side implemented by 11.09 (§10.4) | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen; implemented by 11.15 with the native differences in §11.1 | 11.15 |
 | C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audited after 11.11 and 11.12 (§12.3): A13, A15–A18 and A24–A29 fixed, A22 accepted. A29 (success, warning and status colors as text) was fixed with native text tokens after the controller ruling (2026-09-24). Fix round 1 fixed the in-row destructive buttons (I1, in A28) and recorded A30 (PDF stamps; fixed in 11.13 as a native difference, §12.1) and A31 (system-drawn dialogs, accepted). Zero release-blocking findings remain, so **H1 is closed** | 11.10a/11.10b |
-| C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
+| C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 
 ---
 
@@ -2154,8 +2154,12 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
    responses as `.rejected`; move rejected mutations to an app-private, owner-scoped
    rejected store scrubbed at every account boundary; a bounded diagnostic; "N changes
    couldn't sync" on Cloud Sync; then decide whether to relax the pull guard toward RN
-   parity (RN always pulls after push, `utils/sync.ts`), mindful of the 11.12 per-table
-   rebase;
+   parity (RN always pulls after push, `utils/sync.ts` `syncIfOnline`:316-326, which
+   calls `pushQueue`:149-214 then `pullRemote`), mindful of the 11.12 per-table rebase.
+   Test: a poor-network poison-item scenario in `native/PoorNetworkTests/main.swift`
+   (good items push, inbound pulls continue, and the poison item reaches the rejected
+   store exactly once). Implemented by Phase 12 12.00b.1
+   (`docs/native-phase-12-implementation-plan.md`);
 3. the parity-matrix Tax set-aside row, which said "ported" although native has no
    tax-settings screen (see G2): **fixed** by 11.14 (`d18b29c`); the editor itself stays
    with G2's owner;

@@ -281,7 +281,8 @@ Lane 12.00b therefore holds 12.00b.1, 12.00b.2 and 12.00b.3. 12.00b.4 is not bui
 6. Record how exposure is controlled at cutover given no installed base (see
    12.07): the phased release only gates automatic updates to existing installs,
    so new installs receive the build immediately. The real controls are manual
-   release timing and pausing or removing the version from sale. Cite Apple's
+   release timing and, on a breach, pausing the phased release plus Remove App
+   From Sale (the whole app, not a single version — charter §7). Cite Apple's
    current documentation, with the date it was read.
 7. *(Revision 2026-09-25.)* Record the Phase 11 carry decisions it owns (§1.1): D1
    and D2 (build in 12.00b, or a dated waiver with the fields §1.2 lists); the G6
@@ -604,8 +605,9 @@ The playbook extends the
 replacing it.
 
 1. Write the step-by-step rollback:
-   (a) pause the phased release and/or hold or remove the native version from
-       sale (see 12.07 on what each control actually gates);
+   (a) pause the phased release and, to stop new installs, Remove App From Sale
+       (the whole app, not just the native version; see 12.07 and charter §7 on
+       what each control actually gates);
    (b) keep the Cloudflare Worker on the last mixed-client-compatible deployment;
    (c) submit the preserved Expo release branch as a **new binary** whose
        version/build number is higher than the live native release, requesting
@@ -668,10 +670,12 @@ release to production.
    - Because there are no current users, the phased release gates almost
      nothing. Treat new installs as the exposed cohort: use manual release timing
      (release when the owner and on-call are ready), watch the 12.02 dashboards
-     against thresholds, and pause the phased release or remove the version from
-     sale on a breach.
-   - Confirm these App Store Connect behaviors against Apple's current
-     documentation when writing the charter.
+     against thresholds, and on a breach pause the phased release and, to stop
+     new installs, Remove App From Sale — there is no per-version removal for a
+     live version; that control takes the whole app off the App Store, in every
+     region, within 24 hours, and ends that version's phased release (charter §7).
+   - These App Store Connect behaviors are confirmed against Apple's current
+     documentation in the charter (§7, read 2026-09-25).
 4. Retain legacy migration code and backend compatibility; verify no release step
    removes them (SC4).
 5. Monitor continuously against 12.02 during rollout, including the mixed-client
