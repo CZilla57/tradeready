@@ -133,6 +133,38 @@ public extension Canonical {
     }
 }
 
+public extension Canonical {
+    /// Phase 12 12.00b.2-D (L286.1): the prefix of a native-private record
+    /// key. Such a key is local bookkeeping, never shared data. The push
+    /// request builder drops it from every outbound body
+    /// (`NativeSupabaseMutationPushService`), and decoding drops it from every
+    /// record (`ObjectReader.finish`), so one written by an earlier native
+    /// build and kept by RN (`utils/syncMerge.ts` returns the remote job
+    /// verbatim; `utils/timeTracking.ts` `applyClockOut` spreads the session)
+    /// is inert.
+    static let nativePrivateKeyPrefix = "__native"
+}
+
+public extension Canonical.JSONValue {
+    /// This value without any object key that starts with
+    /// `Canonical.nativePrivateKeyPrefix`, at any depth. Strings, including
+    /// ones that contain the prefix, are never changed.
+    func removingNativePrivateFields() -> Canonical.JSONValue {
+        switch self {
+        case let .object(fields):
+            var kept: [String: Canonical.JSONValue] = [:]
+            for (key, value) in fields where !key.hasPrefix(Canonical.nativePrivateKeyPrefix) {
+                kept[key] = value.removingNativePrivateFields()
+            }
+            return .object(kept)
+        case let .array(values):
+            return .array(values.map { $0.removingNativePrivateFields() })
+        case .null, .bool, .number, .string:
+            return self
+        }
+    }
+}
+
 private extension Canonical.JSONValue {
     func decode<T: Decodable>(_ type: T.Type = T.self, key: String) throws -> T {
         do {
@@ -238,8 +270,17 @@ private struct ObjectReader {
         return try value.decode(T.self, key: key)
     }
 
+    /// Phase 12 12.00b.2-D (L286.1): native-private keys are never kept. A
+    /// record read from disk, a pull or any server response loses every
+    /// `Canonical.nativePrivateKeyPrefix` key here, including one nested in
+    /// another unknown field, so a stale widget-replay marker decodes, is
+    /// inert, and is not written back.
     func finish() -> Canonical.Preservation {
-        var result = Canonical.Preservation(unknownFields: fields)
+        var kept: [String: Canonical.JSONValue] = [:]
+        for (key, value) in fields where !key.hasPrefix(Canonical.nativePrivateKeyPrefix) {
+            kept[key] = value.removingNativePrivateFields()
+        }
+        var result = Canonical.Preservation(unknownFields: kept)
         result.explicitNullFields = explicitNullFields
         result.absentDefaultFields = absentDefaultFields
         return result

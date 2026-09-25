@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -386,6 +387,8 @@ struct PoorNetworkTests {
         rebaseRules()
         try await recurringGenerationWaitsForInitialSync()
         try await widgetReplayReachesTheServer()
+        try await widgetReplayMarkersStayLocal()
+        try await staleServerMarkersAreDroppedOnPull()
         try await poisonChangeLeavesTheQueueAndSyncKeepsPulling()
         try await keptRecordsDoNotPinTheCursor()
         try await retryRefusedChange()
@@ -1061,6 +1064,140 @@ struct PoorNetworkTests {
         } else {
             expect(false, "C1: the server job still has its session")
         }
+    }
+
+    /// Every `__native*` object key in `value`, at any depth.
+    static func nativeKeys(_ value: Canonical.JSONValue?) -> [String] {
+        switch value {
+        case let .object(fields)?:
+            return fields.flatMap { key, nested in (key.hasPrefix("__native") ? [key] : []) + nativeKeys(nested) }
+        case let .array(values)?:
+            return values.flatMap { nativeKeys($0) }
+        default:
+            return []
+        }
+    }
+
+    static func sessionCount(_ data: Canonical.JSONValue?) -> Int? {
+        guard case let .object(fields)? = data, case let .array(sessions)? = fields["timeSessions"] else { return nil }
+        return sessions.count
+    }
+
+    /// Phase 12 12.00b.2-D (L286.1): replay's own bookkeeping never reaches
+    /// the server, and a retry stays idempotent after a pull replaced the job.
+    /// The widget clocks in and out; the acknowledgement fails after the save
+    /// and enqueue (a directory sits where the set-aside record for the
+    /// batch's one bad entry goes, as in the 12.00b.2-C tests); the sync
+    /// pushes the job and pulls it back, replacing the local copy with the
+    /// server's; then the claim is retried.
+    @MainActor
+    static func widgetReplayMarkersStayLocal() async throws {
+        let h = Harness(tag: "widget-markers")
+        defer { h.cleanup() }
+        let (_, job) = await syncedBaseline(h, "L286.1")
+        let tag = NativeWidgetOwnerTag.make(binding: Harness.binding)
+        func action(_ body: String) -> String { #"{"ownerTag":"\#(tag)",\#(body)}"# }
+        let startedAt = "2026-09-25T15:00:00.000Z", stoppedAt = "2026-09-25T16:30:00.000Z"
+        let raw = "[" + [
+            action(#""id":"l286-start","type":"timer_start","at":"\#(startedAt)","jobId":"\#(job.id)""#),
+            action(#""id":"l286-stop","type":"timer_stop","at":"\#(stoppedAt)","jobId":"\#(job.id)""#),
+            action(#""id":"l286-bad","type":"expense_log","at":"2026-09-25T15:05:00.000Z","date":"2026-09-25","amount":-1"#),
+        ].joined(separator: ",") + "]"
+        guard let entries = NativeWidgetActionBatchPlanner.rawEntries(of: Data(raw.utf8)), entries.count == 3 else {
+            return expect(false, "L286.1: sanity: the queue splits into its entries")
+        }
+        let recordDigest = SHA256.hash(data: NativeWidgetActionBatchPlanner.joinedList([entries[2]]))
+            .map { String(format: "%02x", $0) }.joined()
+        let claims = h.dir.appendingPathComponent("WidgetActionClaims", isDirectory: true)
+        let blocker = claims.appendingPathComponent("quarantine-\(Harness.binding)-\(recordDigest).json")
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        func claimFiles() -> [String] {
+            ((try? FileManager.default.contentsOfDirectory(atPath: claims.path)) ?? []).filter { $0.hasPrefix("claim-") }
+        }
+
+        h.widgetQueue.value = raw
+        h.store.testReplayWidgetActions()
+        expectEqual(claimFiles().count, 1, "L286.1: sanity: the acknowledgement failed and the claim is kept")
+        expectEqual(h.committed()?.payload.jobs?.first { $0.id == job.id }?.timeSessions?.count, 1,
+                    "L286.1: sanity: the clock-in and clock-out are saved")
+        expectEqual(h.queueKeys(), ["jobs/\(job.id)"], "L286.1: sanity: the replayed job is queued")
+        let queued = h.queue.load().first { $0.table == "jobs" }?.payload
+        expectEqual(nativeKeys(queued), [], "L286.1: the queued job payload has no __native key")
+
+        // The sync pushes the job, then its pull replaces the local job with
+        // the server copy (the job is no longer pending).
+        _ = await h.coordinator.sync(trigger: .manual)
+        expect(h.queue.load().isEmpty, "L286.1: the queue drains")
+        let row = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data
+        expectEqual(nativeKeys(row), [], "L286.1: the Supabase row has no __native key")
+        expectEqual(sessionCount(row), 1, "L286.1: the Supabase row has the widget's session")
+        let pulled = h.committed()?.payload.jobs?.first { $0.id == job.id }
+        expectEqual(pulled?.timeSessions?.count, 1, "L286.1: after the pull the local job has the one session")
+        expectEqual(nativeKeys(try jsonValue(pulled?.timeSessions ?? [])), [],
+                    "L286.1: after the pull the local job is the server copy (no __native key)")
+
+        // The acknowledgement can be written now; the retry applies nothing again.
+        try FileManager.default.removeItem(at: blocker)
+        h.store.testReplayWidgetActions()
+        expect(claimFiles().isEmpty, "L286.1: the retried claim is acknowledged")
+        let retried = h.committed()?.payload.jobs?.first { $0.id == job.id }?.timeSessions
+        expectEqual(retried?.count, 1, "L286.1: the retry after the pull does not clock in again (one session)")
+        expectEqual(retried?.first?.start, startedAt, "L286.1: the session is the widget's")
+        expectEqual(retried?.first?.end, stoppedAt, "L286.1: the session is closed by the widget's stop")
+        let summary = h.store.timeTrackingSummary(jobID: job.id)
+        expect(summary?.isClocked == false && summary?.completedMs == 5_400_000,
+               "L286.1: memory shows the one 90-minute session too (got \(String(describing: summary?.completedMs)))")
+        _ = await h.coordinator.sync(trigger: .manual)
+        let after = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data
+        expectEqual(sessionCount(after), 1, "L286.1: the server keeps one session")
+        expectEqual(nativeKeys(after), [], "L286.1: and still no __native key")
+    }
+
+    /// Phase 12 12.00b.2-D (L286.1): a row an older native build pushed with
+    /// replay markers, which RN kept (`utils/timeTracking.ts` `applyClockOut`
+    /// spreads the session), is pulled: it decodes, the local job holds no
+    /// `__native` key, a new clock-in still applies, and the next push
+    /// cleans the server row.
+    @MainActor
+    static func staleServerMarkersAreDroppedOnPull() async throws {
+        let h = Harness(tag: "stale-markers")
+        defer { h.cleanup() }
+        let (_, job) = await syncedBaseline(h, "L286.1 stale")
+        guard let serverCopy = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data else {
+            return expect(false, "L286.1 stale: the baseline job is on the server")
+        }
+        let staleSession: Canonical.JSONValue = .object([
+            "start": .string("2026-09-24T09:00:00.000Z"), "end": .string("2026-09-24T10:00:00.000Z"),
+            "__nativeWidgetStartActionID": .string("old-start"), "__nativeWidgetStopActionID": .string("old-stop"),
+        ])
+        // The RN client's own upsert of the whole job blob (no native code).
+        var request = URLRequest(url: Harness.supabaseURL.appending(path: "rest/v1/jobs"))
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(Canonical.JSONValue.object([
+            "id": .string(job.id), "user_id": .string(Harness.subject), "deleted": .bool(false),
+            "data": replacing(serverCopy, "timeSessions", with: .array([staleSession])),
+        ]))
+        _ = try await h.server.data(for: request)
+        expectEqual(nativeKeys(h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data).count, 2,
+                    "L286.1 stale: sanity: the server row carries the stale markers")
+
+        expectEqual(await h.store.testPullDeltaIfPossible().state, .completed, "L286.1 stale: the pull completes")
+        let local = h.committed()?.payload.jobs?.first { $0.id == job.id }
+        expectEqual(local?.timeSessions?.count, 1, "L286.1 stale: the stale row decodes with its session")
+        expectEqual(nativeKeys(try jsonValue(local?.timeSessions ?? [])), [],
+                    "L286.1 stale: the local job holds no __native key")
+
+        let tag = NativeWidgetOwnerTag.make(binding: Harness.binding)
+        h.widgetQueue.value = #"[{"ownerTag":"\#(tag)","id":"new-start","type":"timer_start","at":"2026-09-25T09:00:00.000Z","jobId":"\#(job.id)"}]"#
+        h.store.testReplayWidgetActions()
+        expectEqual(h.committed()?.payload.jobs?.first { $0.id == job.id }?.timeSessions?.count, 2,
+                    "L286.1 stale: a new clock-in applies")
+        expectEqual(nativeKeys(h.queue.load().first { $0.table == "jobs" }?.payload), [],
+                    "L286.1 stale: the queued job payload has no __native key")
+        _ = await h.coordinator.sync(trigger: .manual)
+        let cleaned = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data
+        expectEqual(sessionCount(cleaned), 2, "L286.1 stale: the server row has both sessions")
+        expectEqual(nativeKeys(cleaned), [], "L286.1 stale: the next push cleans the server row")
     }
 
     /// Review M1: the pure three-way merge the pull commit uses

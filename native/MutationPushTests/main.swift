@@ -367,6 +367,75 @@ struct MutationPushTests {
         expect(mixedForbidden.forbiddenKeys == ["jobs/j2"],
                "403 per change: the retry reports only the new 403's key")
 
+        // Phase 12 12.00b.2-D (L286.1): no native-private key reaches the
+        // server. The request builder drops every `__native*` object key from
+        // an upsert body, at any depth and for every table. Other keys, and
+        // string values that merely contain the prefix, are sent unchanged.
+        func nativeKeys(_ value: Canonical.JSONValue?) -> [String] {
+            switch value {
+            case let .object(fields)?:
+                return fields.flatMap { key, nested in
+                    (key.hasPrefix("__native") ? [key] : []) + nativeKeys(nested)
+                }
+            case let .array(values)?:
+                return values.flatMap { nativeKeys($0) }
+            default:
+                return []
+            }
+        }
+        let markedSession: Canonical.JSONValue = .object([
+            "start": .string("2026-08-03T09:00:00.000Z"), "end": .string("2026-08-03T11:00:00.000Z"),
+            "__nativeWidgetStartActionID": .string("start-1"), "__nativeWidgetStopActionID": .string("stop-1"),
+        ])
+        let markedJob: Canonical.JSONValue = .object([
+            "id": .string("j1"), "title": .string("__native in a value is data"),
+            "__nativeJobFlag": .bool(true), "__other": .string("kept"),
+            "timeSessions": .array([markedSession]),
+            "future": .object(["nested": .array([.object(["__nativeDeep": .number(1), "keep": .number(2)])])]),
+        ])
+        let markedInvoice = item("invoices", .upsert, "inv9", .object(["id": .string("inv9"), "__nativeFlag": .string("x")]))
+        let stripLoader = PushLoader { request in table(request) == "invoices" ? 422 : 201 }
+        let stripOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: stripLoader
+        ).push(
+            sessionBytes: session, expectedUserSubject: subject,
+            items: [
+                item("jobs", .upsert, "j1", markedJob),
+                item("settings", .upsert, "settings", .object([
+                    "businessName": .string("Ada Electric"), "__nativeSettingsFlag": .bool(true),
+                ])),
+                item("customer_notes", .upsert, "cust-key-1", .string("__nativeWidgetStartActionID in a note is text")),
+                markedInvoice,
+                item("jobs", .delete, "j2", nil),
+            ]
+        )
+        expect(stripLoader.requests.count == 5, "L286.1: sanity: every change was sent")
+        for request in stripLoader.requests {
+            expect(body(request) != nil && nativeKeys(body(request)).isEmpty,
+                   "L286.1: the \(request.httpMethod ?? "?") \(table(request)) body has no __native key (got \(nativeKeys(body(request))))")
+        }
+        let strippedJob = fields(fields(body(stripLoader.requests[0]))?["data"])
+        let strippedSession = fields({ () -> Canonical.JSONValue? in
+            if case let .array(sessions)? = strippedJob?["timeSessions"] { return sessions.first }
+            return nil
+        }())
+        expect(strippedJob?["id"] == .string("j1") && strippedJob?["title"] == .string("__native in a value is data")
+               && strippedJob?["__other"] == .string("kept"),
+               "L286.1: the job's other keys, and a value containing the prefix, are sent unchanged")
+        expect(strippedSession == ["start": .string("2026-08-03T09:00:00.000Z"), "end": .string("2026-08-03T11:00:00.000Z")],
+               "L286.1: the time session is sent without its replay markers")
+        expect(strippedJob?["future"] == .object(["nested": .array([.object(["keep": .number(2)])])]),
+               "L286.1: a native key nested inside an unknown field is dropped too")
+        expect(fields(fields(body(stripLoader.requests[1]))?["data"]) == ["businessName": .string("Ada Electric")],
+               "L286.1: settings are sent without a native key")
+        expect(fields(body(stripLoader.requests[2]))?["note"] == .string("__nativeWidgetStartActionID in a note is text"),
+               "L286.1: a customer note's text is sent unchanged")
+        expect(fields(body(stripLoader.requests[4])) == ["deleted": .bool(true)],
+               "L286.1: a delete body is the constant soft-delete flag")
+        expect(stripOutcome.pushedCount == 4
+               && stripOutcome.rejected == [NativeMutationRejection(item: markedInvoice, statusCode: 422)],
+               "L286.1: a refused change is returned exactly as queued (the rejected store is local and Retry pushes through this builder)")
+
         if failures == 0 { print("PASS: native mutation push tests") }
         else { exit(1) }
     }

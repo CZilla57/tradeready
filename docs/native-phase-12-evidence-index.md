@@ -159,10 +159,10 @@ Counted from the Stage column of every index row on 2026-09-25.
 | §17 Phase 10 | 39 | 3 | 0 | 0 | 4 | 46 |
 | §18 Phase 11 | 85 | 18 | 2 | 1 | 8 | 114 |
 | §19 Phase 12 | 2 | 0 | 0 | 0 | 0 | 2 |
-| §23 Appended (12.00b.1, 12.00b.2-B) | 3 | 0 | 0 | 0 | 0 | 3 |
-| **Total** | **261** | **57** | **2** | **1** | **22** | **343** |
+| §23 Appended (12.00b.1, 12.00b.2-B, 12.00b.2-D) | 3 | 1 | 0 | 0 | 0 | 4 |
+| **Total** | **261** | **58** | **2** | **1** | **22** | **344** |
 
-321 rows are device rows (A, A/B, B, C). 106 of them need STG (76 A, 30 A/B) and stay
+322 rows are device rows (A, A/B, B, C). 107 of them need STG (76 A, 31 A/B) and stay
 blocked while D4 is open; 215 do not need STG. The 22 X rows are 10 setup rows, the four
 Phase 10 implementation gates, PERF-3 (a decision) and the seven Phase 11 owned items.
 
@@ -212,6 +212,7 @@ Sources without runsheet rows are placed statement by statement:
 | Commit `1e47f26` (rating prompt) | 1 | P12-RATE-1 |
 | PL12 12.00b.1 (L329–351) and CH §5.3 (L294–301), after the host fix | 2 (the poison change against STG; the D3 surface with VoiceOver and Dynamic Type) | P12-B1-1, P12-B1-2 (§23) |
 | PL12 L846 and L852 (CH §10 rows L74 and L96), after the 12.00b.2-B host fix | 1 (widget, Siri and On My Way while the app publishes) | P12-B2B-1 (§23) |
+| PL12 L926 (CH §10 row L286.1), after the 12.00b.2-D host fix | 1 (a native widget clock-in, then an Expo edit of that session: no `__native` key in the Supabase row) | P12-B2D-1 (§23) |
 
 ## 8. Passed and closed items (not rows)
 
@@ -1005,11 +1006,11 @@ change the matrix.
 | L130 | Account | In progress | P3-D2 to P3-D5, EXT-3 | |
 | L136 | Local persistence | Blocked | P2-P1 to P2-P8 | |
 | L137 | AsyncStorage upgrade | Blocked | P2-P2 to P2-P8, P2-RB, Q11-P12-6, PERF-5 | G6 |
-| L138 | Supabase sync | In progress | P4-B1 to P4-B5, P4-C1 to P4-C7, P5-5, SYNC-1, SOAK-1 to SOAK-6, PERF-6, PERF-7, P12-B1-1, P12-B1-2 | P11-I2, P11-OI-3 |
+| L138 | Supabase sync | In progress | P4-B1 to P4-B5, P4-C1 to P4-C7, P5-5, SYNC-1, SOAK-1 to SOAK-6, PERF-6, PERF-7, P12-B1-1, P12-B1-2, P12-B2D-1 | P11-I2, P11-OI-3 |
 | L139 | Notifications (platform) | In progress | P10-29 to P10-40, P6-10, P6-16, P6-17, P7-30 | |
 | L140 | Background refresh | In progress | P4-B1 to P4-B5, P10-42, P10-43 | Gates P10-GATE-3, P10-GATE-4 |
 | L141 | Deep links | In progress | DL-1 to DL-6, P10-36, P10-51 | |
-| L142 | WidgetKit | In progress | EXT-1 to EXT-3, NJ-1 to NJ-3, JT-1 to JT-5, OWN-1 to OWN-3, Q11-P12-1, Q11-P12-2, Q11-P12-8, P12-B2B-1 | |
+| L142 | WidgetKit | In progress | EXT-1 to EXT-3, NJ-1 to NJ-3, JT-1 to JT-5, OWN-1 to OWN-3, Q11-P12-1, Q11-P12-2, Q11-P12-8, P12-B2B-1, P12-B2D-1 | |
 | L143 | App Intents/Siri | In progress | SIRI-1 to SIRI-6, Q11-P12-3, Q11-P12-8, P12-B2B-1 | |
 | L144 | Analytics | In progress | AN-1 to AN-6, Q11-P12-4, P10-16, P10-28 | |
 | L145 | Crash reporting | In progress | CR-1 to CR-9, PERF-9 | P11-OI-2 |
@@ -1031,6 +1032,7 @@ appended row follows the rules in §2.
 | P12-B1-1 | I2 fix (12.00b.1): a refused change leaves the queue and sync keeps pulling. **Blocked while D4 is open; never waived** | On the staging backend only, the owner adds a temporary rule that refuses writes to one marked record (for example a trigger that raises for a job titled `P12-B1-POISON`, which PostgREST answers with a 400). On device A, offline: edit that job and two other records. Reconnect and sync. Meanwhile edit a fourth record on the second device and sync it. On A open Settings › Cloud Sync and the list; export the support report. Retry the job with the rule still in place, then again after removing the rule. Make a second poison change and Discard it. Finally sign out and sign in as another team account | The two good edits reach the server and the second device, and the second device's edit arrives on A: inbound sync continues. Cloud Sync shows "1 change couldn't be saved", and the list shows Job, the job's name and the time it was refused. The support report counts one rejected change and carries no record text. Retry with the rule in place files the job again once, with no loop. Retry after removing the rule saves it and the entry leaves the list. Discard asks for confirmation, then A shows the server's version of that record. The other account sees no entry | REL, IPH, STG, +DEV2 | A | STG, DEV2 | RM L1131–1164; P11R L64; PL12 L329–351; CH L238 (defect row), §5.3 L294–301 | [ ] |
 | P12-B1-2 | D3 Cloud Sync surface: accessibility | Same run as P12-B1-1, with two poison changes listed at once (the status line then reads "2 changes couldn't be saved"). With VoiceOver on, go to Settings › Cloud Sync, open "N changes couldn't be saved" and move through each entry, Retry and Discard, and the Discard confirmation. Repeat at the largest accessibility Dynamic Type size, in light and dark mode | VoiceOver reads each entry as one element (type, name, when it was refused), then Retry and Discard with their hints. The confirmation reads its title, the "Discard change" button and the note that a record the cloud never had is removed. At the largest size nothing is truncated or overlaps, and the buttons stay reachable | REL, IPH, STG | A | STG | PL12 L329–351 (step 4, D3); CH §5.3 L294–301 | [ ] |
 | P12-B2B-1 | Bounded App Group lock (12.00b.2-B, L74 and L96): the widget, Siri and On My Way never hang the app or lose an action while the app writes the widget mirror | Put the Job Timer widget on the Home Screen, with a job scheduled next. With the app in front, clock in and out in the app and pull to refresh, so it publishes and rewrites the mirror, while tapping the widget's Start and Stop. Then background the app and at once tap the widget, and say "I'm on my way in TradeReady", including while the app is launching. Do 10 rounds. Afterward foreground the app and compare each job's time sessions with the taps and requests made | The app never freezes and is never terminated (no hang or watchdog report in TestFlight feedback or Settings › Privacy & Security › Analytics Data). Each widget tap either shows the pending state or leaves the widget unchanged. Each On My Way request either opens the review sheet or says "I couldn't open that. Open TradeReady and try again."; none is silent. After the next foreground the widget shows the current timer state, and each applied tap appears once in the time sessions. Contention cannot be forced on a device, so this row proves that nothing hangs and nothing is lost; the host tests prove the busy path | REL, IPH | A | — | CH §10 rows L74, L96; PL12 L846, L852 | [ ] |
+| P12-B2D-1 | Replay markers stay local (12.00b.2-D, L286.1): a widget clock-in reaches Supabase with no `__native` key, and an Expo edit of that session adds none. **Blocked while D4 is open; never waived** | On device A (native REL on staging, a team account), put the Job Timer widget on the Home Screen with a job scheduled next. Tap Start on the widget, open the app and let it sync. The owner reads that job's row in the staging Supabase table editor (table `jobs`, column `data`). On the second iPhone, the Expo build pointed at the same staging backend (never production) and signed in to the same account: pull to refresh, open the job, clock out (this edits the widget's session) and let it sync. On A, pull to refresh. The owner reads the row again | Both times the row's `data` holds one time session for the tap (after the Expo edit, ended at the Expo clock-out), and a search of it for `__native` finds nothing. A and the second iPhone show the same one session with the same times. Record only the session count and the search result, never the row's contents | REL, IPH, STG, +RN2 | A/B | EXPO-BUILD, STG, RN-STG | CH §10 row L286.1; PL12 L926 | [ ] |
 
 ## 24. Stage run records
 

@@ -675,6 +675,72 @@ be applied is set aside; everything else replays. Sources: `NativeWidgetActionBa
   `testQuarantineInAppStore`, `testOneLock`), Q2 in
   `native/Phase11QualificationTests/main.swift`.
 
+**Amended by Phase 12 12.00b.2-D (2026-09-25; charter L286.1).** Replay keeps its
+bookkeeping local, and no `__native*` key reaches the server. This replaces the
+start/stop marker rule above and the "idempotency markers" named in the 12.00b.2-C
+amendment (At most once, Duplicate ids, Not changed); the rest of that amendment
+stands. Sources: `NativeWidgetActionReplayer`, `NativeWidgetActionClaim.appliedTimers`,
+`NativeWidgetActionClaimTransport.recordAppliedTimers` and
+`NativeWidgetActionReplayCoordinator` in `N/NativeWidgetActionReplay.swift`;
+`Canonical.nativePrivateKeyPrefix` and `ObjectReader.finish` in
+`N/Domain/CanonicalModels.swift`; `upsertRequest` in `N/NativeSupabasePush.swift`.
+
+- **Why the markers went.** They sat in the session's unknown fields, were pushed
+  inside the job, and RN keeps them: `mergeRemoteRecord` returns the remote job
+  (`utils/syncMerge.ts:44-59`) and `applyClockOut` spreads the session
+  (`utils/timeTracking.ts:124-133`). They were also the only record of which timer
+  actions a claim had applied. After a push, a pull replaces a job that is not pending
+  with the server copy (`AppStore.rebasePulledDelta`). With the markers stripped from
+  the push and nothing else changed, an unacknowledged claim retried after that pull
+  clocked in again: the poor-network test showed two sessions, locally and on the
+  server. So stripping alone was not safe.
+- **The ledger.** A claim now carries `appliedTimers`: one entry per timer action an
+  attempt of that claim applied (the action id, start or stop, the job id, and the
+  start of the session it opened or closed). The coordinator writes it into the claim
+  file (an atomic rewrite, verified by read-back) BEFORE the canonical save. The claim
+  file is app-private, never synced, and goes when the claim is acknowledged or set
+  aside. The field is left out until a timer action is recorded, so a claim file written without it reads
+  unchanged, and the claim schema version stays 1.
+- **Retry rule.** For an action in the ledger: a start counts as applied if its job
+  still holds a session with that start; if not, the earlier save never happened and
+  the start applies again. A stop acts only on its own session: closed means applied;
+  still open means the earlier save never happened, so it is closed again; gone means
+  it changed elsewhere, and no other session is closed in its place. An action not in
+  the ledger applies as before. A session is named by its job and its start because
+  neither client ever changes a start once written, and the server copy keeps it: RN
+  `applyClockIn` appends and `applyClockOut` only sets the last session's `end`
+  (`utils/timeTracking.ts:106-133`), and native `AppStore.clockIn`/`clockOut` do the
+  same. Trips and expenses keep their deterministic `t_siri_`/`e_siri_` ids, which the
+  server copy keeps too.
+- **Outbound: one choke point.** `NativeSupabaseMutationPushService.upsertRequest`
+  drops every key that starts with `__native` from the payload, at any depth, for
+  every table (collections, settings, customer notes), before it builds the body.
+  Every queued upsert passes there, whichever producer queued it and whenever (a queue
+  file written by an earlier build included). A delete sends the constant
+  `{"deleted": true}`. The push is the only writer to `rest/v1`; the initial and delta
+  sync only read. The other requests (estimate and change-order approval links,
+  portal and booking administration, booking response, invoice delivery, AI, coach,
+  photo transfer) send endpoint-specific bodies, not job rows, and are built from
+  records that no longer hold such keys (Inbound). The queue and the rejected-change
+  store keep payloads as queued: both are local, a Retry pushes through the same
+  builder, and the queue's push reconciliation compares items by value.
+- **Inbound.** Decoding drops every `__native*` key from a record's unknown fields,
+  including one nested in another unknown field (`ObjectReader.finish`). A record read
+  from disk, a pull, or a Discard fetch never holds one. A stale marker written by an
+  earlier native build and kept by RN decodes, is inert (the replayer no longer reads
+  markers, so it cannot suppress a new action), and the next push of that job cleans
+  the server row. Only the two replay markers ever used the prefix.
+- **Recorded limits.** A claim that a build before this change applied but did not
+  acknowledge has no ledger, and its markers are dropped on read, so after the update
+  its timer actions apply again. There are no current users, so this is accepted. A
+  session removed before an interrupted claim is retried (a Discard of the job, or an
+  older server copy) is started again, as it was with the markers.
+- Evidence: `native/WidgetActionReplayTests/main.swift` (`testReplayMarkersStayLocal`),
+  `native/PoorNetworkTests/main.swift` (`widgetReplayMarkersStayLocal`,
+  `staleServerMarkersAreDroppedOnPull`), `native/MutationPushTests/main.swift`,
+  `native/WidgetOwnerGatingTests/main.swift`. Device row: P12-B2D-1 (evidence index
+  §23).
+
 ---
 
 ## 5. Intent contract (A1, A2)

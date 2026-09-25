@@ -252,7 +252,16 @@ struct NativeSupabaseMutationPushService {
         subject: String,
         accessToken: String
     ) throws -> URLRequest {
-        guard let payload = item.payload else { throw NativeMutationPushError.malformedSession }
+        // Phase 12 12.00b.2-D (L286.1): every queued upsert passes here on its
+        // way to the server, whichever producer queued it and whenever (a
+        // queue file written by an earlier build included), so this is where
+        // native-private keys (`Canonical.nativePrivateKeyPrefix`) are dropped:
+        // at any depth, for every table. The queue and the rejected-change
+        // store keep the payload as queued; both are local, and a Retry
+        // pushes through here again. A delete sends a constant body.
+        guard let payload = item.payload?.removingNativePrivateFields() else {
+            throw NativeMutationPushError.malformedSession
+        }
         let body: Canonical.JSONValue
         switch item.table {
         case "settings":

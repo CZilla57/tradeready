@@ -410,21 +410,31 @@ struct NativeWidgetActionReplayResult {
     /// Final review C1: every record this batch's actions wrote, in first-touch
     /// order without duplicates. It includes records an action already wrote
     /// on an earlier, unacknowledged attempt (found by its deterministic id or
-    /// session marker), so a retry after an interrupted enqueue re-queues
-    /// them; the queue's last-writer-wins dedup makes that idempotent. An
-    /// action that matches nothing contributes no record.
+    /// the claim's applied-timer ledger), so a retry after an interrupted
+    /// enqueue re-queues them; the queue's last-writer-wins dedup makes that
+    /// idempotent. An action that matches nothing contributes no record.
     let writtenRecords: [NativeWidgetActionRecordKey]
+    /// Phase 12 12.00b.2-D (L286.1): the claim's ledger after this attempt:
+    /// the entries passed in, plus one per timer action applied now. The
+    /// coordinator makes it durable in the claim before the canonical save.
+    let appliedTimers: [NativeWidgetActionAppliedTimer]
 
     var canAcknowledge: Bool { unsupportedActionIDs.isEmpty }
 }
 
 /// Applies a claimed batch to all affected canonical families in memory. The
 /// caller publishes the returned snapshot once, then acknowledges the claim.
-/// Deterministic record IDs and private action markers make a retry idempotent
-/// if publication succeeds but acknowledgement is interrupted.
+/// Deterministic record IDs (trips, expenses) and the claim's applied-timer
+/// ledger (timer start/stop) make a retry idempotent if publication succeeds
+/// but acknowledgement is interrupted.
+///
+/// Phase 12 12.00b.2-D (L286.1): timer actions no longer write markers into
+/// the time session. Those markers were pushed inside the job and RN keeps
+/// them forever, and they did not survive a pull that replaced the job with
+/// a server copy without them (the retry clocked in again). The ledger lives
+/// in the app-private claim file, which is never synced and is removed with
+/// the claim.
 enum NativeWidgetActionReplayer {
-    private static let startMarker = "__nativeWidgetStartActionID"
-    private static let stopMarker = "__nativeWidgetStopActionID"
     private static let doneStatuses: Set<String> = ["complete", "invoiced", "paid", "declined"]
     private static let expenseCategories: Set<String> = [
         "materials", "tools", "fuel", "labor", "insurance", "software", "marketing", "other"
@@ -440,23 +450,27 @@ enum NativeWidgetActionReplayer {
         case ignored
     }
 
+    /// `appliedTimers` is the claim's ledger from earlier attempts of this
+    /// same claim (empty on the first attempt).
     static func apply(
         _ batch: NativeWidgetActionBatch,
-        to source: Canonical.Snapshot
+        to source: Canonical.Snapshot,
+        appliedTimers: [NativeWidgetActionAppliedTimer] = []
     ) throws -> NativeWidgetActionReplayResult {
         var snapshot = source
         var changed = 0
         var ignored = 0
         var unsupported: [String] = []
         var written: [NativeWidgetActionRecordKey] = []
+        var ledger = appliedTimers
 
         for action in batch.actions {
             let outcome: Outcome
             switch action.kind {
             case .timerStart:
-                outcome = try applyTimerStart(action, snapshot: &snapshot)
+                outcome = try applyTimerStart(action, snapshot: &snapshot, ledger: &ledger)
             case .timerStop:
-                outcome = applyTimerStop(action, snapshot: &snapshot)
+                outcome = applyTimerStop(action, snapshot: &snapshot, ledger: &ledger)
             case .tripLog:
                 outcome = try applyTrip(action, snapshot: &snapshot)
             case .expenseLog:
@@ -481,16 +495,24 @@ enum NativeWidgetActionReplayer {
             changedActionCount: changed,
             ignoredActionCount: ignored,
             unsupportedActionIDs: unsupported,
-            writtenRecords: written
+            writtenRecords: written,
+            appliedTimers: ledger
         )
     }
 
     private static func applyTimerStart(
         _ action: NativeWidgetActionBatch.Action,
-        snapshot: inout Canonical.Snapshot
+        snapshot: inout Canonical.Snapshot,
+        ledger: inout [NativeWidgetActionAppliedTimer]
     ) throws -> Outcome {
-        if let marked = markedJobID(action.id, jobs: snapshot.payload.jobs ?? []) {
-            return .alreadyApplied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: marked))
+        // L286.1: an earlier attempt of this claim started a session. The
+        // action counts as applied while the job still holds that session
+        // (saved locally, or pulled back from the server). If it does not,
+        // the earlier save never happened, and the action applies below.
+        if let entry = ledger.first(where: { $0.actionID == action.id && $0.kind == .start }),
+           snapshot.payload.jobs?.first(where: { $0.id == entry.jobID })?.timeSessions?
+               .contains(where: { $0.start == entry.sessionStart }) == true {
+            return .alreadyApplied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: entry.jobID))
         }
         guard let jobID = string("jobId", action.fields),
               var jobs = snapshot.payload.jobs,
@@ -505,26 +527,40 @@ enum NativeWidgetActionReplayer {
               !hasActiveSession(jobs[index])
         else { return .ignored }
 
-        var session = try decode(
+        let session = try decode(
             Canonical.TimeSession.self,
             from: .object(["start": .string(action.at), "end": .null])
         )
-        session.preservation.unknownFields[startMarker] = .string(action.id)
         var sessions = jobs[index].timeSessions ?? []
         sessions.append(session)
         jobs[index].timeSessions = sessions
         if jobs[index].status == "scheduled" { jobs[index].status = "in_progress" }
         snapshot.payload.jobs = jobs
+        record(.init(actionID: action.id, kind: .start, jobID: jobID, sessionStart: action.at), in: &ledger)
         return .applied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: jobID))
     }
 
     private static func applyTimerStop(
         _ action: NativeWidgetActionBatch.Action,
-        snapshot: inout Canonical.Snapshot
+        snapshot: inout Canonical.Snapshot,
+        ledger: inout [NativeWidgetActionAppliedTimer]
     ) -> Outcome {
         guard var jobs = snapshot.payload.jobs else { return .ignored }
-        if let marked = markedJobID(action.id, jobs: jobs) {
-            return .alreadyApplied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: marked))
+        // L286.1: an earlier attempt of this claim closed a session. The
+        // retry acts on that session only: closed means applied; still open
+        // means the earlier save never happened, so it is closed again; gone
+        // means it changed elsewhere since, and nothing is closed in its place.
+        if let entry = ledger.first(where: { $0.actionID == action.id && $0.kind == .stop }) {
+            let key = NativeWidgetActionRecordKey(table: NativeWidgetActionRecordKey.jobsTable, recordID: entry.jobID)
+            guard let index = jobs.firstIndex(where: { $0.id == entry.jobID }),
+                  var sessions = jobs[index].timeSessions,
+                  let target = sessions.lastIndex(where: { $0.start == entry.sessionStart })
+            else { return .ignored }
+            guard sessions[target].end == nil else { return .alreadyApplied(key) }
+            sessions[target].end = action.at < sessions[target].start ? sessions[target].start : action.at
+            jobs[index].timeSessions = sessions
+            snapshot.payload.jobs = jobs
+            return .applied(key)
         }
         let index: Int?
         if let jobID = string("jobId", action.fields) {
@@ -536,10 +572,25 @@ enum NativeWidgetActionReplayer {
               let last = sessions.indices.last, sessions[last].end == nil
         else { return .ignored }
         sessions[last].end = action.at < sessions[last].start ? sessions[last].start : action.at
-        sessions[last].preservation.unknownFields[stopMarker] = .string(action.id)
         jobs[index].timeSessions = sessions
         snapshot.payload.jobs = jobs
+        record(
+            .init(actionID: action.id, kind: .stop, jobID: jobs[index].id, sessionStart: sessions[last].start),
+            in: &ledger
+        )
         return .applied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: jobs[index].id))
+    }
+
+    /// Adds `entry` to the ledger, replacing an earlier entry for its action.
+    private static func record(
+        _ entry: NativeWidgetActionAppliedTimer,
+        in ledger: inout [NativeWidgetActionAppliedTimer]
+    ) {
+        if let existing = ledger.firstIndex(where: { $0.actionID == entry.actionID }) {
+            ledger[existing] = entry
+        } else {
+            ledger.append(entry)
+        }
     }
 
     private static func applyTrip(
@@ -600,20 +651,6 @@ enum NativeWidgetActionReplayer {
 
     private static func hasActiveSession(_ job: Canonical.Job) -> Bool {
         job.timeSessions?.last?.end == nil && job.timeSessions?.isEmpty == false
-    }
-
-    /// The job holding a session this action already started or stopped.
-    private static func markedJobID(_ actionID: String, jobs: [Canonical.Job]) -> String? {
-        let marker = Canonical.JSONValue.string(actionID)
-        for job in jobs {
-            for session in job.timeSessions ?? [] {
-                if session.preservation.unknownFields[startMarker] == marker
-                    || session.preservation.unknownFields[stopMarker] == marker {
-                    return job.id
-                }
-            }
-        }
-        return nil
     }
 
     private static func string(
@@ -685,8 +722,33 @@ struct NativeWidgetActionClaim: Codable, Equatable {
     let accountBinding: String
     let sourceDigest: String
     let sourceBytes: Data
+    /// Phase 12 12.00b.2-D (L286.1): the timer actions an attempt of this
+    /// claim applied, written before that attempt's canonical save
+    /// (`NativeWidgetActionClaimTransport.recordAppliedTimers`). Nil until
+    /// then, and omitted from the file while nil, so a claim written before
+    /// this field existed reads unchanged. It stays in this app-private file
+    /// and goes with the claim when it is acknowledged or set aside.
+    var appliedTimers: [NativeWidgetActionAppliedTimer]? = nil
 
     var rawValue: String? { String(data: sourceBytes, encoding: .utf8) }
+}
+
+/// Phase 12 12.00b.2-D (L286.1): one timer action an attempt of a claim
+/// applied, and the session it opened or closed. The session is named by
+/// its job and its start, the fields a pulled server copy keeps. The retry
+/// of the same claim reads it to apply the action at most once
+/// (`NativeWidgetActionReplayer`).
+struct NativeWidgetActionAppliedTimer: Codable, Equatable {
+    enum Kind: String, Codable, Equatable {
+        case start
+        case stop
+    }
+
+    let actionID: String
+    let kind: Kind
+    let jobID: String
+    /// The session's `start`, exactly as stored.
+    let sessionStart: String
 }
 
 /// Task 11.05 (decision C8): why a shared queue, entry or claim was set
@@ -1015,6 +1077,37 @@ struct NativeWidgetActionClaimTransport {
             } catch {
                 throw NativeWidgetActionClaimError.writeFailed
             }
+        }
+    }
+
+    /// Phase 12 12.00b.2-D (L286.1): replaces this owner's claim file with
+    /// `claim` carrying `appliedTimers` (verified by read-back), and returns
+    /// the updated claim, the one to acknowledge. The coordinator calls it
+    /// before the canonical save, so a retry always knows which timer actions
+    /// an earlier attempt may have saved. The file is rewritten atomically:
+    /// a crash leaves the old claim or the new one, never neither.
+    func recordAppliedTimers(
+        _ appliedTimers: [NativeWidgetActionAppliedTimer],
+        in claim: NativeWidgetActionClaim
+    ) throws -> NativeWidgetActionClaim {
+        try withLock {
+            guard let (stored, _) = try loadClaim(accountBinding: claim.accountBinding), stored == claim
+            else { throw NativeWidgetActionClaimError.verificationFailed }
+            var updated = claim
+            updated.appliedTimers = appliedTimers
+            let bytes = try Self.encode(updated)
+            let destination = claimURL(updated)
+            do {
+                try bytes.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                guard try Data(contentsOf: destination) == bytes else {
+                    throw NativeWidgetActionClaimError.verificationFailed
+                }
+            } catch let error as NativeWidgetActionClaimError {
+                throw error
+            } catch {
+                throw NativeWidgetActionClaimError.writeFailed
+            }
+            return updated
         }
     }
 
@@ -1350,8 +1443,9 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
     }
 }
 
-/// Owns the commit ordering: durable claim, pure replay, one atomic canonical
-/// save, the outbound-sync enqueue of every written record, then exact
+/// Owns the commit ordering: durable claim, pure replay, the claim's
+/// applied-timer ledger (L286.1), one atomic canonical save, the
+/// outbound-sync enqueue of every written record, then exact
 /// acknowledgement. Unsupported future actions retain their claim and prevent
 /// partial application of the batch.
 struct NativeWidgetActionReplayCoordinator {
@@ -1424,9 +1518,18 @@ struct NativeWidgetActionReplayCoordinator {
             rawValue: raw,
             verifiedAccountBinding: verifiedAccountBinding
         )
-        let result = try NativeWidgetActionReplayer.apply(batch, to: snapshot)
+        let result = try NativeWidgetActionReplayer.apply(
+            batch, to: snapshot, appliedTimers: claim.appliedTimers ?? []
+        )
         guard result.canAcknowledge else {
             return .retainedUnsupported(actionCount: result.unsupportedActionIDs.count)
+        }
+        // Phase 12 12.00b.2-D (L286.1): the ledger is durable before the save
+        // it describes. A crash between the two is safe: the retry finds the
+        // ledger entry but not its session, and applies the action again.
+        var acknowledged = claim
+        if result.appliedTimers != (claim.appliedTimers ?? []) {
+            acknowledged = try transport.recordAppliedTimers(result.appliedTimers, in: claim)
         }
         if result.changedActionCount > 0 {
             try repository.save(result.snapshot)
@@ -1434,7 +1537,7 @@ struct NativeWidgetActionReplayCoordinator {
         if !result.writtenRecords.isEmpty {
             try enqueueWrittenRecords(result.writtenRecords, result.snapshot)
         }
-        try transport.acknowledge(claim)
+        try transport.acknowledge(acknowledged)
         return .committed(
             snapshot: result.snapshot,
             changed: result.changedActionCount,

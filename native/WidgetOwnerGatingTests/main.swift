@@ -495,8 +495,10 @@ private func testReplayGateNativeOwner() async throws {
     let j1 = saved?.payload.jobs?.first { $0.id == "j1" }
     expectEqual(j1?.timeSessions?.count, 1, "exactly ONE session on j1: B's, never A's same-id action")
     expectEqual(j1?.timeSessions?.first?.start, "2026-08-03T18:00:00.000Z", "the session is B's timer_start")
-    expectEqual(j1?.timeSessions?.first?.preservation.unknownFields["__nativeWidgetStartActionID"], .string("b-start"),
-                "the applied marker is B's action id")
+    // Phase 12 12.00b.2-D (L286.1): replay keeps its bookkeeping in the
+    // claim file, never in the record.
+    expectEqual(j1?.timeSessions?.first?.preservation.unknownFields.keys.filter { $0.hasPrefix("__native") }, [],
+                "L286.1: the replayed session holds no __native key")
     expectEqual(saved?.payload.expenses?.map(\.id), ["e_siri_b-exp"], "only B's expense is filed; A's is dropped")
     expect(saved?.payload.trips?.isEmpty ?? true, "the untagged trip is dropped, not filed")
     expect(suite.queue == nil, "the whole claimed queue is acknowledged (dropped entries included)")
@@ -510,6 +512,11 @@ private func testReplayGateNativeOwner() async throws {
         .load().map { "\($0.table)/\($0.recordId)" }
     expectEqual(Set(queuedWrites), ["jobs/j1", "expenses/e_siri_b-exp"],
                 "C1: exactly B's replayed records are queued for sync (none of the dropped entries)")
+    let queuedJob = Canonical.NativeMutationQueue(fileURL: workspace.directory.appendingPathComponent("mutation-queue.json"))
+        .load().first { $0.table == "jobs" }?.payload
+    let queuedJobText = queuedJob.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+    expect(queuedJobText?.contains("timeSessions") == true && queuedJobText?.contains("\"__native") == false,
+           "L286.1: the queued job payload has the session and no __native key")
 }
 
 // MARK: - 4. Cross-sign-in: A signs out, B signs in (widget, Siri, claims)

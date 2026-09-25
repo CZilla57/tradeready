@@ -123,9 +123,20 @@ struct WidgetActionReplayTests {
                && replayed.snapshot.payload.expenses?.first?.category == "other"
                && replayed.snapshot.payload.expenses?.first?.description == "Logged via Siri",
                "expense replay matches RN category and description fallbacks")
-        let replayedAgain = try NativeWidgetActionReplayer.apply(knownBatch, to: replayed.snapshot)
+        // Phase 12 12.00b.2-D (L286.1): the timer actions are recorded in the
+        // result's ledger (kept in the claim), not in the session.
+        expect(replayed.appliedTimers == [
+            .init(actionID: "start-atomic", kind: .start, jobID: "j1", sessionStart: "2026-08-03T09:00:00Z"),
+            .init(actionID: "stop-atomic", kind: .stop, jobID: "j1", sessionStart: "2026-08-03T09:00:00Z"),
+        ], "L286.1: the ledger names each applied timer action and its session")
+        expect(replayedJob.timeSessions?.first?.preservation.unknownFields.isEmpty == true,
+               "L286.1: the replayed session carries no replay marker")
+        let replayedAgain = try NativeWidgetActionReplayer.apply(
+            knownBatch, to: replayed.snapshot, appliedTimers: replayed.appliedTimers
+        )
         expect(replayedAgain.changedActionCount == 0 && replayedAgain.ignoredActionCount == 4,
-               "deterministic IDs and session markers make post-commit retry idempotent")
+               "deterministic IDs and the claim's applied-timer ledger make post-commit retry idempotent")
+        expect(replayedAgain.appliedTimers == replayed.appliedTimers, "L286.1: a no-op retry leaves the ledger unchanged")
 
         let transportRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("tradeready-widget-claim-tests-\(UUID().uuidString)", isDirectory: true)
@@ -261,10 +272,10 @@ struct WidgetActionReplayTests {
         expect(persistedCommit?.snapshot.payload.expenses?.count == 1,
                "all replay families publish in one canonical snapshot")
         let persistedRetry = try NativeWidgetActionReplayer.apply(
-            knownBatch, to: persistedCommit!.snapshot
+            knownBatch, to: persistedCommit!.snapshot, appliedTimers: replayed.appliedTimers
         )
         expect(persistedRetry.changedActionCount == 0 && persistedRetry.ignoredActionCount == 4,
-               "idempotency markers survive canonical encoding and repository reload")
+               "the applied-timer ledger keeps a retry idempotent after canonical encoding and repository reload")
         let remainingCommitClaims = try FileManager.default.contentsOfDirectory(
             atPath: commitRoot.appendingPathComponent("claims").path
         )
@@ -350,6 +361,9 @@ struct WidgetActionReplayTests {
             tag: tag, binding: binding, sourceSnapshot: sourceSnapshot, root: transportRoot, expect: expect
         )
         testClaimQuarantine(
+            tag: tag, binding: binding, sourceSnapshot: sourceSnapshot, root: transportRoot, expect: expect
+        )
+        testReplayMarkersStayLocal(
             tag: tag, binding: binding, sourceSnapshot: sourceSnapshot, root: transportRoot, expect: expect
         )
 
@@ -915,5 +929,208 @@ private func testClaimQuarantine(
                "L130 retention: only set-aside-entry records are evicted, oldest first (the newest \(limit) are kept)")
         expect(kept.count == 2 + 1 + limit,
                "L130 retention: 2 claim-file + 1 whole-queue + \(limit) entry records (got \(kept.count))")
+    }
+}
+
+// MARK: - Phase 12 12.00b.2-D: replay markers stay local (L286.1)
+
+/// The JSON a record encodes to.
+private func jsonValue<T: Encodable>(_ value: T) throws -> Canonical.JSONValue {
+    try JSONDecoder().decode(Canonical.JSONValue.self, from: JSONEncoder().encode(value))
+}
+
+/// Every `__native*` object key in `value`, at any depth.
+private func nativeKeys(_ value: Canonical.JSONValue) -> [String] {
+    switch value {
+    case let .object(fields):
+        return fields.flatMap { key, nested in (key.hasPrefix("__native") ? [key] : []) + nativeKeys(nested) }
+    case let .array(values):
+        return values.flatMap(nativeKeys)
+    default:
+        return []
+    }
+}
+
+/// `value` as the server holds it once the push has dropped every
+/// `__native*` key (a test-local copy of the rule, independent of the app's).
+private func withoutNativeKeys(_ value: Canonical.JSONValue) -> Canonical.JSONValue {
+    switch value {
+    case let .object(fields):
+        return .object(fields.filter { !$0.key.hasPrefix("__native") }.mapValues(withoutNativeKeys))
+    case let .array(values):
+        return .array(values.map(withoutNativeKeys))
+    default:
+        return value
+    }
+}
+
+/// `snapshot` with its copy of `job` replaced, as a delta pull replaces a
+/// record that is not pending (`AppStore.rebasePulledDelta`; RN
+/// `utils/syncMerge.ts` `mergeRemoteRecord` returns the remote job).
+private func replacingJob(_ snapshot: Canonical.Snapshot, with job: Canonical.Job) -> Canonical.Snapshot {
+    var copy = snapshot
+    copy.payload.jobs = copy.payload.jobs?.map { $0.id == job.id ? job : $0 }
+    return copy
+}
+
+private func committedSnapshot(_ result: NativeWidgetActionReplayCommitResult) -> Canonical.Snapshot? {
+    if case let .committed(snapshot, _, _, _, _) = result { return snapshot }
+    return nil
+}
+
+private func testReplayMarkersStayLocal(
+    tag: String, binding: String, sourceSnapshot: Canonical.Snapshot, root: URL, expect: Expect
+) {
+    func section(_ label: String, _ body: () throws -> Void) {
+        do { try body() } catch { expect(false, "\(label): threw \(error)") }
+    }
+    func timer(_ id: String, _ type: String, _ at: String, job: String?) -> String {
+        let jobField = job.map { #","jobId":"\#($0)""# } ?? ""
+        return #"{"ownerTag":"\#(tag)","id":"\#(id)","type":"\#(type)","at":"\#(at)"\#(jobField)}"#
+    }
+    func sessions(_ snapshot: Canonical.Snapshot?) -> [(start: String, end: String?)] {
+        (snapshot?.payload.jobs?.first { $0.id == "j1" }?.timeSessions ?? []).map { ($0.start, $0.end) }
+    }
+    let startAt = "2026-08-03T09:00:00.000Z"
+    let stopAt = "2026-08-03T11:00:00.000Z"
+
+    section("L286.1 a") {
+        // (a) The brief's question. A batch is saved and its job queued, but
+        //     the claim is not acknowledged (here the enqueue hook keeps what
+        //     the push would send, then throws, standing in for a crash after
+        //     the enqueue). The push delivers the job without native keys and
+        //     the next pull replaces the local job with that server copy.
+        //     The retry must not apply the clock-in or clock-out again.
+        let h = ReplayHarness(root, "l286-pulled", "[" + [
+            timer("l286-start", "timer_start", startAt, job: "j1"),
+            timer("l286-stop", "timer_stop", stopAt, job: "j1"),
+        ].joined(separator: ",") + "]")
+        var queuedJob: Canonical.JSONValue?
+        do {
+            _ = try h.coordinator(enqueue: { _, committed in
+                if let job = committed.payload.jobs?.first(where: { $0.id == "j1" }) { queuedJob = try jsonValue(job) }
+                throw NativeWidgetActionReplayEnqueueError.missingRecord
+            }).replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+            expect(false, "L286.1 a: sanity: the interrupted attempt fails")
+        } catch NativeWidgetActionReplayEnqueueError.missingRecord {}
+        guard let queuedJob, let saved = h.saved else { return expect(false, "L286.1 a: sanity: the first attempt saved and queued j1") }
+        expect(sessions(saved).count == 1 && sessions(saved).first?.end == stopAt && h.files("claim-").count == 1,
+               "L286.1 a: sanity: the first attempt saved one closed session and left the claim")
+        expect(nativeKeys(queuedJob).isEmpty,
+               "L286.1: the replayed job holds no __native key, so its queued payload has none (got \(nativeKeys(queuedJob)))")
+        let claimOnDisk = try h.files("claim-").first.map {
+            try JSONDecoder().decode(NativeWidgetActionClaim.self, from: Data(contentsOf: $0))
+        }
+        expect(claimOnDisk?.appliedTimers?.map(\.actionID) == ["l286-start", "l286-stop"],
+               "L286.1: the unacknowledged claim file holds the applied-timer ledger")
+        let serverJob = try JSONDecoder().decode(Canonical.Job.self, from: JSONEncoder().encode(withoutNativeKeys(queuedJob)))
+        let retry = try h.coordinator().replayNext(snapshot: replacingJob(saved, with: serverJob), verifiedAccountBinding: binding)
+        let retryCounts = counts(retry)
+        expect(retryCounts?.changed == 0 && retryCounts?.ignored == 2,
+               "L286.1: after a pull replaced the job with the server copy, the retry applies nothing again (got \(String(describing: retryCounts)))")
+        let retried = sessions(committedSnapshot(retry))
+        expect(retried.count == 1 && retried.first?.start == startAt && retried.first?.end == stopAt,
+               "L286.1: the job keeps exactly one closed session (got \(retried))")
+        expect(h.files("claim-").isEmpty, "L286.1: the retried claim is acknowledged")
+    }
+
+    section("L286.1 b") {
+        // (b) The save never reached the server and a pull put back the
+        //     server's older job (no session). The retry applies the batch
+        //     once more, so nothing is lost. The stop names no job: it closes
+        //     the session it closed before.
+        let h = ReplayHarness(root, "l286-wiped", "[" + [
+            timer("l286b-start", "timer_start", startAt, job: "j1"),
+            timer("l286b-stop", "timer_stop", stopAt, job: nil),
+        ].joined(separator: ",") + "]")
+        do {
+            _ = try h.coordinator(enqueue: { _, _ in throw NativeWidgetActionReplayEnqueueError.missingRecord })
+                .replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+            expect(false, "L286.1 b: sanity: the interrupted attempt fails")
+        } catch NativeWidgetActionReplayEnqueueError.missingRecord {}
+        guard let saved = h.saved, let serverJob = sourceSnapshot.payload.jobs?.first(where: { $0.id == "j1" })
+        else { return expect(false, "L286.1 b: sanity: the first attempt saved") }
+        let retry = try h.coordinator().replayNext(snapshot: replacingJob(saved, with: serverJob), verifiedAccountBinding: binding)
+        let retried = sessions(committedSnapshot(retry))
+        expect(counts(retry)?.changed == 2 && retried.count == 1 && retried.first?.start == startAt && retried.first?.end == stopAt,
+               "L286.1: a pull that removed the unsynced session gets it back exactly once (got \(retried))")
+        expect(h.files("claim-").isEmpty, "L286.1 b: the claim is acknowledged")
+    }
+
+    section("L286.1 c") {
+        // (c) The canonical save fails after the claim recorded its actions
+        //     (a directory sits where the store file goes). The retry applies
+        //     them: nothing was saved, so nothing is skipped.
+        let h = ReplayHarness(root, "l286-save-fails", "[" + [
+            timer("l286c-start", "timer_start", startAt, job: "j1"),
+            timer("l286c-stop", "timer_stop", stopAt, job: "j1"),
+        ].joined(separator: ",") + "]")
+        let store = h.repository.primaryURL
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        do {
+            _ = try h.coordinator().replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+            expect(false, "L286.1 c: sanity: the save fails")
+        } catch {}
+        expect(h.files("claim-").count == 1, "L286.1 c: sanity: the claim is kept")
+        try FileManager.default.removeItem(at: store)
+        let retry = try h.coordinator().replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+        let retried = sessions(h.saved)
+        expect(counts(retry)?.changed == 2 && retried.count == 1 && retried.first?.end == stopAt,
+               "L286.1: after a failed save the retry applies the batch once (got \(retried))")
+        expect(h.files("claim-").isEmpty, "L286.1 c: the claim is acknowledged")
+    }
+
+    section("L286.1 claim file") {
+        // A claim taken before any attempt has no ledger key, so its bytes
+        // are what a build without the ledger wrote (and reads the same).
+        let h = ReplayHarness(root, "l286-claim-file", "[" + timer("l286e-start", "timer_start", startAt, job: "j1") + "]")
+        let claim = try h.transport.claim(verifiedAccountBinding: binding)
+        let bytes = try h.files("claim-").first.map { try Data(contentsOf: $0) }
+        expect(claim?.appliedTimers == nil && bytes.map { String(decoding: $0, as: UTF8.self).contains("appliedTimers") } == false,
+               "L286.1: a new claim file has no ledger key")
+        let legacy = #"{"accountBinding":"\#(binding)","schemaVersion":1,"sourceBytes":"W10=","sourceDigest":"x"}"#
+        let decoded = try JSONDecoder().decode(NativeWidgetActionClaim.self, from: Data(legacy.utf8))
+        expect(decoded.appliedTimers == nil && decoded.sourceBytes == Data("[]".utf8),
+               "L286.1: a claim file without the ledger key decodes")
+        let run = try h.coordinator().replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+        expect(counts(run)?.changed == 1 && h.files("claim-").isEmpty,
+               "L286.1: the claim applies and is acknowledged (the ledger goes with it)")
+    }
+
+    section("L286.1 d") {
+        // (d) Inbound: a record written by an earlier native build and kept
+        //     by RN (`utils/timeTracking.ts` `applyClockOut` spreads the
+        //     session) still carries markers. It decodes, the markers are
+        //     dropped on read (unknown fields elsewhere are kept), and they
+        //     never suppress an action, even one reusing a stale id.
+        let staleJobJSON = #"""
+        {"id":"j1","customerId":"c1","customerName":"Customer","title":"Job","description":"Work",
+         "status":"in_progress","scheduledDate":null,"scheduledStartTime":null,"scheduledEndTime":null,
+         "address":"","estimateTotal":0,"laborHours":0,"laborRate":0,"materials":[],"materialMarkup":0,
+         "overhead":0,"margin":0,"notes":"","invoiceId":null,"createdAt":"2026-08-01T00:00:00Z",
+         "__nativeJobFlag":true,
+         "timeSessions":[{"start":"2026-08-02T09:00:00.000Z","end":"2026-08-02T10:00:00.000Z",
+           "__nativeWidgetStartActionID":"stale-start","__nativeWidgetStopActionID":"stale-stop",
+           "futureSessionField":{"keep":true,"__nativeNested":1}}]}
+        """#
+        let staleJob = try JSONDecoder().decode(Canonical.Job.self, from: Data(staleJobJSON.utf8))
+        let staleJSON = try jsonValue(staleJob)
+        expect(nativeKeys(staleJSON).isEmpty,
+               "L286.1: a record with stale markers decodes without any __native key (got \(nativeKeys(staleJSON)))")
+        expect(staleJob.timeSessions?.first?.preservation.unknownFields["futureSessionField"] == .object(["keep": .bool(true)])
+               && staleJob.timeSessions?.first?.end == "2026-08-02T10:00:00.000Z",
+               "L286.1: the session's own fields and other unknown fields are kept")
+        let staleSnapshot = replacingJob(sourceSnapshot, with: staleJob)
+        let reloaded = try Canonical.SnapshotCodec.decode(Canonical.SnapshotCodec.encode(staleSnapshot))
+        let reloadedJobs = try jsonValue(reloaded.payload.jobs ?? [])
+        expect(nativeKeys(reloadedJobs).isEmpty, "L286.1: the stored snapshot holds no __native key either")
+        let h = ReplayHarness(root, "l286-stale", "[" + [
+            timer("stale-start", "timer_start", startAt, job: "j1"),
+            timer("stale-stop", "timer_stop", stopAt, job: "j1"),
+        ].joined(separator: ",") + "]")
+        let run = try h.coordinator().replayNext(snapshot: staleSnapshot, verifiedAccountBinding: binding)
+        let applied = sessions(committedSnapshot(run))
+        expect(counts(run)?.changed == 2 && applied.count == 2 && applied.last?.start == startAt && applied.last?.end == stopAt,
+               "L286.1: a stale marker never suppresses a new action, even one with the same id (got \(applied))")
     }
 }
