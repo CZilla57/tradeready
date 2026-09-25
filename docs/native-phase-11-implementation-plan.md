@@ -792,7 +792,7 @@ complete / Phase 12 evidence deferred**.
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`) and round 2 (`22f35fd`, review I1: a push acknowledged during a direct-caller pull)**: the pull commit rebases onto the live snapshot and takes the server's version only for records the device has not touched (pending at start or commit, or changed locally), holding a table's cursor where it keeps a local record over a fetched row, with scenarios D–G and table-driven merge cases running by default (229 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Done (code complete 2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A29 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. A29 (success, warning and status colors as text) is fixed with native text tokens after the controller ruling. Fix round 1 fixed the 12 in-row destructive buttons (I1) and minors m1–m7. A30 (PDF stamps) is owned by 11.13 and A31 (system dialogs) is accepted. **H1 is closed:** zero release-blocking findings remain. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
-| 11.13 | all | Pending | 11.01-11.12, 11.15 | Cross-client qualification |
+| 11.13 | all | Done (code complete 2026-09-24). The six areas are qualified against RN (contract §17), and every gap has coverage or a named owner. The new suite `native/Phase11QualificationTests` (318 checks) proves four things. RN's own `BridgeSnapshot` and `SiriSnapshot` decoders, extracted from `targets/`, read every fixture and every native write. Every RN widget-action and deep-link vector runs through the native planner, replayer and parser. The RN `track(` sites equal the catalog, with 49 of 52 events live natively and 3 named exclusions. The RN secure fields and §10.1 deny rows are stripped everywhere, and no §12.1 row is open. A30 (PDF stamps and accent) is fixed as a native difference, with every pairing at 5.67:1 or better. Six known issues are carried to the final review and are not qualified. Device, extension, Siri and store proof is deferred to Phase 12 | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
 
 Exit criteria traceability (roadmap Phase 11):
@@ -3857,3 +3857,117 @@ controller ruled is owned by 11.13.
 |---|---|---|
 | A11B-FR1-1 | Light and dark mode: Settings Sign out and Delete account, the delete sheet's toolbar Delete (enabled and disabled), the paywall Sign out, the editor Delete rows, Remove receipt photo, the job-photo trash, and a booking Decline | Each label is rust, not system red. A disabled one reads as disabled, and VoiceOver still announces it as destructive |
 | A11B-FR1-2 | Tap 12pt above and below the Today card's "On my way" text | It sends "On my way", and the card's status row is no taller than a card without the link |
+
+### 11.13 Cross-client and platform qualification (2026-09-24)
+
+**Status:** done, code complete. The six areas are qualified against RN, and every gap
+has coverage or a named owner (contract §17). A30 is fixed. Device, extension, Siri and
+store proof is deferred to Phase 12.
+
+**Files:**
+- New suite: `native/Phase11QualificationTests/main.swift` and
+  `native/run-phase11-qualification-tests.sh`, registered in
+  `native/run-all-domain-tests.sh`.
+- A30: `native/TradeReadyNative/Domain/NativeAccessibilityAudit.swift` (`DocumentPalette`,
+  `documentContrastRequirements`), `native/TradeReadyNative/NativeInvoicePDF.swift`,
+  `native/TradeReadyNative/NativeEstimatePDF.swift`, and
+  `native/AccessibilityAuditTests/main.swift` (`testDocumentPDFContrast`).
+- Docs: contract §12.1 A30, C20, §12.3 and the new §17; `docs/native-parity-matrix.md`
+  (the PDF generation, Deep links, WidgetKit, App Intents/Siri, Analytics, Crash
+  reporting and Accessibility rows).
+- Nothing under `targets/`, `backend*/`, `__tests__/`, `supabase/`, `utils/` or `types/`
+  was edited. The runner reads the RN decoders from `targets/` in the working tree,
+  including another agent's uncommitted `SiriIntents.swift`, and writes its extract
+  only to `$TMPDIR`.
+
+**Handoff (per area; details in contract §17.1):**
+- **Q1 widget snapshot.** RN `BridgeSnapshot` and `SiriSnapshot` decode F1–F5 and three
+  mirror-written native projections field for field. F6 is rejected by the widget and
+  degraded by Siri, as in RN. The native schema is RN's plus `ownerTag`.
+- **Q2 replay.** Every `widgetActions.test.js` vector passes through the planner and
+  replayer. Rejecting the whole batch is asserted as the §4.3 difference.
+- **Q3 deep links.** Every `deepLinks.test.js` vector passes.
+- **Q4 analytics.** RN `track(` (70 sites) equals the 52-event catalog. A call graph over
+  `N/` finds 49 of 52 events live. The three wired-nowhere events:
+  - `booking_request_opened` and `booking_update_opened` (G1): no native push;
+  - `tax_settings_saved` (G2): its chain `emitTaxSettingsSaved` ← `commitTaxSettings`
+    has no caller.
+  
+  These are named exclusions whose owners 11.14 must schedule. **The 11.08 note
+  "`tax_settings_saved` is emitted by `commitTaxSettings`" is refined:** the emission
+  sits in the private helper `emitTaxSettingsSaved`. A one-hop reachability check
+  therefore missed it, and the first RED run exposed that.
+- **Q5 redaction.** RN `SECURE_FIELDS` and 33 §10.1 deny-row keys are denied by analytics,
+  the crash redactor and the widget snapshot.
+- **Q6 accessibility.** No §12.1 row is open.
+- **A30.** PAID 5.86:1, OUTSTANDING 5.74:1, PARTLY PAID 5.67:1, accent 6.37:1 on white and
+  5.91:1 on the total wash. RN's template keeps 2.88–4.33:1, so this is a recorded native
+  difference.
+
+**Known issues not qualified (final review):**
+1. the `NativeRecurringInvoicesView` "Cancel plan"/"Delete plan" `actionRule` bug;
+2. the `NativeSupabasePush` non-auth 4xx queue wedge;
+3. the parity row "Tax set-aside … ported", which overstates (G2);
+4. the `useAnotherAccount` scrub fail-open;
+5. the silent AI-key wipe failure;
+6. `deepLinkOwnerWasActive` keyed on O.
+
+None was changed.
+
+**Commands and results (TZ=America/Phoenix):**
+- RN oracles (§4):
+  `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/widgetBridge.test.js __tests__/widgetActions.test.js __tests__/deepLinks.test.js __tests__/analytics.test.ts`
+  → 4 suites, 123 tests passed, exit 0. There was a haste-map duplicate-mock warning
+  from a `.claude/worktrees` copy, and it did not affect the result. No failure came
+  from other agents' RN or backend edits.
+- A30 RED: `run-accessibility-audit-tests.sh` failed to compile, because
+  `DocumentPalette` and `documentContrastRequirements` were missing. A30 GREEN:
+  `accessibility-audit tests: 1859/1859 checks passed`.
+- Qualification suite:
+  - first run: harness bugs (duplicate JSON keys in fixture builders, optional promotion
+    in `expectEqual`, the one-hop reachability miss above, and the diagnostic's
+    8-issue cap), all fixed in the test;
+  - RED on the unchanged contract: `1 of 318 checks FAILED` (A30 open);
+  - GREEN: `phase11-qualification tests: 318/318 checks passed`.
+- Mutations (scratch copy of the root, run by the compiled binary; the repo was not
+  touched), each caught:
+  - `.tripLogged` emission dropped: 2 failures;
+  - A5 reopened: 1;
+  - RN `BridgeSnapshot` field added: 3;
+  - new RN `track` event: 1;
+  - new RN secure field: 1;
+  - `commitTaxSettings` given a caller: 4.
+  
+  Restored: 318/318.
+- Focused runners, each exit 0:
+  - `phase11-qualification` 318/318;
+  - `widget-snapshot`, `next-job-widget`, `job-timer-widget` and `widget-action-replay`
+    passed;
+  - `app-intent-queue`, `widget-owner-gating`, `app-group-pending-open-url` and
+    `deep-link-routing` passed;
+  - `analytics-transport` (226 checks) and `analytics-event` (536 checks) passed;
+  - `error-redaction` 694/694, `ai-provider-key` 274/274,
+    `accessibility-audit` 1859/1859, `layout-metrics` 817/817;
+  - `invoice-pdf`, `estimate-pdf`, `background-refresh`, `snapshot` and
+    `store-integration` passed.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0 (341 output lines, 65 `PASS` lines, `phase11-qualification tests: 318/318 checks passed`, no FAILED/error lines; backend-workers `npm test`: tests 26, pass 26, fail 0).
+- Release compile → `** BUILD SUCCEEDED **`.
+- Doc check → `1659 path references checked: 0 missing, 16 planned (not yet created).` (the planned count includes the Phase 12 `docs/native-phase-11-device-runsheet.md`).
+
+**Deviations:**
+- No behavior change beyond A30. G1 and G2 are named blockers, not fixes.
+- The optional simulator smoke (§13) was not run.
+
+**Phase 12 deferrals (not run, not claimed):**
+
+| Row | Step | Pass when |
+|---|---|---|
+| Q11-P12-1 (device) | On the §13 iPhone and iPad rows, install the Release build. Sign in, create a job and an invoice, clock in, then sign out | The Next Job and Job Timer widgets show the owner's data, then clear on sign-out; nothing from the previous owner appears after a new sign-in |
+| Q11-P12-2 (extension) | Add Next Job (small and medium) and Job Timer to the home screen. Use the interactive timer button; leave the device a day | The widgets render, the button starts and stops the timer through the queue, and a snapshot older than 24 h shows the stale state |
+| Q11-P12-3 (Siri) | Speak each of the ten App Intent phrases (contract §5), including on-my-way, from a cold and a warm app | Each intent's action replays once into the app (trip `t_siri_`, expense `e_siri_`, timer), and on-my-way routes to the job composer |
+| Q11-P12-4 (store) | A StoreKit sandbox or TestFlight purchase and restore; Release PostHog and Sentry keys supplied on staging | `subscription_purchased` and the catalog events arrive with allow-listed properties only, and Sentry receives a redacted event |
+| Q11-P12-5 (PDF) | Share an invoice PDF in each status and an estimate PDF, and view them on the device and in Mail | Stamps and accent use the A30 colors and stay legible when printed |
+
+**Next ready:** 11.14 (aggregate verification and closeout). 11.14 must schedule owners
+for G1 (native remote push) and G2 (a native tax-settings editor), and collect the rows
+above into `docs/native-phase-11-device-runsheet.md`.

@@ -82,6 +82,8 @@ sh "$ROOT_DIR/native/run-accessibility-audit-tests.sh"
 sh "$ROOT_DIR/native/run-layout-metrics-tests.sh"
 sh "$ROOT_DIR/native/run-performance-metrics-tests.sh"
 sh "$ROOT_DIR/native/run-poor-network-tests.sh"
+# Task 11.13: Phase 11 cross-client qualification (RN decoders, vectors, catalog).
+sh "$ROOT_DIR/native/run-phase11-qualification-tests.sh"
 "$ROOT_DIR/native/run-business-rules-tests.sh"
 "$ROOT_DIR/native/run-recurring-job-tests.sh"
 "$ROOT_DIR/native/run-adapter-tests.sh"

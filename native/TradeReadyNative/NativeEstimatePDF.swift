@@ -91,10 +91,12 @@ enum NativeEstimatePDFError: LocalizedError {
 enum NativeEstimatePDFRenderer {
     private static let page = CGRect(x: 0, y: 0, width: 612, height: 792)
     private static let margin: CGFloat = 48
-    private static let accent = UIColor(red: 0, green: 0.478, blue: 1, alpha: 1)
-    private static let ink = UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)
-    private static let secondary = UIColor(red: 0.39, green: 0.39, blue: 0.42, alpha: 1)
-    private static let rule = UIColor(red: 0.90, green: 0.90, blue: 0.92, alpha: 1)
+    // Every color comes from the audited document palette (11.13, A30).
+    private static let accent = UIColor(document: NativeAccessibilityAudit.DocumentPalette.accent)
+    private static let ink = UIColor(document: NativeAccessibilityAudit.DocumentPalette.ink)
+    private static let secondary = UIColor(document: NativeAccessibilityAudit.DocumentPalette.secondary)
+    private static let rule = UIColor(document: NativeAccessibilityAudit.DocumentPalette.rule)
+    private static let totalWash = UIColor(document: NativeAccessibilityAudit.DocumentPalette.totalWash)
 
     static func data(for document: NativeEstimatePDFDocument, logoReference: String?) throws -> Data {
         let format = UIGraphicsPDFRendererFormat()
@@ -217,7 +219,7 @@ enum NativeEstimatePDFRenderer {
             require(74)
             y += 14
             let totalRect = CGRect(x: margin, y: y, width: page.width - margin * 2, height: 56)
-            UIColor(red: 0.94, green: 0.97, blue: 1, alpha: 1).setFill()
+            totalWash.setFill()
             UIBezierPath(roundedRect: totalRect, cornerRadius: 8).fill()
             _ = draw("TOTAL ESTIMATE", x: margin + 16, y: y + 19, width: 220,
                      font: .systemFont(ofSize: 12, weight: .semibold), color: ink)

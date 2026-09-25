@@ -65,7 +65,7 @@ characterization).
 | C17 | `$screen` names | Use RN route names; 11.08 produces the exact route-to-screen map (§9.3) | chosen policy; map delivered by 11.08 | 11.08 |
 | C18 | Redaction | Allow/deny table (§10.1); Sentry user is `{id}` only; extras are allow-listed; `rawError` is reduced | chosen; crash side implemented by 11.09 (§10.4) | 11.07, 11.09, 11.15 |
 | C19 | AI key entry | Keychain-only through `NativeKeychainSecureSettingsStore`, same keys as RN (§11) | chosen; implemented by 11.15 with the native differences in §11.1 | 11.15 |
-| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audited after 11.11 and 11.12 (§12.3): A13, A15–A18 and A24–A29 fixed, A22 accepted. A29 (success, warning and status colors as text) was fixed with native text tokens after the controller ruling (2026-09-24). Fix round 1 fixed the in-row destructive buttons (I1, in A28) and recorded A30 (PDF stamps, owned by 11.13) and A31 (system-drawn dialogs, accepted). Zero release-blocking findings remain, so **H1 is closed** | 11.10a/11.10b |
+| C20 | Accessibility baseline | Per-file inventory and release-blocking findings (§12) | chosen baseline; 11.10a closed all four release-blocking candidates (§12.1). 11.10b re-audited after 11.11 and 11.12 (§12.3): A13, A15–A18 and A24–A29 fixed, A22 accepted. A29 (success, warning and status colors as text) was fixed with native text tokens after the controller ruling (2026-09-24). Fix round 1 fixed the in-row destructive buttons (I1, in A28) and recorded A30 (PDF stamps; fixed in 11.13 as a native difference, §12.1) and A31 (system-drawn dialogs, accepted). Zero release-blocking findings remain, so **H1 is closed** | 11.10a/11.10b |
 | C22 | Owner predicate | ONE predicate for the snapshot writer, `ownerTag`, the replay gate and the deep-link/pending-URL gate: `AppStore.derivedStatePublishBinding` (§2.5). The existing migrated-only replay/consume gates are gaps | chosen; replay gap closed by 11.05 (plan §7), deep-link and pending-URL-consumer gaps **closed by 11.06** (§2.5, §6.2, §6.3) | 11.01, 11.05, 11.06 |
 | C21 | Device matrix | Phase 11 owns host, build and simulator rows. Phase 12 owns every physical row (§13) | chosen | 11.13, 11.14 / Phase 12 |
 
@@ -1761,7 +1761,7 @@ tint text on that ground, so this is recorded only.
 | A27 | Found by 11.10b: the route preview's loading and empty bands were a fixed 200pt, which clips AX5 text | **Fixed:** 200pt minimum height | `testFixedFrames` |
 | A28 | Found by 11.10b: error, validation and destructive text used system red. It measures 3.55:1 on a white list row in light mode and 4.09:1 on a dark sheet row. The danger money tone, the booking "Cancelled" kind, overdue amounts and the coach error wash used it too | **Fixed** with `tradeDangerText`, still RN's rust hue. Light is `#a63c27`: RN `lightColors.danger` `#b8432b` darkened by A29, because `#b8432b` measured 4.05:1 on a 13% status wash over the grouped background. It is now 6.36:1 on white and 5.70:1 on grouped gray. Dark is `#ee917a` (native only): 5.94:1 on `#2c2c2e`, where RN's `#e06a4f` measures 4.21:1. Every pair holds at least 4.71:1, washes included. **Corrected in fix round 1 (I1).** The first pass removed every `.red` token but missed the `role: .destructive` buttons the app draws itself, which still rendered system red text (3.55:1). There are 12: Delete customer, the AI key Remove, Sign out and Delete account in Settings, the Delete account sheet's toolbar Delete, the paywall Sign out, Delete expense, Remove receipt photo, Delete trip, Delete service, the job-photo trash, and the bordered booking Decline. The Decline was the worst, red on a red wash at 2.90:1. Each keeps its role for VoiceOver, and its label takes `.nativeDestructiveText()`: `tradeDangerText`, or the secondary color while disabled. It is applied inside the label, so the button style's red does not win. The Decline also tints its `.bordered` wash with `tradeDangerText`. Danger text holds at least 4.54:1 on that 15% wash, and on a 15% system-red wash, over the white, grouped and dark list rows. Destructive buttons in alerts, confirmation dialogs, swipe actions and context menus are system-drawn (A31) | `testDangerText` (no `.red`/`Color.red` token); `testSemanticColors` §7 (every `role: .destructive` is in a system-drawn container, a dialog-only helper whose calls are checked, or a `.nativeDestructiveText()` label; 12 in-row buttons pinned), contrast rows, palette literals |
 | A29 | Found by 11.10b: success, warning and status colors used as text measure below 4.5:1 on white in light mode. System green is 2.22, orange 2.20, mint 2.12, cyan 2.54, blue 4.02 and purple 4.13, across about 110 uses (Money tones, job status pills, overdue and lead counts, booking kinds). Dark mode passes. RN has the same class of failure: `lightColors.success` 4.20, `warning` 3.21 and most `status*` colors 2.15–3.68 | **Fixed (native difference; controller ruling 2026-09-24).** Parity does not extend to inaccessible colors, the same precedent as the 11.10a dark fill. Seven dynamic text tokens replace the system hues: `tradeSuccessText` `#1d6d31`/`#30d158`, `tradeWarningText` `#8c5200`/`#ff9f0a`, `tradeInfoText` `#005cc1`/`#5daeff`, `tradeMintText` `#006b67`/`#63e6e2`, `tradeIndigoText` `#5250c7`/`#a3a2f1`, `tradePurpleText` `#863faa`/`#d38ef6` and `tradeCyanText` `#1e6688`/`#64d2ff` (light/dark). Each light value keeps the system hue, darkened. Each dark value is the system dark color where that passes; blue, indigo and purple are lightened. Every text token, `tradeDangerText` included, holds at least 4.70:1 on white, grouped gray, the canvas and its own 13% wash over each in light mode. In dark mode it holds at least 4.71:1 on black, `#1c1c1e`, `#2c2c2e`, the dark canvas, RN's surface and the washes. Non-text uses (status dots, the retention bar, the calendar conflict block, check glyphs) take the same tokens, because system green, orange, mint and cyan fail even 3:1 on white. Swipe actions drew white on system green, orange and red (2.22, 2.20 and 3.55:1). They now use `tradeSuccessFill` `#22833b`/`#23873c`, `tradeWarningFill` `#a76200`/`#ac6400`, `tradeReadyFill` and `tradeDangerFill`. Every one is at least 4.55:1 under white, and each dark fill is at least 3:1 on the dark rows | `testSemanticColors`: palette literals parsed from `N/Models.swift`, generated contrast rows, no system hue in a non-widget view (the `.mint` portal action is matched per use by its call shape), foreground styles carry only text tokens, fills appear only inside tint, background, fill or overlay calls (a helper returning one fails), no text token as a tint, every swipe button tinted with a fill, and washes at or below 13%. **Fix round 1:** the hue scan also catches UIKit spellings (`Color(.systemGreen)`, `UIColor.systemRed`, `Color(uiColor: .systemOrange)`) (m3). The `.mint` action is matched per use by call shape, not counted per file (m4). A fill may tint only a swipe action or a `.borderedProminent` chain, and a text token only a `.bordered` chain (m2). Every literal opacity above 13% in any context, helper or trailing closure, must be a reviewed non-text or proven use (m1; the coach user bubble's 18% wash under primary text now has rows). The mutations are in the plan §7 log |
-| A30 | Found by the 11.10b review (m5): the invoice PDF's status stamps and accent measure below 4.5:1. PAID green on its tint is 2.90:1, OUTSTANDING orange 3.09:1, PARTLY PAID blue 4.28:1, and the `#007aff` accent on white 4.02:1 (`N/NativeInvoicePDF.swift`, the stamp colors and `accent`; `N/NativeEstimatePDF.swift` shares the accent) | **Open, owned by 11.13 (controller ruling 2026-09-24).** These are printed and shared documents, outside H1's app-view scope, so they do not block H1. Not fixed in 11.10b | Ratios computed with the suite's WCAG math |
+| A30 | Found by the 11.10b review (m5): the invoice PDF's status stamps and accent measure below 4.5:1. PAID green on its tint is 2.90:1, OUTSTANDING orange 3.09:1, PARTLY PAID blue 4.28:1, and the `#007aff` accent on white 4.02:1 (`N/NativeInvoicePDF.swift`, the stamp colors and `accent`; `N/NativeEstimatePDF.swift` shares the accent) | **Fixed in 11.13 (native difference).** Both renderers now take every color from `NativeAccessibilityAudit.DocumentPalette` (`N/Domain/NativeAccessibilityAudit.swift`), and no `UIColor(red:` literal remains in either file. The accent is the light information text color: 6.37:1 on white and 5.91:1 on the total wash. The stamps use the semantic text colors on their unchanged fills: PAID 5.86:1, OUTSTANDING 5.74:1 and PARTLY PAID 5.67:1. All 13 `documentContrastRequirements` pairings meet their role minimum. RN `utils/pdfTemplates.ts` keeps the failing hues: `#007aff` measures 4.02:1, `.badge-paid` 2.88:1, `.badge-unpaid` 3.12:1 and `.badge-partial` 4.33:1. The darker native text is therefore a recorded native difference. These are printed documents outside H1's app-view scope, so A30 never blocked H1 | `testDocumentPDFContrast` in `native/AccessibilityAuditTests/main.swift`: the old literals and RN's hexes fail, and every palette pairing passes. Same WCAG math as the rest of the suite |
 | A31 | Destructive buttons inside alerts, confirmation dialogs, swipe actions and context menus render system red on the system's own material | **Accepted: system-owned.** iOS draws these containers, and the app cannot restyle an alert or dialog button. The swipe actions already take `tradeDangerFill` under white (A29). Helpers that only feed dialogs (`bookingAlertActions`, the insight `optionsActions` and `muteButtons`, and the change-order `actions(for:)`) are listed, and each call site is checked | `testSemanticColors` §7 |
 
 
@@ -1930,7 +1930,7 @@ iOS 17 floor, since the probe ran on the iOS 26 runtime.
 (`c4e040a..7da61a2`). It resolved the §12.1 items handed forward and extended the 11.10a
 scanner. The proof is still `sh native/run-accessibility-audit-tests.sh`.
 
-**Release-blocking findings open: 0. H1 is closed.** A29 was fixed after the controller ruling of 2026-09-24. Fix round 1 then fixed the in-row destructive buttons that the A28 pass had missed (I1). A30, the PDF stamps, is owned by 11.13 and outside H1's app-view scope, and A31 is accepted as system-owned.
+**Release-blocking findings open: 0. H1 is closed.** A29 was fixed after the controller ruling of 2026-09-24. Fix round 1 then fixed the in-row destructive buttons that the A28 pass had missed (I1). A30, the PDF stamps, was outside H1's app-view scope; 11.13 fixed it (§12.1). A31 is accepted as system-owned.
 Every other §12.1 row is fixed, accepted with a rationale, or a Phase 12 device row
 (A12 and A19).
 
@@ -2068,3 +2068,78 @@ created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in
 | `git ls-remote --tags` plus the GitHub releases API for `getsentry/sentry-cocoa` and `PostHog/posthog-ios` | Latest stable: 9.29.0 (2026-09-17) and 3.81.0 (2026-09-22). PrivacyInfo files read at those tags |
 | `grep -rn "track(" --include='*.ts' --include='*.tsx' App.tsx screens components hooks utils context` | 72 lines: 70 call sites, plus 2 in `utils/analytics.ts` (the definition and a comment). 52 distinct events, all in §9.5. 11.08 must not assert a site count |
 | `sh native/run-doc-reference-check.sh` | See the plan execution log (§7 of the plan) |
+
+---
+
+## 17. Cross-client qualification (11.13, 2026-09-24)
+
+11.13 qualifies Phase 11 against RN; it does not rewrite it. Where a focused 11.01–11.12
+suite already proves an area, this section cites it. The cross-client fixtures that
+were missing now live in one new suite:
+
+- `native/Phase11QualificationTests/main.swift`;
+- run by `sh native/run-phase11-qualification-tests.sh`, which is registered in
+  `native/run-all-domain-tests.sh`.
+
+That runner extracts RN's `BridgeSnapshot` (`targets/widget/Widgets.swift`) and
+`SiriSnapshot` (`targets/widget/_shared/SiriIntents.swift`) from the working tree at
+test time. It never copies or edits `targets/`. It fails loudly if either struct
+disappears.
+
+### 17.1 Per-area evidence
+
+| Area | Added by 11.13 (cross-client) | Suites cited (all run with `TZ=America/Phoenix`) | Result | Gaps and owners |
+|---|---|---|---|---|
+| Q1 Widget snapshot parity (§2) | RN `BridgeSnapshot` and `SiriSnapshot` decode F1–F5. F6 is rejected by RN's widget and by native, and Siri degrades it to "no address". Three native projections (empty; next job + timer; no start time + empty address), stored by the real `NativeWidgetMirror`, decode with both RN decoders field for field. The native stored fields equal RN's 15 plus `ownerTag: String?` only. The verbatim copy in `WidgetSnapshotTests` is checked against the working tree | `run-widget-snapshot`, `run-next-job-widget`, `run-job-timer-widget`, `run-widget-owner-gating` | All pass | None |
+| Q2 Action batch replay (§4) | Every `__tests__/widgetActions.test.js` vector (timer start/stop/pair, done statuses, the stop fallback, trip and expense records, dedupe, the category list parsed from `utils/moneyUtils.ts`, the description fallback) runs through the real planner and replayer, including a retry of the same claim | `run-widget-action-replay`, `run-app-intent-queue` (native writer → replay → AppStore), `run-widget-owner-gating` | All pass | None. RN drops only an invalid action, while native rejects the whole batch. That is the recorded §4.3 difference, asserted per vector. `NaN`/`Infinity` cannot be written as JSON, so they surface as `malformedQueue` |
+| Q3 Deep-link matrices (§6) | Every `__tests__/deepLinks.test.js` vector, job and on-my-way, runs through `NativeDeepLinkParser.parse` and `parsePendingOpenURL` (the freshness window and 10 malformed stashes) | `run-deep-link-routing` (auth, owner and record gates), `run-app-group-pending-open-url` | All pass | None. For `otherapp://evil`, RN returns the raw URL and its parser then rejects it; native rejects it at one boundary. The end result is the same (§6.3) |
+| Q4 Event catalog vs call sites (§9.5, §9.7) | RN `track(` sites (70 sites across `App.tsx`, `screens`, `components`, `hooks`, `utils` and `context`, a literal or a two-literal ternary, anything else fails) must equal the 52-event catalog. Every catalog event has a typed constructor. A call graph over `N/` counts an `AppStore` emission as live only if its enclosing function is reachable from a root: a reference in another `N/` file, or one outside every `func` body. Gate-policy events count through `output.events.forEach(emitAnalytics)`. 49/52 are live, and the unwired set must equal the exclusion list exactly | `run-analytics-event`, `run-analytics-transport` | All pass | Three named exclusions; see §17.2, G1 and G2 |
+| Q5 Redaction denylist (§10.1) | RN `SECURE_FIELDS`, parsed from `utils/storage/keys.ts`, is `secureKey` to analytics and denied by the crash redactor. One fixture per §10.1 deny row (33 keys) is dropped by `redactDictionary`, reduced to allow-listed extras by `redactExtras`, and stripped from a catalog event by the analytics policy. Five credential prefixes are scrubbed from text. No widget-snapshot key is secure-shaped, and a secret planted in job notes never reaches the snapshot | `run-error-redaction`, `run-analytics-transport`, `run-ai-provider-key` | All pass | None |
+| Q6 Accessibility and layout metrics (§12) | §12.1 lists A1–A31, and no status starts with **Open. A30 is fixed here (below) | `run-accessibility-audit` (1859 checks, including `testDocumentPDFContrast`), `run-layout-metrics`, `run-invoice-pdf`, `run-estimate-pdf` | All pass | None open. VoiceOver, Switch Control and AX5 are deferred to Phase 12 (A12, A19) |
+
+**A30 (controller-assigned, §12.1).** `N/NativeInvoicePDF.swift` and
+`N/NativeEstimatePDF.swift` now draw every color from
+`NativeAccessibilityAudit.DocumentPalette`. The new values measure:
+
+- accent (the light information text color): 6.37:1 on white and 5.91:1 on the total wash;
+- PAID on its fill: 5.86:1 (success text);
+- OUTSTANDING on its fill: 5.74:1 (warning text);
+- PARTLY PAID on its fill: 5.67:1 (information text).
+
+The fills, ink, secondary and rule colors are unchanged. `documentContrastRequirements`
+has 13 rows, and all meet their role minimum. RN `utils/pdfTemplates.ts` keeps its
+colors: `#007aff` at 4.02:1, badges at 2.88, 3.12 and 4.33:1, and labels in `#8e8e93`
+at 3.26:1. The native colors are therefore a recorded native difference: parity does
+not extend to inaccessible colors (as with A29).
+
+### 17.2 Gaps, blockers and owners
+
+| ID | Gap | Coverage or blocker | Owner |
+|---|---|---|---|
+| G1 | `booking_request_opened`, `booking_update_opened` have no native emission (RN tracks push taps, `App.tsx`) | Named blocker: native has no remote-push surface. Q4 fails if either becomes live without the list changing, or if another event goes unwired | Native remote push, which is not scheduled on the roadmap. 11.14 closeout must assign it to a phase |
+| G2 | `tax_settings_saved` is emitted only via `emitTaxSettingsSaved` ← `commitTaxSettings`, and nothing calls `commitTaxSettings` | Named blocker: native has no tax-settings editor (RN `TaxSetAsideCard`). Q4 pins the dead chain | A native tax-settings editor, which is also unscheduled. 11.14 closeout must assign it. The parity row "Tax set-aside … ported" overstates this and is a known issue left to the final review |
+| G3 | Siri, widget, extension and store behavior on a device | Deferred to Phase 12 (§13): home-screen rendering, interactive widgets, Siri phrases and Shortcuts, on-my-way cold and warm, Control Center, Sentry and PostHog live delivery, StoreKit, VoiceOver, AX5, and the iPad rows | Phase 12 (11.14 collects the runsheet) |
+
+**Known issues carried to the final review, not qualified by 11.13.** None of these
+is claimed as passing, and none was changed:
+
+1. the `NativeRecurringInvoicesView` "Cancel plan"/"Delete plan" `actionRule` bug;
+2. the `NativeSupabasePush` non-auth 4xx queue wedge;
+3. the parity-matrix Tax set-aside row, which says "ported" although native has no
+   tax-settings screen (see G2);
+4. the `useAnotherAccount` scrub fail-open;
+5. the silent AI-key wipe failure;
+6. `deepLinkOwnerWasActive` keyed on O.
+
+### 17.3 Commands and results (2026-09-24, `TZ=America/Phoenix`)
+
+| Command | Result |
+|---|---|
+| `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/widgetBridge.test.js __tests__/widgetActions.test.js __tests__/deepLinks.test.js __tests__/analytics.test.ts` | 4 suites and 123 tests passed, exit 0. Jest printed a haste-map warning about a duplicate `__mocks__` in a `.claude/worktrees` copy; it did not affect the result |
+| `sh native/run-phase11-qualification-tests.sh` | RED before the A30 row changed: `1 of 318 checks FAILED` (A30 open). GREEN: `318/318 checks passed` |
+| Mutations on a scratch copy of the root, run by the compiled binary with nothing in the repo changed | Six mutations, each caught: `emitAnalytics(.tripLogged)` dropped (2 failures); A5 reopened (1); a field added to RN `BridgeSnapshot` (3); a new RN `track("brand_new_event")` (1); a new RN secure field (1); a caller wired for `commitTaxSettings` (4). The restored copy returned `318/318` |
+| `sh native/run-accessibility-audit-tests.sh` | RED (A30 test first): compile failure, `DocumentPalette` and `documentContrastRequirements` missing. GREEN: `1859/1859 checks passed` |
+| The focused runners in §17.1, plus `run-background-refresh`, `run-snapshot` and `run-store-integration` | Each exits 0; the plan §7 11.13 entry lists every runner and its output line |
+| `sh native/run-all-domain-tests.sh` | See the plan §7 11.13 entry |
+| Release compile (`xcodebuild … -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`) | `** BUILD SUCCEEDED **` |
+| `sh native/run-doc-reference-check.sh` | See the plan §7 11.13 entry |

@@ -1693,6 +1693,96 @@ func testReAuditSites(root: URL, sources: [SourceFile]) {
     }
 }
 
+// MARK: - 11.13 A30: invoice and estimate PDF contrast
+
+/// The first `#rrggbb` after `marker` in `text`.
+func hexAfter(_ marker: String, in text: String) -> RGB? {
+    guard let start = text.range(of: marker) else { return nil }
+    let tail = text[start.upperBound...]
+    guard let hash = tail.firstIndex(of: "#") else { return nil }
+    return RGB(hex: String(tail[hash...].prefix(7)))
+}
+
+func testDocumentPDFContrast(root: URL) {
+    // Baseline: the literals the renderers shipped before 11.13 (contract §12.1 A30).
+    let white = Audit.Palette.white
+    let oldAccent = RGB(red: 0, green: 0.478, blue: 1)
+    let oldBadges: [(String, RGB, RGB, Double)] = [
+        ("PAID", RGB(red: 0.15, green: 0.65, blue: 0.36), RGB(red: 0.91, green: 0.98, blue: 0.94), 2.90),
+        ("OUTSTANDING", RGB(red: 0.77, green: 0.48, blue: 0), RGB(red: 1, green: 0.95, blue: 0.88), 3.09),
+        ("PARTLY PAID", RGB(red: 0.18, green: 0.44, blue: 0.82), RGB(red: 0.92, green: 0.95, blue: 1), 4.28),
+    ]
+    let oldAccentRatio = Audit.contrastRatio(oldAccent, white)
+    expectClose(oldAccentRatio, 4.02, "A30 baseline: old PDF accent on white measured 4.02")
+    expect(oldAccentRatio < Audit.Threshold.text, "A30 baseline: old accent fails text AA")
+    for (label, text, fill, measured) in oldBadges {
+        let ratio = Audit.contrastRatio(text, fill)
+        expectClose(ratio, measured, "A30 baseline: old \(label) badge measured \(measured)")
+        expect(ratio < Audit.Threshold.text, "A30 baseline: old \(label) badge fails text AA")
+    }
+
+    // RN's template ships the same failing hues: the fix is a native difference.
+    if let rn = read(root, "utils/pdfTemplates.ts") {
+        let rnPairs: [(String, RGB?, RGB?)] = [
+            ("accent on white", hexAfter("const ACCENT =", in: rn), white),
+            ("badge-paid", hexAfter(".badge-paid   { background: #e8f9f0; color:", in: rn), hexAfter(".badge-paid", in: rn)),
+            ("badge-unpaid", hexAfter(".badge-unpaid { background: #fff3e0; color:", in: rn), hexAfter(".badge-unpaid", in: rn)),
+            ("badge-partial", hexAfter(".badge-partial { background: #eaf2ff; color:", in: rn), hexAfter(".badge-partial", in: rn)),
+        ]
+        for (name, foreground, background) in rnPairs {
+            guard let foreground, let background else {
+                expect(false, "RN pdfTemplates.ts \(name) colours parse"); continue
+            }
+            let ratio = Audit.contrastRatio(foreground, background)
+            expect(ratio < Audit.Threshold.text,
+                   "RN PDF \(name) \(String(format: "%.2f", ratio)):1 still fails (A30 is a native difference)")
+        }
+    } else {
+        expect(false, "utils/pdfTemplates.ts readable")
+    }
+
+    // The shipped document palette meets every role minimum.
+    let requirements = Audit.documentContrastRequirements
+    expect(requirements.count >= 12, "document contrast table is populated (\(requirements.count))")
+    expectEqual(Set(requirements.map(\.name)).count, requirements.count, "document requirement names are unique")
+    for requirement in requirements {
+        let ratio = Audit.contrastRatio(requirement.foreground, requirement.background)
+        expect(ratio >= requirement.role.minimum,
+               "PDF \(requirement.name): \(String(format: "%.2f", ratio)):1 ≥ \(requirement.role.minimum):1")
+    }
+    let d = Audit.DocumentPalette.self
+    let namedPairs: [(String, RGB, RGB)] = [
+        ("accent business name on white", d.accent, d.page),
+        ("accent total on the total wash", d.accent, d.totalWash),
+        ("PAID badge", d.paidBadgeText, d.paidBadgeFill),
+        ("OUTSTANDING badge", d.outstandingBadgeText, d.outstandingBadgeFill),
+        ("PARTLY PAID badge", d.partlyPaidBadgeText, d.partlyPaidBadgeFill),
+    ]
+    for (name, foreground, background) in namedPairs {
+        let present = requirements.contains { row in
+            row.foreground == foreground && row.background == background && row.role == .text
+        }
+        expect(present, "document requirement row for \(name)")
+    }
+
+    // Both renderers take every colour from the palette: no literal remains.
+    for path in ["native/TradeReadyNative/NativeInvoicePDF.swift", "native/TradeReadyNative/NativeEstimatePDF.swift"] {
+        guard let text = read(root, path) else { expect(false, "\(path) readable"); continue }
+        expect(!text.contains("UIColor(red:") && !text.contains("UIColor(white:"),
+               "\(path) has no literal UIColor (A30 palette only)")
+        for token in ["DocumentPalette.accent", "DocumentPalette.ink", "DocumentPalette.secondary",
+                      "DocumentPalette.rule", "DocumentPalette.totalWash"] {
+            expect(text.contains(token), "\(path) uses \(token)")
+        }
+    }
+    if let invoice = read(root, "native/TradeReadyNative/NativeInvoicePDF.swift") {
+        for token in ["paidBadgeFill", "paidBadgeText", "partlyPaidBadgeFill", "partlyPaidBadgeText",
+                      "outstandingBadgeFill", "outstandingBadgeText"] {
+            expect(invoice.contains("DocumentPalette.\(token)"), "invoice badge uses DocumentPalette.\(token)")
+        }
+    }
+}
+
 // MARK: - Entry
 
 @main
@@ -1728,6 +1818,8 @@ struct AccessibilityAuditTests {
         testReAuditSites(root: root, sources: sources)
         testDangerText(root: root, sources: sources)
         testSemanticColors(root: root, sources: sources)
+        // 11.13 A30.
+        testDocumentPDFContrast(root: root)
 
         if failures > 0 {
             print("accessibility-audit tests: \(failures) of \(checks) checks FAILED")

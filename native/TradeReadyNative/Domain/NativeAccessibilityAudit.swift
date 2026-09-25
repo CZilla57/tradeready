@@ -169,6 +169,54 @@ enum NativeAccessibilityAudit {
         static let warningFillDark = RGB(red: 0.674, green: 0.394, blue: 0.000)
     }
 
+    // MARK: Invoice and estimate PDF palette (11.13, A30)
+
+    /// The colors `N/NativeInvoicePDF.swift` and `N/NativeEstimatePDF.swift`
+    /// draw with. A PDF page is always white, whatever the device appearance,
+    /// so each role has one value. Before 11.13 the badges measured PAID 2.90,
+    /// OUTSTANDING 3.09 and PARTLY PAID 4.28, and the `#007aff` accent 4.02 on
+    /// white. RN `utils/pdfTemplates.ts` still uses those hues, so the darker
+    /// text here is a native difference recorded in contract §12.1 A30.
+    enum DocumentPalette {
+        static let page = Palette.white
+        /// Business name, the accent rule and the total amount. The light
+        /// information text color: 6.37:1 on white, 5.91:1 on the total wash.
+        static let accent = Palette.infoTextLight
+        static let ink = RGB(red: 0.11, green: 0.11, blue: 0.12)
+        static let secondary = RGB(red: 0.39, green: 0.39, blue: 0.42)
+        /// Table separators: decorative, so no contrast minimum applies.
+        static let rule = RGB(red: 0.90, green: 0.90, blue: 0.92)
+        /// The rounded panel behind TOTAL DUE / BALANCE DUE.
+        static let totalWash = RGB(red: 0.94, green: 0.97, blue: 1.00)
+        static let paidBadgeFill = RGB(red: 0.91, green: 0.98, blue: 0.94)
+        static let paidBadgeText = Palette.successTextLight
+        static let partlyPaidBadgeFill = RGB(red: 0.92, green: 0.95, blue: 1.00)
+        static let partlyPaidBadgeText = Palette.infoTextLight
+        static let outstandingBadgeFill = RGB(red: 1.00, green: 0.95, blue: 0.88)
+        static let outstandingBadgeText = Palette.warningTextLight
+    }
+
+    /// Every text and UI pairing the PDF renderers draw. The host suite
+    /// computes each one against its role's minimum.
+    static let documentContrastRequirements: [ContrastRequirement] = {
+        let d = DocumentPalette.self
+        return [
+            .init(name: "accent business name on white", foreground: d.accent, background: d.page, role: .text),
+            .init(name: "accent total amount on the total wash", foreground: d.accent, background: d.totalWash, role: .text),
+            .init(name: "accent header rule on white", foreground: d.accent, background: d.page, role: .nonText),
+            .init(name: "ink body text on white", foreground: d.ink, background: d.page, role: .text),
+            .init(name: "ink TOTAL DUE label on the total wash", foreground: d.ink, background: d.totalWash, role: .text),
+            .init(name: "secondary labels on white", foreground: d.secondary, background: d.page, role: .text),
+            .init(name: "secondary text on the total wash", foreground: d.secondary, background: d.totalWash, role: .text),
+            .init(name: "PAID badge text on its fill", foreground: d.paidBadgeText, background: d.paidBadgeFill, role: .text),
+            .init(name: "PARTLY PAID badge text on its fill", foreground: d.partlyPaidBadgeText, background: d.partlyPaidBadgeFill, role: .text),
+            .init(name: "OUTSTANDING badge text on its fill", foreground: d.outstandingBadgeText, background: d.outstandingBadgeFill, role: .text),
+            .init(name: "PAID badge text on white", foreground: d.paidBadgeText, background: d.page, role: .text),
+            .init(name: "PARTLY PAID badge text on white", foreground: d.partlyPaidBadgeText, background: d.page, role: .text),
+            .init(name: "OUTSTANDING badge text on white", foreground: d.outstandingBadgeText, background: d.page, role: .text),
+        ]
+    }()
+
     // MARK: Semantic color tokens (A28, A29)
 
     struct SemanticColorToken: Equatable {

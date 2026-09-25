@@ -138,10 +138,12 @@ enum NativeInvoicePDFError: LocalizedError { case renderFailed, temporaryFileFai
 enum NativeInvoicePDFRenderer {
     private static let page = CGRect(x: 0, y: 0, width: 612, height: 792)
     private static let margin: CGFloat = 48
-    private static let accent = UIColor(red: 0, green: 0.478, blue: 1, alpha: 1)
-    private static let ink = UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)
-    private static let secondary = UIColor(red: 0.39, green: 0.39, blue: 0.42, alpha: 1)
-    private static let rule = UIColor(red: 0.90, green: 0.90, blue: 0.92, alpha: 1)
+    // Every color comes from the audited document palette (11.13, A30).
+    private static let accent = UIColor(document: NativeAccessibilityAudit.DocumentPalette.accent)
+    private static let ink = UIColor(document: NativeAccessibilityAudit.DocumentPalette.ink)
+    private static let secondary = UIColor(document: NativeAccessibilityAudit.DocumentPalette.secondary)
+    private static let rule = UIColor(document: NativeAccessibilityAudit.DocumentPalette.rule)
+    private static let totalWash = UIColor(document: NativeAccessibilityAudit.DocumentPalette.totalWash)
 
     /// Renders the frozen document. A missing or unreadable logo omits only
     /// the logo; sharing the result never mutates invoice state.
@@ -285,7 +287,7 @@ enum NativeInvoicePDFRenderer {
                           font: .monospacedDigitSystemFont(ofSize: 12, weight: .medium), color: ink, alignment: .right) + 8
             }
             let totalRect = CGRect(x: margin, y: y, width: page.width - margin * 2, height: 56)
-            UIColor(red: 0.94, green: 0.97, blue: 1, alpha: 1).setFill()
+            totalWash.setFill()
             UIBezierPath(roundedRect: totalRect, cornerRadius: 8).fill()
             _ = draw(document.status == .partlyPaid ? "BALANCE DUE" : "TOTAL DUE",
                      x: margin + 16, y: y + 19, width: 220,
@@ -356,14 +358,14 @@ enum NativeInvoicePDFRenderer {
         let text: UIColor
         switch status {
         case .paid:
-            label = "PAID"; fill = UIColor(red: 0.91, green: 0.98, blue: 0.94, alpha: 1)
-            text = UIColor(red: 0.15, green: 0.65, blue: 0.36, alpha: 1)
+            label = "PAID"; fill = UIColor(document: NativeAccessibilityAudit.DocumentPalette.paidBadgeFill)
+            text = UIColor(document: NativeAccessibilityAudit.DocumentPalette.paidBadgeText)
         case .partlyPaid:
-            label = "PARTLY PAID"; fill = UIColor(red: 0.92, green: 0.95, blue: 1, alpha: 1)
-            text = UIColor(red: 0.18, green: 0.44, blue: 0.82, alpha: 1)
+            label = "PARTLY PAID"; fill = UIColor(document: NativeAccessibilityAudit.DocumentPalette.partlyPaidBadgeFill)
+            text = UIColor(document: NativeAccessibilityAudit.DocumentPalette.partlyPaidBadgeText)
         case .outstanding:
-            label = "OUTSTANDING"; fill = UIColor(red: 1, green: 0.95, blue: 0.88, alpha: 1)
-            text = UIColor(red: 0.77, green: 0.48, blue: 0, alpha: 1)
+            label = "OUTSTANDING"; fill = UIColor(document: NativeAccessibilityAudit.DocumentPalette.outstandingBadgeFill)
+            text = UIColor(document: NativeAccessibilityAudit.DocumentPalette.outstandingBadgeText)
         }
         let font = UIFont.systemFont(ofSize: 11, weight: .bold)
         let textWidth = ceil(NSString(string: label).size(withAttributes: [.font: font]).width)
@@ -511,4 +513,12 @@ enum NativeInvoicePDFRenderer {
         context.restoreGState()
     }
 }
+
+extension UIColor {
+    /// An opaque sRGB color from the audited palette (11.13, A30).
+    convenience init(document color: NativeAccessibilityAudit.RGB) {
+        self.init(red: CGFloat(color.red), green: CGFloat(color.green), blue: CGFloat(color.blue), alpha: 1)
+    }
+}
+
 #endif
