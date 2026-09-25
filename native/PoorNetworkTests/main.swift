@@ -260,7 +260,8 @@ struct Harness {
             ),
             initialSyncService: NativeSupabaseInitialSyncService(
                 supabaseURL: Self.supabaseURL, publishableKey: "publishable-key", loader: link
-            )
+            ),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         store.scheduleBookingTestSeedSignedInOwner(subject: Self.subject, binding: Self.binding)
         let credentials = NativeSyncCredentials(subject: Self.subject, sessionBytes: Self.session)

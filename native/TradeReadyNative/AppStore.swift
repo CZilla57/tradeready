@@ -4809,6 +4809,15 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Phase 12 (review M1): every scene activation retries the pending
+    /// boundary steps. A step whose Keychain record was unreadable at launch
+    /// (for example before first unlock) is re-read, so the owner's gates
+    /// reopen without a tap, a sign-in or a relaunch; a pending step is
+    /// re-run (it is idempotent). Nothing runs when nothing is pending.
+    func retryAccountBoundaryCleanupOnActivation() {
+        retryPendingBoundarySteps()
+    }
+
     private func applyCompletedSignOutState() {
         // Task 11.08 (§9.4): sign-out, completed deletion, the paywall
         // sign-out and a retried scrub all end here — reset first.
@@ -5017,6 +5026,10 @@ final class AppStore: ObservableObject {
         case .all: try sessionStore.clearAllValues()
         }
         try repository.finishAccountScrub()
+        // Phase 12 (review M1): a switch/recovery step still pending is run
+        // now (its data is already gone), so the sign-in screen that follows
+        // shows no cleanup banner for it.
+        retryPendingBoundarySteps()
     }
 
     private func configuredAuthentication() throws -> (
@@ -9075,14 +9088,17 @@ extension AppStore {
     /// the backend bearer path.
     /// Final review 1b: nil while a boundary wipe is pending, so the next
     /// owner's coach never uses the previous owner's key.
+    /// Phase 12 (L286.5b review I1): and nil unless the key was saved by the
+    /// verified owner (`NativeAIProviderKeyOwnerTag`), so a key whose wipe and
+    /// pending state were both lost is still never read for another owner.
     var advisoryAnthropicKey: String? {
-        isBoundaryStepPending(.aiKeyWipe) ? nil : secureSettingsStore.readAIProviderKey(.anthropic)
+        isBoundaryStepPending(.aiKeyWipe) ? nil : secureSettingsStore.readAIProviderKey(.anthropic, ownerBinding: verifiedAccountBinding)
     }
 
     /// The user's own Groq key, read from the secure store — mirrors
     /// `advisoryAnthropicKey` exactly (task 10.13, coach provider routing).
     var advisoryGroqKey: String? {
-        isBoundaryStepPending(.aiKeyWipe) ? nil : secureSettingsStore.readAIProviderKey(.groq)
+        isBoundaryStepPending(.aiKeyWipe) ? nil : secureSettingsStore.readAIProviderKey(.groq, ownerBinding: verifiedAccountBinding)
     }
 
     // MARK: AI provider key entry (task 11.15)
@@ -9090,7 +9106,8 @@ extension AppStore {
     /// Settings › AI Assistant: whether a key is saved (the page shows only
     /// "Saved", never the key).
     func aiProviderKeyIsSaved(_ kind: NativeAIProviderKeyKind) -> Bool {
-        !isBoundaryStepPending(.aiKeyWipe) && secureSettingsStore.readAIProviderKey(kind) != nil
+        !isBoundaryStepPending(.aiKeyWipe)
+            && secureSettingsStore.readAIProviderKey(kind, ownerBinding: verifiedAccountBinding) != nil
     }
 
     /// The status row's state; a Keychain read error is `.unreadable`.
@@ -9101,8 +9118,11 @@ extension AppStore {
     /// kind the previous owner never saved reads — and offers no Remove. That
     /// matches the closed change gate (`canChangeAIProviderKeys`) and the
     /// coach, which already treats both keys as absent (`advisory*Key`).
+    /// Review I1: another owner's key, or an untagged one, reads "Not set" too.
     func aiProviderKeyState(_ kind: NativeAIProviderKeyKind) -> NativeAIProviderKeyPolicy.SavedState {
-        isBoundaryStepPending(.aiKeyWipe) ? .notSet : secureSettingsStore.aiProviderKeyState(kind)
+        isBoundaryStepPending(.aiKeyWipe)
+            ? .notSet
+            : secureSettingsStore.aiProviderKeyState(kind, ownerBinding: verifiedAccountBinding)
     }
 
     /// Saves (or, for an empty entry, clears) a user key in the secure store
@@ -9121,8 +9141,10 @@ extension AppStore {
     /// while an account boundary (sign-out, deletion, scrub, account switch)
     /// is running or its AI-key wipe is still pending a retry, so a write
     /// cannot land after — or be wiped by the retry of — the boundary's wipe.
+    /// Review I1: a save is tagged with the verified owner, so one is required.
     private var canChangeAIProviderKeys: Bool {
-        isSignedIn && !authenticationOperationInFlight && !accountSwitchInFlight
+        isSignedIn && verifiedAccountBinding != nil
+            && !authenticationOperationInFlight && !accountSwitchInFlight
             && !isAccountScrubBlocked && !repository.isAccountScrubPending
             && !isBoundaryStepPending(.aiKeyWipe)
     }
@@ -9164,10 +9186,15 @@ extension AppStore {
         kind: NativeAIProviderKeyKind
     ) -> NativeAIProviderKeyChange {
         let store = secureSettingsStore
+        let ownerBinding = verifiedAccountBinding
         let change = NativeAIProviderKeyPolicy.apply(
             outcome,
             kind: kind,
-            save: { try store.saveAIProviderKey($0, kind: kind) },
+            save: {
+                // `canChangeAIProviderKeys` already required the owner.
+                guard let ownerBinding else { throw NativeSecureSettingsStoreError.unavailable }
+                try store.saveAIProviderKey($0, kind: kind, ownerBinding: ownerBinding)
+            },
             clear: { try store.clearAIProviderKey(kind) }
         )
         // `coachProviderSummary` and `aiProviderKeyIsSaved` read the store.

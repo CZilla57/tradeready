@@ -158,7 +158,8 @@ func makeStore(_ crashReporting: NativeCrashReporting, tag: String, directory ex
         subscriptionService: SubscriptionStub(),
         analytics: NativeNoOpAnalytics(),
         crashReporting: crashReporting,
-        widgetTimelineReloader: NoopReloader()
+        widgetTimelineReloader: NoopReloader(),
+        secureSettingsStore: hostTestSecureSettingsStore()
     )
     store.coachAdvisoryAnthropicKeyOverride = ""
     store.coachAdvisoryGroqKeyOverride = ""
@@ -889,7 +890,8 @@ struct ErrorRedactionTests {
             fileURL: directory.appending(path: "store.json"),
             seedIfMissing: false,
             subscriptionService: SubscriptionStub(),
-            widgetTimelineReloader: NoopReloader()
+            widgetTimelineReloader: NoopReloader(),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         expect(relaunched.customers.contains { $0.id == customer.id }, "throwing: the customer is on disk after relaunch")
         expect(relaunched.jobs.contains { $0.id == job.id }, "throwing: the job is on disk after relaunch")

@@ -600,7 +600,8 @@ struct AnalyticsTransportTests {
             seedIfMissing: true,
             subscriptionService: SubscriptionStub(),
             analytics: transport,
-            widgetTimelineReloader: NoopReloader()
+            widgetTimelineReloader: NoopReloader(),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         store.coachAdvisoryAnthropicKeyOverride = ""
         store.coachAdvisoryGroqKeyOverride = ""

@@ -110,7 +110,8 @@ func makeStore(_ analytics: NativeAnalytics, tag: String) -> (AppStore, URL) {
         seedIfMissing: false,
         subscriptionService: SubscriptionStub(),
         analytics: analytics,
-        widgetTimelineReloader: NoopReloader()
+        widgetTimelineReloader: NoopReloader(),
+        secureSettingsStore: hostTestSecureSettingsStore()
     )
     store.coachAdvisoryAnthropicKeyOverride = ""
     store.coachAdvisoryGroqKeyOverride = ""
@@ -852,7 +853,8 @@ struct AnalyticsEventTests {
             fileURL: directory.appending(path: "store.json"),
             seedIfMissing: false,
             subscriptionService: SubscriptionStub(),
-            widgetTimelineReloader: NoopReloader()
+            widgetTimelineReloader: NoopReloader(),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         expect(relaunched.customers.contains { $0.id == customer.id }, "throwing: the customer is on disk after relaunch")
         expect(relaunched.jobs.first { $0.id == job.id }?.status == .inProgress,

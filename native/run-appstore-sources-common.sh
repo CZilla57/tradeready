@@ -8,7 +8,13 @@
 # run-export-import-ui, run-phase9-qualification, run-pricebook-ui,
 # run-schedule-booking-settings and run-store-integration runners. Each runner
 # appends only its own extras (views, presentation models) and its main.swift.
+#
+# Phase 12.00b.2-A review M6: the list also carries the host-only in-memory
+# Keychain (`HostTestSupport/HostInMemoryKeychain.swift`); every host-test
+# `AppStore` is built on `hostTestSecureSettingsStore()` unless it injects a
+# fake, so no runner reads or writes the real login Keychain.
 APPSTORE_TEST_SOURCES="
+$ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/BusinessRules.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift
@@ -104,6 +110,7 @@ $ROOT_DIR/native/TradeReadyNative/NativePricebookAI.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAITransport.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAIProviderKeyPolicy.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAIProviderKeyStore.swift
+$ROOT_DIR/native/TradeReadyNative/NativeAIProviderKeyOwnerTag.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAccountBoundaryStepRecord.swift
 $ROOT_DIR/native/TradeReadyNative/NativeImportHistory.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAccountDeletion.swift

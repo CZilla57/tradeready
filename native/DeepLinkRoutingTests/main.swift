@@ -203,7 +203,8 @@ private final class Harness {
             pendingOpenURLConsumer: suite.consumer,
             subscriptionService: subscription,
             analytics: analytics,
-            widgetTimelineReloader: NoopReloader()
+            widgetTimelineReloader: NoopReloader(),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
     }
 

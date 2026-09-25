@@ -19,6 +19,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/UIModelAdapters.swift" \
   "$ROOT_DIR/native/TradeReadyNative/LegacyDataImporter.swift" \
   "$ROOT_DIR/native/TradeReadyNative/LegacyMigrationCoordinator.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeAccountBoundaryStepRecord.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeAuxiliaryStateActivation.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeTypedAccountState.swift" \
   "$ROOT_DIR/native/TypedAccountStateTests/main.swift" \

@@ -411,39 +411,63 @@ func testPrecedence() {
 
 // MARK: - 2. Secure store (existing store, in-memory backing)
 
+/// The sealed item a save writes for `key` and `binding` (review I1).
+func sealedItem(_ key: String, binding: String) -> Data? {
+    try? NativeAIProviderKeyOwnerTag.seal(key, binding: binding)
+}
+
 func testSecureStore() {
     let backend = MemorySecureBackend()
     let store = NativeKeychainSecureSettingsStore(backend: backend)
-    expectEqual(store.readAIProviderKey(.anthropic), nil, "empty store reads nil")
+    let owner = "bind-store"
+    expectEqual(store.readAIProviderKey(.anthropic, ownerBinding: owner), nil, "empty store reads nil")
 
-    do { try store.saveAIProviderKey(anthropicKey, kind: .anthropic) } catch { expect(false, "save anthropic: \(error)") }
-    expectEqual(backend.values["anthropicKey"], Data(anthropicKey.utf8), "save = upsert of the UTF-8 bytes under anthropicKey")
-    expectEqual(store.readAIProviderKey(.anthropic), anthropicKey, "saved key reads back")
-    expectEqual(store.readAIProviderKey(.groq), nil, "saving Anthropic leaves Groq unset")
+    do { try store.saveAIProviderKey(anthropicKey, kind: .anthropic, ownerBinding: owner) } catch { expect(false, "save anthropic: \(error)") }
+    expectEqual(backend.values["anthropicKey"], sealedItem(anthropicKey, binding: owner), "save = one upsert of the sealed item under anthropicKey")
+    expectEqual(store.readAIProviderKey(.anthropic, ownerBinding: owner), anthropicKey, "saved key reads back for its owner")
+    expectEqual(store.readAIProviderKey(.groq, ownerBinding: owner), nil, "saving Anthropic leaves Groq unset")
 
-    do { try store.saveAIProviderKey(groqKey, kind: .groq) } catch { expect(false, "save groq: \(error)") }
-    expectEqual(backend.values["groqKey"], Data(groqKey.utf8), "save = upsert under groqKey")
-    expectEqual(store.readAIProviderKey(.anthropic), anthropicKey, "saving Groq leaves Anthropic intact")
+    do { try store.saveAIProviderKey(groqKey, kind: .groq, ownerBinding: owner) } catch { expect(false, "save groq: \(error)") }
+    expectEqual(backend.values["groqKey"], sealedItem(groqKey, binding: owner), "save = upsert under groqKey")
+    expectEqual(store.readAIProviderKey(.anthropic, ownerBinding: owner), anthropicKey, "saving Groq leaves Anthropic intact")
+
+    // Review I1: the item reads only for its owner.
+    expectEqual(store.readAIProviderKey(.groq, ownerBinding: "bind-other"), nil, "I1: another owner reads nil")
+    expectEqual(store.readAIProviderKey(.groq, ownerBinding: nil), nil, "I1: no owner reads nil")
+    expectEqual(store.readAIProviderKey(.groq, ownerBinding: ""), nil, "I1: an empty owner reads nil")
+    expectEqual(store.aiProviderKeyState(.groq, ownerBinding: owner), .saved, "I1: the owner's state is saved")
+    expectEqual(store.aiProviderKeyState(.groq, ownerBinding: "bind-other"), .notSet, "I1: another owner's state is Not set")
+    let tag = NativeAIProviderKeyOwnerTag.make(binding: owner)
+    expectEqual(tag.count, 64, "I1: the owner tag is a 64-hex SHA-256")
+    expect(tag != NativeWidgetOwnerTag.make(binding: owner), "I1: the key tag is domain-separated from the widget stamp")
+    let text = String(decoding: backend.values["groqKey"] ?? Data(), as: UTF8.self)
+    expect(text.contains(tag) && !text.contains(owner), "I1: the item carries the tag, never the binding")
 
     do { try store.clearAIProviderKey(.anthropic) } catch { expect(false, "clear anthropic: \(error)") }
     expect(backend.values["anthropicKey"] == nil, "clear = remove of anthropicKey")
-    expectEqual(store.readAIProviderKey(.groq), groqKey, "clearing Anthropic leaves Groq intact")
+    expectEqual(store.readAIProviderKey(.groq, ownerBinding: owner), groqKey, "clearing Anthropic leaves Groq intact")
     do { try store.clearAIProviderKey(.anthropic) } catch { expect(false, "clearing an absent key is a no-op: \(error)") }
 
-    // A migrated item with stray whitespace reads trimmed (same rule as before 11.15).
+    // Review I1: an untagged item (an RN-era migrated key) reads as absent;
+    // a sealed item with stray whitespace in the key reads trimmed.
     backend.values["anthropicKey"] = Data("  \(anthropicKey)\n".utf8)
-    expectEqual(store.readAIProviderKey(.anthropic), anthropicKey, "migrated item reads trimmed")
+    expectEqual(store.readAIProviderKey(.anthropic, ownerBinding: owner), nil, "I1: an untagged migrated item reads as absent")
+    expectEqual(store.aiProviderKeyState(.anthropic, ownerBinding: owner), .notSet, "I1: …and its state is Not set")
+    backend.values["anthropicKey"] = sealedItem("  \(anthropicKey)\n", binding: owner)
+    expectEqual(store.readAIProviderKey(.anthropic, ownerBinding: owner), anthropicKey, "a sealed key reads trimmed")
+    backend.values["anthropicKey"] = Data(#"{"schemaVersion":2,"ownerTag":"\#(NativeAIProviderKeyOwnerTag.make(binding: owner))","key":"\#(anthropicKey)"}"#.utf8)
+    expectEqual(store.readAIProviderKey(.anthropic, ownerBinding: owner), nil, "I1: an unknown item version reads as absent")
 
     // Read-back verification: a write that does not persist is an error.
     let flaky = MemorySecureBackend()
     flaky.corruptReads = true
     var threw = false
-    do { try NativeKeychainSecureSettingsStore(backend: flaky).saveAIProviderKey(groqKey, kind: .groq) } catch { threw = true }
+    do { try NativeKeychainSecureSettingsStore(backend: flaky).saveAIProviderKey(groqKey, kind: .groq, ownerBinding: owner) } catch { threw = true }
     expect(threw, "an unverified write throws")
     let failing = MemorySecureBackend()
     failing.failUpsert = true
     threw = false
-    do { try NativeKeychainSecureSettingsStore(backend: failing).saveAIProviderKey(groqKey, kind: .groq) } catch {
+    do { try NativeKeychainSecureSettingsStore(backend: failing).saveAIProviderKey(groqKey, kind: .groq, ownerBinding: owner) } catch {
         threw = true
         expectNoLeak("\(error) \(error.localizedDescription)", "Keychain write error text")
     }
@@ -458,14 +482,14 @@ func testOwnerWipe() {
         let store = NativeKeychainSecureSettingsStore(backend: backend)
         do {
             try store.persist(LegacySecureSettings(providerKey: "rk_live_migratedproviderkey"))
-            try store.saveAIProviderKey(anthropicKey, kind: .anthropic)
-            try store.saveAIProviderKey(groqKey, kind: .groq)
+            try store.saveAIProviderKey(anthropicKey, kind: .anthropic, ownerBinding: "bind-wipe")
+            try store.saveAIProviderKey(groqKey, kind: .groq, ownerBinding: "bind-wipe")
             if scope == "live" { try store.clearAccountValues() } else { try store.clearAllValues() }
         } catch {
             expect(false, "owner wipe (\(scope)) threw \(error)")
         }
-        expectEqual(store.readAIProviderKey(.anthropic), nil, "\(scope) wipe removes the entered Anthropic key")
-        expectEqual(store.readAIProviderKey(.groq), nil, "\(scope) wipe removes the entered Groq key")
+        expect(backend.values["anthropicKey"] == nil, "\(scope) wipe removes the entered Anthropic key")
+        expect(backend.values["groqKey"] == nil, "\(scope) wipe removes the entered Groq key")
         expect(backend.values["providerKey"] == nil, "\(scope) wipe removes the migrated providerKey too")
         expectNoLeak(backend.allText, "backing store after \(scope) wipe")
     }
@@ -495,7 +519,7 @@ func testAppStoreWiring() async {
     changes = 0
     expectEqual(store.setAIProviderKey(.groq, entry: "  \(groqKey)\n"), .saved(.groq), "save Groq")
     expect(changes > 0, "a save republishes the store so the page and summary refresh")
-    expectEqual(backend.values["groqKey"], Data(groqKey.utf8), "Groq key stored trimmed in the secure store")
+    expectEqual(backend.values["groqKey"], sealedItem(groqKey, binding: "bind-1115"), "Groq key stored trimmed, sealed for its owner")
     expect(store.aiProviderKeyIsSaved(.groq), "Groq shows as saved")
     expect(!store.aiProviderKeyIsSaved(.anthropic), "Anthropic shows as not set")
     expectEqual(store.coachProviderSummary.analyticsName, "groq", "Groq key → summary groq")
@@ -969,6 +993,167 @@ func testBoundaryWipeClearsLegacyKeyFields() async {
            "L205.e: the retry removes it and clears the marker")
 }
 
+// MARK: - 3c. Phase 12.00b.2-A review fix round 1
+
+/// Review I1 (controller ruling: owner-tagged keys) and M2. The triple
+/// failure: the file marker, the Keychain record and the wipe all fail, and
+/// the process dies before any retry. Nothing durable could record the step,
+/// so the relaunch finds nothing pending (the documented residual), but A's
+/// keys carry A's tag: the next owner reads none of them and can save their
+/// own.
+@MainActor
+func testTripleFailureLeavesKeysInertForTheNextOwner() async {
+    let label = "I1 triple failure"
+    let group = TempAppGroup("triple")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("triple", backend: backend, group: group)
+    defer { makeWritable(directory); try? FileManager.default.removeItem(at: directory) }
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    store.scheduleBookingTestSeedIdentityActivator()
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "\(label): owner A saves Anthropic")
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "\(label): owner A saves Groq")
+
+    backend.failRemoveKeys = ["anthropicKey", "groqKey"]
+    backend.failUpsert = true
+    expect(makeReadOnly(directory), "\(label): sanity: the marker write can be made to fail")
+    let recordFailuresBefore = store.boundaryStepRecordFailureCount
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    expectEqual(store.authenticationGateState, .signedOut, "\(label): sanity: the switch reached its success path")
+    // M2: the record write failed as well; the step is held in-process only.
+    expect(store.boundaryStepRecordFailureCount > recordFailuresBefore, "M2: the record-write failure is counted")
+    expect(boundaryRecords(backend).isEmpty, "M2: sanity: no Keychain record could be written")
+    expect(store.isAccountBoundaryCleanupPending, "M2: in-process the step is still pending")
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+    expect(store.advisoryAnthropicKey == nil && store.advisoryGroqKey == nil, "M2: in-process the coach reads no client key")
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .rejected(.groq, .unavailable), "M2: in-process no key can be saved")
+
+    // The process dies before any retry; the relaunch finds nothing pending.
+    let (relaunched, _) = makeStore("triple", backend: backend, group: group, directory: directory)
+    relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+    expect(!relaunched.isAccountBoundaryCleanupPending, "M2: the documented residual: after the relaunch nothing reads as pending")
+    expect(backend.values["anthropicKey"] != nil && backend.values["groqKey"] != nil, "\(label): sanity: A's keys are still in the Keychain")
+    expect(relaunched.advisoryAnthropicKey == nil && relaunched.advisoryGroqKey == nil, "\(label): B's coach reads none of A's keys")
+    expectEqual(relaunched.coachProviderSummary.analyticsName, "backend", "\(label): …so B's coach uses the backend")
+    expectEqual(relaunched.aiProviderKeyState(.anthropic), .notSet, "\(label): Settings shows Anthropic Not set")
+    expectEqual(relaunched.aiProviderKeyState(.groq), .notSet, "\(label): Settings shows Groq Not set")
+    expect(!relaunched.aiProviderKeyIsSaved(.anthropic) && !relaunched.aiProviderKeyIsSaved(.groq), "\(label): nothing shows as saved")
+    backend.failUpsert = false
+    expectEqual(relaunched.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "\(label): B can save their own key")
+    expectEqual(relaunched.advisoryGroqKey, groqKey, "\(label): …and B's coach reads it")
+    expect(relaunched.advisoryAnthropicKey == nil, "\(label): A's Anthropic key stays inert")
+}
+
+/// Review I1: a key reads only for the owner it was saved for. A keeps
+/// reading A's keys across a relaunch with no boundary crossed; another
+/// owner, no owner, and an untagged item (an RN-era migrated key) read as
+/// absent until the owner saves again.
+@MainActor
+func testKeysReadOnlyForTheirOwner() async {
+    let group = TempAppGroup("owner-tag")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("owner-tag", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "owner A saves Groq")
+    expect(!backend.allText.contains("bind-a") && !backend.allText.contains("user-a"),
+           "I1: no raw binding or user id is stored with the key")
+
+    // A relaunch with no boundary crossed: A still reads A's keys.
+    let (relaunched, _) = makeStore("owner-tag", backend: backend, group: group, directory: directory)
+    expect(relaunched.advisoryAnthropicKey == nil && relaunched.advisoryGroqKey == nil,
+           "I1: before an owner is verified no key reads")
+    relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    expectEqual(relaunched.advisoryAnthropicKey, anthropicKey, "I1: after a relaunch A reads A's Anthropic key")
+    expectEqual(relaunched.advisoryGroqKey, groqKey, "I1: …and A's Groq key")
+    expectEqual(relaunched.aiProviderKeyState(.anthropic), .saved, "I1: …and Settings shows it saved")
+
+    // Another owner, with no boundary wipe at all: the items are inert.
+    relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+    expect(relaunched.advisoryAnthropicKey == nil && relaunched.advisoryGroqKey == nil, "I1: another owner reads none of A's keys")
+    expectEqual(relaunched.coachProviderSummary.analyticsName, "backend", "I1: …so their coach uses the backend")
+    expectEqual(relaunched.aiProviderKeyState(.groq), .notSet, "I1: …and Settings shows Not set")
+    expect(!relaunched.aiProviderKeyIsSaved(.anthropic), "I1: …and nothing saved")
+
+    // An untagged item (an RN-era key the launch migration copied, or any
+    // raw write) reads as absent until the owner saves again.
+    relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    backend.values["groqKey"] = Data(groqKey.utf8)
+    backend.values["anthropicKey"] = Data("  \(anthropicKey)\n".utf8)
+    expect(relaunched.advisoryGroqKey == nil && relaunched.advisoryAnthropicKey == nil, "I1: an untagged item reads as absent")
+    expectEqual(relaunched.aiProviderKeyState(.groq), .notSet, "I1: …Not set in Settings")
+    expectEqual(relaunched.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "I1: saving again tags it for the owner")
+    expectEqual(relaunched.advisoryGroqKey, groqKey, "I1: …and it reads again")
+}
+
+/// Review M7: deletion's Keychain clear removes the boundary-step records
+/// with any backend, not only through the system Keychain's whole-service
+/// delete; sign-out's clear keeps them.
+func testDeletionClearRemovesBoundaryRecords() {
+    let backend = MemorySecureBackend()
+    let store = NativeKeychainSecureSettingsStore(backend: backend)
+    let steps = Canonical.SnapshotRepository.BoundaryStep.allCases
+    do {
+        for step in steps { try store.recordBoundaryStep(step) }
+        try store.clearAccountValues()
+    } catch {
+        expect(false, "M7: sign-out clear threw \(error)")
+    }
+    expectEqual(boundaryRecords(backend).count, steps.count, "M7: sign-out's clearAccountValues keeps the step records")
+    do { try store.clearAllValues() } catch { expect(false, "M7: deletion clear threw \(error)") }
+    expect(boundaryRecords(backend).isEmpty, "M7: deletion's clearAllValues removes every step record")
+}
+
+/// Review M1: scene activation re-reads a record that was unreadable at
+/// launch (for example before first unlock), so the owner's gates reopen
+/// without a tap, a sign-in or a relaunch.
+@MainActor
+func testActivationRereadsAnUnverifiedStep() async {
+    let group = TempAppGroup("activation")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("activation", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
+
+    backend.failRead = true
+    let (relaunched, _) = makeStore("activation", backend: backend, group: group, directory: directory)
+    backend.failRead = false
+    relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    expect(relaunched.isAccountBoundaryCleanupPending, "M1: sanity: an unreadable record gates as pending")
+    relaunched.retryAccountBoundaryCleanupOnActivation()
+    expect(!relaunched.isAccountBoundaryCleanupPending, "M1: scene activation re-reads the record and reopens the gates")
+    expectEqual(relaunched.advisoryAnthropicKey, anthropicKey, "M1: …with the owner's own key intact")
+}
+
+/// Review M1: a step still pending when a sign-out scrub succeeds is retried
+/// right after it, so the sign-in screen shows no cleanup banner for data
+/// the scrub already removed.
+@MainActor
+func testSignOutScrubFinishesAPendingStep() async {
+    let group = TempAppGroup("scrub-step")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("scrub-step", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let marker = directory.appending(path: "store.json").appendingPathExtension("ai-key-wipe-pending")
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    store.scheduleBookingTestSeedIdentityActivator()
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
+    backend.failRemoveKeys = ["anthropicKey"]
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    expect(FileManager.default.fileExists(atPath: marker.path) && store.isAccountBoundaryCleanupPending, "M1: sanity: the wipe is pending")
+    backend.failRemoveKeys = []
+
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    do { try await store.signOut(revokeRemote: false) } catch { expect(false, "M1: signOut threw \(error)") }
+    expect(!FileManager.default.fileExists(atPath: marker.path), "M1: a successful sign-out scrub also finishes the pending step")
+    expect(!store.isAccountBoundaryCleanupPending, "M1: …so the sign-in screen shows no cleanup banner")
+}
+
 // MARK: - 4. Redaction and storage
 
 @MainActor
@@ -1103,7 +1288,8 @@ func testKeysNeverReachDefaultsAppGroupWidgetOrFiles() async {
     expectNoLeak(filesText(in: directory), "business-data files")
     expectNoLeak(store.recordedDiagnostics.joined(separator: "\n"), "AppStore diagnostics")
     expectNoLeak("\(store.settings)", "BusinessSettings projection")
-    expectEqual(backend.values["anthropicKey"], Data(anthropicKey.utf8), "the key lives only in the secure store")
+    expect(NativeAIProviderKeyOwnerTag.open(backend.values["anthropicKey"], binding: "bind-storage") == anthropicKey,
+           "the key lives only in the secure store")
 }
 
 // MARK: - 5. Source checks
@@ -1149,7 +1335,9 @@ func testSources(root: URL) {
     expect(!policy.isEmpty && !storeExtension.isEmpty && !settings.isEmpty && !appStore.isEmpty, "sources readable")
 
     // No logging, defaults, or telemetry in the key files.
-    for (name, text) in [("policy", policy), ("store", storeExtension)] {
+    let ownerTag = source("native/TradeReadyNative/NativeAIProviderKeyOwnerTag.swift")
+    expect(!ownerTag.isEmpty, "owner-tag source readable")
+    for (name, text) in [("policy", policy), ("store", storeExtension), ("owner tag", ownerTag)] {
         for banned in ["print(", "NSLog", "Logger(", "os_log", "UserDefaults", "AppStorage", "reportError", "track(", "SecItem"] {
             expect(!text.contains(banned), "\(name) file does not use \(banned)")
         }
@@ -1209,8 +1397,9 @@ func testSources(root: URL) {
     expect(appStore.contains("case .live: try secureSettingsStore.clearAccountValues()"), "launch recovery / retry wipe via the injected store")
     expect(appStore.contains("performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .live)"), "sign-out scrub uses the injected store")
     expect(appStore.contains("performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)"), "deletion scrub uses the injected store")
-    expect(appStore.contains("secureSettingsStore.readAIProviderKey(.anthropic)") && appStore.contains("secureSettingsStore.readAIProviderKey(.groq)"),
-           "the coach reads the keys through the same store")
+    expect(appStore.contains("secureSettingsStore.readAIProviderKey(.anthropic, ownerBinding: verifiedAccountBinding)")
+           && appStore.contains("secureSettingsStore.readAIProviderKey(.groq, ownerBinding: verifiedAccountBinding)"),
+           "the coach reads the keys through the same store, for the verified owner (review I1)")
 
     // Phase 12.00b.2-A.
     // L286.4: the non-blocking retry banner is driven by the boundary-step
@@ -1252,6 +1441,31 @@ func testSources(root: URL) {
     }
     // L286.3: the stale claim about the switch is gone.
     expect(!appStore.contains("`useAnotherAccount` does not hold"), "L286.3: no stale comment about the switch's operation flag")
+
+    // Review fix round 1.
+    // M1: every scene activation retries the pending boundary steps, which
+    // re-reads a record that was unreadable at launch.
+    let app = source("native/TradeReadyNative/TradeReadyNativeApp.swift")
+    if let active = app.range(of: "case .active:"),
+       let background = app.range(of: "case .background:", range: active.upperBound..<app.endIndex) {
+        expect(app[active.upperBound..<background.lowerBound].contains("store.retryAccountBoundaryCleanupOnActivation()"),
+               "M1: scene activation retries the pending boundary steps")
+    } else {
+        expect(false, "M1: the scene activation branch found")
+    }
+    // M3 (L286.7): each session-rejected catch tears down through
+    // `applyRejectedSessionState()` and nothing else.
+    if let activation = functionBody(appStore, "func activateMigratedAuthenticatedIdentity(") {
+        for error in ["rejectedSession", "malformedStoredSession", "missingAccessToken", "missingRefreshToken"] {
+            guard let caught = activation.range(of: "catch NativeAuthenticatedIdentityError.\(error) {"),
+                  let close = activation.range(of: "}", range: caught.upperBound..<activation.endIndex)
+            else { expect(false, "M3: the \(error) catch found"); continue }
+            let handler = activation[caught.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            expectEqual(handler, "applyRejectedSessionState()", "M3: the \(error) catch runs applyRejectedSessionState() only")
+        }
+    } else {
+        expect(false, "M3: activateMigratedAuthenticatedIdentity found")
+    }
 }
 
 // MARK: - Main
@@ -1282,6 +1496,11 @@ struct AIProviderKeyTests {
         await testPendingBoundaryStepsReachEveryRetry()
         await testSavedStateHidesAPendingWipe()
         await testBoundaryWipeClearsLegacyKeyFields()
+        await testTripleFailureLeavesKeysInertForTheNextOwner()
+        await testKeysReadOnlyForTheirOwner()
+        testDeletionClearRemovesBoundaryRecords()
+        await testActivationRereadsAnUnverifiedStep()
+        await testSignOutScrubFinishesAPendingStep()
         await testAnalyticsNeverCarriesAKey()
         await testCrashPayloadsNeverCarryAKey()
         await testKeysNeverReachDefaultsAppGroupWidgetOrFiles()

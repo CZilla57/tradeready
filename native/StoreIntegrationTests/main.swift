@@ -182,7 +182,7 @@ struct StoreIntegrationTests {
 
         let richStoreURL = directory.appendingPathComponent("RichJob/store.json")
         try Canonical.SnapshotRepository(primaryURL: richStoreURL).save(imported.snapshot)
-        let richStore = AppStore(fileURL: richStoreURL, seedIfMissing: false)
+        let richStore = AppStore(fileURL: richStoreURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let richListItem = richStore.jobListItems.first
         expect(richListItem?.isRecurring == true && richListItem?.isArchived == true,
                "job list projects recurrence and archive state from canonical truth")
@@ -277,7 +277,7 @@ struct StoreIntegrationTests {
         try Canonical.SnapshotRepository(primaryURL: changeOrderURL).save(
             .init(payload: .init(jobs: [changeOrderJob]))
         )
-        let changeOrderStore = AppStore(fileURL: changeOrderURL, seedIfMissing: false)
+        let changeOrderStore = AppStore(fileURL: changeOrderURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let changeOrderDate = ISO8601DateFormatter().date(from: "2026-09-19T02:00:00Z")!
 
         let createdChangeOrderID = changeOrderStore.createChangeOrder(
@@ -404,7 +404,7 @@ struct StoreIntegrationTests {
         editorJob.changeOrders = []
         editorJob.preservation.unknownFields["futureJob"] = .string("keep")
         try Canonical.SnapshotRepository(primaryURL: editorURL).save(.init(payload: .init(jobs: [editorJob])))
-        let editorStore = AppStore(fileURL: editorURL, seedIfMissing: false)
+        let editorStore = AppStore(fileURL: editorURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
 
         expect(editorStore.changeOrderSectionState(jobID: editorJob.id)?.isVisible == true,
                "an addable job with no orders still shows the change-order section")
@@ -494,7 +494,7 @@ struct StoreIntegrationTests {
         leadEditorJob.changeOrders = []
         try Canonical.SnapshotRepository(primaryURL: leadEditorURL)
             .save(.init(payload: .init(jobs: [leadEditorJob])))
-        let leadEditorStore = AppStore(fileURL: leadEditorURL, seedIfMissing: false)
+        let leadEditorStore = AppStore(fileURL: leadEditorURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         expect(leadEditorStore.changeOrderSectionState(jobID: leadEditorJob.id)?.isVisible == false,
                "a lead job with no orders renders no section")
         expect(leadEditorStore.changeOrderDraft(jobID: leadEditorJob.id) == .failure(.jobNotEligible),
@@ -509,7 +509,8 @@ struct StoreIntegrationTests {
         let subscriptionStore = AppStore(
             fileURL: directory.appendingPathComponent("Subscription/store.json"),
             seedIfMissing: false,
-            subscriptionService: subscriptionService
+            subscriptionService: subscriptionService,
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         var googleCredentialClearCount = 0
         await subscriptionStore.useAnotherAccount {
@@ -627,7 +628,8 @@ struct StoreIntegrationTests {
                 documentsDirectory: launchDocuments,
                 secureSettings: .init(),
                 appGroupValues: [:]
-            )
+            ),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         expect(cleanStore.customers.count == 3 && cleanStore.launchMigrationNotice == nil,
                "clean launch seeds only after legacy migration reports no data")
@@ -635,7 +637,8 @@ struct StoreIntegrationTests {
         let launchStore = AppStore(
             fileURL: launchURL,
             automaticallyMigrateLegacyData: true,
-            legacyMigrationSource: launchSource
+            legacyMigrationSource: launchSource,
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         expect(launchStore.customers.count == 1 && launchStore.customers.first?.name == "Ada Lovelace",
                "launch migration imports Expo data before demo seeding")
@@ -656,7 +659,8 @@ struct StoreIntegrationTests {
         let replayStore = AppStore(
             fileURL: launchURL,
             automaticallyMigrateLegacyData: true,
-            legacyMigrationSource: launchSource
+            legacyMigrationSource: launchSource,
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         expect(replayStore.customers.count == 1 && replayStore.launchMigrationNotice == nil,
                "completed launch migration reloads silently")
@@ -665,7 +669,7 @@ struct StoreIntegrationTests {
                "completed launch replay does not rewrite the snapshot")
 
         let conflictURL = directory.appendingPathComponent("Conflict/store.json")
-        let conflictSeed = AppStore(fileURL: conflictURL, seedIfMissing: false)
+        let conflictSeed = AppStore(fileURL: conflictURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let nativeCustomer = Customer(name: "Native Sentinel")
         conflictSeed.upsert(nativeCustomer)
         let conflictBytes = try Data(contentsOf: conflictURL)
@@ -683,7 +687,8 @@ struct StoreIntegrationTests {
             fileURL: conflictURL,
             seedIfMissing: false,
             automaticallyMigrateLegacyData: true,
-            legacyMigrationSource: launchSource
+            legacyMigrationSource: launchSource,
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         expect(conflictStore.customers.map(\.id) == [nativeCustomer.id]
                && conflictStore.launchMigrationNotice == nil,
@@ -707,14 +712,15 @@ struct StoreIntegrationTests {
                 documentsDirectory: launchDocuments,
                 secureSettings: .init(),
                 appGroupValues: [:]
-            )
+            ),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         expect(brokenLaunch.isLegacyMigrationBlocked && brokenLaunch.customers.isEmpty,
                "failed first-launch migration blocks editing instead of seeding demo data")
         expect(!FileManager.default.fileExists(atPath: brokenLaunchURL.path),
                "failed first-launch migration leaves the native destination absent")
 
-        let empty = AppStore(fileURL: url, seedIfMissing: false)
+        let empty = AppStore(fileURL: url, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         expect(empty.customers.isEmpty && empty.jobs.isEmpty && empty.invoices.isEmpty,
                "empty store has empty projections")
 
@@ -956,7 +962,7 @@ struct StoreIntegrationTests {
         expect(empty.selectedTab == .today && empty.deepLinkedInvoiceID == nil,
                "signing out revokes routing even for a previously-valid invoice ID")
 
-        let reloaded = AppStore(fileURL: url, seedIfMissing: false)
+        let reloaded = AppStore(fileURL: url, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         expect(reloaded.customers.first?.name == customer.name, "customer reload projection")
         expect(reloaded.jobs.first?.title == job.title, "job reload projection")
         expect(reloaded.settings.businessName == "Canonical Plumbing", "settings binding persists through canonical merge")
@@ -964,7 +970,7 @@ struct StoreIntegrationTests {
         // Phase 7.06 — provider settings round-trip instead of clobbering.
         empty.settings.paymentProvider = "paypal"
         empty.settings.setProviderKey("acme-shop", for: "paypal")
-        let providerReloaded = AppStore(fileURL: url, seedIfMissing: false)
+        let providerReloaded = AppStore(fileURL: url, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         expect(providerReloaded.settings.paymentProvider == "paypal", "selected provider persists")
         expect(providerReloaded.settings.providerKey(for: "paypal") == "acme-shop", "per-provider key persists")
         expect(providerReloaded.settings.providerKey() == "acme-shop", "default key resolves the active provider")
@@ -993,7 +999,7 @@ struct StoreIntegrationTests {
         preservedSnapshot.schemaVersion = Canonical.Snapshot.currentSchemaVersion
         try Canonical.SnapshotCodec.encode(preservedSnapshot).write(to: url, options: .atomic)
 
-        let preservingStore = AppStore(fileURL: url, seedIfMissing: false)
+        let preservingStore = AppStore(fileURL: url, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         var editedCustomer = preservingStore.customers[0]
         editedCustomer.name = "Edited without loss"
         preservingStore.upsert(editedCustomer)
@@ -1014,7 +1020,7 @@ struct StoreIntegrationTests {
         let legacyEncoder = JSONEncoder(); legacyEncoder.dateEncodingStrategy = .iso8601
         let encodedLegacy = try legacyEncoder.encode(legacy)
         try encodedLegacy.write(to: legacyURL, options: .atomic)
-        let upgraded = AppStore(fileURL: legacyURL, seedIfMissing: false)
+        let upgraded = AppStore(fileURL: legacyURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         expect(upgraded.settings.businessName == "Legacy Native", "legacy native snapshot loads")
         let upgradedBytes = try Data(contentsOf: legacyURL)
         let upgradedSnapshot = try Canonical.SnapshotCodec.decode(upgradedBytes)
@@ -1030,12 +1036,12 @@ struct StoreIntegrationTests {
         expect(legacyMigrationComplete, "legacy native migration is journaled complete")
 
         let recoveryURL = directory.appendingPathComponent("recovery-store.json")
-        let recoveryStore = AppStore(fileURL: recoveryURL, seedIfMissing: false)
+        let recoveryStore = AppStore(fileURL: recoveryURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let retainedCustomer = Customer(name: "Retained Customer")
         recoveryStore.upsert(retainedCustomer)
         recoveryStore.upsert(Customer(name: "Lost Latest Customer"))
         try Data("corrupt-current-snapshot".utf8).write(to: recoveryURL, options: .atomic)
-        let recoveredStore = AppStore(fileURL: recoveryURL, seedIfMissing: false)
+        let recoveredStore = AppStore(fileURL: recoveryURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         expect(recoveredStore.customers.map(\.id) == [retainedCustomer.id],
                "AppStore recovers the last-known-good snapshot")
         expect(recoveredStore.migrationMessage?.contains("Recovered local data") == true,
@@ -1057,7 +1063,7 @@ struct StoreIntegrationTests {
         let unreadableURL = directory.appendingPathComponent("unreadable-store.json")
         let unreadableBytes = Data("unrecognized-private-source".utf8)
         try unreadableBytes.write(to: unreadableURL, options: .atomic)
-        let unreadableStore = AppStore(fileURL: unreadableURL, seedIfMissing: true)
+        let unreadableStore = AppStore(fileURL: unreadableURL, seedIfMissing: true, secureSettingsStore: hostTestSecureSettingsStore())
         expect(unreadableStore.customers.isEmpty, "unreadable store is not replaced with demo projections")
         expect(!unreadableStore.upsert(Customer(name: "Must Not Replace Recovery Source")),
                "customer save reports a blocked unreadable snapshot")
@@ -1075,7 +1081,7 @@ struct StoreIntegrationTests {
         )
         let invalidProjectionBytes = try Canonical.SnapshotCodec.encode(invalidProjectionSnapshot)
         try invalidProjectionBytes.write(to: projectionURL, options: .atomic)
-        let projectionBlockedStore = AppStore(fileURL: projectionURL, seedIfMissing: true)
+        let projectionBlockedStore = AppStore(fileURL: projectionURL, seedIfMissing: true, secureSettingsStore: hostTestSecureSettingsStore())
         expect(projectionBlockedStore.customers.isEmpty,
                "unprojectable canonical records remain hidden")
         expect(projectionBlockedStore.migrationMessage?.contains("could not be projected") == true,
@@ -1098,7 +1104,7 @@ struct StoreIntegrationTests {
         )
         let futureBytes = try Canonical.SnapshotCodec.encode(futureSnapshot)
         try futureBytes.write(to: futureURL, options: .atomic)
-        let futureStore = AppStore(fileURL: futureURL, seedIfMissing: true)
+        let futureStore = AppStore(fileURL: futureURL, seedIfMissing: true, secureSettingsStore: hostTestSecureSettingsStore())
         expect(!futureStore.upsert(Customer(name: "Must Not Downgrade")),
                "customer save reports a blocked future snapshot")
         let retainedFutureBytes = try Data(contentsOf: futureURL)
@@ -1110,7 +1116,8 @@ struct StoreIntegrationTests {
         let queueStore = AppStore(
             fileURL: queueURL,
             seedIfMissing: false,
-            subscriptionService: StoreSubscriptionServiceStub()
+            subscriptionService: StoreSubscriptionServiceStub(),
+            secureSettingsStore: hostTestSecureSettingsStore()
         )
         let queuedCustomer = Customer(name: "Queue Customer")
         queueStore.upsert(queuedCustomer)
@@ -1294,7 +1301,7 @@ struct StoreIntegrationTests {
                "stale delivery callback preserves the newer canonical job status")
 
         let revisionURL = directory.appendingPathComponent("EstimateRevision/store.json")
-        let revisionSeedStore = AppStore(fileURL: revisionURL, seedIfMissing: false)
+        let revisionSeedStore = AppStore(fileURL: revisionURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let revisionCustomer = Customer(name: "Revision Customer", email: "revision@example.com")
         let revisionJob = Job(
             customerId: revisionCustomer.id,
@@ -1329,7 +1336,7 @@ struct StoreIntegrationTests {
         revisionSnapshot.payload.jobs?[revisionIndex].estimateSentAt = nil
         try Canonical.SnapshotRepository(primaryURL: revisionURL).save(revisionSnapshot)
 
-        let revisionStore = AppStore(fileURL: revisionURL, seedIfMissing: false)
+        let revisionStore = AppStore(fileURL: revisionURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         expect(revisionStore.estimateReviewDraft(jobID: revisionJob.id) == nil,
                "a reset declined estimate cannot be resent before its customer-facing snapshot changes")
         guard var revisedPricing = revisionStore.jobPricingDraft(jobID: revisionJob.id) else {
@@ -1370,7 +1377,7 @@ struct StoreIntegrationTests {
         }
 
         let autoInvoiceURL = directory.appendingPathComponent("AutoInvoice/store.json")
-        let autoInvoiceSeed = AppStore(fileURL: autoInvoiceURL, seedIfMissing: false)
+        let autoInvoiceSeed = AppStore(fileURL: autoInvoiceURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let autoCustomer = Customer(name: "Auto Customer", email: "auto@example.test", phone: "555-0110")
         let autoJob = Job(
             customerId: autoCustomer.id,
@@ -1396,7 +1403,7 @@ struct StoreIntegrationTests {
         autoSnapshot.payload.settings?.autoEmailInvoiceOnComplete = true
         try Canonical.SnapshotRepository(primaryURL: autoInvoiceURL).save(autoSnapshot)
 
-        let autoInvoiceStore = AppStore(fileURL: autoInvoiceURL, seedIfMissing: false)
+        let autoInvoiceStore = AppStore(fileURL: autoInvoiceURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let autoCompleteDate = ISO8601DateFormatter().date(from: "2026-09-19T10:00:00Z")!
         let autoOutcome = autoInvoiceStore.completeJob(id: autoJob.id, on: autoCompleteDate)
         guard case .autoInvoiced(let autoInvoiceID) = autoOutcome else {
@@ -1428,7 +1435,7 @@ struct StoreIntegrationTests {
                "automatic completion queues the atomic job and invoice result")
 
         let missingCustomerURL = directory.appendingPathComponent("AutoInvoiceMissingCustomer/store.json")
-        let missingCustomerStore = AppStore(fileURL: missingCustomerURL, seedIfMissing: false)
+        let missingCustomerStore = AppStore(fileURL: missingCustomerURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         missingCustomerStore.settings.autoInvoiceOnComplete = true
         let unlinkedJob = Job(
             customerName: "New Auto Customer",
@@ -1652,7 +1659,8 @@ struct StoreIntegrationTests {
                                      lockFile: dir.appendingPathComponent("app-group.lock")
                                  ),
                                  initialSyncService: delta,
-                                 subscriptionService: StoreSubscriptionServiceStub())
+                                 subscriptionService: StoreSubscriptionServiceStub(),
+                                 secureSettingsStore: hostTestSecureSettingsStore())
             return (store, dir)
         }
         func snapshot08(_ url: URL) throws -> Canonical.Snapshot {
@@ -2246,7 +2254,7 @@ struct StoreIntegrationTests {
 
         let phase9Directory = directory.appendingPathComponent("Phase9", isDirectory: true)
         let phase9URL = phase9Directory.appendingPathComponent("store.json")
-        let phase9Store = AppStore(fileURL: phase9URL, seedIfMissing: false)
+        let phase9Store = AppStore(fileURL: phase9URL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         func snapshot9(_ url: URL) throws -> Canonical.Snapshot {
             guard let outcome = try Canonical.SnapshotRepository(primaryURL: url).load() else {
                 throw StoreTestError.missingFixture
@@ -2295,7 +2303,7 @@ struct StoreIntegrationTests {
             var seeded = canonical
             seeded.payload.expenses = [try canonicalRecord(seededJSON)]
             try Canonical.SnapshotRepository(primaryURL: phase9URL).save(seeded)
-            let relaunched = AppStore(fileURL: phase9URL, seedIfMissing: false)
+            let relaunched = AppStore(fileURL: phase9URL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let opened = relaunched.expenses.first { $0.id == "e-seed" }
             expect(opened?.receiptUri == "receipts/old.jpg" && opened?.importBatchId == "imp_seed",
                    "9.08 the expense projection exposes receipt and import provenance after relaunch")
@@ -2330,7 +2338,7 @@ struct StoreIntegrationTests {
 
             // Injected queue failure: the local write must still be durable.
             let blockedURL = phase9Directory.appendingPathComponent("blocked/store.json")
-            let blockedStore = AppStore(fileURL: blockedURL, seedIfMissing: false)
+            let blockedStore = AppStore(fileURL: blockedURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             try FileManager.default.createDirectory(
                 at: phase9Directory.appendingPathComponent("blocked/mutation-queue.json"),
                 withIntermediateDirectories: true
@@ -2359,7 +2367,7 @@ struct StoreIntegrationTests {
         do {
             let receiptDirectory = phase9Directory.appendingPathComponent("Receipts", isDirectory: true)
             let receiptURL = receiptDirectory.appendingPathComponent("store.json")
-            let receiptStore = AppStore(fileURL: receiptURL, seedIfMissing: false)
+            let receiptStore = AppStore(fileURL: receiptURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
 
             // Persist real bytes at the deterministic path.
             guard let jpeg = StoreTestImage.noisyJPEG(width: 900, height: 600) else {
@@ -2397,7 +2405,8 @@ struct StoreIntegrationTests {
                    "9.10 an unknown id has no editor baseline")
 
             let scanStore = AppStore(
-                fileURL: receiptURL, seedIfMissing: false, advisoryAITransport: StoreTestOCRTransport()
+                fileURL: receiptURL, seedIfMissing: false, advisoryAITransport: StoreTestOCRTransport(),
+                secureSettingsStore: hostTestSecureSettingsStore()
             )
             let mutationsBeforeScan = pendingMutations(receiptURL).count
             let scan = await scanStore.scanReceipt(receiptUri: receiptUri)
@@ -2414,7 +2423,7 @@ struct StoreIntegrationTests {
         // Mileage: create ordering, validation, edit preservation.
         do {
             let tripURL = phase9Directory.appendingPathComponent("Trips/store.json")
-            let tripStore = AppStore(fileURL: tripURL, seedIfMissing: false)
+            let tripStore = AppStore(fileURL: tripURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             var draft = NativeTripDraft(
                 date: "2026-09-10",
                 odometerStartText: "1000",
@@ -2442,7 +2451,7 @@ struct StoreIntegrationTests {
             """
             let seeded = Canonical.Snapshot(payload: .init(trips: [try canonicalRecord(seededTripJSON)]))
             try Canonical.SnapshotRepository(primaryURL: tripURL).save(seeded)
-            let reopened = AppStore(fileURL: tripURL, seedIfMissing: false)
+            let reopened = AppStore(fileURL: tripURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let openedTrip = reopened.trips.first { $0.id == "t-seed" }
             draft.date = "2026-09-03"
             draft.odometerStartText = "10"
@@ -2479,7 +2488,7 @@ struct StoreIntegrationTests {
         // Pricebook: create, nested preservation, delete.
         do {
             let pricebookURL = phase9Directory.appendingPathComponent("Pricebook/store.json")
-            let pricebookStore = AppStore(fileURL: pricebookURL, seedIfMissing: false)
+            let pricebookStore = AppStore(fileURL: pricebookURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let draft = NativePricebookEntryDraft(
                 name: "  Drain clearing  ", description: "Standard", category: "Plumbing",
                 laborHours: 2, laborBreakdown: nil, laborRate: 95, materials: [],
@@ -2510,7 +2519,7 @@ struct StoreIntegrationTests {
             """
             let seeded = Canonical.Snapshot(payload: .init(pricebook: [try canonicalRecord(seededJSON)]))
             try Canonical.SnapshotRepository(primaryURL: pricebookURL).save(seeded)
-            let reopened = AppStore(fileURL: pricebookURL, seedIfMissing: false)
+            let reopened = AppStore(fileURL: pricebookURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let openedEntry = reopened.pricebookEntries.first { $0.id == created.id }
             var editedDraft = draft
             editedDraft.laborHours = 3
@@ -2544,7 +2553,7 @@ struct StoreIntegrationTests {
             """
             let seeded = Canonical.Snapshot(payload: .init(settings: try canonicalRecord(settingsJSON)))
             try Canonical.SnapshotRepository(primaryURL: settingsURL).save(seeded)
-            let store = AppStore(fileURL: settingsURL, seedIfMissing: false)
+            let store = AppStore(fileURL: settingsURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             expect(store.settings.taxIncomeRate == nil && store.settings.vehicleDeductionMethod == nil,
                    "9.08 an unset tax rate and vehicle election surface as unset, not zero")
             expect(store.taxSettingsValues.taxIncomeRate == nil,
@@ -2587,7 +2596,7 @@ struct StoreIntegrationTests {
             """
             let seeded = Canonical.Snapshot(payload: .init(customers: [try canonicalRecord(customerJSON)]))
             try Canonical.SnapshotRepository(primaryURL: importURL).save(seeded)
-            let store = AppStore(fileURL: importURL, seedIfMissing: false)
+            let store = AppStore(fileURL: importURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let rows = [
                 ["Ada Electric", "ada@example.com"],
                 ["New Co", "new@example.com"],
@@ -2631,7 +2640,7 @@ struct StoreIntegrationTests {
         // Invoice import joins the current customers; undo is per entity.
         do {
             let editURL = phase9Directory.appendingPathComponent("ImportEdit/store.json")
-            let store = AppStore(fileURL: editURL, seedIfMissing: false)
+            let store = AppStore(fileURL: editURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             guard let customerReport = succeed(
                 store.commitImport(
                     entity: .customers,
@@ -2665,7 +2674,7 @@ struct StoreIntegrationTests {
         // The account boundary scrubs device-local import history.
         do {
             let scrubURL = phase9Directory.appendingPathComponent("Scrub/store.json")
-            let store = AppStore(fileURL: scrubURL, seedIfMissing: false)
+            let store = AppStore(fileURL: scrubURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             _ = store.commitImport(
                 entity: .expenses,
                 rows: [["40", "2026-05-01", "fuel"]],
@@ -2683,7 +2692,8 @@ struct StoreIntegrationTests {
                     suiteName: suite,
                     defaults: UserDefaults(suiteName: suite) ?? .standard,
                     lockFile: phase9Directory.appendingPathComponent("scrub.lock")
-                )
+                ),
+                secureSettingsStore: hostTestSecureSettingsStore()
             )
             expect(scrubbed.importHistory.isEmpty,
                    "9.08 the account boundary scrubs device-local import history")
@@ -2698,7 +2708,7 @@ struct StoreIntegrationTests {
         do {
             let apptDirectory = directory.appendingPathComponent("AppointmentReview10_07", isDirectory: true)
             let apptURL = apptDirectory.appendingPathComponent("store.json")
-            let apptStore = AppStore(fileURL: apptURL, seedIfMissing: false)
+            let apptStore = AppStore(fileURL: apptURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let apptCustomer = Customer(name: "Review Customer", email: "review@example.test", phone: "555-0177")
             let apptJob = Job(
                 customerId: apptCustomer.id, customerName: apptCustomer.name,
@@ -2775,7 +2785,7 @@ struct StoreIntegrationTests {
         do {
             let sweepDirectory = directory.appendingPathComponent("ReviewSweep10_07", isDirectory: true)
             let sweepURL = sweepDirectory.appendingPathComponent("store.json")
-            let sweepStore = AppStore(fileURL: sweepURL, seedIfMissing: false)
+            let sweepStore = AppStore(fileURL: sweepURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let sweepBinding = String(repeating: "9", count: 64)
             sweepStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.07-sweep", binding: sweepBinding)
 
@@ -2813,7 +2823,7 @@ struct StoreIntegrationTests {
             // `applyAuthenticatedIdentityOutcome` calls to repopulate
             // `reviewRequestRecords` from the on-disk
             // NativeReviewRequestStore for the verified owner.
-            let relaunched = AppStore(fileURL: sweepURL, seedIfMissing: false)
+            let relaunched = AppStore(fileURL: sweepURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-10.07-sweep", binding: sweepBinding)
             expect(relaunched.jobs.first(where: { $0.id == sweepJob.id })?.status == .complete,
                    "10.07 the completed job's canonical status survives the simulated relaunch")
@@ -2858,7 +2868,7 @@ struct StoreIntegrationTests {
         do {
             let archivedDirectory = directory.appendingPathComponent("ArchivedRouting10_08", isDirectory: true)
             let archivedURL = archivedDirectory.appendingPathComponent("store.json")
-            let archivedStore = AppStore(fileURL: archivedURL, seedIfMissing: false)
+            let archivedStore = AppStore(fileURL: archivedURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let archivedBinding = String(repeating: "8", count: 64)
             archivedStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.08-archived", binding: archivedBinding)
 
@@ -2936,7 +2946,7 @@ struct StoreIntegrationTests {
         do {
             let rinvDirectory = directory.appendingPathComponent("RecurringRouting10_08", isDirectory: true)
             let rinvURL = rinvDirectory.appendingPathComponent("store.json")
-            let rinvStore = AppStore(fileURL: rinvURL, seedIfMissing: false)
+            let rinvStore = AppStore(fileURL: rinvURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let rinvCustomer = Customer(name: "Maintenance Customer", email: "maint@example.test")
             expect(rinvStore.upsert(rinvCustomer), "10.08 rinv fixture customer saves")
 
@@ -3006,7 +3016,7 @@ struct StoreIntegrationTests {
         do {
             let keyDirectory = directory.appendingPathComponent("ScheduleKey10_08", isDirectory: true)
             let keyURL = keyDirectory.appendingPathComponent("store.json")
-            let keyStore = AppStore(fileURL: keyURL, seedIfMissing: false)
+            let keyStore = AppStore(fileURL: keyURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let keyBinding = String(repeating: "5", count: 64)
             keyStore.scheduleBookingTestSeedSignedInOwner(subject: "user-10.08-key", binding: keyBinding)
 
@@ -3137,7 +3147,8 @@ struct StoreIntegrationTests {
             let snapshot = Canonical.Snapshot(payload: Canonical.SnapshotPayload())
             try Canonical.SnapshotRepository(primaryURL: url).save(snapshot)
             let store = AppStore(fileURL: url, seedIfMissing: false,
-                                 subscriptionService: StoreSubscriptionServiceStub())
+                                 subscriptionService: StoreSubscriptionServiceStub(),
+                                 secureSettingsStore: hostTestSecureSettingsStore())
             store.scheduleBookingTestSeedSignedInOwner(subject: "user-10.09", binding: "bind-10.09")
 
             var notifyCalls = 0
@@ -3435,7 +3446,7 @@ struct StoreIntegrationTests {
             let dir1011 = FileManager.default.temporaryDirectory
                 .appendingPathComponent("tradeready-1011-router-\(UUID().uuidString)", isDirectory: true)
             let url1011 = dir1011.appendingPathComponent("store.json")
-            let store = AppStore(fileURL: url1011, seedIfMissing: false)
+            let store = AppStore(fileURL: url1011, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
 
             let job = Job(customerId: "c1011", customerName: "Nora", title: "Panel swap", laborRate: 95)
             var archivedJob = Job(customerId: "c1011", customerName: "Nora", title: "Old job", laborRate: 95)
@@ -3690,7 +3701,8 @@ struct StoreIntegrationTests {
             try Canonical.SnapshotRepository(primaryURL: wiringURL).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(
                 jobs: [job08(id: "j1", status: "approved", date: "2026-09-22")], settings: settings08())))
             let store = AppStore(fileURL: wiringURL, seedIfMissing: false,
-                                 subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder)
+                                 subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder,
+                                 secureSettingsStore: hostTestSecureSettingsStore())
             // Seed a verified owner without going through activation — this
             // proves the FAIL-CLOSED default:
             // an owner is signed in but `activateInsightMutes`/
@@ -3720,7 +3732,8 @@ struct StoreIntegrationTests {
             expect(store.todaySetupTasks?.first { $0.id == .rate }?.done == true,
                    "10.12 markSetupTaskDone(.rate) flips the in-memory rate task done")
             let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
-                                      subscriptionService: StoreSubscriptionServiceStub())
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-1012", binding: hexBinding("bind-1012"))
             relaunched.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-1012"))
             expect(relaunched.todaySetupTasks?.first { $0.id == .rate }?.done == true,
@@ -3745,7 +3758,8 @@ struct StoreIntegrationTests {
             try Canonical.SnapshotRepository(primaryURL: sampleURL).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(
                 jobs: [job08(id: "j1", status: "lead", date: nil, start: nil, end: nil)], settings: settings08())))
             let sampleStore = AppStore(fileURL: sampleURL, seedIfMissing: false,
-                                       subscriptionService: StoreSubscriptionServiceStub(), analytics: sampleRecorder)
+                                       subscriptionService: StoreSubscriptionServiceStub(), analytics: sampleRecorder,
+                                       secureSettingsStore: hostTestSecureSettingsStore())
             sampleStore.scheduleBookingTestSeedSignedInOwner(subject: "user-hero", binding: hexBinding("bind-hero"))
             sampleStore.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-hero"))
             expect(sampleStore.todayHero?.kind == .sampleTour,
@@ -3756,7 +3770,8 @@ struct StoreIntegrationTests {
             expect(sampleRecorder.calls.contains { $0.event == "sample_job_opened" },
                    "10.12 the sample-tour hero tap fires sample_job_opened")
             let relaunchedSample = AppStore(fileURL: sampleDir.appendingPathComponent("store.json"), seedIfMissing: false,
-                                            subscriptionService: StoreSubscriptionServiceStub())
+                                            subscriptionService: StoreSubscriptionServiceStub(),
+                                            secureSettingsStore: hostTestSecureSettingsStore())
             relaunchedSample.scheduleBookingTestSeedSignedInOwner(subject: "user-hero", binding: hexBinding("bind-hero"))
             relaunchedSample.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-hero"))
             expect(relaunchedSample.todayHero == nil,
@@ -3889,7 +3904,8 @@ struct StoreIntegrationTests {
             // the SAME (now-departed) binding: activation must come back
             // empty/fresh, not resurrect the pre-scrub data.
             let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
-                                      subscriptionService: StoreSubscriptionServiceStub())
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-1", binding: scrubBinding)
             relaunched.testActivateInsightAndChecklistStores(accountBinding: scrubBinding)
             // Fix round 1 (I7c): assert non-nil first — the store came back
@@ -3915,7 +3931,8 @@ struct StoreIntegrationTests {
                    "10.12 a real applyRecoverySignedOutState() (via cancelPasswordRecovery) scrubs insightMutes")
 
             let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
-                                      subscriptionService: StoreSubscriptionServiceStub())
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-r1012", binding: hexBinding("bind-r1012"))
             relaunched.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-r1012"))
             // Fix round 1 (I7c): assert non-nil first, then the value — a
@@ -3981,7 +3998,8 @@ struct StoreIntegrationTests {
             let url = dir.appendingPathComponent("store.json")
             try Canonical.SnapshotRepository(primaryURL: url).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings08())))
             let boundStore = AppStore(fileURL: url, seedIfMissing: false,
-                                      subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder)
+                                      subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder,
+                                      secureSettingsStore: hostTestSecureSettingsStore())
             boundStore.scheduleBookingTestSeedSignedInOwner(subject: "user-i2b", binding: hexBinding("bind-i2b"))
             boundStore.testActivateInsightAndChecklistStores(accountBinding: hexBinding("bind-i2b"))
             expect(boundStore.insightMutes != nil, "10.12 fix1 I2 sanity: insightMutes is readable (non-nil, empty) after activation")
@@ -4093,7 +4111,8 @@ struct StoreIntegrationTests {
                    "10.12 fix1 I7a: a real applyCompletedSignOutState() scrubs insightMutes")
 
             let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
-                                      subscriptionService: StoreSubscriptionServiceStub())
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-i7a", binding: binding)
             relaunched.testActivateInsightAndChecklistStores(accountBinding: binding)
             expect(relaunched.setupChecklistState != nil,
@@ -4116,7 +4135,8 @@ struct StoreIntegrationTests {
             store.testApplyCompletedSignOutState()
 
             let relaunched = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
-                                      subscriptionService: StoreSubscriptionServiceStub())
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-i7b", binding: binding)
             relaunched.testActivateInsightAndChecklistStores(accountBinding: binding)
             expect(relaunched.insightMutes != nil,
@@ -4163,7 +4183,8 @@ struct StoreIntegrationTests {
             wrongOwnerStore.applyInsightMute(insight1012(.lowMarginEstimate, id: "low_margin_estimate:i7d-wrongowner"), days: nil)
             // Now "sign in" as a DIFFERENT owner over the same on-disk files.
             let impersonating = AppStore(fileURL: wrongOwnerDir.appendingPathComponent("store.json"), seedIfMissing: false,
-                                         subscriptionService: StoreSubscriptionServiceStub())
+                                         subscriptionService: StoreSubscriptionServiceStub(),
+                                         secureSettingsStore: hostTestSecureSettingsStore())
             impersonating.scheduleBookingTestSeedSignedInOwner(subject: "user-i7d-real", binding: realBinding)
             impersonating.testActivateInsightAndChecklistStores(accountBinding: realBinding)
             expect(impersonating.setupChecklistState == nil,
@@ -4201,7 +4222,8 @@ struct StoreIntegrationTests {
             let url = dir.appendingPathComponent("store.json")
             try Canonical.SnapshotRepository(primaryURL: url).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings08())))
             let store = AppStore(fileURL: url, seedIfMissing: false,
-                                 subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder)
+                                 subscriptionService: StoreSubscriptionServiceStub(), analytics: recorder,
+                                 secureSettingsStore: hostTestSecureSettingsStore())
             store.trackSetupChecklistTaskOpened(.notifications)
             expect(recorder.calls.contains { $0.event == "setup_checklist_task_opened" && $0.properties["task"] == "notifications" },
                    "10.12 fix1 minor: the notifications task also fires setup_checklist_task_opened, matching RN")
@@ -4291,7 +4313,8 @@ struct StoreIntegrationTests {
             let recorder = RecordingAnalytics()
             let store = AppStore(fileURL: url, seedIfMissing: false,
                                  subscriptionService: StoreSubscriptionServiceStub(),
-                                 coachTransport: coachTransport, analytics: recorder)
+                                 coachTransport: coachTransport, analytics: recorder,
+                                 secureSettingsStore: hostTestSecureSettingsStore())
             seed08Owner(store, subject: "user-backend", binding: "bind-backend")
             // Force the backend branch deterministically regardless of what
             // (if anything) the real Keychain holds on the machine running
@@ -4334,7 +4357,8 @@ struct StoreIntegrationTests {
             )
             let anthropicStore = AppStore(fileURL: url, seedIfMissing: false,
                                           subscriptionService: StoreSubscriptionServiceStub(),
-                                          coachTransport: coachTransport)
+                                          coachTransport: coachTransport,
+                                          secureSettingsStore: hostTestSecureSettingsStore())
             anthropicStore.scheduleBookingTestSeedSignedInOwner(subject: "user-anthropic", binding: "bind-anthropic")
             anthropicStore.coachAdvisoryAnthropicKeyOverride = "test-anthropic-key"
             anthropicStore.coachAdvisoryGroqKeyOverride = ""
@@ -4431,7 +4455,7 @@ struct StoreIntegrationTests {
         do {
             let dirI1 = FileManager.default.temporaryDirectory
                 .appendingPathComponent("tradeready-fw-i1-\(UUID().uuidString)", isDirectory: true)
-            let store = AppStore(fileURL: dirI1.appendingPathComponent("store.json"), seedIfMissing: false)
+            let store = AppStore(fileURL: dirI1.appendingPathComponent("store.json"), seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             store.scheduleBookingTestSeedSignedInOwner(subject: "user-fw-i1", binding: String(repeating: "f", count: 64))
             store.settings.appointmentRemindersEnabled = true
             store.settings.reviewRequestEnabled = true
@@ -4619,7 +4643,7 @@ struct StoreIntegrationTests {
             let dirM3 = FileManager.default.temporaryDirectory
                 .appendingPathComponent("tradeready-fw-m3-\(UUID().uuidString)", isDirectory: true)
             let urlM3 = dirM3.appendingPathComponent("store.json")
-            let seeded = AppStore(fileURL: urlM3, seedIfMissing: false)
+            let seeded = AppStore(fileURL: urlM3, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             let dupJob = Job(customerId: "c-m3", customerName: "Dup Co", title: "Duplicated", status: .scheduled, laborRate: 95)
             expect(seeded.upsert(dupJob), "m3 fixture job saves")
             var persisted = try Canonical.SnapshotRepository(primaryURL: urlM3).load()!.snapshot
@@ -4629,7 +4653,7 @@ struct StoreIntegrationTests {
             persisted.payload.jobs!.append(shadow)
             try Canonical.SnapshotRepository(primaryURL: urlM3).save(persisted)
 
-            let relaunched = AppStore(fileURL: urlM3, seedIfMissing: false)
+            let relaunched = AppStore(fileURL: urlM3, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-fw-m3", binding: String(repeating: "3", count: 64))
             expect(relaunched.canonicalJobs.filter { $0.id == dupJob.id }.count == 2,
                    "m3 sanity: the relaunched store really holds two jobs with the same id")
@@ -4646,7 +4670,7 @@ struct StoreIntegrationTests {
         do {
             let dirM5 = FileManager.default.temporaryDirectory
                 .appendingPathComponent("tradeready-fw-m5-\(UUID().uuidString)", isDirectory: true)
-            let store = AppStore(fileURL: dirM5.appendingPathComponent("store.json"), seedIfMissing: false)
+            let store = AppStore(fileURL: dirM5.appendingPathComponent("store.json"), seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
             store.scheduleBookingTestSeedSignedInOwner(subject: "user-fw-m5", binding: String(repeating: "5", count: 64))
             let customer = Customer(name: "Stale Link Co", email: "stale@example.test")
             expect(store.upsert(customer), "m5 fixture customer saves")

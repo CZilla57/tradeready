@@ -19,6 +19,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/UIModelAdapters.swift" \
   "$ROOT_DIR/native/TradeReadyNative/LegacyDataImporter.swift" \
   "$ROOT_DIR/native/TradeReadyNative/LegacyMigrationCoordinator.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeAccountBoundaryStepRecord.swift" \
   "$ROOT_DIR/native/MigrationCoordinatorTests/main.swift" \
   -o "$OUTPUT_PATH"
 

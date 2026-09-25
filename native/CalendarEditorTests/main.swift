@@ -88,7 +88,8 @@ private func seed09Store(jobs: [Canonical.Job] = [],
         jobs: jobs, customers: [], settings: settings, bookingRequests: []))
     try Canonical.SnapshotRepository(primaryURL: url).save(snapshot)
     let store = AppStore(fileURL: url, seedIfMissing: false,
-                         subscriptionService: CalendarEditorTestSubscriptionStub())
+                         subscriptionService: CalendarEditorTestSubscriptionStub(),
+                         secureSettingsStore: hostTestSecureSettingsStore())
     return (store, dir)
 }
 

@@ -8,7 +8,8 @@ import Foundation
 // as pending and its gates stay closed. The item holds only a schema version:
 // no account, binding, key or payload. Sign-out's `clearAccountValues` leaves
 // it alone; deletion's `clearAllValues` removes it together with everything
-// the steps protect.
+// the steps protect (the whole service on the system Keychain, and
+// `removeAllBoundaryStepRecords` on any other backend: review M7).
 extension NativeKeychainSecureSettingsStore {
     static func boundaryStepRecordAccount(_ step: Canonical.SnapshotRepository.BoundaryStep) -> String {
         "account-boundary-\(step.rawValue).v1"
@@ -36,6 +37,13 @@ extension NativeKeychainSecureSettingsStore {
         try backend.remove(key: account)
         guard try backend.read(key: account) == nil else {
             throw NativeSecureSettingsStoreError.verificationFailed(key: account)
+        }
+    }
+
+    /// Every step's record, removed with a verified remove.
+    func removeAllBoundaryStepRecords() throws {
+        for step in Canonical.SnapshotRepository.BoundaryStep.allCases {
+            try removeBoundaryStepRecord(step)
         }
     }
 }

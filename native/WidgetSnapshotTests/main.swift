@@ -692,7 +692,8 @@ private func makeStore(
         seedIfMissing: false,
         appGroupAccountScrubber: group.scrubber,
         subscriptionService: subscription ?? SubscriptionStub(),
-        widgetTimelineReloader: reloader
+        widgetTimelineReloader: reloader,
+        secureSettingsStore: hostTestSecureSettingsStore()
     )
 }
 

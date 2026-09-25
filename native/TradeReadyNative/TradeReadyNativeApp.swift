@@ -164,6 +164,9 @@ struct TradeReadyNativeApp: App {
                         backgroundRefreshScheduler.cancelActive()
                         // Task 11.06 (§2.5 gap): consume on EVERY activation.
                         store.consumePendingOpenURLStash()
+                        // Phase 12 (review M1): re-read a boundary-step record
+                        // that was unreadable at launch, and retry any step.
+                        store.retryAccountBoundaryCleanupOnActivation()
                         Task {
                             await store.activateMigratedAuthenticatedIdentity()
                             // Pull metadata before mirroring photo bytes so a

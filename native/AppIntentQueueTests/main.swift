@@ -968,7 +968,8 @@ private func testAppStoreHandoffAndReplay() async throws {
             lockFile: suite.lockFile
         ),
         subscriptionService: SubscriptionStub(),
-        widgetTimelineReloader: CountingReloader()
+        widgetTimelineReloader: CountingReloader(),
+        secureSettingsStore: hostTestSecureSettingsStore()
     )
     store.installWidgetMirror(NativeWidgetMirror(defaults: suite.defaults, lockFile: suite.lockFile, reloader: CountingReloader()))
     store.scheduleBookingTestSeedSignedInOwner(subject: "user-11.04", binding: ownerBinding)

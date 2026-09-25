@@ -292,7 +292,8 @@ private func makeStore(
     subscription: (any NativeSubscriptionServing)? = nil,
     scrubber: NativeAppGroupAccountScrubber? = nil,
     installMirror: Bool = true,
-    secureSettingsStore: NativeKeychainSecureSettingsStore = NativeKeychainSecureSettingsStore()
+    // Review M6: the host-only in-memory Keychain, never the login Keychain.
+    secureSettingsStore: NativeKeychainSecureSettingsStore = hostTestSecureSettingsStore()
 ) -> AppStore {
     let store = AppStore(
         fileURL: workspace.fileURL,
@@ -1358,7 +1359,8 @@ private func testWriteGate() async throws {
         fileURL: workspace.fileURL, seedIfMissing: false,
         widgetActionReplayTransport: suite.transport(claims: workspace.claims),
         appGroupAccountScrubber: NativeAppGroupAccountScrubber(suiteName: suite.name, defaults: suite.defaults, lockFile: nil),
-        subscriptionService: SubscriptionStub(), widgetTimelineReloader: retryReloader
+        subscriptionService: SubscriptionStub(), widgetTimelineReloader: retryReloader,
+        secureSettingsStore: hostTestSecureSettingsStore()
     )
     expect(retrying.isAccountScrubBlocked, "sanity: an unavailable container blocks the launch scrub")
     expect(retrying.widgetMirrorOwnerBinding == nil && retrying.widgetActionReplayBinding == nil,
