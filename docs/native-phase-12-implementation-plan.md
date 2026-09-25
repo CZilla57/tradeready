@@ -5,8 +5,8 @@
 **Status:** Ready for charter/characterization; no stage executed, no evidence collected.
 Revised 2026-09-22 per [native-phase-10-12-plan-review.md](native-phase-10-12-plan-review.md).
 
-**Revised 2026-09-25 (Phase 11 reconciliation; DRAFT until the owner answers D1–D5
-in §1.3).** Phase 11 finished after this plan was written (code-complete at `6d573a7`
+**Revised 2026-09-25 (Phase 11 reconciliation; owner decisions D1–D5 answered the
+same day, §1.3).** Phase 11 finished after this plan was written (code-complete at `6d573a7`
 on branch native/phase-11; this phase works on branch native/phase-12). This revision:
 
 - moves the delivered Phase 11 monitoring, widget, App Intents, privacy-manifest and
@@ -212,18 +212,23 @@ So some build work happens in Phase 12 whichever option is chosen. The two optio
 The options can be mixed per gap (for example, build G2 and waive G1). The owner
 decides (D1, D2); this plan does not choose.
 
-### 1.3 Owner decisions pending (asked 2026-09-25)
+### 1.3 Owner decisions (asked and answered 2026-09-25)
 
-| ID | Decision | Affects |
-|---|---|---|
-| D1 | G1 native remote push: build before cutover (12.00b.4), or a dated waiver in the charter | 12.00, 12.00b, 12.01 (push entitlement) |
-| D2 | G2 tax-settings screen: build before cutover (12.00b.3), or a dated waiver | 12.00, 12.00b |
-| D3 | I2 rejected-change UX: the shape of the "N changes couldn't sync" surface on Cloud Sync, and whether the user can retry or discard rejected changes | 12.00b.1 |
-| D4 | Isolated staging: does a trusted staging backend and Supabase project exist? If not, it stays a hard blocker. `https://staging.invalid` stays, and production is never substituted | 12.03 (every STG row), 12.04 (SA3) |
-| D5 | Charter RACI: a name or role for owner, release engineer, backend, support and on-call | 12.00 and every stage gate |
+| ID | Decision | Answer (2026-09-25) | Affects |
+|---|---|---|---|
+| D1 | G1 native remote push: build before cutover (12.00b.4), or a dated waiver in the charter | **Dated waiver.** Booking alerts arrive by email only until native push ships; the charter records the waiver. 12.00b.4 is not built in Phase 12 | 12.00, 12.00b, 12.01 (no push entitlement needed) |
+| D2 | G2 tax-settings screen: build before cutover (12.00b.3), or a dated waiver | **Build** (12.00b.3) | 12.00, 12.00b |
+| D3 | I2 rejected-change UX: the shape of the "N changes couldn't sync" surface on Cloud Sync, and whether the user can retry or discard rejected changes | **Surface:** a Cloud Sync status line ("N changes couldn't be saved") that opens a detail list (record type, name, when); the count also goes into the support report. **Actions:** Retry re-queues the change; Discard removes it after a confirmation dialog, and the next pull restores the server's version | 12.00b.1 |
+| D4 | Isolated staging: does a trusted staging backend and Supabase project exist? If not, it stays a hard blocker. `https://staging.invalid` stays, and production is never substituted | **Not yet.** It stays a hard blocker with an owner task; `https://staging.invalid` stays | 12.03 (every STG row), 12.04 (SA3) |
+| D5 | Charter RACI: a name or role for owner, release engineer, backend, support and on-call | **The owner holds every role.** The charter records the single-person risk and the on-call coverage the phased release needs | 12.00 and every stage gate |
 
-Answers are recorded in this table with their date before any task that depends on
-them is dispatched.
+Also decided on 2026-09-25: native/phase-12 is rebased onto native/phase-11 at `1bb701c`,
+which picks up `1e47f26` (the App Store rating prompt). The final whole-branch review
+runs from `6d573a7`, so it also covers `1e47f26`, which Phase 11's final review did not
+see.
+
+Resolution of §1.2: **Option A for I2, the §7 S1/S2 items and G2; Option B for G1.**
+Lane 12.00b therefore holds 12.00b.1, 12.00b.2 and 12.00b.3. 12.00b.4 is not built.
 
 ## 2. Stage graph and gates
 
@@ -359,7 +364,7 @@ in the same task, but they do not block Stage A on their own.
 4. Pass the Phase 11 accessibility scanners, update the parity row "Tax set-aside",
    and add a device row to 12.03.
 
-**12.00b.4 — G1 native remote push (only if D1 is "build").**
+**12.00b.4 — G1 native remote push (only if D1 is "build"). Not built: D1 was answered "dated waiver" on 2026-09-25 (§1.3). Kept as the spec for the release that builds it.**
 
 1. Register for remote notifications only when notification permission is already
    granted. RN never prompts for push; the invoice-reminder flow owns the ask.
@@ -765,7 +770,7 @@ deferred device/staging/TestFlight evidence from Phases 2–11 is collected here
 | Task | Requirement IDs | Status | Depends on | Deliverable |
 |---|---|---|---|---|
 | 12.00 | all (gates) | Pending | 11.12 (definitions); D1, D2, D5 | Cutover charter + provisional thresholds + RACI + rollback data decision + defect list (§7) + G6/OI-3 policy |
-| 12.00b | E1, SB2; G1/G2 parity if built | Proposed (§1.2) | D1–D3; 12.00 defect list | I2 fix + §7 S1/S2 code fixes + G2/G1 if built |
+| 12.00b | E1, SB2; G2 parity | Approved 2026-09-25 (§1.3) | D1–D3 answered; 12.00 defect list | I2 fix + §7 S1/S2 code fixes + G2 editor (G1 waived) |
 | 12.01 | SC2, SC4 | Pending | 12.00, 11.x; SIGN-1, VER-1, OI-1 | Release config + store-readiness + review notes |
 | 12.02 | E2 | Pending | 12.00, 11.07-11.12 | Monitoring/metrics/support |
 | 12.03 | enables SA2/SA3, E1-E3 | Pending | phase runsheets (parallel with 12.00); D4 | Deferred-evidence index incl. Phase 5/6/8 rows + §7 device items |
