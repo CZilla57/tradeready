@@ -129,8 +129,9 @@ enum NativeAIProviderKeyPolicy {
         case wrongPrefix
         case invalidCharacters
         case wrongLength
-        /// Signed out, or an account boundary (sign-out, deletion, scrub) is
-        /// in progress: keys are owner-bound and cannot change then.
+        /// Signed out, or an account boundary (sign-out, deletion, scrub,
+        /// account switch) is in progress or its AI-key wipe is still pending:
+        /// keys are owner-bound and cannot change then.
         case unavailable
 
         func message(for kind: NativeAIProviderKeyKind) -> String {

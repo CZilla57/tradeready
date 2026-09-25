@@ -612,12 +612,17 @@ private struct AIProviderKeySection: View {
     let kind: NativeAIProviderKeyKind
     @State private var entry = ""
     @State private var feedback: NativeAIProviderKeyChange?
+    /// Phase 12 (L205.g): read from the Keychain on appear, after a save or
+    /// remove, and when a boundary step starts or finishes — never in `body`.
+    @State private var state: NativeAIProviderKeyPolicy.SavedState?
 
     var body: some View {
-        let state = store.aiProviderKeyState(kind)
         Section {
             Text(kind.hint).font(.caption).foregroundStyle(.secondary)
-            LabeledContent(NativeAIProviderKeyPolicy.statusTitle(for: kind), value: NativeAIProviderKeyPolicy.savedStatus(state))
+            LabeledContent(
+                NativeAIProviderKeyPolicy.statusTitle(for: kind),
+                value: state.map(NativeAIProviderKeyPolicy.savedStatus) ?? ""
+            )
             SecureField(kind.placeholder, text: $entry)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -626,7 +631,7 @@ private struct AIProviderKeySection: View {
                 .accessibilityLabel(kind.accessibilityLabel)
             Button(NativeAIProviderKeyPolicy.saveButtonTitle, action: save)
                 .disabled(!NativeAIProviderKeyPolicy.canSubmit(entry))
-            if NativeAIProviderKeyPolicy.offersRemove(state) {
+            if let state, NativeAIProviderKeyPolicy.offersRemove(state) {
                 Button(role: .destructive) {
                     finish(store.clearAIProviderKey(kind))
                 } label: {
@@ -641,6 +646,8 @@ private struct AIProviderKeySection: View {
         } footer: {
             Text(NativeAIProviderKeyPolicy.storageNote)
         }
+        .onAppear(perform: refreshState)
+        .onChange(of: store.isAccountBoundaryCleanupPending) { _, _ in refreshState() }
     }
 
     private func save() {
@@ -651,6 +658,11 @@ private struct AIProviderKeySection: View {
     private func finish(_ change: NativeAIProviderKeyChange) {
         if change.clearsEntry { entry = "" }
         feedback = change
+        refreshState()
+    }
+
+    private func refreshState() {
+        state = store.aiProviderKeyState(kind)
     }
 }
 

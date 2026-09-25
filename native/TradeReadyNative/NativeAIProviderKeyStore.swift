@@ -35,4 +35,21 @@ extension NativeKeychainSecureSettingsStore {
             throw NativeSecureSettingsStoreError.verificationFailed(key: kind.secureAccount)
         }
     }
+
+    /// Phase 12 (L205.e): every account an AI provider credential can occupy —
+    /// the two keys above plus the migrated legacy `providerKey` and
+    /// `geminiKey` fields. Nothing reads the legacy fields after migration,
+    /// but they are credentials, so the switch/recovery-exit boundary wipe
+    /// removes them too (sign-out and deletion already do, through
+    /// `clearAccountValues`).
+    static let accountBoundaryAIKeyAccounts = NativeAIProviderKeyKind.allCases.map(\.secureAccount)
+        + ["providerKey", "geminiKey"]
+
+    /// A verified remove of one of `accountBoundaryAIKeyAccounts`.
+    func clearAccountBoundaryAIKey(account: String) throws {
+        try backend.remove(key: account)
+        guard try backend.read(key: account) == nil else {
+            throw NativeSecureSettingsStoreError.verificationFailed(key: account)
+        }
+    }
 }

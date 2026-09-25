@@ -706,6 +706,42 @@ private func testUseAnotherAccountClears() async throws {
     expectEqual(h.store.authenticationGateState, .signedOut, "sanity: signed out")
 }
 
+/// Phase 12 (L286.7): a stored session rejected at re-verification ends the
+/// session like sign-out: the verified binding and every held route are
+/// dropped. The parked route follows the §6.3 parking rule (discarded when an
+/// owner was active; kept by the launch resolution `.loading` → `.signedOut`).
+@MainActor
+private func testRejectedSessionClearsRoutes() async throws {
+    let h = try Harness()
+    defer { h.cleanUp() }
+    h.signIn()
+    h.store.handle(url: URL(string: "tradeready://onmyway/live")!)
+    h.store.deepLinkedJobID = "live"
+    h.store.requestEstimateFollowUpReview(jobID: "estimate-archived")
+    expectEqual(h.store.pendingOnMyWayJobID, "live", "sanity: a review is held")
+    expectEqual(h.store.coachConversationTicket().ownerBinding, bindingA, "sanity: the verified binding is A")
+    h.store.testSetAuthenticationGateState(.initialSyncUnavailable(message: "offline"))
+    h.store.handle(url: URL(string: "tradeready://job/live")!)
+    expect(h.store.parkedDeepLink != nil, "sanity: a link is parked")
+    h.store.testApplyRejectedSessionState()
+    expectEqual(h.store.authenticationGateState, .signedOut, "sanity: the rejected session signs out")
+    expect(h.store.deepLinkedJobID == nil && h.store.pendingOnMyWayJobID == nil
+           && h.store.pendingEstimateFollowUpJobID == nil && h.store.parkedDeepLink == nil
+           && h.store.deepLinkUnavailableNotice == nil,
+           "L286.7: a rejected session drops every held and parked route")
+    expect(h.store.coachConversationTicket().ownerBinding == nil, "L286.7: …and the verified binding")
+
+    // The launch resolution keeps a parked route for the sign-in that follows.
+    let launch = try Harness()
+    defer { launch.cleanUp() }
+    launch.store.handle(url: URL(string: "tradeready://job/live")!)
+    expect(launch.store.parkedDeepLink != nil, "sanity: parked behind .loading")
+    launch.store.testApplyRejectedSessionState()
+    expect(launch.store.parkedDeepLink != nil, "L286.7: the launch resolution keeps the parked route (§6.3)")
+    launch.signIn()
+    expectEqual(launch.store.deepLinkedJobID, "live", "…and it applies when the same owner signs in")
+}
+
 // MARK: - 6b. Launch resolution is not an account boundary (fix round 1, I1)
 
 private enum LaunchPath: String, CaseIterable { case stash, launchURL }
@@ -906,6 +942,7 @@ struct DeepLinkRoutingTests {
         run("parking lifecycle", testParkingLifecycle)
         run("no double On My Way", testNoDoubleOnMyWay)
         await runAsync("use another account", testUseAnotherAccountClears)
+        await runAsync("rejected session", testRejectedSessionClearsRoutes)
         run("P8", testP8ArchivedEstimateNotification)
         run("launch resolution", testLaunchResolutionKeepsParkedRoute)
         await runAsync("second useAnotherAccount clear", testUseAnotherAccountSecondClear)

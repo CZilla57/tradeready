@@ -291,7 +291,8 @@ private func makeStore(
     reloader: RecordingReloader = RecordingReloader(),
     subscription: (any NativeSubscriptionServing)? = nil,
     scrubber: NativeAppGroupAccountScrubber? = nil,
-    installMirror: Bool = true
+    installMirror: Bool = true,
+    secureSettingsStore: NativeKeychainSecureSettingsStore = NativeKeychainSecureSettingsStore()
 ) -> AppStore {
     let store = AppStore(
         fileURL: workspace.fileURL,
@@ -300,7 +301,8 @@ private func makeStore(
         appGroupAccountScrubber: scrubber ?? suite.scrubber,
         pendingOpenURLConsumer: suite.pendingOpenURLConsumer,
         subscriptionService: subscription ?? SubscriptionStub(),
-        widgetTimelineReloader: reloader
+        widgetTimelineReloader: reloader,
+        secureSettingsStore: secureSettingsStore
     )
     if installMirror {
         // The mirror's own post-write reloads go to a separate recorder, so
@@ -1135,6 +1137,108 @@ private func testUseAnotherAccountScrubFailureFailsClosed() async throws {
     expect(!FileManager.default.fileExists(atPath: marker.path), "1a: the sign-in retry clears the marker")
 }
 
+// MARK: - 8c2. The widget wipe survives a double failure (Phase 12, L286.5b)
+
+/// An in-memory Keychain (the system Keychain is never written by this
+/// fixture).
+private final class MemoryKeychain: NativeSecureKeyValueBacking {
+    var values: [String: Data] = [:]
+    func upsert(_ value: Data, key: String) throws { values[key] = value }
+    func read(key: String) throws -> Data? { values[key] }
+    func remove(key: String) throws { values.removeValue(forKey: key) }
+    var boundaryRecords: [String] { values.keys.filter { $0.hasPrefix("account-boundary-") }.sorted() }
+}
+
+/// Makes `directory` refuse new entries, so a boundary-step file marker
+/// cannot be written there (a full or read-only volume). False when the
+/// environment ignores the permission (for example, running as root).
+private func makeReadOnly(_ directory: URL) -> Bool {
+    try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+    let probe = directory.appendingPathComponent("probe-\(UUID().uuidString)")
+    guard FileManager.default.createFile(atPath: probe.path, contents: Data()) else { return true }
+    try? FileManager.default.removeItem(at: probe)
+    return false
+}
+
+private func makeWritable(_ directory: URL) {
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+}
+
+/// L286.5b (S1): for every (marker write fails) × (wipe fails) combination
+/// followed by a relaunch — a fresh store on the same workspace, App Group
+/// suite and Keychain — the previous owner's App Group state is unreadable
+/// through the mirror and replay gates (the wipe still reads as pending, or
+/// the state is gone), and a later successful retry clears the pending state
+/// and reopens both gates for the next owner.
+@MainActor
+private func testWidgetScrubSurvivesDoubleFailureAndRelaunch() async throws {
+    for markerFails in [false, true] {
+        for wipeFails in [false, true] {
+            let label = "L286.5b widget-scrub (marker \(markerFails ? "fails" : "ok"), wipe \(wipeFails ? "fails" : "ok"))"
+            let suite = TempSuite(), workspace = Workspace(), blockable = BlockableScrubber()
+            defer { makeWritable(workspace.directory); suite.cleanUp(); workspace.cleanUp(); blockable.cleanUp() }
+            let marker = workspace.fileURL.appendingPathExtension("widget-scrub-pending")
+            let keychain = MemoryKeychain()
+            let secure = NativeKeychainSecureSettingsStore(backend: keychain)
+            try workspace.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
+            try workspace.bind(bindingA)
+            let scrubber = blockable.scrubber(suite)
+            let store = makeStore(workspace, suite: suite, scrubber: scrubber, secureSettingsStore: secure)
+            store.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+            await settle()
+            expect(!suite.isEmpty, "\(label): sanity: A's snapshot is mirrored")
+
+            // `scrubber(_:)` starts blocked; the wipe succeeds only unblocked.
+            if wipeFails { blockable.block() } else { blockable.unblock() }
+            if markerFails {
+                // No replay claim is held, so only the marker write needs the
+                // directory (a full volume still allows removals).
+                try? FileManager.default.removeItem(at: workspace.claims)
+                expect(makeReadOnly(workspace.directory), "\(label): sanity: the marker write can be made to fail")
+            }
+            store.scheduleBookingTestSeedIdentityActivator()
+            await store.useAnotherAccount {}
+            expectEqual(store.authenticationGateState, .signedOut, "\(label): sanity: the switch reached its success path")
+            expectEqual(store.isAccountBoundaryCleanupPending, wipeFails, "\(label): the cleanup retry is offered exactly while the wipe is pending")
+            if markerFails {
+                expect(!FileManager.default.fileExists(atPath: marker.path), "\(label): sanity: no file marker was written")
+                expect(store.boundaryStepMarkerWriteFailureCount >= 1, "\(label): the marker write failure is counted")
+            }
+
+            // Relaunch after the volume recovered; B completes onboarding on
+            // the retained workspace and signs in.
+            makeWritable(workspace.directory)
+            try workspace.bind(bindingB)
+            let relaunched = makeStore(workspace, suite: suite, scrubber: scrubber, secureSettingsStore: secure)
+            relaunched.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
+            await settle()
+            expectEqual(relaunched.derivedStatePublishBinding, bindingB, "\(label): sanity: O = B")
+            if wipeFails {
+                expect(!suite.isEmpty, "\(label): sanity: A's App Group state is still there")
+                expect(relaunched.widgetMirrorOwnerBinding == nil, "\(label): after the relaunch the mirror has no owner")
+                expect(relaunched.widgetActionReplayBinding == nil, "\(label): …and replay is closed")
+                expectEqual(relaunched.refreshWidgetMirror(force: true), .skippedNoOwner, "\(label): …and nothing is written over A's state")
+                expect(relaunched.isAccountBoundaryCleanupPending, "\(label): the relaunch offers the cleanup retry")
+            } else {
+                expect(!relaunched.isAccountBoundaryCleanupPending, "\(label): nothing is pending after the relaunch")
+                expectEqual(relaunched.widgetMirrorOwnerBinding, bindingB, "\(label): A's state was wiped, so the mirror is B's")
+            }
+
+            // A later successful retry clears the pending state and reopens
+            // both gates.
+            blockable.unblock()
+            relaunched.retryAccountScrub()
+            if wipeFails { expect(suite.isEmpty, "\(label): the retry wiped A's App Group state") }
+            await settle()
+            expect(!FileManager.default.fileExists(atPath: marker.path), "\(label): no file marker remains")
+            expect(keychain.boundaryRecords.isEmpty, "\(label): no Keychain boundary record remains")
+            expect(!relaunched.isAccountBoundaryCleanupPending, "\(label): the cleanup retry is no longer offered")
+            expectEqual(relaunched.widgetMirrorOwnerBinding, bindingB, "\(label): the mirror reopens for B")
+            expectEqual(relaunched.widgetActionReplayBinding, bindingB, "\(label): replay reopens for B")
+        }
+    }
+}
+
 // MARK: - 8d. An account switch is exclusive (final review 1c)
 
 @MainActor
@@ -1341,6 +1445,7 @@ struct WidgetOwnerGatingTests {
         await runAsync("deep link while signed out", testDeepLinkWhileSignedOut)
         await runAsync("use another account", testUseAnotherAccountScrubsWidgetState)
         await runAsync("use another account scrub failure", testUseAnotherAccountScrubFailureFailsClosed)
+        await runAsync("widget scrub double failure and relaunch", testWidgetScrubSurvivesDoubleFailureAndRelaunch)
         await runAsync("account switch is exclusive", testAccountSwitchIsExclusive)
         await runAsync("write gate", testWriteGate)
         testOneLock()

@@ -27,6 +27,9 @@ struct RootView: View {
                 }
             } else {
                 authenticationGate
+                    // Phase 12 (L286.4): a pending switch/recovery boundary
+                    // step offers its retry above every gate.
+                    .safeAreaInset(edge: .top, spacing: 0) { NativeAccountCleanupBanner() }
             }
         }
         .alert(item: Binding(

@@ -175,6 +175,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var launchMigrationNotice: LegacyLaunchMigrationNotice?
     @Published private(set) var isLegacyMigrationBlocked = false
     @Published private(set) var isAccountScrubBlocked = false
+    /// Phase 12 (L286.4): a switch/recovery boundary step (widget wipe, AI-key
+    /// wipe) is still pending. Drives the non-blocking "Try cleanup again"
+    /// banner; `retryAccountScrub` runs the pending steps.
+    @Published private(set) var isAccountBoundaryCleanupPending = false
     @Published private(set) var authenticatedAccountState: NativeAuthenticatedAccountState = .notChecked
     @Published private(set) var authenticationGateState: NativeAuthenticationGateState = .loading {
         didSet {
@@ -362,10 +366,11 @@ final class AppStore: ObservableObject {
     private var didCheckMigratedAuthenticatedIdentity = false
     private var authenticatedIdentityActivator: NativeAuthenticatedIdentityActivator?
     private var authenticationOperationInFlight = false
-    /// Task 11.15 fix round 1: `useAnotherAccount` does not hold
-    /// `authenticationOperationInFlight`, and the gate stays `.signedIn` across
-    /// its `clearSession`/`logOut` awaits. This closes the AI provider key
-    /// gate for the whole switch.
+    /// Task 11.15 fix round 1: the gate stays `.signedIn` across
+    /// `useAnotherAccount`'s `clearSession`/`logOut` awaits, so this closes the
+    /// AI provider key gate for the whole switch. (Since final review 1c the
+    /// switch also holds `authenticationOperationInFlight` throughout; this
+    /// flag additionally makes a second switch a no-op.)
     private var accountSwitchInFlight = false
     private var identityActivationInFlight = false
     private var identityActivationWaiters: [CheckedContinuation<Void, Never>] = []
@@ -388,13 +393,26 @@ final class AppStore: ObservableObject {
     private let widgetActionReplayTransport: NativeWidgetActionClaimTransport?
     /// Task 11.05 (§4.5, C8): bounded, payload-free replay counters.
     private(set) var widgetActionReplayDiagnostics = NativeWidgetActionReplayDiagnostics()
-    /// Final review 1a/1b: boundary steps whose durable marker could not be
-    /// written this session; they fail closed in memory until the step runs.
+    /// Final review 1a/1b: boundary steps pending without a file marker (it
+    /// could not be written). Phase 12 (L286.5b): each is also recorded in
+    /// the Keychain (`NativeAccountBoundaryStepRecord.swift`), and a record
+    /// found at launch lands here, so the step fails closed across a relaunch.
     private var boundaryStepsPendingInMemory: Set<Canonical.SnapshotRepository.BoundaryStep> = []
+    /// Phase 12 (L286.5b): steps whose Keychain record could not be read. They
+    /// gate as pending, but their body runs only once a retry can read the
+    /// record: it never wipes the current owner's data on a guess.
+    private var boundaryStepsUnverified: Set<Canonical.SnapshotRepository.BoundaryStep> = []
     /// Final review 1b: bounded, payload-free count of failed boundary AI-key
     /// wipes (no key material, no account).
     private(set) var aiProviderKeyWipeFailureCount = 0
     private static let aiProviderKeyWipeFailureCap = 99
+    /// Phase 12 (L286.5b): bounded, payload-free counts of boundary-step file
+    /// markers that could not be written, and of Keychain step records that
+    /// could not be written, read or removed (the log line carries the stage
+    /// and step codes only).
+    private(set) var boundaryStepMarkerWriteFailureCount = 0
+    private(set) var boundaryStepRecordFailureCount = 0
+    private static let boundaryStepFailureCap = 99
     private let initialSyncService: (any NativeInitialSyncServing)?
     private let subscriptionService: NativeSubscriptionServing
     private let injectedJobPhotoTransferService: (any NativeJobPhotoTransferring)?
@@ -541,6 +559,11 @@ final class AppStore: ObservableObject {
             fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("setup-checklist.json")
         )
         self.syncStatus = NativeSyncStatus(pendingCount: self.mutationQueue.load().count)
+        // Phase 12 (L286.5b): a step whose file marker could not be written
+        // was recorded in the Keychain instead; it is pending from launch.
+        for step in Canonical.SnapshotRepository.BoundaryStep.allCases {
+            loadBoundaryStepRecord(step)
+        }
         var accountScrubRecoveryError: Error?
         if let pendingScope = repository.pendingAccountScrubScope {
             do {
@@ -576,6 +599,7 @@ final class AppStore: ObservableObject {
             // session (widget wipe, AI-key wipe) is retried at launch.
             retryPendingBoundarySteps()
         }
+        refreshAccountBoundaryCleanupPending()
         let hadNativeSnapshot = FileManager.default.fileExists(atPath: fileURL.path)
             || FileManager.default.fileExists(atPath: repository.backupURL.path)
         var launchOutcome: LegacyMigrationOutcome?
@@ -4198,17 +4222,13 @@ final class AppStore: ObservableObject {
                 )
             }
         } catch NativeAuthenticatedIdentityError.rejectedSession {
-            authenticatedAccountState = .sessionRejected
-            authenticationGateState = .signedOut
+            applyRejectedSessionState()
         } catch NativeAuthenticatedIdentityError.malformedStoredSession {
-            authenticatedAccountState = .sessionRejected
-            authenticationGateState = .signedOut
+            applyRejectedSessionState()
         } catch NativeAuthenticatedIdentityError.missingAccessToken {
-            authenticatedAccountState = .sessionRejected
-            authenticationGateState = .signedOut
+            applyRejectedSessionState()
         } catch NativeAuthenticatedIdentityError.missingRefreshToken {
-            authenticatedAccountState = .sessionRejected
-            authenticationGateState = .signedOut
+            applyRejectedSessionState()
         } catch NativeAuthenticatedIdentityError.temporarilyUnavailable {
             if nativeShouldPreserveSignedInGateDuringTemporaryOutage(
                 isInitialCheck: isInitialCheck,
@@ -4229,6 +4249,23 @@ final class AppStore: ObservableObject {
             authenticatedAccountState = .unavailable
             authenticationGateState = .unavailable
         }
+    }
+
+    /// Phase 12 (L286.7): the four session-rejected outcomes of
+    /// `activateMigratedAuthenticatedIdentity` end the session the way
+    /// sign-out and the recovery exits do: the verified binding and every held
+    /// route are dropped (defense in depth — `deepLinkSessionOwnerBinding`
+    /// already ignores `.signedOut`). The parked route is left to the gate
+    /// change's contract §6.3 rule instead: discarded when an owner was active,
+    /// kept by the launch resolution `.loading` → `.signedOut` for the sign-in
+    /// that follows (its tag and freshness checks still apply there).
+    private func applyRejectedSessionState() {
+        verifiedAccountBinding = nil
+        authenticatedAccountState = .sessionRejected
+        authenticationGateState = .signedOut
+        let keptByParkingRule = parkedDeepLink
+        clearDeepLinkRouteState()
+        parkedDeepLink = keptByParkingRule
     }
 
     private func finishIdentityActivation() {
@@ -4376,8 +4413,8 @@ final class AppStore: ObservableObject {
                 responseUserSubject: session.userSubject
             )
             try NativePasswordRecoveryStore().clear()
-            didCheckMigratedAuthenticatedIdentity = true
-            applyAuthenticatedIdentityOutcome(outcome, email: session.email)
+            // Phase 12 (L286.4): the same pre-bind retry as sign-in.
+            bindInteractiveOwner(outcome, email: session.email)
         }
         // RN `AuthScreen.tsx:130`: after the sign-up call succeeds, in both
         // the confirmation-pending and the signed-in case.
@@ -4759,6 +4796,9 @@ final class AppStore: ObservableObject {
             }
             try repository.finishAccountScrub()
             isAccountScrubBlocked = false
+            // Phase 12 (L286.4): a switch/recovery step still pending (the
+            // AI-key wipe) is retried with the scrub, not left for a sign-in.
+            retryPendingBoundarySteps()
             applyCompletedSignOutState()
             NativeGoogleSignInProvider.clearLocalCredential()
             // Task 11.05: widgets were reloaded right after the App Group
@@ -4840,37 +4880,106 @@ final class AppStore: ObservableObject {
 
     /// Final review 1a/1b: the account-scrub marker pattern
     /// (`beginAccountScrub` … `finishAccountScrub`) for one boundary step that
-    /// runs outside the full scrub. The marker is written before the step and
-    /// removed only after it succeeds; if the marker itself cannot be written
-    /// the step is held pending in memory, so it fails closed either way.
+    /// runs outside the full scrub. The step is recorded as pending before it
+    /// runs and the record is removed only after it succeeds.
+    ///
+    /// Phase 12 (L286.5b): the record is the file marker; if that cannot be
+    /// written, the step is held in memory AND recorded in the Keychain, so a
+    /// failure of the step itself still survives a relaunch. Only a failure of
+    /// all three (file, Keychain, step) followed by a relaunch before any retry
+    /// loses it, and each of those failures is counted and logged.
     private func runDurableBoundaryStep(
         _ step: Canonical.SnapshotRepository.BoundaryStep,
         _ body: () throws -> Void
     ) throws {
-        do { try repository.beginBoundaryStep(step) } catch { boundaryStepsPendingInMemory.insert(step) }
+        defer { refreshAccountBoundaryCleanupPending() }
+        recordBoundaryStepPending(step)
         try body()
-        boundaryStepsPendingInMemory.remove(step)
+        finishBoundaryStepRecords(step)
+    }
+
+    private func recordBoundaryStepPending(_ step: Canonical.SnapshotRepository.BoundaryStep) {
+        do {
+            try repository.beginBoundaryStep(step)
+            return
+        } catch {
+            boundaryStepMarkerWriteFailureCount = min(Self.boundaryStepFailureCap, boundaryStepMarkerWriteFailureCount + 1)
+            print("TradeReadyAccountBoundary stage=marker-write step=\(step.rawValue)")
+        }
+        boundaryStepsPendingInMemory.insert(step)
+        do { try secureSettingsStore.recordBoundaryStep(step) } catch {
+            countBoundaryStepRecordFailure(stage: "record-write", step)
+        }
+    }
+
+    private func finishBoundaryStepRecords(_ step: Canonical.SnapshotRepository.BoundaryStep) {
+        if boundaryStepsPendingInMemory.contains(step) || boundaryStepsUnverified.contains(step) {
+            do {
+                try secureSettingsStore.removeBoundaryStepRecord(step)
+                boundaryStepsPendingInMemory.remove(step)
+                boundaryStepsUnverified.remove(step)
+            } catch {
+                // Still recorded: the step stays pending and the retry reruns
+                // it (idempotent) until the record can be removed.
+                countBoundaryStepRecordFailure(stage: "record-remove", step)
+            }
+        }
         // A marker that cannot be removed stays pending: the retry reruns the
         // (idempotent) step and it keeps failing closed meanwhile.
         try? repository.finishBoundaryStep(step)
     }
 
+    /// Phase 12 (L286.5b): reads the step's Keychain record. A recorded step
+    /// is pending; an unreadable record leaves the step unverified (gated as
+    /// pending, body not run) until a retry can read it.
+    private func loadBoundaryStepRecord(_ step: Canonical.SnapshotRepository.BoundaryStep) {
+        do {
+            if try secureSettingsStore.isBoundaryStepRecorded(step) {
+                boundaryStepsPendingInMemory.insert(step)
+            }
+            boundaryStepsUnverified.remove(step)
+        } catch {
+            boundaryStepsUnverified.insert(step)
+            countBoundaryStepRecordFailure(stage: "record-read", step)
+        }
+    }
+
+    private func countBoundaryStepRecordFailure(stage: String, _ step: Canonical.SnapshotRepository.BoundaryStep) {
+        boundaryStepRecordFailureCount = min(Self.boundaryStepFailureCap, boundaryStepRecordFailureCount + 1)
+        print("TradeReadyAccountBoundary stage=\(stage) step=\(step.rawValue)")
+    }
+
     private func isBoundaryStepPending(_ step: Canonical.SnapshotRepository.BoundaryStep) -> Bool {
-        boundaryStepsPendingInMemory.contains(step) || repository.isBoundaryStepPending(step)
+        boundaryStepsPendingInMemory.contains(step)
+            || boundaryStepsUnverified.contains(step)
+            || repository.isBoundaryStepPending(step)
+    }
+
+    private func refreshAccountBoundaryCleanupPending() {
+        let pending = Canonical.SnapshotRepository.BoundaryStep.allCases.contains { isBoundaryStepPending($0) }
+        if isAccountBoundaryCleanupPending != pending { isAccountBoundaryCleanupPending = pending }
     }
 
     /// Final review 1a/1b: retries every pending boundary step — at launch,
-    /// from `retryAccountScrub` and before an interactive sign-in binds the
-    /// next owner. A step that fails again stays pending (still fail-closed).
+    /// from `retryAccountScrub` (both branches, Phase 12 L286.4) and before an
+    /// interactive sign-in or sign-up binds the next owner. A step that fails
+    /// again stays pending (still fail-closed). A new step adds a
+    /// `BoundaryStep` case and its body to the switch below.
     private func retryPendingBoundarySteps() {
-        if isBoundaryStepPending(.widgetScrub) {
-            // Timelines are reloaded inside it, right after the wipe.
-            do { try scrubWidgetAccountState() } catch {
-                print("TradeReadyAccountBoundary stage=retry-widget-scrub")
+        defer { refreshAccountBoundaryCleanupPending() }
+        for step in Canonical.SnapshotRepository.BoundaryStep.allCases {
+            if boundaryStepsUnverified.contains(step) { loadBoundaryStepRecord(step) }
+            // Still unverified: stay closed without running on a guess.
+            guard boundaryStepsPendingInMemory.contains(step) || repository.isBoundaryStepPending(step) else { continue }
+            switch step {
+            case .widgetScrub:
+                // Timelines are reloaded inside it, right after the wipe.
+                do { try scrubWidgetAccountState() } catch {
+                    print("TradeReadyAccountBoundary stage=retry-widget-scrub")
+                }
+            case .aiKeyWipe:
+                wipeAIProviderKeysForAccountBoundary()
             }
-        }
-        if isBoundaryStepPending(.aiKeyWipe) {
-            wipeAIProviderKeysForAccountBoundary()
         }
     }
 
@@ -8981,12 +9090,19 @@ extension AppStore {
     /// Settings › AI Assistant: whether a key is saved (the page shows only
     /// "Saved", never the key).
     func aiProviderKeyIsSaved(_ kind: NativeAIProviderKeyKind) -> Bool {
-        secureSettingsStore.readAIProviderKey(kind) != nil
+        !isBoundaryStepPending(.aiKeyWipe) && secureSettingsStore.readAIProviderKey(kind) != nil
     }
 
     /// The status row's state; a Keychain read error is `.unreadable`.
+    ///
+    /// Phase 12 (L286.5a): while the account-boundary wipe is pending, the key
+    /// in the Keychain may be the previous owner's, so the row reads "Not set"
+    /// without reading it — what it reads once the wipe completes, and what a
+    /// kind the previous owner never saved reads — and offers no Remove. That
+    /// matches the closed change gate (`canChangeAIProviderKeys`) and the
+    /// coach, which already treats both keys as absent (`advisory*Key`).
     func aiProviderKeyState(_ kind: NativeAIProviderKeyKind) -> NativeAIProviderKeyPolicy.SavedState {
-        secureSettingsStore.aiProviderKeyState(kind)
+        isBoundaryStepPending(.aiKeyWipe) ? .notSet : secureSettingsStore.aiProviderKeyState(kind)
     }
 
     /// Saves (or, for an empty entry, clears) a user key in the secure store
@@ -9002,8 +9118,9 @@ extension AppStore {
     }
 
     /// Keys are owner-bound: they change only for a signed-in owner and never
-    /// while an account boundary (sign-out, deletion, scrub) is running, so a
-    /// write cannot land after the boundary's wipe.
+    /// while an account boundary (sign-out, deletion, scrub, account switch)
+    /// is running or its AI-key wipe is still pending a retry, so a write
+    /// cannot land after — or be wiped by the retry of — the boundary's wipe.
     private var canChangeAIProviderKeys: Bool {
         isSignedIn && !authenticationOperationInFlight && !accountSwitchInFlight
             && !isAccountScrubBlocked && !repository.isAccountScrubPending
@@ -9013,8 +9130,9 @@ extension AppStore {
     /// Task 11.15 fix round 1: removes both provider keys (entered or migrated)
     /// from the injected secure store at an account boundary that does not run
     /// the full scrub (account switch, password-recovery exits). Each account
-    /// is removed independently with a verified remove, and every kind is
-    /// attempted even when one fails.
+    /// is removed independently with a verified remove, and every account is
+    /// attempted even when one fails. Phase 12 (L205.e): the migrated legacy
+    /// `providerKey`/`geminiKey` fields are removed the same way.
     ///
     /// Final review 1b: a failure is not fatal to the boundary, but it is not
     /// silent either. The wipe runs under the durable `.aiKeyWipe` marker, so
@@ -9027,8 +9145,10 @@ extension AppStore {
         do {
             try runDurableBoundaryStep(.aiKeyWipe) {
                 var firstFailure: Error?
-                for kind in NativeAIProviderKeyKind.allCases {
-                    do { try secureSettingsStore.clearAIProviderKey(kind) } catch { firstFailure = firstFailure ?? error }
+                for account in NativeKeychainSecureSettingsStore.accountBoundaryAIKeyAccounts {
+                    do { try secureSettingsStore.clearAccountBoundaryAIKey(account: account) } catch {
+                        firstFailure = firstFailure ?? error
+                    }
                 }
                 if let firstFailure { throw firstFailure }
             }
@@ -9925,12 +10045,22 @@ extension AppStore {
         method: NativeAnalyticsEvent.SignInMethod,
         gateOverride: NativeAuthenticationGateState? = nil
     ) {
-        // Final review 1a/1b: a boundary step still pending from a switch or
-        // recovery exit is retried before the next owner is bound.
+        bindInteractiveOwner(outcome, email: email, gateOverride: gateOverride)
+        emitAnalytics(.signIn(method))
+    }
+
+    /// The shared tail of every interactive path that binds a freshly
+    /// verified owner: the three sign-ins and (Phase 12, L286.4) sign-up's
+    /// immediate session. Final review 1a/1b: a boundary step still pending
+    /// from a switch or recovery exit is retried before the owner is bound.
+    private func bindInteractiveOwner(
+        _ outcome: NativeAuthenticatedIdentityActivationOutcome,
+        email: String?,
+        gateOverride: NativeAuthenticationGateState? = nil
+    ) {
         retryPendingBoundarySteps()
         didCheckMigratedAuthenticatedIdentity = true
         applyAuthenticatedIdentityOutcome(outcome, email: email, gateOverride: gateOverride)
-        emitAnalytics(.signIn(method))
     }
 
     /// RN `TodayScreen.tsx:761`/`:766`: the first-action hero taps.
@@ -10464,6 +10594,35 @@ extension AppStore {
         finishInteractiveSignIn(
             outcome, email: email, method: method, gateOverride: landingGate ?? .signedIn(email: email)
         )
+    }
+
+    /// Test-only (Phase 12, L286.4): runs the real tail of `signUp`'s
+    /// immediate-session branch (`bindInteractiveOwner`) with a verified live
+    /// outcome, as `signUp` does after `installVerifiedSession`. The provider
+    /// call needs the network, which this host-test binary cannot drive.
+    /// Production never calls this.
+    func testBindSignedUpOwner(subject: String, binding: String, email: String) {
+        let outcome = NativeAuthenticatedIdentityActivationOutcome(
+            accountState: .noAccountState,
+            newlyStagedCount: 0,
+            alreadyStagedCount: 0,
+            typedAccountState: nil,
+            localOwnerVerified: true,
+            accountBinding: binding,
+            verifiedAccountBinding: binding,
+            verifiedUserSubject: subject,
+            verifiedEmail: email,
+            verificationSource: .live
+        )
+        bindInteractiveOwner(outcome, email: email, gateOverride: .signedIn(email: email))
+    }
+
+    /// Test-only (Phase 12, L286.7): runs the real teardown the four
+    /// session-rejected catches of `activateMigratedAuthenticatedIdentity`
+    /// share. That activation needs a configured Supabase build, which this
+    /// host-test binary does not have. Production never calls this.
+    func testApplyRejectedSessionState() {
+        applyRejectedSessionState()
     }
 
     /// Test-only (task 11.08 fix round 1): the real pull-to-refresh tail with

@@ -710,6 +710,265 @@ func testAppStoreBoundaryWipeFailureFailsClosed() async {
     _ = launched
 }
 
+// MARK: - 3b. Phase 12.00b.2-A: boundary steps survive a double failure
+
+/// Makes `directory` refuse new entries, so a boundary-step file marker
+/// cannot be written there (a full or read-only volume). False when the
+/// environment ignores the permission (for example, running as root).
+func makeReadOnly(_ directory: URL) -> Bool {
+    try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+    let probe = directory.appending(path: "probe-\(UUID().uuidString)")
+    guard FileManager.default.createFile(atPath: probe.path, contents: Data()) else { return true }
+    try? FileManager.default.removeItem(at: probe)
+    return false
+}
+
+func makeWritable(_ directory: URL) {
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+}
+
+/// The Keychain accounts that hold a boundary-step record (L286.5b).
+func boundaryRecords(_ backend: MemorySecureBackend) -> [String] {
+    backend.values.keys.filter { $0.hasPrefix("account-boundary-") }.sorted()
+}
+
+/// L286.5b (S1): for every (marker write fails) × (wipe fails) combination
+/// followed by a relaunch — a fresh store on the same directory and Keychain —
+/// the previous owner's keys are unreadable through every gated path (the
+/// wipe still reads as pending, or the keys are gone), and a later successful
+/// retry clears the pending state and reopens the gates.
+@MainActor
+func testAIKeyWipeSurvivesDoubleFailureAndRelaunch() async {
+    for markerFails in [false, true] {
+        for wipeFails in [false, true] {
+            let label = "L286.5b ai-key-wipe (marker \(markerFails ? "fails" : "ok"), wipe \(wipeFails ? "fails" : "ok"))"
+            let group = TempAppGroup("double-\(markerFails)-\(wipeFails)")
+            defer { group.cleanUp() }
+            let backend = MemorySecureBackend()
+            let (store, directory) = makeStore("double", backend: backend, group: group)
+            defer { makeWritable(directory); try? FileManager.default.removeItem(at: directory) }
+            let marker = directory.appending(path: "store.json").appendingPathExtension("ai-key-wipe-pending")
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+            store.scheduleBookingTestSeedIdentityActivator()
+            expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "\(label): owner A saves Anthropic")
+            expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "\(label): owner A saves Groq")
+
+            if wipeFails { backend.failRemoveKeys = ["anthropicKey", "groqKey"] }
+            if markerFails { expect(makeReadOnly(directory), "\(label): sanity: the marker write can be made to fail") }
+            await store.useAnotherAccount(clearGoogleCredential: {})
+            expectEqual(store.authenticationGateState, .signedOut, "\(label): sanity: the switch reached its success path")
+            expectEqual(store.isAccountBoundaryCleanupPending, wipeFails, "\(label): the cleanup retry is offered exactly while the wipe is pending")
+            if markerFails {
+                expect(!FileManager.default.fileExists(atPath: marker.path), "\(label): sanity: no file marker was written")
+                expect(store.boundaryStepMarkerWriteFailureCount >= 1, "\(label): the marker write failure is counted")
+            }
+
+            // Relaunch (the volume still refuses the file marker when it did
+            // before), then the next owner signs in.
+            let (relaunched, _) = makeStore("double", backend: backend, group: group, directory: directory)
+            relaunched.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+            if wipeFails {
+                expect(backend.values["anthropicKey"] != nil, "\(label): sanity: A's key is still in the Keychain")
+                expect(relaunched.advisoryAnthropicKey == nil && relaunched.advisoryGroqKey == nil,
+                       "\(label): after the relaunch the coach reads no client key")
+                expectEqual(relaunched.coachProviderSummary.analyticsName, "backend", "\(label): …so B's coach uses the backend")
+                expect(!relaunched.aiProviderKeyIsSaved(.anthropic) && !relaunched.aiProviderKeyIsSaved(.groq),
+                       "\(label): Settings shows no saved key")
+                expectEqual(relaunched.setAIProviderKey(.groq, entry: groqKey), .rejected(.groq, .unavailable),
+                            "\(label): no key can be saved while the wipe is pending")
+                expect(relaunched.isAccountBoundaryCleanupPending, "\(label): the relaunch offers the cleanup retry")
+            } else {
+                expect(backend.values["anthropicKey"] == nil && backend.values["groqKey"] == nil, "\(label): A's keys are gone")
+                expect(!relaunched.isAccountBoundaryCleanupPending, "\(label): nothing is pending after the relaunch")
+            }
+
+            // A later successful retry clears the pending state and reopens
+            // the gates.
+            makeWritable(directory)
+            backend.failRemoveKeys = []
+            relaunched.retryAccountScrub()
+            expect(backend.values["anthropicKey"] == nil && backend.values["groqKey"] == nil, "\(label): the retry removed A's keys")
+            expect(!FileManager.default.fileExists(atPath: marker.path), "\(label): no file marker remains")
+            expect(boundaryRecords(backend).isEmpty, "\(label): no Keychain boundary record remains")
+            expect(!relaunched.isAccountBoundaryCleanupPending, "\(label): the cleanup retry is no longer offered")
+            expectEqual(relaunched.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "\(label): B can save once the retry succeeded")
+            expectEqual(relaunched.advisoryGroqKey, groqKey, "\(label): …and the coach reads B's own key")
+        }
+    }
+}
+
+/// L286.5b: the Keychain record's own failures fail closed. An unreadable
+/// record gates both steps as pending without running them (no wipe of the
+/// current owner's key on a guess) until a retry can read it; a record that
+/// cannot be removed keeps its step pending across a relaunch.
+@MainActor
+func testBoundaryRecordFailuresFailClosed() async {
+    let group = TempAppGroup("record")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("record", backend: backend, group: group)
+    defer { makeWritable(directory); try? FileManager.default.removeItem(at: directory) }
+    let recordAccount = NativeKeychainSecureSettingsStore.boundaryStepRecordAccount(.aiKeyWipe)
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
+
+    // Unreadable at launch, absent once readable.
+    backend.failRead = true
+    let (unreadable, _) = makeStore("record", backend: backend, group: group, directory: directory)
+    backend.failRead = false
+    unreadable.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    expect(unreadable.isAccountBoundaryCleanupPending, "L286.5b: an unreadable record gates as pending")
+    expect(unreadable.advisoryAnthropicKey == nil, "L286.5b: …so the coach reads no client key")
+    expect(unreadable.boundaryStepRecordFailureCount >= 1, "L286.5b: …and the read failure is counted")
+    expect(backend.values["anthropicKey"] != nil, "L286.5b: the step did not run on a guess")
+    unreadable.retryAccountScrub()
+    expect(!unreadable.isAccountBoundaryCleanupPending, "L286.5b: a readable, absent record reopens the gates")
+    expectEqual(unreadable.advisoryAnthropicKey, anthropicKey, "L286.5b: …with the owner's own key intact")
+
+    // Unreadable at launch, present once readable: the step runs then.
+    backend.values[recordAccount] = Data(#"{"schemaVersion":1}"#.utf8)
+    backend.failRead = true
+    let (recorded, _) = makeStore("record", backend: backend, group: group, directory: directory)
+    backend.failRead = false
+    recorded.retryAccountScrub()
+    expect(backend.values["anthropicKey"] == nil, "L286.5b: a recorded step runs once its record can be read")
+    expect(boundaryRecords(backend).isEmpty && !recorded.isAccountBoundaryCleanupPending, "L286.5b: …and its record is removed")
+
+    // The step succeeds but its record cannot be removed.
+    recorded.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    recorded.scheduleBookingTestSeedIdentityActivator()
+    expectEqual(recorded.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic again")
+    backend.failRemoveKeys = [recordAccount]
+    expect(makeReadOnly(directory), "sanity: the marker write can be made to fail")
+    await recorded.useAnotherAccount(clearGoogleCredential: {})
+    makeWritable(directory)
+    expect(backend.values["anthropicKey"] == nil, "sanity: the wipe itself succeeded")
+    expect(recorded.isAccountBoundaryCleanupPending, "L286.5b: a record that cannot be removed keeps the step pending")
+    let (relaunched, _) = makeStore("record", backend: backend, group: group, directory: directory)
+    expect(relaunched.isAccountBoundaryCleanupPending, "L286.5b: …across a relaunch")
+    backend.failRemoveKeys = []
+    relaunched.retryAccountScrub()
+    expect(boundaryRecords(backend).isEmpty && !relaunched.isAccountBoundaryCleanupPending, "L286.5b: the retry removes it")
+}
+
+/// L286.4 (S2): a pending boundary step is reachable from the manual retry
+/// on both of its branches, and sign-up's immediate session retries it before
+/// binding the new owner.
+@MainActor
+func testPendingBoundaryStepsReachEveryRetry() async {
+    let group = TempAppGroup("reach")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("reach", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storeURL = directory.appending(path: "store.json")
+    let marker = storeURL.appendingPathExtension("ai-key-wipe-pending")
+
+    func failSwitch(_ step: String) async {
+        store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+        store.scheduleBookingTestSeedIdentityActivator()
+        backend.values["anthropicKey"] = Data(anthropicKey.utf8)
+        backend.failRemoveKeys = ["anthropicKey"]
+        await store.useAnotherAccount(clearGoogleCredential: {})
+        expect(FileManager.default.fileExists(atPath: marker.path), "L286.4 \(step): sanity: the wipe is pending")
+        expect(store.isAccountBoundaryCleanupPending, "L286.4 \(step): the cleanup retry is offered")
+        backend.failRemoveKeys = []
+    }
+
+    // The retry while no account scrub is pending.
+    await failSwitch("retry, no scrub pending")
+    store.retryAccountScrub()
+    expect(!FileManager.default.fileExists(atPath: marker.path), "L286.4 retry (no scrub pending): the step ran")
+    expect(!store.isAccountBoundaryCleanupPending, "L286.4 retry (no scrub pending): the retry is no longer offered")
+
+    // The retry while a sign-out scrub is also pending: finishing the scrub
+    // runs the pending step too.
+    await failSwitch("retry, scrub pending")
+    do { try Canonical.SnapshotRepository(primaryURL: storeURL).beginAccountScrub(scope: .live) } catch {
+        expect(false, "L286.4: could not stage a pending sign-out scrub: \(error)")
+    }
+    store.retryAccountScrub()
+    expect(!store.isAccountScrubBlocked, "L286.4 retry (scrub pending): sanity: the scrub finished")
+    expect(!FileManager.default.fileExists(atPath: marker.path), "L286.4 retry (scrub pending): the pending step ran too")
+    expect(!store.isAccountBoundaryCleanupPending, "L286.4 retry (scrub pending): the retry is no longer offered")
+
+    // Sign-up's immediate session retries before binding the new owner.
+    await failSwitch("sign-up")
+    store.testBindSignedUpOwner(subject: "user-b", binding: "bind-b", email: "b@example.test")
+    expect(!FileManager.default.fileExists(atPath: marker.path), "L286.4 sign-up: the pre-bind retry cleared the marker")
+    expect(backend.values["anthropicKey"] == nil, "L286.4 sign-up: …after removing A's key")
+    expect(!store.isAccountBoundaryCleanupPending, "L286.4 sign-up: the retry is no longer offered")
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "L286.4 sign-up: B can save")
+}
+
+/// L286.5a (S2): while the wipe is pending, Settings shows "Not set" for
+/// both kinds — the same as a kind the previous owner never saved — and
+/// offers no Remove, matching the closed change gate.
+@MainActor
+func testSavedStateHidesAPendingWipe() async {
+    let group = TempAppGroup("saved-state")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("saved-state", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    store.scheduleBookingTestSeedIdentityActivator()
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic only")
+    backend.failRemoveKeys = ["anthropicKey", "groqKey"]
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+    expect(backend.values["anthropicKey"] != nil, "sanity: A's key is still in the Keychain")
+    expect(!store.aiProviderKeyIsSaved(.anthropic), "L286.5a: A's key does not show as saved for B")
+    expectEqual(store.aiProviderKeyState(.anthropic), .notSet, "L286.5a: the saved kind reads Not set while pending")
+    expectEqual(store.aiProviderKeyState(.groq), .notSet, "L286.5a: …exactly like the kind A never saved")
+    expect(!NativeAIProviderKeyPolicy.offersRemove(store.aiProviderKeyState(.anthropic)),
+           "L286.5a: no Remove is offered while the change gate is closed")
+    backend.failRemoveKeys = []
+    store.retryAccountScrub()
+    expectEqual(store.aiProviderKeyState(.anthropic), .notSet, "L286.5a: after the wipe the kind is really not set")
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "B saves their own key")
+    expectEqual(store.aiProviderKeyState(.anthropic), .saved, "L286.5a: B's own key reads Saved")
+}
+
+/// L205.e: the boundary wipe also removes the migrated legacy `providerKey`
+/// and `geminiKey` fields, and a failure to remove one is counted and keeps
+/// the step pending like the others.
+@MainActor
+func testBoundaryWipeClearsLegacyKeyFields() async {
+    let legacy = ["providerKey": Data("legacy-provider-value".utf8), "geminiKey": Data("legacy-gemini-value".utf8)]
+    let group = TempAppGroup("legacy")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("legacy", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let marker = directory.appending(path: "store.json").appendingPathExtension("ai-key-wipe-pending")
+
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    store.scheduleBookingTestSeedIdentityActivator()
+    backend.values.merge(legacy) { _, new in new }
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    expect(backend.values["providerKey"] == nil && backend.values["geminiKey"] == nil, "L205.e: the account switch removes the legacy fields")
+
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    backend.values.merge(legacy) { _, new in new }
+    await store.cancelPasswordRecovery()
+    expectEqual(store.authenticationGateState, .signedOut, "sanity: cancelPasswordRecovery reached the recovery sign-out")
+    expect(backend.values["providerKey"] == nil && backend.values["geminiKey"] == nil, "L205.e: a recovery exit removes the legacy fields")
+
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    store.scheduleBookingTestSeedIdentityActivator()
+    backend.values.merge(legacy) { _, new in new }
+    let failuresBefore = store.aiProviderKeyWipeFailureCount
+    backend.failRemoveKeys = ["geminiKey"]
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    expect(store.aiProviderKeyWipeFailureCount > failuresBefore, "L205.e: a legacy field that cannot be removed is counted")
+    expect(FileManager.default.fileExists(atPath: marker.path), "L205.e: …and keeps the wipe pending")
+    backend.failRemoveKeys = []
+    store.retryAccountScrub()
+    expect(backend.values["geminiKey"] == nil && !FileManager.default.fileExists(atPath: marker.path),
+           "L205.e: the retry removes it and clears the marker")
+}
+
 // MARK: - 4. Redaction and storage
 
 @MainActor
@@ -952,6 +1211,47 @@ func testSources(root: URL) {
     expect(appStore.contains("performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)"), "deletion scrub uses the injected store")
     expect(appStore.contains("secureSettingsStore.readAIProviderKey(.anthropic)") && appStore.contains("secureSettingsStore.readAIProviderKey(.groq)"),
            "the coach reads the keys through the same store")
+
+    // Phase 12.00b.2-A.
+    // L286.4: the non-blocking retry banner is driven by the boundary-step
+    // flag and runs `retryAccountScrub`.
+    let rootView = source("native/TradeReadyNative/RootView.swift")
+    let banner = source("native/TradeReadyNative/NativeAccountCleanupBanner.swift")
+    expect(rootView.contains("NativeAccountCleanupBanner()"), "L286.4: RootView shows the account-cleanup banner")
+    expect(banner.contains("store.isAccountBoundaryCleanupPending"), "L286.4: the banner is gated on the pending boundary steps")
+    expect(banner.contains("store.retryAccountScrub()") && banner.contains("Try cleanup again"), "L286.4: the banner's button runs the retry")
+    // L286.4: sign-up's immediate session binds through the same pre-bind retry.
+    if let signUp = functionBody(appStore, "func signUp(") {
+        expect(signUp.contains("bindInteractiveOwner("), "L286.4: signUp binds through bindInteractiveOwner")
+        expect(!signUp.contains("applyAuthenticatedIdentityOutcome("), "L286.4: signUp never binds directly")
+    } else {
+        expect(false, "signUp found")
+    }
+    expect(functionBody(appStore, "private func finishInteractiveSignIn(")?.contains("bindInteractiveOwner(") == true,
+           "L286.4: interactive sign-in binds through bindInteractiveOwner")
+    if let bind = functionBody(appStore, "private func bindInteractiveOwner("),
+       let retry = bind.range(of: "retryPendingBoundarySteps()"),
+       let apply = bind.range(of: "applyAuthenticatedIdentityOutcome(") {
+        expect(retry.lowerBound < apply.lowerBound, "L286.4: the pending steps are retried before the owner is bound")
+    } else {
+        expect(false, "L286.4: bindInteractiveOwner retries, then binds")
+    }
+    // L286.5a: the saved state is gated like the advisory reads.
+    expect(functionBody(appStore, "func aiProviderKeyState(")?.contains("isBoundaryStepPending(.aiKeyWipe)") == true,
+           "L286.5a: aiProviderKeyState is gated on the pending wipe")
+    // L205.g: the key rows never read the Keychain in `body`.
+    if let start = settings.range(of: "private struct AIProviderKeySection: View"),
+       let body = settings.range(of: "var body: some View", range: start.upperBound..<settings.endIndex),
+       let end = settings.range(of: "private func save()", range: body.upperBound..<settings.endIndex) {
+        let rowBody = String(settings[body.lowerBound..<end.lowerBound])
+        expect(!rowBody.contains("store.aiProviderKeyState("), "L205.g: the key row's body does no Keychain read")
+        expect(settings[start.lowerBound..<end.lowerBound].contains(".onChange(of: store.isAccountBoundaryCleanupPending)"),
+               "L205.g: the cached state refreshes when a boundary step changes")
+    } else {
+        expect(false, "AIProviderKeySection found")
+    }
+    // L286.3: the stale claim about the switch is gone.
+    expect(!appStore.contains("`useAnotherAccount` does not hold"), "L286.3: no stale comment about the switch's operation flag")
 }
 
 // MARK: - Main
@@ -977,6 +1277,11 @@ struct AIProviderKeyTests {
         await testAppStoreAccountSwitchWipesKeys()
         await testAppStoreRecoveryExitWipesKeys()
         await testAppStoreBoundaryWipeFailureFailsClosed()
+        await testAIKeyWipeSurvivesDoubleFailureAndRelaunch()
+        await testBoundaryRecordFailuresFailClosed()
+        await testPendingBoundaryStepsReachEveryRetry()
+        await testSavedStateHidesAPendingWipe()
+        await testBoundaryWipeClearsLegacyKeyFields()
         await testAnalyticsNeverCarriesAKey()
         await testCrashPayloadsNeverCarryAKey()
         await testKeysNeverReachDefaultsAppGroupWidgetOrFiles()

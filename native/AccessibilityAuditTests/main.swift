@@ -811,6 +811,11 @@ let viewFileInventory: Set<String> = [
     // No UI of its own: it only asks StoreKit, whose system rating sheet
     // carries Apple's own labels, Dynamic Type, contrast and focus.
     "N/NativeAppRatingPromptPresenter.swift",
+    // Phase 12 (L286.4), reviewed: text-titled Label and Button, text styles
+    // that wrap at every Dynamic Type size, `tradeWarningText` on its 12% wash
+    // and primary body text, a regular-size prominent button, and a `.contain`
+    // element so VoiceOver reaches the button on its own.
+    "N/NativeAccountCleanupBanner.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
