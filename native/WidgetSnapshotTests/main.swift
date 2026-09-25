@@ -217,6 +217,45 @@ private func releaseLock(_ descriptor: Int32) {
     close(descriptor)
 }
 
+/// Phase 12 (12.00b.2-B): holds the lock on a separate open file description
+/// with an idempotent `release()`. `releaseAfter` is a safety valve: code that
+/// still blocked on the lock (the pre-12.00b.2-B `flock(LOCK_EX)`) would
+/// otherwise hang the run, so the holder lets go on a background queue and
+/// the test fails on its timing assertions instead.
+private final class LockHolder {
+    private let lock = NSLock()
+    private var descriptor: Int32?
+
+    init(at url: URL, releaseAfter seconds: TimeInterval) {
+        descriptor = holdLock(at: url)
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in self?.release() }
+    }
+
+    deinit { release() }
+
+    func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor else { return }
+        releaseLock(descriptor)
+        self.descriptor = nil
+    }
+}
+
+private func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+/// Records `reportError` calls: the diagnostic code and the context only.
+private final class RecordingCrashReporting: NativeCrashReporting {
+    private(set) var reports: [(code: String?, context: [String: String])] = []
+    func reportError(_ value: Any?, context: [String: Any]) {
+        reports.append(((value as? [String: Any])?["code"] as? String, context.mapValues { "\($0)" }))
+    }
+    func setUser(id: String?) {}
+    var widgetLockReports: [(code: String?, context: [String: String])] {
+        reports.filter { $0.context["context"] == "widgetLock" }
+    }
+}
+
 @MainActor
 private final class SubscriptionStub: NativeSubscriptionServing {
     func prepare(appUserID: String, apiKey: String, entitlementID: String) async throws -> NativeSubscriptionEntitlement {
@@ -678,7 +717,8 @@ private func makeStore(
     jobs: [Canonical.Job],
     group: TempAppGroup,
     reloader: RecordingReloader,
-    subscription: SubscriptionStub? = nil
+    subscription: SubscriptionStub? = nil,
+    crashReporting: NativeCrashReporting = NativeNoOpCrashReporting()
 ) throws -> AppStore {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("tradeready-1101-store-\(label)-\(UUID().uuidString)", isDirectory: true)
@@ -692,6 +732,7 @@ private func makeStore(
         seedIfMissing: false,
         appGroupAccountScrubber: group.scrubber,
         subscriptionService: subscription ?? SubscriptionStub(),
+        crashReporting: crashReporting,
         widgetTimelineReloader: reloader,
         secureSettingsStore: hostTestSecureSettingsStore()
     )
@@ -894,6 +935,235 @@ private func testSignOutScrubsAndReloads() async throws {
     expect(group.storedJSON == nil, "nothing re-populates the suite after sign-out")
 }
 
+// MARK: - 11. Bounded lock on the main actor (Phase 12, 12.00b.2-B: L74)
+
+/// The main thread never waits longer than `mainThreadBudget` for the lock:
+/// `LOCK_NB` attempts with a short backoff, then `.busy` (nothing ran).
+@MainActor
+private func testBoundedAcquireOnMainThread() {
+    expect(Thread.isMainThread, "sanity: this test runs on the main thread")
+    let budget = WidgetAppGroupLock.mainThreadBudget
+    expectEqual(budget, 0.1, "the main-thread budget is 100 ms (below the 250 ms hang threshold)")
+    expectEqual(WidgetAppGroupLock.budget(onMainThread: true), budget, "the main thread gets the main-thread budget")
+    expectEqual(WidgetAppGroupLock.budget(onMainThread: false), WidgetAppGroupLock.offMainThreadBudget,
+                "any other thread gets the off-main budget")
+    expectEqual(WidgetAppGroupLock.offMainThreadBudget, 2, "the off-main budget is 2 s")
+    let group = TempAppGroup("bounded-main")
+    defer { group.cleanUp() }
+
+    // (a) Held by another open file description for longer than the budget.
+    let holder = LockHolder(at: group.lockFile, releaseAfter: 1)
+    var ran = false
+    var caught: Error?
+    let start = uptime()
+    do { try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { ran = true } } catch { caught = error }
+    let elapsed = uptime() - start
+    expectEqual(caught as? WidgetAppGroupLockError, .busy, "a lock held elsewhere past the budget → busy")
+    expect(!ran, "the body never runs when the lock stays busy")
+    expect(elapsed < budget + 0.05, "busy is returned within the budget (took \(elapsed) s)")
+    expect(elapsed >= budget * 0.8, "the acquire retries for the budget, not one attempt (took \(elapsed) s)")
+    holder.release()
+
+    // (b) Released: the next acquire runs the body.
+    var ranAfterRelease = false
+    do { try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { ranAfterRelease = true } } catch {
+        expect(false, "the acquire succeeds after release (\(error))")
+    }
+    expect(ranAfterRelease, "the body runs once the lock is free")
+
+    // (c) A short hold (an append takes a few ms) is waited out, not refused.
+    let brief = LockHolder(at: group.lockFile, releaseAfter: 0.02)
+    var ranAfterBriefHold = false
+    do { try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { ranAfterBriefHold = true } } catch {
+        expect(false, "a 20 ms hold is waited out on the main thread (\(error))")
+    }
+    expect(ranAfterBriefHold, "the body runs after a brief hold")
+    brief.release()
+
+    // (d) The body's own error passes through unchanged, and the lock is released.
+    struct BodyError: Error, Equatable {}
+    do {
+        try WidgetAppGroupLock.withExclusiveLock(at: group.lockFile) { throw BodyError() }
+        expect(false, "the body error propagates")
+    } catch {
+        expect(error is BodyError, "the body's error is not mapped to a lock error")
+    }
+    let reHeld = holdLock(at: group.lockFile)
+    releaseLock(reHeld)
+}
+
+/// Off the main thread the wait is bounded too (2 s), so a stuck holder can
+/// never park an intent or the claim path forever.
+private func testBoundedAcquireOffMainThread() {
+    let group = TempAppGroup("bounded-off")
+    defer { group.cleanUp() }
+    let holder = LockHolder(at: group.lockFile, releaseAfter: 4)
+    let lockFile = group.lockFile
+    let busy = LockedFlag(false)
+    let ranBody = LockedFlag(false)
+    let offMain = LockedFlag(false)
+    let elapsedBox = NSLock()
+    var elapsed: TimeInterval = 0
+    let done = DispatchSemaphore(value: 0)
+    Thread {
+        offMain.set(!Thread.isMainThread)
+        let start = uptime()
+        do {
+            try WidgetAppGroupLock.withExclusiveLock(at: lockFile) { ranBody.set(true) }
+        } catch WidgetAppGroupLockError.busy {
+            busy.set(true)
+        } catch {}
+        elapsedBox.lock(); elapsed = uptime() - start; elapsedBox.unlock()
+        done.signal()
+    }.start()
+    let finishedInBudget = done.wait(timeout: .now() + 3) == .success
+    expect(finishedInBudget, "an off-main acquire gives up within its 2 s budget")
+    holder.release()
+    if !finishedInBudget { _ = done.wait(timeout: .now() + 5) }
+    expect(offMain.get(), "sanity: the acquire ran off the main thread")
+    expect(busy.get(), "off-main contention past the budget → busy")
+    expect(!ranBody.get(), "the body never ran")
+    elapsedBox.lock(); let took = elapsed; elapsedBox.unlock()
+    expect(took >= 1.6 && took < 2.5, "the off-main wait is about 2 s (took \(took) s)")
+}
+
+/// The mirror writer on the main thread: a busy lock returns `.busy`, writes
+/// nothing, reloads nothing; the next write lands after the release.
+@MainActor
+private func testWriterBusyOnMainThread() {
+    let group = TempAppGroup("writer-busy")
+    defer { group.cleanUp() }
+    let reloader = RecordingReloader()
+    let mirror = group.mirror(reloader)
+    let projection = project([job(#"{"id":"j9","scheduledDate":"2026-08-04"}"#)])
+    group.defaults.set("prior", forKey: WidgetAppGroup.snapshotKey)
+
+    let holder = LockHolder(at: group.lockFile, releaseAfter: 1)
+    let start = uptime()
+    let outcome = mirror.write(projection: projection, ownerBinding: "bind-11.01",
+                               isCurrentOwner: { _ in true }, force: true, now: now)
+    let elapsed = uptime() - start
+    expectEqual(outcome, .busy, "a main-thread mirror write behind a held lock → busy")
+    expect(elapsed < WidgetAppGroupLock.mainThreadBudget + 0.05, "the main thread waited at most the budget (took \(elapsed) s)")
+    expectEqual(group.storedJSON, "prior", "a busy write leaves the stored snapshot untouched")
+    expectEqual(reloader.count, 0, "a busy write does not reload timelines")
+    holder.release()
+
+    expectEqual(mirror.write(projection: projection, ownerBinding: "bind-11.01",
+                             isCurrentOwner: { _ in true }, force: true, now: now),
+                .written, "after the release the write lands")
+    expectEqual(group.stored?.nextJob?.id, "j9", "the retried write stored the projection")
+    expectEqual(reloader.count, 1, "the landed write reloads once")
+}
+
+/// AppStore: a busy mirror stays dirty, emits one payload-free diagnostic per
+/// busy event, is retried on a bounded schedule and by the next publish, and
+/// never writes for an owner that is no longer current.
+@MainActor
+private func testAppStoreRetriesBusyMirror() async throws {
+    let group = TempAppGroup("busy-store")
+    defer { group.cleanUp() }
+    let reloader = RecordingReloader()
+    let reporter = RecordingCrashReporting()
+    let store = try makeStore("busy", jobs: [
+        job(#"{"id":"future","scheduledDate":"2099-01-01","scheduledStartTime":"08:00"}"#),
+    ], group: group, reloader: reloader, crashReporting: reporter)
+    expectEqual(store.widgetMirrorBusyRetryDelays, [0.5, 2, 8], "production retry schedule: 0.5 s, 2 s, 8 s")
+    store.widgetMirrorBusyRetryDelays = []
+    store.installWidgetMirror(group.mirror(reloader))
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-12.b2b", binding: "bind-12.b2b")
+    await settle()
+    expectEqual(group.stored?.ownerTag, NativeWidgetOwnerTag.make(binding: "bind-12.b2b"), "sanity: mirrored before contention")
+    expect(!store.isWidgetMirrorDirty, "sanity: a written mirror is clean")
+
+    // (a) A canonical write while the extension holds the lock.
+    var holder = LockHolder(at: group.lockFile, releaseAfter: 2)
+    let before = group.storedJSON
+    let reloadsBefore = reloader.count
+    let start = uptime()
+    expect(store.clockIn(jobID: "future", on: now), "sanity: the clock-in commits while the lock is held elsewhere")
+    await settle()
+    let elapsed = uptime() - start
+    expect(elapsed < 0.5, "the busy mirror write did not hold the main actor past its budget (took \(elapsed) s)")
+    expect(store.isWidgetMirrorDirty, "a busy mirror write leaves the mirror dirty")
+    expectEqual(store.widgetMirrorLockBusyCount, 1, "one busy event is counted")
+    expectEqual(reporter.widgetLockReports.count, 1, "one diagnostic per busy event")
+    expectEqual(reporter.widgetLockReports.first?.code, "widget-lock/busy", "the diagnostic is a bounded code")
+    expectEqual(reporter.widgetLockReports.first?.context, ["context": "widgetLock", "operation": "mirror"],
+                "the diagnostic carries no payload (no job, owner or snapshot)")
+    expectEqual(group.storedJSON, before, "nothing is written while the lock is busy")
+    expectEqual(reloader.count, reloadsBefore, "no reload while busy")
+    holder.release()
+    expectEqual(store.refreshWidgetMirror(force: false), .written, "the next publish lands once the lock is free")
+    expect(!store.isWidgetMirrorDirty, "a landed write clears the dirty flag")
+    expectEqual(group.stored?.timer?.jobId, "future", "the clock-in the busy write missed is now mirrored")
+
+    // (b) The scheduled retry lands after the release with no new trigger.
+    store.widgetMirrorBusyRetryDelays = [0.15]
+    holder = LockHolder(at: group.lockFile, releaseAfter: 2)
+    expect(store.clockOut(jobID: "future", on: now.addingTimeInterval(600)), "sanity: the clock-out commits")
+    await settle()
+    expect(store.isWidgetMirrorDirty, "the clock-out mirror write went busy")
+    expectEqual(group.stored?.timer?.jobId, "future", "the busy write left the old timer in place")
+    holder.release()
+    try await Task.sleep(nanoseconds: 500_000_000)
+    await settle()
+    expect(!store.isWidgetMirrorDirty, "the scheduled retry cleared the dirty flag")
+    expect(group.stored != nil && group.stored?.timer == nil, "the scheduled retry mirrored the clock-out")
+    expectEqual(store.widgetMirrorLockBusyCount, 2, "one more busy event")
+
+    // (c) The retry schedule is bounded: while the lock stays held, the
+    // trigger plus one retry per delay go busy, then scheduling stops. The
+    // mirror stays dirty for the next publish.
+    store.widgetMirrorBusyRetryDelays = [0.05, 0.05]
+    holder = LockHolder(at: group.lockFile, releaseAfter: 3)
+    let busyBefore = store.widgetMirrorLockBusyCount
+    let reportsBefore = reporter.widgetLockReports.count
+    expectEqual(store.refreshWidgetMirror(force: false), .busy, "a direct refresh behind a held lock → busy")
+    try await Task.sleep(nanoseconds: 600_000_000)
+    await settle()
+    expectEqual(store.widgetMirrorLockBusyCount, busyBefore + 3, "the trigger and both scheduled retries went busy")
+    try await Task.sleep(nanoseconds: 300_000_000)
+    await settle()
+    expectEqual(store.widgetMirrorLockBusyCount, busyBefore + 3, "no retry is scheduled past the bounded schedule")
+    expectEqual(reporter.widgetLockReports.count, reportsBefore + 3, "each busy event reported once")
+    expect(store.isWidgetMirrorDirty, "the mirror stays dirty for the next publish")
+    holder.release()
+    expectEqual(store.refreshWidgetMirror(force: false), .unchanged,
+                "the next publish after the release reaches the writer (content already current)")
+    expect(!store.isWidgetMirrorDirty, "…and clears the dirty flag")
+
+    // (d) A busy seam write (trigger 3) is also retried.
+    store.widgetMirrorBusyRetryDelays = []
+    holder = LockHolder(at: group.lockFile, releaseAfter: 2)
+    let committed = Canonical.Snapshot(payload: Canonical.SnapshotPayload(
+        invoices: [], jobs: [job(#"{"id":"from-seam","scheduledDate":"2099-02-02"}"#)]
+    ))
+    await store.derivedStatePublisher.publish(canonical: committed, expectedOwnerBinding: "bind-12.b2b")
+    expect(store.isWidgetMirrorDirty, "a busy seam write leaves the mirror dirty")
+    holder.release()
+    let afterSeam = store.refreshWidgetMirror(force: false)
+    expect(afterSeam == .written || afterSeam == .unchanged,
+           "the next publish reaches the writer after the release (got \(String(describing: afterSeam)))")
+    expect(!store.isWidgetMirrorDirty, "…and is clean")
+
+    // (e) The owner changes while the mirror is dirty: the retry re-evaluates
+    // the owner gate and never writes the previous owner's snapshot.
+    store.widgetMirrorBusyRetryDelays = [0.1]
+    holder = LockHolder(at: group.lockFile, releaseAfter: 2)
+    expectEqual(store.refreshWidgetMirror(force: true), .busy, "busy while the owner is still signed in")
+    expect(store.isWidgetMirrorDirty, "dirty")
+    let ownerSnapshot = group.storedJSON
+    let reloadsBeforeClear = reloader.count
+    store.scheduleBookingTestClearOwner()
+    holder.release()
+    try await Task.sleep(nanoseconds: 400_000_000)
+    await settle()
+    expectEqual(group.storedJSON, ownerSnapshot, "the retry never writes after the owner is gone")
+    expectEqual(reloader.count, reloadsBeforeClear, "…and never reloads for the previous owner")
+    expect(!store.isWidgetMirrorDirty, "a gated-off retry settles the dirty flag (the scrubber owns the suite)")
+}
+
 // MARK: - Main
 
 @main
@@ -912,6 +1182,10 @@ struct WidgetSnapshotTests {
         try await testAppStoreWiring()
         try await testSeamProjectsNewestCanonical()
         try await testSignOutScrubsAndReloads()
+        testBoundedAcquireOnMainThread()
+        testBoundedAcquireOffMainThread()
+        testWriterBusyOnMainThread()
+        try await testAppStoreRetriesBusyMirror()
 
         if failures > 0 {
             print("Widget snapshot tests: \(failures) failure(s)")

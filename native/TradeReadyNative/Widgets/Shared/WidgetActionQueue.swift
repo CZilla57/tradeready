@@ -11,7 +11,10 @@ import Foundation
 //
 // Contract: docs/native-phase-11-platform-hardening-contract-decisions.md
 // - §4.1 action JSON shapes and field rules;
-// - §4.2 lock protocol (only `WidgetAppGroupLock`, never a second flock);
+// - §4.2 lock protocol (only `WidgetAppGroupLock`, never a second flock).
+//   Phase 12 (12.00b.2-B): the acquire is bounded (100 ms on the main
+//   thread, 2 s elsewhere); a busy lock is `WidgetIntentFailure.busy` and
+//   nothing is read or written;
 // - §4.3 writer rules: refuse at 512, exact-duplicate ids are idempotent and
 //   differing duplicates fail, never overwrite a malformed queue, validate the
 //   new action before appending (string rules shared with the planner via
@@ -48,6 +51,9 @@ struct WidgetIntentEnvironment {
     var now: () -> Date
     var makeActionID: () -> String
     var timeZone: TimeZone
+    /// Phase 12 (12.00b.2-B): called once per busy lock acquire (the bounded
+    /// wait ran out). A payload-free diagnostic seam; host tests count it.
+    var onLockBusy: () -> Void = {}
 
     static func live() -> WidgetIntentEnvironment {
         WidgetIntentEnvironment(
@@ -55,7 +61,8 @@ struct WidgetIntentEnvironment {
             lockFile: WidgetAppGroup.liveLockFile(),
             now: { Date() },
             makeActionID: { UUID().uuidString },
-            timeZone: .current
+            timeZone: .current,
+            onLockBusy: { print("TradeReadyWidgetLock stage=busy site=intent") }
         )
     }
 }
@@ -183,6 +190,9 @@ enum WidgetIntentFailure: Error, Equatable {
     case invalidAction(field: String)
     /// A write did not read back as written.
     case writeFailed
+    /// Phase 12 (12.00b.2-B): the shared lock stayed busy for the whole
+    /// bounded wait. Nothing was read or written; the intent reports failure.
+    case busy
 }
 
 enum WidgetTimerIntentOutcome: Equatable {
@@ -591,6 +601,8 @@ struct WidgetIntentEngine {
 
     /// Runs `body` inside ONE `WidgetAppGroupLock` hold (§4.2). Every store
     /// read and write an action writer makes happens inside it (§4.5).
+    /// Phase 12 (12.00b.2-B): a busy lock (the bounded wait ran out) is
+    /// `.busy`, reported once through `onLockBusy`; nothing ran.
     private func locked<T>(
         _ body: (any WidgetAppGroupKeyValueStore) throws -> T
     ) -> Result<T, WidgetIntentFailure> {
@@ -601,6 +613,9 @@ struct WidgetIntentEngine {
             return .success(try WidgetAppGroupLock.withExclusiveLock(at: lockFile) { try body(store) })
         } catch let failure as WidgetIntentFailure {
             return .failure(failure)
+        } catch WidgetAppGroupLockError.busy {
+            environment.onLockBusy()
+            return .failure(.busy)
         } catch {
             return .failure(.unavailable)
         }

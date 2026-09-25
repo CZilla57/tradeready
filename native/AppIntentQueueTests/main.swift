@@ -908,6 +908,89 @@ private func testLockDiscipline() {
     suite.cleanUp()
 }
 
+// MARK: - 8b. On My Way under lock contention (Phase 12, 12.00b.2-B: L96)
+
+/// Holds the lock on a separate open file description with an idempotent
+/// `release()`. `releaseAfter` is a safety valve so code that still blocks
+/// on the lock fails on timing instead of hanging the run.
+private final class LockHolder {
+    private let lock = NSLock()
+    private var descriptor: Int32?
+
+    init(at url: URL, releaseAfter seconds: TimeInterval) {
+        descriptor = holdLock(at: url)
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in self?.release() }
+    }
+
+    deinit { release() }
+
+    func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor else { return }
+        releaseLock(descriptor)
+        self.descriptor = nil
+    }
+}
+
+/// `OnMyWayIntent.perform()` is `@MainActor`, so its stash takes the lock on
+/// the main thread: a busy lock must come back within the main-thread budget
+/// as a failure the intent speaks, with nothing written and nothing lost.
+@MainActor
+private func testOnMyWayStashReportsBusy() {
+    expect(Thread.isMainThread, "sanity: this runs on the main thread, like OnMyWayIntent.perform()")
+    let suite = TempSuite()
+    defer { suite.cleanUp() }
+    suite.defaults.set(snapshotJSON(), forKey: WidgetAppGroup.snapshotKey)
+    _ = suite.engine.clockIn()
+    let snapshotBefore = suite.defaults.string(forKey: WidgetAppGroup.snapshotKey)
+    let queueBefore = suite.defaults.string(forKey: WidgetAppGroup.actionsKey)
+    expect(queueBefore != nil, "sanity: a queued action is present before the contention")
+
+    var busyEvents = 0
+    let engine = WidgetIntentEngine(environment: WidgetIntentEnvironment(
+        store: suite.defaults, lockFile: suite.lockFile, now: { now },
+        makeActionID: { UUID().uuidString }, timeZone: phoenix,
+        onLockBusy: { busyEvents += 1 }
+    ))
+
+    let holder = LockHolder(at: suite.lockFile, releaseAfter: 1)
+    let start = ProcessInfo.processInfo.systemUptime
+    let outcome = engine.stashOnMyWay()
+    let elapsed = ProcessInfo.processInfo.systemUptime - start
+    expectEqual(outcome, .failed(.busy), "a stash behind a held lock reports busy")
+    expect(elapsed < WidgetAppGroupLock.mainThreadBudget + 0.05,
+           "the main thread waited at most the budget (took \(elapsed) s)")
+    expectEqual(busyEvents, 1, "one bounded diagnostic per busy event")
+    expect(suite.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey) == nil, "no stash is written while busy")
+    expectEqual(suite.defaults.string(forKey: WidgetAppGroup.actionsKey), queueBefore, "the queue is untouched")
+    expectEqual(suite.defaults.string(forKey: WidgetAppGroup.snapshotKey), snapshotBefore, "the snapshot is untouched")
+    expectEqual(SiriIntentDialogs.onMyWay(outcome), "I couldn't open that. Open TradeReady and try again.",
+                "the intent speaks the existing stash-failure dialog (never a silent drop)")
+    expectEqual(SiriIntentDialogs.failure(.busy), SiriIntentDialogs.couldNotSave, "writer intents speak couldNotSave")
+    expectEqual(SiriIntentDialogs.startTrip(.failed(.busy), odometerStart: 1),
+                "I couldn't start the trip. Open TradeReady and try again.", "Start Trip speaks its failure dialog")
+    expectEqual(SiriIntentDialogs.stopTrip(.failed(.busy)),
+                "Something went wrong saving the trip \u{2014} try again.", "Stop Trip speaks its failure dialog")
+
+    // The same engine path the widget buttons use: busy writes nothing.
+    let timer = engine.startTimer(jobID: "j9")
+    expectEqual(timer, .failed(.busy), "a timer append behind a held lock reports busy")
+    expect(!timer.wroteQueue, "…writes nothing, so the widget does not reload")
+    expectEqual(busyEvents, 2, "…and reports its own busy event")
+    expectEqual(suite.defaults.string(forKey: WidgetAppGroup.actionsKey), queueBefore, "the queue is still untouched")
+
+    // Nothing lost: once the lock is free, the same action stashes.
+    holder.release()
+    guard case .opening(let url, _, let stashJSON) = engine.stashOnMyWay() else {
+        return expect(false, "after the release the stash succeeds")
+    }
+    expectEqual(url, "tradeready://onmyway/j9", "the retried stash opens the next job")
+    expectEqual(suite.defaults.string(forKey: WidgetAppGroup.pendingOpenURLKey), stashJSON, "the retried stash is written")
+    expectEqual(busyEvents, 2, "a successful stash emits no busy diagnostic")
+    expectEqual(suite.defaults.string(forKey: WidgetAppGroup.actionsKey), queueBefore, "the queue is still untouched")
+}
+
 // MARK: - 9. Router + AppStore: the on-my-way review, and end-to-end replay
 
 @MainActor
@@ -1181,6 +1264,7 @@ struct AppIntentQueueTests {
         testOnMyWayStash()
         testReadOnlyIntents()
         testLockDiscipline()
+        testOnMyWayStashReportsBusy()
         testRouter()
         try await testAppStoreHandoffAndReplay()
         testDeclarations()

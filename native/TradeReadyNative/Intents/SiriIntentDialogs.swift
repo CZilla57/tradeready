@@ -19,12 +19,13 @@ enum SiriIntentDialogs {
     static let noUpcomingJobs = "You have no upcoming jobs scheduled."
     static let badOdometer = "That odometer reading doesn't look right. Try again with a number of miles."
 
-    /// The refusal for a failure shared by every writer.
+    /// The refusal for a failure shared by every writer. Phase 12
+    /// (12.00b.2-B): a busy lock wrote nothing, so it is "couldn't save".
     static func failure(_ failure: WidgetIntentFailure) -> String {
         switch failure {
         case .signInRequired: return signInFirst
         case .queueFull: return tooManyPending
-        case .unavailable, .malformedQueue, .duplicateConflict, .invalidAction, .writeFailed:
+        case .unavailable, .busy, .malformedQueue, .duplicateConflict, .invalidAction, .writeFailed:
             return couldNotSave
         }
     }

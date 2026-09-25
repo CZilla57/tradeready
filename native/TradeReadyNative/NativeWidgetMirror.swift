@@ -9,7 +9,9 @@ import WidgetKit
 // §3.1 (write protocol), §2.3 (encoding, `ownerTag`), §2.5 (owner predicate),
 // §4.2 (lock). Write protocol:
 //   1. no owner binding → no-op (never a clear; wiping is the scrubber's job);
-//   2. acquire the shared advisory lock;
+//   2. acquire the shared advisory lock (bounded, Phase 12 12.00b.2-B: on
+//      the main thread it waits at most 100 ms, then returns `.busy` having
+//      written nothing; `AppStore` keeps the mirror dirty and retries);
 //   3. re-check the owner inside the lock (a sign-out scrub that ran first
 //      must win — the writer never re-populates a scrubbed suite);
 //   4. write `widgetSnapshot`, release the lock;
@@ -43,6 +45,10 @@ enum NativeWidgetMirrorOutcome: Equatable {
     case unavailable
     case lockFailed
     case encodingFailed
+    /// Phase 12 (12.00b.2-B): the lock stayed busy for the whole bounded
+    /// wait. Nothing was read or written and timelines were not reloaded;
+    /// the caller keeps the mirror dirty and retries.
+    case busy
 }
 
 /// Which canonical snapshot a seam (trigger 3) write projected (contract
@@ -131,6 +137,8 @@ struct NativeWidgetMirror {
             }
         } catch WidgetAppGroupLockError.unavailable {
             return .unavailable
+        } catch WidgetAppGroupLockError.busy {
+            return .busy
         } catch {
             return .lockFailed
         }

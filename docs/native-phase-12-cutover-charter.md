@@ -489,8 +489,8 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
-| L74 | `NativeWidgetMirror.write` takes a blocking `flock` on the MainActor with no timeout | S2 | Open | **12.00b.2**: bounded try-lock in `WidgetAppGroupLock` (one fix with L96) | Open |
-| L96 | `OnMyWayIntent.perform()` takes the same blocking `flock` on the MainActor | S2 | Open | **12.00b.2** (with L74) | Open |
+| L74 | `NativeWidgetMirror.write` takes a blocking `flock` on the MainActor with no timeout | S2 | Open | **12.00b.2**: bounded try-lock in `WidgetAppGroupLock` (one fix with L96) | Fixed — 12.00b.2-B (`fix(native): phase 12.00b.2 - bounded App Group lock on the main actor (L74, L96)`) |
+| L96 | `OnMyWayIntent.perform()` takes the same blocking `flock` on the MainActor | S2 | Open | **12.00b.2** (with L74) | Fixed — 12.00b.2-B (`fix(native): phase 12.00b.2 - bounded App Group lock on the main actor (L74, L96)`) |
 | L130 | One malformed, duplicate or over-512 widget/Siri queue entry quarantines the whole batch, so valid actions (clock-ins, expenses, trips) are never applied | **S1** | Open | **12.00b.2**: quarantine only the bad entries when the queue parses. A whole-batch quarantine stays only for unparseable bytes, and the raw bytes are still retained. Amend contract §4.6 | Open |
 | L131 | `invalidClaim`/`conflictingClaims` retry forever and the claim is never quarantined, which wedges that owner's replay | S2 | Open | **12.00b.2**: quarantine the bad claim with a bounded diagnostic. Today's workaround is sign-out/in, which clears claims | Open |
 | L237.d | Returning-user launch runs `refreshRecurringJobs()` but not `refreshRecurringInvoices()`, while RN runs both | S2 | Open | **12.00b.2**: add the invoice refresh, with a test cross-checked against RN | Open |
@@ -552,7 +552,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L110 | `.missing` and `.noUpcomingJob` share an icon; `.missing` copy is not the contract's | S3 | Open | backlog | Open |
 | L117 | Four copies of the "job not before today" local-date compare | S3 | Open | backlog; consolidate under `TZ=America/Phoenix` tests (FA-039 class) | Open |
 | L118 | Widget navy colour constant is duplicated | S3 | Open | backlog | Open |
-| L132 | Race tests assert "not finished after 0.3s", not "blocked on the flock" | S3 | Open | backlog | Open |
+| L132 | Race tests assert "not finished after 0.3s", not "blocked on the flock" | S3 | Open | backlog | Fixed — 12.00b.2-B rider (`fix(native): phase 12.00b.2 - bounded App Group lock on the main actor (L74, L96)`; the anchored writer-first scrub race) |
 | L133 | `testOneLock` counts exact source-string occurrences in `AppStore.swift` | S3 | Open | backlog | Open |
 | L140.b | `StoreIntegrationTests` comment says there is no App-Group access, but the switch now scrubs it | S3 | Open | backlog | Open |
 | L168 | Analytics-config comment names three gating conditions; the code has a fourth (invalid host) | S3 | Open | backlog | Open |

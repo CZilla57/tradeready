@@ -338,6 +338,20 @@ final class AppStore: ObservableObject {
     private var widgetMirror: NativeWidgetMirror?
     private var widgetMirrorObserverToken: UUID?
     private var widgetMirrorRefreshScheduled = false
+    /// Phase 12 (12.00b.2-B, charter L74): true while the latest mirror write
+    /// found the App Group lock busy and wrote nothing. A write that reaches
+    /// the writer (written, unchanged) or finds no owner clears it.
+    private(set) var isWidgetMirrorDirty = false
+    /// Bounded, payload-free count of busy mirror writes.
+    private(set) var widgetMirrorLockBusyCount = 0
+    private static let widgetMirrorLockBusyCap = 9_999
+    /// Delays of the scheduled retries while the mirror is dirty: each retry
+    /// that is busy again takes the next delay; after the last, the next
+    /// trigger (canonical write, gate change, seam, foreground, background
+    /// refresh) retries. Host tests shorten it.
+    var widgetMirrorBusyRetryDelays: [TimeInterval] = [0.5, 2, 8]
+    private var widgetMirrorBusyRetryAttempt = 0
+    private var widgetMirrorBusyRetryScheduled = false
     /// Task 11.01: true from the moment an explicit sign-out/deletion starts
     /// scrubbing until it finishes. The §2.5 predicate stays non-nil during
     /// the post-scrub `await subscriptionService.logOut()`, and the in-memory
@@ -6636,19 +6650,69 @@ final class AppStore: ObservableObject {
     @discardableResult
     func refreshWidgetMirror(force: Bool, now: Date = Date()) -> NativeWidgetMirrorOutcome? {
         guard let widgetMirror else { return nil }
-        guard let binding = widgetMirrorOwnerBinding else { return .skippedNoOwner }
+        guard let binding = widgetMirrorOwnerBinding else { return noteWidgetMirrorOutcome(.skippedNoOwner) }
         let projection = NativeWidgetSnapshotProjection.project(
             jobs: snapshot.payload.jobs ?? [],
             business: makeCachedBusinessSnapshot(from: snapshot, now: now),
             now: now
         )
-        return widgetMirror.write(
+        return noteWidgetMirrorOutcome(widgetMirror.write(
             projection: projection,
             ownerBinding: binding,
             isCurrentOwner: { [weak self] candidate in self?.widgetMirrorOwnerBinding == candidate },
             force: force,
             now: now
-        )
+        ))
+    }
+
+    /// Phase 12 (12.00b.2-B, charter L74): the mirror runs on the main actor,
+    /// so its lock wait is bounded (100 ms). A busy write wrote nothing: the
+    /// mirror stays dirty, one payload-free diagnostic is emitted, and a
+    /// retry is scheduled; every later trigger retries too. A write that
+    /// reaches the writer, or finds no owner, settles it. A retry re-projects
+    /// the live snapshot through the owner gate, so it never writes for an
+    /// owner that is no longer current. `.skippedOwnerChanged`,
+    /// `.unavailable`, `.lockFailed` and `.encodingFailed` leave the flag as
+    /// it was.
+    @discardableResult
+    private func noteWidgetMirrorOutcome(_ outcome: NativeWidgetMirrorOutcome) -> NativeWidgetMirrorOutcome {
+        switch outcome {
+        case .busy:
+            isWidgetMirrorDirty = true
+            widgetMirrorLockBusyCount = min(Self.widgetMirrorLockBusyCap, widgetMirrorLockBusyCount + 1)
+            print("TradeReadyWidgetLock stage=busy site=mirror count=\(widgetMirrorLockBusyCount)")
+            reportError(
+                ["code": "widget-lock/busy", "message": "App Group lock busy"],
+                context: ["context": "widgetLock", "operation": "mirror"]
+            )
+            scheduleWidgetMirrorBusyRetry()
+        case .written, .unchanged, .skippedNoOwner:
+            isWidgetMirrorDirty = false
+            widgetMirrorBusyRetryAttempt = 0
+        case .skippedOwnerChanged, .unavailable, .lockFailed, .encodingFailed:
+            break
+        }
+        return outcome
+    }
+
+    /// Schedules the next busy retry, at most one at a time and at most one
+    /// per `widgetMirrorBusyRetryDelays` entry per dirty episode. Non-forced:
+    /// a forced write differs only in `updatedAt`, and the writer's 1-hour
+    /// dedupe still rewrites an aged mirror.
+    private func scheduleWidgetMirrorBusyRetry() {
+        guard !widgetMirrorBusyRetryScheduled,
+              widgetMirrorBusyRetryAttempt < widgetMirrorBusyRetryDelays.count
+        else { return }
+        let delay = widgetMirrorBusyRetryDelays[widgetMirrorBusyRetryAttempt]
+        widgetMirrorBusyRetryAttempt += 1
+        widgetMirrorBusyRetryScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+            guard let self else { return }
+            self.widgetMirrorBusyRetryScheduled = false
+            guard self.isWidgetMirrorDirty else { return }
+            self.refreshWidgetMirror(force: false)
+        }
     }
 
     /// Trigger 3 (the 10.09 seam), stamped for the publish's
@@ -6686,13 +6750,13 @@ final class AppStore: ObservableObject {
                 now: now
             )
         }
-        widgetMirror.write(
+        noteWidgetMirrorOutcome(widgetMirror.write(
             projection: projection,
             ownerBinding: expectedOwnerBinding,
             isCurrentOwner: { [weak self] candidate in self?.widgetMirrorOwnerBinding == candidate },
             force: false,
             now: now
-        )
+        ))
     }
 
     /// Coalesces trigger-1 writes to one per main-actor turn, so a burst of

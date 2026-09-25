@@ -271,6 +271,13 @@ Write protocol:
 - Acquire the advisory lock.
 - Re-check the owner gate, write `widgetSnapshot`, release the lock.
 - Then call `WidgetCenter.shared.reloadAllTimelines()`.
+- **Amended by Phase 12 12.00b.2-B (2026-09-25).** The mirror runs on the main actor,
+  so its lock wait is bounded (§4.2 amendment). A busy write leaves the stored snapshot
+  as it was and does not reload. `AppStore` marks the mirror dirty, logs one
+  payload-free diagnostic (`widget-lock/busy`, context `widgetLock`/`mirror`, and a
+  capped count), and schedules a retry after 0.5 s, then 2 s, then 8 s while it stays
+  busy. Every later trigger retries too. A retry projects the live snapshot through the
+  owner gate, so it never writes for an owner who is no longer current.
 
 Gate: write only when the §2.5 owner predicate `O` is non-nil, re-checked inside the
 lock. For seam writes, `O` must also equal the publish's `expectedOwnerBinding`.
@@ -392,6 +399,25 @@ Field rules:
 If the container is unavailable or the lock fails, the intent reports failure. It never
 writes without the lock. The native claim transport already takes the same lock before
 it claims a prefix.
+
+- **Amended by Phase 12 12.00b.2-B (2026-09-25): the acquire is bounded (charter L74,
+  L96).** Step 1 no longer blocks in `flock(LOCK_EX)`. `WidgetAppGroupLock` tries
+  `LOCK_EX | LOCK_NB`, backs off 1 ms doubling to a 16 ms cap, makes a last attempt at
+  the deadline, then throws `busy` without running the critical section. The budget is
+  100 ms on the main thread (iOS counts 250 ms as a hang) and 2 s on any other thread.
+  There is no blocking variant. The lock file, the scrub's lock order and the scrub's
+  semantics are unchanged.
+  - A busy intent (`WidgetIntentFailure.busy`) writes nothing and reports failure with
+    its existing failure dialog: "TradeReady couldn't save that" for the shared writer
+    refusal, the trip intents' own failure lines, and "I couldn't open that. Open
+    TradeReady and try again." for On My Way. The widget buttons do not reload.
+  - A busy mirror write (`NativeWidgetMirrorOutcome.busy`) writes nothing; §3.1 keeps it
+    dirty and retries.
+  - A busy claim, acknowledge or quarantine is the transport's `lockFailed`: the queue
+    stays, and the next activation retries. A busy stash consumer takes nothing and
+    leaves the stash for its 300 s window. A busy account scrub is the scrubber's
+    `lockFailed`: the widget step stays pending, the mirror and replay stay gated, and
+    sign-out throws `localScrubFailed` until a retry succeeds.
 
 ### 4.3 Writer rules (chosen; stricter than RN because the native planner rejects whole batches)
 

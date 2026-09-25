@@ -10,6 +10,10 @@ import Foundation
 //    `pendingOpenUrl` stash `{url, at, ownerTag}` in that ONE lock hold
 //    (contract §4.5, §6.2). No snapshot/tag → "Open TradeReady and sign in
 //    first."; stale → "Open TradeReady to refresh your schedule."
+//    `perform()` is `@MainActor`, so the lock wait is bounded to 100 ms
+//    (Phase 12, 12.00b.2-B): a busy lock writes nothing, opens nothing and
+//    speaks the stash-failure dialog "I couldn't open that. Open TradeReady
+//    and try again." — the user's request is never silently dropped.
 // 2. The URL `tradeready://onmyway/<id>` goes to `NativeIntentURLRouter`,
 //    which feeds `AppStore.handle(url:)` → `routeToOnMyWay` →
 //    `requestOnMyWayReview`: an editable review, never auto-sent (§5.1).

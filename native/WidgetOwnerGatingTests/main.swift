@@ -169,6 +169,52 @@ private func releaseLock(_ descriptor: Int32) {
     close(descriptor)
 }
 
+/// Phase 12 (L132): true while another open file description holds the lock
+/// (a `LOCK_NB` probe on a fresh descriptor fails).
+private func lockIsHeld(at url: URL) -> Bool {
+    let descriptor = open(url.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+    guard descriptor >= 0 else { return false }
+    defer { close(descriptor) }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { return true }
+    flock(descriptor, LOCK_UN)
+    return false
+}
+
+/// Phase 12 (12.00b.2-B): holds the lock with an idempotent `release()`.
+/// `releaseAfter` is a safety valve, so code that still blocks on the lock
+/// fails on timing instead of hanging the run.
+private final class LockHolder {
+    private let lock = NSLock()
+    private var descriptor: Int32?
+
+    init(at url: URL, releaseAfter seconds: TimeInterval) {
+        descriptor = holdLock(at: url)
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in self?.release() }
+    }
+
+    deinit { release() }
+
+    func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor else { return }
+        releaseLock(descriptor)
+        self.descriptor = nil
+    }
+}
+
+/// Phase 12 (L132): counts entries into `removePersistentDomain` (the
+/// scrubber's in-lock critical section), so a test can prove the scrub has
+/// not reached it yet.
+private final class ProbedDefaults: UserDefaults {
+    private let entries = Box<Int>()
+    var removeEntries: Int { entries.get() ?? 0 }
+    override func removePersistentDomain(forName domainName: String) {
+        entries.set(removeEntries + 1)
+        super.removePersistentDomain(forName: domainName)
+    }
+}
+
 /// The real UserDefaults, except that `removePersistentDomain` (the
 /// scrubber's in-lock critical section) can be paused, so the REAL scrubber
 /// holds the REAL lock while writers queue up behind it.
@@ -608,7 +654,8 @@ private func testRealScrubRaceWriterFirst() throws {
     // (b) the reverse: an extension writer holds the lock mid-append while the
     // real scrubber waits for it. The append lands first, then the scrub wipes
     // it: no action survives into the next account.
-    let suite2 = TempSuite()
+    let suite2 = TempSuite(defaults: { ProbedDefaults(suiteName: $0)! })
+    let probed = suite2.defaults as! ProbedDefaults
     defer { suite2.cleanUp() }
     try suite2.defaults.set(WidgetSnapshot(
         updatedAt: iso(Date()), nextJob: nil, timer: nil, outstandingTotal: 0, ownerTag: tagA
@@ -618,13 +665,26 @@ private func testRealScrubRaceWriterFirst() throws {
     let (logged, loggedDone) = runInBackground { writer.logExpense(amount: 11, category: .fuel, description: nil) }
     gatedStore.entered.wait() // the writer holds the lock, mid-append
     let scrubber = suite2.scrubber
-    let (scrubbed, scrubDone) = runInBackground { () -> Bool in (try? scrubber.scrub()) != nil }
+    // Phase 12 (L132): prove the scrub is running and parked on the lock, not
+    // merely slow to start. It signals right before `scrub()`; after the wait
+    // it has not reached its in-lock wipe while the lock is still held, and
+    // between entry and that wipe `scrub()` only creates the directory, opens
+    // the lock file and acquires the lock.
+    let scrubStarted = DispatchSemaphore(value: 0)
+    let (scrubbed, scrubDone) = runInBackground { () -> Bool in
+        scrubStarted.signal()
+        return (try? scrubber.scrub()) != nil
+    }
+    expect(scrubStarted.wait(timeout: .now() + 5) == .success, "L132: the scrub has started")
     expect(scrubDone.wait(timeout: .now() + 0.3) == .timedOut, "the real scrubber waits for the writer's lock hold")
+    expectEqual(probed.removeEntries, 0, "L132: the started scrub has not reached its in-lock wipe")
+    expect(lockIsHeld(at: suite2.lockFile), "L132: …because the writer still holds the lock")
     gatedStore.release.signal()
     _ = loggedDone.wait(timeout: .now() + 10)
     _ = scrubDone.wait(timeout: .now() + 10)
     if case .logged = logged.get() {} else { expect(false, "the in-flight append completes (\(String(describing: logged.get())))") }
     expect(scrubbed.get() == true, "the scrub then succeeds")
+    expectEqual(probed.removeEntries, 1, "L132: the wipe ran once, after the writer released the lock")
     expect(suite2.isEmpty, "the scrub wipes the just-appended action with everything else")
 }
 
@@ -1368,6 +1428,55 @@ private func testWriteGate() async throws {
     expectEqual(retryReloader.count, 0, "no reload while the wipe has not happened")
 }
 
+// MARK: - 9b. Sign-out behind a busy lock (Phase 12, 12.00b.2-B)
+
+/// The account scrub runs on the main actor, so it takes the bounded
+/// main-thread acquire. Busy maps to the scrub's existing lock failure: the
+/// sign-out fails closed within the budget (widget step pending, mirror
+/// gated, nothing wiped or half-wiped) and the retry finishes it once the
+/// lock is free. The scrub's lock order and code are unchanged.
+@MainActor
+private func testSignOutBehindBusyLockFailsClosed() async throws {
+    let suite = TempSuite(), workspace = Workspace()
+    defer { suite.cleanUp(); workspace.cleanUp() }
+    let marker = workspace.fileURL.appendingPathExtension("widget-scrub-pending")
+    try workspace.write(jobs: [job("j1")])
+    try workspace.bind(bindingA)
+    let reloader = RecordingReloader()
+    let store = makeStore(workspace, suite: suite, reloader: reloader)
+    store.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+    await settle()
+    expectEqual(WidgetSnapshot.load(from: suite.defaults)?.ownerTag, tagA, "sanity: A's snapshot is mirrored")
+
+    let holder = LockHolder(at: suite.lockFile, releaseAfter: 2)
+    let start = ProcessInfo.processInfo.systemUptime
+    var thrown: Error?
+    do { try await store.signOut(revokeRemote: false) } catch { thrown = error }
+    let elapsed = ProcessInfo.processInfo.systemUptime - start
+    if case NativeAccountSignOutError.localScrubFailed? = thrown as? NativeAccountSignOutError {} else {
+        expect(false, "a sign-out behind a busy lock fails with localScrubFailed (got \(String(describing: thrown)))")
+    }
+    expect(elapsed < 0.5, "the main actor was not held past the lock budget (took \(elapsed) s)")
+    expect(FileManager.default.fileExists(atPath: marker.path), "the widget wipe stays pending (durable marker)")
+    expectEqual(WidgetSnapshot.load(from: suite.defaults)?.ownerTag, tagA, "nothing in the suite was touched while busy")
+    expectEqual(reloader.count, 0, "no post-wipe reload ran")
+    expect(store.widgetMirrorOwnerBinding == nil, "the mirror is gated while the wipe is pending")
+    expectEqual(store.refreshWidgetMirror(force: true), .skippedNoOwner, "…and writes nothing")
+
+    holder.release()
+    store.retryAccountScrub()
+    expect(!FileManager.default.fileExists(atPath: marker.path), "the retry clears the marker once the lock is free")
+    expect(suite.isEmpty, "the retry wipes A's App Group state")
+    expect(reloader.count > 0, "the retry reloads timelines after the wipe")
+    expectEqual(store.authenticationGateState, .signedOut, "the retry completes the sign-out")
+
+    // Structure: no blocking acquire remains in the one shared lock.
+    let lock = source("Widgets/Shared/WidgetAppGroup.swift")
+    expect(!lock.isEmpty, "sanity: the lock source is readable")
+    expect(lock.contains("LOCK_EX | LOCK_NB"), "the shared lock acquires with LOCK_NB")
+    expect(!lock.contains("LOCK_EX)"), "the shared lock has no blocking LOCK_EX acquire")
+}
+
 // MARK: - 10. One lock (deferred 11.01 minor) and scrub-path structure
 
 private func source(_ relative: String) -> String {
@@ -1450,6 +1559,7 @@ struct WidgetOwnerGatingTests {
         await runAsync("widget scrub double failure and relaunch", testWidgetScrubSurvivesDoubleFailureAndRelaunch)
         await runAsync("account switch is exclusive", testAccountSwitchIsExclusive)
         await runAsync("write gate", testWriteGate)
+        await runAsync("sign-out behind a busy lock", testSignOutBehindBusyLockFailsClosed)
         testOneLock()
         for gap in knownGaps { print("KNOWN GAP (not asserted; handed off): \(gap)") }
         if failures == 0 {
