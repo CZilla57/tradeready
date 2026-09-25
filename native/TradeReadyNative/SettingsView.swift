@@ -152,6 +152,10 @@ struct SettingsView: View {
     private var syncSubtitle: String {
         if store.syncStatus.isSyncing { return "Syncing changes…" }
         if store.syncStatus.diagnosticCode != nil { return "Needs attention" }
+        // Phase 12 (12.00b.1, D3): refused changes wait for Retry or Discard.
+        if !store.rejectedChanges.isEmpty {
+            return "\(store.rejectedChanges.count) change\(store.rejectedChanges.count == 1 ? "" : "s") couldn't be saved"
+        }
         if store.syncStatus.pendingCount > 0 {
             return "\(store.syncStatus.pendingCount) change\(store.syncStatus.pendingCount == 1 ? "" : "s") waiting"
         }
@@ -318,6 +322,20 @@ struct SyncSettings: View {
                 }
                 .padding(.vertical, 4)
             }
+            // Phase 12 (12.00b.1, known issue I2; owner decision D3): the
+            // changes the cloud refused, with Retry and Discard.
+            if !store.rejectedChanges.isEmpty {
+                Section {
+                    NavigationLink {
+                        NativeRejectedChangesView()
+                    } label: {
+                        Label(rejectedChangesTitle, systemImage: "exclamationmark.icloud.fill")
+                            .foregroundStyle(Color.tradeWarningText)
+                    }
+                } footer: {
+                    Text("Everything else keeps syncing. Open the list to retry or discard each change.")
+                }
+            }
             Section("SYNC DETAILS") {
                 LabeledContent("Pending changes", value: "\(store.syncStatus.pendingCount)")
                 LabeledContent("Last completed", value: lastCompletedText)
@@ -345,11 +363,17 @@ struct SyncSettings: View {
                 Text("Pending changes stay on this device and retry automatically. Diagnostic codes contain no customer data, account identifiers, or credentials.")
             }
         })
+        .task { store.refreshRejectedChanges() }
     }
 
     private var isOffline: Bool {
         if case .offline? = store.syncStatus.lastOutcome { return true }
         return false
+    }
+
+    private var rejectedChangesTitle: String {
+        let count = store.rejectedChanges.count
+        return "\(count) change\(count == 1 ? "" : "s") couldn't be saved"
     }
 
     private var statusTitle: String {

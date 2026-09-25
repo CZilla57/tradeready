@@ -816,6 +816,11 @@ let viewFileInventory: Set<String> = [
     // and primary body text, a regular-size prominent button, and a `.contain`
     // element so VoiceOver reaches the button on its own.
     "N/NativeAccountCleanupBanner.swift",
+    // Phase 12 (12.00b.1, D3), reviewed: text-titled Labels and bordered
+    // Buttons with hints, text styles that wrap at every Dynamic Type size,
+    // each entry's type, name and time combined into one VoiceOver element,
+    // a titled confirmation dialog for Discard and a text alert for errors.
+    "N/NativeRejectedChangesView.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -1582,7 +1587,9 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
             }
         }
     }
-    expectEqual(inRowDestructive, 12, "in-row destructive buttons audited")
+    // 13: Phase 12 (12.00b.1, D3) adds the Discard button of each entry in
+    // `NativeRejectedChangesView`.
+    expectEqual(inRowDestructive, 13, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

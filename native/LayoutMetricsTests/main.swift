@@ -434,6 +434,8 @@ let scrollRootInventory: [String: Int] = [
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoiceEditor|Form": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobsView|List": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobEditor|Form": 1,
+    // Phase 12 (12.00b.1, D3): Settings › Cloud Sync › changes not saved.
+    "NativeRejectedChangesView.swift|NativeRejectedChangesView|Form": 1,
     "NativeReviewRequestView.swift|NativeReviewRequestView|Form": 1,
     "NativeRouteView.swift|NativeRouteView|List": 1,
     "NativeScheduleEditorView.swift|NativeScheduleEditorView|Form": 1,
