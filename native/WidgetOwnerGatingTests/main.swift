@@ -449,6 +449,12 @@ private func testReplayGateNativeOwner() async throws {
     expectEqual(store.widgetActionReplayDiagnostics.ownerDroppedActionCount, 3, "three entries dropped, counted without payload")
     expect(store.migrationMessage == nil, "a dropped foreign action surfaces no message")
     expectEqual(store.jobs.first { $0.id == "j1" }?.status, .inProgress, "in-memory state is the committed replay")
+    // Final review C1: the replay queues B's writes for sync — only B's, and
+    // only once the gate opened on O (the refused gates above queued nothing).
+    let queuedWrites = Canonical.NativeMutationQueue(fileURL: workspace.directory.appendingPathComponent("mutation-queue.json"))
+        .load().map { "\($0.table)/\($0.recordId)" }
+    expectEqual(Set(queuedWrites), ["jobs/j1", "expenses/e_siri_b-exp"],
+                "C1: exactly B's replayed records are queued for sync (none of the dropped entries)")
 }
 
 // MARK: - 4. Cross-sign-in: A signs out, B signs in (widget, Siri, claims)
@@ -625,7 +631,8 @@ private func coordinator(_ queue: MemoryQueue, _ root: URL, lockFile: URL) -> Na
         transport: NativeWidgetActionClaimTransport(
             queue: queue, claimDirectory: root.appendingPathComponent("claims"), lockFile: lockFile
         ),
-        repository: Canonical.SnapshotRepository(primaryURL: root.appendingPathComponent("store.json"))
+        repository: Canonical.SnapshotRepository(primaryURL: root.appendingPathComponent("store.json")),
+        enqueueWrittenRecords: { _, _ in }
     )
 }
 

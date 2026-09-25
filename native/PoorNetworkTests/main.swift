@@ -209,9 +209,17 @@ final class TestClock: @unchecked Sendable {
 
 // MARK: - Harness
 
+/// The App Group widget/Siri action queue in memory (the extension's writer side).
+final class MemoryWidgetActionQueue: NativeWidgetActionQueueBacking {
+    var value: String?
+    func read() -> String? { value }
+    func write(_ value: String?) { self.value = value }
+}
+
 @MainActor
 struct Harness {
     static let subject = "11111111-2222-3333-4444-555555555555"
+    static let binding = String(repeating: "b", count: 64)
     static let session = Data(#"{"access_token":"private-access-token"}"#.utf8)
     static let supabaseURL = URL(string: "https://project.supabase.co")!
     static let baseBackoff: TimeInterval = 30
@@ -224,6 +232,8 @@ struct Harness {
     let cursorStore: Canonical.NativeSyncCursorStore
     let clock: TestClock
     let coordinator: NativeSyncCoordinator
+    /// Final review C1: the widget/Siri queue the real replay claims from.
+    let widgetQueue = MemoryWidgetActionQueue()
 
     /// `server` lets a second harness act as "another device" of the same account.
     init(tag: String, server: InMemorySupabase = InMemorySupabase()) {
@@ -238,6 +248,11 @@ struct Harness {
         store = AppStore(
             fileURL: dir.appendingPathComponent("store.json"),
             seedIfMissing: false,
+            widgetActionReplayTransport: NativeWidgetActionClaimTransport(
+                queue: widgetQueue,
+                claimDirectory: dir.appendingPathComponent("WidgetActionClaims", isDirectory: true),
+                lockFile: dir.appendingPathComponent("app-group.lock")
+            ),
             appGroupAccountScrubber: NativeAppGroupAccountScrubber(
                 suiteName: suite,
                 defaults: UserDefaults(suiteName: suite) ?? .standard,
@@ -247,7 +262,7 @@ struct Harness {
                 supabaseURL: Self.supabaseURL, publishableKey: "publishable-key", loader: link
             )
         )
-        store.scheduleBookingTestSeedSignedInOwner(subject: Self.subject, binding: String(repeating: "b", count: 64))
+        store.scheduleBookingTestSeedSignedInOwner(subject: Self.subject, binding: Self.binding)
         let credentials = NativeSyncCredentials(subject: Self.subject, sessionBytes: Self.session)
         store.scheduleBookingTestCredentials = credentials
         // The same files AppStore.init opened: every local edit lands here.
@@ -340,6 +355,7 @@ struct PoorNetworkTests {
         try await directPullKeepsEditPushedDuringIt()
         rebaseRules()
         try await recurringGenerationWaitsForInitialSync()
+        try await widgetReplayReachesTheServer()
 
         NativePerformanceMetrics.shared.replaceSink(nil)
         if failures == 0 {
@@ -909,6 +925,101 @@ struct PoorNetworkTests {
         }
         expectEqual(serverRate, Decimal(95), "G: the follow-up edit reached the server too")
         expect(h.queue.load().isEmpty, "G: the queue drains")
+    }
+
+    /// Final review C1: a widget/Siri replay is a local write like any other.
+    /// It must queue the upserts of every record it wrote (RN routes replay
+    /// through saveJobs/saveTrips/saveExpenses, `utils/widgetActions.ts`), so
+    /// the records reach the server and a pull of a server-changed job keeps
+    /// the replayed time session (the record is pending, so rebase keeps it).
+    @MainActor
+    static func widgetReplayReachesTheServer() async throws {
+        let h = Harness(tag: "widget-replay")
+        defer { h.cleanup() }
+        let (_, job) = await syncedBaseline(h, "C1")
+        expect(h.queue.load().isEmpty, "C1: the baseline drained the queue")
+        let tag = NativeWidgetOwnerTag.make(binding: Harness.binding)
+        func action(_ body: String) -> String { #"{"ownerTag":"\#(tag)",\#(body)}"# }
+
+        // A batch that matches nothing (an unknown job, an idle stop) commits
+        // nothing and so enqueues nothing.
+        h.widgetQueue.value = "[" + [
+            action(#""id":"c1-ghost","type":"timer_start","at":"2026-09-24T15:00:00.000Z","jobId":"no-such-job""#),
+            action(#""id":"c1-idle-stop","type":"timer_stop","at":"2026-09-24T15:00:00.000Z""#),
+        ].joined(separator: ",") + "]"
+        h.store.testReplayWidgetActions()
+        expect(h.widgetQueue.value == nil, "C1: the no-op batch is claimed and acknowledged")
+        expectEqual(h.queueKeys(), [], "C1: a replay that commits nothing enqueues nothing")
+
+        // One of each writing kind: timer_start, trip_log, expense_log.
+        let startedAt = "2026-09-24T16:00:00.000Z"
+        h.widgetQueue.value = "[" + [
+            action(#""id":"c1-start","type":"timer_start","at":"\#(startedAt)","jobId":"\#(job.id)""#),
+            action(#""id":"c1-trip","type":"trip_log","at":"2026-09-24T16:05:00.000Z","date":"2026-09-24","odometerStart":100,"odometerEnd":112"#),
+            action(#""id":"c1-expense","type":"expense_log","at":"2026-09-24T16:10:00.000Z","date":"2026-09-24","amount":18.5,"category":"fuel""#),
+        ].joined(separator: ",") + "]"
+        h.store.testReplayWidgetActions()
+        expect(h.widgetQueue.value == nil, "C1: the batch is claimed and acknowledged")
+        expectEqual(Set(h.queueKeys()), ["jobs/\(job.id)", "trips/t_siri_c1-trip", "expenses/e_siri_c1-expense"],
+                    "C1: the replay queued an upsert for every record it wrote")
+        let queuedJob = h.queue.load().first { $0.table == "jobs" }?.payload
+        if case let .object(fields)? = queuedJob, case let .array(sessions)? = fields["timeSessions"] {
+            expectEqual(sessions.count, 1, "C1: the queued job payload carries the replayed time session")
+        } else {
+            expect(false, "C1: the queued job payload is the replayed job")
+        }
+
+        // Another device edits the same job from the server's copy (which has
+        // no widget session); a pull runs before the push.
+        guard let serverCopy = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data else {
+            expect(false, "C1: the baseline job is on the server"); return
+        }
+        let otherDevice = NativeSupabaseMutationPushService(
+            supabaseURL: Harness.supabaseURL, publishableKey: "publishable-key", allowsWrites: true, loader: h.server
+        )
+        let remote = try await otherDevice.push(
+            sessionBytes: Harness.session, expectedUserSubject: Harness.subject,
+            items: [.init(table: "jobs", op: .upsert, recordId: job.id,
+                          payload: replacing(serverCopy, "title", with: .string("Roof inspection (remote)")),
+                          ts: "2026-09-24T16:30:00.000Z")]
+        )
+        expect(remote.remaining.isEmpty, "C1: the other device's job edit reached the server")
+        h.link.condition = .writesFail
+        expectEqual(await h.store.testPullDeltaIfPossible().state, .completed, "C1: the pull completes")
+        let sessionsAfterPull = h.committed()?.payload.jobs?.first { $0.id == job.id }?.timeSessions
+        expectEqual(sessionsAfterPull?.count, 1, "C1: the pull keeps the replayed time session on disk (pending record)")
+        expectEqual(sessionsAfterPull?.first?.start, startedAt, "C1: the kept session is the widget's")
+        expect(h.store.timeTrackingSummary(jobID: job.id)?.isClocked == true,
+               "C1: the pull keeps the replayed clock-in in memory")
+
+        // Reconnect: the replayed records reach the server.
+        h.link.condition = .online
+        h.clock.advance(301)
+        _ = await h.coordinator.sync(trigger: .manual)
+        expect(h.queue.load().isEmpty, "C1: the queue drains")
+        let serverJob = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data
+        if case let .object(fields)? = serverJob, case let .array(sessions)? = fields["timeSessions"] {
+            expectEqual(sessions.count, 1, "C1: the server job has the widget's time session")
+        } else {
+            expect(false, "C1: the server has the job row")
+        }
+        expect(h.server.storedRow(table: "trips", id: "t_siri_c1-trip", userID: Harness.subject) != nil,
+               "C1: the replayed trip reached the server")
+        expect(h.server.storedRow(table: "expenses", id: "e_siri_c1-expense", userID: Harness.subject) != nil,
+               "C1: the replayed expense reached the server")
+
+        // timer_stop (the fourth kind) re-queues the job with the closed session.
+        h.widgetQueue.value = "[" + action(#""id":"c1-stop","type":"timer_stop","at":"2026-09-24T17:00:00.000Z""#) + "]"
+        h.store.testReplayWidgetActions()
+        expectEqual(h.queueKeys(), ["jobs/\(job.id)"], "C1: timer_stop queues the job upsert")
+        _ = await h.coordinator.sync(trigger: .manual)
+        let stopped = h.server.storedRow(table: "jobs", id: job.id, userID: Harness.subject)?.data
+        if case let .object(fields)? = stopped, case let .array(sessions)? = fields["timeSessions"],
+           case let .object(last)? = sessions.last {
+            expectEqual(last["end"], .string("2026-09-24T17:00:00.000Z"), "C1: the server session is closed by the widget stop")
+        } else {
+            expect(false, "C1: the server job still has its session")
+        }
     }
 
     /// Review M1: the pure three-way merge the pull commit uses

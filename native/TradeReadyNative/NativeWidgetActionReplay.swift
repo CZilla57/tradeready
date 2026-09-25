@@ -209,11 +209,38 @@ enum NativeWidgetActionBatchPlanner {
     }
 }
 
+/// Final review C1: one canonical record a replayed action wrote, keyed the
+/// way the outbound mutation queue keys it (`<table>/<recordId>`).
+struct NativeWidgetActionRecordKey: Hashable {
+    static let jobsTable = "jobs"
+    static let tripsTable = "trips"
+    static let expensesTable = "expenses"
+
+    let table: String
+    let recordID: String
+}
+
+/// Final review C1: why the caller refused to queue a replay's writes. The
+/// claim stays unacknowledged and is retried.
+enum NativeWidgetActionReplayEnqueueError: Error, Equatable {
+    /// The verified owner changed between the commit and the enqueue.
+    case ownerChanged
+    /// A written record is missing from the committed snapshot.
+    case missingRecord
+}
+
 struct NativeWidgetActionReplayResult {
     let snapshot: Canonical.Snapshot
     let changedActionCount: Int
     let ignoredActionCount: Int
     let unsupportedActionIDs: [String]
+    /// Final review C1: every record this batch's actions wrote, in first-touch
+    /// order without duplicates. It includes records an action already wrote
+    /// on an earlier, unacknowledged attempt (found by its deterministic id or
+    /// session marker), so a retry after an interrupted enqueue re-queues
+    /// them; the queue's last-writer-wins dedup makes that idempotent. An
+    /// action that matches nothing contributes no record.
+    let writtenRecords: [NativeWidgetActionRecordKey]
 
     var canAcknowledge: Bool { unsupportedActionIDs.isEmpty }
 }
@@ -230,6 +257,16 @@ enum NativeWidgetActionReplayer {
         "materials", "tools", "fuel", "labor", "insurance", "software", "marketing", "other"
     ]
 
+    /// What one action did to the snapshot.
+    private enum Outcome {
+        /// The action wrote this record now.
+        case applied(NativeWidgetActionRecordKey)
+        /// The action wrote this record on an earlier attempt (retry).
+        case alreadyApplied(NativeWidgetActionRecordKey)
+        /// The action matches nothing (unknown or finished job, idle stop).
+        case ignored
+    }
+
     static func apply(
         _ batch: NativeWidgetActionBatch,
         to source: Canonical.Snapshot
@@ -238,49 +275,62 @@ enum NativeWidgetActionReplayer {
         var changed = 0
         var ignored = 0
         var unsupported: [String] = []
+        var written: [NativeWidgetActionRecordKey] = []
 
         for action in batch.actions {
-            let didChange: Bool
+            let outcome: Outcome
             switch action.kind {
             case .timerStart:
-                didChange = try applyTimerStart(action, snapshot: &snapshot)
+                outcome = try applyTimerStart(action, snapshot: &snapshot)
             case .timerStop:
-                didChange = applyTimerStop(action, snapshot: &snapshot)
+                outcome = applyTimerStop(action, snapshot: &snapshot)
             case .tripLog:
-                didChange = try applyTrip(action, snapshot: &snapshot)
+                outcome = try applyTrip(action, snapshot: &snapshot)
             case .expenseLog:
-                didChange = try applyExpense(action, snapshot: &snapshot)
+                outcome = try applyExpense(action, snapshot: &snapshot)
             case .unknown:
                 unsupported.append(action.id)
                 continue
             }
-            if didChange { changed += 1 } else { ignored += 1 }
+            switch outcome {
+            case .applied(let key):
+                changed += 1
+                if !written.contains(key) { written.append(key) }
+            case .alreadyApplied(let key):
+                ignored += 1
+                if !written.contains(key) { written.append(key) }
+            case .ignored:
+                ignored += 1
+            }
         }
         return .init(
             snapshot: snapshot,
             changedActionCount: changed,
             ignoredActionCount: ignored,
-            unsupportedActionIDs: unsupported
+            unsupportedActionIDs: unsupported,
+            writtenRecords: written
         )
     }
 
     private static func applyTimerStart(
         _ action: NativeWidgetActionBatch.Action,
         snapshot: inout Canonical.Snapshot
-    ) throws -> Bool {
+    ) throws -> Outcome {
+        if let marked = markedJobID(action.id, jobs: snapshot.payload.jobs ?? []) {
+            return .alreadyApplied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: marked))
+        }
         guard let jobID = string("jobId", action.fields),
               var jobs = snapshot.payload.jobs,
               let index = jobs.firstIndex(where: { $0.id == jobID })
-        else { return false }
+        else { return .ignored }
         // Task 11.05 (§3.3): a stale widget/Siri snapshot can name a job that
         // was archived since. The exact id is re-resolved here and an
         // archived job fails closed (ignored), matching the projection's own
         // rule that archived work is never offered (RN `!j.archivedAt`).
-        guard !hasMarker(action.id, jobs: jobs),
-              !doneStatuses.contains(jobs[index].status),
+        guard !doneStatuses.contains(jobs[index].status),
               !isArchived(jobs[index]),
               !hasActiveSession(jobs[index])
-        else { return false }
+        else { return .ignored }
 
         var session = try decode(
             Canonical.TimeSession.self,
@@ -292,14 +342,17 @@ enum NativeWidgetActionReplayer {
         jobs[index].timeSessions = sessions
         if jobs[index].status == "scheduled" { jobs[index].status = "in_progress" }
         snapshot.payload.jobs = jobs
-        return true
+        return .applied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: jobID))
     }
 
     private static func applyTimerStop(
         _ action: NativeWidgetActionBatch.Action,
         snapshot: inout Canonical.Snapshot
-    ) -> Bool {
-        guard var jobs = snapshot.payload.jobs, !hasMarker(action.id, jobs: jobs) else { return false }
+    ) -> Outcome {
+        guard var jobs = snapshot.payload.jobs else { return .ignored }
+        if let marked = markedJobID(action.id, jobs: jobs) {
+            return .alreadyApplied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: marked))
+        }
         let index: Int?
         if let jobID = string("jobId", action.fields) {
             index = jobs.firstIndex { $0.id == jobID }
@@ -308,25 +361,26 @@ enum NativeWidgetActionReplayer {
         }
         guard let index, var sessions = jobs[index].timeSessions,
               let last = sessions.indices.last, sessions[last].end == nil
-        else { return false }
+        else { return .ignored }
         sessions[last].end = action.at < sessions[last].start ? sessions[last].start : action.at
         sessions[last].preservation.unknownFields[stopMarker] = .string(action.id)
         jobs[index].timeSessions = sessions
         snapshot.payload.jobs = jobs
-        return true
+        return .applied(.init(table: NativeWidgetActionRecordKey.jobsTable, recordID: jobs[index].id))
     }
 
     private static func applyTrip(
         _ action: NativeWidgetActionBatch.Action,
         snapshot: inout Canonical.Snapshot
-    ) throws -> Bool {
+    ) throws -> Outcome {
         let id = "t_siri_\(action.id)"
+        let key = NativeWidgetActionRecordKey(table: NativeWidgetActionRecordKey.tripsTable, recordID: id)
         var trips = snapshot.payload.trips ?? []
-        guard !trips.contains(where: { $0.id == id }),
-              let date = string("date", action.fields),
+        guard !trips.contains(where: { $0.id == id }) else { return .alreadyApplied(key) }
+        guard let date = string("date", action.fields),
               let start = number("odometerStart", action.fields),
               let end = number("odometerEnd", action.fields)
-        else { return false }
+        else { return .ignored }
         let trip = try decode(Canonical.Trip.self, from: .object([
             "id": .string(id), "date": .string(date),
             "odometerStart": .number(start), "odometerEnd": .number(end),
@@ -337,19 +391,20 @@ enum NativeWidgetActionReplayer {
         ]))
         trips.append(trip)
         snapshot.payload.trips = trips
-        return true
+        return .applied(key)
     }
 
     private static func applyExpense(
         _ action: NativeWidgetActionBatch.Action,
         snapshot: inout Canonical.Snapshot
-    ) throws -> Bool {
+    ) throws -> Outcome {
         let id = "e_siri_\(action.id)"
+        let key = NativeWidgetActionRecordKey(table: NativeWidgetActionRecordKey.expensesTable, recordID: id)
         var expenses = snapshot.payload.expenses ?? []
-        guard !expenses.contains(where: { $0.id == id }),
-              let date = string("date", action.fields),
+        guard !expenses.contains(where: { $0.id == id }) else { return .alreadyApplied(key) }
+        guard let date = string("date", action.fields),
               let amount = number("amount", action.fields)
-        else { return false }
+        else { return .ignored }
         let proposedCategory = string("category", action.fields) ?? "other"
         let category = expenseCategories.contains(proposedCategory) ? proposedCategory : "other"
         let proposedDescription = string("description", action.fields) ?? ""
@@ -362,7 +417,7 @@ enum NativeWidgetActionReplayer {
         ]))
         expenses.append(expense)
         snapshot.payload.expenses = expenses
-        return true
+        return .applied(key)
     }
 
     private static func isArchived(_ job: Canonical.Job) -> Bool {
@@ -374,17 +429,18 @@ enum NativeWidgetActionReplayer {
         job.timeSessions?.last?.end == nil && job.timeSessions?.isEmpty == false
     }
 
-    private static func hasMarker(_ actionID: String, jobs: [Canonical.Job]) -> Bool {
+    /// The job holding a session this action already started or stopped.
+    private static func markedJobID(_ actionID: String, jobs: [Canonical.Job]) -> String? {
         let marker = Canonical.JSONValue.string(actionID)
         for job in jobs {
             for session in job.timeSessions ?? [] {
                 if session.preservation.unknownFields[startMarker] == marker
                     || session.preservation.unknownFields[stopMarker] == marker {
-                    return true
+                    return job.id
                 }
             }
         }
-        return false
+        return nil
     }
 
     private static func string(
@@ -864,14 +920,27 @@ struct NativeWidgetActionReplayDiagnostics: Equatable {
 }
 
 /// Owns the commit ordering: durable claim, pure replay, one atomic canonical
-/// save, then exact acknowledgement. Unsupported future actions retain their
-/// claim and prevent partial application of the batch.
+/// save, the outbound-sync enqueue of every written record, then exact
+/// acknowledgement. Unsupported future actions retain their claim and prevent
+/// partial application of the batch.
 struct NativeWidgetActionReplayCoordinator {
     /// C8: the bounded, payload-free message surfaced after a quarantine.
     static let quarantinedMessage = "Some widget or Siri actions couldn't be read and were set aside."
 
+    /// Final review C1: queues the upserts of `records` (read from the
+    /// committed snapshot) for the outbound sync. Called after the canonical
+    /// save and BEFORE the claim is acknowledged, only when the batch wrote a
+    /// record, on the caller's actor and for the same verified owner the
+    /// batch was committed for. A throw leaves the claim unacknowledged: the
+    /// retry finds each record already written and queues it again.
+    typealias EnqueueWrittenRecords = (
+        _ records: [NativeWidgetActionRecordKey],
+        _ committed: Canonical.Snapshot
+    ) throws -> Void
+
     let transport: NativeWidgetActionClaimTransport
     let repository: Canonical.SnapshotRepository
+    let enqueueWrittenRecords: EnqueueWrittenRecords
 
     func replayNext(
         snapshot: Canonical.Snapshot,
@@ -903,6 +972,9 @@ struct NativeWidgetActionReplayCoordinator {
         }
         if result.changedActionCount > 0 {
             try repository.save(result.snapshot)
+        }
+        if !result.writtenRecords.isEmpty {
+            try enqueueWrittenRecords(result.writtenRecords, result.snapshot)
         }
         try transport.acknowledge(claim)
         return .committed(

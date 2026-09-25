@@ -5675,15 +5675,33 @@ final class AppStore: ObservableObject {
     /// acknowledges shared input. Unsupported future actions remain durable.
     /// Task 11.05: actions not stamped `hash(O)` are dropped before dispatch
     /// (§4.5) and an unpreparable queue is quarantined (C8).
+    ///
+    /// Final review C1: a replay is a local write like any other (RN routes
+    /// it through saveJobs/saveTrips/saveExpenses, `utils/widgetActions.ts`).
+    /// `apply` bypasses the per-write enqueue hooks, so the coordinator hands
+    /// every record the batch wrote to `enqueueWidgetReplayWrites` after the
+    /// canonical save and before the claim is acknowledged. The records are
+    /// then pending, so a pull cannot replace them with the server copy.
     private func replayVerifiedWidgetActionsIfPossible() {
         guard let accountBinding = widgetActionReplayBinding,
               let widgetActionReplayTransport,
               ensurePersistenceWritable()
         else { return }
+        var enqueuedWrites = false
         let coordinator = NativeWidgetActionReplayCoordinator(
             transport: widgetActionReplayTransport,
-            repository: repository
+            repository: repository,
+            enqueueWrittenRecords: { [unowned self] records, committed in
+                try self.enqueueWidgetReplayWrites(records, from: committed, accountBinding: accountBinding)
+                enqueuedWrites = true
+            }
         )
+        defer {
+            if enqueuedWrites {
+                scheduleSyncAfterLocalChange()
+                scheduleWidgetMirrorRefresh()
+            }
+        }
         do {
             // Each claim contains at most 512 actions. Bound foreground work so
             // a continuously-writing extension cannot starve app activation.
@@ -5713,6 +5731,43 @@ final class AppStore: ObservableObject {
             // behind disk. Reload the verified canonical result before retry.
             if let loaded = try? repository.load() { try? apply(loaded.snapshot) }
             migrationMessage = "Widget actions are still safely queued and will be retried."
+        }
+    }
+
+    /// Final review C1: queues one upsert per record a replayed batch wrote,
+    /// read from the committed snapshot, in one atomic last-writer-wins queue
+    /// save. Refuses (throws) unless the replay owner is still `O`, so the
+    /// claim stays unacknowledged. A failure is recorded like every other
+    /// local write's enqueue failure and rethrown, so the claim is retried.
+    private func enqueueWidgetReplayWrites(
+        _ records: [NativeWidgetActionRecordKey],
+        from committed: Canonical.Snapshot,
+        accountBinding: String
+    ) throws {
+        do {
+            guard widgetActionReplayBinding == accountBinding else {
+                throw NativeWidgetActionReplayEnqueueError.ownerChanged
+            }
+            let drafts = try records.map { key -> Canonical.MutationDraft in
+                let payload: Canonical.JSONValue?
+                switch key.table {
+                case NativeWidgetActionRecordKey.jobsTable:
+                    payload = try committed.payload.jobs?.first { $0.id == key.recordID }.map(Self.mutationPayload)
+                case NativeWidgetActionRecordKey.tripsTable:
+                    payload = try committed.payload.trips?.first { $0.id == key.recordID }.map(Self.mutationPayload)
+                case NativeWidgetActionRecordKey.expensesTable:
+                    payload = try committed.payload.expenses?.first { $0.id == key.recordID }.map(Self.mutationPayload)
+                default:
+                    payload = nil
+                }
+                guard let payload else { throw NativeWidgetActionReplayEnqueueError.missingRecord }
+                return Canonical.MutationDraft(table: key.table, op: .upsert, recordId: key.recordID, payload: payload)
+            }
+            try mutationQueue.enqueueBatch(drafts)
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue-widget-replay count=\(records.count)")
+            recordLocalSyncFailure("queue/enqueue-widget-replay")
+            throw error
         }
     }
 

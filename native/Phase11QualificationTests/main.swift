@@ -332,7 +332,7 @@ private func coordinatorReplay(_ raw: String?, on source: Canonical.Snapshot) th
         lockFile: root.appendingPathComponent("group/\(WidgetAppGroup.lockFileName)")
     )
     let repository = Canonical.SnapshotRepository(primaryURL: root.appendingPathComponent("store.json"))
-    let result = try NativeWidgetActionReplayCoordinator(transport: transport, repository: repository)
+    let result = try NativeWidgetActionReplayCoordinator(transport: transport, repository: repository, enqueueWrittenRecords: { _, _ in })
         .replayNext(snapshot: source, verifiedAccountBinding: planningBinding)
     return (result, queue.value, try repository.load()?.snapshot, try transport.quarantinedQueues(accountBinding: planningBinding).count)
 }

@@ -195,13 +195,50 @@ struct WidgetActionReplayTests {
         let commitRepository = Canonical.SnapshotRepository(
             primaryURL: commitRoot.appendingPathComponent("store.json")
         )
-        let committed = try NativeWidgetActionReplayCoordinator(
+        // Final review C1: the coordinator hands every written record to the
+        // enqueue hook after the canonical save and before acknowledgement.
+        let commitClaims = commitRoot.appendingPathComponent("claims")
+        var enqueueCalls: [(keys: [String], savedAtCall: Bool, claimAtCall: Bool)] = []
+        var failNextEnqueue = true
+        let recordingCoordinator = NativeWidgetActionReplayCoordinator(
             transport: commitTransport,
-            repository: commitRepository
-        ).replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+            repository: commitRepository,
+            enqueueWrittenRecords: { records, committedSnapshot in
+                enqueueCalls.append((
+                    records.map { "\($0.table)/\($0.recordID)" },
+                    (try? commitRepository.load()?.snapshot.payload.trips?.count) == 1
+                        && committedSnapshot.payload.expenses?.count == 1,
+                    ((try? FileManager.default.contentsOfDirectory(atPath: commitClaims.path))?.count ?? 0) == 1
+                ))
+                if failNextEnqueue {
+                    failNextEnqueue = false
+                    throw NativeWidgetActionReplayEnqueueError.missingRecord
+                }
+            }
+        )
+        let writtenKeys = ["jobs/j1", "trips/t_siri_trip-atomic", "expenses/e_siri_expense-atomic"]
+        expect(replayed.writtenRecords.map { "\($0.table)/\($0.recordID)" } == writtenKeys,
+               "C1: the replay result names every written record once, in first-touch order")
+        expect(replayedAgain.writtenRecords.map { "\($0.table)/\($0.recordID)" } == writtenKeys,
+               "C1: an already-applied retry still names the records it wrote earlier")
+        do {
+            _ = try recordingCoordinator.replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+            expect(false, "C1: an enqueue failure fails the replay")
+        } catch NativeWidgetActionReplayEnqueueError.missingRecord {
+            expect(enqueueCalls.count == 1 && enqueueCalls[0].keys == writtenKeys,
+                   "C1: the enqueue hook received every written record")
+            expect(enqueueCalls[0].savedAtCall, "C1: the enqueue runs after the canonical save")
+            expect(enqueueCalls[0].claimAtCall, "C1: the enqueue runs before the claim is acknowledged")
+            expect(((try? FileManager.default.contentsOfDirectory(atPath: commitClaims.path))?.count ?? 0) == 1,
+                   "C1: an enqueue failure leaves the claim unacknowledged")
+        }
+        let committed = try recordingCoordinator
+            .replayNext(snapshot: try commitRepository.load()!.snapshot, verifiedAccountBinding: binding)
+        expect(enqueueCalls.count == 2 && enqueueCalls[1].keys == writtenKeys,
+               "C1: the retry re-queues the records the failed attempt wrote (queue dedup makes it idempotent)")
         if case let .committed(committedSnapshot, changed, ignored, ownerDropped) = committed {
-            expect(changed == 4 && ignored == 0 && ownerDropped == 0 && committedSnapshot.payload.trips?.count == 1,
-                   "coordinator commits the complete multi-family result")
+            expect(changed == 0 && ignored == 4 && ownerDropped == 0 && committedSnapshot.payload.trips?.count == 1,
+                   "coordinator commits the complete multi-family result (the retry finds it already applied)")
         } else { expect(false, "known batch reaches the committed state") }
         let persistedCommit = try commitRepository.load()
         expect(persistedCommit?.snapshot.payload.expenses?.count == 1,
@@ -229,10 +266,13 @@ struct WidgetActionReplayTests {
         let futureRepository = Canonical.SnapshotRepository(
             primaryURL: futureRoot.appendingPathComponent("store.json")
         )
+        var futureEnqueues = 0
         let retained = try NativeWidgetActionReplayCoordinator(
             transport: futureTransport,
-            repository: futureRepository
+            repository: futureRepository,
+            enqueueWrittenRecords: { _, _ in futureEnqueues += 1 }
         ).replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+        expect(futureEnqueues == 0, "C1: a retained (unsupported) batch enqueues nothing")
         if case .retainedUnsupported(actionCount: 1) = retained {
             let futureClaimCount = try FileManager.default.contentsOfDirectory(
                 atPath: futureRoot.appendingPathComponent("claims").path
@@ -241,6 +281,27 @@ struct WidgetActionReplayTests {
             expect(futureQueue.value == nil && futureClaimCount == 1 && futureStoredSnapshot == nil,
                    "future action bytes remain in an unacknowledged durable claim")
         } else { expect(false, "future action batch remains deferred as one unit") }
+
+        // Final review C1: a batch that commits nothing enqueues nothing.
+        let noopRoot = transportRoot.appendingPathComponent("noop", isDirectory: true)
+        let noopQueue = MemoryWidgetActionQueue(#"""
+        [{"ownerTag":"\#(tag)","id":"ghost","type":"timer_start","at":"2026-08-03T09:00:00Z","jobId":"missing"},
+         {"ownerTag":"\#(tag)","id":"idle","type":"timer_stop","at":"2026-08-03T09:00:00Z"}]
+        """#)
+        var noopEnqueues = 0
+        let noop = try NativeWidgetActionReplayCoordinator(
+            transport: NativeWidgetActionClaimTransport(
+                queue: noopQueue,
+                claimDirectory: noopRoot.appendingPathComponent("claims", isDirectory: true),
+                lockFile: noopRoot.appendingPathComponent("group/\(WidgetAppGroup.lockFileName)")
+            ),
+            repository: Canonical.SnapshotRepository(primaryURL: noopRoot.appendingPathComponent("store.json")),
+            enqueueWrittenRecords: { _, _ in noopEnqueues += 1 }
+        ).replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+        if case let .committed(_, changed, ignored, _) = noop {
+            expect(changed == 0 && ignored == 2 && noopEnqueues == 0 && noopQueue.value == nil,
+                   "C1: a batch that commits nothing enqueues nothing and is acknowledged")
+        } else { expect(false, "C1: the no-op batch commits") }
 
         do {
             _ = try NativeWidgetActionBatchPlanner.prepare(rawValue: raw, verifiedAccountBinding: "not-a-binding")
