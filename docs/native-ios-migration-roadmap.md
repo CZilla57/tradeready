@@ -459,7 +459,8 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   `tradeready-ios` project (12.01/12.02) and the 429 push policy (12.00/12.02). Of the
   five known code issues sent to the final review (runsheet OI-4), four are fixed; the
   sync-push 4xx wedge (I2) is a cutover-blocking defect owned by Phase 12.00 (see
-  Phase 12 below).
+  Phase 12 below). I2 is fixed on native/phase-12 by 12.00b.1 (host evidence only);
+  its device rows P12-B1-1 and P12-B1-2 are still needed.
 - Phases 8–9 and 12: **Not started** (tracking note: Phase 8's contract
   decisions and Phase 9's implementation plan/device runsheet already exist as
   in-flight artifacts from earlier work on this branch; their roadmap status
@@ -1130,7 +1131,9 @@ given a dated waiver by Phase 12.00; neither may be silently dropped.
 ### Cutover-blocking defect (owned by Phase 12.00)
 
 Recorded by the Phase 11 final review (contract §17.2 "Known issues" 2; runsheet row
-I2); not fixed in Phase 11. It must be fixed before cutover.
+I2); not fixed in Phase 11. It must be fixed before cutover. **Fixed on
+native/phase-12 by Phase 12 12.00b.1 (2026-09-25), host evidence only.** It stays
+cutover-blocking until its device rows pass (see the end of the entry below).
 
 - **Sync push wedges on a non-auth 4xx (I2).** `NativeSupabasePush` treats
   400/404/409/413/422, and a 403 that repeats after refresh, as transient and keeps the
@@ -1145,6 +1148,20 @@ I2); not fixed in Phase 11. It must be fixed before cutover.
   `native/PoorNetworkTests/main.swift` (good items push, inbound pulls continue, and
   the poison item reaches the rejected store exactly once). Implemented by Phase 12
   12.00b.1 (`docs/native-phase-12-implementation-plan.md`).
+  **Fix (12.00b.1):** a non-auth 4xx, or a 403 that repeats after one refresh, is
+  `.rejected` (`NativeMutationPushClassification`). The change leaves the queue for the
+  owner-scoped, file-protected rejected-change store, which every account boundary
+  scrubs. Settings › Cloud Sync shows "N changes couldn't be saved", with Retry
+  (through the normal queue) and Discard (after a confirmation, shows the server's
+  version). The count goes to the support report. The pull guard is relaxed to RN
+  parity: the coordinator pulls after every push pass. Queued and refused records no
+  longer hold a table's cursor, so a kept record cannot pin it. Host tests:
+  `run-rejected-changes`, `run-mutation-push`, `run-sync-coordinator`, and
+  `run-poor-network` scenarios P (the poison change), Q (the cursor), R (Retry) and S
+  (Discard). **Device rows still needed:** P12-B1-1 (a poison change on a real device
+  against STG; blocked while D4 is open, never waived) and P12-B1-2 (the Cloud Sync
+  surface with VoiceOver and Dynamic Type), in
+  `docs/native-phase-12-evidence-index.md` §23.
 
 ### Exit criteria
 

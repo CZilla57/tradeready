@@ -479,7 +479,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
-| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable) | Open |
+| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable) | Fixed — 12.00b.1 (host) |
 
 ### 12.00b.2 — S1/S2 code fixes (block Stage A entry) (10)
 

@@ -2173,8 +2173,9 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
    dismissal and the alerts act on `presenting:`. Test: `run-recurring-invoice`.
    Device row: runsheet Q11-P12-7;
 2. the `NativeSupabasePush` non-auth 4xx queue wedge (final review I2): **recorded,
-   not fixed**. Owner: Phase 12.00, cutover-blocking. Non-auth 4xx (400/404/409/413/422,
-   and a 403 that repeats after refresh) is treated as transient and retained forever,
+   not fixed** at Phase 11 exit; **fixed in Phase 12 12.00b.1** (below). Owner: Phase
+   12.00, cutover-blocking. Non-auth 4xx (400/404/409/413/422, and a 403 that repeats
+   after refresh) is treated as transient and retained forever,
    and `NativeSyncCoordinator`'s `guard queue.load().isEmpty` skips every pull, so one
    poison mutation wedges inbound sync and an RLS 403 loops. Fix sketch: classify those
    responses as `.rejected`; move rejected mutations to an app-private, owner-scoped
@@ -2185,7 +2186,46 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
    Test: a poor-network poison-item scenario in `native/PoorNetworkTests/main.swift`
    (good items push, inbound pulls continue, and the poison item reaches the rejected
    store exactly once). Implemented by Phase 12 12.00b.1
-   (`docs/native-phase-12-implementation-plan.md`);
+   (`docs/native-phase-12-implementation-plan.md`).
+   **Fixed in Phase 12 12.00b.1 (2026-09-25, native/phase-12, host evidence only):**
+   - Classification: `NativeMutationPushClassification.classify`
+     (`N/NativeMutationPushClassification.swift`) is the one status table. 2xx is
+     accepted. 401, and a 403 before this pass refreshed, take the auth path. A 403
+     after one refresh, and every other 4xx except 408/425/429, is `.rejected`.
+     408/425/429, 5xx, other statuses, transport errors and non-HTTP responses stay
+     transient. Tests: `run-mutation-push` (the table), `run-sync-coordinator`.
+   - Store: a rejected change leaves the queue for `NativeRejectedChangeStore`
+     (`N/NativeRejectedChangeStore.swift`). It is app-private next to the queue,
+     written with complete file protection, tagged with a one-way hash of the owner's
+     binding, capped at 100 entries (newest kept, drops counted), and never logged. A
+     settle that cannot write keeps every started item queued. Every account boundary
+     scrubs it under a durable `rejected-changes-scrub-pending` step
+     (`Canonical.SnapshotRepository.BoundaryStep`, file marker plus the 12.00b.2-A
+     Keychain record), and the full account scrub removes it. Test:
+     `run-rejected-changes`.
+   - Diagnostic: `rejected/<table>/<status>` with a count, through `reportError` and
+     the redaction path, plus `rejected-store/overflow`. The count, and never the
+     entries, is `rejectedChangeCount` in `createPersistenceSupportReport` (schema v2).
+     Tests: `run-error-redaction`, `run-repository`.
+   - Surface (owner decision D3): Settings › Cloud Sync shows "N change(s) couldn't be
+     saved" and opens `NativeRejectedChangesView`. Each entry shows its record type,
+     name and when it was refused. **Retry** re-queues the change through the normal
+     queue, where it coalesces; refused again, it goes back to the store once, with no
+     loop in the pass. **Discard** asks for confirmation, then fetches that one record
+     from the server and shows the server's version. A change the server never had (a
+     refused insert) is removed from this device, and the confirmation says so. No
+     delete is queued. Tests: `run-rejected-changes`, poor-network R and S.
+   - Pull guard (plan step 5), decided: the coordinator pulls after every push pass
+     that returns per-item results, as RN `syncIfOnline` does (`utils/sync.ts`
+     316-326: `pushQueue` at 320, then `pullRemote` at 321). A push that throws still
+     skips the pull. The 11.12 per-table rebase keeps queued and refused records over
+     the server's rows. They no longer hold the table's cursor (`unheldKeys`), so a
+     kept record cannot pin the watermark. Only a record pushed while the pull was in
+     flight holds it (the I1 rule). Tests: poor-network P (the poison scenario) and Q
+     (the watermark reaches the newest server stamp over three passes).
+   - Still owed: device rows P12-B1-1 (a poison change on a real device against STG,
+     blocked while D4 is open, never waived) and P12-B1-2 (the Cloud Sync surface with
+     VoiceOver and Dynamic Type), in `docs/native-phase-12-evidence-index.md` §23;
 3. the parity-matrix Tax set-aside row, which said "ported" although native has no
    tax-settings screen (see G2): **fixed** by 11.14 (`d18b29c`); the editor itself stays
    with G2's owner;

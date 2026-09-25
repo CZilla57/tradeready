@@ -159,9 +159,10 @@ Counted from the Stage column of every index row on 2026-09-25.
 | §17 Phase 10 | 39 | 3 | 0 | 0 | 4 | 46 |
 | §18 Phase 11 | 85 | 18 | 2 | 1 | 8 | 114 |
 | §19 Phase 12 | 2 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | **258** | **57** | **2** | **1** | **22** | **340** |
+| §23 Appended (12.00b.1) | 2 | 0 | 0 | 0 | 0 | 2 |
+| **Total** | **260** | **57** | **2** | **1** | **22** | **342** |
 
-318 rows are device rows (A, A/B, B, C). 104 of them need STG (74 A, 30 A/B) and stay
+320 rows are device rows (A, A/B, B, C). 106 of them need STG (76 A, 30 A/B) and stay
 blocked while D4 is open; 214 do not need STG. The 22 X rows are 10 setup rows, the four
 Phase 10 implementation gates, PERF-3 (a decision) and the seven Phase 11 owned items.
 
@@ -209,6 +210,7 @@ Sources without runsheet rows are placed statement by statement:
 | PL12 §7 items routed to 12.03 (L898, L904, L916) and the fixed row L901 | 4 | Linked onto A11-TT-1, IPAD-MT-3, A11B-FR1-1 and A11B-FR1-2, IPAD-KB-1; no new row |
 | CH L283 (G1 waiver condition) | 1 | P12-G1-1 |
 | Commit `1e47f26` (rating prompt) | 1 | P12-RATE-1 |
+| PL12 12.00b.1 (L329–351) and CH §5.3 (L294–301), after the host fix | 2 (the poison change against STG; the D3 surface with VoiceOver and Dynamic Type) | P12-B1-1, P12-B1-2 (§23) |
 
 ## 8. Passed and closed items (not rows)
 
@@ -851,7 +853,7 @@ IDs carry the `P11-` prefix because Phase 8 uses G1–G4 for other items (P8S L4
 | P11-OI-1 | Privacy-label declaration of first-party backend data | 12.01 decides the declaration (email, synced records, photos); the owner enters the labels | Decision linked; EXT-4 and PRIV-1 can then close | Decision | X | — | P11R L61; CH L161 | [ ] |
 | P11-OI-2 | Sentry project `tradeready-ios` in org `tradeready-3r` | The owner creates the project before the first dSYM upload | Project exists; CR-1 to CR-9 unblock | Owner action | X | — | P11R L62; CH L162 | [ ] |
 | P11-OI-3 | 429 push policy | Provisional policy recorded (CH §5.5): accept for Stages A and B, monitor TH-6 through PERF-7, collect the real rate limits before Stage B entry | Decision linked; the rate limits recorded; the blocker condition not hit | Decision | X | — | P11R L63; CH L348–373 | [ ] |
-| P11-I2 | Sync push wedges on a non-auth 4xx | Fixed in 12.00b.1 (CH §5.3, D3; unwaivable). 12.00b.1 appends its device row in §23 if it has one; 12.02 makes TH-7 a monitored signal | Fixed before cutover; the rejected-change surface works as D3 describes | Build (12.00b.1) | X | — | P11R L64; CH L294–301 | [ ] |
+| P11-I2 | Sync push wedges on a non-auth 4xx | Fixed in 12.00b.1 (CH §5.3, D3; unwaivable), on the host on native/phase-12. Its device rows are P12-B1-1 and P12-B1-2 (§23); 12.02 makes TH-7 a monitored signal | Fixed before cutover; the rejected-change surface works as D3 describes | Build (12.00b.1) | X | — | P11R L64; CH L294–301 | [ ] |
 
 ## 19. Phase 12 rows
 
@@ -1002,7 +1004,7 @@ change the matrix.
 | L130 | Account | In progress | P3-D2 to P3-D5, EXT-3 | |
 | L136 | Local persistence | Blocked | P2-P1 to P2-P8 | |
 | L137 | AsyncStorage upgrade | Blocked | P2-P2 to P2-P8, P2-RB, Q11-P12-6, PERF-5 | G6 |
-| L138 | Supabase sync | In progress | P4-B1 to P4-B5, P4-C1 to P4-C7, P5-5, SYNC-1, SOAK-1 to SOAK-6, PERF-6, PERF-7 | P11-I2, P11-OI-3 |
+| L138 | Supabase sync | In progress | P4-B1 to P4-B5, P4-C1 to P4-C7, P5-5, SYNC-1, SOAK-1 to SOAK-6, PERF-6, PERF-7, P12-B1-1, P12-B1-2 | P11-I2, P11-OI-3 |
 | L139 | Notifications (platform) | In progress | P10-29 to P10-40, P6-10, P6-16, P6-17, P7-30 | |
 | L140 | Background refresh | In progress | P4-B1 to P4-B5, P10-42, P10-43 | Gates P10-GATE-3, P10-GATE-4 |
 | L141 | Deep links | In progress | DL-1 to DL-6, P10-36, P10-51 | |
@@ -1025,6 +1027,8 @@ appended row follows the rules in §2.
 
 | ID | Requirement | Steps | Expected result | Env / build | Stage | Prereqs | Source | Evidence |
 |---|---|---|---|---|---|---|---|---|
+| P12-B1-1 | I2 fix (12.00b.1): a refused change leaves the queue and sync keeps pulling. **Blocked while D4 is open; never waived** | On the staging backend only, the owner adds a temporary rule that refuses writes to one marked record (for example a trigger that raises for a job titled `P12-B1-POISON`, which PostgREST answers with a 400). On device A, offline: edit that job and two other records. Reconnect and sync. Meanwhile edit a fourth record on the second device and sync it. On A open Settings › Cloud Sync and the list; export the support report. Retry the job with the rule still in place, then again after removing the rule. Make a second poison change and Discard it. Finally sign out and sign in as another team account | The two good edits reach the server and the second device, and the second device's edit arrives on A: inbound sync continues. Cloud Sync shows "1 change couldn't be saved", and the list shows Job, the job's name and the time it was refused. The support report counts one rejected change and carries no record text. Retry with the rule in place files the job again once, with no loop. Retry after removing the rule saves it and the entry leaves the list. Discard asks for confirmation, then A shows the server's version of that record. The other account sees no entry | REL, IPH, STG, +DEV2 | A | STG, DEV2 | RM L1131–1164; P11R L64; PL12 L329–351; CH L238 (defect row), §5.3 L294–301 | [ ] |
+| P12-B1-2 | D3 Cloud Sync surface: accessibility | Same run as P12-B1-1, with two poison changes listed at once (the status line then reads "2 changes couldn't be saved"). With VoiceOver on, go to Settings › Cloud Sync, open "N changes couldn't be saved" and move through each entry, Retry and Discard, and the Discard confirmation. Repeat at the largest accessibility Dynamic Type size, in light and dark mode | VoiceOver reads each entry as one element (type, name, when it was refused), then Retry and Discard with their hints. The confirmation reads its title, the "Discard change" button and the note that a record the cloud never had is removed. At the largest size nothing is truncated or overlaps, and the buttons stay reachable | REL, IPH, STG | A | STG | PL12 L329–351 (step 4, D3); CH §5.3 L294–301 | [ ] |
 
 ## 24. Stage run records
 
