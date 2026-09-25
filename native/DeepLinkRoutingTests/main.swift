@@ -818,6 +818,51 @@ private func testUseAnotherAccountSecondClear() async throws {
            "the clear after the awaits drops a route that arrived between clearSession and logOut")
 }
 
+// MARK: - 6d. A verified owner behind a pending gate (final review item 2)
+
+/// O is nil at `.initialSyncLoading`/`.initialSyncUnavailable` (and before a
+/// workspace is bound), yet the account IS verified. A warm link that parks
+/// there must carry that owner, and leaving that session is a boundary.
+@MainActor
+private func testVerifiedOwnerBehindPendingGate() async throws {
+    // The workspace belongs to B (B's data has a `live` job). A signs in
+    // first: verified, but A's workspace is not bound here, so O stays nil.
+    for viaSignedOut in [false, true] {
+        let label = viaSignedOut ? "via .signedOut" : "direct"
+        let h = try Harness(bound: bindingB)
+        defer { h.cleanUp() }
+        h.signIn(bindingA)
+        expect(h.store.derivedStatePublishBinding == nil, "\(label): sanity: O is nil for A (no bound workspace)")
+        h.store.testSetAuthenticationGateState(.initialSyncLoading)
+        h.store.handle(url: URL(string: "tradeready://job/live")!)
+        expectEqual(h.store.parkedDeepLink?.arrivalBinding, bindingA,
+                    "\(label): a link parked behind the initial sync records the verified owner A")
+        h.store.testSetAuthenticationGateState(.initialSyncUnavailable(message: "offline"))
+        expect(h.store.parkedDeepLink != nil, "\(label): sanity: still parked behind the unavailable gate")
+        if viaSignedOut {
+            h.store.testSetAuthenticationGateState(.signedOut)
+            expect(h.store.parkedDeepLink == nil, "\(label): A was verified, so leaving A's session discards the route")
+        }
+        h.signIn(bindingB)
+        expectEqual(h.store.derivedStatePublishBinding, bindingB, "\(label): sanity: O = B")
+        expect(h.noRoute && h.store.parkedDeepLink == nil,
+               "\(label): B never gets the link that parked in A's session (B's same-id job stays closed)")
+        expect(h.store.deepLinkUnavailableNotice == nil, "\(label): …and sees no notice for a tap B did not make")
+    }
+
+    // The password-recovery exits are an account boundary for held routes.
+    let r = try Harness()
+    defer { r.cleanUp() }
+    r.signIn(bindingA)
+    r.store.handle(url: URL(string: "tradeready://onmyway/live")!)
+    expectEqual(r.store.pendingOnMyWayJobID, "live", "recovery: sanity: A's review is held")
+    r.store.testSetAuthenticationGateState(.passwordRecovery(email: nil))
+    await r.store.cancelPasswordRecovery()
+    expectEqual(r.store.authenticationGateState, .signedOut, "recovery: sanity: the recovery sign-out ran")
+    expect(r.store.deepLinkedJobID == nil && r.store.pendingOnMyWayJobID == nil && r.store.parkedDeepLink == nil,
+           "recovery: the recovery sign-out drops every held route")
+}
+
 // MARK: - 7. P8: an archived estimate's est_ notification opens
 
 @MainActor
@@ -864,6 +909,7 @@ struct DeepLinkRoutingTests {
         run("P8", testP8ArchivedEstimateNotification)
         run("launch resolution", testLaunchResolutionKeepsParkedRoute)
         await runAsync("second useAnotherAccount clear", testUseAnotherAccountSecondClear)
+        await runAsync("verified owner behind a pending gate", testVerifiedOwnerBehindPendingGate)
         if failures == 0 {
             print("Deep-link routing tests passed")
         } else {

@@ -3868,7 +3868,7 @@ final class AppStore: ObservableObject {
                 route: route,
                 source: .warmURL,
                 ownerTag: stashOwnerTag,
-                arrivalBinding: derivedStatePublishBinding,
+                arrivalBinding: deepLinkSessionOwnerBinding,
                 at: now
             ),
             now: now
@@ -3979,12 +3979,28 @@ final class AppStore: ObservableObject {
         if phase == .closed, gateChanged {
             // The boundary is consumed; a later closed gate needs a new owner.
             deepLinkOwnerWasActive = false
-        } else if derivedStatePublishBinding != nil {
+        } else if deepLinkSessionOwnerBinding != nil {
             deepLinkOwnerWasActive = true
         }
         if phase == .signedIn, Self.deepLinkGatePhase(oldValue) != .signedIn {
             flushParkedDeepLink()
         }
+    }
+
+    /// Final review item 2: the session a link arrives in (and the session a
+    /// boundary leaves) is the verified account, not only a completed-workspace
+    /// owner `O`. `O` is nil behind `.initialSyncLoading`/`.initialSyncUnavailable`
+    /// and the recovery gates, yet the signed-in account is already known, so
+    /// a link parked there is stamped with that account and dropped when the
+    /// session ends instead of resolving later in another account's data.
+    /// Closed gates and `.loading` (a re-verification whose outcome may be a
+    /// different account) never borrow a possibly stale verified binding.
+    private var deepLinkSessionOwnerBinding: String? {
+        if let derivedStatePublishBinding { return derivedStatePublishBinding }
+        guard authenticationGateState != .loading,
+              Self.deepLinkGatePhase(authenticationGateState) != .closed
+        else { return nil }
+        return verifiedAccountBinding
     }
 
     /// Task 11.06 (11.05 handoff d): every held route and one-shot target
@@ -5640,6 +5656,9 @@ final class AppStore: ObservableObject {
         isSubscriptionTrialing = false
         authenticatedAccountState = .noMigratedSession
         authenticationGateState = .signedOut
+        // Final review item 2: a recovery exit is an account boundary like
+        // sign-out; no route held in the recovered session survives it.
+        clearDeepLinkRouteState()
         // Task 11.15 fix round 1 (controller ruling): both recovery exits
         // (`updateRecoveredPassword`, `cancelPasswordRecovery`) end here and
         // tear down the account boundary, so the next owner may differ.
