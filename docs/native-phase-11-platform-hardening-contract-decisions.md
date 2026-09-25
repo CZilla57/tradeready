@@ -1584,9 +1584,28 @@ Native contract (chosen):
   (§17.2 item 5), the key rows read "Not set" without reading the Keychain and offer no
   Remove (L286.5a): the key there may be the previous owner's, and "Not set" is what a
   kind the previous owner never saved reads. The rows cache that state and refresh it on
-  appear, after a save or remove and when a boundary step starts or finishes, never in
-  `body` (L205.g). The boundary wipe also removes the migrated legacy `providerKey` and
-  `geminiKey` fields (L205.e).
+  appear, after a save or remove, and when `isAccountBoundaryCleanupPending` (whether any
+  boundary step is pending) changes, never in `body` (L205.g). That flag does not change
+  when one step clears while another stays pending; the rows are still right, because a
+  wiped kind reads "Not set" either way. The boundary wipe also removes the migrated
+  legacy `providerKey` and `geminiKey` fields (L205.e).
+- **Amended by Phase 12 12.00b.2-A review I1 (2026-09-25): owner-tagged key items.**
+  - Each `anthropicKey` / `groqKey` item holds a small JSON object
+    (`N/NativeAIProviderKeyOwnerTag.swift`): the key, a schema version, and an owner
+    tag. The tag is the lowercase hex SHA-256 of a versioned prefix plus the verified
+    account binding, the widget owner stamp's derivation with its own prefix. The item
+    stores no user id, email or binding. One verified upsert writes it, so a key is
+    never stored without its tag.
+  - Every read (the coach's advisory keys, `aiProviderKeyIsSaved`,
+    `aiProviderKeyState`) returns the key only when the tag matches the current verified
+    owner. An untagged, malformed or other owner's item reads as absent ("Not set"; the
+    coach routes to the backend).
+  - A save needs a verified account binding; `canChangeAIProviderKeys` is false without
+    one.
+  - RN-era keys copied by the launch migration (`anthropicKey`, `groqKey`, `geminiKey`)
+    are written before any owner is verified, so they stay untagged and read as absent
+    until the owner saves a key again. No migration tags them.
+  - The boundary wipe and its markers stay as defense in depth.
 
 ---
 
@@ -2185,7 +2204,23 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
    it through `retryAccountScrub`, on both of its branches, and sign-up's immediate
    session retries it before binding, like sign-in (L286.4). Tests: `run-ai-provider-key`
    and `run-widget-owner-gating` (every marker × step failure combination, then a
-   relaunch);
+   relaunch).
+   **Note (2026-09-25, 12.00b.2-A review):**
+   - When the file marker, the Keychain record and the step all fail, the step is
+     pending in memory only. The in-process gates hold, and the record-write failure
+     is counted. A relaunch forgets it.
+   - AI keys are owner-tagged (§11.1), so after that relaunch A's key still reads as
+     absent for B, and B can save its own.
+   - The widget step's share of that residual is rated S3. Replay stamped for A is
+     dropped, and B's first mirror write overwrites A's snapshot. The widget extension
+     showing leftover App Group data until then is pre-existing.
+   - The next owner is not refused: B binds after the pre-bind retry, and stays gated
+     while a step is pending.
+   - A record unreadable at launch is re-read on every scene activation, and a
+     successful sign-out or deletion scrub retries any step still pending (review M1).
+   - Deletion's `clearAllValues` removes the step records on any backend (review M7).
+   - Tests: `run-ai-provider-key` (the triple failure, then a relaunch; owner-only
+     reads; activation; the post-scrub retry; deletion).
 5. the silent AI-key wipe failure (final review 1b): **fixed** in `5f2f397`. The wipe
    tries every kind under a durable `ai-key-wipe-pending` marker and counts and logs a
    failure without key material; while pending the coach reads no client key and no key
