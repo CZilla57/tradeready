@@ -129,21 +129,31 @@ struct RepositoryTests {
                "diagnostics report latest migration status")
         let diagnosticObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(diagnostics)) as? [String: Any]
         expect(Set(diagnosticObject?.keys.map { $0 } ?? []) == [
-            "snapshotSchemaVersion", "snapshotStatus", "backupAvailable", "counts", "migrations"
+            "snapshotSchemaVersion", "snapshotStatus", "backupAvailable", "counts", "migrations",
+            // Phase 12 (12.00b.1, I2): the refused-change count, a count only.
+            "rejectedChangeCount"
         ], "diagnostics expose counts and status only")
 
         let supportReport = try diagnostics.encodedSupportReport(appVersion: "2.4.1")
         let repeatedSupportReport = try diagnostics.encodedSupportReport(appVersion: "2.4.1")
         expect(supportReport == repeatedSupportReport, "support report bytes are deterministic")
-        let expectedSupportReport = "{\"appVersion\":\"2.4.1\",\"backupAvailable\":true,\"migrationStatuses\":[{\"migration\":\"canonical-snapshot-v0-to-v1\",\"status\":null},{\"migration\":\"legacy-native-snapshot-to-v1\",\"status\":null},{\"migration\":\"react-native-async-storage-to-v1\",\"status\":\"completed\"}],\"recordCounts\":{\"bookingRequests\":0,\"customerNotes\":0,\"customers\":0,\"expenses\":0,\"invoices\":0,\"jobPhotos\":0,\"jobs\":0,\"pricebook\":0,\"recurringInvoices\":0,\"recurringJobs\":0,\"trips\":0},\"reportSchemaVersion\":1,\"snapshotSchemaVersion\":1,\"snapshotStatus\":\"recovered\"}"
+        let expectedSupportReport = "{\"appVersion\":\"2.4.1\",\"backupAvailable\":true,\"migrationStatuses\":[{\"migration\":\"canonical-snapshot-v0-to-v1\",\"status\":null},{\"migration\":\"legacy-native-snapshot-to-v1\",\"status\":null},{\"migration\":\"react-native-async-storage-to-v1\",\"status\":\"completed\"}],\"recordCounts\":{\"bookingRequests\":0,\"customerNotes\":0,\"customers\":0,\"expenses\":0,\"invoices\":0,\"jobPhotos\":0,\"jobs\":0,\"pricebook\":0,\"recurringInvoices\":0,\"recurringJobs\":0,\"trips\":0},\"rejectedChangeCount\":0,\"reportSchemaVersion\":2,\"snapshotSchemaVersion\":1,\"snapshotStatus\":\"recovered\"}"
         expect(supportReport == Data(expectedSupportReport.utf8),
                "support report matches canonical sorted JSON bytes")
 
         let supportObject = try JSONSerialization.jsonObject(with: supportReport) as? [String: Any]
         expect(Set(supportObject?.keys.map { $0 } ?? []) == [
             "reportSchemaVersion", "appVersion", "snapshotSchemaVersion", "snapshotStatus",
-            "backupAvailable", "recordCounts", "migrationStatuses"
+            "backupAvailable", "recordCounts", "migrationStatuses", "rejectedChangeCount"
         ], "support report has a closed top-level schema")
+        expect(Canonical.PersistenceSupportReport.currentSchemaVersion == 2,
+               "support report schema v2 (12.00b.1 adds rejectedChangeCount)")
+        var withRefusals = diagnostics
+        withRefusals.rejectedChangeCount = 3
+        let refusalReport = String(decoding: try withRefusals.encodedSupportReport(appVersion: "2.4.1"), as: UTF8.self)
+        expect(refusalReport.contains("\"rejectedChangeCount\":3"), "support report carries the refused-change count")
+        let decodedReport = try JSONDecoder().decode(Canonical.PersistenceSupportReport.self, from: Data(refusalReport.utf8))
+        expect(decodedReport == .init(appVersion: "2.4.1", diagnostics: withRefusals), "support report v2 round-trips")
         expect(supportObject?["reportSchemaVersion"] as? Int == Canonical.PersistenceSupportReport.currentSchemaVersion,
                "support report identifies its schema")
         expect(supportObject?["appVersion"] as? String == "2.4.1",

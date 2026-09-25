@@ -58,7 +58,9 @@ $ROOT_DIR/native/TradeReadyNative/NativeInitialSync.swift
 $ROOT_DIR/native/TradeReadyNative/NativeMutationQueue.swift
 $ROOT_DIR/native/TradeReadyNative/NativeRecordDeletion.swift
 $ROOT_DIR/native/TradeReadyNative/NativeSyncBackfill.swift
+$ROOT_DIR/native/TradeReadyNative/NativeMutationPushClassification.swift
 $ROOT_DIR/native/TradeReadyNative/NativeSupabasePush.swift
+$ROOT_DIR/native/TradeReadyNative/NativeRejectedChangeStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeSyncCoordinator.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBackgroundRefresh.swift
 $ROOT_DIR/native/TradeReadyNative/NativeDerivedStatePublisher.swift

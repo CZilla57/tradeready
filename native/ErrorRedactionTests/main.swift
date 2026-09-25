@@ -977,6 +977,69 @@ struct ErrorRedactionTests {
         pass(pulled)
         expectEqual(captures().count, 1, "sync: a partial pull reports")
 
+        // Phase 12 (12.00b.1): the pull now also runs after a partial or
+        // failed push (RN `syncIfOnline` awaits pushQueue, then pullRemote),
+        // so a pass can report both, each under its own context.
+        fake.clear()
+        var both = NativeSyncStatus()
+        both.lastOutcome = .partial(pushed: 1, remaining: 1, authRefreshed: false)
+        both.diagnosticCode = "push/http_503"
+        both.lastPullResult = .failed("pull/jobs/http_500")
+        pass(both)
+        let bothCaptures = captures()
+        expectEqual(bothCaptures.count, 2, "sync: a partial push followed by a failed pull reports both")
+        if bothCaptures.count == 2, case .capture(let pushTitle, _, _, let pushPrint) = bothCaptures[0],
+           case .capture(let pullTitle, _, let pullExtras, let pullPrint) = bothCaptures[1] {
+            expectEqual(pushTitle, "[push/http_503] Sync push left changes queued", "sync: the push report keeps the push code")
+            expectEqual(pushPrint, ["{{ default }}", "pushQueue"], "sync: …under pushQueue")
+            expectEqual(pullTitle, "[pull/jobs/http_500] Sync pull did not complete", "sync: the pull report carries the pull's own code")
+            expectEqual(pullPrint, ["{{ default }}", "pullRemote"], "sync: …under pullRemote")
+            expectEqual(pullExtras,
+                        "{\"context\":\"pullRemote\",\"rawError\":{\"code\":\"pull/jobs/http_500\",\"message\":\"Sync pull did not complete\"}}",
+                        "sync: the pull report's extras")
+        }
+        fake.clear()
+        both.lastPullResult = .completed
+        pass(both)
+        expectEqual(captures().count, 1, "sync: a partial push with a clean pull reports the push only")
+
+        // A refused change (12.00b.1): one bounded report per settle, with
+        // the table, the status and a count, never the change.
+        fake.clear()
+        store.scheduleBookingTestSeedSignedInOwner(subject: "user-r", binding: hexBinding("e1"))
+        func refused(_ table: String, _ id: String, _ status: Int) -> NativeMutationRejection {
+            NativeMutationRejection(item: Canonical.MutationItem(
+                table: table, op: .upsert, recordId: id,
+                payload: .object(["id": .string(id), "title": .string("Pat's secret job"), "email": .string("pat@example.com")]),
+                ts: "2026-09-25T10:00:00.000Z"
+            ), statusCode: status)
+        }
+        do {
+            try store.testSettleRejectedChanges(NativeMutationPushSettlement(
+                rejected: [refused("jobs", "job-secret-1", 422), refused("jobs", "job-secret-2", 422)], cleared: []
+            ))
+        } catch {
+            expect(false, "sync: the refused changes were filed (\(error))")
+        }
+        expectEqual(captures(), [.capture(
+            title: "[rejected/jobs/422] Sync push refused changes", domain: NativeReportedError.errorDomain,
+            extras: "{\"collection\":\"jobs\",\"context\":\"pushRejected\",\"count\":2,\"rawError\":{\"code\":\"rejected/jobs/422\",\"message\":\"Sync push refused changes\"},\"status\":422}",
+            fingerprint: ["{{ default }}", "pushRejected"]
+        )], "sync: a refusal reports pushRejected once, with the table, status and count")
+        for report in fake.reports {
+            let text = "\(report)"
+            for secret in ["job-secret", "Pat's secret job", "pat@example.com", hexBinding("e1")] {
+                expect(!text.contains(secret), "sync: the refusal report never carries '\(secret)'")
+            }
+        }
+        fake.clear()
+        do {
+            try store.testSettleRejectedChanges(NativeMutationPushSettlement(rejected: [], cleared: [refused("jobs", "job-secret-1", 422).item]))
+        } catch {
+            expect(false, "sync: a cleared-only settle succeeds (\(error))")
+        }
+        expectEqual(captures().count, 0, "sync: a settle with no refusal reports nothing")
+
         fake.clear()
         for quiet in [NativeSyncOutcome.completed(pushed: 2, authRefreshed: false), .idleNoChanges, .offline,
                       .notAuthenticated, .backoffDeferred, .alreadyRunning] {

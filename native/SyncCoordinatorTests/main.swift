@@ -87,6 +87,207 @@ private final class EnvironmentBlockedPush: NativeMutationPushing {
     }
 }
 
+/// Phase 12 (12.00b.1): a push that answers from a per-call script and
+/// records whether each call followed one successful refresh.
+private final class ScriptedPushService: NativeMutationPushing {
+    var calls: [(items: [Canonical.MutationItem], afterAuthRefresh: Bool)] = []
+    var script: (_ items: [Canonical.MutationItem], _ afterAuthRefresh: Bool, _ callIndex: Int) -> NativeMutationPushOutcome
+    var beforeReturn: () -> Void = {}
+
+    init(script: @escaping (_ items: [Canonical.MutationItem], _ afterAuthRefresh: Bool, _ callIndex: Int) -> NativeMutationPushOutcome) {
+        self.script = script
+    }
+
+    func push(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        items: [Canonical.MutationItem]
+    ) async throws -> NativeMutationPushOutcome {
+        try await push(sessionBytes: sessionBytes, expectedUserSubject: expectedUserSubject, items: items, afterAuthRefresh: false)
+    }
+
+    func push(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        items: [Canonical.MutationItem],
+        afterAuthRefresh: Bool
+    ) async throws -> NativeMutationPushOutcome {
+        let index = calls.count
+        calls.append((items, afterAuthRefresh))
+        let outcome = script(items, afterAuthRefresh, index)
+        beforeReturn()
+        return outcome
+    }
+}
+
+private struct SettleFailed: Error {}
+
+/// Phase 12 (12.00b.1, I2): refused changes leave the queue through the
+/// settle step, a repeated 403 is refused after one refresh, a failed settle
+/// keeps the whole attempt queued, and the pull keeps running.
+@MainActor
+private func rejectedChanges(
+    makeQueue: (String) -> Canonical.NativeMutationQueue,
+    seed: (Canonical.NativeMutationQueue, [String]) throws -> Void,
+    credentials: NativeSyncCredentials,
+    expect: (Bool, String) -> Void
+) async throws {
+    func outcome(
+        remaining: [Canonical.MutationItem] = [], pushed: Int, rejected: [NativeMutationRejection] = [],
+        auth: Bool = false, code: String? = nil
+    ) -> NativeMutationPushOutcome {
+        .init(
+            remaining: remaining, pushedCount: pushed,
+            failedTables: remaining.isEmpty ? [] : ["jobs"], authRejected: auth,
+            lastDiagnosticCode: code, rejected: rejected
+        )
+    }
+
+    // A refused change is settled (set aside) and then leaves the queue; the
+    // accepted ones are cleared; the pass completes and the pull runs.
+    let queue = makeQueue("rejected-settle")
+    try seed(queue, ["good", "poison", "slow"])
+    let items = queue.load()
+    let good = items[0], poison = items[1], slow = items[2]
+    var settlements: [NativeMutationPushSettlement] = []
+    var pulls = 0
+    let push = ScriptedPushService { _, _, _ in
+        outcome(remaining: [slow], pushed: 1, rejected: [.init(item: poison, statusCode: 422)], code: "rejected/jobs/422")
+    }
+    let coordinator = NativeSyncCoordinator(
+        push: push, queue: queue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { settlements.append($0) },
+        pull: { pulls += 1; return .completed }
+    )
+    let result = await coordinator.sync(trigger: .foreground)
+    expect(result == .partial(pushed: 1, remaining: 1, authRefreshed: false),
+           "12.00b.1: the refused change is not counted as remaining")
+    expect(settlements.count == 1 && settlements.first?.rejected == [.init(item: poison, statusCode: 422)]
+           && settlements.first?.cleared == [good],
+           "12.00b.1: one settle per attempt: the refused change, and the accepted one cleared")
+    expect(queue.load() == [slow], "12.00b.1: the refused change left the queue; the transient one stays")
+    expect(pulls == 1, "12.00b.1: the pull still runs with a transient change queued")
+
+    // Only refusals: the pass completes, with no failure or backoff.
+    let onlyQueue = makeQueue("rejected-only")
+    try seed(onlyQueue, ["poison-2"])
+    let onlyPoison = onlyQueue.load()[0]
+    var onlySettled: [NativeMutationPushSettlement] = []
+    let only = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, _ in
+            outcome(pushed: 0, rejected: [.init(item: onlyPoison, statusCode: 400)], code: "rejected/jobs/400")
+        },
+        queue: onlyQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { onlySettled.append($0) }
+    )
+    expect(await only.sync(trigger: .foreground) == .completed(pushed: 0, authRefreshed: false),
+           "12.00b.1: a pass whose only problem is a refusal completes")
+    expect(onlyQueue.load().isEmpty && only.status().consecutiveFailures == 0 && only.status().nextEarliestAttempt == nil,
+           "12.00b.1: a refusal is not a failure: no backoff, empty queue")
+    expect(onlySettled.count == 1, "12.00b.1: the refusal was settled once")
+
+    // A 403 keeps the auth path once; the same 403 on the post-refresh push
+    // is refused (afterAuthRefresh), and nothing is pushed a third time.
+    let forbiddenQueue = makeQueue("rejected-403")
+    try seed(forbiddenQueue, ["locked"])
+    let locked = forbiddenQueue.load()[0]
+    var refreshes = 0
+    var forbiddenSettled: [NativeMutationPushSettlement] = []
+    let forbiddenPush = ScriptedPushService { items, afterRefresh, _ in
+        afterRefresh
+            ? outcome(pushed: 0, rejected: items.map { .init(item: $0, statusCode: 403) }, code: "rejected/jobs/403")
+            : outcome(remaining: items, pushed: 0, auth: true, code: "http-response/jobs/403")
+    }
+    let forbidden = NativeSyncCoordinator(
+        push: forbiddenPush, queue: forbiddenQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        refreshSession: { refreshes += 1; return true },
+        settleRejected: { forbiddenSettled.append($0) }
+    )
+    expect(await forbidden.sync(trigger: .foreground) == .completed(pushed: 0, authRefreshed: true),
+           "12.00b.1: a repeated 403 after one refresh is refused, and the pass completes")
+    expect(forbiddenPush.calls.map(\.afterAuthRefresh) == [false, true] && refreshes == 1,
+           "12.00b.1: one refresh, one retry marked afterAuthRefresh, no third push")
+    expect(forbiddenSettled.last?.rejected == [.init(item: locked, statusCode: 403)] && forbiddenQueue.load().isEmpty,
+           "12.00b.1: the repeated 403 is set aside and leaves the queue")
+
+    // A settle that throws acknowledges nothing from that attempt: every
+    // started change stays queued (each write is idempotent), and the pass
+    // reports a bounded store diagnostic. The pull still runs.
+    let failQueue = makeQueue("rejected-settle-fails")
+    try seed(failQueue, ["ok", "bad"])
+    let failItems = failQueue.load()
+    var failPulls = 0
+    let failing = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, _ in
+            outcome(pushed: 1, rejected: [.init(item: failItems[1], statusCode: 409)], code: "rejected/jobs/409")
+        },
+        queue: failQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { _ in throw SettleFailed() },
+        pull: { failPulls += 1; return .completed }
+    )
+    let failResult = await failing.sync(trigger: .foreground)
+    expect(failQueue.load() == failItems, "12.00b.1: a failed settle keeps every started change queued, in order")
+    expect(failResult == .partial(pushed: 1, remaining: 2, authRefreshed: false),
+           "12.00b.1: a failed settle is a partial pass")
+    expect(failing.status().diagnosticCode == "rejected-store/unavailable",
+           "12.00b.1: a failed settle reports the bounded rejected-store code")
+    expect(failPulls == 1, "12.00b.1: the pull runs after a failed settle too")
+
+    // No settle step configured: a refusal stays queued (fail closed).
+    let unwiredQueue = makeQueue("rejected-unwired")
+    try seed(unwiredQueue, ["refused"])
+    let refused = unwiredQueue.load()[0]
+    let unwired = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, _ in
+            outcome(pushed: 0, rejected: [.init(item: refused, statusCode: 422)], code: "rejected/jobs/422")
+        },
+        queue: unwiredQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials }
+    )
+    _ = await unwired.sync(trigger: .foreground)
+    expect(unwiredQueue.load() == [refused], "12.00b.1: without a settle step a refusal stays queued")
+
+    // A change replaced while its refused version was on the wire is not set
+    // aside: the newer change stays queued and goes out on its own.
+    let supersededQueue = makeQueue("rejected-superseded")
+    try seed(supersededQueue, ["edited"])
+    let original = supersededQueue.load()[0]
+    var supersededSettled: [NativeMutationPushSettlement] = []
+    let supersededPush = ScriptedPushService { _, _, index in
+        index == 0
+            ? outcome(pushed: 0, rejected: [.init(item: original, statusCode: 422)], code: "rejected/jobs/422")
+            : outcome(pushed: 1)
+    }
+    supersededPush.beforeReturn = {
+        guard supersededPush.calls.count == 1 else { return }
+        _ = try? supersededQueue.enqueue(
+            table: "jobs", op: .upsert, recordId: "edited",
+            payload: .object(["id": .string("edited"), "title": .string("newer")])
+        )
+    }
+    let superseded = NativeSyncCoordinator(
+        push: supersededPush, queue: supersededQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { supersededSettled.append($0) }
+    )
+    _ = await superseded.sync(trigger: .foreground)
+    expect(supersededSettled.allSatisfy { $0.rejected.isEmpty },
+           "12.00b.1: a refusal of a change replaced in flight is not set aside")
+    expect(supersededPush.calls.count == 1 && supersededQueue.load().count == 1
+           && supersededQueue.load()[0].payload != original.payload,
+           "12.00b.1: the newer change stays queued for the next pass")
+}
+
 @main
 struct SyncCoordinatorTests {
     @MainActor
@@ -238,8 +439,12 @@ struct SyncCoordinatorTests {
         expect(await protectedPull.sync(trigger: .foreground)
                == .partial(pushed: 0, remaining: protectedRemainder.count, authRefreshed: false),
                "a failed local push retains its pending mutation")
-        expect(protectedPullCount == 0,
-               "remote pull waits rather than overwriting pending local truth")
+        // Phase 12 (12.00b.1, I2): the pull runs after every push pass that
+        // reached per-item results, as RN's syncIfOnline does (utils/sync.ts
+        // 316-326: pushQueue at 320, then pullRemote at 321). The 11.12 pull
+        // commit keeps the pending record (AppStore.rebasePulledDelta).
+        expect(protectedPullCount == 1,
+               "the pull still runs after a partial push; the pull commit protects pending local truth")
 
         // Backoff elapses: a later trigger runs again on its own.
         clock = Date(timeIntervalSince1970: 2_000_000)
@@ -478,10 +683,10 @@ struct SyncCoordinatorTests {
             now: { backoffPullClock }, baseBackoff: 5, maxBackoff: 300
         )
         _ = await backoffPull.sync(trigger: .foreground)
-        expect(backoffPullCount == 0, "a failed first push does not pull over pending local truth")
+        expect(backoffPullCount == 1, "a failed first push still pulls once (12.00b.1: pull after push, like RN)")
         backoffPullClock = backoffPullClock.addingTimeInterval(1)
         expect(await backoffPull.sync(trigger: .foreground) == .backoffDeferred, "a pass inside the window defers")
-        expect(backoffPullCount == 0, "a deferred pass does not pull")
+        expect(backoffPullCount == 1, "a deferred pass does not pull")
 
         // A scheduled retry makes network-interruption recovery automatic even
         // when no later foreground or edit trigger arrives.
@@ -529,6 +734,8 @@ struct SyncCoordinatorTests {
         automatic.reset()
         expect(automatic.status() == NativeSyncStatus(),
                "an account-boundary reset clears retries and prior status")
+
+        try await rejectedChanges(makeQueue: makeQueue, seed: seed, credentials: credentials, expect: expect)
 
         if failures == 0 { print("PASS: native sync coordinator tests") }
         else { exit(1) }

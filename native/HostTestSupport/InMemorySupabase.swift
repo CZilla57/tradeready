@@ -92,7 +92,9 @@ final class InMemorySupabase: NativeInitialSyncHTTPDataLoading, NativeMutationPu
             } ?? []
             return respond(200, try Self.encode(payload), request)
         case "customer_notes":
-            let rows = (notes[userID] ?? [:]).keys.sorted().map { key in
+            // Phase 12 (12.00b.1): Discard's targeted fetch of one note.
+            let only = value("customer_key")?.replacingOccurrences(of: "eq.", with: "")
+            let rows = (notes[userID] ?? [:]).keys.sorted().filter { only == nil || $0 == only }.map { key in
                 Canonical.JSONValue.object([
                     "user_id": .string(userID),
                     "customer_key": .string(key),
@@ -103,8 +105,11 @@ final class InMemorySupabase: NativeInitialSyncHTTPDataLoading, NativeMutationPu
         default:
             let since = value("updated_at")?.replacingOccurrences(of: "gte.", with: "")
             let sinceDate = since.flatMap(Self.parse)
+            // Phase 12 (12.00b.1): Discard's targeted fetch of one record.
+            let onlyID = value("id")?.replacingOccurrences(of: "eq.", with: "")
             var rows = (collections[table] ?? [:]).values.filter { row in
                 guard row.userID == userID else { return false }
+                if let onlyID, row.id != onlyID { return false }
                 guard let sinceDate, let rowDate = Self.parse(row.updatedAt) else { return true }
                 return rowDate >= sinceDate
             }

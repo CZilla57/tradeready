@@ -11,6 +11,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeMutationQueue.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeMutationPushClassification.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeSupabasePush.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeSyncCoordinator.swift" \
   "$ROOT_DIR/native/SyncCoordinatorTests/main.swift" \

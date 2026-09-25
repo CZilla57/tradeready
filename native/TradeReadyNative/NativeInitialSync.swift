@@ -695,3 +695,204 @@ struct NativeSupabaseInitialSyncService: NativeInitialSyncServing, NativeDeltaSy
         try JSONDecoder().decode(Canonical.JSONValue.self, from: JSONEncoder().encode(value))
     }
 }
+
+// MARK: - Phase 12 (12.00b.1, I2): one record, for Discard
+
+/// What the server holds for one record.
+enum NativeServerRecord: Equatable {
+    /// The live row's data: a collection record, the settings blob, or a
+    /// customer note's text (`.string`).
+    case present(Canonical.JSONValue)
+    /// No row, or a tombstone.
+    case absent
+}
+
+/// Discard (owner decision D3) replaces this device's copy of one refused
+/// record with the server's current version. A targeted fetch of that one
+/// record, not a cursor rewind: it costs one request, returns exactly the
+/// server's row, and tells "the server has no such record" (a refused
+/// insert) apart from "the row did not change" — a rewind refetches the
+/// whole table and still cannot see an absent row.
+protocol NativeServerRecordFetching {
+    /// The server's current row for `table`/`recordId`, owner-checked like
+    /// the delta pull. An auth rejection throws `rejectedSession`.
+    func fetchServerRecord(
+        table: String,
+        recordId: String,
+        sessionBytes: Data,
+        expectedUserSubject: String
+    ) async throws -> NativeServerRecord
+
+    /// `snapshot` with that one record replaced by the server's version:
+    /// taken exactly (an invoice's local payments are not merged in), or
+    /// removed when the server has none. Settings the server lacks stay
+    /// local (the pull does the same). The result passes the snapshot codec
+    /// (the credential scrub), like every pull candidate.
+    func applyingServerRecord(
+        _ record: NativeServerRecord,
+        table: String,
+        recordId: String,
+        to snapshot: Canonical.Snapshot
+    ) throws -> Canonical.Snapshot
+}
+
+extension NativeSupabaseInitialSyncService: NativeServerRecordFetching {
+    func fetchServerRecord(
+        table: String,
+        recordId: String,
+        sessionBytes: Data,
+        expectedUserSubject: String
+    ) async throws -> NativeServerRecord {
+        guard supabaseURL.scheme?.lowercased() == "https", supabaseURL.host != nil,
+              !publishableKey.isEmpty, !expectedUserSubject.isEmpty, !recordId.isEmpty
+        else { throw NativeInitialSyncError.invalidConfiguration }
+        let session: StoredSession
+        do { session = try JSONDecoder().decode(StoredSession.self, from: sessionBytes) }
+        catch { throw NativeInitialSyncError.malformedSession }
+        guard !session.accessToken.isEmpty else { throw NativeInitialSyncError.malformedSession }
+        let subject = expectedUserSubject
+
+        if Collection(rawValue: table) != nil {
+            let rows: [RemoteCollectionRow] = try await fetchRows(
+                table: table,
+                select: "id,user_id,data,deleted,updated_at",
+                subject: subject,
+                accessToken: session.accessToken,
+                pageSize: 2,
+                additionalFilters: [URLQueryItem(name: "id", value: "eq.\(recordId)")]
+            )
+            guard rows.count <= 1, rows.allSatisfy({ row in
+                row.userID == subject && row.id == recordId && Self.recordID(in: row.data) == recordId
+            }) else {
+                Self.reportDiagnostic(stage: "row-contract", table: table)
+                throw NativeInitialSyncError.invalidResponse
+            }
+            guard let row = rows.first, !row.deleted else { return .absent }
+            return .present(row.data)
+        }
+        switch table {
+        case "settings":
+            let rows: [RemoteSettingsRow] = try await fetchRows(
+                table: "settings",
+                select: "user_id,data",
+                subject: subject,
+                accessToken: session.accessToken,
+                pageSize: 2
+            )
+            guard rows.count <= 1, rows.allSatisfy({ $0.userID == subject }) else {
+                Self.reportDiagnostic(stage: "row-contract", table: "settings")
+                throw NativeInitialSyncError.invalidResponse
+            }
+            return rows.first.map { .present($0.data) } ?? .absent
+        case "customer_notes":
+            let rows: [RemoteNoteRow] = try await fetchRows(
+                table: "customer_notes",
+                select: "user_id,customer_key,note",
+                subject: subject,
+                accessToken: session.accessToken,
+                pageSize: 2,
+                additionalFilters: [URLQueryItem(name: "customer_key", value: "eq.\(recordId)")]
+            )
+            guard rows.count <= 1, rows.allSatisfy({ $0.userID == subject && $0.customerKey == recordId }) else {
+                Self.reportDiagnostic(stage: "row-contract", table: "customer_notes")
+                throw NativeInitialSyncError.invalidResponse
+            }
+            return rows.first.map { .present(.string($0.note)) } ?? .absent
+        default:
+            throw NativeInitialSyncError.invalidConfiguration
+        }
+    }
+
+    func applyingServerRecord(
+        _ record: NativeServerRecord,
+        table: String,
+        recordId: String,
+        to snapshot: Canonical.Snapshot
+    ) throws -> Canonical.Snapshot {
+        var candidate = snapshot
+        if let collection = Collection(rawValue: table) {
+            try replace(record, recordId: recordId, collection: collection, in: &candidate.payload)
+        } else if table == "settings" {
+            if case let .present(data) = record {
+                candidate.payload.settings = try mergeSettings(local: candidate.payload.settings, remote: data)
+            }
+        } else if table == "customer_notes" {
+            switch record {
+            case let .present(.string(note)):
+                var notes = candidate.payload.customerNotes ?? [:]
+                notes[recordId] = note
+                candidate.payload.customerNotes = notes
+            case .present:
+                throw NativeInitialSyncError.invalidResponse
+            case .absent:
+                if candidate.payload.customerNotes?[recordId] != nil {
+                    candidate.payload.customerNotes?.removeValue(forKey: recordId)
+                }
+            }
+        } else {
+            throw NativeInitialSyncError.invalidResponse
+        }
+        candidate.schemaVersion = Canonical.Snapshot.currentSchemaVersion
+        do {
+            return try Canonical.SnapshotCodec.decode(Canonical.SnapshotCodec.encode(candidate))
+        } catch {
+            throw NativeInitialSyncError.invalidResponse
+        }
+    }
+
+    private func replace(
+        _ record: NativeServerRecord,
+        recordId: String,
+        collection: Collection,
+        in payload: inout Canonical.SnapshotPayload
+    ) throws {
+        switch collection {
+        case .jobs: payload.jobs = try replacing(payload.jobs, record, recordId, \.id)
+        case .invoices:
+            // The server's invoice exactly: `mergeInvoice` with no local copy
+            // only reconciles its own paid fields.
+            payload.invoices = try replacing(payload.invoices, record, recordId, \.id) {
+                try Self.mergeInvoice(local: nil, remote: $0)
+            }
+        case .customers: payload.customers = try replacing(payload.customers, record, recordId, \.id)
+        case .expenses: payload.expenses = try replacing(payload.expenses, record, recordId, \.id)
+        case .pricebook: payload.pricebook = try replacing(payload.pricebook, record, recordId, \.id)
+        case .recurringJobs: payload.recurringJobs = try replacing(payload.recurringJobs, record, recordId, \.id)
+        case .recurringInvoices:
+            payload.recurringInvoices = try replacing(payload.recurringInvoices, record, recordId, \.id)
+        case .trips: payload.trips = try replacing(payload.trips, record, recordId, \.id)
+        case .bookingRequests:
+            payload.bookingRequests = try replacing(payload.bookingRequests, record, recordId, \.id) {
+                try Self.mergeBookingRequest(local: nil, remote: $0)
+            }
+        case .jobPhotos: payload.jobPhotos = try replacing(payload.jobPhotos, record, recordId, \.id)
+        }
+    }
+
+    private func replacing<Record: Codable>(
+        _ local: [Record]?,
+        _ record: NativeServerRecord,
+        _ recordId: String,
+        _ id: KeyPath<Record, String>,
+        server: (Record) throws -> Record = { $0 }
+    ) throws -> [Record]? {
+        var records = local ?? []
+        switch record {
+        case .absent:
+            guard records.contains(where: { $0[keyPath: id] == recordId }) else { return local }
+            records.removeAll { $0[keyPath: id] == recordId }
+        case let .present(data):
+            let remote: Record
+            do { remote = try Self.decode(Record.self, from: data) }
+            catch { throw NativeInitialSyncError.invalidResponse }
+            guard remote[keyPath: id] == recordId else { throw NativeInitialSyncError.invalidResponse }
+            let value = try server(remote)
+            if let index = records.firstIndex(where: { $0[keyPath: id] == recordId }) {
+                records[index] = value
+            } else {
+                records.append(value)
+            }
+        }
+        return records
+    }
+}

@@ -78,6 +78,10 @@ final class PoorNetworkLink: NativeInitialSyncHTTPDataLoading, NativeMutationPus
     /// When set, the next GET is served now (it reads the server as it is at
     /// this moment) and its response is held until `release()`.
     var holdNextResponse = false
+    /// 12.00b.1 (I2): a write of one record (`<table>/<id>`) is answered with
+    /// this status and never reaches the server: a 4xx the server will never
+    /// accept (a poison change), or a 5xx that never clears.
+    var writeStatus: [String: Int] = [:]
     private(set) var isHolding = false
     private var held: CheckedContinuation<Void, Never>?
 
@@ -97,6 +101,15 @@ final class PoorNetworkLink: NativeInitialSyncHTTPDataLoading, NativeMutationPus
     }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if request.httpMethod != "GET", condition != .offline,
+           let status = writeStatus["\(request.url?.pathComponents.last ?? "")/\(Self.recordID(of: request) ?? "-")"] {
+            log(request, reachedServer: false)
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: status, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (Data(#"{"code":"23514","message":"refused"}"#.utf8), response)
+        }
         if holdNextResponse, condition == .online || condition == .writesFail, request.httpMethod == "GET" {
             holdNextResponse = false
             let response = try await forward(request)
@@ -180,17 +193,24 @@ final class PoorNetworkLink: NativeInitialSyncHTTPDataLoading, NativeMutationPus
     private func log(_ request: URLRequest, reachedServer: Bool) {
         let method = request.httpMethod ?? "GET"
         let table = request.url?.pathComponents.last ?? ""
-        var recordID: String?
+        attempts.append(Attempt(method: method, table: table, recordID: Self.recordID(of: request), reachedServer: reachedServer))
+    }
+
+    /// The record a write targets (a GET targets none).
+    private static func recordID(of request: URLRequest) -> String? {
+        let method = request.httpMethod ?? "GET"
+        let table = request.url?.pathComponents.last ?? ""
         if method == "POST", let body = request.httpBody,
            case let .object(fields)? = try? JSONDecoder().decode(Canonical.JSONValue.self, from: body) {
-            if case let .string(id)? = fields["id"] { recordID = id }
-            else if case let .string(key)? = fields["customer_key"] { recordID = key }
-            else { recordID = table }
-        } else if method == "PATCH" {
-            recordID = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            if case let .string(id)? = fields["id"] { return id }
+            if case let .string(key)? = fields["customer_key"] { return key }
+            return table
+        }
+        if method == "PATCH" {
+            return URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
                 .queryItems?.first { $0.name == "id" }?.value?.replacingOccurrences(of: "eq.", with: "")
         }
-        attempts.append(Attempt(method: method, table: table, recordID: recordID, reachedServer: reachedServer))
+        return nil
     }
 
     var writes: [Attempt] { attempts.filter(\.isWrite) }
@@ -283,6 +303,8 @@ struct Harness {
             reachability: link,
             credentialsProvider: { credentials },
             refreshSession: { false },
+            // 12.00b.1: the rejected-change settle step, as the app wires it.
+            settleRejected: { try store.testSettleRejectedChanges($0) },
             pull: { await store.testPullDeltaIfPossible() },
             statusChanged: { status in store.testApplySyncStatus(status) },
             now: { clock.now },
@@ -297,6 +319,13 @@ struct Harness {
     }
 
     func queueKeys() -> [String] { queue.load().map { "\($0.table)/\($0.recordId)" } }
+
+    /// 12.00b.1: every entry in the rejected-change store for this owner
+    /// (including one hidden while its Retry is queued).
+    func rejectedEntries() -> [NativeRejectedChange] {
+        (try? NativeRejectedChangeStore(fileURL: dir.appendingPathComponent("rejected-changes.json"))
+            .load(binding: Self.binding)) ?? []
+    }
 
     func cleanup() { try? FileManager.default.removeItem(at: dir) }
 }
@@ -357,6 +386,10 @@ struct PoorNetworkTests {
         rebaseRules()
         try await recurringGenerationWaitsForInitialSync()
         try await widgetReplayReachesTheServer()
+        try await poisonChangeLeavesTheQueueAndSyncKeepsPulling()
+        try await keptRecordsDoNotPinTheCursor()
+        try await retryRefusedChange()
+        try await discardRefusedChange()
 
         NativePerformanceMetrics.shared.replaceSink(nil)
         if failures == 0 {
@@ -496,7 +529,12 @@ struct PoorNetworkTests {
                "B: throttling opens the first backoff window (30 s)")
         expectEqual(h.link.writes.map(\.key), queued, "B: each change is attempted exactly once in the pass")
         expect(h.link.committedWrites.isEmpty, "B: a throttled server commits nothing")
-        expect(h.link.reads.isEmpty, "B: no pull runs over pending local writes")
+        // 12.00b.1 (I2): the pull now runs after a partial push, as RN's
+        // `syncIfOnline` does (utils/sync.ts 316-326). Throttled too, it
+        // commits nothing, and the push's code stays the pass's code.
+        expect(!h.link.reads.isEmpty && h.link.reads.allSatisfy { !$0.reachedServer },
+               "B: the pull still runs after the partial push (RN parity) and is throttled too")
+        expect(h.cursorStore.load().tables["jobs"] == nil, "B: the throttled pull commits no cursor")
         expectEqual(h.queueKeys(), queued, "B: the queue keeps both changes, in order")
 
         expectEqual(await h.coordinator.sync(trigger: .foreground), .backoffDeferred,
@@ -695,7 +733,9 @@ struct PoorNetworkTests {
                     "C4: a mid-push drop keeps the unacknowledged remainder")
         expectEqual(h.queueKeys(), Array(keys.dropFirst()), "C4: the queue holds the remainder, in order")
         expectEqual(h.link.committedWriteCount(keys[0]), 1, "C4: the first change committed once")
-        expect(h.link.reads.isEmpty, "C4: no pull runs over the pending remainder")
+        // 12.00b.1 (I2): the pull runs after the partial push (RN parity);
+        // the link is down, so it reaches nothing and commits nothing.
+        expect(h.link.reads.allSatisfy { !$0.reachedServer }, "C4: the pull over the dead link reaches nothing")
         let local = Set(store.canonicalJobs.map(\.id))
         expect(jobs.allSatisfy { local.contains($0.id) }, "C4: local truth keeps all three jobs")
         expectEqual(h.coordinator.status().diagnosticCode, "transport/jobs", "C4: bounded transport code")
@@ -1317,6 +1357,300 @@ struct PoorNetworkTests {
         expectEqual(pushed.server, "Roof inspection (local)", "F: once pushed, the local edit is the server's value")
         expectEqual(pushed.memory, "Roof inspection (local)", "F: after the push and pull, the device still shows it")
         expect(h.queue.load().isEmpty, "F: the queue drains")
+    }
+
+
+    // MARK: P. A poison change (12.00b.1, known issue I2)
+
+    /// The title a server row holds, or nil.
+    @MainActor
+    static func serverTitle(_ h: Harness, _ id: String) -> String? {
+        guard let row = h.server.storedRow(table: "jobs", id: id, userID: Harness.subject), !row.deleted,
+              case let .object(fields) = row.data, case let .string(title)? = fields["title"] else { return nil }
+        return title
+    }
+
+    /// The title of a job in the committed snapshot (what a relaunch reads), or nil.
+    @MainActor
+    static func committedTitle(_ h: Harness, _ id: String) -> String? {
+        h.committed()?.payload.jobs?.first { $0.id == id }?.title
+    }
+
+    /// Plan 12.00b.1 step 6: one change the server will never accept (HTTP
+    /// 422) must not wedge sync. The good changes push, inbound changes keep
+    /// arriving, and the poison change reaches the rejected store exactly once.
+    ///
+    /// RN parity: `utils/sync.ts` `syncIfOnline` (lines 316-326) awaits
+    /// `pushQueue(userId)` (line 320) and then `pullRemote(userId)` (line 321)
+    /// on every pass, so a failing change never holds back inbound changes.
+    /// RN keeps the failed change queued and retries it every pass
+    /// (`pushQueue`, lines 204-213); native files a refused change once in the
+    /// rejected-change store, where Settings › Cloud Sync offers Retry and
+    /// Discard (owner decision D3).
+    @MainActor
+    static func poisonChangeLeavesTheQueueAndSyncKeepsPulling() async throws {
+        let h = Harness(tag: "poison")
+        let other = Harness(tag: "poison-other", server: h.server)
+        defer { h.cleanup(); other.cleanup() }
+        let customer = Customer(name: "Poison Pipes", email: "poison@example.test")
+        let good1 = Job(customerId: customer.id, customerName: customer.name, title: "Good one", laborRate: 90)
+        let poison = Job(customerId: customer.id, customerName: customer.name, title: "Poison", laborRate: 90)
+        let good2 = Job(customerId: customer.id, customerName: customer.name, title: "Good two", laborRate: 90)
+        expect(h.store.upsert(customer), "P: the customer saves")
+        for job in [good1, poison, good2] { expect(h.store.upsert(job), "P: \(job.title) saves") }
+        let poisonKey = "jobs/\(poison.id)"
+        h.link.writeStatus[poisonKey] = 422
+
+        // Another device of the same account has a change waiting on the server.
+        let remote = Job(customerId: customer.id, customerName: customer.name, title: "From the other device", laborRate: 90)
+        expect(other.store.upsert(remote), "P: the other device saves a job")
+        _ = await other.coordinator.sync(trigger: .manual)
+        expect(serverTitle(h, remote.id) != nil, "P: sanity: the other device's job is on the server")
+
+        let first = await h.coordinator.sync(trigger: .manual)
+        expectEqual(first, .completed(pushed: 3, authRefreshed: false),
+                    "P: the pass completes: the customer and both good jobs pushed, the refusal is not a failure")
+        for key in ["customers/\(customer.id)", "jobs/\(good1.id)", "jobs/\(good2.id)"] {
+            expectEqual(h.link.committedWriteCount(key), 1, "P: \(key) committed once")
+        }
+        expectEqual(h.link.writes.filter { $0.key == poisonKey }.count, 1, "P: the poison change was sent once")
+        expect(h.queue.load().isEmpty, "P: the poison change left the live queue")
+        let filed = h.rejectedEntries()
+        expectEqual(filed.map(\.key), [poisonKey], "P: the poison change reached the rejected store")
+        expectEqual(filed.first?.statusCode, 422, "P: …with its status")
+        expectEqual(filed.first?.item.op, .upsert, "P: …as the original queued change")
+        expectEqual(h.store.rejectedChanges.map(\.id), [poisonKey], "P: Cloud Sync lists it")
+        expect(h.link.reads.contains { $0.table == "jobs" && $0.reachedServer }, "P: the pull ran after the push")
+        expectEqual(committedTitle(h, remote.id), "From the other device", "P: the inbound change arrived")
+        expectEqual(committedTitle(h, poison.id), "Poison", "P: the refused record keeps its local version")
+        let status = h.coordinator.status()
+        expect(status.consecutiveFailures == 0 && status.nextEarliestAttempt == nil && status.diagnosticCode == nil,
+               "P: a refusal opens no backoff and leaves no failure code")
+        expectEqual(status.pendingCount, 0, "P: nothing is pending")
+
+        // The next passes: the poison change is never sent again or filed twice,
+        // and inbound changes keep arriving.
+        let filedAt = filed.first?.rejectedAt
+        var later = remote
+        later.title = "Edited on the other device"
+        expect(other.store.upsert(later), "P: the other device edits its job")
+        _ = await other.coordinator.sync(trigger: .manual)
+        h.link.resetLog()
+        _ = await h.coordinator.sync(trigger: .foreground)
+        _ = await h.coordinator.sync(trigger: .manual)
+        expect(h.link.writes.isEmpty, "P: later passes send nothing (the poison change is not retried)")
+        expectEqual(h.rejectedEntries().map(\.key), [poisonKey], "P: still exactly one entry")
+        expectEqual(h.rejectedEntries().first?.rejectedAt, filedAt, "P: the entry was filed exactly once")
+        expectEqual(committedTitle(h, remote.id), "Edited on the other device", "P: later inbound changes keep arriving")
+    }
+
+    // MARK: Q. A kept record cannot pin its table's cursor (12.00b.1)
+
+    /// Plan 12.00b.1 step 5: with the pull running while changes are still
+    /// queued, the 11.12 commit keeps every record this device has a pending
+    /// or refused change for. Such a record must not hold its table's
+    /// watermark forever: a change that keeps failing (HTTP 503 every pass)
+    /// and a refused one (HTTP 422) sit on "jobs" while another device edits
+    /// the same two jobs and adds a third. The jobs watermark still advances
+    /// to the newest server row on every pass.
+    @MainActor
+    static func keptRecordsDoNotPinTheCursor() async throws {
+        let h = Harness(tag: "cursor")
+        let other = Harness(tag: "cursor-other", server: h.server)
+        defer { h.cleanup(); other.cleanup() }
+        let customer = Customer(name: "Quartz Tile", email: "quartz@example.test")
+        var stuck = Job(customerId: customer.id, customerName: customer.name, title: "Stuck", laborRate: 70)
+        var refused = Job(customerId: customer.id, customerName: customer.name, title: "Refused", laborRate: 70)
+        expect(h.store.upsert(customer) && h.store.upsert(stuck) && h.store.upsert(refused), "Q: the records save")
+        expectEqual(await h.coordinator.sync(trigger: .manual), .completed(pushed: 3, authRefreshed: false), "Q: they reach the server")
+        _ = await other.coordinator.sync(trigger: .manual)
+        expect(other.store.jobs.count == 2, "Q: sanity: the other device pulled both jobs")
+
+        // This device edits both; one keeps failing, one is refused.
+        h.link.writeStatus["jobs/\(stuck.id)"] = 503
+        h.link.writeStatus["jobs/\(refused.id)"] = 422
+        stuck.title = "Stuck (local edit)"
+        refused.title = "Refused (local edit)"
+        expect(h.store.upsert(stuck) && h.store.upsert(refused), "Q: both local edits save")
+        // The other device edits the same two jobs and adds a third.
+        guard var otherStuck = other.store.jobs.first(where: { $0.id == stuck.id }),
+              var otherRefused = other.store.jobs.first(where: { $0.id == refused.id }) else {
+            expect(false, "Q: the other device has both jobs"); return
+        }
+        otherStuck.title = "Stuck (other device)"
+        otherRefused.title = "Refused (other device)"
+        let fresh = Job(customerId: customer.id, customerName: customer.name, title: "Fresh", laborRate: 70)
+        expect(other.store.upsert(otherStuck) && other.store.upsert(otherRefused) && other.store.upsert(fresh),
+               "Q: the other device's edits save")
+        _ = await other.coordinator.sync(trigger: .manual)
+        func newestJobStamp() -> String? {
+            h.server.liveRows(table: "jobs", userID: Harness.subject).map(\.updatedAt).max()
+        }
+
+        let pass = await h.coordinator.sync(trigger: .manual)
+        expectEqual(pass, .partial(pushed: 0, remaining: 1, authRefreshed: false),
+                    "Q: the 503 change stays queued; the refused one left the queue")
+        expectEqual(h.queueKeys(), ["jobs/\(stuck.id)"], "Q: only the failing change is queued")
+        expectEqual(h.rejectedEntries().map(\.key), ["jobs/\(refused.id)"], "Q: the refused change is filed")
+        expectEqual(committedTitle(h, stuck.id), "Stuck (local edit)", "Q: the pending record keeps its local version")
+        expectEqual(committedTitle(h, refused.id), "Refused (local edit)", "Q: the refused record keeps its local version")
+        expectEqual(committedTitle(h, fresh.id), "Fresh", "Q: the other device's new job arrived")
+        expectEqual(h.cursorStore.load().tables["jobs"], newestJobStamp(),
+                    "Q: the jobs watermark advanced to the newest server row despite the two kept records")
+
+        // The other device keeps editing; every pass advances the watermark again.
+        var freshEdit = fresh
+        for round in 1...2 {
+            freshEdit.title = "Fresh \(round)"
+            expect(other.store.upsert(freshEdit), "Q: round \(round): the other device edits")
+            _ = await other.coordinator.sync(trigger: .manual)
+            h.clock.advance(301)
+            _ = await h.coordinator.sync(trigger: .manual)
+            expectEqual(committedTitle(h, fresh.id), "Fresh \(round)", "Q: round \(round): the edit arrived")
+            expectEqual(h.cursorStore.load().tables["jobs"], newestJobStamp(),
+                        "Q: round \(round): the watermark is not pinned")
+            expectEqual(committedTitle(h, stuck.id), "Stuck (local edit)", "Q: round \(round): the pending record is still kept")
+            expectEqual(committedTitle(h, refused.id), "Refused (local edit)", "Q: round \(round): the refused record is still kept")
+        }
+
+        // Once the failing change clears it reaches the server, and the
+        // refused record's Discard shows the other device's version.
+        h.link.writeStatus["jobs/\(stuck.id)"] = nil
+        h.clock.advance(301)
+        _ = await h.coordinator.sync(trigger: .manual)
+        expectEqual(serverTitle(h, stuck.id), "Stuck (local edit)", "Q: the stuck change reached the server once it cleared")
+        let discarded = await h.store.discardRejectedChange(id: "jobs/\(refused.id)")
+        expect(discarded == nil, "Q: Discard succeeds")
+        expectEqual(committedTitle(h, refused.id), "Refused (other device)",
+                    "Q: Discard shows the server's version even though the watermark moved past it")
+    }
+
+    // MARK: R. Retry (12.00b.1, owner decision D3)
+
+    @MainActor
+    static func retryRefusedChange() async throws {
+        let h = Harness(tag: "retry")
+        defer { h.cleanup() }
+        let customer = Customer(name: "Rowan Roofing", email: "rowan@example.test")
+        var job = Job(customerId: customer.id, customerName: customer.name, title: "Original", laborRate: 80)
+        expect(h.store.upsert(customer) && h.store.upsert(job), "R: the records save")
+        _ = await h.coordinator.sync(trigger: .manual)
+        let key = "jobs/\(job.id)"
+        h.link.writeStatus[key] = 409
+        job.title = "Refused edit"
+        expect(h.store.upsert(job), "R: the edit saves")
+        _ = await h.coordinator.sync(trigger: .manual)
+        expectEqual(h.store.rejectedChanges.map(\.id), [key], "R: sanity: the edit was refused and listed")
+        let original = h.rejectedEntries().first
+
+        // Retry while the server still refuses: sent once, back in the list, no loop.
+        h.link.resetLog()
+        expect(h.store.retryRejectedChange(id: key), "R: Retry re-queues the change")
+        expectEqual(h.queueKeys(), [key], "R: the change is back in the live queue")
+        expectEqual(h.queue.load().first?.payload, original?.item.payload, "R: …with the refused change's payload")
+        expect(h.store.rejectedChanges.isEmpty, "R: the entry is hidden while its Retry is queued")
+        expectEqual(await h.coordinator.sync(trigger: .manual), .completed(pushed: 0, authRefreshed: false),
+                    "R: the pass completes")
+        expectEqual(h.link.writes.filter { $0.key == key }.count, 1, "R: the retried change was sent exactly once in the pass")
+        expect(h.queue.load().isEmpty, "R: the refused retry left the queue again")
+        expectEqual(h.store.rejectedChanges.map(\.id), [key], "R: the refused retry is back in the list")
+        expectEqual(h.rejectedEntries().count, 1, "R: still one entry for the record")
+        expect(!h.store.retryRejectedChange(id: "jobs/none"), "R: Retry of an unknown entry does nothing")
+
+        // Retry is an ordinary queued change: a newer edit replaces it (last
+        // writer wins), and the accepted push clears the entry.
+        h.link.writeStatus[key] = nil
+        expect(h.store.retryRejectedChange(id: key), "R: Retry again")
+        job.title = "Edited after Retry"
+        expect(h.store.upsert(job), "R: a newer edit saves")
+        expectEqual(h.queueKeys(), [key], "R: the queue coalesces Retry and the edit into one change")
+        h.link.resetLog()
+        expectEqual(await h.coordinator.sync(trigger: .manual), .completed(pushed: 1, authRefreshed: false),
+                    "R: the pass pushes the one change")
+        expectEqual(serverTitle(h, job.id), "Edited after Retry", "R: the server has the newest edit")
+        expect(h.store.rejectedChanges.isEmpty && h.rejectedEntries().isEmpty, "R: the accepted change cleared the entry")
+        expect(!FileManager.default.fileExists(atPath: h.dir.appendingPathComponent("rejected-changes.json").path),
+               "R: an empty store leaves no file")
+    }
+
+    // MARK: S. Discard (12.00b.1, owner decision D3)
+
+    @MainActor
+    static func discardRefusedChange() async throws {
+        let h = Harness(tag: "discard")
+        let other = Harness(tag: "discard-other", server: h.server)
+        defer { h.cleanup(); other.cleanup() }
+        let customer = Customer(name: "Sage Siding", email: "sage@example.test")
+        var job = Job(customerId: customer.id, customerName: customer.name, title: "Server version", laborRate: 80)
+        let doomed = Job(customerId: customer.id, customerName: customer.name, title: "Keep on server", laborRate: 80)
+        expect(h.store.upsert(customer) && h.store.upsert(job) && h.store.upsert(doomed), "S: the records save")
+        _ = await h.coordinator.sync(trigger: .manual)
+        _ = await other.coordinator.sync(trigger: .manual)
+
+        // (a) The server has the record: Discard shows the server's current version.
+        let key = "jobs/\(job.id)"
+        h.link.writeStatus[key] = 422
+        job.title = "Refused local edit"
+        expect(h.store.upsert(job), "S(a): the edit saves")
+        _ = await h.coordinator.sync(trigger: .manual)
+        expectEqual(h.store.rejectedChanges.map(\.id), [key], "S(a): sanity: refused and listed")
+        guard var otherJob = other.store.jobs.first(where: { $0.id == job.id }) else {
+            expect(false, "S(a): the other device has the job"); return
+        }
+        otherJob.title = "Server version (newer)"
+        expect(other.store.upsert(otherJob), "S(a): the other device edits the job")
+        _ = await other.coordinator.sync(trigger: .manual)
+
+        // Offline: nothing changes and the entry stays.
+        h.link.condition = .offline
+        let offline = await h.store.discardRejectedChange(id: key)
+        expect(offline != nil, "S: an offline Discard explains why it did not finish")
+        expectEqual(committedTitle(h, job.id), "Refused local edit", "S: an offline Discard changes nothing")
+        expectEqual(h.store.rejectedChanges.map(\.id), [key], "S: …and keeps the entry")
+        h.link.condition = .online
+
+        h.link.resetLog()
+        let discarded = await h.store.discardRejectedChange(id: key)
+        expect(discarded == nil, "S(a): Discard succeeds")
+        expect(h.link.writes.isEmpty, "S(a): Discard sends no write")
+        expectEqual(h.link.reads.map(\.table), ["jobs"], "S(a): Discard fetches just that record")
+        expectEqual(h.store.jobs.first { $0.id == job.id }?.title, "Server version (newer)", "S(a): the screen shows the server's version")
+        expectEqual(committedTitle(h, job.id), "Server version (newer)", "S(a): …and it is committed")
+        expect(h.store.rejectedChanges.isEmpty && h.rejectedEntries().isEmpty, "S(a): the entry is gone")
+        expect(h.queue.load().isEmpty, "S(a): nothing is queued by Discard")
+        let again = await h.store.discardRejectedChange(id: key)
+        expect(again != nil, "S(a): a second Discard of the same entry does nothing")
+        h.link.resetLog()
+        _ = await h.coordinator.sync(trigger: .manual)
+        expect(h.link.writes.isEmpty, "S(a): the next pass sends nothing for it")
+        expectEqual(committedTitle(h, job.id), "Server version (newer)", "S(a): the server's version stays")
+
+        // (b) A refused insert: the server never had it, so Discard removes
+        // the local-only record.
+        let orphan = Job(customerId: customer.id, customerName: customer.name, title: "Never saved", laborRate: 80)
+        let orphanKey = "jobs/\(orphan.id)"
+        h.link.writeStatus[orphanKey] = 400
+        expect(h.store.upsert(orphan), "S(b): the new job saves locally")
+        _ = await h.coordinator.sync(trigger: .manual)
+        expectEqual(h.store.rejectedChanges.map(\.id), [orphanKey], "S(b): sanity: the insert was refused")
+        expect(serverTitle(h, orphan.id) == nil, "S(b): sanity: the server has no such row")
+        let discardedInsert = await h.store.discardRejectedChange(id: orphanKey)
+        expect(discardedInsert == nil, "S(b): Discard succeeds")
+        expect(h.store.jobs.first { $0.id == orphan.id } == nil, "S(b): the local-only job is removed")
+        expect(committedTitle(h, orphan.id) == nil, "S(b): …and the removal is committed")
+        expect(h.store.rejectedChanges.isEmpty, "S(b): the entry is gone")
+        expect(h.queue.load().isEmpty, "S(b): Discard queues no delete for it")
+
+        // A refused delete: Discard restores the server's record.
+        let doomedKey = "jobs/\(doomed.id)"
+        h.link.writeStatus[doomedKey] = 409
+        expect(h.store.deleteJob(id: doomed.id), "S(delete): the job is deleted locally")
+        _ = await h.coordinator.sync(trigger: .manual)
+        expectEqual(h.rejectedEntries().first?.item.op, .delete, "S(delete): sanity: the delete was refused")
+        let discardedDelete = await h.store.discardRejectedChange(id: doomedKey)
+        expect(discardedDelete == nil, "S(delete): Discard succeeds")
+        expectEqual(committedTitle(h, doomed.id), "Keep on server", "S(delete): the server's record is back on this device")
+        expect(h.store.rejectedChanges.isEmpty, "S(delete): the entry is gone")
     }
 
     // MARK: Signposts (11.12 instrumentation on the pull commit path)

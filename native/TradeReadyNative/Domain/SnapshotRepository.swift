@@ -28,6 +28,9 @@ extension Canonical {
             case widgetScrub = "widget-scrub-pending"
             /// The removal of both AI provider keys from the secure store.
             case aiKeyWipe = "ai-key-wipe-pending"
+            /// Phase 12 (12.00b.1, I2): the removal of the rejected-change
+            /// store (`NativeRejectedChangeStore`).
+            case rejectedChangesScrub = "rejected-changes-scrub-pending"
         }
 
         private struct BoundaryStepMarker: Codable {
@@ -407,6 +410,9 @@ extension Canonical {
         let backupAvailable: Bool
         let counts: Counts
         let migrations: [Migration]
+        /// Phase 12 (12.00b.1, I2): how many refused changes are waiting in
+        /// Settings › Cloud Sync. A count only.
+        var rejectedChangeCount = 0
 
         /// Produces canonical JSON that is safe to attach to a support request.
         /// The report is rebuilt from this closed diagnostics schema so paths,
@@ -420,7 +426,8 @@ extension Canonical {
     }
 
     struct PersistenceSupportReport: Codable, Equatable {
-        static let currentSchemaVersion = 1
+        /// 2: Phase 12 (12.00b.1, I2) adds `rejectedChangeCount`.
+        static let currentSchemaVersion = 2
 
         struct MigrationStatus: Codable, Equatable {
             let migration: MigrationKind
@@ -460,6 +467,9 @@ extension Canonical {
         let backupAvailable: Bool
         let recordCounts: PersistenceDiagnostics.Counts
         let migrationStatuses: [MigrationStatus]
+        /// How many refused changes wait in Settings › Cloud Sync. A count
+        /// only: never a table, record, name or payload.
+        let rejectedChangeCount: Int
 
         init(appVersion: String, diagnostics: PersistenceDiagnostics) {
             reportSchemaVersion = Self.currentSchemaVersion
@@ -471,6 +481,7 @@ extension Canonical {
             migrationStatuses = diagnostics.migrations
                 .map { .init(migration: $0.migration, status: $0.status) }
                 .sorted { $0.migration.rawValue < $1.migration.rawValue }
+            rejectedChangeCount = diagnostics.rejectedChangeCount
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -481,6 +492,7 @@ extension Canonical {
             case backupAvailable
             case recordCounts
             case migrationStatuses
+            case rejectedChangeCount
         }
 
         init(from decoder: Decoder) throws {
@@ -492,6 +504,8 @@ extension Canonical {
             backupAvailable = try values.decode(Bool.self, forKey: .backupAvailable)
             recordCounts = try values.decode(PersistenceDiagnostics.Counts.self, forKey: .recordCounts)
             migrationStatuses = try values.decode([MigrationStatus].self, forKey: .migrationStatuses)
+            // A v1 report has no count.
+            rejectedChangeCount = try values.decodeIfPresent(Int.self, forKey: .rejectedChangeCount) ?? 0
         }
 
         func encode(to encoder: Encoder) throws {
@@ -507,6 +521,7 @@ extension Canonical {
             try values.encode(backupAvailable, forKey: .backupAvailable)
             try values.encode(recordCounts, forKey: .recordCounts)
             try values.encode(migrationStatuses, forKey: .migrationStatuses)
+            try values.encode(rejectedChangeCount, forKey: .rejectedChangeCount)
         }
 
         fileprivate static func encode(_ report: PersistenceSupportReport) throws -> Data {

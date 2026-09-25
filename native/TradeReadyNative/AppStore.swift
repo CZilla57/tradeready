@@ -248,6 +248,9 @@ final class AppStore: ObservableObject {
     @Published private(set) var stripeConnectStatus: NativeStripeConnectStatus?
     @Published private(set) var stripeConnectLoading = false
     @Published private(set) var stripeConnectError: String?
+    /// Phase 12 (12.00b.1, I2; owner decision D3): the changes the server
+    /// refused that are waiting for Retry or Discard in Settings › Cloud Sync.
+    @Published private(set) var rejectedChanges: [NativeRejectedChange] = []
 
     private let fileURL: URL
     private let repository: Canonical.SnapshotRepository
@@ -270,6 +273,9 @@ final class AppStore: ObservableObject {
     /// Task 10.12 (D4/D5): owner-bound setup-checklist store (10.03's
     /// `NativeSetupChecklistStore`).
     private let setupChecklistStore: NativeSetupChecklistStore
+    /// Phase 12 (12.00b.1, I2): the owner-scoped, bounded, file-protected
+    /// store of refused changes (`NativeRejectedChangeStore`).
+    private let rejectedChangeStore: NativeRejectedChangeStore
     /// Task 10.12 (ruling R5): no-op by default; the app injects
     /// `NativeAnalyticsTransport.live()`. Every emission goes through
     /// `emitAnalytics(_:)` (task 11.08).
@@ -406,6 +412,12 @@ final class AppStore: ObservableObject {
     /// wipes (no key material, no account).
     private(set) var aiProviderKeyWipeFailureCount = 0
     private static let aiProviderKeyWipeFailureCap = 99
+    /// Phase 12 (12.00b.1, I2): bounded, payload-free counts of failed
+    /// boundary scrubs of the rejected-change store, and of refused changes
+    /// dropped because the store was full (the oldest go first).
+    private(set) var rejectedChangeScrubFailureCount = 0
+    private(set) var rejectedChangeOverflowCount = 0
+    private static let rejectedChangeCounterCap = 9_999
     /// Phase 12 (L286.5b): bounded, payload-free counts of boundary-step file
     /// markers that could not be written, and of Keychain step records that
     /// could not be written, read or removed (the log line carries the stage
@@ -512,7 +524,8 @@ final class AppStore: ObservableObject {
         analytics: NativeAnalytics = NativeNoOpAnalytics(),
         crashReporting: NativeCrashReporting = NativeNoOpCrashReporting(),
         widgetTimelineReloader: any NativeWidgetTimelineReloading = NativeWidgetCenterTimelineReloader(),
-        secureSettingsStore: NativeKeychainSecureSettingsStore = .init()
+        secureSettingsStore: NativeKeychainSecureSettingsStore = .init(),
+        rejectedChangeFiles: (any NativeRejectedChangeFileBacking)? = nil
     ) {
         self.analytics = analytics
         self.secureSettingsStore = secureSettingsStore
@@ -558,6 +571,10 @@ final class AppStore: ObservableObject {
         self.setupChecklistStore = NativeSetupChecklistStore(
             fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("setup-checklist.json")
         )
+        self.rejectedChangeStore = NativeRejectedChangeStore(
+            fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("rejected-changes.json"),
+            files: rejectedChangeFiles ?? NativeProtectedRejectedChangeFiles()
+        )
         self.syncStatus = NativeSyncStatus(pendingCount: self.mutationQueue.load().count)
         // Phase 12 (L286.5b): a step whose file marker could not be written
         // was recorded in the Keychain instead; it is pending from launch.
@@ -573,6 +590,8 @@ final class AppStore: ObservableObject {
                 case .all: try repository.removeAllAccountData()
                 }
                 try mutationQueue.removeAll()
+                // Phase 12 (12.00b.1): refused changes are this account's queued writes too.
+                try rejectedChangeStore.removeAll()
                 try syncBackfill.removeAll()
                 try syncCursorStore.removeAll()
                 try customerDuplicateDismissalStore.removeAll()
@@ -745,7 +764,11 @@ final class AppStore: ObservableObject {
     }
 
     func persistenceDiagnostics() throws -> Canonical.PersistenceDiagnostics {
-        repository.diagnostics(for: try repository.load(), journal: try migrationJournal.read())
+        var diagnostics = repository.diagnostics(for: try repository.load(), journal: try migrationJournal.read())
+        // Phase 12 (12.00b.1): the monitored count (a count only). An
+        // unreadable store falls back to the list last shown.
+        diagnostics.rejectedChangeCount = (try? visibleRejectedChanges())?.count ?? rejectedChanges.count
+        return diagnostics
     }
 
     /// Creates a metadata-only JSON report that the user can explicitly share
@@ -4314,6 +4337,8 @@ final class AppStore: ObservableObject {
         accountSwitchInFlight = true
         defer { accountSwitchInFlight = false }
         wipeAIProviderKeysForAccountBoundary()
+        // Phase 12 (12.00b.1): the refused changes belong to the old owner.
+        scrubRejectedChangesForAccountBoundary()
         guard let activator = authenticatedIdentityActivator else {
             authenticationGateState = .signedOut
             return
@@ -4343,6 +4368,7 @@ final class AppStore: ObservableObject {
             // Task 11.15 fix round 1: and again after the awaits — a key that
             // landed during `clearSession`/`logOut` belonged to the old owner.
             wipeAIProviderKeysForAccountBoundary()
+            scrubRejectedChangesForAccountBoundary()
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
         reviewRequestRecords = []
@@ -4538,6 +4564,7 @@ final class AppStore: ObservableObject {
             // Task 11.15 fix round 1: dropping the recovery session is an
             // account boundary too (same rule as the two recovery exits).
             wipeAIProviderKeysForAccountBoundary()
+            scrubRejectedChangesForAccountBoundary()
         }
         try? recoveryStore.clear()
         didCheckMigratedAuthenticatedIdentity = false
@@ -4782,6 +4809,8 @@ final class AppStore: ObservableObject {
             case .all: try repository.removeAllAccountData()
             }
             try mutationQueue.removeAll()
+            // Phase 12 (12.00b.1): refused changes are this account's queued writes too.
+            try rejectedChangeStore.removeAll()
             try syncBackfill.removeAll()
             try syncCursorStore.removeAll()
             try customerDuplicateDismissalStore.removeAll()
@@ -4843,6 +4872,7 @@ final class AppStore: ObservableObject {
         reviewRequestRecords = []
         pendingCustomerMergeUndo = nil
         pendingRecordDeleteUndo = nil
+        rejectedChanges = []
         isMigratedLocalOwnerVerified = false
         migratedAccountBinding = nil
         verifiedAccountBinding = nil
@@ -4988,6 +5018,8 @@ final class AppStore: ObservableObject {
                 }
             case .aiKeyWipe:
                 wipeAIProviderKeysForAccountBoundary()
+            case .rejectedChangesScrub:
+                scrubRejectedChangesForAccountBoundary()
             }
         }
     }
@@ -5007,6 +5039,9 @@ final class AppStore: ObservableObject {
         // leaves the marker pending so the next launch retries, and no other
         // account can ever inherit and push this account's queued writes.
         try mutationQueue.removeAll()
+        // Phase 12 (12.00b.1): refused changes are this account's queued
+        // writes too; they go with the queue, under the same marker.
+        try rejectedChangeStore.removeAll()
         try syncBackfill.removeAll()
         try syncCursorStore.removeAll()
         try customerDuplicateDismissalStore.removeAll()
@@ -5851,6 +5886,7 @@ final class AppStore: ObservableObject {
         dismissedCustomerDuplicatePairKeys = []
         pendingCustomerMergeUndo = nil
         pendingRecordDeleteUndo = nil
+        rejectedChanges = []
         isMigratedLocalOwnerVerified = false
         migratedAccountBinding = nil
         verifiedAccountBinding = nil
@@ -5869,6 +5905,8 @@ final class AppStore: ObservableObject {
         // (`updateRecoveredPassword`, `cancelPasswordRecovery`) end here and
         // tear down the account boundary, so the next owner may differ.
         wipeAIProviderKeysForAccountBoundary()
+        // Phase 12 (12.00b.1): and so do the refused changes.
+        scrubRejectedChangesForAccountBoundary()
         // Task 10.09 (B1): account boundary — clear the owner-scoped cached
         // snapshot only; observer registrations survive (see
         // `applyCompletedSignOutState`'s identical comment).
@@ -6720,6 +6758,12 @@ final class AppStore: ObservableObject {
             reachability: syncReachability,
             credentialsProvider: { [weak self] in self?.currentSyncCredentials() },
             refreshSession: { [weak self] in await self?.refreshSyncSession() ?? false },
+            // Phase 12 (12.00b.1, I2): a refused change leaves the queue for
+            // the rejected-change store. Without an owner the change stays queued.
+            settleRejected: { [weak self] settlement in
+                guard let self else { throw NativeRejectedChangeStoreError.noOwner }
+                try self.settleRejectedChanges(settlement)
+            },
             pull: { [weak self] in await self?.pullDeltaIfPossible() ?? .skipped },
             statusChanged: { [weak self] status in self?.applySyncStatus(status) }
         )
@@ -6777,6 +6821,12 @@ final class AppStore: ObservableObject {
         // single-flight with the coordinator, so one of these can be pushed,
         // and leave the queue, while this pull is in flight.
         var pendingAtStart = pendingMutationKeys()
+        // Phase 12 (12.00b.1): a refused change's record keeps its local
+        // version until Retry or Discard. If the store cannot be read (a
+        // locked device), those records are unknown: skip this pull rather
+        // than overwrite one.
+        let rejectedAtStart: Set<String>
+        do { rejectedAtStart = try rejectedChangeKeys() } catch { return .failed("pull/rejected-store") }
 
         let outcome: NativeDeltaPullOutcome
         do {
@@ -6823,13 +6873,28 @@ final class AppStore: ObservableObject {
         // where it was, so the next pull fetches the row again. No await between
         // here and the commit. If the rebase cannot be done, discard the
         // candidate and keep the cursor, so the next pull refetches.
+        //
+        // Phase 12 (12.00b.1, I2; contract §17.2 item 5): the pull now also
+        // runs while changes are queued, so a record kept for a change that
+        // is still queued at commit, or refused, must not hold its table's
+        // watermark: a change that keeps failing, or a refusal waiting for
+        // the owner, would pin that table's cursor forever and every pass
+        // would refetch the same rows. Neither needs the refetch: a queued
+        // change replaces the server's row when it lands (last writer wins),
+        // and Discard fetches the refused record's current row itself. A
+        // record pending at the start but pushed during the pull (11.12 I1)
+        // still holds, as before.
+        let pendingNow = pendingMutationKeys()
+        let rejectedNow: Set<String>
+        do { rejectedNow = try rejectedChangeKeys() } catch { return .failed("pull/rejected-store") }
         let rebase: PulledDeltaRebase
         do {
             rebase = try Self.rebasePulledDelta(
                 base: pullBase,
                 pulled: outcome.snapshot,
                 live: snapshot,
-                protectedKeys: pendingAtStart.union(pendingMutationKeys())
+                protectedKeys: pendingAtStart.union(pendingNow).union(rejectedAtStart).union(rejectedNow),
+                unheldKeys: pendingNow.union(rejectedNow)
             )
         } catch {
             return .failed("pull/local-rebase")
@@ -7249,6 +7314,236 @@ final class AppStore: ObservableObject {
         syncNow(trigger: .localChange)
     }
 
+    // MARK: Phase 12 (12.00b.1, I2): refused changes
+
+    /// The settle step `syncCoordinatorIfConfigured` hands the coordinator:
+    /// files the refused changes of one push attempt in the owner's
+    /// rejected-change store and clears the entries of records whose newer
+    /// change the server accepted. Throwing keeps the whole attempt queued
+    /// (the coordinator re-sends it next pass), so a refusal is never lost:
+    /// there must be a verified owner, and no account switch or pending
+    /// boundary scrub (that file is about to be removed). An attempt with no
+    /// refusal needs no owner while none can be listed.
+    private func settleRejectedChanges(_ settlement: NativeMutationPushSettlement) throws {
+        let ownerChanging = accountSwitchInFlight || isBoundaryStepPending(.rejectedChangesScrub)
+        guard !settlement.rejected.isEmpty || (!ownerChanging && verifiedAccountBinding != nil) else { return }
+        guard !ownerChanging else { throw NativeRejectedChangeStoreError.noOwner }
+        let dropped = try rejectedChangeStore.settle(
+            rejected: settlement.rejected,
+            clearedKeys: Set(settlement.cleared.map(NativeRejectedChange.key)),
+            binding: verifiedAccountBinding,
+            now: Date()
+        )
+        reportRejectedChanges(settlement.rejected, dropped: dropped)
+        refreshRejectedChanges()
+    }
+
+    /// One bounded report per settle with a refusal, through the Phase 11
+    /// redaction path: the first refusal's table and status and the count,
+    /// never a record, name or payload. Its own context, so refusals group
+    /// apart from `pushQueue` (changes still queued).
+    private func reportRejectedChanges(_ rejected: [NativeMutationRejection], dropped: Int) {
+        if let first = rejected.first {
+            let code = "rejected/\(first.item.table)/\(first.statusCode)"
+            print("TradeReadyRejectedChanges stage=filed table=\(first.item.table) status=\(first.statusCode) count=\(rejected.count)")
+            reportError(
+                ["code": code, "message": "Sync push refused changes"],
+                context: ["context": "pushRejected", "collection": first.item.table,
+                          "status": first.statusCode, "count": rejected.count]
+            )
+        }
+        guard dropped > 0 else { return }
+        rejectedChangeOverflowCount = min(Self.rejectedChangeCounterCap, rejectedChangeOverflowCount + dropped)
+        print("TradeReadyRejectedChanges stage=overflow count=\(dropped)")
+        reportError(
+            ["code": "rejected-store/overflow", "message": "Refused changes over the limit were dropped"],
+            context: ["context": "pushRejected", "count": dropped]
+        )
+    }
+
+    /// The owner's entries shown in Settings › Cloud Sync, oldest first: none
+    /// while the owner is changing, and none for a record that has a change
+    /// queued (a Retry, or a newer edit, which supersedes the refusal).
+    private func visibleRejectedChanges() throws -> [NativeRejectedChange] {
+        guard !accountSwitchInFlight, !isBoundaryStepPending(.rejectedChangesScrub) else { return [] }
+        let entries = try rejectedChangeStore.load(binding: verifiedAccountBinding)
+        guard !entries.isEmpty else { return [] }
+        let queued = pendingMutationKeys()
+        return entries.filter { !queued.contains($0.key) }
+    }
+
+    /// Reloads `rejectedChanges`. An unreadable store (a locked device)
+    /// keeps the list last shown.
+    func refreshRejectedChanges() {
+        guard let visible = try? visibleRejectedChanges() else { return }
+        if rejectedChanges != visible { rejectedChanges = visible }
+    }
+
+    /// Every refused record's key, including one hidden while its Retry is
+    /// queued. The pull keeps these records' local versions. Throws when the
+    /// store cannot be read, so the pull can fail closed.
+    private func rejectedChangeKeys() throws -> Set<String> {
+        Set(try rejectedChangeStore.load(binding: verifiedAccountBinding).map(\.key))
+    }
+
+    /// The name the Cloud Sync list shows for an entry: from the change
+    /// itself, or, for a delete, the record still on this device.
+    func rejectedChangeName(_ change: NativeRejectedChange) -> String? {
+        let table = change.item.table
+        if let name = NativeRejectedChangeDisplay.name(table: table, payload: change.item.payload) { return name }
+        let id = change.item.recordId
+        switch table {
+        case "jobs": return jobs.first { $0.id == id }?.title
+        case "invoices": return invoices.first { $0.id == id }?.number
+        case "customers": return customers.first { $0.id == id }?.name
+        case "expenses": return expenses.first { $0.id == id }?.merchant
+        default: return nil
+        }
+    }
+
+    /// Retry (owner decision D3): sends the refused change again through the
+    /// normal queue, so it coalesces with any newer edit of the record (last
+    /// writer wins) and its entry is hidden while queued. The push files it
+    /// again if the server refuses again; the pass that sends it never sends
+    /// it twice. Returns false when nothing was queued.
+    @discardableResult
+    func retryRejectedChange(id: String) -> Bool {
+        guard !persistenceWritesBlocked,
+              let entry = (try? visibleRejectedChanges())?.first(where: { $0.id == id })
+        else { return false }
+        do {
+            try mutationQueue.enqueue(
+                table: entry.item.table,
+                op: entry.item.op,
+                recordId: entry.item.recordId,
+                payload: entry.item.payload
+            )
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue-retry table=\(entry.item.table)")
+            recordLocalSyncFailure("queue/enqueue-retry")
+            return false
+        }
+        refreshRejectedChanges()
+        scheduleSyncAfterLocalChange()
+        return true
+    }
+
+    static let rejectedChangeUnavailableMessage =
+        "Cloud Sync isn't available right now. Nothing was changed."
+    static let rejectedChangeGoneMessage =
+        "This change is no longer waiting. Nothing was changed."
+    static let rejectedChangeOfflineMessage =
+        "Couldn't load the cloud version. Nothing was changed. Try again when you're online."
+    static let rejectedChangeRaceMessage =
+        "This record changed while its cloud version was loading. Nothing was changed. Try again."
+    static let rejectedChangeCommitMessage =
+        "Couldn't show the cloud version. Nothing was changed."
+    static let rejectedChangeClearMessage =
+        "The cloud version is shown, but this entry couldn't be cleared. Try Discard again."
+
+    /// Discard (owner decision D3): drops the refused change and shows the
+    /// server's current version of the record. One targeted fetch of that
+    /// record (not a cursor rewind): the server's row replaces this device's
+    /// copy, and a record the server does not have (a refused insert) is
+    /// removed from this device. Nothing is queued. Returns nil on success,
+    /// or a message when nothing was changed.
+    func discardRejectedChange(id: String) async -> String? {
+        guard ensurePersistenceWritable() else { return Self.persistenceReadOnlyMessage }
+        guard let binding = verifiedAccountBinding, let subject = authenticatedUserSubject
+        else { return Self.rejectedChangeUnavailableMessage }
+        let entry: NativeRejectedChange
+        do {
+            guard let found = try visibleRejectedChanges().first(where: { $0.id == id }) else {
+                return Self.rejectedChangeGoneMessage
+            }
+            entry = found
+        } catch {
+            return Self.rejectedChangeUnavailableMessage
+        }
+        guard let fetcher = serverRecordFetcherIfConfigured(),
+              let credentials = currentSyncCredentials(), credentials.subject == subject
+        else { return Self.rejectedChangeUnavailableMessage }
+        let table = entry.item.table, recordId = entry.item.recordId
+
+        let record: NativeServerRecord
+        do {
+            record = try await fetcher.fetchServerRecord(
+                table: table, recordId: recordId,
+                sessionBytes: credentials.sessionBytes, expectedUserSubject: subject
+            )
+        } catch NativeInitialSyncError.rejectedSession {
+            guard await refreshSyncSession(),
+                  let fresh = currentSyncCredentials(), fresh.subject == subject,
+                  subject == authenticatedUserSubject
+            else { return Self.rejectedChangeOfflineMessage }
+            do {
+                record = try await fetcher.fetchServerRecord(
+                    table: table, recordId: recordId,
+                    sessionBytes: fresh.sessionBytes, expectedUserSubject: subject
+                )
+            } catch {
+                return Self.rejectedChangeOfflineMessage
+            }
+        } catch {
+            return Self.rejectedChangeOfflineMessage
+        }
+
+        // After the await: the same owner, a writable workspace, and the
+        // same entry, still not superseded by a queued change.
+        guard subject == authenticatedUserSubject, binding == verifiedAccountBinding,
+              !persistenceWritesBlocked,
+              (try? visibleRejectedChanges())?.first(where: { $0.id == id }) == entry
+        else { return Self.rejectedChangeRaceMessage }
+        let previous = snapshot
+        do {
+            let next = try fetcher.applyingServerRecord(record, table: table, recordId: recordId, to: snapshot)
+            try apply(next)
+            try repository.save(snapshot)
+        } catch {
+            try? apply(previous)
+            return Self.rejectedChangeCommitMessage
+        }
+        // Fix round 2 (G5) rule: a settings row from the server can carry a
+        // Square token; heal it locally like after a pull.
+        if table == "settings" { scrubLegacySquareToken() }
+        do {
+            try rejectedChangeStore.remove(key: id, binding: binding)
+        } catch {
+            refreshRejectedChanges()
+            return Self.rejectedChangeClearMessage
+        }
+        refreshRejectedChanges()
+        return nil
+    }
+
+    /// Discard's one-record fetch: the injected initial-sync service when it
+    /// supports it (tests inject one), otherwise the configured Supabase service.
+    private func serverRecordFetcherIfConfigured() -> (any NativeServerRecordFetching)? {
+        if let injected = initialSyncService as? any NativeServerRecordFetching { return injected }
+        guard let supabaseURL = BuildEnvironment.supabaseURL,
+              let publishableKey = BuildEnvironment.supabasePublishableKey
+        else { return nil }
+        return NativeSupabaseInitialSyncService(supabaseURL: supabaseURL, publishableKey: publishableKey)
+    }
+
+    /// Removes the rejected-change store at an account boundary that does not
+    /// run the full scrub (account switch, password-recovery exits), under
+    /// the durable `.rejectedChangesScrub` marker like the AI-key wipe: a
+    /// failure leaves it pending, nothing is listed or filed meanwhile, and
+    /// the retry runs at launch, on activation, before a sign-in and from
+    /// `retryAccountScrub`. Counted and logged without data.
+    private func scrubRejectedChangesForAccountBoundary() {
+        do {
+            try runDurableBoundaryStep(.rejectedChangesScrub) {
+                try rejectedChangeStore.removeAll()
+            }
+        } catch {
+            rejectedChangeScrubFailureCount = min(Self.rejectedChangeCounterCap, rejectedChangeScrubFailureCount + 1)
+            print("TradeReadyRejectedChanges stage=boundary-scrub")
+        }
+        if !rejectedChanges.isEmpty { rejectedChanges = [] }
+    }
+
     // MARK: 11.12 Finding D: rebase a pulled delta onto the live snapshot
 
     /// The keys (`<table>/<recordId>`, the queue's `MutationKey`) of every
@@ -7275,18 +7570,24 @@ final class AppStore: ObservableObject {
     /// other record keeps its live state, including a pending delete and a
     /// local create. Records keep their live order; rows only the pull has
     /// (new remote rows) follow in pulled order. With nothing protected or
-    /// changed locally in a table, that table is `pulled` exactly.
+    /// changed locally in a table, that table is `pulled` exactly. A record
+    /// kept for a key in `unheldKeys` (12.00b.1: still queued at commit, or
+    /// refused) never holds its table's watermark.
     static func rebasePulledDelta(
         base: Canonical.Snapshot,
         pulled: Canonical.Snapshot,
         live: Canonical.Snapshot,
-        protectedKeys: Set<String>
+        protectedKeys: Set<String>,
+        unheldKeys: Set<String> = []
     ) throws -> PulledDeltaRebase {
         var result = pulled
         var held = Set<String>()
         let b = base.payload, p = pulled.payload, l = live.payload
         func rebase<R: Encodable>(_ table: String, _ id: KeyPath<R, String>, _ base: [R]?, _ pulled: [R]?, _ live: [R]?) throws -> [R]?? {
-            let merged = try rebaseRecords(table: table, id: id, base: base, pulled: pulled, live: live, protectedKeys: protectedKeys)
+            let merged = try rebaseRecords(
+                table: table, id: id, base: base, pulled: pulled, live: live,
+                protectedKeys: protectedKeys, unheldKeys: unheldKeys
+            )
             if merged.holdsCursor { held.insert(table) }
             return merged.records
         }
@@ -7331,7 +7632,8 @@ final class AppStore: ObservableObject {
         base: [R]?,
         pulled: [R]?,
         live: [R]?,
-        protectedKeys: Set<String>
+        protectedKeys: Set<String>,
+        unheldKeys: Set<String> = []
     ) throws -> (records: [R]??, holdsCursor: Bool) {
         let prefix = "\(table)/"
         if !protectedKeys.contains(where: { $0.hasPrefix(prefix) }), try sameEncoding(live, base) {
@@ -7348,6 +7650,7 @@ final class AppStore: ObservableObject {
         // A kept local record over a server row this pull fetched: hold the cursor.
         var holdsCursor = false
         func keptOverServer(_ key: String) throws {
+            guard !unheldKeys.contains(prefix + key) else { return }
             if try !sameEncoding(pulledByID[key], baseByID[key]), try !sameEncoding(pulledByID[key], liveByID[key]) {
                 holdsCursor = true
             }
@@ -10015,6 +10318,9 @@ extension AppStore {
         let passEnded = syncStatus.isSyncing && !status.isSyncing
         syncStatus = status
         guard passEnded else { return }
+        // Phase 12 (12.00b.1): the Cloud Sync list follows each pass (a
+        // change queued for a refused record hides its entry).
+        refreshRejectedChanges()
         let code = status.diagnosticCode
         switch status.lastOutcome {
         case .failed(let remaining)?, .partial(_, let remaining, _)?:
@@ -10022,8 +10328,15 @@ extension AppStore {
                 ["code": code ?? "push/unavailable", "message": "Sync push left changes queued"],
                 context: ["context": "pushQueue", "count": remaining]
             )
+            // Phase 12 (12.00b.1): the pull also runs after a partial or
+            // failed push now (RN `syncIfOnline`: `pushQueue`, then
+            // `pullRemote`, each reporting its own failure).
+            guard let pull = status.lastPullResult, pull.state == .failed || pull.state == .partial else { return }
+            reportError(
+                ["code": pull.diagnosticCode ?? "pull/unavailable", "message": "Sync pull did not complete"],
+                context: ["context": "pullRemote"]
+            )
         case .completed?:
-            // The pull runs only after a completed push with an empty queue.
             guard let pull = status.lastPullResult, pull.state == .failed || pull.state == .partial else { return }
             reportError(
                 ["code": code ?? pull.diagnosticCode ?? "pull/unavailable", "message": "Sync pull did not complete"],
@@ -10679,6 +10992,14 @@ extension AppStore {
     /// never calls this.
     func testApplySyncStatus(_ status: NativeSyncStatus) {
         applySyncStatus(status)
+    }
+
+    /// Test-only (12.00b.1): the rejected-change settle step
+    /// `syncCoordinatorIfConfigured` hands the coordinator. The poor-network
+    /// harness builds that same coordinator around it. Production never
+    /// calls this.
+    func testSettleRejectedChanges(_ settlement: NativeMutationPushSettlement) throws {
+        try settleRejectedChanges(settlement)
     }
 
     /// Test-only (task 11.05): runs the real widget/Siri replay trigger body

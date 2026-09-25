@@ -76,9 +76,42 @@ protocol NativeMutationPushing {
         expectedUserSubject: String,
         items: [Canonical.MutationItem]
     ) async throws -> NativeMutationPushOutcome
+
+    /// Phase 12 (12.00b.1): the push that follows one successful session
+    /// refresh in the same pass passes `afterAuthRefresh: true`, so a 403
+    /// that repeats is refused instead of retried.
+    func push(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        items: [Canonical.MutationItem],
+        afterAuthRefresh: Bool
+    ) async throws -> NativeMutationPushOutcome
+}
+
+extension NativeMutationPushing {
+    func push(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        items: [Canonical.MutationItem],
+        afterAuthRefresh: Bool
+    ) async throws -> NativeMutationPushOutcome {
+        try await push(sessionBytes: sessionBytes, expectedUserSubject: expectedUserSubject, items: items)
+    }
 }
 
 extension NativeSupabaseMutationPushService: NativeMutationPushing {}
+
+/// Phase 12 (12.00b.1, I2): what one push attempt did to the queue, handed
+/// to the rejected-change store before the queue commits the attempt.
+struct NativeMutationPushSettlement: Equatable {
+    /// The changes the server refused, each still queued unchanged: they move
+    /// to the rejected-change store.
+    var rejected: [NativeMutationRejection]
+    /// Every other change the attempt took off the queue (accepted, or
+    /// dropped as unsendable). A set-aside change for the same record is
+    /// superseded by it.
+    var cleared: [Canonical.MutationItem]
+}
 
 /// Connectivity gate. The coordinator never pushes while unreachable, so an
 /// offline device retains its queue instead of burning retries and backoff.
@@ -110,6 +143,7 @@ final class NativeSyncCoordinator {
     private let reachability: any NativeSyncReachability
     private let credentialsProvider: () async -> NativeSyncCredentials?
     private let refreshSession: () async -> Bool
+    private let settleRejected: ((NativeMutationPushSettlement) throws -> Void)?
     private let pull: (() async -> NativeSyncPullResult)?
     private let statusChanged: (NativeSyncStatus) -> Void
     private let now: () -> Date
@@ -134,6 +168,7 @@ final class NativeSyncCoordinator {
         reachability: any NativeSyncReachability,
         credentialsProvider: @escaping () async -> NativeSyncCredentials?,
         refreshSession: @escaping () async -> Bool = { false },
+        settleRejected: ((NativeMutationPushSettlement) throws -> Void)? = nil,
         pull: (() async -> NativeSyncPullResult)? = nil,
         statusChanged: @escaping (NativeSyncStatus) -> Void = { _ in },
         now: @escaping () -> Date = Date.init,
@@ -145,6 +180,7 @@ final class NativeSyncCoordinator {
         self.reachability = reachability
         self.credentialsProvider = credentialsProvider
         self.refreshSession = refreshSession
+        self.settleRejected = settleRejected
         self.pull = pull
         self.statusChanged = statusChanged
         self.now = now
@@ -283,11 +319,16 @@ final class NativeSyncCoordinator {
                 return record(.failed(remaining: queue.load().count))
             }
         }
-        // Never let a remote pull overwrite canonical records that still have
-        // a local mutation waiting to reach the server. This also keeps a
-        // delete immediately followed by undo local-first: the replacement
-        // upsert runs in the coalesced pass before any tombstone can be pulled.
-        guard queue.load().isEmpty else { return outcome }
+        // Phase 12 (12.00b.1, I2; contract §17.2): pull after every push pass
+        // that reached per-item results, even with changes still queued, as
+        // RN's `syncIfOnline` does (`utils/sync.ts` 316-326: `pushQueue`,
+        // then `pullRemote`). The pull never overwrites a record with a queued
+        // change: the 11.12 commit keeps it (`AppStore.rebasePulledDelta`,
+        // "pending wins"), which also keeps a delete followed by undo
+        // local-first. So one change that keeps failing no longer holds back
+        // every other record's inbound updates. A thrown push (configuration,
+        // session, environment) returned above and skips the pull, as RN's
+        // `try` block does.
         // Pull rides the same reachability/auth/backoff gates. It owns its own
         // commit and refresh, so its result does not alter the push outcome or
         // the push-driven backoff.
@@ -303,7 +344,9 @@ final class NativeSyncCoordinator {
                     cancelRetry()
                 }
             case .partial, .failed:
-                diagnosticCode = result.diagnosticCode ?? "pull/unavailable"
+                // The first code of the pass wins, like the transports' own
+                // diagnostics: a push failure's code is not replaced.
+                if diagnosticCode == nil { diagnosticCode = result.diagnosticCode ?? "pull/unavailable" }
                 if nextEarliestAttempt == nil { registerFailure() }
             case .skipped:
                 break
@@ -324,9 +367,11 @@ final class NativeSyncCoordinator {
         var outcome = try await push.push(
             sessionBytes: credentials.sessionBytes,
             expectedUserSubject: credentials.subject,
-            items: items
+            items: items,
+            afterAuthRefresh: false
         )
         guard generation == accountGeneration else { throw SyncInvalidation.accountChanged }
+        outcome = settle(outcome, startedItems: items)
         var authRefreshed = false
         var attemptedRemainder = outcome.remaining
         var queuedRemainder: [Canonical.MutationItem]
@@ -343,12 +388,16 @@ final class NativeSyncCoordinator {
             let retryItems = outcome.remaining.filter { currentItems.contains($0) }
             if didRefresh, let fresh, !retryItems.isEmpty {
                 authRefreshed = true
+                // A 403 on this push, after one successful refresh, is a
+                // refusal (12.00b.1); nothing is pushed a third time.
                 outcome = try await push.push(
                     sessionBytes: fresh.sessionBytes,
                     expectedUserSubject: fresh.subject,
-                    items: retryItems
+                    items: retryItems,
+                    afterAuthRefresh: true
                 )
                 guard generation == accountGeneration else { throw SyncInvalidation.accountChanged }
+                outcome = settle(outcome, startedItems: retryItems)
                 attemptedRemainder = outcome.remaining
                 queuedRemainder = try queue.reconcilePush(
                     startedItems: retryItems,
@@ -381,6 +430,53 @@ final class NativeSyncCoordinator {
             remaining: queuedRemainder.count,
             authRefreshed: authRefreshed
         ))
+    }
+
+    /// Phase 12 (12.00b.1, I2): hands one attempt to the rejected-change
+    /// store before the queue commits it. A refused change still queued
+    /// unchanged is set aside; one replaced while it was on the wire is
+    /// superseded (the newer change stays queued and is pushed on its own).
+    /// If the store cannot take the attempt, nothing from it is
+    /// acknowledged: every started change stays queued (each write is
+    /// idempotent and is sent again next pass), so a refusal is never lost
+    /// and no set-aside entry outlives a change that replaced it. With no
+    /// settle step configured, a refusal stays queued.
+    private func settle(
+        _ outcome: NativeMutationPushOutcome,
+        startedItems: [Canonical.MutationItem]
+    ) -> NativeMutationPushOutcome {
+        var result = outcome
+        let refusedItems = outcome.rejected.map(\.item)
+        let current = queue.load()
+        let rejected = outcome.rejected.filter { current.contains($0.item) }
+        let cleared = startedItems.filter { !outcome.remaining.contains($0) && !refusedItems.contains($0) }
+        result.rejected = rejected
+        guard !rejected.isEmpty || !cleared.isEmpty else { return result }
+        guard let settleRejected else {
+            if !rejected.isEmpty { keepQueued(rejected.map(\.item), in: &result, startedItems: startedItems) }
+            return result
+        }
+        do {
+            try settleRejected(NativeMutationPushSettlement(rejected: rejected, cleared: cleared))
+        } catch {
+            keepQueued(startedItems, in: &result, startedItems: startedItems)
+            result.lastDiagnosticCode = "rejected-store/unavailable"
+        }
+        return result
+    }
+
+    /// Returns `items` to the attempt's remainder, in queue order.
+    private func keepQueued(
+        _ items: [Canonical.MutationItem],
+        in outcome: inout NativeMutationPushOutcome,
+        startedItems: [Canonical.MutationItem]
+    ) {
+        let kept = startedItems.filter { outcome.remaining.contains($0) || items.contains($0) }
+        outcome.remaining = kept
+        outcome.rejected.removeAll { items.contains($0.item) }
+        outcome.failedTables = kept.reduce(into: [String]()) { tables, item in
+            if !tables.contains(item.table) { tables.append(item.table) }
+        }
     }
 
     private func registerFailure() {

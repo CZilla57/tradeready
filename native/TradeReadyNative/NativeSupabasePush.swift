@@ -35,6 +35,11 @@ struct NativeMutationPushOutcome: Equatable {
     var failedTables: [String]
     var authRejected: Bool
     var lastDiagnosticCode: String?
+    /// Phase 12 (12.00b.1, I2): changes the server refused (a non-auth 4xx,
+    /// or a 403 after one refresh). They are not in `remaining`: the
+    /// coordinator moves them to the rejected-change store before the queue
+    /// drops them, and keeps them queued if it cannot.
+    var rejected: [NativeMutationRejection] = []
 }
 
 /// Phase 4 write path for the existing JSON-blob sync contract.
@@ -93,6 +98,23 @@ struct NativeSupabaseMutationPushService {
         expectedUserSubject: String,
         items: [Canonical.MutationItem]
     ) async throws -> NativeMutationPushOutcome {
+        try await push(
+            sessionBytes: sessionBytes,
+            expectedUserSubject: expectedUserSubject,
+            items: items,
+            afterAuthRefresh: false
+        )
+    }
+
+    /// `afterAuthRefresh` marks the coordinator's retry after one successful
+    /// session refresh in the same pass: a 403 then is a rejection, not
+    /// another auth failure (`NativeMutationPushClassification`).
+    func push(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        items: [Canonical.MutationItem],
+        afterAuthRefresh: Bool
+    ) async throws -> NativeMutationPushOutcome {
         Self.clearDiagnostic()
         guard allowsWrites else { throw NativeMutationPushError.productionWriteBlocked }
         guard supabaseURL.scheme?.lowercased() == "https", supabaseURL.host != nil,
@@ -115,6 +137,7 @@ struct NativeSupabaseMutationPushService {
         var pushed = 0
         var failedTables: [String] = []
         var authRejected = false
+        var rejected: [NativeMutationRejection] = []
 
         for item in items {
             let request: URLRequest
@@ -134,14 +157,24 @@ struct NativeSupabaseMutationPushService {
                 continue
             }
 
-            switch await send(request, table: item.table) {
-            case .success:
+            let (result, response) = await send(request, afterAuthRefresh: afterAuthRefresh)
+            switch result {
+            case .accepted:
                 pushed += 1
             case .authRejected:
+                Self.reportResponse(response, table: item.table)
                 authRejected = true
                 remaining.append(item)
                 Self.appendUnique(item.table, to: &failedTables)
+            case .rejected:
+                // Phase 12 (12.00b.1, I2): the server will not take this
+                // change on a retry. It leaves the remainder, so it can no
+                // longer hold the queue; the coordinator sets it aside.
+                guard case let .http(statusCode) = response else { continue }
+                Self.reportDiagnostic(stage: "rejected", table: item.table, statusCode: statusCode)
+                rejected.append(NativeMutationRejection(item: item, statusCode: statusCode))
             case .transient:
+                Self.reportResponse(response, table: item.table)
                 remaining.append(item)
                 Self.appendUnique(item.table, to: &failedTables)
             }
@@ -152,35 +185,36 @@ struct NativeSupabaseMutationPushService {
             pushedCount: pushed,
             failedTables: failedTables,
             authRejected: authRejected,
-            lastDiagnosticCode: Self.lastDiagnosticCode
+            lastDiagnosticCode: Self.lastDiagnosticCode,
+            rejected: rejected
         )
     }
 
-    private enum SendResult {
-        case success
-        case authRejected
-        case transient
+    private func send(
+        _ request: URLRequest,
+        afterAuthRefresh: Bool
+    ) async -> (NativeMutationPushResponseClass, NativeMutationPushResponse) {
+        let response: NativeMutationPushResponse
+        do {
+            let (_, urlResponse) = try await loader.data(for: request)
+            if let http = urlResponse as? HTTPURLResponse {
+                response = .http(statusCode: http.statusCode)
+            } else {
+                response = .nonHTTP
+            }
+        } catch {
+            response = .transportError
+        }
+        return (NativeMutationPushClassification.classify(response, afterAuthRefresh: afterAuthRefresh), response)
     }
 
-    private func send(_ request: URLRequest, table: String) async -> SendResult {
-        let data: Data
-        let response: URLResponse
-        do { (data, response) = try await loader.data(for: request) }
-        catch {
-            Self.reportDiagnostic(stage: "transport", table: table)
-            return .transient
+    /// The bounded diagnostic for a failed (auth or transient) response.
+    private static func reportResponse(_ response: NativeMutationPushResponse, table: String) {
+        switch response {
+        case .transportError: reportDiagnostic(stage: "transport", table: table)
+        case .nonHTTP: reportDiagnostic(stage: "non-http-response", table: table)
+        case let .http(statusCode): reportDiagnostic(stage: "http-response", table: table, statusCode: statusCode)
         }
-        _ = data
-        guard let http = response as? HTTPURLResponse else {
-            Self.reportDiagnostic(stage: "non-http-response", table: table)
-            return .transient
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            Self.reportDiagnostic(stage: "http-response", table: table, statusCode: http.statusCode)
-            if http.statusCode == 401 || http.statusCode == 403 { return .authRejected }
-            return .transient
-        }
-        return .success
     }
 
     private func buildRequest(

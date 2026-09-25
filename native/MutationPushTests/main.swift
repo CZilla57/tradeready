@@ -264,6 +264,92 @@ struct MutationPushTests {
             expect(true, "a session without an access token fails closed")
         }
 
+        // Phase 12 (12.00b.1, I2): the status → class table, one pure function.
+        // A 403 is rejected only on the push that follows one successful
+        // refresh in the same pass; 408, 425, 429, 5xx, 3xx and every
+        // non-response stay transient.
+        typealias Class = NativeMutationPushResponseClass
+        let classTable: [(NativeMutationPushResponse, Bool, Class)] = [
+            (.http(statusCode: 200), false, .accepted), (.http(statusCode: 201), false, .accepted),
+            (.http(statusCode: 204), true, .accepted), (.http(statusCode: 299), false, .accepted),
+            (.http(statusCode: 301), false, .transient), (.http(statusCode: 304), true, .transient),
+            (.http(statusCode: 400), false, .rejected), (.http(statusCode: 400), true, .rejected),
+            (.http(statusCode: 401), false, .authRejected), (.http(statusCode: 401), true, .authRejected),
+            (.http(statusCode: 403), false, .authRejected), (.http(statusCode: 403), true, .rejected),
+            (.http(statusCode: 404), false, .rejected), (.http(statusCode: 409), false, .rejected),
+            (.http(statusCode: 413), false, .rejected), (.http(statusCode: 422), false, .rejected),
+            (.http(statusCode: 422), true, .rejected), (.http(statusCode: 405), false, .rejected),
+            (.http(statusCode: 408), false, .transient), (.http(statusCode: 408), true, .transient),
+            (.http(statusCode: 425), false, .transient), (.http(statusCode: 429), false, .transient),
+            (.http(statusCode: 429), true, .transient),
+            (.http(statusCode: 500), false, .transient), (.http(statusCode: 502), true, .transient),
+            (.http(statusCode: 503), false, .transient), (.http(statusCode: 504), false, .transient),
+            (.http(statusCode: 100), false, .transient), (.http(statusCode: 600), false, .transient),
+            (.transportError, false, .transient), (.transportError, true, .transient),
+            (.nonHTTP, false, .transient), (.nonHTTP, true, .transient),
+        ]
+        for (response, afterRefresh, expected) in classTable {
+            let actual = NativeMutationPushClassification.classify(response, afterAuthRefresh: afterRefresh)
+            expect(actual == expected, "classify \(response) afterAuthRefresh=\(afterRefresh) is \(expected) (got \(actual))")
+        }
+
+        // A rejected change leaves the remainder: it is returned once, with its
+        // status, beside the pushed and retained items. It is not a failed
+        // table, and the diagnostic is the bounded rejected/<table>/<status>.
+        let rejectLoader = PushLoader { request in
+            switch table(request) {
+            case "invoices": 422
+            case "customers": 503
+            default: 201
+            }
+        }
+        let invoiceItem = item("invoices", .upsert, "inv1", .object(["id": .string("inv1")]))
+        let rejectOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: rejectLoader
+        ).push(
+            sessionBytes: session, expectedUserSubject: subject,
+            items: [
+                item("jobs", .upsert, "j1", jobBlob("j1")),
+                invoiceItem,
+                item("customers", .upsert, "c1", .object(["id": .string("c1")])),
+            ]
+        )
+        expect(rejectOutcome.pushedCount == 1, "rejection: the accepted item is pushed")
+        expect(rejectOutcome.rejected == [NativeMutationRejection(item: invoiceItem, statusCode: 422)],
+               "rejection: the refused item is returned once with its status")
+        expect(rejectOutcome.remaining.map(\.recordId) == ["c1"],
+               "rejection: only the transient item is retained in the remainder")
+        expect(rejectOutcome.failedTables == ["customers"] && !rejectOutcome.authRejected,
+               "rejection: a refused table is not a failed table and never flags auth")
+        expect(rejectOutcome.lastDiagnosticCode == "rejected/invoices/422",
+               "rejection: the bounded rejected/<table>/<status> diagnostic")
+
+        // The first 403 keeps the auth path; the same 403 on the push after one
+        // refresh (afterAuthRefresh) is a rejection.
+        let forbiddenLoader = PushLoader { _ in 403 }
+        let forbiddenService = NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: forbiddenLoader
+        )
+        let jobItem = item("jobs", .upsert, "j1", jobBlob("j1"))
+        let firstForbidden = try await forbiddenService.push(
+            sessionBytes: session, expectedUserSubject: subject, items: [jobItem]
+        )
+        expect(firstForbidden.authRejected && firstForbidden.remaining == [jobItem] && firstForbidden.rejected.isEmpty,
+               "403: the first 403 keeps the auth-refresh path")
+        let repeatedForbidden = try await forbiddenService.push(
+            sessionBytes: session, expectedUserSubject: subject, items: [jobItem], afterAuthRefresh: true
+        )
+        expect(!repeatedForbidden.authRejected && repeatedForbidden.remaining.isEmpty
+               && repeatedForbidden.rejected == [NativeMutationRejection(item: jobItem, statusCode: 403)],
+               "403: a 403 that repeats after one refresh is a rejection")
+        expect(repeatedForbidden.lastDiagnosticCode == "rejected/jobs/403",
+               "403: the repeated 403 reports rejected/jobs/403")
+        let repeatedUnauthorized = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: PushLoader { _ in 401 }
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [jobItem], afterAuthRefresh: true)
+        expect(repeatedUnauthorized.authRejected && repeatedUnauthorized.rejected.isEmpty,
+               "401: a 401 after a refresh stays on the auth path (the coordinator refreshes once per pass)")
+
         if failures == 0 { print("PASS: native mutation push tests") }
         else { exit(1) }
     }
