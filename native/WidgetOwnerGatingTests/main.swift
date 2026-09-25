@@ -289,14 +289,15 @@ private func makeStore(
     _ workspace: Workspace,
     suite: TempSuite,
     reloader: RecordingReloader = RecordingReloader(),
-    subscription: SubscriptionStub? = nil,
+    subscription: (any NativeSubscriptionServing)? = nil,
+    scrubber: NativeAppGroupAccountScrubber? = nil,
     installMirror: Bool = true
 ) -> AppStore {
     let store = AppStore(
         fileURL: workspace.fileURL,
         seedIfMissing: false,
         widgetActionReplayTransport: suite.transport(claims: workspace.claims),
-        appGroupAccountScrubber: suite.scrubber,
+        appGroupAccountScrubber: scrubber ?? suite.scrubber,
         pendingOpenURLConsumer: suite.pendingOpenURLConsumer,
         subscriptionService: subscription ?? SubscriptionStub(),
         widgetTimelineReloader: reloader
@@ -1044,6 +1045,157 @@ private func testUseAnotherAccountScrubsWidgetState() async throws {
                 "the local workspace is retained (only the widget/Siri surface is an account boundary here)")
 }
 
+// MARK: - 8c. Use another account: a failed App Group wipe fails closed (final review 1a)
+
+/// A scrubber whose lock sits under a regular file, so taking it fails until
+/// `unblock()` removes that file (the same lock path then works).
+private struct BlockableScrubber {
+    let root = tempDirectory("blocked-lock")
+    var blocker: URL { root.appendingPathComponent("blocker") }
+    func scrubber(_ suite: TempSuite) -> NativeAppGroupAccountScrubber {
+        FileManager.default.createFile(atPath: blocker.path, contents: Data("x".utf8))
+        return NativeAppGroupAccountScrubber(
+            suiteName: suite.name, defaults: suite.defaults,
+            lockFile: blocker.appendingPathComponent(WidgetAppGroup.lockFileName)
+        )
+    }
+    func block() {
+        // A successful scrub created the lock's directory at this path.
+        try? FileManager.default.removeItem(at: blocker)
+        FileManager.default.createFile(atPath: blocker.path, contents: Data("x".utf8))
+    }
+    func unblock() { try? FileManager.default.removeItem(at: blocker) }
+    func cleanUp() { try? FileManager.default.removeItem(at: root) }
+}
+
+@MainActor
+private func testUseAnotherAccountScrubFailureFailsClosed() async throws {
+    let suite = TempSuite(), workspace = Workspace(), blockable = BlockableScrubber()
+    defer { suite.cleanUp(); workspace.cleanUp(); blockable.cleanUp() }
+    let marker = workspace.fileURL.appendingPathExtension("widget-scrub-pending")
+    try workspace.write(jobs: [job("j1", ["customerName": "Alice (A)"])])
+    try workspace.bind(bindingA)
+    let reloader = RecordingReloader()
+    let scrubber = blockable.scrubber(suite)
+    let store = makeStore(workspace, suite: suite, reloader: reloader, scrubber: scrubber)
+    store.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+    await settle()
+    expect(WidgetSnapshot.load(from: suite.defaults) != nil, "sanity: A's snapshot is mirrored")
+
+    store.scheduleBookingTestSeedIdentityActivator()
+    await store.useAnotherAccount {}
+    expectEqual(store.authenticationGateState, .signedOut, "sanity: the switch reached its success path")
+    expectEqual(store.widgetActionReplayDiagnostics.accountSwitchScrubFailureCount, 1, "the failed wipe is counted")
+    expect(FileManager.default.fileExists(atPath: marker.path), "1a: the failed wipe leaves a durable pending marker")
+
+    // B signs in on the same (retained) workspace. The wipe is still pending,
+    // so nothing may be mirrored over A's stale App Group state.
+    try workspace.bind(bindingB)
+    store.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
+    await settle()
+    expectEqual(store.derivedStatePublishBinding, bindingB, "sanity: O = B")
+    expect(store.widgetMirrorOwnerBinding == nil, "1a: while the wipe is pending the mirror has no owner")
+    expectEqual(store.refreshWidgetMirror(force: true), .skippedNoOwner, "1a: …and writes nothing")
+
+    // A relaunch keeps it pending while the container is still unavailable.
+    let relaunched = makeStore(workspace, suite: suite, reloader: RecordingReloader(), scrubber: scrubber)
+    relaunched.testSeedNativeSignedInOwner(subject: "user-b", binding: bindingB)
+    expect(relaunched.widgetMirrorOwnerBinding == nil, "1a: the pending wipe survives a relaunch")
+
+    // The retry succeeds once the container is available again.
+    blockable.unblock()
+    let reloadsBefore = reloader.count
+    store.retryAccountScrub()
+    expect(!FileManager.default.fileExists(atPath: marker.path), "1a: a successful retry clears the marker")
+    expect(reloader.count > reloadsBefore, "1a: timelines are reloaded after the successful retry")
+    expect(suite.isEmpty, "1a: A's App Group state is gone")
+    expectEqual(store.widgetMirrorOwnerBinding, bindingB, "1a: the mirror reopens for B")
+
+    // Launch retry: pending at launch with the container available → wiped.
+    blockable.block()
+    try workspace.bind(bindingA)
+    store.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+    await store.useAnotherAccount {}
+    expect(FileManager.default.fileExists(atPath: marker.path), "1a: sanity: pending again")
+    blockable.unblock()
+    let launchReloader = RecordingReloader()
+    let launched = makeStore(workspace, suite: suite, reloader: launchReloader, scrubber: scrubber)
+    expect(!FileManager.default.fileExists(atPath: marker.path), "1a: the launch retry clears the marker")
+    expect(launchReloader.count > 0, "1a: the launch retry reloads timelines")
+    _ = launched
+
+    // Sign-in retry: pending when an interactive sign-in finishes → wiped first.
+    blockable.block()
+    store.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+    await store.useAnotherAccount {}
+    expect(FileManager.default.fileExists(atPath: marker.path), "1a: sanity: pending once more")
+    blockable.unblock()
+    try workspace.bind(bindingB)
+    store.testFinishInteractiveSignIn(subject: "user-b", binding: bindingB, email: "b@example.test", method: .password)
+    expect(!FileManager.default.fileExists(atPath: marker.path), "1a: the sign-in retry clears the marker")
+}
+
+// MARK: - 8d. An account switch is exclusive (final review 1c)
+
+@MainActor
+private final class HoldingSubscription: NativeSubscriptionServing {
+    private var held: CheckedContinuation<Void, Never>?
+    private var holdNext = true
+    private(set) var isHolding = false
+    func prepare(appUserID: String, apiKey: String, entitlementID: String) async throws -> NativeSubscriptionEntitlement {
+        .init(isActive: false, isTrialing: false)
+    }
+    func loadOffering() async throws -> NativeSubscriptionOffering { .init(packages: []) }
+    func purchase(packageID: String) async throws -> NativeSubscriptionPurchaseResult {
+        .init(entitlement: .init(isActive: false, isTrialing: false), userCancelled: false)
+    }
+    func restore() async throws -> NativeSubscriptionEntitlement { .init(isActive: false, isTrialing: false) }
+    /// The first `logOut` suspends until `release()`; later ones return.
+    func logOut() async {
+        guard holdNext else { return }
+        holdNext = false
+        isHolding = true
+        await withCheckedContinuation { held = $0 }
+        isHolding = false
+    }
+    func release() { held?.resume(); held = nil }
+}
+
+@MainActor
+private func testAccountSwitchIsExclusive() async throws {
+    let suite = TempSuite(), workspace = Workspace()
+    defer { suite.cleanUp(); workspace.cleanUp() }
+    try workspace.write(jobs: [job("j1")])
+    try workspace.bind(bindingA)
+    let subscription = HoldingSubscription()
+    let store = makeStore(workspace, suite: suite, subscription: subscription)
+    store.testSeedNativeSignedInOwner(subject: "user-a", binding: bindingA)
+    store.scheduleBookingTestSeedIdentityActivator()
+    await settle()
+    var firstClears = 0, secondClears = 0
+    let first = Task { await store.useAnotherAccount { firstClears += 1 } }
+    for _ in 0..<500 where !subscription.isHolding { await Task.yield() }
+    expect(subscription.isHolding, "1c: sanity: the first switch is suspended in logOut")
+
+    await store.useAnotherAccount { secondClears += 1 }
+    expectEqual(secondClears, 0, "1c: a second switch while the first is suspended is a no-op")
+    expectEqual(store.authenticationGateState, .signedIn(email: nil), "1c: …it tears nothing down mid-switch")
+    expect(store.widgetActionReplayBinding == nil, "1c: the first switch's boundary still holds")
+    do {
+        try await store.signIn(email: "b@example.test", password: "password-b")
+        expect(false, "1c: signIn during a switch is refused")
+    } catch NativeSupabaseAuthError.rejected(let message) {
+        expectEqual(message, "Another sign-in request is still running.", "1c: signIn during a switch is refused")
+    } catch {
+        expect(false, "1c: signIn during a switch is refused before any provider call (got \(error))")
+    }
+
+    subscription.release()
+    await first.value
+    expectEqual(firstClears, 1, "1c: the first switch completes its own exit")
+    expectEqual(store.authenticationGateState, .signedOut, "1c: the first switch completes")
+}
+
 // MARK: - 9. The write gate (brief item 1, §3.1)
 
 @MainActor
@@ -1126,8 +1278,8 @@ private func testOneLock() {
     let appStore = source("AppStore.swift")
     expectEqual(appStore.components(separatedBy: "appGroupAccountScrubber.scrub()").count - 1, 1,
                 "the App Group wipe is called from exactly one place (scrubWidgetAccountState)")
-    expectEqual(appStore.components(separatedBy: "try scrubWidgetAccountState()").count - 1, 4,
-                "every scrub path (launch recovery, retry, sign-out/deletion, use another account) goes through it")
+    expectEqual(appStore.components(separatedBy: "try scrubWidgetAccountState()").count - 1, 5,
+                "every scrub path (launch recovery, retry, sign-out/deletion, use another account, pending-step retry) goes through it")
     expectEqual(appStore.components(separatedBy: "reloadAllTimelines()").count - 1, 1,
                 "timelines are reloaded from exactly one place (right after the wipe)")
     expect(!appStore.contains("guard isMigratedLocalOwnerVerified,\n              let accountBinding = migratedAccountBinding"),
@@ -1188,6 +1340,8 @@ struct WidgetOwnerGatingTests {
         await runAsync("stale/missing records", testStaleAndMissingRecordsFailClosed)
         await runAsync("deep link while signed out", testDeepLinkWhileSignedOut)
         await runAsync("use another account", testUseAnotherAccountScrubsWidgetState)
+        await runAsync("use another account scrub failure", testUseAnotherAccountScrubFailureFailsClosed)
+        await runAsync("account switch is exclusive", testAccountSwitchIsExclusive)
         await runAsync("write gate", testWriteGate)
         testOneLock()
         for gap in knownGaps { print("KNOWN GAP (not asserted; handed off): \(gap)") }

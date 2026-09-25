@@ -17,6 +17,23 @@ extension Canonical {
             let scope: AccountScrubScope
         }
 
+        /// Final review 1a/1b: an owner-boundary step that runs outside the
+        /// full account scrub (the account switch keeps the workspace; the
+        /// password-recovery exits run no scrub). Each gets its own privacy-
+        /// safe marker next to the account-scrub marker, written before the
+        /// step and removed only after it succeeds, so a failure stays pending
+        /// across launches until a retry completes it.
+        enum BoundaryStep: String, CaseIterable {
+            /// The App Group suite wipe, timeline reload and claim removal.
+            case widgetScrub = "widget-scrub-pending"
+            /// The removal of both AI provider keys from the secure store.
+            case aiKeyWipe = "ai-key-wipe-pending"
+        }
+
+        private struct BoundaryStepMarker: Codable {
+            let schemaVersion: Int
+        }
+
         enum LoadSource: Equatable {
             case primary
             case recoveredBackup
@@ -140,6 +157,28 @@ extension Canonical {
         func finishAccountScrub() throws {
             guard isAccountScrubPending else { return }
             try fileManager.removeItem(at: accountScrubMarkerURL)
+        }
+
+        func boundaryStepMarkerURL(_ step: BoundaryStep) -> URL {
+            primaryURL.appendingPathExtension(step.rawValue)
+        }
+
+        func isBoundaryStepPending(_ step: BoundaryStep) -> Bool {
+            fileManager.fileExists(atPath: boundaryStepMarkerURL(step).path)
+        }
+
+        /// Same shape as `beginAccountScrub`: no account data or ID.
+        func beginBoundaryStep(_ step: BoundaryStep) throws {
+            guard !isBoundaryStepPending(step) else { return }
+            try atomicWrite(
+                try JSONEncoder().encode(BoundaryStepMarker(schemaVersion: 1)),
+                to: boundaryStepMarkerURL(step)
+            )
+        }
+
+        func finishBoundaryStep(_ step: BoundaryStep) throws {
+            guard isBoundaryStepPending(step) else { return }
+            try fileManager.removeItem(at: boundaryStepMarkerURL(step))
         }
 
         func load() throws -> LoadOutcome? {

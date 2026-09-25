@@ -71,6 +71,8 @@ final class MemorySecureBackend: NativeSecureKeyValueBacking {
     var values: [String: Data] = [:]
     var failUpsert = false
     var failRemove = false
+    /// Removes of just these accounts fail (the AI keys, not the session).
+    var failRemoveKeys: Set<String> = []
     /// A Keychain read error (for example before first unlock).
     var failRead = false
     /// Returns different bytes on read-back (a Keychain that did not persist).
@@ -85,7 +87,7 @@ final class MemorySecureBackend: NativeSecureKeyValueBacking {
         return corruptReads ? Data("x".utf8) : value
     }
     func remove(key: String) throws {
-        if failRemove { throw NativeSecureSettingsStoreError.writeFailed(key: key, status: -25300) }
+        if failRemove || failRemoveKeys.contains(key) { throw NativeSecureSettingsStoreError.writeFailed(key: key, status: -25300) }
         values.removeValue(forKey: key)
     }
     var allText: String {
@@ -658,6 +660,56 @@ func testAppStoreRecoveryExitWipesKeys() async {
     expect(!store.aiProviderKeyIsSaved(.anthropic) && !store.aiProviderKeyIsSaved(.groq), "owner B inherits no key after recovery")
 }
 
+// Final review 1b: a failed boundary wipe fails closed and is retried.
+@MainActor
+func testAppStoreBoundaryWipeFailureFailsClosed() async {
+    let group = TempAppGroup("wipe-fail")
+    defer { group.cleanUp() }
+    let backend = MemorySecureBackend()
+    let (store, directory) = makeStore("wipe-fail", backend: backend, group: group)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let marker = directory.appending(path: "store.json").appendingPathExtension("ai-key-wipe-pending")
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: "bind-a")
+    store.scheduleBookingTestSeedIdentityActivator()
+    expectEqual(store.setAIProviderKey(.anthropic, entry: anthropicKey), .saved(.anthropic), "owner A saves Anthropic")
+
+    backend.failRemoveKeys = ["anthropicKey", "groqKey"]
+    await store.useAnotherAccount(clearGoogleCredential: {})
+    expectEqual(store.authenticationGateState, .signedOut, "sanity: useAnotherAccount reached its success path")
+    expect(backend.values["anthropicKey"] != nil, "sanity: the Keychain still holds A's key")
+    expect(FileManager.default.fileExists(atPath: marker.path), "1b: the failed wipe leaves a durable pending marker")
+    expect(store.aiProviderKeyWipeFailureCount >= 1, "1b: the failed wipe is counted")
+    store.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: "bind-b")
+    expect(store.advisoryAnthropicKey == nil && store.advisoryGroqKey == nil,
+           "1b: while the wipe is pending the coach reads no client key")
+    expectEqual(store.coachProviderSummary.analyticsName, "backend", "1b: …so owner B's coach uses the backend")
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .rejected(.groq, .unavailable),
+                "1b: no key can be saved while the wipe is pending")
+
+    // A relaunch while the Keychain still refuses keeps it pending.
+    let (relaunched, _) = makeStore("wipe-fail", backend: backend, group: group, directory: directory)
+    expect(FileManager.default.fileExists(atPath: marker.path), "1b: the pending wipe survives a relaunch")
+    expect(relaunched.advisoryAnthropicKey == nil, "1b: …and still fails closed after it")
+
+    // Sign-in retry.
+    backend.failRemoveKeys = []
+    store.testFinishInteractiveSignIn(subject: "user-b", binding: "bind-b", email: "b@example.test", method: .password)
+    expect(!FileManager.default.fileExists(atPath: marker.path), "1b: the sign-in retry clears the marker")
+    expect(backend.values["anthropicKey"] == nil, "1b: …after removing A's key")
+    expectEqual(store.setAIProviderKey(.groq, entry: groqKey), .saved(.groq), "1b: B can save once the retry succeeded")
+
+    // A recovery exit's failed wipe is pending too; the launch retry clears it.
+    backend.failRemoveKeys = ["anthropicKey", "groqKey"]
+    await store.cancelPasswordRecovery()
+    expectEqual(store.authenticationGateState, .signedOut, "sanity: cancelPasswordRecovery reached the recovery sign-out")
+    expect(FileManager.default.fileExists(atPath: marker.path), "1b: a recovery exit's failed wipe is pending")
+    backend.failRemoveKeys = []
+    let (launched, _) = makeStore("wipe-fail", backend: backend, group: group, directory: directory)
+    expect(!FileManager.default.fileExists(atPath: marker.path), "1b: the launch retry clears the marker")
+    expect(backend.values["groqKey"] == nil, "1b: …after removing the key")
+    _ = launched
+}
+
 // MARK: - 4. Redaction and storage
 
 @MainActor
@@ -924,6 +976,7 @@ struct AIProviderKeyTests {
         await testAppStoreOwnerWipe()
         await testAppStoreAccountSwitchWipesKeys()
         await testAppStoreRecoveryExitWipesKeys()
+        await testAppStoreBoundaryWipeFailureFailsClosed()
         await testAnalyticsNeverCarriesAKey()
         await testCrashPayloadsNeverCarryAKey()
         await testKeysNeverReachDefaultsAppGroupWidgetOrFiles()

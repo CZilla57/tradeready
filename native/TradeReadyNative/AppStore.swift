@@ -382,6 +382,13 @@ final class AppStore: ObservableObject {
     private let widgetActionReplayTransport: NativeWidgetActionClaimTransport?
     /// Task 11.05 (§4.5, C8): bounded, payload-free replay counters.
     private(set) var widgetActionReplayDiagnostics = NativeWidgetActionReplayDiagnostics()
+    /// Final review 1a/1b: boundary steps whose durable marker could not be
+    /// written this session; they fail closed in memory until the step runs.
+    private var boundaryStepsPendingInMemory: Set<Canonical.SnapshotRepository.BoundaryStep> = []
+    /// Final review 1b: bounded, payload-free count of failed boundary AI-key
+    /// wipes (no key material, no account).
+    private(set) var aiProviderKeyWipeFailureCount = 0
+    private static let aiProviderKeyWipeFailureCap = 99
     private let initialSyncService: (any NativeInitialSyncServing)?
     private let subscriptionService: NativeSubscriptionServing
     private let injectedJobPhotoTransferService: (any NativeJobPhotoTransferring)?
@@ -557,6 +564,11 @@ final class AppStore: ObservableObject {
             } catch {
                 accountScrubRecoveryError = error
             }
+        }
+        if accountScrubRecoveryError == nil {
+            // Final review 1a/1b: a boundary step left pending by an earlier
+            // session (widget wipe, AI-key wipe) is retried at launch.
+            retryPendingBoundarySteps()
         }
         let hadNativeSnapshot = FileManager.default.fileExists(atPath: fileURL.path)
             || FileManager.default.fileExists(atPath: repository.backupURL.path)
@@ -4222,6 +4234,14 @@ final class AppStore: ObservableObject {
             NativeGoogleSignInProvider.clearLocalCredential()
         }
     ) async {
+        // Final review 1c: one account boundary at a time. A second tap while
+        // a switch (or a sign-in/sign-out/deletion) is suspended is a no-op;
+        // otherwise its exit would reopen the first switch's gates mid-await.
+        // The switch holds `authenticationOperationInFlight` throughout, so
+        // no sign-in can start (and bind an owner) until it has finished.
+        guard !accountSwitchInFlight, !authenticationOperationInFlight else { return }
+        authenticationOperationInFlight = true
+        defer { authenticationOperationInFlight = false }
         // A verified provider session can still be rejected by the exact-owner
         // gate. Clear Google's Keychain-backed app credential on every exit so
         // the next attempt can actually select a different Google account.
@@ -4259,7 +4279,9 @@ final class AppStore: ObservableObject {
             // reloaded at once (before the `logOut` await) and the replay
             // claims removed. Losing that owner's unreplayed actions is
             // accepted (no current users). A wipe failure does not keep the
-            // cleared session's owner in memory; it is counted instead.
+            // cleared session's owner in memory; it is counted, and (final
+            // review 1a) its durable marker keeps the mirror closed until a
+            // retry succeeds (`scrubWidgetAccountState`).
             do {
                 try scrubWidgetAccountState()
             } catch {
@@ -4305,7 +4327,8 @@ final class AppStore: ObservableObject {
     }
 
     func signIn(email: String, password: String) async throws {
-        guard !authenticationOperationInFlight else {
+        // Final review 1c: never during an account switch either.
+        guard !authenticationOperationInFlight, !accountSwitchInFlight else {
             throw NativeSupabaseAuthError.rejected(message: "Another sign-in request is still running.")
         }
         authenticationOperationInFlight = true
@@ -4695,6 +4718,9 @@ final class AppStore: ObservableObject {
     func retryAccountScrub() {
         guard repository.isAccountScrubPending else {
             isAccountScrubBlocked = false
+            // Final review 1a/1b: a pending switch/recovery boundary step.
+            retryPendingBoundarySteps()
+            scheduleWidgetMirrorRefresh()
             return
         }
         do {
@@ -4784,10 +4810,53 @@ final class AppStore: ObservableObject {
     /// completes, and no later owner can read it. It then removes the
     /// app-private replay claims and quarantine files, which hold the scrubbed
     /// owner's actions. A failure leaves the scrub marker pending (retried).
+    ///
+    /// Final review 1a: it runs under its own durable `.widgetScrub` marker,
+    /// because the account switch retains the workspace and so has no
+    /// account-scrub marker. While it is pending the mirror has no owner and
+    /// replay is closed; `retryPendingBoundarySteps` retries it.
     private func scrubWidgetAccountState() throws {
-        try appGroupAccountScrubber.scrub()
-        widgetTimelineReloader.reloadAllTimelines()
-        try widgetActionReplayTransport?.removeAllAccountClaims()
+        try runDurableBoundaryStep(.widgetScrub) {
+            try appGroupAccountScrubber.scrub()
+            widgetTimelineReloader.reloadAllTimelines()
+            try widgetActionReplayTransport?.removeAllAccountClaims()
+        }
+    }
+
+    /// Final review 1a/1b: the account-scrub marker pattern
+    /// (`beginAccountScrub` … `finishAccountScrub`) for one boundary step that
+    /// runs outside the full scrub. The marker is written before the step and
+    /// removed only after it succeeds; if the marker itself cannot be written
+    /// the step is held pending in memory, so it fails closed either way.
+    private func runDurableBoundaryStep(
+        _ step: Canonical.SnapshotRepository.BoundaryStep,
+        _ body: () throws -> Void
+    ) throws {
+        do { try repository.beginBoundaryStep(step) } catch { boundaryStepsPendingInMemory.insert(step) }
+        try body()
+        boundaryStepsPendingInMemory.remove(step)
+        // A marker that cannot be removed stays pending: the retry reruns the
+        // (idempotent) step and it keeps failing closed meanwhile.
+        try? repository.finishBoundaryStep(step)
+    }
+
+    private func isBoundaryStepPending(_ step: Canonical.SnapshotRepository.BoundaryStep) -> Bool {
+        boundaryStepsPendingInMemory.contains(step) || repository.isBoundaryStepPending(step)
+    }
+
+    /// Final review 1a/1b: retries every pending boundary step — at launch,
+    /// from `retryAccountScrub` and before an interactive sign-in binds the
+    /// next owner. A step that fails again stays pending (still fail-closed).
+    private func retryPendingBoundarySteps() {
+        if isBoundaryStepPending(.widgetScrub) {
+            // Timelines are reloaded inside it, right after the wipe.
+            do { try scrubWidgetAccountState() } catch {
+                print("TradeReadyAccountBoundary stage=retry-widget-scrub")
+            }
+        }
+        if isBoundaryStepPending(.aiKeyWipe) {
+            wipeAIProviderKeysForAccountBoundary()
+        }
     }
 
     private func performLocalAccountScrub(
@@ -5686,6 +5755,7 @@ final class AppStore: ObservableObject {
             accountBoundaryOpen: widgetMirrorSuspendedForAccountBoundary
                 || isAccountScrubBlocked
                 || repository.isAccountScrubPending
+                || isBoundaryStepPending(.widgetScrub)
         )
     }
 
@@ -6361,7 +6431,9 @@ final class AppStore: ObservableObject {
     var widgetMirrorOwnerBinding: String? {
         guard !widgetMirrorSuspendedForAccountBoundary,
               !isAccountScrubBlocked,
-              !repository.isAccountScrubPending
+              !repository.isAccountScrubPending,
+              // Final review 1a: the previous owner's App Group state may remain.
+              !isBoundaryStepPending(.widgetScrub)
         else { return nil }
         return derivedStatePublishBinding
     }
@@ -8877,11 +8949,17 @@ extension AppStore {
     /// The user's own Anthropic key, read from the secure store (never from the
     /// business snapshot). Nil means "no client key" — the transport then takes
     /// the backend bearer path.
-    var advisoryAnthropicKey: String? { secureSettingsStore.readAIProviderKey(.anthropic) }
+    /// Final review 1b: nil while a boundary wipe is pending, so the next
+    /// owner's coach never uses the previous owner's key.
+    var advisoryAnthropicKey: String? {
+        isBoundaryStepPending(.aiKeyWipe) ? nil : secureSettingsStore.readAIProviderKey(.anthropic)
+    }
 
     /// The user's own Groq key, read from the secure store — mirrors
     /// `advisoryAnthropicKey` exactly (task 10.13, coach provider routing).
-    var advisoryGroqKey: String? { secureSettingsStore.readAIProviderKey(.groq) }
+    var advisoryGroqKey: String? {
+        isBoundaryStepPending(.aiKeyWipe) ? nil : secureSettingsStore.readAIProviderKey(.groq)
+    }
 
     // MARK: AI provider key entry (task 11.15)
 
@@ -8914,16 +8992,34 @@ extension AppStore {
     private var canChangeAIProviderKeys: Bool {
         isSignedIn && !authenticationOperationInFlight && !accountSwitchInFlight
             && !isAccountScrubBlocked && !repository.isAccountScrubPending
+            && !isBoundaryStepPending(.aiKeyWipe)
     }
 
     /// Task 11.15 fix round 1: removes both provider keys (entered or migrated)
     /// from the injected secure store at an account boundary that does not run
     /// the full scrub (account switch, password-recovery exits). Each account
-    /// is removed independently with a verified remove; a failure is not fatal
-    /// to the boundary (the switch's second wipe retries it).
+    /// is removed independently with a verified remove, and every kind is
+    /// attempted even when one fails.
+    ///
+    /// Final review 1b: a failure is not fatal to the boundary, but it is not
+    /// silent either. The wipe runs under the durable `.aiKeyWipe` marker, so
+    /// a failure leaves it pending: the coach reads no client key
+    /// (`advisory*Key`) and no key can be saved (`canChangeAIProviderKeys`)
+    /// until a retry succeeds — at launch, before an interactive sign-in, from
+    /// `retryAccountScrub`, or the switch's own second wipe. The failure is
+    /// counted and logged without key material or account.
     private func wipeAIProviderKeysForAccountBoundary() {
-        for kind in NativeAIProviderKeyKind.allCases {
-            try? secureSettingsStore.clearAIProviderKey(kind)
+        do {
+            try runDurableBoundaryStep(.aiKeyWipe) {
+                var firstFailure: Error?
+                for kind in NativeAIProviderKeyKind.allCases {
+                    do { try secureSettingsStore.clearAIProviderKey(kind) } catch { firstFailure = firstFailure ?? error }
+                }
+                if let firstFailure { throw firstFailure }
+            }
+        } catch {
+            aiProviderKeyWipeFailureCount = min(Self.aiProviderKeyWipeFailureCap, aiProviderKeyWipeFailureCount + 1)
+            print("TradeReadyAIProviderKey stage=boundary-wipe")
         }
         objectWillChange.send()
     }
@@ -9814,6 +9910,9 @@ extension AppStore {
         method: NativeAnalyticsEvent.SignInMethod,
         gateOverride: NativeAuthenticationGateState? = nil
     ) {
+        // Final review 1a/1b: a boundary step still pending from a switch or
+        // recovery exit is retried before the next owner is bound.
+        retryPendingBoundarySteps()
         didCheckMigratedAuthenticatedIdentity = true
         applyAuthenticatedIdentityOutcome(outcome, email: email, gateOverride: gateOverride)
         emitAnalytics(.signIn(method))
