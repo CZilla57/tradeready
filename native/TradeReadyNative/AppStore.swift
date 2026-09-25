@@ -6823,8 +6823,8 @@ final class AppStore: ObservableObject {
         var pendingAtStart = pendingMutationKeys()
         // Phase 12 (12.00b.1): a refused change's record keeps its local
         // version until Retry or Discard. If the store cannot be read (a
-        // locked device), those records are unknown: skip this pull rather
-        // than overwrite one.
+        // device not yet unlocked since a restart), those records are
+        // unknown: skip this pull rather than overwrite one.
         let rejectedAtStart: Set<String>
         do { rejectedAtStart = try rejectedChangeKeys() } catch { return .failed("pull/rejected-store") }
 
@@ -7372,8 +7372,8 @@ final class AppStore: ObservableObject {
         return entries.filter { !queued.contains($0.key) }
     }
 
-    /// Reloads `rejectedChanges`. An unreadable store (a locked device)
-    /// keeps the list last shown.
+    /// Reloads `rejectedChanges`. An unreadable store (before the first
+    /// unlock after a restart) keeps the list last shown.
     func refreshRejectedChanges() {
         guard let visible = try? visibleRejectedChanges() else { return }
         if rejectedChanges != visible { rejectedChanges = visible }

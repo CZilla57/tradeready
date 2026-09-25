@@ -2196,9 +2196,11 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      transient. Tests: `run-mutation-push` (the table), `run-sync-coordinator`.
    - Store: a rejected change leaves the queue for `NativeRejectedChangeStore`
      (`N/NativeRejectedChangeStore.swift`). It is app-private next to the queue,
-     written with complete file protection, tagged with a one-way hash of the owner's
-     binding, capped at 100 entries (newest kept, drops counted), and never logged. A
-     settle that cannot write keeps every started item queued. Every account boundary
+     tagged with a one-way hash of the owner's binding, capped at 100 entries (newest
+     kept, drops counted), and never logged. It is written with after-first-unlock
+     protection, like the queue and snapshot that hold the same payloads: `.complete`
+     would add no confidentiality and would stop background sync while locked. A
+     settle that cannot read or write keeps every started item queued. Every account boundary
      scrubs it under a durable `rejected-changes-scrub-pending` step
      (`Canonical.SnapshotRepository.BoundaryStep`, file marker plus the 12.00b.2-A
      Keychain record), and the full account scrub removes it. Test:
@@ -2223,6 +2225,10 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      kept record cannot pin the watermark. Only a record pushed while the pull was in
      flight holds it (the I1 rule). Tests: poor-network P (the poison scenario) and Q
      (the watermark reaches the newest server stamp over three passes).
+   - Residuals, rated S3: past the cap the oldest refused change is dropped and
+     counted, and a later pull can then overwrite its record; the password-recovery
+     exits scrub the store but keep the records, with the same effect. The server would
+     never accept those edits anyway.
    - Still owed: device rows P12-B1-1 (a poison change on a real device against STG,
      blocked while D4 is open, never waived) and P12-B1-2 (the Cloud Sync surface with
      VoiceOver and Dynamic Type), in `docs/native-phase-12-evidence-index.md` §23;

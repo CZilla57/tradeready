@@ -88,9 +88,14 @@ func testStoreBasics() throws {
     let url = dir.appendingPathComponent("rejected-changes.json")
     let store = NativeRejectedChangeStore(fileURL: url)
 
-    // File protection: written like the 11.13 LegacyBackups (complete protection).
-    expect(NativeProtectedRejectedChangeFiles.writeOptions.contains(.completeFileProtection),
-           "store: written with complete file protection")
+    // File protection (review prep R15): after first unlock, like the live
+    // mutation queue and the canonical snapshot that hold the same payloads,
+    // so background sync can read it while the device is locked. Never the
+    // `.complete` class, which adds no confidentiality over those files.
+    expect(NativeProtectedRejectedChangeFiles.writeOptions.contains(.completeFileProtectionUntilFirstUserAuthentication),
+           "store: written with after-first-unlock file protection")
+    expect(!NativeProtectedRejectedChangeFiles.writeOptions.contains(.completeFileProtection),
+           "store: not written with complete protection (it would stop background sync while locked)")
     expect(NativeProtectedRejectedChangeFiles.writeOptions.contains(.atomic), "store: written atomically")
 
     expectEqual(try store.load(binding: bindingA), [], "store: no file reads empty")
@@ -197,7 +202,7 @@ func testStoreFailsClosed() throws {
     let store = NativeRejectedChangeStore(fileURL: url, files: files)
     try store.settle(rejected: [rejection("jobs", "J1")], clearedKeys: [], binding: bindingA, now: now)
 
-    // A read failure (a locked device, complete protection) is not "empty".
+    // A read failure (before first unlock, or an I/O error) is not "empty".
     files.failRead = true
     do {
         _ = try store.load(binding: bindingA)

@@ -296,8 +296,12 @@ entry item (§4.2). No waiver.
 Unwaivable (roadmap: "It must be fixed before cutover"); defect row L238, built in
 12.00b.1. D3's surface: a Cloud Sync status line ("N changes couldn't be saved") that opens
 a detail list (record type, name, when); the count also goes into the support report.
-Retry re-queues a change; Discard removes it after a confirmation dialog, and the next pull
-restores the server's version. The monitored signal is TH-7. Rejected changes cannot be
+Retry re-queues a change through the normal push. Discard, after a confirmation dialog
+("Discard this change?", button "Discard change"), fetches the server's version of that one
+record at once and shows it on this device; it does not wait for the next delta pull, which
+may never return the row. A refused insert that the server has no record of is removed from
+this device, and the dialog says so: "If the record was never saved to the cloud, it will
+be removed from this device." (Implemented 2026-09-25 in 12.00b.1.) The monitored signal is TH-7. Rejected changes cannot be
 drained before a rollback advisory; 12.06 reports them as not drainable (§6).
 
 ### 5.4 G6 — retention of the RN source files and legacy backups
@@ -479,7 +483,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
-| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable) | Fixed — 12.00b.1 (host) |
+| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable). **Residuals, rated S3 (2026-09-25):** past the 100-entry cap the oldest refused change is dropped and counted, and a later pull can then overwrite its record; the password-recovery exits scrub the store but keep the records, with the same effect. The server would never accept those edits anyway | Fixed — 12.00b.1 (host) |
 
 ### 12.00b.2 — S1/S2 code fixes (block Stage A entry) (10)
 

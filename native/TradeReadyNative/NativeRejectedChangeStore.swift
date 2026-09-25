@@ -10,8 +10,11 @@ import CryptoKit
 //
 // Each entry holds the queued change itself, so the file is local customer
 // data. It is:
-// - app-private, next to the queue, and written with complete file protection
-//   like the 11.13 LegacyBackups files;
+// - app-private, next to the queue, and written with after-first-unlock file
+//   protection, like the live mutation queue and the canonical snapshot that
+//   hold the same payloads (review prep R15). The `.complete` class would add
+//   no confidentiality over those files and would stop background sync while
+//   the device is locked;
 // - owner-scoped: the document carries a one-way tag of the verified owner's
 //   binding, and another owner (or no owner) reads nothing. Every account
 //   boundary also removes it (`AppStore.scrubRejectedChangesForAccountBoundary`
@@ -38,8 +41,8 @@ struct NativeRejectedChange: Codable, Equatable, Identifiable {
 }
 
 enum NativeRejectedChangeStoreError: Error, Equatable {
-    /// The file exists but could not be read, for example while the device is
-    /// locked (complete protection). It is not treated as empty.
+    /// The file exists but could not be read, for example before the first
+    /// unlock after a restart, or an I/O error. It is not treated as empty.
     case unreadable
     /// There is no verified owner to file the change under.
     case noOwner
@@ -54,11 +57,13 @@ protocol NativeRejectedChangeFileBacking {
     func remove(_ url: URL) throws
 }
 
-/// The app's backing: complete file protection, like the 11.13 LegacyBackups
-/// files. While the device is locked the file can be neither read nor
-/// written; the store then throws and the caller keeps the change queued.
+/// The app's backing: after-first-unlock file protection
+/// (`completeFileProtectionUntilFirstUserAuthentication`), so a background
+/// sync can read and write it while the device is locked. Before the first
+/// unlock after a restart it can be neither read nor written; the store then
+/// throws and the caller keeps the change queued (fail closed).
 struct NativeProtectedRejectedChangeFiles: NativeRejectedChangeFileBacking {
-    static let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtection]
+    static let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
 
     func read(_ url: URL) throws -> Data? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
