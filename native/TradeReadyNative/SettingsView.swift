@@ -398,6 +398,8 @@ struct PaymentsSettings: View {
     @State private var disconnectBusy = false
     @State private var confirmingDisconnect = false
     @State private var actionError: String?
+    @State private var squareDraft = ""
+    @State private var squareFeedback: (message: String, isError: Bool)?
 
     private var providers: [(id: String, label: String)] {
         [("stripe", "Stripe"), ("square", "Square"), ("paypal", "PayPal.Me"), ("venmo", "Venmo"), ("custom", "Custom URL")]
@@ -489,15 +491,34 @@ struct PaymentsSettings: View {
                 if let hint = providerHint {
                     Text(hint).font(.caption).foregroundStyle(.secondary)
                 }
-                TextField(
-                    "Paste link or username here",
-                    text: Binding(
-                        get: { store.settings.providerKey(for: store.settings.paymentProvider) },
-                        set: { store.settings.setProviderKey($0, for: store.settings.paymentProvider) }
+                if provider.id == NativeSquareProviderKeyPolicy.providerID {
+                    // Fix round 2 (G5): the Square field is a draft saved
+                    // explicitly, so a pasted access token is refused before
+                    // it can persist or sync (never saved per keystroke).
+                    TextField("Paste link or username here", text: $squareDraft)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .onSubmit(saveSquareDraft)
+                        .onAppear { squareDraft = store.settings.providerKey(for: provider.id) }
+                    Button("Save link", action: saveSquareDraft)
+                        .disabled(squareDraft == store.settings.providerKey(for: provider.id))
+                    if let squareFeedback {
+                        Text(squareFeedback.message)
+                            .font(.caption)
+                            .foregroundStyle(squareFeedback.isError ? Color.tradeDangerText : Color.secondary)
+                    }
+                } else {
+                    TextField(
+                        "Paste link or username here",
+                        text: Binding(
+                            get: { store.settings.providerKey(for: store.settings.paymentProvider) },
+                            set: { store.setPaymentProviderKey($0, for: store.settings.paymentProvider) }
+                        )
                     )
-                )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                }
                 Text("This appears in the payment links you send to customers — never paste a password, API key, or access token here.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -510,6 +531,16 @@ struct PaymentsSettings: View {
         if phase == .active { Task { await store.refreshStripeStatus() } }
     }
     .nativeAnalyticsScreen(.settingsPayments)
+    }
+
+    private func saveSquareDraft() {
+        switch store.setPaymentProviderKey(squareDraft, for: NativeSquareProviderKeyPolicy.providerID) {
+        case let .save(value):
+            squareDraft = value
+            squareFeedback = (value.isEmpty ? "Square link cleared." : "Square link saved.", false)
+        case let .reject(message):
+            squareFeedback = (message, true)
+        }
     }
 
     private func connect() async {

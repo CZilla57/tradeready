@@ -792,7 +792,7 @@ complete / Phase 12 evidence deferred**.
 | 11.11 | H2 | Done (code complete 2026-09-24; RN `contentColumn` (700pt) on all 58 scroll roots and 12 fixed-chrome sites, measured on the Simulator; one `TabView`, no split view, no pushed `NavigationStack`; multitasking manifest checked unchanged; §12.1 A11 hardware-keyboard shortcuts done (contract §12.2); Split View/Slide Over/Stage Manager/rotation/keyboard proof deferred to Phase 12) | 11.10a | iPad layouts + multitasking |
 | 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`) and round 2 (`22f35fd`, review I1: a push acknowledged during a direct-caller pull)**: the pull commit rebases onto the live snapshot and takes the server's version only for records the device has not touched (pending at start or commit, or changed locally), holding a table's cursor where it keeps a local record over a fetched row, with scenarios D–G and table-driven merge cases running by default (229 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Done (code complete 2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A29 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. A29 (success, warning and status colors as text) is fixed with native text tokens after the controller ruling. Fix round 1 fixed the 12 in-row destructive buttons (I1) and minors m1–m7. A30 (PDF stamps) is owned by 11.13 and A31 (system dialogs) is accepted. **H1 is closed:** zero release-blocking findings remain. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
-| 11.13 | all | Done (code complete 2026-09-24). The six areas are qualified against RN (contract §17), and every gap has coverage or a named owner. The new suite `native/Phase11QualificationTests` (474 checks after fix round 1) proves four things. RN's own `BridgeSnapshot` and `SiriSnapshot` decoders, extracted from `targets/`, read every contract fixture and every native write. Every RN widget-action and deep-link vector with a Swift form runs through the native planner, replayer, coordinator and parser, and a completeness guard pins each RN vector. The RN `track(` sites equal the catalog, with 49 of 52 events live natively and 3 named exclusions. The RN secure fields and §10.1 deny rows are stripped everywhere, and no §12.1 row is open. A30 (PDF stamps and accent) is fixed as a native difference, with every pairing at 5.67:1 or better. Fix round 1 made an empty queue a no-op (RN parity) and added the Square token prefixes. Gaps G1, G2 and G5 are owned by Phase 12.00. Six known issues are carried to the final review and are not qualified. Device, extension, Siri and store proof is deferred to Phase 12 | 11.01-11.12, 11.15 | Cross-client qualification |
+| 11.13 | all | Done (code complete 2026-09-24). The six areas are qualified against RN (contract §17), and every gap has coverage or a named owner. The new suite `native/Phase11QualificationTests` (510 checks after fix round 2) proves four things. RN's own `BridgeSnapshot` and `SiriSnapshot` decoders, extracted from `targets/`, read every contract fixture and every native write. Every RN widget-action and deep-link vector with a Swift form runs through the native planner, replayer, coordinator and parser, and a completeness guard pins each RN vector. The RN `track(` sites equal the catalog, with 49 of 52 events live natively and 3 named exclusions. The RN secure fields and §10.1 deny rows are stripped everywhere, and no §12.1 row is open. A30 (PDF stamps and accent) is fixed as a native difference, with every pairing at 5.67:1 or better. Fix round 1 made an empty queue a no-op (RN parity) and added the Square token prefixes. Fix round 2 fixed G4 and G5: Settings refuses a Square value that is not a payment link, and RN `scrubLegacySquareToken` runs at sign-in and after every synced-settings commit. Gaps G1 and G2 are owned by Phase 12.00. Six known issues are carried to the final review and are not qualified. Device, extension, Siri and store proof is deferred to Phase 12 | 11.01-11.12, 11.15 | Cross-client qualification |
 | 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
 
 Exit criteria traceability (roadmap Phase 11):
@@ -3904,8 +3904,8 @@ store proof is deferred to Phase 12.
   bug before the RED run (fix round 1, M4).
 - **Q5 redaction.** RN `SECURE_FIELDS` and the 33 deny-row keys, parsed from §10.1, are
   denied by analytics, the crash redactor and the widget snapshot. Square token shapes
-  are recognised (fix round 1). G4 is not applicable. G5 is a named blocker: native
-  stores a pasted Square token and has no scrub pass.
+  are recognised (fix round 1). G4 and G5 are fixed (fix round 2): the Settings Square
+  field refuses a value that is not a payment link, and the RN heal is ported.
 - **Q6 accessibility.** Every §12.1 status is on the closed-status allow-list.
 - **A30.** PAID 5.86:1, OUTSTANDING 5.74:1, PARTLY PAID 5.67:1, accent 6.37:1 on white and
   5.91:1 on the total wash. RN's template keeps 2.88–4.33:1, so this is a recorded native
@@ -3968,7 +3968,7 @@ None was changed.
 - In the first pass, nothing changed behavior beyond A30. Fix round 1 changed two
   things. An empty or whitespace-only queue is now an empty batch, matching RN
   (contract §4.6). `NativeSensitiveData` gained the Square token prefixes. G1, G2 and
-  G5 are named blockers, not fixes.
+  G5 were named blockers, not fixes (fix round 2 then fixed G5).
 - The optional simulator smoke (§13) was not run.
 
 **Phase 12 deferrals (not run, not claimed):**
@@ -3981,9 +3981,9 @@ None was changed.
 | Q11-P12-4 (store) | A StoreKit sandbox or TestFlight purchase and restore; Release PostHog and Sentry keys supplied on staging | `subscription_purchased` and the catalog events arrive with allow-listed properties only, and Sentry receives a redacted event |
 | Q11-P12-5 (PDF) | Share an invoice PDF in each status and an estimate PDF, and view them on the device and in Mail | Stamps and accent use the A30 colors and stay legible when printed |
 
-**Next ready:** 11.14 (aggregate verification and closeout). G1 (native remote push), G2
-(a native tax-settings editor) and G5 (a Square token scrub pass or input validation)
-are owned by Phase 12.00 as cutover-blocking parity gaps (build or dated waiver).
+**Next ready:** 11.14 (aggregate verification and closeout). G1 (native remote push) and
+G2 (a native tax-settings editor) are owned by Phase 12.00 as cutover-blocking parity
+gaps (build or dated waiver). G5 was fixed in fix round 2 and is no longer a blocker.
 11.14 must collect the rows above into `docs/native-phase-11-device-runsheet.md`.
 
 **Fix round 1 (2026-09-24, review of `9b32481`):**
@@ -4033,3 +4033,42 @@ are owned by Phase 12.00 as cutover-blocking parity gaps (build or dated waiver)
 - Verification results are recorded in the report
   (`.superpowers/sdd/native-phase-11-implementation-plan/task-11.13-report.md`,
   "Fix round 1").
+
+**Fix round 2 (2026-09-24, controller ruling on G5, review of `f7a2e13`):** a plaintext
+Square access token in synced settings is a security defect, so it is fixed in 11.13.
+- **Validate on save (G5).** `NativeSquareProviderKeyPolicy`
+  (`native/TradeReadyNative/Domain/NativeInvoicePaymentLinks.swift`) is the pure rule:
+  - a Square value `isSquarePaymentLink` refuses is rejected, with RN's Square hint as
+    the copy;
+  - an empty entry clears the field;
+  - other providers keep RN's unvalidated save.
+  
+  `AppStore.setPaymentProviderKey` is the only Settings write path. The Square field in
+  `native/TradeReadyNative/SettingsView.swift` is a draft saved with **Save link**, so it
+  is never saved per keystroke. `mergeSettingsAndSave` strips a non-link Square value
+  before any write, as a persist-time guard.
+- **Heal (G4).** `AppStore.scrubLegacySquareToken()` ports RN's rule exactly: delete
+  `providerKeys.square` when it is non-empty and not a link, and write nothing
+  otherwise. It saves, rotates the repository `.backup` (which would otherwise keep the
+  credential), re-projects Settings and queues one settings upsert. It runs on the
+  returning-user sign-in, after the initial-sync commit and after every delta-pull
+  commit, gated on the exact signed-in workspace. The heal is local: the push sends
+  the whole settings `data` blob, so the server copy is replaced.
+- **Tests.** Q5 covers the policy, the copy, the three call sites and the Settings write
+  path. Q4 now requires G4 and G5 to read "Fixed" with no Phase 12.00 owner.
+  `run-store-integration` covers:
+  - a pasted token never reaches the projection, snapshot, disk or queue;
+  - a direct settings write is stripped;
+  - a link saves and queues, and empty clears;
+  - a pulled token is scrubbed, and the cleaned blob is queued once;
+  - a second pass writes nothing;
+  - the gate.
+- RED: `phase11-qualification tests: 6 of 510 checks FAILED`; `run-store-integration`
+  first failed to compile, then `FAILED: 11` with the API stubbed. GREEN:
+  `510/510 checks passed` and `PASS: canonical AppStore integration tests`. Removing the
+  persist guard and the pull hook fails 8 store checks.
+- **Residual, RN-identical.** Like RN's scrub, the heal reads only `providerKeys.square`.
+  A legacy single `providerKey` holding a token under provider `square` is not deleted.
+  Settings still hides it: the projection's backfill shows it, and the persist guard
+  strips it on the next save.
+- Verification results are recorded in the report, under "Fix round 2".

@@ -4665,6 +4665,113 @@ struct StoreIntegrationTests {
                    "m5 the rinv_ fallback clears the stale invoice/outreach target and opens the plain Invoices list")
         }
 
+        // Task 11.13 fix round 2 (G4/G5): a Square access token is never
+        // persisted from Settings, and RN's `scrubLegacySquareToken` heal runs
+        // on the synced settings a pull delivers.
+        do {
+            let squareToken = "EAAAEOuLQObrVwJvCvoio3qx9Bi7MEZ2Ymv2nUx8m2cVYzAh8Kx5yGQZ"
+            let squareLink = "https://square.link/u/abc123"
+            func diskContains(_ dir: URL, _ needle: String) -> Bool {
+                let files = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?
+                    .compactMap { $0 as? URL } ?? []
+                return files.contains { (try? Data(contentsOf: $0)).map { String(decoding: $0, as: UTF8.self).contains(needle) } ?? false }
+            }
+            func persistedSquare(_ dir: URL) -> String? {
+                (try? Canonical.SnapshotRepository(primaryURL: dir.appendingPathComponent("store.json")).load())?
+                    .snapshot.payload.settings?.providerKeys["square"]
+            }
+            func settingsUpserts(_ dir: URL) -> [Canonical.MutationItem] {
+                pendingMutations(dir.appendingPathComponent("store.json")).filter { $0.table == "settings" && $0.op == .upsert }
+            }
+            func queuedSquare(_ item: Canonical.MutationItem?) -> Canonical.JSONValue? {
+                guard case let .object(fields)? = item?.payload, case let .object(keys)? = fields["providerKeys"] else { return nil }
+                return keys["square"]
+            }
+
+            // Pasted tokens are rejected and never reach the snapshot, disk or queue.
+            for token in [squareToken, "sq0atp-3_Wb0zJnNx7lzM1nb2eP0g", "  \(squareToken) "] {
+                let (store, dir) = try seed08Store(settings: settings08(), tag: "sq-reject")
+                seed08Owner(store, subject: "user-sq", binding: "bind-sq")
+                let queuedBefore = pendingMutations(dir.appendingPathComponent("store.json")).count
+                let result = store.setPaymentProviderKey(token, for: "square")
+                expect(result == .reject(NativeSquareProviderKeyPolicy.rejectionMessage),
+                       "G5 a pasted Square token is rejected with the RN hint copy")
+                expect(store.settings.providerKey(for: "square").isEmpty, "G5 a rejected token never reaches the settings projection")
+                expect(persistedSquare(dir) == nil, "G5 a rejected token never reaches the persisted snapshot")
+                expect(pendingMutations(dir.appendingPathComponent("store.json")).count == queuedBefore,
+                       "G5 a rejected token queues nothing")
+                expect(!diskContains(dir, token.trimmingCharacters(in: .whitespaces)), "G5 a rejected token is nowhere on disk")
+            }
+            // A write that bypasses the validated save (any direct settings
+            // edit) is still stripped before the snapshot, disk and queue.
+            do {
+                let (store, dir) = try seed08Store(settings: settings08(), tag: "sq-bypass")
+                seed08Owner(store, subject: "user-sq", binding: "bind-sq")
+                store.settings.paymentProviderKeys["square"] = squareToken
+                expect(store.settings.paymentProviderKeys["square"] == nil, "G5 a direct Square token write is stripped from the projection")
+                expect(persistedSquare(dir) == nil, "G5 a direct Square token write never reaches the snapshot")
+                expect(!diskContains(dir, squareToken), "G5 a direct Square token write is nowhere on disk (snapshot or queue)")
+            }
+            // A valid payment link saves, persists and queues; empty clears.
+            do {
+                let (store, dir) = try seed08Store(settings: settings08(), tag: "sq-link")
+                seed08Owner(store, subject: "user-sq", binding: "bind-sq")
+                expect(store.setPaymentProviderKey(squareLink, for: "square") == .save(squareLink), "G5 a Square payment link saves")
+                expect(store.settings.providerKey(for: "square") == squareLink && persistedSquare(dir) == squareLink,
+                       "G5 the saved link is projected and persisted")
+                expect(queuedSquare(settingsUpserts(dir).last) == .string(squareLink), "G5 the saved link is queued for sync")
+                expect(store.setPaymentProviderKey("   ", for: "square") == .save(""), "G5 an empty Square entry saves")
+                expect(persistedSquare(dir) == "", "G5 an empty Square entry clears the stored link")
+                expect(store.setPaymentProviderKey("johndoe", for: "venmo") == .save("johndoe")
+                           && store.settings.providerKey(for: "venmo") == "johndoe",
+                       "G5 other providers keep RN's unvalidated save")
+            }
+            // The heal: a pulled settings blob carrying a token is scrubbed on
+            // commit, and the cleaned blob is queued so the cloud copy heals.
+            do {
+                let delta = ScheduleBookingTestDelta()
+                var poisoned = settings08()
+                poisoned.providerKeys = ["square": squareToken, "venmo": "@me"]
+                delta.handler = { local, cursor in
+                    var pulled = local
+                    pulled.payload.settings = poisoned
+                    return NativeDeltaPullOutcome(snapshot: pulled, cursor: cursor, failedTables: [], lastDiagnosticCode: nil)
+                }
+                let (store, dir) = try seed08Store(settings: settings08(), delta: delta, tag: "sq-heal")
+                seed08Owner(store, subject: "user-sq", binding: "bind-sq")
+                _ = await store.runBookingIntakeAfterVerifiedPull()
+                expect(delta.enteredPull, "G5 heal sanity: the real delta pull ran")
+                expect(persistedSquare(dir) == nil
+                           && (try? Canonical.SnapshotRepository(primaryURL: dir.appendingPathComponent("store.json")).load())?
+                               .snapshot.payload.settings?.providerKeys["venmo"] == "@me",
+                       "G5 the pulled Square token is scrubbed from the committed snapshot; other providers stay")
+                expect(store.settings.providerKey(for: "square").isEmpty, "G5 the pulled token never reaches the Settings projection")
+                let upserts = settingsUpserts(dir)
+                expect(upserts.count == 1 && queuedSquare(upserts.first) == nil,
+                       "G5 the scrub queues one settings upsert without the Square entry (the cloud copy heals)")
+                expect(!diskContains(dir, squareToken), "G5 after the heal the token is nowhere on disk")
+                // Idempotent: a second pull that finds nothing writes nothing.
+                delta.handler = nil
+                _ = await store.runBookingIntakeAfterVerifiedPull()
+                expect(settingsUpserts(dir).count == 1, "G5 a heal that finds nothing queues nothing")
+            }
+            // Gate: never heals (so never queues) outside the exact signed-in workspace.
+            do {
+                var poisoned = settings08()
+                poisoned.providerKeys = ["square": squareToken]
+                let (store, dir) = try seed08Store(settings: poisoned, tag: "sq-gate")
+                expect(!store.scrubLegacySquareToken() && settingsUpserts(dir).isEmpty,
+                       "G5 the heal is gated on the exact signed-in workspace")
+                seed08Owner(store, subject: "user-sq", binding: "bind-sq")
+                expect(store.scrubLegacySquareToken(), "G5 the heal runs once signed in")
+                expect(persistedSquare(dir) == nil && settingsUpserts(dir).count == 1
+                           && queuedSquare(settingsUpserts(dir).first) == nil,
+                       "G5 the signed-in heal clears the stored token and queues the scrub")
+                expect(!store.scrubLegacySquareToken() && settingsUpserts(dir).count == 1,
+                       "G5 a second heal finds nothing and writes nothing")
+            }
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }

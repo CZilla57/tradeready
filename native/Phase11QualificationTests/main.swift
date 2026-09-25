@@ -1017,10 +1017,16 @@ private func testAnalyticsCatalog(root: URL, sources: [SourceFile]) {
            "Q4 every exclusion names the Phase 12.00 cutover owner")
     let gaps = readOrFail(root, "docs/native-phase-11-platform-hardening-contract-decisions.md")
         .components(separatedBy: "### 17.2").dropFirst().first ?? ""
-    // G5 (Square token writes, Q5) shares the owner.
-    for gap in Set(analyticsExclusions.values.map { String($0.prefix(2)) } + ["G5"]).sorted() {
+    for gap in Set(analyticsExclusions.values.map { String($0.prefix(2)) }).sorted() {
         let line = gaps.components(separatedBy: "\n").first { $0.hasPrefix("| \(gap) |") } ?? ""
         expect(line.contains(cutoverOwner), "Q4 contract §17.2 \(gap) carries the same owner")
+    }
+    // Fix round 2 (controller ruling on G5): the Square token gaps are fixed
+    // in 11.13, so neither row may still name the Phase 12.00 cutover owner.
+    for gap in ["G4", "G5"] {
+        let line = gaps.components(separatedBy: "\n").first { $0.hasPrefix("| \(gap) |") } ?? ""
+        expect(line.contains("Fixed (fix round 2") && !line.contains(cutoverOwner),
+               "Q4 contract §17.2 \(gap) is recorded as fixed, with no Phase 12.00 owner")
     }
 }
 
@@ -1117,8 +1123,8 @@ private func testRedaction(root: URL) throws {
 
     // Fix round 1 (I1): Square access tokens. RN `scrubLegacySquareToken`
     // (App.tsx sign-in chain; utils/storage/settings.ts) deletes any stored
-    // Square value `isSquarePaymentLink` refuses. Native has no such pass (G4,
-    // G5), so the shared screens must at least recognise the token shapes.
+    // Square value `isSquarePaymentLink` refuses; native ports it in fix round
+    // 2 (G4/G5, below). The shared screens also recognise the token shapes.
     let squareTokens = [
         "EAAAEOuLQObrVwJvCvoio3qx9Bi7MEZ2Ymv2nUx8m2cVYzAh8Kx5yGQZ", "sq0atp-3_Wb0zJnNx7lzM1nb2eP0g",
         "sq0atb-Hx7lzM1nb2eP0g_3Wb0zJ", "sq0csp-Q2lnbmF0dXJlX2V4YW1wbGU", "sq0csb-Q2lnbmF0dXJlX2V4YW1wbGU",
@@ -1146,6 +1152,60 @@ private func testRedaction(root: URL) throws {
         expect(NativeInvoicePaymentLinks.isProviderConfigured(.square, key: link),
                "Q5 Square link \(link) still configures the Square provider")
     }
+
+    // Fix round 2 (G4/G5): the native Settings Square field validates on
+    // save, and the RN `scrubLegacySquareToken` heal is ported. Both share one
+    // pure policy whose Square rule IS `isSquarePaymentLink`.
+    let square = NativeSquareProviderKeyPolicy.providerID
+    expectEqual(square, "square", "Q5 the policy guards the RN `square` providerKeys entry")
+    for token in squareTokens {
+        let tag = String(token.prefix(7))
+        let decision = NativeSquareProviderKeyPolicy.validate(token, provider: square)
+        expectEqual(decision, .reject(NativeSquareProviderKeyPolicy.rejectionMessage),
+                    "Q5 saving a Square \(tag)… token is rejected")
+        expectEqual(NativeSquareProviderKeyPolicy.validate("  \(token)\n", provider: square),
+                    .reject(NativeSquareProviderKeyPolicy.rejectionMessage),
+                    "Q5 a padded Square \(tag)… token is rejected too")
+        expectEqual(NativeSquareProviderKeyPolicy.scrubbed([square: token, "venmo": "@me"]), ["venmo": "@me"],
+                    "Q5 the heal deletes a stored Square \(tag)… token and keeps other providers")
+    }
+    expect(!NativeSquareProviderKeyPolicy.rejectionMessage.contains("EAAA")
+               && NativeSquareProviderKeyPolicy.rejectionMessage.contains(
+                   "Paste your Square payment link (create one in Square Dashboard → Payment Links, e.g. https://square.link/u/abc123)"),
+           "Q5 the rejection copy carries RN's Square hint and never echoes a token")
+    for link in ["https://square.link/u/EAAAbc12", "square.link/u/AbC123", " checkout.square.site/merchant/ML1/checkout/ABC "] {
+        expectEqual(NativeSquareProviderKeyPolicy.validate(link, provider: square), .save(link),
+                    "Q5 Square link \(link) saves as typed")
+        expect(NativeSquareProviderKeyPolicy.scrubbed([square: link]) == nil,
+               "Q5 the heal keeps Square link \(link) and reports no change (no write)")
+    }
+    for blank in ["", "   ", "\n"] {
+        expectEqual(NativeSquareProviderKeyPolicy.validate(blank, provider: square), .save(""),
+                    "Q5 an empty Square entry clears the field")
+    }
+    expect(NativeSquareProviderKeyPolicy.scrubbed([square: ""]) == nil
+               && NativeSquareProviderKeyPolicy.scrubbed([:]) == nil
+               && NativeSquareProviderKeyPolicy.scrubbed(["venmo": "EAAAvenmo"]) == nil,
+           "Q5 the heal is a no-op without a non-empty Square value (RN `!square` short-circuit)")
+    for provider in ["paypal", "venmo", "custom", "stripe"] {
+        expectEqual(NativeSquareProviderKeyPolicy.validate("johndoe", provider: provider), .save("johndoe"),
+                    "Q5 \(provider) keeps RN's unvalidated save")
+    }
+    // The heal runs where RN runs it (sign-in) and wherever native loads or
+    // merges synced settings: the initial-sync commit, the returning-user
+    // sign-in, and every delta-pull commit.
+    let appStore = SourceFile(relativePath: "AppStore.swift",
+                              text: readOrFail(root, "native/TradeReadyNative/AppStore.swift"))
+    for function in ["beginInitialSyncGate", "applyAuthenticatedIdentityOutcome", "pullDeltaAndCommit"] {
+        let body = SourceFile(relativePath: function, text: functionBody(appStore, function))
+        expect(body.codeText.contains("scrubLegacySquareToken()"),
+               "Q5 AppStore.\(function) runs the Square token heal")
+    }
+    let settingsView = SourceFile(relativePath: "SettingsView.swift",
+                                  text: readOrFail(root, "native/TradeReadyNative/SettingsView.swift"))
+    expect(!settingsView.codeText.contains(".setProviderKey(")
+               && settingsView.codeText.contains("store.setPaymentProviderKey("),
+           "Q5 Settings writes provider keys only through the validated AppStore save")
 
     // Widget snapshot keys (§10.1 column 3): no secure-looking key, no secure field.
     let snapshotJSON = try projectSnapshot([

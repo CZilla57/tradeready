@@ -176,3 +176,48 @@ enum NativeInvoicePaymentLinks {
         return value.addingPercentEncoding(withAllowedCharacters: unescaped) ?? value
     }
 }
+
+/// Task 11.13 fix round 2 (contract §17.2 G4/G5): the Square provider-key
+/// policy. An RN build before the 2026-08 Square credential fix told users to
+/// paste their Square ACCESS TOKEN under Settings → Square, so a live
+/// credential can sit in the synced settings blob. Native never saves one
+/// (`validate`, the Settings save), and heals one it finds (`scrubbed`, the
+/// port of RN `scrubLegacySquareToken`, `utils/storage/settings.ts`). The
+/// Square rule is `isSquarePaymentLink` itself, the single RN definition of
+/// "safe to emit"; every other provider keeps RN's unvalidated save.
+enum NativeSquareProviderKeyPolicy {
+    /// The `providerKeys` entry RN's heal deletes.
+    static let providerID = NativePaymentProvider.square.rawValue
+
+    /// Shown when a Square entry is refused. RN's Square hint
+    /// (`screens/SettingsPaymentsScreen.tsx`), framed as a refusal; it never
+    /// echoes what was typed, so a pasted credential is not shown back.
+    static let rejectionMessage = "That isn't a Square payment link, so it wasn't saved. "
+        + "Paste your Square payment link (create one in Square Dashboard → Payment Links, "
+        + "e.g. https://square.link/u/abc123) — never an access token."
+
+    enum Decision: Equatable {
+        /// Persist this value (Square: trimmed-empty clears to "").
+        case save(String)
+        /// Persist nothing; show this message.
+        case reject(String)
+    }
+
+    static func validate(_ value: String, provider: String) -> Decision {
+        guard provider == providerID else { return .save(value) }
+        if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .save("") }
+        return NativeInvoicePaymentLinks.isSquarePaymentLink(value) ? .save(value) : .reject(rejectionMessage)
+    }
+
+    /// RN `scrubLegacySquareToken` semantics exactly: when the Square entry is
+    /// a non-empty value `isSquarePaymentLink` refuses, the key is deleted.
+    /// Nil means nothing to scrub, and the caller MUST NOT write (RN: a run
+    /// that finds nothing never saves, since saving re-enqueues an upsert).
+    static func scrubbed(_ providerKeys: [String: String]) -> [String: String]? {
+        guard let square = providerKeys[providerID], !square.isEmpty,
+              !NativeInvoicePaymentLinks.isSquarePaymentLink(square) else { return nil }
+        var cleaned = providerKeys
+        cleaned.removeValue(forKey: providerID)
+        return cleaned
+    }
+}

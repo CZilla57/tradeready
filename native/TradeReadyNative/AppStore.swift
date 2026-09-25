@@ -5112,6 +5112,9 @@ final class AppStore: ObservableObject {
                         && allowUnboundWorkspaceAdoption
                 )
                 refreshRecurringJobs()
+                // Fix round 2 (G5): RN runs its Square token heal on every
+                // sign-in (`App.tsx`); gated like generation, after the gate.
+                scrubLegacySquareToken()
             } else {
                 beginInitialSyncGate(
                     outcome: outcome,
@@ -5193,6 +5196,9 @@ final class AppStore: ObservableObject {
                 // gated on the post-initial-sync state). Synchronous, so no
                 // suspension is added before the publish below.
                 self.runRecurringGenerationAfterInitialSync()
+                // Fix round 2 (G5): the first sign-in's synced settings may
+                // carry a Square token; heal it before anything publishes.
+                self.scrubLegacySquareToken()
                 // Task 10.09 (B1) fix round 2: the initial full sync's commit
                 // above never routes through `pullDeltaIfPossible` — it is
                 // its own, structurally separate committed canonical sync
@@ -5917,6 +5923,59 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Task 11.13 fix round 2 (G5): the only Settings write path for a
+    /// payment provider key. A Square value `isSquarePaymentLink` refuses (a
+    /// pasted access token) is rejected and never reaches the snapshot, disk
+    /// or the mutation queue; an empty Square entry clears the field; every
+    /// other provider keeps RN's unvalidated save.
+    @discardableResult
+    func setPaymentProviderKey(_ entry: String, for provider: String) -> NativeSquareProviderKeyPolicy.Decision {
+        let decision = NativeSquareProviderKeyPolicy.validate(entry, provider: provider)
+        if case let .save(value) = decision {
+            settings.setProviderKey(value, for: provider)
+        }
+        return decision
+    }
+
+    /// Task 11.13 fix round 2 (G4/G5): the port of RN `scrubLegacySquareToken`
+    /// (`utils/storage/settings.ts`; run on every sign-in, `App.tsx`). A stored
+    /// Square value `isSquarePaymentLink` refuses is deleted from
+    /// `providerKeys`, and the cleaned blob is queued so the cloud copy (the
+    /// push replaces the whole settings `data` blob) is overwritten too.
+    /// Native runs it at sign-in and after every commit of synced settings
+    /// (initial sync, delta pull), because a pull can resurrect an unscrubbed
+    /// blob from another device or an old queue. Idempotent: a run that finds
+    /// nothing writes nothing. Gated on the exact signed-in workspace (the
+    /// recurring-generation gate) so it never queues a write that another
+    /// owner's session could upload.
+    @discardableResult
+    func scrubLegacySquareToken() -> Bool {
+        guard derivedStatePublishBinding != nil, !persistenceWritesBlocked,
+              let current = snapshot.payload.settings,
+              let cleaned = NativeSquareProviderKeyPolicy.scrubbed(current.providerKeys)
+        else { return false }
+        var healed = current
+        healed.providerKeys = cleaned
+        let previous = snapshot
+        do {
+            snapshot.payload.settings = healed
+            try repository.save(snapshot)
+        } catch {
+            snapshot = previous
+            print("TradeReadySquareTokenScrub stage=save")
+            return false
+        }
+        // The repository keeps the previous generation as its `.backup`, which
+        // still holds the credential; a second write rotates the healed
+        // snapshot into it. Best effort: the primary is already healed.
+        do { try repository.save(snapshot) } catch { print("TradeReadySquareTokenScrub stage=backup") }
+        isApplyingProjection = true
+        settings = CanonicalUIAdapters.settings(from: healed)
+        isApplyingProjection = false
+        enqueueSettingsUpsert(healed)
+        return true
+    }
+
     private func mergeSettingsAndSave() {
         guard ensurePersistenceWritable() else {
             if let canonicalSettings = snapshot.payload.settings {
@@ -5925,6 +5984,14 @@ final class AppStore: ObservableObject {
                 isApplyingProjection = false
             }
             return
+        }
+        // Fix round 2 (G5): a Square value that is not a payment link never
+        // persists, whatever path wrote it (`setPaymentProviderKey` rejects it
+        // first; this is the persist-time guard behind it).
+        if let cleaned = NativeSquareProviderKeyPolicy.scrubbed(settings.paymentProviderKeys) {
+            isApplyingProjection = true
+            settings.paymentProviderKeys = cleaned
+            isApplyingProjection = false
         }
         do {
             if let baseline = snapshot.payload.settings {
@@ -6503,6 +6570,10 @@ final class AppStore: ObservableObject {
         // occurrences materialize before any recurrence-manager refresh reads
         // them. A no-op when nothing is due; never fails the pull.
         refreshRecurringJobs()
+        // Fix round 2 (G5): a pull can resurrect a Square token from another
+        // device's (or an old RN build's) settings blob; heal it locally and
+        // queue the cleaned blob. A no-op when nothing needs scrubbing.
+        scrubLegacySquareToken()
         // Task 10.09 (B1): the post-sync-commit seam, invoked exactly once
         // per commit this call makes — never on an offline/signed-out/
         // pre-commit-failed pass: every such pass returns above, before ever
