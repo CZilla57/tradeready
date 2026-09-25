@@ -430,7 +430,35 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   deferred to Phase 12 per
   [native-phase-10-device-runsheet.md](native-phase-10-device-runsheet.md),
   which also tracks the four open gates above.
-- Phases 8–9, 11–12: **Not started** (tracking note: Phase 8's contract
+- Phase 11: **Code complete (tasks 11.00–11.15, closed out by 11.14 on
+  2026-09-24); device, extension, Siri, live-SDK and store evidence deferred to
+  Phase 12. Not `Verified`.** The Phase 11 final whole-branch review is still
+  pending. Delivered and host-tested: a WidgetKit extension
+  (`TradeReadyWidgets.appex`, embedded in the app) with Next Job (small, medium) and
+  Job Timer widgets over an owner-tagged App Group snapshot that RN's own
+  `BridgeSnapshot` decoder reads; all ten App Intents (eight Siri shortcuts plus the
+  widget's Start/Stop Timer) appending owner-tagged actions to the locked App Group
+  queue and replaying through the normal save paths; owner, stale-data and
+  sign-in gating for widgets, Siri and cold/warm deep links; PostHog analytics (52-event
+  catalog, 49 live natively) with an allow-list, identity lifecycle and screen map;
+  Sentry crash reporting with a redactor and a dSYM upload script; app and extension
+  privacy manifests; AI-provider key entry; an accessibility audit and re-audit with
+  zero release-blocking findings; the iPad content column and hardware-keyboard
+  shortcuts; privacy-safe signposts, a poor-network suite and a soak protocol; and a
+  cross-client qualification suite against RN's decoders, vectors and call sites.
+  Evidence: `TZ=America/Phoenix sh native/run-all-domain-tests.sh` (every one of the
+  120 runners registered) and the unsigned generic Release build pass. The signed
+  local Release build did **not** complete: the widget extension has no provisioning
+  profile with the App Group, and Xcode has no signed-in developer account to create
+  one (plan §7, 11.14). Every device row is in
+  [native-phase-11-device-runsheet.md](native-phase-11-device-runsheet.md). Two
+  cutover-blocking parity gaps are owned by Phase 12.00 (see Phase 12 below): no
+  native remote push notifications (G1) and no native tax-settings screen (G2).
+  Carried to Phase 12 as owned items: the RN AsyncStorage source-file retention policy
+  (G6, 12.00), the first-party data in the privacy labels (12.01), the Sentry
+  `tradeready-ios` project (12.01/12.02) and the 429 push policy (12.00/12.02). Five
+  known code issues go to the Phase 11 final review (runsheet OI-4).
+- Phases 8–9 and 12: **Not started** (tracking note: Phase 8's contract
   decisions and Phase 9's implementation plan/device runsheet already exist as
   in-flight artifacts from earlier work on this branch; their roadmap status
   lines were not reconciled by this Phase 10 closeout task and remain as
@@ -1080,6 +1108,22 @@ matrix rows read `In progress` until those device/staging runs pass.
 - Release gradually using phased App Store rollout.
 - Do not remove legacy migration code or backend compatibility during the first
   stable native release series.
+
+### Cutover-blocking parity gaps (owned by Phase 12.00)
+
+Found by Phase 11 qualification (contract §17.2). Each is built before cutover or
+given a dated waiver by Phase 12.00; neither may be silently dropped.
+
+- **Push notifications (G1).** The native app has no remote push notifications. RN
+  opens booking requests and booking updates from push taps and tracks
+  `booking_request_opened` and `booking_update_opened`; natively neither alert nor
+  event exists. Build native remote push (a device token the backend's sender accepts —
+  RN registers an Expo push token in `utils/pushToken.ts` — plus tap routing) or
+  record a dated waiver.
+- **Tax settings screen (G2).** Native has the tax-settings domain and
+  `AppStore.commitTaxSettings`, but no screen calls it, so the income-tax rate and
+  vehicle method cannot be set and `tax_settings_saved` is never emitted. Build the
+  editor (RN `TaxSettingsModal`) or record a dated waiver.
 
 ### Exit criteria
 

@@ -2008,8 +2008,11 @@ Every other §12.1 row is fixed, accepted with a rationale, or a Phase 12 device
 | Sentry/PostHog live delivery (Release, staging key absent → silent) | **Phase 12** | 11.07/11.09 rows |
 | Poor network, memory and battery soak | **Phase 12** | 11.12 host tests (`native/run-poor-network-tests.sh`, done 2026-09-24) plus the soak protocol (SOAK-1 to SOAK-6 in `docs/native-phase-11-performance.md`) |
 
-11.14 collects these rows in `docs/native-phase-11-device-runsheet.md`, a new file
-created by 11.14. Phase 12 12.03 consolidates it. No row is claimed as passed in Phase 11.
+11.14 collected these rows in [native-phase-11-device-runsheet.md](native-phase-11-device-runsheet.md)
+(created 2026-09-24). Phase 12 12.03 consolidates it. No row is claimed as passed in Phase 11.
+The 11.14 results for the three Phase 11 rows above (aggregate, unsigned build, signed
+local build) are in the plan §7 11.14 entry; the signed local build did not complete
+(widget provisioning), and that is recorded there, not claimed.
 
 ---
 

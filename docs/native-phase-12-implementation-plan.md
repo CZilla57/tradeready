@@ -23,8 +23,8 @@ device runsheets produced by Phases 2–11. As of 2026-09-22 these exist:
 `native-phase-7-device-runsheet.md`, `native-phase-9-device-runsheet.md`, and
 [native-phase-10-device-runsheet.md](native-phase-10-device-runsheet.md) (created
 by this task, 10.15).
-`native-phase-11-device-runsheet.md` is
-created by 11.14. **No Phase 5, 6, or 8 runsheet exists**, and the
+[native-phase-11-device-runsheet.md](native-phase-11-device-runsheet.md) (created
+by 11.14). **No Phase 5, 6, or 8 runsheet exists**, and the
 consolidated runsheet has no sections for them; their deferred rows are scattered
 through the roadmap text and are recovered by 12.03. The rollback procedure
 extends [native-phase-0-baseline.md § Rollback procedure](native-phase-0-baseline.md).

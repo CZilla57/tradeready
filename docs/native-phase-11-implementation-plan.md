@@ -769,7 +769,7 @@ invoke any App Store Connect or deploy command to validate a build.
 
 ## 6. Initial execution ledger
 
-11.00 and 11.01 are done (see §7); tasks **11.02–11.15 are pending**. The source review used to write this plan is
+Every task, 11.00–11.15, is done: code complete, with device evidence deferred to Phase 12 (see §7 and the [device runsheet](native-phase-11-device-runsheet.md)). The source review used to write this plan is
 not test execution or an implementation completion. When work starts, maintain one
 row per task: status, owner/session, dependency evidence, files, commands, actual
 results, blockers, and handoff. Separate **implementation blocked** from **code
@@ -793,7 +793,7 @@ complete / Phase 12 evidence deferred**.
 | 11.12 | H3, H4 | Done (code complete 2026-09-24; eight privacy-safe `OSSignposter` intervals (launch, snapshot load, migration, initial sync, delta pull, background refresh, two list projections) behind a pinned call-site inventory; poor-network suite over the real coordinator, queue, push, pull and AppStore commit: offline→online, throttle/timeout, mid-pass drop, 5/5 mutations caught; one data-loss finding (an edit saved during an in-flight delta pull was reverted by the pull commit and could be lost), **fixed in fix round 1 (`36a08dc`) and round 2 (`22f35fd`, review I1: a push acknowledged during a direct-caller pull)**: the pull commit rebases onto the live snapshot and takes the server's version only for records the device has not touched (pending at start or commit, or changed locally), holding a table's cursor where it keeps a local record over a fetched row, with scenarios D–G and table-driven merge cases running by default (229 checks; see §7); measurement and soak protocol with Phase 12 owners in [performance](native-phase-11-performance.md); device numbers deferred to Phase 12 Stage A) | 11.10a, 11.11 | Performance + poor-network host tests + soak protocol |
 | 11.10b | H1 | Done (code complete 2026-09-24). The re-audit after 11.11 and 11.12 is done (contract §12.3). A13, A15–A18 and A24–A29 are fixed, A22 is accepted with a rationale, and the scanner covers all 59 view files. A29 (success, warning and status colors as text) is fixed with native text tokens after the controller ruling. Fix round 1 fixed the 12 in-row destructive buttons (I1) and minors m1–m7. A30 (PDF stamps) is owned by 11.13 and A31 (system dialogs) is accepted. **H1 is closed:** zero release-blocking findings remain. VoiceOver, Switch Control and AX5 proof is deferred to Phase 12 | 11.11, 11.12 | Accessibility re-audit (closes H1) |
 | 11.13 | all | Done (code complete 2026-09-24). The six areas are qualified against RN (contract §17), and every gap has coverage or a named owner. The new suite `native/Phase11QualificationTests` (510 checks after fix round 2) proves four things. RN's own `BridgeSnapshot` and `SiriSnapshot` decoders, extracted from `targets/`, read every contract fixture and every native write. Every RN widget-action and deep-link vector with a Swift form runs through the native planner, replayer, coordinator and parser, and a completeness guard pins each RN vector. The RN `track(` sites equal the catalog, with 49 of 52 events live natively and 3 named exclusions. The RN secure fields and §10.1 deny rows are stripped everywhere, and no §12.1 row is open. A30 (PDF stamps and accent) is fixed as a native difference, with every pairing at 5.67:1 or better. Fix round 1 made an empty queue a no-op (RN parity) and added the Square token prefixes. Fix round 2 fixed G4 and G5: Settings refuses a Square value that is not a payment link, and RN `scrubLegacySquareToken` runs at sign-in and after every synced-settings commit. Gaps G1 and G2 are owned by Phase 12.00. Six known issues are carried to the final review and are not qualified. Device, extension, Siri and store proof is deferred to Phase 12 | 11.01-11.12, 11.15 | Cross-client qualification |
-| 11.14 | all | Pending | 11.13 | Aggregate verification + closeout |
+| 11.14 | all | Done with a recorded blocker (2026-09-24). Code complete; device evidence deferred to Phase 12. All 120 `native/run-*-tests.sh` runners are registered exactly once, and every `native/*Tests/main.swift` has a runner. The aggregate exits 0 under `TZ=America/Phoenix`. Target membership was checked from the build: the extension compiles `native/TradeReadyWidgets/` plus `N/Widgets/Shared/` only, links no SPM package, and ships `Metadata.appintents` for Start/Stop Timer; the app's metadata lists all ten intents and eight auto shortcuts. The unsigned generic Release build succeeds with `PlugIns/TradeReadyWidgets.appex` embedded. **The signed local Release build did not complete**: no Xcode developer account is signed in, and the wildcard team profile lacks the App Group the widget extension needs (errors in §7). This is recorded, not claimed. The device runsheet is written and linked from Phase 12. The roadmap and parity matrix now separate code complete from deferred evidence; the Tax set-aside row is corrected (G2), and G1/G2 are cutover-blocking Phase 12.00 lines in the roadmap | 11.13 | Aggregate verification + closeout — [runsheet](native-phase-11-device-runsheet.md) |
 
 Exit criteria traceability (roadmap Phase 11):
 
@@ -4102,3 +4102,148 @@ Square access token in synced settings is a security defect, so it is fixed in 1
   when every file is `NSFileProtectionComplete` and the tree is excluded from iCloud and
   Finder backup.
 - Verification results are recorded in the report, under "Fix round 3".
+
+### 11.14 — Aggregate verification and evidence closeout (2026-09-24)
+
+**Status:** done with one recorded blocker. Phase 11 is code complete; device, extension,
+Siri, live-SDK and store evidence is deferred to Phase 12. The signed local Release build
+did **not** complete (widget provisioning; see below). That is recorded here and not
+claimed. No code was changed.
+
+**Files:**
+- New: `docs/native-phase-11-device-runsheet.md`.
+- Updated: `docs/native-ios-migration-roadmap.md` (a Phase 11 "Current progress" entry, and
+  a Phase 12 "Cutover-blocking parity gaps (owned by Phase 12.00)" section with the push
+  notification line G1 and the tax-settings line G2), `docs/native-parity-matrix.md`,
+  `docs/native-phase-12-implementation-plan.md` (the runsheet is now a link; nothing else
+  changed), contract §13 (the runsheet link and a pointer to this entry), and this plan
+  (§6 and this entry).
+- Nothing under `targets/`, `backend*/`, `__tests__/`, `supabase/`, `utils/` or `types/`
+  was edited. `project.pbxproj` was only read.
+
+**Runner registration (ruling P9).** The guard in `native/run-all-domain-tests.sh` passed.
+An independent check also passed: each of the 120 `native/run-*-tests.sh` runners
+(excluding the aggregate) has exactly one uncommented invocation line, and every
+`native/*Tests/main.swift` is compiled by some runner. The Phase 11 runners are:
+`widget-snapshot`, `app-intent-queue`, `next-job-widget`, `job-timer-widget`,
+`widget-owner-gating`, `deep-link-routing`, `analytics-transport`, `analytics-event`,
+`error-redaction`, `ai-provider-key`, `accessibility-audit`, `layout-metrics`,
+`performance-metrics`, `poor-network` and `phase11-qualification`. Each was registered by
+its own task, so 11.14 added none and `run-all-domain-tests.sh` is unchanged.
+
+**Target membership (read-only; evidence from a clean unsigned Release build):**
+- `project.pbxproj`: the app target syncs the root group `TradeReadyNative` and has the
+  five SPM products (GoogleSignIn, GoogleSignInSwift, RevenueCat, PostHog, Sentry). The
+  `TradeReadyWidgets` target syncs `TradeReadyWidgets` (exceptions: `Info.plist`,
+  `TradeReadyWidgets.entitlements`) and `TradeReadyNative/Widgets/Shared`, with no package
+  products. The app embeds `TradeReadyWidgets.appex` through "Embed Foundation Extensions",
+  and the app target depends on the widget target.
+- Widget `TradeReadyWidgets.SwiftFileList` (12 files): the nine
+  `N/Widgets/Shared/*.swift` files plus `native/TradeReadyWidgets/JobTimerWidget.swift`,
+  `NextJobWidget.swift` and `TradeReadyWidgets.swift`. No other app source is in the
+  extension.
+- App `TradeReadyNative.SwiftFileList` (200 files): includes the same nine shared files,
+  `N/Intents/*.swift` (4) and `N/NativeAppIntents.swift`; no file from
+  `native/TradeReadyWidgets/`.
+- `otool -L` on the extension binary: no Sentry, PostHog, RevenueCat or Google library.
+  Extension `NSExtensionPointIdentifier` = `com.apple.widgetkit-extension`, bundle id
+  `com.gettradereadyapp.tradeready.widgets`, deployment target 17.0.
+- App Intents are real: `ExtractAppIntentsMetadata` runs for both `TradeReadyNative` and
+  `TradeReadyWidgets`. The app's `Metadata.appintents/extract.actionsdata` lists ten actions
+  (`ClockInIntent`, `ClockOutIntent`, `LogExpenseIntent`, `NextJobIntent`,
+  `OnMyWayIntent`, `OutstandingIntent`, `StartTimerIntent`, `StartTripIntent`,
+  `StopTimerIntent`, `StopTripIntent`) and eight auto shortcuts. The extension's lists
+  `StartTimerIntent` and `StopTimerIntent`.
+- Both `PrivacyInfo.xcprivacy` files are in the built bundle (app root and the `.appex`).
+- `DEBUG_INFORMATION_FORMAT` resolves to `dwarf-with-dsym` for Release in both targets.
+
+**Commands and results:**
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → exit 0; 342 output lines, 62
+  `PASS` lines, no `FAILED` or `error:` line. Phase 11 lines:
+  `phase11-qualification tests: 510/510 checks passed`,
+  `error-redaction tests: 720/720`, `ai-provider-key tests: 274/274`,
+  `accessibility-audit tests: 1860/1860`, `layout-metrics tests: 817/817`,
+  `performance-metrics tests: 178/178`, `poor-network tests: 258/258`,
+  `Analytics transport tests passed (226 checks)`,
+  `Analytics event tests passed (536 checks)`, and the widget, intent, owner-gating,
+  deep-link and pending-open-URL runners passed. The tail is backend-workers `npm test`:
+  `tests 26, pass 26, fail 0`. That suite runs over the working tree, which includes other
+  agents' uncommitted backend work. The 22 `warning:` lines are existing Swift 6
+  concurrency warnings in test harnesses.
+- Unsigned compile:
+  `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
+  → `** BUILD SUCCEEDED **`, exit 0. The first run was incremental, so it was re-run after
+  `… clean` to get the membership evidence above: `** BUILD SUCCEEDED **`, exit 0, with 4
+  existing concurrency warnings in `N/NativeChangeOrdersView.swift`.
+  `Products/Release-iphoneos/TradeReadyNative.app/PlugIns/` contains
+  `TradeReadyWidgets.appex`.
+- Signed local build (pre-approved; no archive, export or upload):
+  `xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -destination 'generic/platform=iOS' -allowProvisioningUpdates build`
+  → `** BUILD FAILED **`, exit 65, before compiling. Verbatim:
+  - `DVTDeveloperAccountManager: Failed to load credentials for 69318FA2-5742-44AA-B8B1-A667D457CBDA: Error Domain=DVTDeveloperAccountCredentialsError Code=0 "Invalid credentials in keychain for 69318FA2-5742-44AA-B8B1-A667D457CBDA, missing Xcode-Username"`
+  - `error: No Accounts: Add a new account in Accounts settings. (in target 'TradeReadyWidgets' from project 'TradeReadyNative')`
+  - `error: Provisioning profile "iOS Team Provisioning Profile: *" doesn't include the App Groups capability. (in target 'TradeReadyWidgets' from project 'TradeReadyNative')`
+  - `error: Provisioning profile "iOS Team Provisioning Profile: *" doesn't support the group.com.gettradereadyapp.tradeready App Group. (in target 'TradeReadyWidgets' from project 'TradeReadyNative')`
+  - `error: Provisioning profile "iOS Team Provisioning Profile: *" doesn't include the com.apple.security.application-groups entitlement. (in target 'TradeReadyWidgets' from project 'TradeReadyNative')`
+
+  Cause: the local profiles for team `96J48TJWX3` include an app profile for
+  `com.gettradereadyapp.tradeready` with the App Group, but none for
+  `com.gettradereadyapp.tradeready.widgets`. Automatic signing cannot create one, because
+  no developer account is signed in to Xcode. **Owner action:** sign in to Xcode ›
+  Settings › Accounts for team `96J48TJWX3`, then re-run the command so automatic
+  signing registers the widget App ID with the App Group. No account, profile, keychain
+  or project setting was changed by this task.
+- `sh native/run-doc-reference-check.sh` → `1697 path references checked: 0 missing, 13 planned (not yet created).` (11.13 recorded 16 planned. The runsheet now exists, and every reference to it resolves; the 13 left are Phase 12 files, the Phase 0 reference folder and the Phase 8 runsheet).
+
+**Runsheet.** `docs/native-phase-11-device-runsheet.md` uses the 12.03 row shape: ID,
+requirement, steps, expected result, environment/build and an evidence placeholder, with
+environment codes defined once. It collects:
+- every "Runsheet rows" block in this log (11.01–11.06, 11.07, 11.08, 11.09, 11.15, 11.10a,
+  11.11, 11.10b including A11B-FR1-1/2);
+- 11.13's Q11-P12-1 to Q11-P12-6;
+- 11.12's PERF-1 to PERF-10 and SOAK-1 to SOAK-6 (summarized; the protocol stays in
+  `docs/native-phase-11-performance.md`);
+- the controller carries: the 11.09 device checks (CR-6 SDK write-back coverage, CR-7 the
+  `NSDebugDescriptionErrorKey` title, CR-8 transactions through `beforeSendSpan`, CR-9 the
+  Release dSYM format) and SYNC-1 (fresh-install recurring generation).
+
+An "Owned items" table names the carries that are not device rows:
+- G1 native remote push and G2 the tax-settings screen: Phase 12.00, cutover-blocking;
+- G6 the RN AsyncStorage retention policy: 12.00;
+- OI-1 the §8.2 first-party data for the privacy labels: 12.01;
+- OI-2 the Sentry project `tradeready-ios` in `tradeready-3r`: 12.01/12.02;
+- OI-3 the 429 push policy: 12.00/12.02;
+- OI-4 the five known code issues reserved for the Phase 11 final review.
+
+The Phase 12 plan's scope list now links the runsheet.
+
+**Roadmap and parity matrix.**
+- The roadmap's "Current progress" adds Phase 11 as code complete with evidence deferred,
+  never `Verified`, and names the signed-build blocker. "Phases 8–9, 11–12" now reads
+  "Phases 8–9 and 12".
+- The parity matrix's Phase 11 rows (Deep links, WidgetKit, App Intents/Siri, Analytics,
+  Crash reporting, Accessibility, iPad) each end with "Phase 11 code complete; device
+  evidence deferred, not `Verified`" and their runsheet row IDs. It also gains a Privacy
+  manifests row.
+- **The Tax set-aside row is corrected:** only the Money card is ported. There is no
+  tax-settings screen; `N/Domain/NativeTaxSettings.swift` and
+  `AppStore.commitTaxSettings` have no view caller. The row points at G2 and Phase 12.00.
+  This closes 11.13 known issue 3.
+- The Notifications (platform) row names G1. The AsyncStorage upgrade row now records
+  that untagged RN-era queue entries are dropped (contract §14 asked for this at
+  closeout) and names G6. The AI Assistant and Supabase sync rows point at their
+  runsheet rows and at OI-3/OI-4.
+
+**Deviations:**
+- The signed build is a recorded failure, not a pass.
+- Nothing else was waived.
+- The code items reserved for the final review were not touched:
+  - the `useAnotherAccount` scrub fail-open;
+  - the silent AI-key wipe;
+  - `deepLinkOwnerWasActive` keyed on O;
+  - the recurring Cancel/Delete plan no-op;
+  - the `NativeSupabasePush` non-auth 4xx wedge.
+- No new code defect was found.
+
+**Next ready:** the Phase 11 final whole-branch review. Before Phase 12 Stage A, the owner
+must sign in to Xcode so the signed build can be re-run, and Phase 12.00 takes G1 and G2.
