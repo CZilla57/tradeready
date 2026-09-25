@@ -524,6 +524,7 @@ final class AppStore: ObservableObject {
         seedIfMissing: Bool = true,
         automaticallyMigrateLegacyData: Bool = false,
         legacyMigrationSource: LegacyMigrationSource? = nil,
+        repository injectedRepository: Canonical.SnapshotRepository? = nil,
         widgetActionReplayTransport: NativeWidgetActionClaimTransport? = nil,
         appGroupAccountScrubber: NativeAppGroupAccountScrubber = .init(),
         pendingOpenURLConsumer: NativePendingOpenURLConsumer? = nil,
@@ -546,7 +547,11 @@ final class AppStore: ObservableObject {
         self.crashReporting = crashReporting
         self.widgetTimelineReloader = widgetTimelineReloader
         self.fileURL = fileURL
-        self.repository = Canonical.SnapshotRepository(primaryURL: fileURL)
+        // Phase 12.00b.2-E fix round 2 (L267.a): injectable so a host test can
+        // observe the launch path's re-protect call with a counting
+        // `legacyFileEnumerator`, the same seam `SnapshotRepository` already
+        // exposes. Defaults to the real repository for every other caller.
+        self.repository = injectedRepository ?? Canonical.SnapshotRepository(primaryURL: fileURL)
         self.widgetActionReplayTransport = widgetActionReplayTransport ?? (try? .live())
         self.appGroupAccountScrubber = appGroupAccountScrubber
         self.pendingOpenURLConsumer = pendingOpenURLConsumer
@@ -657,6 +662,22 @@ final class AppStore: ObservableObject {
                         }
                         return try coordinator.migrate(currentSettings: currentSettings)
                     }
+                } else {
+                    // Phase 12.00b.2-E fix round 2 (L267.a, Important 1): once a
+                    // migration has completed, this automatic launch path never
+                    // calls `coordinator.migrate` again — `shouldAttempt` stays
+                    // false on every later launch, so the `.alreadyCompleted`
+                    // re-protect hook inside `migrate` is unreachable here. Run
+                    // the same re-protect directly so a protection failure from
+                    // the original pass still heals on a later launch. Best
+                    // effort: `reprotectPublishedLegacyDirectory` never throws,
+                    // so this never blocks launch or changes launchOutcome/
+                    // launchError; a bounded diagnostic already prints from
+                    // inside it on failure (no path or filename).
+                    _ = repository.reprotectPublishedLegacyDirectory(
+                        migration: .reactNativeAsyncStorage,
+                        name: "AsyncStorage"
+                    )
                 }
             } catch {
                 launchError = error

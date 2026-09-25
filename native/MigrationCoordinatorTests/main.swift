@@ -458,10 +458,12 @@ struct MigrationCoordinatorTests {
         expect(completedReplay.status == .alreadyCompleted, "completed migration re-run is a no-op")
         expect(coordinatorSecureBackend.writeKeys.filter { $0 == "groqKey" }.count == 2,
                "completed re-run does not touch Keychain")
-        // L267.a (Phase 12.00b.2-E fix round 1, Important 1 & 2 point 3): the
-        // `.alreadyCompleted` early return is the only call site reached once
-        // the journal is complete, so it must invoke the re-protect hook on
-        // every launch — a failed first pass would otherwise never heal.
+        // L267.a (Phase 12.00b.2-E fix round 1, Important 1 & 2 point 3): a
+        // direct `migrate` re-run (manual retry, re-import) reaches the
+        // `.alreadyCompleted` early return, so it must invoke the re-protect
+        // hook here too — a failed first pass would otherwise never heal.
+        // (Fix round 2 covers the separate automatic-launch steady-state case,
+        // which never calls `migrate` at all — see StoreIntegrationTests.)
         expect(legacyEnumeratorCounter.count == enumeratorCallsBeforeReplay + 1,
                "L267.a the .alreadyCompleted path re-protects the published legacy backup copy")
 

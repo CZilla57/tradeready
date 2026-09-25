@@ -668,6 +668,64 @@ struct StoreIntegrationTests {
         expect(replayedBytes == replayBytes,
                "completed launch replay does not rewrite the snapshot")
 
+        // Phase 12.00b.2-E fix round 2 (L267.a, Important 1): once a migration
+        // has completed, this automatic launch path never calls
+        // `coordinator.migrate` again (`hadNativeSnapshot` is true and the
+        // journal status is `.completed`, exactly like `replayStore` above),
+        // so the `.alreadyCompleted` re-protect hook inside `migrate` is
+        // unreachable here — a protection failure from the original pass
+        // would otherwise never heal on a later launch. A counting
+        // `legacyFileEnumerator`, injected through the new `repository:`
+        // parameter, proves the launch path re-protects the already-published
+        // legacy backup copy directly instead.
+        final class LaunchReprotectCallCounter { var count = 0 }
+        let launchReprotectCounter = LaunchReprotectCallCounter()
+        let launchReprotectRepository = Canonical.SnapshotRepository(
+            primaryURL: launchURL,
+            legacyFileEnumerator: { url in
+                launchReprotectCounter.count += 1
+                return FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+            }
+        )
+        let reprotectedLaunchStore = AppStore(
+            fileURL: launchURL,
+            automaticallyMigrateLegacyData: true,
+            legacyMigrationSource: launchSource,
+            repository: launchReprotectRepository,
+            secureSettingsStore: hostTestSecureSettingsStore()
+        )
+        expect(reprotectedLaunchStore.customers.count == 1 && reprotectedLaunchStore.launchMigrationNotice == nil,
+               "L267.a fix round 2 fixture: a steady-state launch with an injected repository still reloads silently")
+        expect(launchReprotectCounter.count == 1,
+               "L267.a fix round 2: an automatic launch that skips migration because it is already complete still re-protects the published legacy backup copy exactly once")
+
+        // Companion case: a launch blocked on account-scrub recovery must not
+        // run the re-protect hook either — `accountScrubRecoveryError != nil`
+        // skips the entire migration block, both the `shouldAttempt` branch
+        // and this fix's new `else` branch.
+        let scrubBlockedURL = directory.appendingPathComponent("LaunchScrubBlocked/store.json")
+        try Canonical.SnapshotRepository(primaryURL: scrubBlockedURL).beginAccountScrub(scope: .live)
+        final class ScrubBlockedReprotectCallCounter { var count = 0 }
+        let scrubBlockedCounter = ScrubBlockedReprotectCallCounter()
+        let scrubBlockedRepository = Canonical.SnapshotRepository(
+            primaryURL: scrubBlockedURL,
+            legacyFileEnumerator: { url in
+                scrubBlockedCounter.count += 1
+                return FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+            }
+        )
+        let scrubBlockedStore = AppStore(
+            fileURL: scrubBlockedURL,
+            automaticallyMigrateLegacyData: true,
+            repository: scrubBlockedRepository,
+            appGroupAccountScrubber: NativeAppGroupAccountScrubber(lockFile: nil),
+            secureSettingsStore: hostTestSecureSettingsStore()
+        )
+        expect(scrubBlockedStore.isAccountScrubBlocked,
+               "L267.a fix round 2 fixture: sanity, the scrub is genuinely blocked")
+        expect(scrubBlockedCounter.count == 0,
+               "L267.a fix round 2: a launch blocked on account-scrub recovery does not re-protect the legacy backup copy")
+
         let conflictURL = directory.appendingPathComponent("Conflict/store.json")
         let conflictSeed = AppStore(fileURL: conflictURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
         let nativeCustomer = Customer(name: "Native Sentinel")
