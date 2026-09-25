@@ -75,13 +75,22 @@ struct ControlConstruct {
     var line: Int { file.line(of: start) }
     var code: String { file.codeSlice(start..<end) }
     var raw: String { file.rawSlice(start..<end) }
-    var location: String { "N/\(file.relativePath):\(line)" }
+    var location: String { "\(displayPath(file)):\(line)" }
 
     static let nonTextViews: Set<String> = [
         "Image", "HStack", "VStack", "ZStack", "Group", "Spacer", "Circle", "Rectangle",
         "RoundedRectangle", "Capsule", "ProgressView", "Color", "EmptyView", "Divider", "AnyView",
         "UIImage", "Font", "CGSize", "EdgeInsets", "Animation", "LinearGradient", "Angle",
     ]
+
+    /// A text title the control can be announced and listed by: a string or
+    /// value title, or a `Text`/`Label` in its label closure. The iPad
+    /// keyboard-shortcut HUD lists a shortcut under this title (11.10b).
+    var hasTextTitle: Bool {
+        if hasTitle { return true }
+        guard let labelCode else { return false }
+        return labelCode.contains("Text(") || labelCode.contains("Label(")
+    }
 
     /// Label is only images/shapes (no text-bearing or custom view).
     var isIconOnly: Bool {
@@ -335,6 +344,8 @@ func testPaletteLiteralsShipped(root: URL) {
         ("tradeReady", p.tradeReadyDark, p.tradeReadyLight),
         ("tradeReadyFill", p.tradeReadyFillDark, p.tradeReadyFillLight),
         ("tradeCanvas", p.tradeCanvasDark, p.tradeCanvasLight),
+        ("tradeDangerFill", p.dangerFillDark, p.dangerFillLight),
+        ("tradeDangerText", p.dangerTextDark, p.dangerTextLight),
     ]
     for (name, dark, light) in expectations {
         let defs = paletteDefinitions(models, name)
@@ -427,13 +438,16 @@ func testIconOnlyControls(sources: [SourceFile]) {
 
     // The six §12 findings, located by marker; each must be found, be
     // classified icon-only, and carry a label.
-    let known: [(file: String, kind: String, marker: String)] = [
-        ("InvoicesView.swift", "Button", "Image(systemName: \"plus\")"),
-        ("JobsView.swift", "Button", "Image(systemName: \"plus\")"),
-        ("NativeRecurringInvoicesView.swift", "Button", "Image(systemName: \"plus\")"),
-        ("CustomersView.swift", "Button", "Image(systemName: \"plus\")"),
-        ("NativeBookingRequestsView.swift", "Button", "contactIcon(target.action)"),
-        ("NativeRouteView.swift", "Menu", "arrow.up.arrow.down"),
+    // 11.10b: the four ⌘N "+" buttons carry a titled `Label` shown icon-only
+    // (the shortcut HUD lists a title), so they are no longer icon-only
+    // constructs; they must show only the icon and keep the RN label.
+    let known: [(file: String, kind: String, marker: String, titled: Bool)] = [
+        ("InvoicesView.swift", "Button", "systemImage: \"plus\"", true),
+        ("JobsView.swift", "Button", "systemImage: \"plus\"", true),
+        ("NativeRecurringInvoicesView.swift", "Button", "systemImage: \"plus\"", true),
+        ("CustomersView.swift", "Button", "systemImage: \"plus\"", true),
+        ("NativeBookingRequestsView.swift", "Button", "contactIcon(target.action)", false),
+        ("NativeRouteView.swift", "Menu", "arrow.up.arrow.down", false),
     ]
     for site in known {
         let matches = constructs.filter {
@@ -443,7 +457,12 @@ func testIconOnlyControls(sources: [SourceFile]) {
             expect(false, "known finding not found: \(site.kind) with \(site.marker) in N/\(site.file)"); continue
         }
         expectEqual(matches.count, 1, "known finding unique: \(site.file) \(site.marker)")
-        expect(match.isIconOnly, "known finding classified icon-only: \(match.location)")
+        if site.titled {
+            expect(match.hasTextTitle, "known finding has a text title: \(match.location)")
+            expect(match.raw.contains(".labelStyle(.iconOnly)"), "known finding still shows only the icon: \(match.location)")
+        } else {
+            expect(match.isIconOnly, "known finding classified icon-only: \(match.location)")
+        }
         expect(match.hasAccessibilityLabel, "known finding labelled: \(match.location)")
     }
 
@@ -677,8 +696,8 @@ func testFills(sources: [SourceFile]) {
             if path == "NativeAccessibilityViews.swift" { continue }
             if path == "NativeTimeTrackingView.swift" {
                 let tail = source.rawSlice(hit..<min(source.raw.count, hit + 120))
-                expect(tail.contains(".tint(summary.isClocked ? .red : .tradeReadyFill)"),
-                       "time tracking prominent button re-tints to tradeReadyFill")
+                expect(tail.contains(".tint(summary.isClocked ? .tradeDangerFill : .tradeReadyFill)"),
+                       "time tracking prominent button re-tints to tradeDangerFill / tradeReadyFill (A18)")
                 continue
             }
             expect(false, "raw .borderedProminent at N/\(path):\(source.line(of: hit)); use tradeReadyProminentButtonStyle()")
@@ -759,6 +778,480 @@ func testFocusOrder(sources: [SourceFile]) {
     }
 }
 
+// MARK: - 11.10b re-audit
+
+/// `N/…` for app sources, `native/TradeReadyWidgets/…` for the widget
+/// extension target's own files.
+func displayPath(_ file: SourceFile) -> String {
+    file.relativePath.hasPrefix(widgetTargetPrefix)
+        ? "native/TradeReadyWidgets/" + file.relativePath.dropFirst(widgetTargetPrefix.count)
+        : "N/\(file.relativePath)"
+}
+
+let widgetTargetPrefix = "@TradeReadyWidgets/"
+
+/// The widget extension target's own sources (`native/TradeReadyWidgets`),
+/// scanned with the app's so no view file escapes the audit.
+func loadWidgetTargetSources(root: URL) -> [SourceFile] {
+    let base = root.appendingPathComponent("native/TradeReadyWidgets")
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []
+    return names.filter { $0.hasSuffix(".swift") }.sorted().compactMap { name in
+        guard let text = try? String(contentsOf: base.appendingPathComponent(name), encoding: .utf8) else { return nil }
+        return SourceFile(relativePath: widgetTargetPrefix + name, text: text)
+    }
+}
+
+/// Every file that declares SwiftUI UI (a `View`, `ViewModifier`,
+/// representable, toolbar, scene or widget). The re-audit (11.10b) reviewed
+/// each one for labels, Dynamic Type, contrast, touch targets and keyboard
+/// focus. A new view file fails the suite until it is reviewed and added.
+let viewFileInventory: Set<String> = [
+    "N/CoachView.swift", "N/Components.swift", "N/CustomersView.swift", "N/InvoicesView.swift",
+    "N/JobsView.swift", "N/MoneyView.swift", "N/NativeAccessibilityViews.swift",
+    "N/NativeAnalyticsScreenModifier.swift", "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
+    "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
+    "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
+    "N/NativeCustomerPortalView.swift", "N/NativeEstimateFollowUpView.swift", "N/NativeEstimatePDF.swift",
+    "N/NativeEstimateReview.swift", "N/NativeExpenseEditor.swift", "N/NativeExportDataView.swift",
+    "N/NativeGlobalSearch.swift", "N/NativeImportView.swift", "N/NativeInsightsCard.swift",
+    "N/NativeInteractionState.swift", "N/NativeInvoiceOutreachView.swift", "N/NativeJobPhotosView.swift",
+    "N/NativeJobProfitabilityView.swift", "N/NativeKeyboardDoneBar.swift", "N/NativeLayoutMetrics.swift",
+    "N/NativeMessageComposer.swift", "N/NativeMileageLogView.swift", "N/NativeMoneyCards.swift",
+    "N/NativeOnboardingView.swift", "N/NativePasswordRecoveryView.swift", "N/NativePaywallView.swift",
+    "N/NativePricebookEntryView.swift", "N/NativePricebookView.swift", "N/NativePricingCalculator.swift",
+    "N/NativeRecurringInvoicesView.swift", "N/NativeRecurringJobsView.swift", "N/NativeReviewRequestView.swift",
+    "N/NativeRouteView.swift", "N/NativeScheduleEditorView.swift", "N/NativeScheduleSettingsView.swift",
+    "N/NativeSetupChecklistCard.swift", "N/NativeTemplatePickerView.swift", "N/NativeTimeTrackingView.swift",
+    "N/NativeTodayComponents.swift", "N/NativeTripEditor.swift", "N/RootView.swift", "N/SettingsView.swift",
+    "N/TodayView.swift", "N/TradeReadyNativeApp.swift",
+    "N/Widgets/Shared/JobTimerWidgetView.swift", "N/Widgets/Shared/NextJobWidgetView.swift",
+    "native/TradeReadyWidgets/JobTimerWidget.swift", "native/TradeReadyWidgets/NextJobWidget.swift",
+]
+
+func declaresUI(_ file: SourceFile) -> Bool {
+    let pattern = #"\bsome (View|Scene|WidgetConfiguration|ToolbarContent)\b|:\s*(?:[A-Za-z_.]+\s*,\s*)*(View|ViewModifier|UIViewControllerRepresentable|UIViewRepresentable|App|Widget|ToolbarContent)\b"#
+    let text = file.codeText
+    return text.range(of: pattern, options: .regularExpression) != nil
+}
+
+func testViewInventory(allSources: [SourceFile]) {
+    let actual = Set(allSources.filter(declaresUI).map(displayPath))
+    for path in actual.subtracting(viewFileInventory).sorted() {
+        expect(false, "new view file \(path) is not in the 11.10b accessibility inventory: review its labels, Dynamic Type, contrast, touch targets and focus, then add it to viewFileInventory")
+    }
+    for path in viewFileInventory.subtracting(actual).sorted() {
+        expect(false, "inventoried view file \(path) is missing or no longer declares UI (update viewFileInventory)")
+    }
+    expect(actual.count >= 58, "view inventory covers the app and the widget target (\(actual.count))")
+    expect(allSources.contains { $0.relativePath.hasPrefix(widgetTargetPrefix) }, "widget extension target sources are scanned")
+    // The detector itself.
+    expect(declaresUI(SourceFile(relativePath: "a", text: "struct A: View { var body: some View { EmptyView() } }")), "detector: View")
+    expect(declaresUI(SourceFile(relativePath: "b", text: "struct B: Equatable, UIViewControllerRepresentable {}")), "detector: representable")
+    expect(!declaresUI(SourceFile(relativePath: "c", text: "struct C { let view = 1 } // some View\nlet s = \"some View\"")), "detector ignores comments and strings")
+}
+
+/// Every keyboard shortcut sits on a control with a text title: the iPad
+/// shortcut HUD (hold ⌘) lists it by that title, and an image-only label
+/// has none. VoiceOver keeps reading the control's accessibility label; a
+/// `.keyboardShortcut` does not change it (11.11 regression check).
+func testShortcutTitles(sources: [SourceFile]) {
+    var withShortcut = 0
+    for file in sources {
+        for construct in scanControls(file) {
+            let chain = file.codeSlice(construct.chainStart..<construct.end)
+            guard chain.contains(".keyboardShortcut(") else { continue }
+            withShortcut += 1
+            expect(construct.hasTextTitle, "\(construct.kind) with a keyboard shortcut has a text title (shortcut HUD) at \(construct.location)")
+            if construct.isIconOnly {
+                expect(construct.hasAccessibilityLabel, "icon-only control with a shortcut is labelled at \(construct.location)")
+            }
+        }
+    }
+    let total = sources.reduce(0) { sum, f in sum + f.occurrences(of: "keyboardShortcut").filter { f.code[$0 - 1] == "." }.count }
+    expectEqual(withShortcut, total, "every .keyboardShortcut in N/ is on a scanned control (\(total))")
+    expect(total >= 46, "the 11.11 shortcuts are all scanned (\(total))")
+    for (path, key) in [("JobsView.swift", "addJob"), ("InvoicesView.swift", "addInvoice"),
+                        ("CustomersView.swift", "addCustomer"), ("NativeRecurringInvoicesView.swift", "addMaintenancePlan")] {
+        guard let source = file(sources, path) else { continue }
+        let matches = scanControls(source).filter {
+            ($0.labelCode ?? "").contains("Label(NativeAccessibilityAudit.Label.\(key), systemImage: \"plus\")")
+        }
+        expectEqual(matches.count, 1, "N/\(path): ⌘N \"+\" is Label(Label.\(key), systemImage: \"plus\")")
+        expect(matches.first?.raw.contains(".labelStyle(.iconOnly)") == true, "N/\(path): ⌘N \"+\" still shows only the icon")
+    }
+}
+
+// MARK: A24 — return keys and keyboard dismissal
+
+/// A type's name and its brace range, for the innermost-type lookups below.
+struct TypeRange {
+    let name: String
+    let range: Range<Int>
+}
+
+func typeRanges(_ file: SourceFile) -> [TypeRange] {
+    var result: [TypeRange] = []
+    for hit in file.occurrences(of: "struct") {
+        let nameStart = file.skipSpace(hit + "struct".count)
+        guard let (name, _) = file.identifier(at: nameStart),
+              let brace = (nameStart..<file.code.count).first(where: { file.code[$0] == "{" }),
+              let close = file.matching(brace) else { continue }
+        result.append(TypeRange(name: name, range: brace..<(close + 1)))
+    }
+    return result
+}
+
+func innermostType(_ ranges: [TypeRange], _ index: Int) -> String? {
+    ranges.filter { $0.range.contains(index) }.min { $0.range.count < $1.range.count }?.name
+}
+
+/// Fields whose iOS keyboard has no key that dismisses it: the pad keyboards
+/// and multi-line input (RN `needsDoneBar`), plus the components that wrap a
+/// pad field.
+let keyboardWithoutDismissMarkers = [
+    #"\.keyboardType\(\.(decimalPad|numberPad|phonePad|asciiCapableNumberPad)\)"#,
+    #"axis:\s*\.vertical"#, #"\bTextEditor\("#, #"\bCurrencyField\("#, #"\bDecimalInput\("#,
+]
+/// Components that wrap such a field; the screens that use them are covered.
+let keyboardFieldComponents: Set<String> = ["CurrencyField", "DecimalInput"]
+/// Type holding such a field → the screen type that carries
+/// `.nativeKeyboardDoneBar()` (RN `KeyboardDoneBar`). An unlisted type fails.
+let keyboardDoneBarCoverage: [String: String] = [
+    "CoachView": "CoachView",
+    "CustomerDetailView": "CustomerDetailView",
+    "CustomerEditor": "CustomerEditor",
+    "JobEditor": "JobEditor",
+    "InvoiceEditor": "InvoiceEditor",
+    "PaymentEditor": "PaymentEditor",
+    "NativeChangeOrderEditorView": "NativeChangeOrderEditorView",
+    "ChangeOrderDecisionSheet": "ChangeOrderDecisionSheet",
+    "NativeChangeOrderReviewView": "NativeChangeOrderReviewView",
+    "NativeCreateInvoiceFromJobView": "NativeCreateInvoiceFromJobView",
+    "NativeEstimateFollowUpView": "NativeEstimateFollowUpView",
+    "NativeEstimateReviewView": "NativeEstimateReviewView",
+    "NativeExpenseEditor": "NativeExpenseEditor",
+    "NativeInvoiceOutreachView": "NativeInvoiceOutreachView",
+    "NativeOnMyWayReviewView": "NativeOnMyWayReviewView",
+    "NativeAppointmentConfirmationReviewView": "NativeAppointmentConfirmationReviewView",
+    "NativeMileageLogView": "NativeMileageLogView",
+    "NativePricebookEntryView": "NativePricebookEntryView",
+    "NativePricingCalculatorView": "NativePricingCalculatorView",
+    "NativeRecurringInvoiceEditor": "NativeRecurringInvoiceEditor",
+    "NativeRecurringJobEditor": "NativeRecurringJobEditor",
+    "NativeReviewRequestView": "NativeReviewRequestView",
+    "NativeScheduleSettingsView": "NativeScheduleSettingsView",
+    "NativeTripEditor": "NativeTripEditor",
+    // Settings pages share one `Form` in `SettingsPage`.
+    "BusinessProfileSettings": "SettingsPage",
+    "PricingSettings": "SettingsPage",
+    "ReviewSettings": "SettingsPage",
+]
+
+func testReturnKeysAndDismissal(root: URL, sources: [SourceFile]) {
+    // 1. A Next/Continue key must move somewhere (the 11.10a A7 bug class):
+    //    the field's own chain carries an .onSubmit.
+    var nextKeys = 0
+    for source in sources {
+        for hit in source.occurrences(of: "submitLabel") where source.code[hit - 1] == "." {
+            let open = source.skipSpace(hit + "submitLabel".count)
+            guard open < source.code.count, source.code[open] == "(", let close = source.matching(open) else { continue }
+            let args = source.codeSlice((open + 1)..<close)
+            guard args.contains(".next") || args.contains(".continue") else { continue }
+            nextKeys += 1
+            let fieldStart = (source.occurrences(of: "TextField") + source.occurrences(of: "SecureField")).filter { $0 < hit }.max() ?? hit
+            let region = source.codeSlice(fieldStart..<source.chainEnd(from: close + 1))
+            expect(region.contains(".onSubmit"), "a Next key has an action at N/\(source.relativePath):\(source.line(of: hit))")
+        }
+    }
+    expect(nextKeys >= 2, "the auth and recovery Next keys are scanned (\(nextKeys))")
+
+    // 2. RN oracle: single-line fields default to "done" (dismiss) and pad or
+    //    multi-line keyboards get the "Done" bar. RN has no Next chains in the
+    //    editors, so native adds none; Return in a single-line SwiftUI field
+    //    ends editing, which is RN's "done".
+    if let field = read(root, "components/Field.tsx") {
+        expect(field.contains(#"returnKeyType ?? (multiline ? undefined : "done")"#), "RN Field: single-line inputs return \"done\"")
+        expect(field.contains("KeyboardDoneBar"), "RN Field mounts the KeyboardDoneBar")
+    } else { expect(false, "RN components/Field.tsx readable") }
+    if let bar = read(root, "components/KeyboardDoneBar.tsx") {
+        for pad in ["\"decimal-pad\"", "\"number-pad\"", "\"phone-pad\""] {
+            expect(bar.contains(pad), "RN KeyboardDoneBar covers \(pad)")
+        }
+        expect(bar.contains("multiline === true"), "RN KeyboardDoneBar covers multi-line input")
+        expect(bar.contains(">Done<"), "RN KeyboardDoneBar shows \"Done\"")
+    } else { expect(false, "RN components/KeyboardDoneBar.tsx readable") }
+    for editor in [("JobsView.swift", "JobEditor"), ("InvoicesView.swift", "InvoiceEditor"), ("CustomersView.swift", "CustomerEditor"),
+                   ("NativeExpenseEditor.swift", "NativeExpenseEditor"), ("NativeTripEditor.swift", "NativeTripEditor"),
+                   ("NativePricebookEntryView.swift", "NativePricebookEntryView"), ("NativeScheduleSettingsView.swift", "NativeScheduleSettingsView")] {
+        guard let source = file(sources, editor.0) else { continue }
+        let text = structText(source, editor.1)
+        expect(text.contains("TextField("), "A24 editor \(editor.1) found with its fields")
+        expect(!text.contains(".submitLabel(.next)"), "A24 editor \(editor.1): no Next key without a chain (RN has none)")
+    }
+
+    // 3. Every field whose keyboard cannot dismiss itself is on a screen with
+    //    the Done bar (RN KeyboardDoneBar, owner requirement 2026-07-16).
+    let regexes = keyboardWithoutDismissMarkers.map { try! NSRegularExpression(pattern: $0) }
+    var carriersNeeded: Set<String> = []
+    var fieldTypes: Set<String> = []
+    for source in sources where !source.relativePath.hasPrefix("Widgets/") {
+        let ranges = typeRanges(source)
+        let text = source.codeText
+        let ns = text as NSString
+        for regex in regexes {
+            for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                guard let type = innermostType(ranges, match.range.location) else { continue }
+                if keyboardFieldComponents.contains(type) { continue }
+                fieldTypes.insert(type)
+                guard let carrier = keyboardDoneBarCoverage[type] else {
+                    expect(false, "\(type) (N/\(source.relativePath):\(source.line(of: match.range.location))) has a pad or multi-line field: add .nativeKeyboardDoneBar() to its screen and list it in keyboardDoneBarCoverage")
+                    continue
+                }
+                carriersNeeded.insert(carrier)
+            }
+        }
+    }
+    expectEqual(fieldTypes, Set(keyboardDoneBarCoverage.keys), "keyboardDoneBarCoverage lists exactly the types with such fields")
+    var carrierCount = 0
+    for carrier in carriersNeeded.sorted() {
+        let text = sources.lazy.map { structText($0, carrier) }.first { !$0.isEmpty } ?? ""
+        expect(!text.isEmpty, "Done-bar screen \(carrier) found")
+        let bars = text.components(separatedBy: ".nativeKeyboardDoneBar()").count - 1
+        expectEqual(bars, 1, "\(carrier) carries exactly one .nativeKeyboardDoneBar()")
+        carrierCount += bars
+    }
+    let total = sources.reduce(0) { sum, f in sum + f.occurrences(of: "nativeKeyboardDoneBar").filter { f.code[$0 - 1] == "." }.count }
+    expectEqual(total, carrierCount, "no .nativeKeyboardDoneBar() outside the listed screens (a nested one duplicates the Done button)")
+    if let bar = file(sources, "NativeKeyboardDoneBar.swift") {
+        let text = String(bar.raw)
+        expect(text.contains("ToolbarItemGroup(placement: .keyboard)"), "Done bar sits above the keyboard")
+        expect(text.contains("Button(\"Done\")"), "Done bar shows RN's \"Done\"")
+        expect(text.contains(".accessibilityLabel(NativeAccessibilityAudit.Label.dismissKeyboard)"), "Done bar reads RN's \"Dismiss keyboard\"")
+        expect(text.contains("resignFirstResponder"), "Done bar ends editing wherever focus is")
+        expect(!text.contains("keyboardShortcut"), "Done bar adds no keyboard shortcut")
+    }
+}
+
+/// A host runner that compiles a view using `.nativeKeyboardDoneBar()` must
+/// compile its definition too, or that runner stops building.
+func testRunnersCompileDoneBar(root: URL, sources: [SourceFile]) {
+    let users = Set(sources.filter { source in
+        source.relativePath != "NativeKeyboardDoneBar.swift"
+            && source.occurrences(of: "nativeKeyboardDoneBar").contains { source.code[$0 - 1] == "." }
+    }.map { "native/TradeReadyNative/\($0.relativePath)" })
+    let native = root.appendingPathComponent("native")
+    let runners = ((try? FileManager.default.contentsOfDirectory(atPath: native.path)) ?? [])
+        .filter { $0.hasPrefix("run-") && $0.hasSuffix(".sh") }.sorted()
+    var checked = 0
+    for runner in runners {
+        guard let script = read(root, "native/\(runner)") else { continue }
+        let compiled = users.filter { script.contains($0) }
+        guard !compiled.isEmpty else { continue }
+        checked += 1
+        expect(script.contains("native/TradeReadyNative/NativeKeyboardDoneBar.swift"),
+               "native/\(runner) compiles \(compiled.sorted()) and so must compile N/NativeKeyboardDoneBar.swift")
+    }
+    expect(checked >= 1, "the schedule settings runner compiles a Done-bar screen (\(checked))")
+}
+
+// MARK: A15 — chart summaries
+
+func testChartSummaries(sources: [SourceFile]) {
+    typealias Point = Audit.ChartPoint
+    typealias Value = Audit.ChartSeriesValue
+    expectEqual(Audit.spokenMonth("Jun"), "June", "spoken month")
+    expectEqual(Audit.spokenMonth("May"), "May", "spoken month (May)")
+    expectEqual(Audit.spokenMonth("Q1"), "Q1", "unknown labels are unchanged")
+    expectEqual(Audit.changePhrase(percent: -12), "down 12% from the previous month", "change phrase down")
+    expectEqual(Audit.changePhrase(percent: 5), "up 5% from the previous month", "change phrase up")
+    expectEqual(Audit.changePhrase(percent: 0), nil, "no change phrase for 0 (blank badge)")
+    expectEqual(Audit.changePhrase(percent: nil), nil, "no change phrase without a previous month")
+    let summary = Audit.chartSummary([
+        Point(label: "Apr", values: [Value(series: "Income", value: "$1,200.00"), Value(series: "Expenses", value: "$300.00")]),
+        Point(label: "May", values: [Value(series: "", value: "$80.00")], note: "down 12% from the previous month"),
+    ])
+    expectEqual(summary, "April: Income $1,200.00, Expenses $300.00. May: $80.00, down 12% from the previous month.", "chart summary text")
+    expectEqual(Audit.chartSummary([]), "No data", "empty chart summary")
+    expectEqual(Audit.Label.chart(title: "Last 6 Months"), "Last 6 Months chart", "chart label")
+
+    guard let money = file(sources, "NativeMoneyCards.swift") else { return }
+    for (card, title, legends) in [("NativeMoneyMonthlyChartCardView", "Last 6 Months", 1),
+                                   ("NativeMoneySeasonalCardView", "12-Month Trend", 1),
+                                   ("NativeMoneyExpenseTrendsCardView", "Expense Trends", 0)] {
+        let view = structText(money, card)
+        expect(!view.isEmpty, "\(card) found")
+        expect(view.contains(".accessibilityElement(children: .ignore)"), "\(card): the bars and month letters are one element")
+        expect(view.contains(".accessibilityLabel(NativeAccessibilityAudit.Label.chart(title: \"\(title)\"))"), "\(card): chart label")
+        expect(view.contains(".accessibilityValue(NativeAccessibilityAudit.chartSummary("), "\(card): the figures are the chart's value")
+        let hidden = view.components(separatedBy: ".accessibilityHidden(true)").count - 1
+        expect(hidden >= legends, "\(card): the legend is hidden (the summary names each series)")
+    }
+    let trends = structText(money, "NativeMoneyExpenseTrendsCardView")
+    expect(trends.contains("NativeAccessibilityAudit.changePhrase(percent:"), "expense trends: month-over-month badges are spoken")
+}
+
+// MARK: A16 — fixed frames
+
+/// Literal fixed widths of 20pt or more outside the widget canvas, per file,
+/// that the re-audit kept, with why. A new one fails: scale it with
+/// `@ScaledMetric`, use a minimum, or record it here.
+let retainedFixedWidths: [String: Int] = [
+    // Numeric TextFields for a multiplier and percents (digits right-aligned; the field scrolls).
+    "SettingsView.swift": 3,  // + the Appearance icon column (26pt; the glyph overflows, never clips)
+    "NativeOnboardingView.swift": 1,  // feature icon column (26pt; glyph overflows, never clips)
+    "NativeInsightsCard.swift": 1,  // insight icon column (22pt; glyph overflows, never clips)
+    "NativeInvoiceOutreachView.swift": 1,  // "%"/"$" segmented control (UIKit caps its text size)
+    "NativeCalendarView.swift": 1,  // timeline hour labels: a fixed 44pt/hour graphic hidden from VoiceOver; the accessible list below scales
+    "NativeTodayComponents.swift": 1,  // schedule time column below AX sizes; it stacks at AX sizes
+    "NativeBookingRequestsView.swift": 2,  // kind column below AX sizes; at AX sizes it is one full-width line
+]
+
+func testFixedFrames(sources: [SourceFile]) {
+    let width = try! NSRegularExpression(pattern: #"\.frame\(width: *([0-9]+(?:\.[0-9]+)?)"#)
+    let square = try! NSRegularExpression(pattern: #"\.frame\(width: *([0-9]+), *height: *([0-9]+)\)"#)
+    for source in sources where !source.relativePath.hasPrefix("Widgets/") && !source.relativePath.hasPrefix(widgetTargetPrefix) {
+        let text = source.codeText
+        let ns = text as NSString
+        var wide = 0
+        var lines: [Int] = []
+        for match in width.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            guard let value = Double(ns.substring(with: match.range(at: 1))), value >= 20 else { continue }
+            wide += 1
+            lines.append(source.line(of: match.range.location))
+        }
+        let allowed = retainedFixedWidths[source.relativePath] ?? 0
+        expectEqual(wide, allowed, "fixed widths ≥ 20pt in N/\(source.relativePath) (lines \(lines)) match the retained list")
+        for match in square.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let side = Int(ns.substring(with: match.range(at: 1))) ?? 0
+            expect(side < 20, "fixed icon frame \(side)pt at N/\(source.relativePath):\(source.line(of: match.range.location)); scale it (A16)")
+        }
+    }
+    // The A16 sites, each scaled.
+    let scaled: [(String, String, String)] = [
+        ("MoneyView.swift", "NativeMoneyExpenseRowView", "@ScaledMetric(relativeTo: .callout) private var iconBadgeSize"),
+        ("SettingsView.swift", "SettingsView", "@ScaledMetric(relativeTo: .title2) private var avatarSize"),
+        ("SettingsView.swift", "SyncSettings", "@ScaledMetric(relativeTo: .title2) private var statusBadgeSize"),
+        ("NativeTodayComponents.swift", "NativeTodayHeroCardView", "@ScaledMetric(relativeTo: .subheadline) private var discSize"),
+        ("NativeJobPhotosView.swift", "PhotoThumbnail", "@ScaledMetric(relativeTo: .caption2) private var scaledSide"),
+    ]
+    for (path, type, metric) in scaled {
+        guard let source = file(sources, path) else { continue }
+        let text = structText(source, type)
+        expect(!text.isEmpty, "N/\(path): \(type) found")
+        expect(text.contains(metric), "N/\(path) \(type): \(metric)")
+    }
+    if let photos = file(sources, "NativeJobPhotosView.swift") {
+        expect(structText(photos, "PhotoThumbnail").contains("NativeAccessibilityAudit.PhotoThumbnail.side(scaled: scaledSide)"), "photo thumbnail side is clamped")
+    }
+    let thumb = Audit.PhotoThumbnail.self
+    expectEqual(thumb.side(scaled: 112), 112, "photo thumbnail default is unchanged")
+    expectEqual(thumb.side(scaled: 400), thumb.sideMaximum, "an AX5 thumbnail is clamped")
+    expect(thumb.sideMaximum <= 375 - 32 - 32, "clamped thumbnail fits a 375pt phone row")
+    // Route index column and booking kind column grow instead of clipping.
+    if let route = file(sources, "NativeRouteView.swift") {
+        let row = structText(route, "StopRowView")
+        expect(row.contains(".frame(minWidth: 24)"), "route stop number has a minimum, not a fixed, width")
+        expect(row.contains(".frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget)"), "route reorder column has a minimum width")
+    }
+    if let booking = file(sources, "NativeBookingRequestsView.swift") {
+        let row = structText(booking, "RequestRowView")
+        expect(row.contains("NativeAccessibilityAdaptiveRow(alignment: .top, spacing: 12)"), "booking request header stacks at AX sizes")
+        expect(row.contains("dynamicTypeSize.isAccessibilitySize"), "booking kind column drops its fixed width at AX sizes")
+    }
+    if let today = file(sources, "NativeTodayComponents.swift") {
+        expect(structText(today, "NativeTodayScheduleStop").contains("dynamicTypeSize.isAccessibilitySize"), "Today schedule time column stacks at AX sizes")
+    }
+    // A27: the route empty and loading bands grow with their text.
+    if let route = file(sources, "NativeRouteView.swift") {
+        expect(!String(route.raw).contains(".frame(height: 200)"), "route preview bands are not a fixed 200pt (AX5 text clipped)")
+        expectEqual(route.occurrences(of: "minHeight").count >= 2, true, "route preview bands keep a 200pt minimum")
+    }
+}
+
+// MARK: A28 — error and destructive text
+
+/// No view uses system red (text measured 3.55:1 on a white row): error,
+/// destructive and danger-tone text, glyphs, strokes and washes use
+/// `tradeDangerText` (RN `colors.danger`), and filled buttons `tradeDangerFill`.
+func testDangerText(root: URL, sources: [SourceFile]) {
+    let red = try! NSRegularExpression(pattern: #"\bColor\.red\b|(?<![\w)\]])\.red\b"#)
+    var uses = 0
+    for source in sources where !source.relativePath.hasPrefix("Widgets/") && !source.relativePath.hasPrefix("Domain/")
+        && !source.relativePath.hasPrefix(widgetTargetPrefix) {
+        let text = source.codeText
+        let ns = text as NSString
+        for match in red.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            expect(false, "system red at N/\(source.relativePath):\(source.line(of: match.range.location)); use .tradeDangerText (A28)")
+        }
+        uses += source.occurrences(of: "tradeDangerText").count
+    }
+    expect(uses >= 28, "error and destructive text use tradeDangerText (\(uses))")
+    // The detector itself.
+    let fixture = "Text(e).foregroundStyle(.red)\nText(f).foregroundStyle(ok ? Color.red : .secondary)\ncase .bad: .red\nlet l = color.red + rgb().red + UIColor(red: 1)"
+    expectEqual(red.numberOfMatches(in: fixture, range: NSRange(location: 0, length: (fixture as NSString).length)), 3, "system-red detector ignores RGB components")
+    if let auth = read(root, "screens/AuthScreen.tsx") {
+        expect(auth.contains("color: colors.danger"), "RN error text uses colors.danger")
+    } else { expect(false, "RN AuthScreen.tsx readable") }
+}
+
+// MARK: A17, A13, A25, A26 and the white-text allowlist
+
+func testReAuditSites(root: URL, sources: [SourceFile]) {
+    // A17: the job-photo error badge is announced.
+    if let photos = file(sources, "NativeJobPhotosView.swift") {
+        let thumb = structText(photos, "PhotoThumbnail")
+        expect(thumb.contains(".accessibilityValue(error ?? \"\")"), "photo thumbnail announces its error (A17)")
+        expect(thumb.contains("exclamationmark.triangle.fill"), "photo error badge found")
+    }
+    // A13 + A25: the Today job card's "On my way".
+    if let today = file(sources, "NativeTodayComponents.swift") {
+        let card = structText(today, "NativeTodayJobCard")
+        let buttons = scanControls(SourceFile(relativePath: "NativeTodayComponents.swift", text: card))
+            .filter { $0.raw.hasPrefix("Button(action: onOnMyWay)") }
+        expectEqual(buttons.count, 1, "Today job card On my way button found")
+        let minimumFrame = "minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget"
+        expect(buttons.first?.raw.contains(minimumFrame) == true, "On my way has a 44×44 target (A25; RN hitSlop 8)")
+        expect(buttons.first?.raw.contains(".accessibilityLabel(NativeAccessibilityAudit.Label.onMyWay(customerName: job.customerName))") == true,
+               "On my way keeps RN's label")
+        expect(card.contains(".accessibilityActions {"), "the card offers On my way as a VoiceOver action (A13)")
+        expect(card.contains("Button(NativeAccessibilityAudit.Label.onMyWay(customerName: job.customerName), action: onOnMyWay)"),
+               "the card action uses RN's label")
+    }
+    if let rn = read(root, "screens/TodayScreen.tsx") {
+        expect(rn.contains("accessibilityLabel={`On my way to ${job.customerName}`}"), "RN parity: On my way to ${job.customerName}")
+    } else { expect(false, "RN TodayScreen.tsx readable") }
+    expectEqual(Audit.Label.onMyWay(customerName: "Dana Ruiz"), "On my way to Dana Ruiz", "on my way label")
+
+    // A26: the map stop number is white on a fill capsule.
+    if let route = file(sources, "NativeRouteView.swift") {
+        let text = String(route.raw)
+        let number = text.range(of: "Text(\"\\(annotation.order)\")").map { String(text[$0.lowerBound...].prefix(600)) } ?? ""
+        expect(number.contains(".background(Color.tradeReadyFill, in: Capsule())"), "map stop number sits on the fill, not on the map (A26)")
+    }
+
+    // White text or glyphs only where a fill under them is proven.
+    let allowed: [String: Int] = ["SettingsView.swift": 1, "NativeTodayComponents.swift": 5, "NativeRouteView.swift": 1]
+    let white = try! NSRegularExpression(pattern: #"\.foreground(?:Style|Color)\((?:Color)?\.white\)"#)
+    for source in sources where !source.relativePath.hasPrefix("Widgets/") {
+        let text = source.codeText
+        let count = white.numberOfMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+        expectEqual(count, allowed[source.relativePath] ?? 0, "white foregrounds in N/\(source.relativePath) are the audited on-fill sites")
+    }
+
+    // A18 baseline: why the clock-out button left system red.
+    let p = Audit.Palette.self
+    expect(Audit.contrastRatio(p.white, p.systemRedDark) < Audit.Threshold.text, "baseline: white on dark system red fails text AA")
+    expect(Audit.contrastRatio(p.white, p.systemRedLight) < Audit.Threshold.text, "baseline: white on light system red fails text AA")
+    let rnDanger = RGB(hex: "#b8432b")!
+    expectEqual(p.dangerFillLight, RGB(red: 0.722, green: 0.263, blue: 0.169), "light danger fill literal")
+    expectClose(p.dangerFillLight.red, rnDanger.red, tolerance: 0.001, "light danger fill = RN lightColors.danger (red)")
+    expectClose(p.dangerFillLight.green, rnDanger.green, tolerance: 0.001, "light danger fill = RN lightColors.danger (green)")
+    expectClose(p.dangerFillLight.blue, rnDanger.blue, tolerance: 0.001, "light danger fill = RN lightColors.danger (blue)")
+    if let theme = read(root, "utils/theme.ts") {
+        expect(theme.contains(##"danger: "#b8432b""##), "RN lightColors.danger is #b8432b")
+    }
+}
+
 // MARK: - Entry
 
 @main
@@ -768,20 +1261,31 @@ struct AccessibilityAuditTests {
             ? URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
             : URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         let sources = loadSources(root: root)
+        // 11.10b: the widget extension target's own view files join the scans.
+        let allSources = sources + loadWidgetTargetSources(root: root)
 
         testContrastMath()
         testContrastRequirements()
         testPaletteLiteralsShipped(root: root)
         testAccentColorAsset(root: root)
         testLabelCatalog(root: root, sources: sources)
-        testIconOnlyControls(sources: sources)
+        testIconOnlyControls(sources: allSources)
         testReduceMotion(sources: sources)
         testDynamicType(sources: sources)
         testTouchTargets(sources: sources)
         testFills(sources: sources)
         testFocusOrder(sources: sources)
-        testTranslucentWhite(sources: sources)
+        testTranslucentWhite(sources: allSources)
         testMoneyCardLabels(root: root, sources: sources)
+        // 11.10b re-audit.
+        testViewInventory(allSources: allSources)
+        testShortcutTitles(sources: allSources)
+        testReturnKeysAndDismissal(root: root, sources: sources)
+        testRunnersCompileDoneBar(root: root, sources: sources)
+        testChartSummaries(sources: sources)
+        testFixedFrames(sources: allSources)
+        testReAuditSites(root: root, sources: sources)
+        testDangerText(root: root, sources: sources)
 
         if failures > 0 {
             print("accessibility-audit tests: \(failures) of \(checks) checks FAILED")

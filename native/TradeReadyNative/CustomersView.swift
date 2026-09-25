@@ -152,9 +152,8 @@ struct CustomersView: View {
                 Button {
                     guard !isPresentingAnything else { return }
                     showingEditor = true
-                } label: {
-                    Image(systemName: "plus")
-                }
+                } label: { Label(NativeAccessibilityAudit.Label.addCustomer, systemImage: "plus") }
+                .labelStyle(.iconOnly)
                 .accessibilityLabel(NativeAccessibilityAudit.Label.addCustomer)
                 .keyboardShortcut(newShortcut)
             }
@@ -419,7 +418,7 @@ struct CustomerDetailView: View {
                             Button("Merge into another customer", systemImage: "person.2") {
                                 showingMergePicker = true
                             }
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.tradeDangerText)
                         } header: {
                             Text("Customer record")
                         } footer: {
@@ -459,6 +458,7 @@ struct CustomerDetailView: View {
                 .refreshable { await store.performPullToRefresh() }
                 .navigationTitle("Customer")
                 .navigationBarTitleDisplayMode(.inline)
+                .nativeKeyboardDoneBar()
                 .toolbar {
                     if let storedCustomer {
                         Button("Edit", systemImage: "pencil") {
@@ -677,6 +677,7 @@ struct CustomerEditor: View {
             .background(Color.tradeCanvas)
             .navigationTitle(customer.name.isEmpty ? "New Customer" : "Edit Customer")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 DismissableFormToolbar(title: "Customer") {
                     let plan = NativeCustomerIdentity.editorSavePlan(

@@ -103,7 +103,7 @@ struct NativeJobProfitabilitySection: View {
     private func toneColor(_ tone: NativeProfitabilityTone?) -> Color {
         switch tone {
         case .good: .green
-        case .bad: .red
+        case .bad: .tradeDangerText
         case .neutral, nil: .secondary
         }
     }

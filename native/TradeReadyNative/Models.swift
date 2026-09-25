@@ -469,10 +469,19 @@ extension Color {
     /// Filled surfaces under white text or icons (selected chips, prominent buttons).
     static let tradeReadyFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.184, green: 0.471, blue: 0.769, alpha: 1) : UIColor(red: 0.114, green: 0.361, blue: 0.620, alpha: 1) })
     static let tradeCanvas = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.063, green: 0.094, blue: 0.149, alpha: 1) : UIColor(red: 0.961, green: 0.961, blue: 0.945, alpha: 1) })
+    /// Destructive filled surfaces under white text (the clock-out button). Light is RN
+    /// `lightColors.danger`; dark is native only (system red measured about 3.3:1 under white).
+    static let tradeDangerFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.800, green: 0.290, blue: 0.188, alpha: 1) : UIColor(red: 0.722, green: 0.263, blue: 0.169, alpha: 1) })
+    /// Error and destructive text (11.10b A28). Light is RN `lightColors.danger`, the
+    /// color RN gives error text; dark is native only. System red text measured 3.55:1
+    /// on a white list row.
+    static let tradeDangerText = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.922, green: 0.490, blue: 0.388, alpha: 1) : UIColor(red: 0.722, green: 0.263, blue: 0.169, alpha: 1) })
 #else
     static let tradeReady = Color(red: 0.114, green: 0.361, blue: 0.620)
     static let tradeReadyFill = Color(red: 0.114, green: 0.361, blue: 0.620)
     static let tradeCanvas = Color(red: 0.961, green: 0.961, blue: 0.945)
+    static let tradeDangerFill = Color(red: 0.722, green: 0.263, blue: 0.169)
+    static let tradeDangerText = Color(red: 0.722, green: 0.263, blue: 0.169)
 #endif
 }
 

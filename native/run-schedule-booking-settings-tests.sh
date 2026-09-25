@@ -16,6 +16,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeCalendarView.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeScheduleEditorView.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeScheduleSettingsView.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/NativeKeyboardDoneBar.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeAccessibilityAudit.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeBookingSettingsView.swift" \
   "$ROOT_DIR/native/ScheduleBookingSettingsTests/main.swift" \

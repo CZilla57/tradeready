@@ -128,6 +128,7 @@ struct NativeExpenseEditor: View {
             .background(Color.tradeCanvas)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {

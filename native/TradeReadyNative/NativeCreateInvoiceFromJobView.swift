@@ -68,6 +68,7 @@ struct NativeCreateInvoiceFromJobView: View {
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(copy.title)
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 DismissableFormToolbar(title: copy.cta) {
                     guard canSave else { return }

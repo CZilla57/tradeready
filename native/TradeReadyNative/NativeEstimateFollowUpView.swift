@@ -115,6 +115,7 @@ struct NativeEstimateFollowUpView: View {
             .background(Color.tradeCanvas)
             .navigationTitle("Estimate Follow-Up")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
             }

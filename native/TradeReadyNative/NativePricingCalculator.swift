@@ -177,6 +177,7 @@ struct NativePricingCalculatorView: View {
             .background(Color.tradeCanvas)
             .navigationTitle("Pricing Calculator")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {

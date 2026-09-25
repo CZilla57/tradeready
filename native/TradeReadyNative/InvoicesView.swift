@@ -155,7 +155,8 @@ struct InvoicesView: View {
                     Button {
                         guard !isPresentingAnything else { return }
                         showingEditor = true
-                    } label: { Image(systemName: "plus") }
+                    } label: { Label(NativeAccessibilityAudit.Label.addInvoice, systemImage: "plus") }
+                        .labelStyle(.iconOnly)
                         .accessibilityLabel(NativeAccessibilityAudit.Label.addInvoice)
                         .keyboardShortcut(newShortcut)
                 }
@@ -553,7 +554,7 @@ struct InvoiceEditor: View {
             Form {
                 if let saveError {
                     Section {
-                        Text(saveError).foregroundStyle(.red)
+                        Text(saveError).foregroundStyle(Color.tradeDangerText)
                     }
                 }
                 Section("Customer") {
@@ -570,6 +571,7 @@ struct InvoiceEditor: View {
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(invoice.customer.isEmpty ? "New Invoice" : "Edit Invoice")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 DismissableFormToolbar(title: invoice.number) {
                     let draft = NativeInvoiceDraft(
@@ -625,7 +627,7 @@ struct PaymentEditor: View {
             Form {
                 if let saveError {
                     Section {
-                        Text(saveError).foregroundStyle(.red)
+                        Text(saveError).foregroundStyle(Color.tradeDangerText)
                     }
                 }
                 Section {
@@ -645,6 +647,7 @@ struct PaymentEditor: View {
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle("Record Payment")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 DismissableFormToolbar(title: "Payment") {
                     guard amount > 0 else { return }

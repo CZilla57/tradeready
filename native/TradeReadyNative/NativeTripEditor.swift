@@ -73,7 +73,7 @@ struct NativeTripEditor: View {
                     }
                     Text(NativeMileageLog.distanceText(draft))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(invalid ? Color.red : Color.primary)
+                        .foregroundStyle(invalid ? Color.tradeDangerText : Color.primary)
                         .accessibilityLabel(NativeMileageLog.distanceText(draft))
                 }
 
@@ -96,6 +96,7 @@ struct NativeTripEditor: View {
             .background(Color.tradeCanvas)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {

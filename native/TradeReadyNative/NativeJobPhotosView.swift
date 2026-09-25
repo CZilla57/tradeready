@@ -55,7 +55,7 @@ struct NativeJobPhotosView: View {
                         .accessibilityLabel("Delete photo")
                     }
                     if let error = errors[photo.id] {
-                        Text(error).font(.caption).foregroundStyle(.red)
+                        Text(error).font(.caption).foregroundStyle(Color.tradeDangerText)
                     }
                 }
             }
@@ -82,7 +82,7 @@ struct NativeJobPhotosView: View {
             }
             .buttonStyle(.borderless)
             if let importError {
-                Text(importError).font(.caption).foregroundStyle(.red)
+                Text(importError).font(.caption).foregroundStyle(Color.tradeDangerText)
             }
         }
         .sheet(isPresented: selectedPhotoIsPresented) {
@@ -160,6 +160,12 @@ private struct PhotoThumbnail: View {
     let bytes: Data?
     let error: String?
     let action: () -> Void
+    /// 11.10b A16: the thumbnail grows with Dynamic Type so its "Waiting for
+    /// download" caption fits, clamped so a row of photos still shows more
+    /// than one on a phone.
+    @ScaledMetric(relativeTo: .caption2) private var scaledSide: CGFloat = 112
+
+    private var side: CGFloat { NativeAccessibilityAudit.PhotoThumbnail.side(scaled: scaledSide) }
 
     var body: some View {
         Button(action: action) {
@@ -175,13 +181,15 @@ private struct PhotoThumbnail: View {
                     .foregroundStyle(.secondary)
                     .padding(6)
                 }
-                if error != nil { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).padding(7) }
+                if error != nil { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.tradeDangerText).padding(7) }
             }
-            .frame(width: 112, height: 112)
+            .frame(width: side, height: side)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(bytes == nil ? "Photo waiting for download" : "Open job photo")
+        // 11.10b A17: the red badge is visual only; VoiceOver reads the error.
+        .accessibilityValue(error ?? "")
     }
 }
 

@@ -144,7 +144,7 @@ struct NativeInvoiceOutreachView: View {
                                     Text(paymentLink).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                                 }
                                 if let linkError {
-                                    Text(linkError).font(.caption).foregroundStyle(.red)
+                                    Text(linkError).font(.caption).foregroundStyle(Color.tradeDangerText)
                                 }
                             }
                             Section("Payment plan") {
@@ -203,6 +203,7 @@ struct NativeInvoiceOutreachView: View {
             }
             .navigationTitle("Request payment")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .onAppear {
                 if providerID.isEmpty { providerID = store.settings.paymentProvider }

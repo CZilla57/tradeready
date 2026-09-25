@@ -33,7 +33,7 @@ struct NativePasswordRecoveryView: View {
                         if let errorMessage {
                             Label(errorMessage, systemImage: "exclamationmark.circle.fill")
                                 .font(.subheadline)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(Color.tradeDangerText)
                                 .accessibilityIdentifier("recovery-error")
                         }
 

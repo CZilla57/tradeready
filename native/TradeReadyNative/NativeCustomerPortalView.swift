@@ -91,7 +91,7 @@ struct NativeCustomerPortalView: View {
             if let statusMessage {
                 Section {
                     Label(statusMessage, systemImage: isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
-                        .font(.footnote).foregroundStyle(isError ? .red : .secondary)
+                        .font(.footnote).foregroundStyle(isError ? Color.tradeDangerText : Color.secondary)
                         .accessibilityLabel(statusMessage)
                 }
             }
@@ -142,7 +142,7 @@ struct NativeCustomerPortalView: View {
                         actionLabel("Rotate link", systemImage: "arrow.triangle.2.circlepath.circle", busy: busyAction == .rotate)
                     }
                     .disabled(busyAction != nil)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.tradeDangerText)
                     .accessibilityHint("Asks for confirmation, then replaces the link. The old link stops working.")
                 }
             }

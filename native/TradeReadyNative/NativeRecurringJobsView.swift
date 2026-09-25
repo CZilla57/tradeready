@@ -111,6 +111,7 @@ struct NativeRecurringJobEditor: View {
             }
             .nativeContentColumn(.list)
             .navigationTitle("Repeat \(rule.title)")
+            .nativeKeyboardDoneBar()
             .toolbar {
                 DismissableFormToolbar(title: "Save") {
                     rule.endCount = rule.endCondition == RecurrenceEndCondition.count.rawValue ? max(Int(endCount) ?? 1, rule.occurrenceCount) : nil

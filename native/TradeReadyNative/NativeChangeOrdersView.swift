@@ -290,7 +290,7 @@ struct NativeChangeOrderEditorView: View {
                     Section {
                         Text(errorMessage)
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.tradeDangerText)
                     }
                 }
             }
@@ -298,6 +298,7 @@ struct NativeChangeOrderEditorView: View {
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(draft.isEditing ? "Edit Change Order" : "Add Change Order")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -439,6 +440,7 @@ private struct ChangeOrderDecisionSheet: View {
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(prompt.decision == .approved ? "Mark approved" : "Mark declined")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
@@ -557,6 +559,7 @@ struct NativeChangeOrderReviewView: View {
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle("Send for approval")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .sheet(isPresented: $showingComposer) {
                 NativeMessageComposer(
@@ -629,7 +632,7 @@ private struct ChangeOrderStatusBadge: View {
         case .muted: .secondary
         case .accent: .tradeReady
         case .success: .green
-        case .danger: .red
+        case .danger: .tradeDangerText
         }
     }
 

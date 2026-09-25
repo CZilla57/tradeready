@@ -14,7 +14,7 @@ enum NativeMoneyPalette {
         case .accent: .tradeReady
         case .success: .green
         case .warning: .orange
-        case .danger: .red
+        case .danger: .tradeDangerText
         case .neutral: .primary
         case .muted: .secondary
         }
@@ -264,6 +264,8 @@ struct NativeMoneyMonthlyChartCardView: View {
                 legend("Income", tone: .success)
                 legend("Expenses", tone: .danger)
             }
+            // The chart summary names both series (11.10b A15).
+            .accessibilityHidden(true)
             HStack(alignment: .bottom, spacing: 6) {
                 ForEach(Array(card.rows.enumerated()), id: \.offset) { _, row in
                     VStack(spacing: 4) {
@@ -279,6 +281,20 @@ struct NativeMoneyMonthlyChartCardView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
+            // 11.10b A15: VoiceOver reads the figures the bars draw, not a
+            // row of bare month abbreviations.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(NativeAccessibilityAudit.Label.chart(title: "Last 6 Months"))
+            .accessibilityValue(NativeAccessibilityAudit.chartSummary(summaryPoints))
+        }
+    }
+
+    private var summaryPoints: [NativeAccessibilityAudit.ChartPoint] {
+        card.rows.map { row in
+            NativeAccessibilityAudit.ChartPoint(label: row.label, values: [
+                .init(series: "Income", value: NativeMoneyFormat.money(row.income)),
+                .init(series: "Expenses", value: NativeMoneyFormat.money(row.expenses)),
+            ])
         }
     }
 
@@ -353,6 +369,8 @@ struct NativeMoneySeasonalCardView: View {
                 legend("This year", tone: .accent)
                 legend("Last year", tone: .neutral, faded: true)
             }
+            // The chart summary names both series (11.10b A15).
+            .accessibilityHidden(true)
             HStack(alignment: .bottom, spacing: 4) {
                 ForEach(Array(card.trends.months.enumerated()), id: \.offset) { _, month in
                     VStack(spacing: 4) {
@@ -370,6 +388,9 @@ struct NativeMoneySeasonalCardView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(NativeAccessibilityAudit.Label.chart(title: "12-Month Trend"))
+            .accessibilityValue(NativeAccessibilityAudit.chartSummary(summaryPoints))
             NativeAccessibilityAdaptiveRow(alignment: .center) {
                 total("This Year", amount: card.trends.thisYearTotal, tone: .accent)
                 if card.trends.lastYearTotal > 0 {
@@ -377,6 +398,15 @@ struct NativeMoneySeasonalCardView: View {
                     total("Last Year", amount: card.trends.lastYearTotal, tone: .neutral)
                 }
             }
+        }
+    }
+
+    private var summaryPoints: [NativeAccessibilityAudit.ChartPoint] {
+        card.trends.months.map { month in
+            NativeAccessibilityAudit.ChartPoint(label: month.label, values: [
+                .init(series: "This year", value: NativeMoneyFormat.money(month.thisYear)),
+                .init(series: "Last year", value: NativeMoneyFormat.money(month.lastYear)),
+            ])
         }
     }
 
@@ -424,7 +454,7 @@ struct NativeMoneyExpenseTrendsCardView: View {
                 ForEach(Array(card.trends.months.enumerated()), id: \.offset) { index, month in
                     VStack(spacing: 3) {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(Color.red)
+                            .fill(Color.tradeDangerText)
                             .frame(height: barHeight(month.total))
                             .frame(height: 80, alignment: .bottom)
                         Text(month.label.prefix(1))
@@ -437,11 +467,26 @@ struct NativeMoneyExpenseTrendsCardView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
+            // 11.10b A15: one element that speaks each month's spend and its
+            // month-over-month change instead of single letters and arrows.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(NativeAccessibilityAudit.Label.chart(title: "Expense Trends"))
+            .accessibilityValue(NativeAccessibilityAudit.chartSummary(summaryPoints))
             NativeAccessibilityAdaptiveRow(alignment: .center) {
                 total("12-Mo Total", amount: card.trends.trailingTotal, tone: .danger)
                 NativeAccessibilityColumnDivider(height: 30)
                 total("Monthly Avg", amount: Decimal(card.trends.avgMonthly), tone: .neutral)
             }
+        }
+    }
+
+    private var summaryPoints: [NativeAccessibilityAudit.ChartPoint] {
+        card.trends.months.map { month in
+            NativeAccessibilityAudit.ChartPoint(
+                label: month.label,
+                values: [.init(series: "", value: NativeMoneyFormat.money(month.total))],
+                note: NativeAccessibilityAudit.changePhrase(percent: month.momChangePct)
+            )
         }
     }
 

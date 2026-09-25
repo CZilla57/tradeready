@@ -122,7 +122,7 @@ struct NativeScheduleEditorView: View {
             if let failure = failureMessage {
                 Section {
                     Label(failure, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote).foregroundStyle(.red)
+                        .font(.footnote).foregroundStyle(Color.tradeDangerText)
                         .accessibilityLabel("Save failed: \(failure). Your draft was kept.")
                 }
             }
@@ -164,7 +164,7 @@ struct NativeScheduleEditorView: View {
             if !issues.isEmpty {
                 Section(header: Text("Check these")) {
                     ForEach(issues.indices, id: \.self) { index in
-                        Text(issueText(issues[index])).font(.footnote).foregroundStyle(.red)
+                        Text(issueText(issues[index])).font(.footnote).foregroundStyle(Color.tradeDangerText)
                     }
                 }
             }

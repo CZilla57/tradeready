@@ -40,7 +40,7 @@ struct NativeAuthView: View {
                         if let errorMessage {
                             Label(errorMessage, systemImage: "exclamationmark.circle.fill")
                                 .font(.subheadline)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(Color.tradeDangerText)
                                 .accessibilityIdentifier("auth-error")
                         }
                         if let noticeMessage {

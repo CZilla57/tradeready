@@ -148,6 +148,7 @@ struct NativeOnMyWayReviewView: View {
             }
             .navigationTitle("On my way")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .sheet(isPresented: $showingComposer) {
                 if let draft {
@@ -250,6 +251,7 @@ struct NativeAppointmentConfirmationReviewView: View {
             }
             .navigationTitle("Appointment confirmation")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .sheet(isPresented: $showingComposer) {
                 if let draft {

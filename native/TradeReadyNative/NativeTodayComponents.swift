@@ -155,7 +155,7 @@ struct NativeTodayStatsRowView: View {
                 value: overdueCount > 0 ? nativeTodayMoney(overdueTotal) : "—",
                 sub: overdueCount > 0 ? "\(overdueCount) invoice\(overdueCount == 1 ? "" : "s")" : "All clear",
                 accent: overdueCount > 0,
-                tint: overdueCount > 0 ? .red : .secondary,
+                tint: overdueCount > 0 ? .tradeDangerText : .secondary,
                 action: onOverdueTap,
                 accessibilityLabel: "Overdue invoices: \(overdueCount > 0 ? "\(overdueCount), \(nativeTodayMoney(overdueTotal))" : "none")"
             )
@@ -199,6 +199,8 @@ struct NativeTodayStatsRowView: View {
 struct NativeTodayHeroCardView: View {
     let hero: NativeTodayHero
     let onTap: () -> Void
+    /// 11.10b A16: the glyph disc grows with the title beside it.
+    @ScaledMetric(relativeTo: .subheadline) private var discSize: CGFloat = 40
 
     private var symbol: String {
         switch hero.kind {
@@ -212,7 +214,7 @@ struct NativeTodayHeroCardView: View {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 ZStack {
-                    Circle().fill(.white.opacity(0.18)).frame(width: 40, height: 40)
+                    Circle().fill(.white.opacity(0.18)).frame(width: discSize, height: discSize)
                     Image(systemName: symbol).foregroundStyle(.white)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -312,13 +314,13 @@ struct NativeTodayOverdueInvoiceRow: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(nativeTodayMoney(invoice.amount))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(isSerious ? .red : .orange)
+                        .foregroundStyle(isSerious ? Color.tradeDangerText : Color.orange)
                         .monospacedDigit()
                     Text("\(daysPastDue)d overdue")
                         .font(.caption2.monospaced())
-                        .foregroundStyle(isSerious ? .red : .orange)
+                        .foregroundStyle(isSerious ? Color.tradeDangerText : Color.orange)
                         .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background((isSerious ? Color.red : .orange).opacity(0.12), in: Capsule())
+                        .background((isSerious ? Color.tradeDangerText : .orange).opacity(0.12), in: Capsule())
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 14)
@@ -389,7 +391,7 @@ struct NativeTodayListCard<Content: View>: View {
             .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(danger ? Color.red.opacity(0.4) : Color(.quaternaryLabel), lineWidth: danger ? 1 : 0.5)
+                    .strokeBorder(danger ? Color.tradeDangerText.opacity(0.4) : Color(.quaternaryLabel), lineWidth: danger ? 1 : 0.5)
             }
     }
 }
@@ -424,9 +426,13 @@ struct NativeTodayJobCard: View {
                     if canSendOnMyWay {
                         Button(action: onOnMyWay) {
                             Text("On my way").font(.caption.weight(.bold)).foregroundStyle(Color.tradeReady)
+                                // 11.10b A25: RN pads this link with hitSlop 8;
+                                // native gives it the 44pt minimum target.
+                                .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget, minHeight: NativeAccessibilityAudit.minimumTouchTarget)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("On my way to \(job.customerName)")
+                        .accessibilityLabel(NativeAccessibilityAudit.Label.onMyWay(customerName: job.customerName))
                     }
                 }
             }
@@ -436,6 +442,14 @@ struct NativeTodayJobCard: View {
             .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.quaternary) }
         }
         .buttonStyle(.plain)
+        // 11.10b A13: a button nested in the card button is not reliably its
+        // own VoiceOver element, so the card also offers it as a custom action
+        // (swipe up or down on the card).
+        .accessibilityActions {
+            if canSendOnMyWay {
+                Button(NativeAccessibilityAudit.Label.onMyWay(customerName: job.customerName), action: onOnMyWay)
+            }
+        }
     }
 }
 
@@ -444,8 +458,29 @@ struct NativeTodayScheduleStop: View {
     let isLast: Bool
     let onTap: () -> Void
     let onOnMyWay: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        // 11.10b A16: the 52pt time column clips "10:30 AM" at AX sizes, so
+        // there the time sits above the card at full width.
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(NativeTodayBriefing.formatTimeRange(job.scheduledStartTime, nil))
+                        .font(.caption.monospaced())
+                    if let end = job.scheduledEndTime, !end.isEmpty {
+                        Text(NativeTodayBriefing.formatTimeRange(end, nil))
+                            .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    }
+                }
+                NativeTodayJobCard(job: job, onTap: onTap, onOnMyWay: onOnMyWay)
+            }
+        } else {
+            timelineRow
+        }
+    }
+
+    private var timelineRow: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(spacing: 4) {
                 Text(NativeTodayBriefing.formatTimeRange(job.scheduledStartTime, nil))

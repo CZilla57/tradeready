@@ -27,6 +27,9 @@ extension SettingsDestination {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
+    /// 11.10b A16: the profile avatar grows with its glyph (capped so the
+    /// business name keeps most of the row at AX sizes).
+    @ScaledMetric(relativeTo: .title2) private var avatarSize: CGFloat = 56
     /// Task 10.12 (D4): a specific subpage to push open immediately, e.g. from
     /// the setup checklist card's task tap. `nil` shows the plain settings
     /// list (the existing gear-icon behavior).
@@ -87,7 +90,7 @@ struct SettingsView: View {
             ZStack {
                 Circle().fill(LinearGradient(colors: [.tradeReadyFill, .tradeInk], startPoint: .topLeading, endPoint: .bottomTrailing))
                 Image(systemName: "wrench.and.screwdriver.fill").foregroundStyle(.white).font(.title2)
-            }.frame(width: 56, height: 56)
+            }.frame(width: min(avatarSize, 96), height: min(avatarSize, 96))
             VStack(alignment: .leading, spacing: 3) {
                 Text(store.settings.businessName).font(.title3.bold())
                 Text([store.settings.trade, store.settings.region].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
@@ -181,6 +184,7 @@ private struct SettingsPage<Content: View>: View {
     var body: some View {
         Form { content }.nativeContentColumn(.list).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas).onDisappear { store.save() }
+            .nativeKeyboardDoneBar()
     }
 }
 
@@ -286,7 +290,7 @@ struct ImportSettings: View {
             Text("Includes only app version, data counts, backup state, and migration status. It never includes customer records or credentials.")
                 .font(.caption).foregroundStyle(.secondary)
             if let supportReportError {
-                Text(supportReportError).font(.caption).foregroundStyle(.red)
+                Text(supportReportError).font(.caption).foregroundStyle(Color.tradeDangerText)
             }
         }
     }).alert("Import", isPresented: $showingResult) { Button("OK") {} } message: { Text(store.migrationMessage ?? "Import finished.") }
@@ -295,6 +299,8 @@ struct ImportSettings: View {
 
 struct SyncSettings: View {
     @EnvironmentObject private var store: AppStore
+    /// 11.10b A16: the status badge grows with its `.title2` glyph.
+    @ScaledMetric(relativeTo: .title2) private var statusBadgeSize: CGFloat = 42
 
     var body: some View {
         SettingsPage(title: "Cloud Sync", content: Group {
@@ -303,7 +309,7 @@ struct SyncSettings: View {
                     Image(systemName: statusSymbol)
                         .font(.title2)
                         .foregroundStyle(statusColor)
-                        .frame(width: 42, height: 42)
+                        .frame(width: statusBadgeSize, height: statusBadgeSize)
                         .background(statusColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
                     VStack(alignment: .leading, spacing: 3) {
                         Text(statusTitle).font(.headline)
@@ -442,7 +448,7 @@ struct PaymentsSettings: View {
                     }
                     Button { confirmingDisconnect = true } label: {
                         HStack {
-                            Text("Disconnect").foregroundStyle(.red)
+                            Text("Disconnect").foregroundStyle(Color.tradeDangerText)
                             if disconnectBusy { Spacer(); ProgressView() }
                         }
                     }.disabled(disconnectBusy)
@@ -459,7 +465,7 @@ struct PaymentsSettings: View {
                     }.disabled(onboardBusy)
                 }
                 if let error = actionError ?? store.stripeConnectError {
-                    Text(error).font(.caption).foregroundStyle(.red)
+                    Text(error).font(.caption).foregroundStyle(Color.tradeDangerText)
                 }
             }
             .confirmationDialog("Disconnect Stripe?", isPresented: $confirmingDisconnect, titleVisibility: .visible) {
@@ -595,7 +601,7 @@ private struct AIProviderKeySection: View {
             if let feedback {
                 Text(feedback.message)
                     .font(.caption)
-                    .foregroundStyle(feedback.isError ? Color.red : Color.secondary)
+                    .foregroundStyle(feedback.isError ? Color.tradeDangerText : Color.secondary)
             }
         } footer: {
             Text(NativeAIProviderKeyPolicy.storageNote)
@@ -748,7 +754,7 @@ struct AccountSettings: View {
     @State private var isDeleting = false
     var body: some View { SettingsPage(title: "Account", content: Group {
         Section("PROFILE") { LabeledContent("Name", value: store.settings.contactName.isEmpty ? "Not set" : store.settings.contactName); LabeledContent("Email", value: store.settings.email.isEmpty ? "Not set" : store.settings.email); LabeledContent("Migrated session", value: store.authenticatedAccountState.displayValue) }
-        Section("DATA") { Button { resetConfirmation = true } label: { Label("Reset demo data", systemImage: "arrow.counterclockwise") }.foregroundStyle(.red) }
+        Section("DATA") { Button { resetConfirmation = true } label: { Label("Reset demo data", systemImage: "arrow.counterclockwise") }.foregroundStyle(Color.tradeDangerText) }
         Section {
             Button("Sign out", role: .destructive) {
                 if store.syncStatus.pendingCount > 0 {

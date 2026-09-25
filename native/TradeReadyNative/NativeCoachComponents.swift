@@ -78,7 +78,7 @@ struct NativeCoachMessageBubble: View {
                 .background(bubbleColor, in: RoundedRectangle(cornerRadius: 18))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18)
-                        .strokeBorder(message.isError ? Color.red.opacity(0.5) : .clear)
+                        .strokeBorder(message.isError ? Color.tradeDangerText.opacity(0.5) : .clear)
                 )
                 .onLongPressGesture(minimumDuration: 0.3) { onCopy(displayText) }
                 .accessibilityLabel(displayText)
@@ -88,7 +88,7 @@ struct NativeCoachMessageBubble: View {
     }
 
     private var bubbleColor: Color {
-        if message.isError { return Color.red.opacity(0.12) }
+        if message.isError { return Color.tradeDangerText.opacity(0.12) }
         return isUser ? Color.tradeReady.opacity(0.18) : Color(.secondarySystemBackground)
     }
 }

@@ -82,17 +82,17 @@ struct NativeOnboardingView: View {
                 .foregroundStyle(.secondary)
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.circle.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.tradeDangerText)
             }
             TextField("Business name", text: binding(\.businessName))
                 .textContentType(.organizationName)
             if showErrors && draft.businessName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Business name is required.").font(.caption).foregroundStyle(.red)
+                Text("Business name is required.").font(.caption).foregroundStyle(Color.tradeDangerText)
             }
             TextField("Your name", text: binding(\.contactName))
                 .textContentType(.name)
             if showErrors && draft.contactName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Your name is required.").font(.caption).foregroundStyle(.red)
+                Text("Your name is required.").font(.caption).foregroundStyle(Color.tradeDangerText)
             }
             Text("Your trade").font(.headline)
             Text("Used to tailor sample jobs and future pricing guidance.")
@@ -170,7 +170,7 @@ struct NativeStartingPointView: View {
                     .foregroundStyle(.secondary).textCase(.uppercase)
                 Text("How do you want to start?").font(.largeTitle.bold())
                 Text("One last choice and you’re working.").foregroundStyle(.secondary)
-                if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
+                if let errorMessage { Text(errorMessage).foregroundStyle(Color.tradeDangerText) }
                 choiceCard(
                     .sample,
                     icon: "chart.bar.doc.horizontal",

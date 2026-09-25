@@ -60,7 +60,7 @@ struct NativeRecurringInvoicesView: View {
                 Text("Turning this on never emails pre-existing invoices.")
             }
             if let saveError {
-                Section { Text(saveError).foregroundStyle(.red) }
+                Section { Text(saveError).foregroundStyle(Color.tradeDangerText) }
             }
             Section("Plans") {
                 if store.recurringInvoiceRules.isEmpty {
@@ -92,7 +92,8 @@ struct NativeRecurringInvoicesView: View {
             Button {
                 guard !isPresentingAnything else { return }
                 editorTarget = .new
-            } label: { Image(systemName: "plus") }
+            } label: { Label(NativeAccessibilityAudit.Label.addMaintenancePlan, systemImage: "plus") }
+                .labelStyle(.iconOnly)
                 .accessibilityLabel(NativeAccessibilityAudit.Label.addMaintenancePlan)
                 .keyboardShortcut(newShortcut)
         }
@@ -186,7 +187,7 @@ private struct NativeRecurringInvoiceEditor: View {
         NavigationStack {
             Form {
                 if let saveError {
-                    Section { Text(saveError).foregroundStyle(.red) }
+                    Section { Text(saveError).foregroundStyle(Color.tradeDangerText) }
                 }
                 Section("Customer") {
                     Picker("Customer", selection: $customerId) {
@@ -241,6 +242,7 @@ private struct NativeRecurringInvoiceEditor: View {
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
             .navigationTitle(isEditing ? "Edit plan" : "New plan")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.keyboardShortcut("s", modifiers: .command) }

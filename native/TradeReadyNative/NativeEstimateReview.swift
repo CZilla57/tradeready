@@ -192,6 +192,7 @@ struct NativeEstimateReviewView: View {
             .background(Color.tradeCanvas)
             .navigationTitle("Send Estimate")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
             }

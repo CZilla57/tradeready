@@ -60,6 +60,7 @@ struct CoachView: View {
                 composer
             }
             .navigationTitle("Coach")
+            .nativeKeyboardDoneBar()
             .toolbar {
                 if NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: messages.count) {
                     // Task 10.13 fix round 1: cancel any in-flight send AND

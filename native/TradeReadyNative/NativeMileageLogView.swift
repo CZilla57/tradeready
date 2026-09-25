@@ -72,6 +72,7 @@ struct NativeMileageLogView: View {
         }
         .navigationTitle("Mileage log")
         .navigationBarTitleDisplayMode(.inline)
+        .nativeKeyboardDoneBar()
         .refreshable { await store.performPullToRefresh() }
         .sheet(item: $editorTarget) { target in
             NativeTripEditor(target: target, opened: openedTrip(for: target))

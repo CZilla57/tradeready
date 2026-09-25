@@ -96,7 +96,8 @@ struct NativeRouteView: View {
                     .nativeContentColumnFrame()
             } else if isLoadingPreview {
                 ProgressView("Building route preview…")
-                    .frame(height: 200)
+                    // 11.10b A27: a minimum, so AX5 text grows the band.
+                    .frame(minHeight: 200)
                     .frame(maxWidth: .infinity)
                     .background(Color(.systemGray6))
                     .nativeContentColumnFrame()
@@ -106,7 +107,7 @@ struct NativeRouteView: View {
                 } description: {
                     Text("Add addresses to jobs to see the route preview.")
                 }
-                .frame(height: 200)
+                .frame(minHeight: 200)
                 .nativeContentColumnFrame()
             }
 
@@ -243,6 +244,10 @@ private struct MapPreviewView: View {
                                 Text("\(annotation.order)")
                                     .font(.caption2.bold())
                                     .foregroundStyle(.white)
+                                    // 11.10b A26: white on the map tiles had no
+                                    // guaranteed contrast; it sits on the fill.
+                                    .padding(.horizontal, 5)
+                                    .background(Color.tradeReadyFill, in: Capsule())
                             }
                         }
                     }
@@ -383,7 +388,9 @@ private struct StopRowView: View {
                 Text("\(index + 1)")
                     .font(.subheadline.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 24)
+                    // 11.10b A16: a two-digit stop number at AX sizes widens the
+                    // column instead of clipping.
+                    .frame(minWidth: 24)
                 if !isLast {
                     Button(action: onMoveDown) {
                         Image(systemName: "chevron.down")
@@ -396,7 +403,7 @@ private struct StopRowView: View {
                     .accessibilityLabel(NativeAccessibilityAudit.Label.moveStopDown)
                 }
             }
-            .frame(width: 44)
+            .frame(minWidth: NativeAccessibilityAudit.minimumTouchTarget)
 
             // Stop info
             VStack(alignment: .leading, spacing: 2) {
@@ -436,7 +443,7 @@ private struct StopRowView: View {
                 } else {
                     Text("No address")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.tradeDangerText)
                 }
             }
         }

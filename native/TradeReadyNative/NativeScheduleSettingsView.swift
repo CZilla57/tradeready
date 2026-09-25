@@ -62,6 +62,7 @@ struct NativeScheduleSettingsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .nativeKeyboardDoneBar()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
@@ -100,7 +101,7 @@ struct NativeScheduleSettingsView: View {
             }
             if let failure = failureMessage {
                 Section {
-                    Text(failure).font(.footnote).foregroundStyle(.red)
+                    Text(failure).font(.footnote).foregroundStyle(Color.tradeDangerText)
                         .accessibilityLabel("Save failed: \(failure)")
                 }
             }
@@ -263,7 +264,7 @@ struct NativeScheduleSettingsView: View {
 
             if !validationErrors.isEmpty {
                 Section(header: Text("Check before saving")) {
-                    ForEach(validationErrors, id: \.self) { Text($0).font(.footnote).foregroundStyle(.red) }
+                    ForEach(validationErrors, id: \.self) { Text($0).font(.footnote).foregroundStyle(Color.tradeDangerText) }
                 }
             }
 

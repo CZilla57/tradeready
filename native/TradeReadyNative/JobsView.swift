@@ -109,7 +109,8 @@ struct JobsView: View {
                     Button {
                         guard !isPresentingAnything else { return }
                         showingNewJob = true
-                    } label: { Image(systemName: "plus") }
+                    } label: { Label(NativeAccessibilityAudit.Label.addJob, systemImage: "plus") }
+                        .labelStyle(.iconOnly)
                         .accessibilityLabel(NativeAccessibilityAudit.Label.addJob)
                         .keyboardShortcut(newShortcut)
                 }
@@ -668,6 +669,7 @@ struct JobEditor: View {
                 duplicateTemplate != nil ? "Duplicate Job" : isNewRecord ? "New Job" : "Edit Job"
             )
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar {
                 DismissableFormToolbar(title: duplicateTemplate != nil ? "Duplicate" : isNewRecord ? "New Job" : "Job") {
                     if !isScheduled {

@@ -191,6 +191,7 @@ private struct RequestRowView: View {
     private var details: String { request.details }
     private var slotDate: String? { request.slot?.date }
     private var slotStart: String? { request.slot?.start }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -209,7 +210,9 @@ private struct RequestRowView: View {
     }
 
     private var headerSection: some View {
-        HStack(alignment: .top, spacing: 12) {
+        // 11.10b A16: at AX sizes the kind sits above the name instead of in a
+        // 64pt column that squeezes the name and details.
+        NativeAccessibilityAdaptiveRow(alignment: .top, spacing: 12) {
             kindIndicator
             VStack(alignment: .leading, spacing: 4) {
                 Text(customerName.isEmpty ? "Unknown customer" : customerName)
@@ -234,18 +237,30 @@ private struct RequestRowView: View {
         }
     }
 
+    @ViewBuilder
     private var kindIndicator: some View {
-        VStack(spacing: 4) {
-            Image(systemName: kindIcon)
-                .font(.title2)
-                .foregroundStyle(kindColor)
-            Text(kindLabel)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(kindColor)
-                .multilineTextAlignment(.center)
-                .frame(width: 56)
+        if dynamicTypeSize.isAccessibilitySize {
+            // One line, full width: the label is never squeezed into 56pt.
+            HStack(spacing: 6) {
+                Image(systemName: kindIcon)
+                    .foregroundStyle(kindColor)
+                Text(kindLabel)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(kindColor)
+            }
+        } else {
+            VStack(spacing: 4) {
+                Image(systemName: kindIcon)
+                    .font(.title2)
+                    .foregroundStyle(kindColor)
+                Text(kindLabel)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(kindColor)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 56)
+            }
+            .frame(width: 64)
         }
-        .frame(width: 64)
     }
 
     private var actionsSection: some View {
@@ -298,7 +313,7 @@ private struct RequestRowView: View {
             case .missingJob:
                 Text("Linked job not found")
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.tradeDangerText)
                 Button("Reconcile") { /* TODO: reconciliation flow */ }
                     .buttonStyle(.bordered)
                     .disabled(true)
@@ -326,7 +341,7 @@ private struct RequestRowView: View {
         switch kind {
         case .rescheduleRequested: .orange
         case .portalChange: .blue
-        case .cancelled: .red
+        case .cancelled: .tradeDangerText
         case .missingJob: .purple
         case .unconvertedActive: .orange
         }

@@ -105,6 +105,7 @@ struct NativeReviewRequestView: View {
             .background(Color.tradeCanvas)
             .navigationTitle("Request a review")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeKeyboardDoneBar()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) } }
             .onAppear {
                 guard let draft, message.isEmpty else { return }

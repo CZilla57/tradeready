@@ -289,13 +289,15 @@ private struct NativeMoneyTrueEmptyState: View {
 /// optional notes and receipt glyph, amount.
 struct NativeMoneyExpenseRowView: View {
     let row: NativeMoneyExpenseRow
+    /// 11.10b A16: the category badge grows with the text beside it.
+    @ScaledMetric(relativeTo: .callout) private var iconBadgeSize: CGFloat = 30
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: NativeMoneyCategorySymbol.symbol(for: row.categoryId))
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .frame(width: 30, height: 30)
+                .frame(width: iconBadgeSize, height: iconBadgeSize)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.merchant).font(.subheadline.weight(.medium)).lineLimit(1)

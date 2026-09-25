@@ -74,7 +74,7 @@ struct NativeTimeTrackingSection: View {
                     )
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(summary.isClocked ? .red : .tradeReadyFill)
+                .tint(summary.isClocked ? .tradeDangerFill : .tradeReadyFill)
                 .accessibilityLabel(summary.isClocked ? "Clock out" : "Clock in")
             }
             if summary.isClocked, let active = summary.activeSession {
@@ -96,7 +96,7 @@ struct NativeTimeTrackingSection: View {
         let delta = NSDecimalNumber(decimal: overUnder).doubleValue
         guard abs(delta) >= 0.05 else { return base }
         let signed = "\(delta > 0 ? "+" : "")\(decimalLabel(overUnder))h"
-        return base + Text("  \(signed)").foregroundColor(delta > 0 ? .red : .green)
+        return base + Text("  \(signed)").foregroundColor(delta > 0 ? .tradeDangerText : .green)
     }
 
     private func sessionCountText(_ count: Int) -> String {
