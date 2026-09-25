@@ -225,11 +225,12 @@ struct Harness {
     let clock: TestClock
     let coordinator: NativeSyncCoordinator
 
-    init(tag: String) {
+    /// `server` lets a second harness act as "another device" of the same account.
+    init(tag: String, server: InMemorySupabase = InMemorySupabase()) {
         dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("tradeready-poor-network-\(tag)-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        server = InMemorySupabase()
+        self.server = server
         link = PoorNetworkLink(server: server)
         clock = TestClock()
         // A throwaway App Group suite: a host test never touches the real one.
@@ -338,6 +339,7 @@ struct PoorNetworkTests {
         try await pendingEditWinsOverServerChangeToSameRecord()
         try await directPullKeepsEditPushedDuringIt()
         rebaseRules()
+        try await recurringGenerationWaitsForInitialSync()
 
         NativePerformanceMetrics.shared.replaceSink(nil)
         if failures == 0 {
@@ -1035,6 +1037,141 @@ struct PoorNetworkTests {
         let untouched = try? AppStore.rebasePulledDelta(base: base, pulled: serverNotes, live: base, protectedKeys: [])
         expectEqual(untouched?.snapshot.payload.customerNotes, serverNotes.payload.customerNotes,
                     "rebase: notes: untouched notes take the server's")
+    }
+
+    /// H. Fix round 3 (controller ruling): recurring job and invoice
+    /// generation never runs before the initial sync commits. This device's
+    /// local snapshot (data from before this sign-in, not queued) still has
+    /// four due rules; on the server, another device of the account has
+    /// already generated this period's occurrence for one job rule and one
+    /// plan. A scene-activation foreground refresh during the initial-sync
+    /// await generates and queues nothing. After the commit and the gate
+    /// advance, the post-commit generation (the same method the initial-sync
+    /// task calls) makes exactly one occurrence per due rule, and the server
+    /// ends with no duplicate.
+    ///
+    /// The initial-sync task itself is not drivable in this host binary (its
+    /// gate sits behind the Info.plist-backed `BuildEnvironment` guard; see
+    /// StoreIntegrationTests "10.09 fix round 2"). Its state is set with the
+    /// existing `testSetAuthenticationGateState` hook, and its merge is stood
+    /// in for by the real delta pull from an empty cursor (a full pull with
+    /// the same merge rules). The initial-sync task's call order is pinned by
+    /// a source check below.
+    @MainActor
+    static func recurringGenerationWaitsForInitialSync() async throws {
+        let other = Harness(tag: "recurring-other-device")
+        let h = Harness(tag: "recurring-initial-sync", server: other.server)
+        defer { other.cleanup(); h.cleanup() }
+        let today = NativeRecurringJobs.todayString()
+        let customer = Customer(name: "Delta Roofing", email: "delta@example.test")
+        let seedJob = Job(customerId: customer.id, customerName: customer.name, title: "Gutter clean", laborRate: 80)
+        expect(other.store.upsert(customer) && other.store.upsert(seedJob), "H: the other device's seed records save")
+        guard var firstRule = other.store.recurringJobDraft(from: seedJob.id), var secondRule = other.store.recurringJobDraft(from: seedJob.id) else {
+            expect(false, "H: job rules draft")
+            return
+        }
+        // The draft counts the seed job as occurrence 1; make the next one due today.
+        firstRule.nextDueDate = today
+        secondRule.id = firstRule.id + "-second"
+        secondRule.nextDueDate = today
+        expectEqual(firstRule.nextDueDate, today, "H: the job rules are due today")
+        func plan(_ id: String) -> Canonical.RecurringInvoice {
+            Canonical.RecurringInvoice(
+                id: id, customerId: customer.id, customerName: customer.name,
+                description: "Maintenance", amount: 150, dueDays: 30,
+                cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+                occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: today,
+                isActive: true, createdAt: today, autoSendEnabled: false)
+        }
+        let firstPlan = plan("rinv-h-first"), secondPlan = plan("rinv-h-second")
+
+        // This device: the same four rules, not yet advanced, and nothing queued.
+        expect(h.store.upsert(customer), "H: the customer is on this device")
+        expect(h.store.createRecurringJob(firstRule) && h.store.createRecurringJob(secondRule)
+               && h.store.createRecurringInvoice(firstPlan) && h.store.createRecurringInvoice(secondPlan),
+               "H: this device holds the four due rules")
+        try h.queue.removeAll()
+        let jobsBefore = h.store.jobs.count, invoicesBefore = h.store.invoices.count
+
+        // The other device generates this period for the first rule and plan,
+        // then adds the second ones, and everything reaches the server.
+        expect(other.store.createRecurringJob(firstRule) && other.store.createRecurringInvoice(firstPlan), "H: other device rules")
+        expect(other.store.runRecurringJobGeneration(today: today), "H: the other device generates the first job occurrence")
+        expect(other.store.runRecurringInvoiceGeneration(today: today), "H: the other device generates the first plan's invoice")
+        expect(other.store.createRecurringJob(secondRule) && other.store.createRecurringInvoice(secondPlan), "H: other device second rules")
+        let push = NativeSupabaseMutationPushService(
+            supabaseURL: Harness.supabaseURL, publishableKey: "publishable-key", allowsWrites: true, loader: other.server
+        )
+        let pushed = try await push.push(sessionBytes: Harness.session, expectedUserSubject: Harness.subject, items: other.queue.load())
+        expect(pushed.remaining.isEmpty, "H: the other device's records reached the server")
+
+        func linked(_ rows: [Canonical.JSONValue], _ field: String, _ id: String) -> Int {
+            rows.filter { row in
+                guard case let .object(fields) = row, case let .string(value)? = fields[field] else { return false }
+                return value == id
+            }.count
+        }
+        func diskJobs(_ rule: String) -> Int { linked((h.committed()?.payload.jobs ?? []).compactMap { try? jsonValue($0) }, "recurringJobId", rule) }
+        func diskInvoices(_ rule: String) -> Int { linked((h.committed()?.payload.invoices ?? []).compactMap { try? jsonValue($0) }, "recurringInvoiceId", rule) }
+        func serverCount(_ table: String, _ field: String, _ id: String) -> Int {
+            linked(h.server.liveRows(table: table, userID: Harness.subject).map(\.data), field, id)
+        }
+
+        // The initial sync is in flight; the user brings the app to the foreground.
+        h.store.testSetAuthenticationGateState(.initialSyncLoading)
+        await h.store.performForegroundRefresh()
+        expectEqual(h.store.jobs.count, jobsBefore, "H: a foreground refresh during the initial sync generates no job")
+        expectEqual(h.store.invoices.count, invoicesBefore, "H: a foreground refresh during the initial sync generates no invoice")
+        expectEqual(h.queueKeys(), [], "H: a foreground refresh during the initial sync queues nothing")
+        expect(h.store.recurringJobRules.allSatisfy { $0.nextDueDate == today }
+               && h.store.recurringInvoiceRules.allSatisfy { $0.nextDueDate == today },
+               "H: no rule advances during the initial sync")
+
+        // The server's data arrives (stand-in for the initial-sync merge).
+        expectEqual(await h.store.testPullDeltaIfPossible().state, .completed, "H: the full pull commits")
+        expectEqual(h.queueKeys(), [], "H: the pull commit during the initial sync generates nothing either")
+        expectEqual(diskJobs(firstRule.id), 1, "H: the other device's job occurrence arrived")
+        expectEqual(diskInvoices(firstPlan.id), 1, "H: the other device's plan invoice arrived")
+
+        // The initial sync commits and its gate advances; the post-commit generation runs.
+        h.store.testSetAuthenticationGateState(.signedIn(email: nil))
+        h.store.testRunRecurringGenerationAfterInitialSync()
+        for (label, count) in [
+            ("first job rule", diskJobs(firstRule.id)), ("second job rule", diskJobs(secondRule.id)),
+            ("first plan", diskInvoices(firstPlan.id)), ("second plan", diskInvoices(secondPlan.id)),
+        ] {
+            expectEqual(count, 1, "H: after the initial sync, exactly one occurrence for the \(label)")
+        }
+        // A later activation generates nothing more.
+        await h.store.performForegroundRefresh()
+        expectEqual(diskJobs(secondRule.id) + diskInvoices(secondPlan.id), 2, "H: a later foreground refresh adds nothing")
+
+        _ = await h.coordinator.sync(trigger: .manual)
+        expect(h.queue.load().isEmpty, "H: this device's generated records reach the server")
+        expectEqual(serverCount("jobs", "recurringJobId", firstRule.id), 1, "H: no duplicate of the other device's job occurrence on the server")
+        expectEqual(serverCount("jobs", "recurringJobId", secondRule.id), 1, "H: one occurrence of the second job rule on the server")
+        expectEqual(serverCount("invoices", "recurringInvoiceId", firstPlan.id), 1, "H: no duplicate of the other device's plan invoice on the server")
+        expectEqual(serverCount("invoices", "recurringInvoiceId", secondPlan.id), 1, "H: one invoice for the second plan on the server")
+
+        // The initial-sync task calls the post-commit generation only after its gate advances.
+        let source = (try? String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("TradeReadyNative/AppStore.swift"), encoding: .utf8)) ?? ""
+        if let gate = source.range(of: "private func beginInitialSyncGate("),
+           let end = source.range(of: "private func advancePastInitialSync(", range: gate.upperBound..<source.endIndex) {
+            let body = String(source[gate.upperBound..<end.lowerBound])
+            expect(!body.contains("refreshRecurringJobs()") && !body.contains("runRecurringInvoiceGeneration("),
+                   "H: the initial-sync task has no generation call before its gate advances")
+            if let advance = body.range(of: "self.advancePastInitialSync("),
+               let generate = body.range(of: "self.runRecurringGenerationAfterInitialSync()") {
+                expect(advance.lowerBound < generate.lowerBound,
+                       "H: the initial-sync task generates after advancePastInitialSync")
+            } else {
+                expect(false, "H: the initial-sync task calls runRecurringGenerationAfterInitialSync()")
+            }
+        } else {
+            expect(false, "H: AppStore.swift source is readable for the call-order pin")
+        }
     }
 
     /// F. The server changed the same record the user has pending. Documented

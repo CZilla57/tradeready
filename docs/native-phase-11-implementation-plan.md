@@ -3413,11 +3413,15 @@ so this entry is the record of the decision.
   commit with the same capture-before-await shape, left unchanged. RootView shows the
   loading screen, deep links park, widget replay has no publish binding yet, and
   background refresh needs a completed workspace. **Corrected in fix round 2 (review
-  M3):** scene activation still runs `performForegroundRefresh`, whose
-  `refreshRecurringJobs` can generate and enqueue jobs during the initial-sync await.
-  That is benign: recurring job ids are deterministic (rule plus occurrence), and the
-  commit's own `refreshRecurringJobs` regenerates the same ids. See the round 2
-  observation on recurring invoices.
+  M3):** scene activation still runs `performForegroundRefresh`, whose recurring
+  generation could generate and enqueue during the initial-sync await. **Corrected
+  again and fixed in fix round 3:** that was not benign. Recurring job ids carry a
+  timestamp (`LocalIDGenerator.recurringJobID`: `j<ms>_<rule>_<occurrence>`), not just
+  the rule and occurrence, and invoice ids are random. An occurrence generated during
+  the await is dropped by the commit while it stays queued, so it could be generated
+  again under a new id, and generating against the pre-sync snapshot can also repeat
+  an occurrence another device already generated. Fix round 3 gates every recurring
+  generation entry point on the post-initial-sync state (see below).
 - Two overlapping pulls can at most regress the cursor, which only causes an
   idempotent refetch.
 
@@ -3503,13 +3507,9 @@ no restructure was needed.
 - **M2:** the merge keeps the live order (an expense or trip created during the pull stays
   at the front, where `performExpenseEdit`/`performTripEdit` insert it); rows only the pull has follow in
   pulled order.
-- **M3:** the initial-sync audit is corrected above. **Observation, not changed:**
-  the same `performForegroundRefresh` also runs `runRecurringInvoiceGeneration`, whose
-  invoice ids are random. An invoice generated during the initial-sync await is reverted
-  locally but stays queued. If the app is still offline at the next foreground,
-  generation could run again under a new id, giving a possible duplicate invoice. This
-  is not reproduced. It is recorded for a controller ruling, because the initial-sync
-  commit is outside this ruling.
+- **M3:** the initial-sync audit is corrected above. The recurring-invoice
+  observation raised here (and the same exposure for jobs) was ruled on and fixed in
+  fix round 3.
 - **M4:** the harness coordinator now passes `statusChanged` through the existing
   `testApplySyncStatus` hook. Comments in `syncCoordinatorIfConfigured` and
   `Harness.init` link the two.
@@ -3543,5 +3543,82 @@ no restructure was needed.
   backend-workers `fail 0`).
 - Release compile → `** BUILD SUCCEEDED **`.
 - `sh native/run-doc-reference-check.sh` → `1606 path references checked: 0 missing, 14 planned (not yet created).`
+
+### 11.12 fix round 3 — recurring generation waits for the initial sync (2026-09-24)
+
+**Status:** Fixed in the commit "fix(native): 11.12 fix round 3 - recurring generation
+waits for the initial sync". It is a local guard plus a reorder of the post-commit
+calls. The initial-sync commit (`apply`/`save`) is unchanged.
+
+**Ruling (controller).** Recurring job and invoice generation must not run before the
+initial sync commits. Generating against an incomplete snapshot can duplicate
+occurrences another device already generated. It also caused the drop-then-duplicate
+issue: an occurrence generated during the await is dropped by the commit but stays
+queued, and it is generated again under a new id.
+
+**Fix (`N/AppStore.swift`).**
+- **Gate.** `mayGenerateRecurringRecords` is `derivedStatePublishBinding != nil`,
+  meaning:
+  - the signed-in-family gate states (`signedIn`, `subscriptionLoading`, `paywall`,
+    `startingPoint`, `onboarding`);
+  - plus the exact workspace (a migrated owner or a completed persisted workspace).
+
+  This is the same state derived-state publishing and widget replay use.
+  `refreshRecurringJobs()` and the new `refreshRecurringInvoices()` return early
+  without it. The generators themselves (`runRecurringJobGeneration`,
+  `runRecurringInvoiceGeneration`) are unchanged, and direct callers such as tests
+  are unaffected.
+- **Entry points, all gated:**
+  - `performForegroundRefresh` (scene activation): jobs and invoices.
+  - The delta-pull commit hook in `pullDeltaAndCommit`: jobs. It covers the
+    coordinator, background refresh (through `syncNowAndWait`) and the
+    booking/portal recovery pulls. Background refresh has no other generation call.
+  - The returning-user launch path in `applyAuthenticatedIdentityOutcome`: jobs, now
+    called after `advancePastInitialSync` so the gate can hold.
+  - The initial-sync task's post-commit generation: now
+    `runRecurringGenerationAfterInitialSync()` (jobs **and invoices**; invoices were
+    missing there), called after `markInitialSyncCompleted` and
+    `advancePastInitialSync`. It stays synchronous and before the publish, so no
+    suspension point is added (10.09 fix round 2 ordering).
+- **Effect when the gate ends elsewhere.** When the gate ends in `.onboarding` or
+  `.startingPoint` without a completed workspace, generation is deferred to the next
+  foreground or pull commit once the workspace completes. It is delayed, never lost,
+  because rules keep their due dates. When the gate ends in `.accountMismatch` or
+  `.unavailable`, nothing is generated into another owner's workspace.
+
+**Test (`native/PoorNetworkTests/main.swift` scenario H).**
+- **Setup.** Another device of the account (a second harness on the same server) has
+  already generated this period's occurrence for one job rule and one plan. This
+  device holds all four due rules locally, not queued.
+- **During the initial sync.** With the gate in `.initialSyncLoading` (set through the
+  existing `testSetAuthenticationGateState` hook), the real `performForegroundRefresh`
+  generates no job or invoice, queues nothing and advances no rule. The delta-pull
+  commit generates nothing either.
+- **After the commit.** Once the gate advances, the post-commit generation (through
+  `testRunRecurringGenerationAfterInitialSync`) makes exactly one occurrence per due
+  rule. That includes the rules whose occurrence came from the other device. A later
+  foreground refresh adds nothing, and after a push the server holds one occurrence
+  per rule.
+- **Limits.** The initial-sync task is not drivable in the host binary (the
+  `BuildEnvironment` guard; see StoreIntegrationTests "10.09 fix round 2"). The real
+  delta pull from an empty cursor stands in for its merge, and a source check pins the
+  task's order: no generation call before the gate advances, and
+  `runRecurringGenerationAfterInitialSync()` after `advancePastInitialSync`.
+
+**Commands and results (TZ=America/Phoenix):**
+- RED (post-commit method present, no gate or reorder):
+  `poor-network tests: 13 of 258 checks FAILED`. Generation happened during the
+  initial sync, the server ended with duplicates of the other device's job and invoice
+  occurrences, and the source pin failed.
+- GREEN: `poor-network tests: 258/258 checks passed`.
+- Mutation (drop the invoice gate): 7 failures, restored from a copy.
+- The recurring-job and recurring-invoice suites, sync-coordinator, delta-sync,
+  mutation-push, mutation-queue, initial-sync, sync-backfill, two-device convergence,
+  background-refresh and store-integration all PASS.
+  `performance-metrics tests: 178/178 checks passed`.
+- Release compile → `** BUILD SUCCEEDED **`.
+- `TZ=America/Phoenix sh native/run-all-domain-tests.sh` → `exit=0` (65 PASS lines,
+  backend-workers `fail 0`).
+- `sh native/run-doc-reference-check.sh` → `1608 path references checked: 0 missing, 14 planned (not yet created).`
 
 **Next ready:** 11.10b (accessibility re-audit).

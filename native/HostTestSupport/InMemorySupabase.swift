@@ -174,6 +174,11 @@ final class InMemorySupabase: NativeInitialSyncHTTPDataLoading, NativeMutationPu
         return respond(204, Data("{}".utf8), request)
     }
 
+    // Test-only inspection: the non-deleted rows the server holds for a table.
+    func liveRows(table: String, userID: String) -> [Row] {
+        (collections[table] ?? [:]).values.filter { $0.userID == userID && !$0.deleted }
+    }
+
     // Test-only inspection: how many non-deleted rows the server holds for a table.
     func liveRowCount(table: String, userID: String) -> Int {
         (collections[table] ?? [:]).values.filter { $0.userID == userID && !$0.deleted }.count

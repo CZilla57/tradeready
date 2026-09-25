@@ -3190,7 +3190,34 @@ final class AppStore: ObservableObject {
     /// `checkAndGenerateRecurringJobs`. The Batch 2 recurrence manager calls
     /// this before its own refresh so generated occurrences are visible to it.
     func refreshRecurringJobs() {
+        guard mayGenerateRecurringRecords else { return }
         _ = runRecurringJobGeneration()
+    }
+
+    /// Foreground entry point for maintenance-plan invoices, gated like
+    /// `refreshRecurringJobs`.
+    private func refreshRecurringInvoices() {
+        guard mayGenerateRecurringRecords else { return }
+        _ = runRecurringInvoiceGeneration()
+    }
+
+    /// Task 11.12 fix round 3 (controller ruling): recurring generation runs
+    /// only in the signed-in, post-initial-sync, exact-workspace state that
+    /// derived-state publishing and widget replay also require. Before the
+    /// initial sync commits, the snapshot is incomplete: generating against
+    /// it can repeat an occurrence another device already generated, and an
+    /// occurrence generated during the initial-sync await is dropped by that
+    /// commit while it stays queued, so it would be generated again under a
+    /// new id (job ids carry a timestamp; invoice ids are random).
+    private var mayGenerateRecurringRecords: Bool {
+        derivedStatePublishBinding != nil
+    }
+
+    /// The initial sync's post-commit generation (jobs and invoices), run
+    /// once its gate has advanced so `mayGenerateRecurringRecords` can hold.
+    private func runRecurringGenerationAfterInitialSync() {
+        refreshRecurringJobs()
+        refreshRecurringInvoices()
     }
 
     private static let recurringInvoiceIDGenerator = LocalIDGenerator()
@@ -5077,13 +5104,14 @@ final class AppStore: ObservableObject {
                 // Returning-user app open with a previously completed sync:
                 // mirror RN's session-mount generation on the local snapshot.
                 // (First syncs generate in the initial-sync task above, and
-                // every later sync generates in the pull hook.)
-                refreshRecurringJobs()
+                // every later sync generates in the pull hook.) Fix round 3:
+                // after the gate advances, since generation is gated on it.
                 advancePastInitialSync(
                     outcome: outcome,
                     allowUnboundWorkspaceAdoption: !outcome.verificationSource.isOfflineFallback
                         && allowUnboundWorkspaceAdoption
                 )
+                refreshRecurringJobs()
             } else {
                 beginInitialSyncGate(
                     outcome: outcome,
@@ -5156,12 +5184,15 @@ final class AppStore: ObservableObject {
                     throw error
                 }
                 NativePerformanceMetrics.shared.end(initialSync, count: self.performanceRecordCount())
-                self.refreshRecurringJobs()
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
                     outcome: outcome,
                     allowUnboundWorkspaceAdoption: allowUnboundWorkspaceAdoption
                 )
+                // Fix round 3: generation waits for the gate to advance (it is
+                // gated on the post-initial-sync state). Synchronous, so no
+                // suspension is added before the publish below.
+                self.runRecurringGenerationAfterInitialSync()
                 // Task 10.09 (B1) fix round 2: the initial full sync's commit
                 // above never routes through `pullDeltaIfPossible` — it is
                 // its own, structurally separate committed canonical sync
@@ -6581,8 +6612,10 @@ final class AppStore: ObservableObject {
         // Mirrors RN's foreground `checkAndGenerateRecurringJobs`: runs after
         // the sync when it succeeds, and on the local snapshot when offline —
         // and before photo transfer or any Batch 2 recurrence-manager refresh.
+        // Both are gated on the initial sync having committed (fix round 3):
+        // an activation during the initial-sync await generates nothing.
         refreshRecurringJobs()
-        _ = runRecurringInvoiceGeneration()
+        refreshRecurringInvoices()
         rescheduleInvoiceDeliveries()
         guard synced else { return }
         let photos = await performJobPhotoTransfer()
@@ -10113,6 +10146,13 @@ extension AppStore {
     /// `pullDeltaIfPossible` commit path. Production never calls this.
     func testSetAuthenticationGateState(_ state: NativeAuthenticationGateState) {
         authenticationGateState = state
+    }
+
+    /// Test-only (task 11.12 fix round 3): runs the post-commit recurring
+    /// generation the initial-sync task calls once its gate advances (that
+    /// task is not drivable in the host binary). Production never calls this.
+    func testRunRecurringGenerationAfterInitialSync() {
+        runRecurringGenerationAfterInitialSync()
     }
 
     /// Test-only (task 11.12): runs the real `pullDeltaIfPossible`, the pull
