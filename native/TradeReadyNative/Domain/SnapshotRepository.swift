@@ -52,6 +52,15 @@ extension Canonical {
             case corruptPrimaryNoUsableBackup(primary: Error, backup: Error?)
         }
 
+        /// Phase 12.00b.2-E fix round 1 (L267.a, Important 1 & 2): the outcome
+        /// of raising a copied `LegacyBackups/` file's protection class, so a
+        /// caller (and a host test) can observe the failure mode instead of a
+        /// printed diagnostic alone. Counts only — never a path or filename.
+        enum LegacyFileProtectionOutcome: Equatable {
+            case enumeratorUnavailable
+            case completed(protected: Int, failed: Int)
+        }
+
         /// Task 11.13 fix round 3: everything under `LegacyBackups/` is the
         /// exact pre-conversion source, which can hold an RN-era plaintext
         /// Square access token (contract §17.2 G6). It is written with
@@ -69,20 +78,23 @@ extension Canonical {
         private let fileManager: FileManager
         private let now: () -> Date
 
-        /// Test-only (Phase 12.00b.2-E, L267.a): forces
-        /// `protectCopiedLegacyFiles` onto its nil-enumerator failure path.
-        /// `FileManager.enumerator(at:includingPropertiesForKeys:)` is a
-        /// `@nonobjc` Swift-overlay method and cannot be overridden from
-        /// outside Foundation, so a host test has no other way to force a
-        /// real nil enumerator. Always `false` in production.
-        var testForcesNilLegacyFileProtectionEnumerator = false
+        /// Phase 12.00b.2-E fix round 1 (Minor): injected like `fileManager`/
+        /// `now` instead of a mutable stored test seam. Lets a host test force
+        /// the nil-enumerator failure path without a production-visible
+        /// boolean var. `FileManager.enumerator(at:includingPropertiesForKeys:)`
+        /// is a `@nonobjc` Swift-overlay method and cannot be subclassed or
+        /// overridden from outside Foundation on this toolchain, so this
+        /// closure is the only way to simulate its failure from a host test.
+        /// Defaults to the real `FileManager.enumerator`.
+        private let legacyFileEnumerator: (URL) -> FileManager.DirectoryEnumerator?
 
         init(
             primaryURL: URL,
             backupURL: URL? = nil,
             legacyBackupDirectoryURL: URL? = nil,
             fileManager: FileManager = .default,
-            now: @escaping () -> Date = Date.init
+            now: @escaping () -> Date = Date.init,
+            legacyFileEnumerator: ((URL) -> FileManager.DirectoryEnumerator?)? = nil
         ) {
             self.primaryURL = primaryURL
             self.backupURL = backupURL ?? primaryURL.appendingPathExtension("backup")
@@ -93,6 +105,8 @@ extension Canonical {
                 .appendingPathComponent("Media", isDirectory: true)
             self.fileManager = fileManager
             self.now = now
+            self.legacyFileEnumerator = legacyFileEnumerator
+                ?? { fileManager.enumerator(at: $0, includingPropertiesForKeys: nil) }
         }
 
         var isAccountScrubPending: Bool {
@@ -278,19 +292,51 @@ extension Canonical {
                 .appendingPathComponent(migration.rawValue, isDirectory: true)
             try prepareLegacyBackupDirectory(migrationDirectory)
             let destination = migrationDirectory.appendingPathComponent(name, isDirectory: true)
-            if fileManager.fileExists(atPath: destination.path) { return destination }
+            if fileManager.fileExists(atPath: destination.path) {
+                // Phase 12.00b.2-E fix round 1 (L267.a, Important 1): a
+                // completed migration's only other caller
+                // (`LegacyMigrationCoordinator.migrate`) short-circuits to
+                // `.alreadyCompleted` once the journal is complete and never
+                // calls this again, so this early return is the other path
+                // that must heal a protection failure from the original pass
+                // rather than silently returning.
+                _ = reprotectPublishedLegacyDirectory(migration: migration, name: name)
+                return destination
+            }
 
             let staging = migrationDirectory
                 .appendingPathComponent(".\(name)-staging-\(UUID().uuidString)", isDirectory: true)
             do {
                 try fileManager.copyItem(at: source, to: staging)
-                protectCopiedLegacyFiles(in: staging)
+                _ = protectCopiedLegacyFiles(in: staging)
                 try fileManager.moveItem(at: staging, to: destination)
             } catch {
                 try? fileManager.removeItem(at: staging)
                 throw error
             }
             return destination
+        }
+
+        /// Phase 12.00b.2-E fix round 1 (L267.a, Important 1): re-runs file
+        /// protection on an already-published `LegacyBackups/<migration>/<name>`
+        /// copy. `LegacyMigrationCoordinator.migrate` short-circuits to
+        /// `.alreadyCompleted` once the journal is complete and never calls
+        /// `preserveLegacyDirectory` again, so this is the only path that can
+        /// heal a protection failure from the original pass on a later
+        /// launch. Returns `nil` when nothing has been published yet (nothing
+        /// to protect). Never throws; touches only the copied `LegacyBackups/`
+        /// tree, never the RN source files it was copied from (charter G6
+        /// §5.4 item 1).
+        @discardableResult
+        func reprotectPublishedLegacyDirectory(
+            migration: MigrationKind,
+            name: String
+        ) -> LegacyFileProtectionOutcome? {
+            let destination = legacyBackupDirectoryURL
+                .appendingPathComponent(migration.rawValue, isDirectory: true)
+                .appendingPathComponent(name, isDirectory: true)
+            guard fileManager.fileExists(atPath: destination.path) else { return nil }
+            return protectCopiedLegacyFiles(in: destination)
         }
 
         func diagnostics(
@@ -355,28 +401,31 @@ extension Canonical {
         }
 
         /// A copied directory keeps the source's protection class; raise every
-        /// copied file to `legacyBackupFileProtection`. Best effort, bounded log.
-        private func protectCopiedLegacyFiles(in directory: URL) {
-            // Phase 12.00b.2-E (L267.a): a nil enumerator is a failure of the
-            // same kind as a per-file `setAttributes` failure below — log the
-            // same bounded diagnostic instead of returning silently. Never a
-            // throw: protection is best-effort hardening on top of the copy
-            // `preserveLegacyDirectory` already made, not a correctness gate,
-            // so a nil enumerator must not block or retry the migration.
-            guard !testForcesNilLegacyFileProtectionEnumerator,
-                  let files = fileManager.enumerator(at: directory, includingPropertiesForKeys: nil)
-            else {
+        /// copied file to `legacyBackupFileProtection`. Best effort, bounded
+        /// log — never a throw: protection is hardening on top of the copy
+        /// `preserveLegacyDirectory` already made, not a correctness gate, so
+        /// neither a nil enumerator nor a per-file failure may block or retry
+        /// the migration. Phase 12.00b.2-E fix round 1 (Important 1 & 2):
+        /// returns an outcome instead of `Void` so a caller can re-protect a
+        /// published copy later, and a host test can assert the failure mode
+        /// behaviourally instead of pinning this function's source text.
+        @discardableResult
+        private func protectCopiedLegacyFiles(in directory: URL) -> LegacyFileProtectionOutcome {
+            guard let files = legacyFileEnumerator(directory) else {
                 print("TradeReadyLegacyBackup stage=file-protection")
-                return
+                return .enumeratorUnavailable
             }
-            var failed = false
+            var protected = 0
+            var failed = 0
             for case let file as URL in files where !file.hasDirectoryPath {
                 do {
                     try fileManager.setAttributes([.protectionKey: Self.legacyBackupFileProtection],
                                                   ofItemAtPath: file.path)
-                } catch { failed = true }
+                    protected += 1
+                } catch { failed += 1 }
             }
-            if failed { print("TradeReadyLegacyBackup stage=file-protection") }
+            if failed > 0 { print("TradeReadyLegacyBackup stage=file-protection") }
+            return .completed(protected: protected, failed: failed)
         }
 
         private func atomicWrite(_ data: Data, to url: URL) throws {

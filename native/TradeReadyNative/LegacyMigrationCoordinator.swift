@@ -629,6 +629,12 @@ struct LegacyMigrationCoordinator {
     ) throws -> LegacyMigrationOutcome {
         let kind = Canonical.MigrationKind.reactNativeAsyncStorage
         if try journal.isComplete(kind) {
+            // Phase 12.00b.2-E fix round 1 (L267.a, Important 1): this is the
+            // only call site reached once the journal is complete — a
+            // protection failure from the original migration pass would
+            // otherwise never get another chance. Best effort: never throws,
+            // never blocks this already-completed status.
+            _ = repository.reprotectPublishedLegacyDirectory(migration: kind, name: "AsyncStorage")
             return .init(
                 status: .alreadyCompleted, snapshot: nil, importedCount: 0,
                 missingPhotoCount: 0, adoptedPhotoCount: 0, deferredPhotoCount: 0

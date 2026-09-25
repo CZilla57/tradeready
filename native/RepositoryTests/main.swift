@@ -86,68 +86,91 @@ struct RepositoryTests {
             expect(excludedFromBackup(directoryRepository.legacyBackupDirectoryURL),
                    "preserveLegacyDirectory excludes LegacyBackups from backup")
 
-            // L267.a (Phase 12.00b.2-E): `protectCopiedLegacyFiles` (the gate
-            // that raises copied `LegacyBackups/` files — which can hold the
-            // G6 legacy Square/session-token residual — to complete file
-            // protection) must treat a nil `FileManager.enumerator` the same
-            // as a per-file `setAttributes` failure: a bounded diagnostic,
-            // never a throw, never blocking the copy.
-            // `FileManager.enumerator(at:includingPropertiesForKeys:)` cannot
-            // be overridden from outside Foundation on this toolchain (it is
-            // a `@nonobjc` extension method), so there is no way to force a
-            // real nil enumerator from a host test; `testForcesNilLegacyFileProtectionEnumerator`
-            // is the small internal seam that stands in for it. Production
-            // never sets it (defaults to `false`).
-            let nilEnumeratorRoot = root.appendingPathComponent("nil-enumerator-case", isDirectory: true)
-            let nilEnumeratorSource = nilEnumeratorRoot.appendingPathComponent("rn-async-storage", isDirectory: true)
-            try FileManager.default.createDirectory(at: nilEnumeratorSource, withIntermediateDirectories: true)
+            // L267.a (Phase 12.00b.2-E fix round 1): review found the round-0
+            // fix only made the nil-enumerator failure visible; it never
+            // closed the fail-open. `preserveLegacyDirectory` protects a
+            // published `LegacyBackups/` copy once (which can hold the G6
+            // legacy Square/session-token residual); its only other caller,
+            // `LegacyMigrationCoordinator.migrate`, short-circuits to
+            // `.alreadyCompleted` once the journal is complete, so nothing
+            // ever re-protected a copy that failed on its first pass.
+            // `protectCopiedLegacyFiles` now reports an outcome instead of
+            // `Void`, and `reprotectPublishedLegacyDirectory` re-runs it on an
+            // already-published copy so a later launch heals a failed pass.
+            // The nil-enumerator seam is now an init-injected closure
+            // (`legacyFileEnumerator`), like `fileManager`/`now`, instead of a
+            // mutable stored var — `FileManager.enumerator(at:includingPropertiesForKeys:)`
+            // is a `@nonobjc` Swift-overlay method and cannot be subclassed or
+            // overridden from outside Foundation on this toolchain, so this
+            // closure is still the only way to force a real nil enumerator.
+            let reprotectRoot = root.appendingPathComponent("reprotect-case", isDirectory: true)
+            let reprotectSource = reprotectRoot.appendingPathComponent("rn-async-storage", isDirectory: true)
+            try FileManager.default.createDirectory(at: reprotectSource, withIntermediateDirectories: true)
             try Data("{\"providerKeys\":{\"square\":\"EAAA-token\"}}".utf8)
-                .write(to: nilEnumeratorSource.appendingPathComponent("manifest.json"), options: .atomic)
-            var nilEnumeratorRepository = Canonical.SnapshotRepository(
-                primaryURL: nilEnumeratorRoot.appendingPathComponent("store.json")
-            )
-            nilEnumeratorRepository.testForcesNilLegacyFileProtectionEnumerator = true
-            let nilEnumeratorCopied = try nilEnumeratorRepository.preserveLegacyDirectory(
-                nilEnumeratorSource, migration: .legacyNativeSnapshot, name: "AsyncStorage"
-            )
-            expect(FileManager.default.fileExists(
-                       atPath: nilEnumeratorCopied.appendingPathComponent("manifest.json").path),
-                   "L267.a a nil enumerator does not block the legacy directory copy (best effort, same as a per-file failure)")
+                .write(to: reprotectSource.appendingPathComponent("manifest.json"), options: .atomic)
+            try Data("second-file-bytes".utf8)
+                .write(to: reprotectSource.appendingPathComponent("second.json"), options: .atomic)
 
-            // The behavior above (no throw, copy still completes) is
-            // identical whether or not the diagnostic fires, so it alone
-            // cannot distinguish "logs a diagnostic" from "returns silently".
-            // Pin the actual source: the nil-enumerator guard's failure body
-            // must contain the exact same bounded log line the per-file
-            // failure path below it already uses, not a new or absent one.
-            let repositorySource = try String(
-                contentsOf: URL(fileURLWithPath: #filePath)
-                    .deletingLastPathComponent().deletingLastPathComponent()
-                    .appendingPathComponent("TradeReadyNative/Domain/SnapshotRepository.swift"),
-                encoding: .utf8
-            )
-            if let functionStart = repositorySource.range(of: "private func protectCopiedLegacyFiles(in directory: URL) {"),
-               let functionEnd = repositorySource.range(
-                   of: "private func atomicWrite(", range: functionStart.upperBound..<repositorySource.endIndex
-               )
-            {
-                let body = String(repositorySource[functionStart.upperBound..<functionEnd.lowerBound])
-                let perFileFailureLog = "print(\"TradeReadyLegacyBackup stage=file-protection\")"
-                expect(body.contains(perFileFailureLog),
-                       "L267.a sanity: the per-file failure path logs the bounded diagnostic")
-                if let guardStart = body.range(of: "guard "),
-                   let guardElseStart = body.range(of: "else {", range: guardStart.upperBound..<body.endIndex),
-                   let guardElseEnd = body.range(of: "}", range: guardElseStart.upperBound..<body.endIndex)
-                {
-                    let guardFailureBody = String(body[guardElseStart.upperBound..<guardElseEnd.lowerBound])
-                    expect(guardFailureBody.contains(perFileFailureLog),
-                           "L267.a a nil enumerator logs the same bounded diagnostic as a per-file failure, not a silent return")
-                } else {
-                    expect(false, "L267.a: the nil-enumerator guard-else body is locatable for the pin")
+            // A counting wrapper around the real enumerator lets the test
+            // observe *that* protection was re-run (not just its result),
+            // which is how the early-return and `.alreadyCompleted` call
+            // sites are verified below without touching `private` internals.
+            final class EnumeratorCallCounter { var count = 0 }
+            let reprotectCounter = EnumeratorCallCounter()
+            let reprotectRepository = Canonical.SnapshotRepository(
+                primaryURL: reprotectRoot.appendingPathComponent("store.json"),
+                legacyFileEnumerator: { url in
+                    reprotectCounter.count += 1
+                    return FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
                 }
-            } else {
-                expect(false, "L267.a: SnapshotRepository.swift source is readable for the nil-enumerator pin")
-            }
+            )
+            let reprotectCopied = try reprotectRepository.preserveLegacyDirectory(
+                reprotectSource, migration: .legacyNativeSnapshot, name: "AsyncStorage"
+            )
+            expect(FileManager.default.fileExists(atPath: reprotectCopied.appendingPathComponent("manifest.json").path),
+                   "L267.a reprotect fixture: the legacy directory is published")
+            expect(reprotectCounter.count == 1, "L267.a reprotect fixture: the first publish protects once")
+
+            // Important 1, the published-destination early return
+            // (SnapshotRepository.swift :281 pre-fix): a second call for a
+            // name that already exists must re-protect, not just return the
+            // URL silently.
+            let secondPublish = try reprotectRepository.preserveLegacyDirectory(
+                reprotectSource, migration: .legacyNativeSnapshot, name: "AsyncStorage"
+            )
+            expect(secondPublish == reprotectCopied,
+                   "L267.a a second preserveLegacyDirectory call for the same name is still idempotent")
+            expect(reprotectCounter.count == 2,
+                   "L267.a the published-destination early return re-protects instead of returning silently")
+
+            // Important 2, point 1: an enumerator failure is reported through
+            // the outcome, not only logged.
+            let enumeratorFailureRepository = Canonical.SnapshotRepository(
+                primaryURL: reprotectRoot.appendingPathComponent("store.json"),
+                legacyFileEnumerator: { _ in nil }
+            )
+            let enumeratorFailureOutcome = enumeratorFailureRepository.reprotectPublishedLegacyDirectory(
+                migration: .legacyNativeSnapshot, name: "AsyncStorage"
+            )
+            expect(enumeratorFailureOutcome == .enumeratorUnavailable,
+                   "L267.a a nil enumerator is reported as .enumeratorUnavailable through the outcome, not only logged")
+
+            // Important 2, point 2: re-running the hook with a real enumerator
+            // heals the copy — 0 failures, every file protected.
+            let healedOutcome = reprotectRepository.reprotectPublishedLegacyDirectory(
+                migration: .legacyNativeSnapshot, name: "AsyncStorage"
+            )
+            expect(healedOutcome == .completed(protected: 2, failed: 0),
+                   "L267.a re-protecting an already-published copy protects every file with zero failures")
+
+            // Nothing published yet: no directory to re-protect, and the hook
+            // must not claim work was done.
+            let neverPublishedRepository = Canonical.SnapshotRepository(
+                primaryURL: root.appendingPathComponent("never-published-case/store.json")
+            )
+            expect(neverPublishedRepository.reprotectPublishedLegacyDirectory(
+                       migration: .legacyNativeSnapshot, name: "AsyncStorage") == nil,
+                   "L267.a re-protect is a no-op when nothing has been published yet")
         }
 
         let brokenPrimary = root.appendingPathComponent("broken.json")

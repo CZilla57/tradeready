@@ -167,15 +167,6 @@ do {
     expect(racedReassigned.pendingDestructive?.rule.id == tapped.id,
            "L286.2: a reassigned actionRule still targets the dialog's captured rule, not the new one")
 
-    // A destructive request with no open dialog still targets the rule
-    // explicitly passed at the call site (the confirmationDialog closure
-    // always supplies one while presenting; `requestDestructive` never
-    // re-derives it from `actionRule`).
-    var idle = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
-    idle.requestDestructive(.cancelPlan, for: tapped)
-    expect(idle.pendingDestructive?.rule.id == tapped.id,
-           "I1/L286.2: requestDestructive targets the explicitly passed rule, not actionRule")
-
     // The screen drives both alerts from the surviving target, never from the
     // dialog's plan (which is nil by then).
     let viewURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -185,6 +176,16 @@ do {
     expect(!view.contains("if let rule = actionRule"), "I1: no alert reads the dialog's (already cleared) plan")
     expect(view.contains("NativeRecurringPlanActionState<Canonical.RecurringInvoice>"), "I1: the screen uses the action state")
     expect(view.contains("presenting: planActions.pendingDestructive"), "I1: the alerts present the destructive target")
+    // L286.2 (Phase 12.00b.2-E fix round 1, Minor): the tests above pin the
+    // `NativeRecurringPlanActionState` API only, never the view's actual call
+    // sites — the I1 regression this class of bug came from was entirely in
+    // the view's wiring, not the state machine. Pin both destructive buttons
+    // passing the confirmationDialog closure's own `rule`, not a re-derived
+    // `actionRule`.
+    expect(view.contains("requestDestructive(.cancelPlan, for: rule)"),
+           "L286.2: the Cancel plan button passes the dialog's captured rule explicitly")
+    expect(view.contains("requestDestructive(.deletePlan, for: rule)"),
+           "L286.2: the Delete plan button passes the dialog's captured rule explicitly")
 }
 
 print(failures == 0 ? "PASS: native recurring invoice tests" : "FAILED: \(failures) native recurring invoice test(s)")

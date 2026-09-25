@@ -301,7 +301,21 @@ struct MigrationCoordinatorTests {
         try existingJPEGBytes.write(to: existingPhoto, options: .atomic)
 
         let primary = root.appendingPathComponent("Native/store.json")
-        let repository = Canonical.SnapshotRepository(primaryURL: primary)
+        // L267.a (Phase 12.00b.2-E fix round 1, Important 2 point 3): wraps
+        // the real enumerator to count calls, so the test can observe that
+        // the `.alreadyCompleted` early return in `LegacyMigrationCoordinator.migrate`
+        // actually invokes `reprotectPublishedLegacyDirectory` (an outcome
+        // alone would not be visible from here, since `migrate` does not
+        // surface it on `LegacyMigrationOutcome`).
+        final class LegacyEnumeratorCallCounter { var count = 0 }
+        let legacyEnumeratorCounter = LegacyEnumeratorCallCounter()
+        let repository = Canonical.SnapshotRepository(
+            primaryURL: primary,
+            legacyFileEnumerator: { url in
+                legacyEnumeratorCounter.count += 1
+                return FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+            }
+        )
         let journal = Canonical.MigrationJournal(
             fileURL: primary.deletingLastPathComponent().appendingPathComponent("migration-journal.json")
         )
@@ -439,10 +453,17 @@ struct MigrationCoordinatorTests {
         let appGroupObject = try JSONDecoder().decode([String: String].self, from: appGroupBackup)
         expect(appGroupObject == source.appGroupValues, "raw app-group values are backed up")
 
+        let enumeratorCallsBeforeReplay = legacyEnumeratorCounter.count
         let completedReplay = try coordinator.migrate(currentSettings: BusinessSettings(), source: source)
         expect(completedReplay.status == .alreadyCompleted, "completed migration re-run is a no-op")
         expect(coordinatorSecureBackend.writeKeys.filter { $0 == "groqKey" }.count == 2,
                "completed re-run does not touch Keychain")
+        // L267.a (Phase 12.00b.2-E fix round 1, Important 1 & 2 point 3): the
+        // `.alreadyCompleted` early return is the only call site reached once
+        // the journal is complete, so it must invoke the re-protect hook on
+        // every launch — a failed first pass would otherwise never heal.
+        expect(legacyEnumeratorCounter.count == enumeratorCallsBeforeReplay + 1,
+               "L267.a the .alreadyCompleted path re-protects the published legacy backup copy")
 
         let conflictRoot = root.appendingPathComponent("PhotoConflict", isDirectory: true)
         let conflictDocuments = conflictRoot.appendingPathComponent("Documents", isDirectory: true)
