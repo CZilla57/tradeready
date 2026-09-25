@@ -117,6 +117,7 @@ sh "$ROOT_DIR/native/run-phase10-qualification-tests.sh"
 # (60-cap / foreign-family / cleanup) and the two AppStore-closure runners.
 sh "$ROOT_DIR/native/run-business-snapshot-tests.sh"
 sh "$ROOT_DIR/native/run-insight-mute-tests.sh"
+sh "$ROOT_DIR/native/run-app-rating-prompt-tests.sh"
 sh "$ROOT_DIR/native/run-setup-checklist-tests.sh"
 sh "$ROOT_DIR/native/run-notification-coordinator-tests.sh"
 sh "$ROOT_DIR/native/run-schedule-booking-settings-tests.sh"

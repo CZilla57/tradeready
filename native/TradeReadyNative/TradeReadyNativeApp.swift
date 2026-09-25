@@ -4,6 +4,7 @@ import SwiftUI
 struct TradeReadyNativeApp: App {
     @StateObject private var store: AppStore
     @StateObject private var followUpNotifications: NativeEstimateFollowUpNotificationCoordinator
+    @StateObject private var ratingPrompts: NativeAppRatingPromptCoordinator
     @Environment(\.scenePhase) private var scenePhase
     private let backgroundRefreshScheduler: NativeBackgroundRefreshScheduler
 
@@ -88,6 +89,15 @@ struct TradeReadyNativeApp: App {
             }
         }
         _followUpNotifications = StateObject(wrappedValue: coordinator)
+        // App Store rating prompt (native-only): the store reports committed
+        // owner wins (invoice paid, estimate sent); the coordinator decides
+        // when a rating request is worthwhile and the root presenter asks
+        // StoreKit. Same one-way hand-off as the invoice-reminder prompt above.
+        let ratingPrompts = NativeAppRatingPromptCoordinator.live()
+        store.onAppRatingWin = { [weak ratingPrompts] win in
+            ratingPrompts?.recordWin(win)
+        }
+        _ratingPrompts = StateObject(wrappedValue: ratingPrompts)
         // Task 10.09 (B1 output a): the post-sync-commit seam's only path to
         // notification reconciliation. AppStore cannot hold the coordinator
         // directly (see the hand-off note above this init), so it calls out
@@ -123,6 +133,7 @@ struct TradeReadyNativeApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(followUpNotifications)
+                .modifier(NativeAppRatingPromptPresenter(coordinator: ratingPrompts))
                 .tint(.tradeReady)
                 .preferredColorScheme(store.settings.appearance.colorScheme)
                 // Task 11.12: the root view's first appearance ends the Launch

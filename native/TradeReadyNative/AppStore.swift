@@ -306,6 +306,12 @@ final class AppStore: ObservableObject {
     /// Fire-and-forget by design (RN does not await its call either); nil in
     /// previews/tests that never construct the coordinator.
     var onInvoiceCreatedContextualPrompt: (@MainActor () -> Void)?
+    /// App Store rating hand-off (native-only): fired beside each committed
+    /// owner `invoicePaid`/`estimateSent` analytics emission, so a deduped,
+    /// refused, or synced-in change is never a win. `TradeReadyNativeApp`
+    /// wires it to `NativeAppRatingPromptCoordinator.recordWin`; nil in tests
+    /// and previews that never construct the coordinator.
+    var onAppRatingWin: (@MainActor (NativeAppRatingWin) -> Void)?
     private let appGroupAccountScrubber: NativeAppGroupAccountScrubber
     /// Task 11.15: the one secure store for the auth session and the user's
     /// provider keys (`NativeKeychainSecureSettingsStore`, the system Keychain
@@ -1766,6 +1772,8 @@ final class AppStore: ObservableObject {
             // Task 11.08: RN `InvoicesScreen.tsx:239`/`:241`.
             for invoice in settledPublished { emitAnalytics(.invoicePaid(amount: invoice.amount)) }
             emitAnalytics(.bulkInvoicesMarkedPaid(count: settledPublished.count))
+            // One owner action, one win, however many invoices it settled.
+            if !settledPublished.isEmpty { onAppRatingWin?(.invoicePaid) }
             return (settledPublished, skipped)
         } catch {
             migrationMessage = "Could not mark the invoices paid: \(error.localizedDescription)"
@@ -2032,6 +2040,7 @@ final class AppStore: ObservableObject {
         guard stampEstimateSent(id: id, from: expectedStatus, on: date) else { return false }
         // Task 11.08: RN `SendEstimateScreen.markAsSent` / `PricingCalculatorScreen`.
         emitAnalytics(.estimateSent)
+        onAppRatingWin?(.estimateSent)
         return true
     }
 
@@ -2079,6 +2088,7 @@ final class AppStore: ObservableObject {
         // Task 11.08: the composer-confirmed stamp is native's estimate-sent
         // commit (contract §9.7).
         emitAnalytics(.estimateSent)
+        onAppRatingWin?(.estimateSent)
         return .recorded
     }
 
@@ -2225,6 +2235,7 @@ final class AppStore: ObservableObject {
             enqueueUpsert(table: "jobs", recordId: review.jobID, record: result)
             // Task 11.08: RN `SendEstimateScreen.createLink` success.
             emitAnalytics(.estimateSent)
+            onAppRatingWin?(.estimateSent)
             _ = await syncNowAndWait(trigger: .localChange)
             return .success(link)
         } catch {
@@ -3432,7 +3443,10 @@ final class AppStore: ObservableObject {
         if case .success(let next) = result,
            !current.effectivePayments.contains(where: { $0.id == payment.id }) {
             emitAnalytics(.paymentRecorded(amount: payment.amount, method: payment.method, balanceRemaining: next.balance))
-            if next.isPaid && !current.isPaid { emitAnalytics(.invoicePaid(amount: next.amount)) }
+            if next.isPaid && !current.isPaid {
+                emitAnalytics(.invoicePaid(amount: next.amount))
+                onAppRatingWin?(.invoicePaid)
+            }
         }
         return result
     }
@@ -3450,6 +3464,7 @@ final class AppStore: ObservableObject {
         if case .success = result {
             emitAnalytics(.paymentRecorded(amount: current.balance, method: "other", balanceRemaining: 0))
             emitAnalytics(.invoicePaid(amount: current.amount))
+            onAppRatingWin?(.invoicePaid)
         }
         return result
     }

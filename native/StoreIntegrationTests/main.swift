@@ -825,6 +825,8 @@ struct StoreIntegrationTests {
         )
         empty.upsert(paymentInvoice)
         empty.upsert(paymentJob)
+        var ratingWins: [NativeAppRatingWin] = []
+        empty.onAppRatingWin = { ratingWins.append($0) }
         empty.recordPayment(
             invoiceID: paymentInvoice.id,
             payment: Payment(id: "payment-partial", amount: 75, method: "Cash")
@@ -863,6 +865,8 @@ struct StoreIntegrationTests {
         let settledTwice = empty.invoices.first(where: { $0.id == paymentInvoice.id })
         expect(settledOnce?.isPaid == true && settledTwice?.isPaid == true && settledTwice?.balance == 0,
                "repeated settlement is a safe no-op")
+        expect(ratingWins == [.invoicePaid, .invoicePaid],
+               "only the payment that settles an invoice and the first settle are rating wins; partial, deduped, and repeat settles are not")
         _ = empty.voidPayment(invoiceID: paymentInvoice.id, paymentID: "payment-settle-7", on: paymentInvoice.due)
         let voidedOnce = empty.invoices.first(where: { $0.id == paymentInvoice.id })
         _ = empty.voidPayment(invoiceID: paymentInvoice.id, paymentID: "payment-settle-7", on: paymentInvoice.due)
@@ -1205,6 +1209,8 @@ struct StoreIntegrationTests {
         let estimateSentDate = Calendar(identifier: .gregorian).date(
             from: DateComponents(year: 2026, month: 8, day: 18)
         )!
+        var estimateRatingWins: [NativeAppRatingWin] = []
+        queueStore.onAppRatingWin = { estimateRatingWins.append($0) }
         expect(queueStore.markEstimateSent(id: estimateJob.id, from: .lead, on: estimateSentDate),
                "reviewed lead estimate stamps sent through a durable canonical commit")
         let sentEstimate = try Canonical.SnapshotRepository(primaryURL: queueURL)
@@ -1214,6 +1220,8 @@ struct StoreIntegrationTests {
                "sent estimate persists the exact status and local follow-up date")
         expect(!queueStore.markEstimateSent(id: estimateJob.id, from: .lead, on: estimateSentDate),
                "stale estimate review cannot overwrite a newer job status")
+        expect(estimateRatingWins == [.estimateSent],
+               "a sent estimate is one rating win; the refused stale send is none")
         let sentMutation = pendingMutations(queueURL).first {
             $0.table == "jobs" && $0.recordId == estimateJob.id
         }

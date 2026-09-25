@@ -807,7 +807,11 @@ func loadWidgetTargetSources(root: URL) -> [SourceFile] {
 let viewFileInventory: Set<String> = [
     "N/CoachView.swift", "N/Components.swift", "N/CustomersView.swift", "N/InvoicesView.swift",
     "N/JobsView.swift", "N/MoneyView.swift", "N/NativeAccessibilityViews.swift",
-    "N/NativeAnalyticsScreenModifier.swift", "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
+    "N/NativeAnalyticsScreenModifier.swift",
+    // No UI of its own: it only asks StoreKit, whose system rating sheet
+    // carries Apple's own labels, Dynamic Type, contrast and focus.
+    "N/NativeAppRatingPromptPresenter.swift",
+    "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
     "N/NativeCustomerPortalView.swift", "N/NativeEstimateFollowUpView.swift", "N/NativeEstimatePDF.swift",
