@@ -451,11 +451,13 @@ enum NativeWidgetActionReplayer {
     }
 
     /// `appliedTimers` is the claim's ledger from earlier attempts of this
-    /// same claim (empty on the first attempt).
+    /// same claim (empty on the first attempt). It has no default: a caller
+    /// that left it out would silently replay timer actions without
+    /// idempotency (12.00b.2-D review M4).
     static func apply(
         _ batch: NativeWidgetActionBatch,
         to source: Canonical.Snapshot,
-        appliedTimers: [NativeWidgetActionAppliedTimer] = []
+        appliedTimers: [NativeWidgetActionAppliedTimer]
     ) throws -> NativeWidgetActionReplayResult {
         var snapshot = source
         var changed = 0

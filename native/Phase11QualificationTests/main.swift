@@ -291,7 +291,7 @@ private func replay(_ actions: [String], on source: Canonical.Snapshot) -> Nativ
     guard let batch = try? NativeWidgetActionBatchPlanner.prepare(
         rawValue: queue(actions), verifiedAccountBinding: planningBinding
     ) else { return nil }
-    return try? NativeWidgetActionReplayer.apply(batch, to: source)
+    return try? NativeWidgetActionReplayer.apply(batch, to: source, appliedTimers: [])
 }
 
 /// The whole-queue error, or (Phase 12 12.00b.2-C) the first entry the

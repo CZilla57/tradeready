@@ -105,7 +105,7 @@ struct WidgetActionReplayTests {
         let knownBatch = try NativeWidgetActionBatchPlanner.prepare(
             rawValue: knownRaw, verifiedAccountBinding: binding
         )
-        let replayed = try NativeWidgetActionReplayer.apply(knownBatch, to: sourceSnapshot)
+        let replayed = try NativeWidgetActionReplayer.apply(knownBatch, to: sourceSnapshot, appliedTimers: [])
         let replayedJob = replayed.snapshot.payload.jobs!.first!
         expect(replayed.changedActionCount == 4 && replayed.canAcknowledge,
                "all known action families apply in one replay plan")
@@ -1078,6 +1078,93 @@ private func testReplayMarkersStayLocal(
         expect(counts(retry)?.changed == 2 && retried.count == 1 && retried.first?.end == stopAt,
                "L286.1: after a failed save the retry applies the batch once (got \(retried))")
         expect(h.files("claim-").isEmpty, "L286.1 c: the claim is acknowledged")
+    }
+
+    section("L286.1 ledger first") {
+        // Review M2: the ledger is written BEFORE the canonical save. Here the
+        // ledger write fails (the claims directory is read-only once the
+        // claim is taken), so the attempt must stop with nothing saved and
+        // nothing queued, and keep its claim; the retry then applies the batch
+        // exactly once. Saved first, the failed attempt would already hold the
+        // closed session, and the retry (no ledger) would clock in again.
+        let h = ReplayHarness(root, "l286-ledger-first", "[" + [
+            timer("l286f-start", "timer_start", startAt, job: "j1"),
+            timer("l286f-stop", "timer_stop", stopAt, job: "j1"),
+        ].joined(separator: ",") + "]")
+        guard try h.transport.claim(verifiedAccountBinding: binding) != nil
+        else { return expect(false, "L286.1 ledger first: sanity: the batch is claimed") }
+        let fileManager = FileManager.default
+        try fileManager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: h.claims.path)
+        defer { try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: h.claims.path) }
+        var enqueued = 0
+        do {
+            _ = try h.coordinator(enqueue: { _, _ in enqueued += 1 })
+                .replayNext(snapshot: sourceSnapshot, verifiedAccountBinding: binding)
+            expect(false, "L286.1 ledger first: sanity: the attempt fails when the ledger cannot be written")
+        } catch NativeWidgetActionClaimError.writeFailed {
+        } catch {
+            expect(false, "L286.1 ledger first: sanity: the ledger write fails as writeFailed (threw \(error))")
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: h.claims.path)
+        expect(h.saved == nil && enqueued == 0,
+               "L286.1: a failed ledger write leaves nothing saved and nothing queued (saved \(sessions(h.saved)), enqueued \(enqueued))")
+        let kept = try h.files("claim-").first.map {
+            try JSONDecoder().decode(NativeWidgetActionClaim.self, from: Data(contentsOf: $0))
+        }
+        expect(h.files("claim-").count == 1 && kept != nil && kept?.appliedTimers == nil,
+               "L286.1: after a failed ledger write the claim is kept, without a ledger")
+        let retry = try h.coordinator(enqueue: { _, _ in enqueued += 1 })
+            .replayNext(snapshot: h.saved ?? sourceSnapshot, verifiedAccountBinding: binding)
+        let retried = sessions(h.saved)
+        expect(counts(retry)?.changed == 2 && retried.count == 1 && retried.first?.start == startAt
+               && retried.first?.end == stopAt && enqueued == 1,
+               "L286.1: the retry after a failed ledger write applies the batch exactly once (got \(String(describing: counts(retry))), \(retried), enqueued \(enqueued))")
+        expect(h.files("claim-").isEmpty, "L286.1 ledger first: the claim is acknowledged")
+    }
+
+    section("L286.1 stop gone") {
+        // Review M3: a stop in the ledger acts only on the session it closed.
+        // The first attempt closes the open session S1 and records it, then
+        // is interrupted before acknowledgement. A pull brings the server
+        // copy, where S1 is gone and another session S2 is open (clocked in
+        // elsewhere). The retry ignores the stop: S2 stays open, and the
+        // claim is acknowledged.
+        let s1Start = "2026-08-03T08:00:00.000Z"
+        let s2Start = "2026-08-03T12:00:00.000Z"
+        func job(openSessionAt start: String) throws -> Canonical.Job {
+            guard var job = sourceSnapshot.payload.jobs?.first(where: { $0.id == "j1" }) else {
+                throw NativeWidgetActionReplayEnqueueError.missingRecord
+            }
+            job.timeSessions = [try JSONDecoder().decode(
+                Canonical.TimeSession.self, from: Data(#"{"start":"\#(start)","end":null}"#.utf8)
+            )]
+            job.status = "in_progress"
+            return job
+        }
+        let h = ReplayHarness(root, "l286-stop-gone", "[" + timer("l286g-stop", "timer_stop", stopAt, job: "j1") + "]")
+        do {
+            _ = try h.coordinator(enqueue: { _, _ in throw NativeWidgetActionReplayEnqueueError.missingRecord })
+                .replayNext(snapshot: replacingJob(sourceSnapshot, with: job(openSessionAt: s1Start)), verifiedAccountBinding: binding)
+            expect(false, "L286.1 stop gone: sanity: the interrupted attempt fails")
+        } catch NativeWidgetActionReplayEnqueueError.missingRecord {}
+        guard let saved = h.saved else { return expect(false, "L286.1 stop gone: sanity: the first attempt saved") }
+        let closed = sessions(saved)
+        let ledger = try h.files("claim-").first.map {
+            try JSONDecoder().decode(NativeWidgetActionClaim.self, from: Data(contentsOf: $0))
+        }?.appliedTimers
+        expect(closed.count == 1 && closed.first?.start == s1Start && closed.first?.end == stopAt
+               && ledger == [.init(actionID: "l286g-stop", kind: .stop, jobID: "j1", sessionStart: s1Start)],
+               "L286.1 stop gone: sanity: the first attempt closed S1 and recorded it (got \(closed))")
+        let retry = try h.coordinator().replayNext(
+            snapshot: replacingJob(saved, with: job(openSessionAt: s2Start)), verifiedAccountBinding: binding
+        )
+        let retryCounts = counts(retry)
+        expect(retryCounts?.changed == 0 && retryCounts?.ignored == 1,
+               "L286.1: a stop whose recorded session is gone is ignored (got \(String(describing: retryCounts)))")
+        let after = sessions(committedSnapshot(retry))
+        expect(after.count == 1 && after.first?.start == s2Start && after.first?.end == nil,
+               "L286.1: the other open session is not closed in its place (got \(after))")
+        expect(h.files("claim-").isEmpty, "L286.1 stop gone: the claim is acknowledged")
     }
 
     section("L286.1 claim file") {

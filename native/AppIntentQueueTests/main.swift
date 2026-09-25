@@ -527,7 +527,7 @@ private func testTripSession() throws {
     expectEqual(entry["date"] as? String, "2026-08-03", "trip_log.date is the local start date")
     expectEqual(action.fields["odometerEnd"], .number(12_042.1), "odometerEnd")
     guard case .success(let batch) = plan(h.queueRaw) else { return expect(false, "trip_log is planner-valid") }
-    let replayed = try NativeWidgetActionReplayer.apply(batch, to: Canonical.Snapshot(payload: .init()))
+    let replayed = try NativeWidgetActionReplayer.apply(batch, to: Canonical.Snapshot(payload: .init()), appliedTimers: [])
     let logged = replayed.snapshot.payload.trips?.first
     expectEqual(logged?.id, "t_siri_\(trip.id ?? "")", "replay files the trip under t_siri_<id>")
     expectEqual(logged?.miles, Decimal(string: "41.6"), "replay computes the same miles")
@@ -661,7 +661,7 @@ private func testLogExpense() throws {
     expect(h.queueRaw?.contains("\"amount\":42.1") == true, "the amount is encoded exactly (42.1, not 42.100000000000001)")
     expectEqual(action.fields["ownerTag"], .string(ownerTag), "expense is owner-stamped")
     guard case .success(let batch) = plan(h.queueRaw) else { return expect(false, "expense_log is planner-valid") }
-    var replayed = try NativeWidgetActionReplayer.apply(batch, to: Canonical.Snapshot(payload: .init()))
+    var replayed = try NativeWidgetActionReplayer.apply(batch, to: Canonical.Snapshot(payload: .init()), appliedTimers: [])
     var expense = replayed.snapshot.payload.expenses?.first
     expectEqual(expense?.amount, Decimal(string: "42.1"), "replay files the exact amount")
     expectEqual(expense?.description, "Scaffold rental", "replay keeps the description")
@@ -672,7 +672,7 @@ private func testLogExpense() throws {
         _ = h.engine.logExpense(amount: 5, category: .fuel, description: description)
         expect(h.queue.first?["description"] == nil, "an empty/absent description \(String(describing: description)) is omitted")
         guard case .success(let emptyBatch) = plan(h.queueRaw) else { return expect(false, "planner-valid without description") }
-        replayed = try NativeWidgetActionReplayer.apply(emptyBatch, to: Canonical.Snapshot(payload: .init()))
+        replayed = try NativeWidgetActionReplayer.apply(emptyBatch, to: Canonical.Snapshot(payload: .init()), appliedTimers: [])
         expense = replayed.snapshot.payload.expenses?.first
         expectEqual(expense?.description, "Logged via Siri", "replay files it as 'Logged via Siri'")
     }
@@ -1074,7 +1074,7 @@ private func testAppStoreHandoffAndReplay() async throws {
     let raw = suite.defaults.string(forKey: WidgetAppGroup.actionsKey)
     guard case .success(let batch) = plan(raw) else { return expect(false, "the intents' queue is planner-valid for the owner") }
     expect(batch.actions.allSatisfy { $0.fields["ownerTag"] == .string(ownerTag) }, "every action carries hash(O) (§4.5)")
-    let replayed = try NativeWidgetActionReplayer.apply(batch, to: canonical)
+    let replayed = try NativeWidgetActionReplayer.apply(batch, to: canonical, appliedTimers: [])
     let session = replayed.snapshot.payload.jobs?.first?.timeSessions?.last
     expectEqual(session?.start, WidgetSnapshot.isoTimestamp(clockedAt), "replay clocks j9 in at the action's time")
     expect(session?.end == nil, "the replayed session is open")
