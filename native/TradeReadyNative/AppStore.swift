@@ -10295,6 +10295,13 @@ extension AppStore {
         snapshot.payload.settings.map(NativeTaxSettingsValues.init(from:)) ?? NativeTaxSettingsValues()
     }
 
+    /// The tax settings sheet's seed (12.00b.3, G2), read fresh each time the
+    /// Money tax card opens it (RN `TaxSettingsModal.tsx:55-63`). It keeps the
+    /// stored method string as-is, which `taxSettingsValues` cannot.
+    var taxSettingsEditor: NativeTaxSettingsEditor {
+        NativeTaxSettingsEditor(settings: snapshot.payload.settings)
+    }
+
     /// Canonical reads for the Money reports (task 9.09). The report engine runs
     /// on canonical records, never on the screen projections, so no figure is
     /// re-derived from a lossy UI type.

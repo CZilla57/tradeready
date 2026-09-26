@@ -13,8 +13,9 @@ import SwiftUI
 // `NativeMileageLogView` seeded with the active filter, the pricebook card opens
 // 9.12's `NativePricebookView`, and expenses use the full 9.10 editor
 // (`NativeExpenseEditor`) — categories, job link, receipt capture, and reviewed
-// OCR pre-fill, committed through the 9.08 typed path. The tax card states its
-// own IRS windows rather than a destination.
+// OCR pre-fill, committed through the 9.08 typed path. The tax card opens
+// 12.00b.3's `NativeTaxSettingsView` sheet, as RN's `TaxSetAsideCard` opens
+// `TaxSettingsModal`.
 
 /// Money-screen destinations owned by the phase 9 feature screens. Kept here so
 /// the card closures stay one-liners.
@@ -32,6 +33,7 @@ struct MoneyView: View {
     @State private var editorTarget: NativeExpenseEditorTarget?
     @State private var pendingExpenseDeletion: NativeMoneyExpenseRow?
     @State private var destination: NativeMoneyDestination?
+    @State private var showingTaxSettings = false
 
     var body: some View {
         // One report pass per render, against the real clock (RN recomputes
@@ -61,6 +63,9 @@ struct MoneyView: View {
             }
             .sheet(item: $editorTarget) { target in
                 NativeExpenseEditor(target: target, opened: openedRecord(for: target))
+            }
+            .sheet(isPresented: $showingTaxSettings) {
+                NativeTaxSettingsView(editor: store.taxSettingsEditor)
             }
             .navigationDestination(item: $destination) { destination in
                 switch destination {
@@ -215,8 +220,9 @@ struct MoneyView: View {
         NativeMoneySectionView(title: "Tools") {
             NativeMoneyMileageCardView(card: overview.mileage) { destination = .mileage }
             // The tax card ignores the screen filter on purpose: its windows are
-            // the IRS periods + calendar YTD, and it states its own range.
-            NativeMoneyTaxCardView(card: overview.tax)
+            // the IRS periods + calendar YTD, and it states its own range. The
+            // whole card opens the settings sheet (RN TaxSetAsideCard.tsx:71-75).
+            NativeMoneyTaxCardView(card: overview.tax) { showingTaxSettings = true }
             NativeMoneyPricebookCardView(card: overview.pricebook) { destination = .pricebook }
         }
     }

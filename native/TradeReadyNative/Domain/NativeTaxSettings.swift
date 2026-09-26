@@ -15,6 +15,11 @@ import Foundation
 // The UI `BusinessSettings` model gains these two stored fields in the
 // integration lane (9.08) because Swift cannot add stored properties in an
 // extension; this module does not depend on that change.
+//
+// 12.00b.3 (G2) adds the sheet's state (`NativeTaxSettingsEditor`) for
+// `N/NativeTaxSettingsView.swift`, and replaces the Foundation rate parser with
+// ports of JS `trim`, `parseFloat` and `Number::toString`, so the rate the
+// sheet accepts and stores is the one RN would.
 
 enum NativeTaxSettingsError: Error, Equatable {
     /// "Enter your effective income-tax rate as a percentage between 0 and 60 —
@@ -54,20 +59,19 @@ struct NativeTaxSettingsDraft: Equatable {
 }
 
 enum NativeTaxSettings {
-    /// `parseFloat` bound, inclusive, mirroring the sheet's 0…60 validation.
-    static let rateMinimum = Decimal.zero
-    static let rateMaximum = Decimal(60)
+    /// The sheet's 0…60 bound, inclusive, checked on the parsed JS double.
+    static let rateBounds: ClosedRange<Double> = 0...60
 
-    /// The sheet's rate field → draft value. Empty/whitespace means "no change"
-    /// (nil, no error). Anything non-finite or outside 0…60 is a refusal.
+    /// The sheet's rate field → draft value (TaxSettingsModal.tsx:66-77):
+    /// `rate.trim()`; blank means "no change" (nil, no error); otherwise
+    /// `parseFloat`, refused unless `Number.isFinite` and within 0…60. The bound
+    /// applies to the rounded double, so "60.00000000000000001" is 60 and valid.
     static func parseRateInput(_ text: String) -> Result<Decimal?, NativeTaxSettingsError> {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = jsTrim(text)
         if trimmed.isEmpty { return .success(nil) }
-        guard let value = Decimal(string: trimmed, locale: Locale(identifier: "en_US_POSIX")),
-              NSDecimalNumber(decimal: value).doubleValue.isFinite,
-              value >= rateMinimum, value <= rateMaximum
-        else { return .failure(.rateOutOfRange) }
-        return .success(value)
+        let parsed = jsParseFloat(trimmed)
+        guard parsed.isFinite, rateBounds.contains(parsed) else { return .failure(.rateOutOfRange) }
+        return .success(storedRate(parsed))
     }
 
     /// The whole draft from the sheet's two inputs.
@@ -113,4 +117,176 @@ enum NativeTaxSettings {
 
     /// Whether the user has set an income-tax rate (0 still counts as set).
     static func incomeRateSet(_ values: NativeTaxSettingsValues) -> Bool { values.taxIncomeRate != nil }
+
+    // MARK: JS number parity (12.00b.3)
+    //
+    // The sheet trims and parses its rate text with JavaScript's own rules and
+    // shows a stored rate with `String(n)`. A tax rate is a money input, so these
+    // follow ECMAScript exactly rather than Foundation's number parsing.
+
+    /// `String.prototype.trim`: strips ECMAScript WhiteSpace and LineTerminator
+    /// code points (TAB, VT, FF, BOM, every Zs space, LF, CR, LS, PS) from both
+    /// ends. NEL (U+0085) and the zero-width spaces are not whitespace to JS.
+    static func jsTrim(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        guard let first = scalars.firstIndex(where: { !isJSWhitespace($0) }),
+              let last = scalars.lastIndex(where: { !isJSWhitespace($0) })
+        else { return "" }
+        var trimmed = String.UnicodeScalarView()
+        trimmed.append(contentsOf: scalars[first...last])
+        return String(trimmed)
+    }
+
+    /// `parseFloat`: the longest prefix that is a StrDecimalLiteral (an optional
+    /// sign, then `Infinity` or ASCII digits with an optional fraction and an
+    /// optional exponent), read as the nearest double. NaN when no prefix
+    /// matches. Hex, numeric separators, commas and non-ASCII digits end the
+    /// prefix, so "12,5" reads as 12 and "15%" as 15.
+    static func jsParseFloat(_ text: String) -> Double {
+        let scalars = Array(text.unicodeScalars.drop(while: isJSWhitespace))
+        var index = 0
+        func isDigit(_ at: Int) -> Bool { at < scalars.count && ("0"..."9").contains(scalars[at]) }
+        func digitRun() -> String {
+            var run = String.UnicodeScalarView()
+            while isDigit(index) { run.append(scalars[index]); index += 1 }
+            return String(run)
+        }
+
+        var sign = ""
+        if index < scalars.count, scalars[index] == "+" || scalars[index] == "-" {
+            sign = scalars[index] == "-" ? "-" : ""
+            index += 1
+        }
+        let infinity = Array("Infinity".unicodeScalars)
+        if scalars.count - index >= infinity.count, Array(scalars[index..<(index + infinity.count)]) == infinity {
+            return sign == "-" ? -.infinity : .infinity
+        }
+        let whole = digitRun()
+        var fraction = ""
+        if index < scalars.count, scalars[index] == "." {
+            index += 1
+            fraction = digitRun()
+        }
+        guard !whole.isEmpty || !fraction.isEmpty else { return .nan }
+
+        var exponent = ""
+        if index < scalars.count, scalars[index] == "e" || scalars[index] == "E" {
+            let mark = index
+            index += 1
+            var exponentSign = ""
+            if index < scalars.count, scalars[index] == "+" || scalars[index] == "-" {
+                exponentSign = scalars[index] == "-" ? "-" : ""
+                index += 1
+            }
+            let exponentDigits = digitRun()
+            if exponentDigits.isEmpty { index = mark } else { exponent = "e" + exponentSign + exponentDigits }
+        }
+        let literal = sign + (whole.isEmpty ? "0" : whole) + "." + (fraction.isEmpty ? "0" : fraction) + exponent
+        return Double(literal) ?? .nan
+    }
+
+    /// `Number::toString` (what `String(n)` and JSON.stringify print): the
+    /// shortest round-trip digits, plain notation for 1e-7 < |n| < 1e21 and
+    /// `de±x` exponent notation outside it. -0 prints as "0".
+    static func jsNumberString(_ value: Double) -> String {
+        if value.isNaN { return "NaN" }
+        if value.isInfinite { return value < 0 ? "-Infinity" : "Infinity" }
+        if value == 0 { return "0" }
+        // Swift's description is the shortest round-trip form; only the
+        // notation differs from JS ("1e-07", "18.0"), so re-lay the digits.
+        let text = "\(value.magnitude)"
+        var mantissa = Substring(text)
+        var exponent = 0
+        if let marker = text.firstIndex(where: { $0 == "e" || $0 == "E" }) {
+            mantissa = text[..<marker]
+            exponent = Int(text[text.index(after: marker)...]) ?? 0
+        }
+        let parts = mantissa.split(separator: ".", omittingEmptySubsequences: false)
+        let wholePart = parts.first.map(String.init) ?? ""
+        var digits = wholePart + (parts.count > 1 ? String(parts[1]) : "")
+        var pointIndex = wholePart.count + exponent
+        while digits.first == "0" { digits.removeFirst(); pointIndex -= 1 }
+        while digits.last == "0" { digits.removeLast() }
+
+        let k = digits.count
+        let n = pointIndex
+        let sign = value < 0 ? "-" : ""
+        if k <= n, n <= 21 {
+            return sign + digits + String(repeating: "0", count: n - k)
+        }
+        if 0 < n, n <= 21 {
+            return sign + digits.prefix(n) + "." + digits.dropFirst(n)
+        }
+        if -6 < n, n <= 0 {
+            return sign + "0." + String(repeating: "0", count: -n) + digits
+        }
+        let power = n - 1
+        let exponentText = "e" + (power < 0 ? "-" : "+") + String(power.magnitude)
+        if k == 1 { return sign + digits + exponentText }
+        return sign + digits.prefix(1) + "." + digits.dropFirst(1) + exponentText
+    }
+
+    /// The field text for a stored rate: `String(settings.taxIncomeRate)`, or ''
+    /// when unset (TaxSettingsModal.tsx:57-61).
+    static func rateSeedText(_ rate: Decimal?) -> String {
+        guard let rate else { return "" }
+        return jsNumberString(Double(rate.description) ?? .nan)
+    }
+
+    /// An accepted rate as the canonical number: the text JSON.stringify writes
+    /// for the JS double, so -0 is stored as 0. Under 1e-128 the canonical
+    /// number cannot hold the value and 0 is stored; the income-tax figure is
+    /// the same to the cent.
+    static func storedRate(_ value: Double) -> Decimal {
+        Decimal(string: jsNumberString(value), locale: Locale(identifier: "en_US_POSIX")) ?? 0
+    }
+
+    private static func isJSWhitespace(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0xFEFF, 0x2028, 0x2029: return true
+        default: return scalar.properties.generalCategory == .spaceSeparator
+        }
+    }
+}
+
+// MARK: - Settings sheet state (12.00b.3, requirement G2)
+
+/// The tax set-aside sheet's state, ported from RN
+/// `components/money/TaxSettingsModal.tsx`. Seeded from the live settings each
+/// time the sheet opens (:55-63); `save()` is `handleSave` (:65-81).
+struct NativeTaxSettingsEditor: Equatable {
+    /// The rate field: `String(settings.taxIncomeRate)`, or '' when unset.
+    var rateText: String
+    /// RN's `method` state: the stored string as-is, so a value outside the
+    /// union still counts as chosen for the unset note, as `!method` does.
+    private(set) var storedMethod: String?
+    /// `settings.mileageRate ?? DEFAULT_MILEAGE_RATE` (:83), for the help copy.
+    let mileageRate: Decimal
+
+    init(settings: Canonical.Settings?) {
+        rateText = NativeTaxSettings.rateSeedText(settings?.taxIncomeRate)
+        storedMethod = settings?.vehicleDeductionMethod
+        mileageRate = settings?.mileageRate ?? TaxWindowSettings().mileageRate
+    }
+
+    /// The chip shown as selected: nil when unset or outside the union.
+    var selectedMethod: VehicleDeductionMethod? {
+        storedMethod.flatMap(VehicleDeductionMethod.init(rawValue:))
+    }
+
+    /// A chip tap. There is deliberately no way back to "not chosen" (:6-9).
+    mutating func select(_ method: VehicleDeductionMethod) {
+        storedMethod = method.rawValue
+    }
+
+    /// `{!method && <Text>No method chosen yet.</Text>}` (:153-155).
+    var showsMethodUnsetNote: Bool { (storedMethod ?? "").isEmpty }
+
+    /// The rate check first, then `if (method) draft.vehicleDeductionMethod =
+    /// method` — so the seeded method is re-sent. A stored method outside the
+    /// union cannot be expressed in the draft and is left unchanged, which is
+    /// the value RN writes back.
+    func save() -> Result<NativeTaxSettingsDraft, NativeTaxSettingsError> {
+        NativeTaxSettings.draft(rateText: rateText, method: selectedMethod)
+    }
 }

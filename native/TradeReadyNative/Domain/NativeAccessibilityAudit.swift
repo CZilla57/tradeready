@@ -544,6 +544,11 @@ enum NativeAccessibilityAudit {
         /// and hides the figure; native keeps the label and exposes the reserve
         /// as the accessibility value (fix round 1, I3).
         static let taxSetAsideOpen = "Tax set-aside — open settings"
+        /// RN `TaxSettingsModal` (12.00b.3): the rate field reads this label
+        /// rather than its "e.g. 15" placeholder, and the "Save" button reads
+        /// as "Save tax settings".
+        static let taxIncomeRate = "Income-tax rate percent"
+        static let saveTaxSettings = "Save tax settings"
         /// RN `KeyboardDoneBar`'s "Done" button (11.10b A24): the bar above a
         /// pad or multi-line keyboard, which has no key that dismisses it.
         static let dismissKeyboard = "Dismiss keyboard"
@@ -594,6 +599,8 @@ enum NativeAccessibilityAudit {
         .init(key: "moveStopUp", text: Label.moveStopUp, rnSource: "screens/RouteScreen.tsx"),
         .init(key: "moveStopDown", text: Label.moveStopDown, rnSource: "screens/RouteScreen.tsx"),
         .init(key: "taxSetAsideOpen", text: Label.taxSetAsideOpen, rnSource: "components/money/TaxSetAsideCard.tsx"),
+        .init(key: "taxIncomeRate", text: Label.taxIncomeRate, rnSource: "components/money/TaxSettingsModal.tsx"),
+        .init(key: "saveTaxSettings", text: Label.saveTaxSettings, rnSource: "components/money/TaxSettingsModal.tsx"),
         .init(key: "dismissKeyboard", text: Label.dismissKeyboard, rnSource: "components/KeyboardDoneBar.tsx"),
         // Labelled before 11.10a; kept in the catalog so parity stays proven.
         .init(key: "openCalendar", text: "Open calendar", rnSource: "screens/TodayScreen.tsx"),

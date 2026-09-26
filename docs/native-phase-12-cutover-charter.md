@@ -291,6 +291,11 @@ Built in 12.00b.3 before Stage A: port RN `components/money/TaxSettingsModal.tsx
 Money tax card, and remove `tax_settings_saved` from the Q4 exclusion list. It is a Stage A
 entry item (§4.2). No waiver.
 
+**Status (2026-09-25):** built in 12.00b.3 on native/phase-12, host evidence only. The
+Money tax card opens `N/NativeTaxSettingsView.swift`; `tax_settings_saved` is off the Q4
+exclusion list. Device rows P12-B3-1 and P12-B3-2 are in the evidence index §23 (the
+second needs staging, D4). The parity row "Tax set-aside" stays "In progress".
+
 ### 5.3 I2 — rejected-change handling (D3)
 
 Unwaivable (roadmap: "It must be fixed before cutover"); defect row L238, built in

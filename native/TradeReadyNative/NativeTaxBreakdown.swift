@@ -40,9 +40,17 @@ enum NativeTaxBreakdownCopy {
         "Using the latest built-in IRS rates — this year's aren't loaded yet"
     static let disclaimer =
         "Estimate only — not tax advice. Assumes net profit under $200k."
+    // The settings sheet (TaxSettingsModal.tsx, 12.00b.3). JSX joins its
+    // wrapped text lines with one space.
+    static let settingsTitle = "Tax set-aside settings"
+    static let rateLabel = "Income-tax rate (%)"
     static let settingsHelp =
-        "Your effective federal + state income-tax rate. Self-employment tax is "
-        + "estimated separately."
+        "Your effective federal + state income-tax rate. Self-employment tax "
+        + "(15.3%) is always included; this adds the income-tax layer on top. "
+        + "Leave blank to estimate with self-employment tax only."
+    static let ratePlaceholder = "e.g. 15"
+    static let vehicleLabel = "Vehicle deduction"
+    static let rateValidationTitle = "Check the rate"
     static let settingsDisclaimer =
         "Estimates only — not tax advice. Talk to a tax professional about which "
         + "method suits your situation."
@@ -52,6 +60,13 @@ enum NativeTaxBreakdownCopy {
     static let methodUnsetNote = "No method chosen yet."
     static let standardMileageLabel = "Standard mileage"
     static let actualFuelLabel = "Actual fuel costs"
+
+    /// The vehicle help line; `mileageRateText` is `formatMoney(mileageRate)`.
+    static func vehicleHelp(mileageRateText: String) -> String {
+        "The IRS allows standard mileage (\(mileageRateText)/mi from your trip log) OR actual costs "
+            + "(your fuel expenses) — never both. Until you choose, the estimate deducts neither, which "
+            + "reserves a little extra."
+    }
 
     /// "Mileage from this device's trip log (N trips this year) — not synced."
     static func mileageDisclosure(tripCount: Int) -> String {

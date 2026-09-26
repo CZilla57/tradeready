@@ -440,6 +440,8 @@ let scrollRootInventory: [String: Int] = [
     "NativeRouteView.swift|NativeRouteView|List": 1,
     "NativeScheduleEditorView.swift|NativeScheduleEditorView|Form": 1,
     "NativeScheduleSettingsView.swift|NativeScheduleSettingsView|Form": 1,
+    // Phase 12 (12.00b.3, G2): Money › tax card › tax set-aside settings.
+    "NativeTaxSettingsView.swift|NativeTaxSettingsView|Form": 1,
     "NativeTemplatePickerView.swift|NativeTemplatePickerView|List": 1,
     "NativeTemplatePickerView.swift|NativePricebookJobPickerView|List": 1,
     "NativeTripEditor.swift|NativeTripEditor|Form": 1,

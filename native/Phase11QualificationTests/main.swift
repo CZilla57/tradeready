@@ -858,10 +858,12 @@ private func testRNVectorCompleteness(root: URL) {
 private let cutoverOwner = "owner: Phase 12.00 — cutover-blocking parity gap (build or dated waiver)"
 
 /// Events with no native emission, each with the named owner (contract §17.2).
+/// Phase 12 12.00b.3 (G2, owner decision D2 = build) wired `tax_settings_saved`
+/// through the Money tax card's settings sheet, so it left this list; G1 stays
+/// (owner decision D1).
 private let analyticsExclusions: [String: String] = [
     "booking_request_opened": "G1: no native remote-push surface; \(cutoverOwner)",
     "booking_update_opened": "G1: no native remote-push surface; \(cutoverOwner)",
-    "tax_settings_saved": "G2: emitted only by AppStore.commitTaxSettings, which nothing calls; \(cutoverOwner)",
 ]
 
 /// Distinct event names from RN `track(` call sites (literal or a two-literal ternary).
@@ -1034,10 +1036,11 @@ private func testAnalyticsCatalog(root: URL, sources: [SourceFile]) {
     let unwired = catalogEvents.subtracting(reachable)
     expectEqual(unwired, Set(analyticsExclusions.keys),
                 "Q4 every catalog event without a reachable native emission is a named exclusion")
-    expectEqual(reachable.count, 49, "Q4 49 of 52 catalog events are wired natively")
-    expectEqual(unreachable, ["emitTaxSettingsSaved": ["tax_settings_saved"]],
-                "Q4 the only unreachable emission is tax_settings_saved (emitTaxSettingsSaved)")
-    expect(!live.contains("commitTaxSettings"), "Q4 commitTaxSettings, emitTaxSettingsSaved's only caller, has no caller")
+    expectEqual(reachable.count, 50, "Q4 50 of 52 catalog events are wired natively")
+    expectEqual(unreachable, [:], "Q4 every native emission site is reachable (12.00b.3 wired tax_settings_saved)")
+    expect(reachable.contains("tax_settings_saved"), "Q4 tax_settings_saved is wired natively (12.00b.3, G2)")
+    expect(live.contains("commitTaxSettings"),
+           "Q4 commitTaxSettings, emitTaxSettingsSaved's only caller, is called by the tax settings sheet")
     expect(analyticsExclusions.values.allSatisfy { $0.hasSuffix("; \(cutoverOwner)") },
            "Q4 every exclusion names the Phase 12.00 cutover owner")
     let gaps = readOrFail(root, "docs/native-phase-11-platform-hardening-contract-decisions.md")
@@ -1053,6 +1056,10 @@ private func testAnalyticsCatalog(root: URL, sources: [SourceFile]) {
         expect(line.contains("Fixed (fix round 2") && !line.contains(cutoverOwner),
                "Q4 contract §17.2 \(gap) is recorded as fixed, with no Phase 12.00 owner")
     }
+    // Phase 12 12.00b.3: the G2 editor is built, so its row names no cutover owner.
+    let g2 = gaps.components(separatedBy: "\n").first { $0.hasPrefix("| G2 |") } ?? ""
+    expect(g2.contains("Built in Phase 12 12.00b.3") && !g2.contains(cutoverOwner),
+           "Q4 contract §17.2 G2 is recorded as built, with no Phase 12.00 owner")
 }
 
 // MARK: - Q5 Redaction denylist (contract §10.1)

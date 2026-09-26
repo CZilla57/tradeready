@@ -823,6 +823,12 @@ let viewFileInventory: Set<String> = [
     // each entry's type, name and time combined into one VoiceOver element,
     // a titled confirmation dialog for Discard and a text alert for errors.
     "N/NativeRejectedChangesView.swift",
+    // Phase 12 (12.00b.3, G2), reviewed: a Form sheet whose rate field carries
+    // RN's "Income-tax rate percent" label and the Done bar, text-titled method
+    // rows with the selected trait, header and footer text that wraps at every
+    // Dynamic Type size, a text-titled Save that reads "Save tax settings", and
+    // text alerts for a refused rate or a failed save.
+    "N/NativeTaxSettingsView.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -955,6 +961,7 @@ let keyboardDoneBarCoverage: [String: String] = [
     "NativeRecurringJobEditor": "NativeRecurringJobEditor",
     "NativeReviewRequestView": "NativeReviewRequestView",
     "NativeScheduleSettingsView": "NativeScheduleSettingsView",
+    "NativeTaxSettingsView": "NativeTaxSettingsView",
     "NativeTripEditor": "NativeTripEditor",
     // Settings pages share one `Form` in `SettingsPage`.
     "BusinessProfileSettings": "SettingsPage",

@@ -2636,6 +2636,32 @@ struct StoreIntegrationTests {
             ), "9.08 the estimator reads the committed values back")
             expect(pendingMutations(settingsURL).count == beforeNoop + 1,
                    "9.08 only the real tax write enqueues a settings upsert")
+            // 12.00b.3 (G2): the sheet seeds from the live record and its draft
+            // commits through the same path.
+            var editor = store.taxSettingsEditor
+            expect(editor.rateText == "22" && editor.selectedMethod == .mileage
+                   && editor.mileageRate == Decimal(string: "0.7"),
+                   "12.00b.3 the tax sheet seeds String(rate), the stored method and the mileage rate")
+            editor.rateText = " 12.5% "
+            editor.select(.actual)
+            if case .success(let draft) = editor.save() {
+                expect(store.commitTaxSettings(draft), "12.00b.3 the sheet's draft commits")
+            } else {
+                expect(false, "12.00b.3 the sheet accepts \" 12.5% \" as parseFloat does")
+            }
+            let edited = try snapshot9(settingsURL).payload.settings!
+            expect(edited.taxIncomeRate == Decimal(string: "12.5") && edited.vehicleDeductionMethod == "actual"
+                   && edited.preservation.unknownFields["forwardCompat"] == .string("keep"),
+                   "12.00b.3 the sheet's save writes the parsed rate and the new method only")
+            expect(store.taxSettingsEditor.rateText == "12.5", "12.00b.3 the next open re-seeds from the saved rate")
+            var blankRate = store.taxSettingsEditor
+            blankRate.rateText = ""
+            if case .success(let draft) = blankRate.save() { store.commitTaxSettings(draft) }
+            let blankSaved = try snapshot9(settingsURL).payload.settings!
+            expect(blankSaved.taxIncomeRate == Decimal(string: "12.5") && blankSaved.vehicleDeductionMethod == "actual",
+                   "12.00b.3 a blank rate keeps the stored rate (RN merges { ...full, ...draft })")
+            // Restore the values the rest of this block asserts on.
+            store.commitTaxSettings(NativeTaxSettingsDraft(taxIncomeRate: Decimal(string: "22"), vehicleDeductionMethod: .mileage))
             // The full settings write path must not drop the two fields.
             store.settings.businessName = "Ada Electric LLC"
             let rewritten = try snapshot9(settingsURL).payload.settings!
