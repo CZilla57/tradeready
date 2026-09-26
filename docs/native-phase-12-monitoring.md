@@ -131,11 +131,16 @@ own record counts, which TH-1 compares exactly, and carry no content:
 - `rollbackReadiness` (12.06, v4): the last Settings › Cloud Sync › Check everything is
   saved on this account (`none`, `ready`, `not-ready`), its age bucket, the drain's sync
   outcome code (`skipped` when a fail-closed condition held), the blocker codes, the
-  waiting-change, refused-change, widget-action, photo-upload and booking-work counts
-  (`bookingWorkCount`: this account's unfinished booking or portal link work, blocker
-  `booking-work-pending`, or `booking-work-unreadable` when its file does not decode),
-  and the migration journal state; `none` before any check and after an account change
-  (`docs/native-phase-12-rollback-playbook.md` §5.1).
+  note codes (`notes`, which never block), the waiting-change, refused-change,
+  widget-action, photo-upload and booking-work counts, and the migration journal state;
+  `none` before any check and after an account change
+  (`docs/native-phase-12-rollback-playbook.md` §5.1). `bookingWorkCount` is this
+  account's unfinished booking or portal link work. It is reported as the note
+  `booking-work-pending`, or `booking-work-unreadable` when its file does not decode, and
+  never as a blocker: the items hold no native-only business data. A mirror item records
+  a change the server already made, and a reschedule proof guards a server resolve whose
+  job change is in the ordinary queue. A count that stays is defect `P12-013` (no
+  automatic recovery yet; Task 12b).
 
 **Code rule.** A code keeps only `A–Z a–z 0–9 . _ / -`, at most 96 bytes, with no run of
 6 or more digits, no run of 12 or more hex characters containing a digit, and nothing
@@ -146,8 +151,8 @@ survives as a code.
 **Cap.** 16,384 bytes (`NativeSupportDiagnostics.maximumReportBytes`). Over it the oldest
 recent codes are dropped first and counted; a report that still does not fit is not
 written (`reportTooLarge`) and the action says the report could not be created. The dry-run
-report was 2,450 bytes (2,694 with the v4 `rollbackReadiness` section, booking-work count
-included, in the 12.06 host run).
+report was 2,450 bytes (2,705 with the v4 `rollbackReadiness` section, its notes and
+booking-work count included, in the 12.06 host run).
 
 **Never included:** records, names, contact details, notes, record ids, the owner
 binding or Supabase subject, file paths, error messages, keys, tokens, sessions, marker
