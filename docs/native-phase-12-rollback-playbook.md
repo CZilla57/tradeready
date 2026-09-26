@@ -55,7 +55,7 @@ staging exists (D4).
 |---|---|---|
 | The rehearsal (plan 12.06 step 5) | owner | §8 and evidence index rows P12-RB-2 to P12-RB-5 and P12-RB-7 |
 | Staffing (step 6) | owner | §8.4 and row P12-RB-6 |
-| The Expo-side rule (1) of the rollback data decision: E-1 detects at app start, clears (recommended) or holds, and pulls; E-2 to E-4 (R48) | the owner decides who builds it on the Expo release branch. The branch owner records E-1's keys, the clear-or-hold choice, the marker path under `expo-file-system` and the owner's acceptance of residual 5 | §5.3; §5.6 item 5 |
+| The Expo-side rule (1) of the rollback data decision: E-1 detects at app start, clears (recommended) or holds, and pulls; E-2 to E-4 (R48). Until the pull, E-1 also holds the widget and Siri replay and invoice creation (R49) | the owner decides who builds it on the Expo release branch. The branch owner records E-1's keys, the clear-or-hold choice, the marker path under `expo-file-system` and the owner's acceptance of residual 5 | §5.3; §5.6 item 5 |
 | Defect `P12-012` (S1): the Expo build pushes its stale pre-upgrade queue before it pulls | owner: a ruling on Stage A entry (R43), then the §5.3 build | charter §10; §5.3 |
 | Defect `P12-013`: unfinished booking and portal link work has no automatic recovery | filed by the controller; Task 12b wires the recovery and adds the charter row | §5.1 |
 | Version numbers (VER-1) | owner; 12.01 sets the scheme | §3 |
@@ -429,13 +429,16 @@ Citations are at `9e84478`; they are React Native files, read-only here.
 
 - **E-1. Once per native run: detect it at app start, drop the queue that predates it,
   clear the stale copies, then pull.** Defined in review fix rounds 2 and 3 (R45, R45a,
-  R48).
+  R48); round 4 (R49) holds the widget and Siri replay and invoice creation until the
+  pull.
   - **When R looks: at app start, on every launch.** The check runs as soon as R's
     JavaScript starts, before anything reads or writes a collection:
     - before the first screen renders;
     - before `initialSync` (`context/AuthContext.tsx:42`);
     - before the launch migrations and the push-token save (`App.tsx:390-403`);
-    - before the background refresh task syncs (`utils/backgroundRefresh.ts:100`).
+    - before the background refresh task syncs (`utils/backgroundRefresh.ts:100`);
+    - before any widget and Siri replay (`context/AuthContext.tsx:108`,
+      `utils/backgroundRefresh.ts:106`).
 
     It runs online or offline, signed in or signed out, because it reads only a file and
     AsyncStorage. It must not wait for a sync, for two reasons:
@@ -463,8 +466,9 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     signal and the §5.3 build is not done. Host test:
     `native/run-rollback-readiness-tests.sh`, section M.
   - **R's record.** R keeps one small AsyncStorage key, for example `__nativeRun` (the
-    branch owner names it), holding `{"run":<n>,"state":"pending"|"seen"}`. The record
-    is device state, so the Expo sign-out (E-4) keeps it.
+    branch owner names it), holding `{"run":<n>,"state":"pending"|"seen"}`, plus a
+    fingerprint in the one case below. The record is device state, so the Expo sign-out
+    (E-4) keeps it.
   - **A new native run** is a marker whose `run` differs from the record's.
     - **No record yet.** The native directory `Application Support/TradeReadyNative/`,
       or any file in it, also counts, even with no marker. The directory is permanent
@@ -474,6 +478,20 @@ Citations are at `9e84478`; they are React Native files, read-only here.
       sentinel run `0`. No marker can hold 0 (`run` is at least 1,
       `N/NativeRunMarker.swift:44`), so the fallback fires once, and any later marker
       still counts as new.
+    - **A marker R cannot use counts as a new native run** (review fix round 4). That
+      is a file R cannot open or parse, or one whose `schemaVersion` is not 1 or whose
+      `run` is not a whole number of at least 1: the tests the native build applies to
+      the same file (`N/NativeRunMarker.swift:40-46`). This is the fail-safe choice.
+      Missing a native run lets R push a stale queue (the `P12-012` class), while a
+      detection too many costs only a pull and whatever R had not yet synced.
+
+      R then records the sentinel run `0` with a short fingerprint of the file's
+      contents, or of "unreadable" when it cannot open the file. The branch owner picks
+      the fingerprint, for example a 32-bit hash, so the record stays small. A later
+      launch counts the marker as new only when it becomes usable or its fingerprint
+      differs from the recorded one; a record without a fingerprint, such as the
+      directory fallback's, differs from every fingerprint. So an unusable marker fires
+      once for each change to the file, not at every launch.
     - `store.json` alone is never a signal. A signed-out native device has none, yet its
       stale queue survives (item 2).
   - **On a new native run, one write.** Before anything else runs, R makes one
@@ -481,12 +499,21 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     - sets `__syncQueue` to empty, because every entry in it predates the detection;
     - sets `__lastSyncedAt` to the empty cursor, so the next pull is a full pull;
     - sets every pulled collection (`COLLECTION_TABLES`, `utils/sync.ts:77`) to an
-      empty list and `customerNotes` to an empty map, the keys the other-owner path
-      clears (`utils/sync.ts:394`);
-    - sets E-1's held settings keys (below) to empty, since a later native run drops R's
-      earlier edits along with its queue;
+      empty list and `customerNotes` to an empty map;
+    - sets E-1's held settings paths (below) to empty, since a later native run drops
+      R's earlier edits along with its queue;
     - records the run as pending.
 
+    The collections and the notes are the keys the other-owner path clears
+    (`utils/sync.ts:394`), with one exception: E-1 keeps `review_requests`. That key is
+    local-only. No table holds it, so no pull could bring it back, and it is R's only
+    record of which jobs already had a review request
+    (`screens/JobDetailScreen.tsx:621`, `utils/reviewRequest.ts:103`, `:136-157`).
+    Clearing it would invite a second request to the same customer. It is never queued
+    or pushed, so keeping it cannot overwrite anything. The other-owner path and the
+    Expo sign-out still clear it (`utils/storage/lifecycle.ts:120`).
+
+    The write does not touch the App Group, where widget and Siri actions wait (below).
     The collections are written empty, not removed. A missing collection makes the
     loaders show sample data (`utils/storage/collections.ts:17-24`).
 
@@ -497,23 +524,69 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     lands, the record still holds the old run. The next launch then detects again and
     repeats the write before anything renders.
   - **While the run is pending** (on every launch, until the pull lands):
-    - **R lists no pre-native record**, so none can be shown, edited or queued. It says
-      it is getting the latest data (the owner approves the wording), so empty lists are
-      not taken for lost data.
+    - **R lists no pre-native record**, so none can be shown, edited or queued.
     - **A record the user creates is queued and pushed as usual.** It is new, not a
-      stale copy.
-    - **Settings are held.** Settings are one record, and they cannot be cleared: with no
-      settings key, R falls back to the defaults (`utils/storage/settings.ts:63`). The
-      push-token save can change them at any launch (`utils/pushToken.ts:26`). While the
-      run is pending, `enqueue` (`utils/sync.ts:99-106`) does not queue `settings`
-      (`utils/storage/settings.ts:79`). R keeps the changed keys in its own key instead,
-      for example `__nativeRunHeldSettings`.
+      stale copy. Invoices are the exception (below).
+    - **Settings are held.** Settings are one record, and they cannot be cleared: with
+      no settings key, R falls back to the defaults (`utils/storage/settings.ts:63`).
+      They are the one pre-native copy R keeps, shows and uses while the run is
+      pending: the business name on screen, the labor rate a new job starts with
+      (`screens/AddJobScreen.tsx:340`), and the numbering and payment settings an
+      invoice would use (`utils/invoiceNumber.ts:30-51`, `utils/autoInvoice.ts:366-377`).
+      That is one more reason invoices wait for the pull (below).
+
+      The push-token save and the Square-token scrub can change settings at any launch
+      (`utils/pushToken.ts:26`, `utils/storage/settings.ts:96-103`). While the run is
+      pending, `enqueue` (`utils/sync.ts:99-106`) does not queue `settings`
+      (`utils/storage/settings.ts:79`). R records each changed leaf path in its own key
+      instead, for example `__nativeRunHeldSettings`. At each save it compares the new
+      settings with the stored ones and keeps every value that was added, changed or
+      removed, under its full path. A nested object is held by its leaves, such as
+      `providerKeys.square` (which the scrub removes) or `pushToken.token`, so applying
+      the hold never carries stale sibling values over the pulled object. A list or a
+      plain value is a leaf.
+    - **Widget and Siri actions wait.** R does not run its widget and Siri replay
+      (`replayWidgetActions`) while the run is pending: not at session start
+      (`context/AuthContext.tsx:108`), not after a foreground sync (`:129`) and not in
+      the background task (`utils/backgroundRefresh.ts:106`). It leaves the App Group
+      `widgetActions` queue as it is; only the Expo sign-out's existing wipe removes it
+      (E-4).
+
+      The replay removes the queue before it applies it (`utils/widgetActions.ts:249-251`)
+      and skips a timer action whose job is not listed (`:104-105`, `:112-115`). Against
+      the cleared jobs it would lose every clock-in and clock-out waiting there: a tap on
+      the native widget after the native build last ran, or a Siri "stop my timer" while
+      R is pending offline. Skipping the call also skips the widget refresh it ends with
+      (`utils/widgetActions.ts:284`) until the replay after the pull.
+    - **Invoices wait.** R creates no invoice while the run is pending. The next invoice
+      number comes from the invoices on the device only (`utils/invoiceNumber.ts:30-51`).
+      With them cleared, a new invoice would start again at the settings floor
+      (`INV-0001` by default) and repeat numbers already sent to customers. The block
+      covers every path that numbers an invoice:
+      - the Add Invoice screen (`screens/AddInvoiceScreen.tsx:88`);
+      - an invoice from a job (`screens/CreateInvoiceFromJobScreen.tsx:234`);
+      - auto-invoice when a job is marked complete (`utils/autoInvoice.ts:209`, called
+        from `screens/JobDetailScreen.tsx:857`). The job is saved as complete without
+        its invoice, as when any other auto-invoice condition is unmet, and the user
+        creates the invoice from the job after the pull;
+      - the recurring-invoice generator (`utils/recurringInvoices.ts:131`), which runs
+        at session start and on each foreground (`context/AuthContext.tsx:104`, `:133`);
+      - an import that creates invoices (`utils/importEngine.ts:334`).
+
+      Every other record can be created while pending (residual 5).
+    - **The pending notice** (the owner approves the wording) says that:
+      - R is getting the latest data from the cloud, so empty lists are not lost data;
+      - settings, such as the business name and rates, may be out of date until then;
+      - invoices can be created once the cloud copy has loaded;
+      - timer taps, trips and expenses from the widget or Siri are added then.
     - **A relaunch** finds the record pending and the marker unchanged. It detects
-      nothing, clears nothing and drops nothing more. It keeps the settings hold and the
-      pending notice.
-  - **The pull completes the run.** Only the pull waits for the first online, signed-in
-    sync. The run completes when a pull reads every table, the settings and the customer
-    notes without an error, whichever path runs it:
+      nothing, clears nothing and drops nothing more. The settings hold, the widget and
+      invoice holds and the pending notice all stay.
+  - **The pull completes the run.** The detection and the clear never wait for a sync
+    (above). Of E-1's own steps, only the pull waits for the first online, signed-in
+    sync; the holds above wait for the pull. The run completes when a pull reads every
+    table, the settings and the customer notes without an error, whichever path runs
+    it:
     - `syncIfOnline` (`utils/sync.ts:316-321`);
     - `initialSync`'s first sign-in (`utils/sync.ts:397-398`);
     - the other-owner path (`utils/sync.ts:394-398`).
@@ -521,27 +594,50 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     Today `pullRemote` swallows a table's failure (`utils/sync.ts:283`) and any other
     error (`utils/sync.ts:310-312`), so the branch must make it report success. On
     success, in this order:
-    1. apply the held settings keys over the pulled settings, save them and queue that
-       settings record;
-    2. then record the run as seen and remove the held keys.
+    1. apply the held leaf paths over the pulled settings, save the result and queue
+       that settings record. This one save bypasses the hold: it runs while the run is
+       still pending, and it queues the record instead of recording leaf paths;
+    2. then record the run as seen and remove the held paths. From here invoices can be
+       created again: by hand, by auto-invoice, by the recurring generator or by an
+       import;
+    3. then run the widget and Siri replay once (`replayWidgetActions`). The actions
+       queued before or during the pending state now find their jobs.
 
-    The order makes a crash harmless. Until the run is seen, the held keys stay, so the
-    next full pull applies them again. Queuing settings again replaces the earlier entry
-    (`utils/sync.ts:100-104`). Held keys found while the run is already seen are
-    removed, never applied.
+    The order makes a crash harmless. Until the run is seen, the held paths stay, so the
+    next successful pull applies them again. Queuing settings again replaces the earlier
+    entry (`utils/sync.ts:100-104`). Held paths found while the run is already seen are
+    removed, never applied. A crash before step 3 leaves the App Group queue as it was,
+    and R's next replay, at session start, foreground or in the background, applies it.
 
-    Held keys that belong to another account are discarded, never applied: the
+    **An action whose job is still missing after the pull**, because the job was
+    deleted or never reached the cloud (§5.6 item 4), is skipped and removed, as the
+    replay does today on any build (`utils/widgetActions.ts:104-105`, `:112-115`,
+    `:249-251`). E-1 keeps that rule. The replay is R's existing one in every other way
+    too: like today, it does not check which account queued an action, and the Expo
+    sign-out's App Group wipe (E-4) is what keeps one account's actions from another.
+
+    Held paths that belong to another account are discarded, never applied: the
     other-owner path and the Expo sign-out (E-4) remove them.
   - **Invariants.**
-    - **R never drops an edit it made after a detection.** Only a later native run
-      drops it (below).
-    - **The pull never silently reverts an edit R made.** Nothing R shows before the pull
-      is a pre-native copy. A record R created survives the pull, because the pull
-      replaces by id and keeps local-only records (`utils/sync.ts:262-272`). Held
-      settings keys are applied after the pull.
+    - **R never drops an edit it made after a detection.** Only a later detection drops
+      it: a later native run (below), or a change to a marker R cannot use (above).
+    - **R never drops a widget or Siri action because of E-1.** While the run is pending
+      it leaves the App Group queue alone, and it replays the queue once the run is
+      seen, after the pull has brought the jobs back. The replay's existing rules still
+      drop an action it cannot apply, such as a timer action whose job is missing
+      (above), and the Expo sign-out's App Group wipe (E-4) still removes the queue.
+    - **R never numbers an invoice against the cleared list.** Invoice creation waits
+      until the run is seen.
+    - **The pull never silently reverts an edit R made.** Apart from settings, nothing R
+      shows before the pull is a pre-native copy. Settings are the one pre-native copy R
+      shows and uses while pending, and the pending notice says they may be out of date.
+      A record R created survives the pull, because the pull replaces by id and keeps
+      local-only records (`utils/sync.ts:262-272`). Held settings paths are applied
+      after the pull.
     - **R never pushes a stale copy.** The queue is emptied at the detection. No
       pre-native copy is left to be queued, although every save queues the whole
-      collection (`utils/sync.ts:121-123`). Settings are queued only after the pull.
+      collection (`utils/sync.ts:121-123`). Settings are queued only after the pull, and
+      only as the pulled record with R's held paths on top.
   - **Clear, not hold: recommended.** The branch owner records the choice. A hold would
     keep the pre-native copies on screen and hold every enqueue until the pull. The
     clear is preferred for three reasons:
@@ -556,9 +652,15 @@ Citations are at `9e84478`; they are React Native files, read-only here.
       payment-ledger union (`utils/syncMerge.ts:47`) and deletes. That is new merge code
       whose failure pushes stale fields: the `P12-012` class.
 
+    **Invoice numbering does not decide between them.** A hold keeps the pre-native
+    invoices but not those numbered in the native window, so its next number could
+    still repeat one already sent. Either way, invoice creation waits for the pull.
+
     **The cost** (residual 5, §5.6 item 5): until the pull, R lists no records, whether
-    offline or before sign-in, and a record created then can duplicate one in the
-    cloud. Settings are the only hold, and it is limited to the changed keys.
+    offline or before sign-in. Invoices cannot be created, because numbering needs the
+    whole invoice list, and widget and Siri actions wait. A record created then can
+    duplicate one in the cloud. Settings are the only data R keeps back from the queue,
+    limited to the changed leaf paths.
   - **No new native run: E-1 does nothing.**
     - A detection never drops a queue entry that R creates after it.
     - A relaunch of R with its own pending queue and no native run since drops
@@ -568,8 +670,9 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     entries predate N2's rows and a push would overwrite them: the `P12-012` class. This
     is residual 1 (§5.6 item 1).
   - **The branch owner records** the record key, the clear or hold choice, the marker
-    path and the pending-state wording. The rehearsal checks:
-    - R's first action offline (§8.2 step 8);
+    path, the fingerprint and the pending-state wording. The rehearsal checks:
+    - R's first action offline, with a widget tap waiting from before R opened and the
+      invoice block (§8.2 steps 4, 8 and 9);
     - the relaunch case (§8.2 step 12);
     - the signed-out native case (§8.2 steps S1–S5);
     - R starting signed out (§8.2 step D3).
@@ -581,14 +684,22 @@ Citations are at `9e84478`; they are React Native files, read-only here.
   An Expo build cannot read the native queue reliably. Warn on each E-1 detection, at
   app start and once per native run, unless the owner accepts a narrower signal. A
   relaunch with no native run since does not warn again. The warning is separate from
-  E-1's pending notice, which stays until the pull lands.
+  E-1's pending notice, which stays until the pull lands. The warning is not about
+  widget or Siri actions waiting in the App Group: they are not missing, and E-1
+  applies them after the pull (the pending notice says so).
 - **E-3.** Never modify or delete the native store, its journal, `LegacyBackups/`, the
   native run marker or the native Keychain items. They make the re-upgrade safe (§5.2)
-  and let E-1 work, and a deletion would contradict Phase 0 step 4.
+  and let E-1 work, and a deletion would contradict Phase 0 step 4. While E-1's run is
+  pending, R also leaves the App Group `widgetActions` queue alone, apart from the
+  sign-out's existing wipe (E-4). After that, its replay consumes the queue as it does
+  today (E-1).
 - **E-4.** Keep the existing sign-out rule: the Expo sign-out clears the queue and the
   owner marker (`utils/storage/lifecycle.ts:106-159`). It also clears E-1's held
-  settings keys, which are account data. It keeps E-1's run record, which is device
-  state, and a pending run stays pending until the next account's full pull.
+  settings paths, which are account data. It keeps E-1's run record, which is device
+  state, and a pending run stays pending until a successful pull under the next
+  account. The sign-out's existing App Group wipe (`utils/storage/lifecycle.ts:141`)
+  also removes any widget and Siri actions still waiting, pending run or not: they
+  belong to the account that signs out. E-1 does not change that.
 
 **Who makes the change.** The owner, as the holder of every role (D5), or an agent the
 owner assigns to the Expo release branch outside Phase 12's lanes. Until it is built:
@@ -667,21 +778,31 @@ The rehearsal (P12-RB-2, P12-RB-3) checks both directions on a device.
    If native never finished its initial sync on that device, E-1 drops the queue and
    clears the copies while the edits exist only in native's store. R does not show
    them. They come back only at the re-upgrade, when N2 pushes them, with the
-   same-record overwrite of item 2.
+   same-record overwrite of item 2. A widget or Siri timer action for such a job finds
+   no job after R's pull either, and the replay skips it (§5.3 E-1).
 
    The check guards this: it reads `initial-sync-incomplete`, and support does not
    advise the rollback (§5.1). Only a device that skipped the check reaches this case.
-5. **Until R's first full pull after a native run, R lists no records** (the cost of
-   E-1's clear, §5.3). This holds offline or before sign-in. R shows its pending notice
-   instead.
-
-   A record created in that window is kept and pushed, but it can duplicate a record
-   that is already in the cloud. A settings change made in that window is applied after
-   the pull.
+5. **Until R's first successful pull after a native run, R lists no records** (the cost
+   of E-1's clear, §5.3). This holds offline or before sign-in. R shows its pending
+   notice instead. In that window:
+   - **A record created then is kept and pushed, but it can duplicate one already in
+     the cloud**, for example a customer or a job. The owner accepts this with the §5.3
+     build.
+   - **No invoice can be created**, by hand, by auto-invoice, by the recurring generator
+     or by an import. The next invoice number comes from the invoices on the device only
+     (`utils/invoiceNumber.ts:30-51`); with them cleared, it would repeat numbers
+     already sent to customers. So a duplicate from this window is never an invoice.
+   - **Widget and Siri actions wait** in the App Group and are applied after the pull. A
+     timer action whose job is not in the cloud is skipped then, as on any build.
+   - **Settings are the pre-native copy**, and the pending notice says they may be out
+     of date. A new job starts with the pre-native labor rate. A settings change made in
+     the window is applied after the pull.
 
    This is not data loss. It needs the owner's acceptance with the §5.3 build. If the
    owner rules for the hold instead, this residual is replaced by the hold's replay rule
-   (§5.3 E-1).
+   (§5.3 E-1). The invoice block stays either way, because a hold's invoices lack those
+   numbered in the native window.
 
 ## 6. The rollback, step by step
 
@@ -885,14 +1006,26 @@ shows the last check. Read its blocker codes and counts (§5.1).
 
 > Version `<ROLLBACK_VERSION>` is installed. Connect to Wi-Fi or mobile data, open it
 > and sign in if it asks. Your data comes from the cloud, so it can take a minute to
-> appear. Until it has, the app shows no records. If something you entered recently is
-> missing after that, don't re-enter it yet and don't delete the app. Reply to this
-> message and tell us what's missing, and we'll check.
+> appear. Until it has, the app shows no records and can't create invoices. Timer taps,
+> trips and expenses from the widget or Siri are added once it has. If something you
+> entered recently is missing after that, don't re-enter it yet and don't delete the
+> app. Reply to this message and tell us what's missing, and we'll check.
 
-If the user says R shows no records, it has not finished its first pull after the
-native build (§5.3 E-1, §5.6 item 5). Ask them to connect and sign in. A record they
-created in the meantime is kept. If it duplicates one that appears after the pull, they
-can remove the extra one.
+What support does in part B (§5.3 E-1, §5.6 item 5):
+
+- **R shows no records, or will not create an invoice.** It has not finished its first
+  pull after the native build. Ask the user to connect and sign in, then look again.
+- **A record created before the pull duplicates one that appeared after it.** A
+  customer or job they created in the meantime is kept. If it repeats one from the
+  cloud, they can delete the extra copy once nothing they added is only on it. This
+  never applies to invoices: R creates none before the pull, so two invoices are two
+  different invoices, and support never tells the user to delete one. Two invoices with
+  the same number mean R was built without the invoice block: escalate as S2 (charter
+  §2).
+- **A timer tap, trip or expense from the widget or Siri does not show.** R applies
+  waiting widget and Siri actions only after its first pull. Ask the user to connect and sign in, and to look
+  again once the records appear. A tap for a job that is no longer in the cloud is
+  skipped, as in every version.
 
 If R carries the §5.3 warning and the user saw it, ask whether they had been offline
 before the update. Their changes may still be in the newer version's storage, and they
@@ -969,7 +1102,8 @@ The rehearsal also needs:
   - before each deletion, sign out of the build that is installed, in its Settings.
     Keychain items survive deleting the app (charter §10, `P12-006`), so a session left
     signed in could meet the next sequence's data.
-- one team account A with synthetic data, whose records are labelled `RB-C1` … `RB-C9`.
+- one team account A with synthetic data, whose customers are labelled `RB-C1` …
+  `RB-C9` and whose rehearsal job is `RB-J1`.
 
 No staging is needed. No step deletes an account.
 
@@ -989,26 +1123,35 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
 **Native window, then T1: native N → Expo R**
 
 4. Online, edit `RB-C1` again (suffix ` n1`) and `RB-C2` (suffix ` n1`). In Settings,
-   change the business name (suffix ` n1`). Let them sync.
+   change the business name (suffix ` n1`). Create job `RB-J1` for `RB-C5`, scheduled
+   for today. Let them sync. Add TradeReady's Job Timer widget to the Home Screen and
+   check that it shows `RB-J1` (if another job shows, schedule `RB-J1` earlier).
 5. Offline, edit `RB-C3` (suffix ` n2`). Open Settings › Cloud Sync and tap Check
    everything is saved. Expect "Not ready yet: 1 change waiting to upload". Export the
    support report.
 6. Online, tap the check again. Expect "Ready". Export the support report.
 7. Offline, edit `RB-C4` (suffix ` n3`) and force-quit **without** running the check.
    This is the ignored-guard case of §5.6 residual 2.
-8. Online, and without opening N, install R from TestFlight. Do not open it yet: turn
-   airplane mode on first. This is **R's first action offline** (§5.3 E-1 at app start).
+8. Online, and without opening N:
+   - On the Home Screen, tap Start on the Job Timer widget for `RB-J1`. The widget shows
+     its pending state. This is a **widget tap made after the native build last ran**
+     (§5.3 E-1): it waits in the App Group, and no app has applied it.
+   - Straight away, install R from TestFlight. Do not open it yet: turn airplane mode
+     on first. This is **R's first action offline** (§5.3 E-1 at app start).
    - Open R offline. Expect the E-2 warning and R's pending notice. No customers or jobs
-     are listed, and no sample data shows: E-1 cleared the pre-native copies before the
-     first screen.
+     are listed, `RB-J1` included, and no sample data shows: E-1 cleared the pre-native
+     copies before the first screen.
+   - Try to create an invoice. R does not create it and says invoices can be created
+     once the cloud copy has loaded.
    - Create customer `RB-C9`. In Settings, change your name (suffix ` r0`).
    - Force-quit R and open it again, still offline. `RB-C9` and ` r0` are still there,
      and nothing from before the upgrade is listed.
    - Go online. Sign in if asked. Pull to refresh.
 
    If R opens offline asking for a sign-in, it cannot sign in there. Record that this
-   case was not exercised (§8.2 step D3 covers a signed-out start). Then go online, sign
-   in as A, make the same two edits and pull to refresh.
+   case, and the invoice check, were not exercised (§8.2 step D3 covers a signed-out
+   start). Then go online, sign in as A, make the same two edits and pull to refresh.
+   The step 9 checks still apply, the widget tap included.
 
 **Expo window, then T2: Expo R → native N2**
 
@@ -1019,6 +1162,9 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
      step 8.
    - `RB-C9` is still listed, and your name shows ` r0`: the pull reverted neither.
    - The business name shows ` n1`: R pushed no stale settings.
+   - `RB-J1` is listed with a running timer that started at the step 8 widget tap. R
+     left the tap in the App Group while pending and applied it after the pull (§5.3
+     E-1).
    - Native-written records of every table used (customer, job with photo) render.
 10. Online in R, edit `RB-C5` (suffix ` e1`) and `RB-C4` (suffix ` e1`), and let them
     sync. The `RB-C4` edit is the same-record conflict of §5.6 residual 2.
@@ -1055,6 +1201,8 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
       pushed, not dropped.
     - `RB-C9` is listed, and Settings shows the business name ` n1` and your name
       ` r0`. R's step 8 edits came through the cloud, and no stale settings did.
+    - `RB-J1` shows the time session that started at the step 8 widget tap: it came
+      through the cloud.
     - `RB-C3` shows ` n2`, not ` e3`: the unsynced R edit stays in R's AsyncStorage (G6)
       and does not reach N2 (§5.6 residual 1). Record it for the owner's ruling.
     - `RB-C4`: record which value wins, ` n3` or ` e1` (§5.6 residual 2). Nothing else
@@ -1120,8 +1268,13 @@ native-only install, signed out, then the Expo window, then N2:
   - Open R. It starts signed out, because it has no session on this device. Record it
     if it does not. Record whether R shows the E-2 warning before the sign-in.
   - Sign in as A. As soon as R shows its lists, and before pulling to refresh, create
-    customer `RB-C7`. Record whether A's records were already listed then, which means
-    the first sign-in's pull had finished.
+    customer `RB-C7`. Record whether A's records were already listed then. Expect yes:
+    the first sign-in's pull had finished. A fresh R has no `__initDone_` key, so its
+    first sign-in pulls before `initialSync` returns (`utils/sync.ts:372-398`), and
+    until then R shows its loading spinner instead of its lists
+    (`context/AuthContext.tsx:41-42`, `App.tsx:379-385`). `RB-C7` is therefore created
+    after that pull, and the step checks that the next pull keeps it. Record a "no" as
+    a finding.
   - Pull to refresh. A's records appear, and `RB-C7` is still listed.
   - Edit `RB-C5` (suffix ` e7`), and let the changes sync until no "changes pending"
     banner shows.
@@ -1168,12 +1321,14 @@ Readiness check (steps 5, 6, 17; S2; D2, D6): lastCheck / drainOutcome / blocker
 Transition timings: T0 <MIN>, T1 <MIN>, T2 <MIN>; manual steps: <LIST>
 N2 launchMigration (step 15): <outcome>; migrationStatuses react-native-async-storage-to-v1: <status>
 R offline first action (step 8): pending notice <yes/no>; pre-upgrade records listed before the pull <none | some>; sample data <none | shown>; sign-in asked offline <yes/no>;
+  invoice refused before the pull <yes/no | not exercised>;
   after the pull RB-C9 <listed | missing>, your name <r0 | other>, business name <n1 | other>; in N2 (step 16) <same | other>
+Widget tap before R's first open (steps 8, 9, 16): RB-J1 before the pull <not listed | listed>; after the pull <timer from the tap | no timer | other>; in N2 <same session | other>
 R relaunch (step 12): banner after relaunch <1 pending | cleared>; E-2 warning again <yes/no>; RB-C2 in N2 <e4 | other>
 RB-C3 in N2 (residual 1): <n2 | e3>
 RB-C4 winner (residual 2): <n3 | e1>
 Signed-out variant: RB-C8 in R <s1 | s0>; E-2 warning <yes/no>
-P12-RB-7: R at D3 started signed out <yes/no>; E-2 before sign-in <yes/no>; A's records listed when RB-C7 was created <yes/no>;
+P12-RB-7: R at D3 started signed out <yes/no>; E-2 before sign-in <yes/no>; A's records listed when RB-C7 was created <yes (expected) | no>;
   N2 before sign-in <signed-out start | other: describe>; launchMigration <outcome>;
   RB-C7 and RB-C5 e7 after sign-in <present | missing>
 Defects raised: <P12-… or none>
@@ -1207,8 +1362,8 @@ These rows are appended to `docs/native-phase-12-evidence-index.md` §23:
 | Row | Stage | What it covers |
 |---|---|---|
 | P12-RB-1 | X | The rollback candidate R uploaded and processed, not submitted, with its numbering recorded |
-| P12-RB-2 | A | Rehearsal T0 and T1: Expo L → native N → Expo R, with unsynced edits, the readiness check and R's first action offline; and the signed-out variant (E-1) |
-| P12-RB-3 | A | Rehearsal T2: Expo R → native N2, with a synced Expo edit, one left pending across an R relaunch, an unsynced one, no re-import and the residuals recorded |
+| P12-RB-2 | A | Rehearsal T0 and T1: Expo L → native N → Expo R, with unsynced edits, the readiness check, a widget tap waiting for R's pull, and R's first action offline with the invoice block; and the signed-out variant (E-1) |
+| P12-RB-3 | A | Rehearsal T2: Expo R → native N2, with a synced Expo edit, one left pending across an R relaunch, an unsynced one, the widget tap's session, no re-import and the residuals recorded |
 | P12-RB-4 | A | The readiness check's states, its accessibility and the v4 support report on a device |
 | P12-RB-5 | A | SC4: the legacy migration still runs in N2 after the round trip |
 | P12-RB-6 | X | Staffing for the cutover window |
