@@ -281,6 +281,9 @@ final class DryRunLink: NativeMutationPushHTTPLoading, NativeSyncReachability, @
     private let lock = NSLock()
     private var count = 0
     let status: (String) -> Int
+    /// Runs while the first request is in flight (a trigger that arrives
+    /// mid-pass, which the coordinator coalesces into a rerun).
+    var duringFirstRequest: (@MainActor @Sendable () async -> Void)?
 
     init(status: @escaping (String) -> Int) { self.status = status }
 
@@ -289,7 +292,8 @@ final class DryRunLink: NativeMutationPushHTTPLoading, NativeSyncReachability, @
     func isReachable() async -> Bool { true }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        lock.lock(); count += 1; lock.unlock()
+        lock.lock(); count += 1; let hook = count == 1 ? duringFirstRequest : nil; lock.unlock()
+        if let hook { await hook() }
         let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
         let response = HTTPURLResponse(
             url: request.url ?? URL(string: "https://dry-run.invalid")!,
@@ -390,6 +394,7 @@ struct SupportDiagnosticsTests {
         pendingAgeSignal()
         initialSyncSignal()
         discardedSignal()
+        await coalescedPassDiscardSignal()
         sourceChecks(root: root)
         try await dryRun()
 
@@ -809,6 +814,17 @@ struct SupportDiagnosticsTests {
         expectEqual(monitor.recordPass(offline, oldestPendingAt: now.addingTimeInterval(-90_000), now: now), [],
                     "monitor: an early exit is not a network pass")
         expectEqual(monitor.consecutiveThrottledPasses, 4, "monitor: an early exit leaves the streak")
+        // Review fix 1 (Important 1): a pass whose coalesced rerun ended early
+        // (offline, backoff) still reports the first run's discards.
+        var deferredAfterDrop = NativeSyncStatus()
+        deferredAfterDrop.lastOutcome = .backoffDeferred
+        deferredAfterDrop.discardedCount = 1
+        deferredAfterDrop.discardedTable = "jobs"
+        expectEqual(monitor.recordPass(deferredAfterDrop, oldestPendingAt: now.addingTimeInterval(-90_000), now: now),
+                    [.discarded(table: "jobs", count: 1)],
+                    "monitor: a discard is reported even when the pass ended on an early exit (no age signal)")
+        expect(monitor.discardedChangeCount == 1 && monitor.consecutiveThrottledPasses == 4,
+               "monitor: …counted, and the early exit still leaves the streak")
         var failed = NativeSyncStatus()
         failed.pendingCount = 4
         failed.lastOutcome = .failed(remaining: 4)
@@ -828,7 +844,7 @@ struct SupportDiagnosticsTests {
         expectEqual(monitor.recordPass(dropped, oldestPendingAt: now.addingTimeInterval(-90_000), now: now),
                     [.discarded(table: "customer_notes", count: 2)],
                     "monitor: every discard reports; the age reports once")
-        expectEqual(monitor.discardedChangeCount, 4, "monitor: discards are totalled")
+        expectEqual(monitor.discardedChangeCount, 5, "monitor: discards are totalled")
         _ = monitor.recordPass(failed, oldestPendingAt: now.addingTimeInterval(-60), now: now)
         expectEqual(monitor.recordPass(failed, oldestPendingAt: now.addingTimeInterval(-90_000), now: now),
                     [.pendingAge(count: 4)], "monitor: a fresh oldest change re-arms the age signal")
@@ -836,7 +852,7 @@ struct SupportDiagnosticsTests {
         _ = monitor.recordPass(throttled, oldestPendingAt: nil, now: now)
         monitor.resetForAccountBoundary()
         expect(monitor.consecutiveThrottledPasses == 0 && monitor.throttledPassCount == 5
-               && monitor.discardedChangeCount == 4, "monitor: an account boundary ends the streak and keeps the totals")
+               && monitor.discardedChangeCount == 5, "monitor: an account boundary ends the streak and keeps the totals")
         _ = monitor.recordPass(throttled, oldestPendingAt: nil, now: now)
         _ = monitor.recordPass(throttled, oldestPendingAt: nil, now: now)
         expectEqual(monitor.recordPass(throttled, oldestPendingAt: nil, now: now), [.throttled(passes: 3)],
@@ -1112,6 +1128,57 @@ struct SupportDiagnosticsTests {
             "record-contract/jobs", "Sync push dropped unsendable changes", context: "pushDiscarded",
             extras: ["collection": "jobs", "count": 1]
         )], "discarded: a completed pass that dropped a change reports it (TH-5)")
+    }
+
+    /// Review fix 1 (Important 1): the coordinator runs a trigger that
+    /// arrived mid-pass as a rerun inside the same pass, and the pass's status
+    /// then carries the rerun's outcome. After a partial push the rerun is
+    /// backoff-deferred, so the pass ends `.backoffDeferred` with the first
+    /// run's discard still counted: it must report exactly once.
+    @MainActor
+    static func coalescedPassDiscardSignal() async {
+        let f = Fixture("coalesced-discard")
+        defer { f.cleanup() }
+        let store = f.launch()
+        store.scheduleBookingTestSeedSignedInOwner(subject: "dry-run-subject", binding: hexBinding("f3"))
+        let queue = Canonical.NativeMutationQueue(fileURL: f.queueURL)
+        var mismatch = queuedItem("coalesced-mismatch", age: 60)
+        mismatch.payload = .object(["id": .string("DIFFERENT")])
+        do {
+            try queue.save([queuedItem("coalesced-ok", age: 60), queuedItem("coalesced-throttled", age: 60), mismatch])
+        } catch {
+            expect(false, "coalesced: the queue was written (\(error))")
+        }
+        final class Throttle: @unchecked Sendable { var on = true }
+        let throttle = Throttle()
+        let link = DryRunLink { throttle.on && $0.contains("coalesced-throttled") ? 429 : 201 }
+        let coordinator = dryRunCoordinator(store, queue: queue, link: link)
+        var midPass: NativeSyncOutcome?
+        link.duringFirstRequest = { midPass = await coordinator.sync(trigger: .foreground) }
+        f.clear()
+
+        let outcome = await coordinator.sync(trigger: .manual)
+        let status = coordinator.status()
+        expectEqual(midPass, .alreadyRunning, "coalesced: sanity: the mid-pass trigger was coalesced")
+        expectEqual(outcome, .backoffDeferred, "coalesced: sanity: the rerun was deferred by the backoff")
+        expect(status.discardedCount == 1 && status.discardedTable == "jobs" && queue.load().count == 1,
+               "coalesced: sanity: the first run discarded one change and kept the throttled one (\(status))")
+        let discardReports = f.captures().filter { $0.context == "pushDiscarded" }
+        expectEqual(discardReports, [signal(
+            "record-contract/jobs", "Sync push dropped unsendable changes", context: "pushDiscarded",
+            extras: ["collection": "jobs", "count": 1]
+        )], "coalesced: the discard reports exactly once although the pass ended deferred (TH-5)")
+        let afterFirst = section((try? reportJSON(store))?.json ?? [:], "sync")
+        expectEqual(afterFirst["discardedChangeCount"] as? Int, 1, "coalesced: the report counts the discard once")
+
+        // The next pass drains the throttled change: no discard, no new report.
+        throttle.on = false
+        f.clear()
+        _ = await coordinator.sync(trigger: .manual)
+        expectEqual(f.captures().filter { $0.context == "pushDiscarded" }, [],
+                    "coalesced: a later pass does not report the earlier discard again")
+        let afterSecond = section((try? reportJSON(store))?.json ?? [:], "sync")
+        expectEqual(afterSecond["discardedChangeCount"] as? Int, 1, "coalesced: …and the count stays 1")
     }
 
     // MARK: 16. Dry run on synthetic fixtures (12.02 deliverable)

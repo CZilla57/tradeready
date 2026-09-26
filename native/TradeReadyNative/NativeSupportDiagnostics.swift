@@ -215,8 +215,13 @@ struct NativeSyncMonitor: Equatable {
         }
     }
 
+    /// Call once per ended pass. A pass's discards count whatever its last
+    /// outcome: the coordinator runs a trigger that arrived mid-pass as a
+    /// rerun inside the same pass, and that rerun can end early (offline,
+    /// backoff) after the first run dropped a change (review fix 1). The
+    /// throttle and age rules read only passes that reached the network.
+    /// `discardedTable` is the pass's first dropped table only.
     mutating func recordPass(_ status: NativeSyncStatus, oldestPendingAt: Date?, now: Date) -> [Signal] {
-        guard Self.isNetworkPass(status.lastOutcome) else { return [] }
         var signals: [Signal] = []
         if status.discardedCount > 0 {
             discardedChangeCount = NativeSupportDiagnostics.boundedCount(discardedChangeCount + status.discardedCount)
@@ -225,6 +230,7 @@ struct NativeSyncMonitor: Equatable {
                 count: NativeSupportDiagnostics.boundedCount(status.discardedCount)
             ))
         }
+        guard Self.isNetworkPass(status.lastOutcome) else { return signals }
         if NativeSupportDiagnostics.isThrottleCode(status.diagnosticCode)
             || NativeSupportDiagnostics.isThrottleCode(status.lastPullResult?.diagnosticCode) {
             throttledPassCount = NativeSupportDiagnostics.boundedCount(throttledPassCount + 1)

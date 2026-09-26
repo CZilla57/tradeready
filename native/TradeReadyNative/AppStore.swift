@@ -11103,9 +11103,13 @@ extension AppStore {
     /// throttled network passes in a row, once per streak) and TH-3
     /// `pendingAge` (a change queued over 24 hours at the end of a network
     /// pass, once until the queue moves on). Counts and table names only.
+    /// Every ended pass goes to the monitor: a discard counts even when the
+    /// pass's coalesced rerun ended early (review fix 1); the monitor itself
+    /// limits the throttle and age rules to network passes.
     private func monitorSyncPass(_ status: NativeSyncStatus) {
-        guard NativeSyncMonitor.isNetworkPass(status.lastOutcome) else { return }
-        let oldest = mutationQueue.load().compactMap { NativeSupportDiagnostics.queuedDate($0.ts) }.min()
+        let oldest = NativeSyncMonitor.isNetworkPass(status.lastOutcome)
+            ? mutationQueue.load().compactMap { NativeSupportDiagnostics.queuedDate($0.ts) }.min()
+            : nil
         for signal in syncMonitor.recordPass(status, oldestPendingAt: oldest, now: Date()) {
             switch signal {
             case let .discarded(table, count):
