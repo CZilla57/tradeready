@@ -292,7 +292,18 @@ struct RepositoryTests {
         expect(scrubRepository.isAccountScrubPending
                && scrubRepository.pendingAccountScrubScope == .live,
                "account scrub publishes its crash-recovery marker first")
+        expect(!scrubRepository.isLiveWorkspaceClearedByAccountScrub,
+               "P12-003: sanity: no scrub-cleared record before the removal")
         try scrubRepository.removeLiveAccountData()
+        // Phase 12 (12.00b.2-G, P12-003): the removal records that a scrub
+        // cleared the live workspace, with no account data in the record.
+        expect(scrubRepository.isLiveWorkspaceClearedByAccountScrub,
+               "P12-003: removing the live workspace records that a scrub cleared it")
+        let clearedRecord = (try? Data(contentsOf: scrubRepository.accountScrubClearedMarkerURL)).flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        }
+        expect(clearedRecord.map { Set($0.keys) == ["schemaVersion"] } == true,
+               "P12-003: the scrub-cleared record holds only its schema version")
         expect(!FileManager.default.fileExists(atPath: scrubPrimary.path)
                && !FileManager.default.fileExists(atPath: scrubRepository.backupURL.path)
                && !FileManager.default.fileExists(atPath: quarantine.path)
@@ -308,6 +319,15 @@ struct RepositoryTests {
         let scrubbedLoad = try scrubRepository.load()
         expect(!scrubRepository.isAccountScrubPending && scrubbedLoad == nil,
                "finished account scrub cannot recover signed-out data")
+        expect(Canonical.SnapshotRepository(primaryURL: scrubPrimary).isLiveWorkspaceClearedByAccountScrub,
+               "P12-003: the scrub-cleared record outlives the scrub (the next launch reads it)")
+        try scrubRepository.save(first)
+        expect(!scrubRepository.isLiveWorkspaceClearedByAccountScrub
+               && !FileManager.default.fileExists(atPath: scrubRepository.accountScrubClearedMarkerURL.path),
+               "P12-003: the next save ends the scrub-cleared state")
+        try scrubRepository.save(second)
+        expect(!scrubRepository.isLiveWorkspaceClearedByAccountScrub,
+               "P12-003: a later save leaves no scrub-cleared record")
 
         let deletionPrimary = root.appendingPathComponent("Deletion/store.json")
         let deletionRepository = Canonical.SnapshotRepository(primaryURL: deletionPrimary)
@@ -329,6 +349,8 @@ struct RepositoryTests {
                && !FileManager.default.fileExists(
                     atPath: deletionDirectory.appendingPathComponent("auxiliary-state.json").path
                ), "permanent deletion removes recovery and activation artifacts")
+        expect(!deletionRepository.isLiveWorkspaceClearedByAccountScrub,
+               "P12-003: permanent deletion leaves no scrub-cleared record (its journal is gone too)")
         try deletionRepository.finishAccountScrub()
 
         if failures == 0 { print("PASS: snapshot repository and migration journal tests") }

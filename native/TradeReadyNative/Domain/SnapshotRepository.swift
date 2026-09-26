@@ -37,6 +37,11 @@ extension Canonical {
             let schemaVersion: Int
         }
 
+        /// Phase 12 (12.00b.2-G, P12-003): see `isLiveWorkspaceClearedByAccountScrub`.
+        private struct WorkspaceClearedMarker: Codable {
+            let schemaVersion: Int
+        }
+
         enum LoadSource: Equatable {
             case primary
             case recoveredBackup
@@ -73,6 +78,7 @@ extension Canonical {
         let backupURL: URL
         let legacyBackupDirectoryURL: URL
         let accountScrubMarkerURL: URL
+        let accountScrubClearedMarkerURL: URL
         let liveMediaDirectoryURL: URL
 
         private let fileManager: FileManager
@@ -101,6 +107,7 @@ extension Canonical {
             self.legacyBackupDirectoryURL = legacyBackupDirectoryURL
                 ?? primaryURL.deletingLastPathComponent().appendingPathComponent("LegacyBackups", isDirectory: true)
             self.accountScrubMarkerURL = primaryURL.appendingPathExtension("account-scrub-pending")
+            self.accountScrubClearedMarkerURL = primaryURL.appendingPathExtension("account-scrub-cleared")
             self.liveMediaDirectoryURL = primaryURL.deletingLastPathComponent()
                 .appendingPathComponent("Media", isDirectory: true)
             self.fileManager = fileManager
@@ -122,6 +129,17 @@ extension Canonical {
             return (try? JSONDecoder().decode(AccountScrubMarker.self, from: data).scope) ?? .live
         }
 
+        /// Phase 12 (12.00b.2-G, P12-003): an account scrub removed the live
+        /// workspace and nothing has been saved since. A sign-out on a migrated
+        /// device removes the snapshot but keeps the completed migration journal
+        /// (so no later account re-imports the React Native data); this record
+        /// is what tells that signed-out state from a lost snapshot. It is
+        /// written before anything is removed, survives relaunches, holds no
+        /// account data, and the next `save` removes it.
+        var isLiveWorkspaceClearedByAccountScrub: Bool {
+            fileManager.fileExists(atPath: accountScrubClearedMarkerURL.path)
+        }
+
         /// Starts an explicit account boundary before deleting any live data.
         /// The privacy-safe marker records only whether exact-owner recovery
         /// artifacts must also be erased. It contains no account data or ID.
@@ -139,6 +157,14 @@ extension Canonical {
         /// Immutable legacy migration backups remain available for recovery and
         /// are still protected by the exact-owner activation gate.
         func removeLiveAccountData() throws {
+            // Phase 12 (12.00b.2-G, P12-003): recorded first, so a scrub that
+            // stops part-way (its marker stays pending and it reruns) can never
+            // leave a removed snapshot without this record. A failed write
+            // fails the scrub, which then stays pending.
+            try atomicWrite(
+                try JSONEncoder().encode(WorkspaceClearedMarker(schemaVersion: 1)),
+                to: accountScrubClearedMarkerURL
+            )
             let directory = primaryURL.deletingLastPathComponent()
             let quarantinePrefix = "\(primaryURL.lastPathComponent).corrupt-"
             let entries = if fileManager.fileExists(atPath: directory.path) {
@@ -172,7 +198,10 @@ extension Canonical {
                 directory.appendingPathComponent("AuxiliaryActivation", isDirectory: true),
                 directory.appendingPathComponent("auxiliary-state.json"),
                 directory.appendingPathComponent("migration-journal.json"),
-                directory.appendingPathComponent("tradeready-support-report.json")
+                directory.appendingPathComponent("tradeready-support-report.json"),
+                // Phase 12 (12.00b.2-G): with the journal gone the record
+                // means nothing; a deletion leaves nothing behind.
+                accountScrubClearedMarkerURL
             ]
             for url in deletionTargets where fileManager.fileExists(atPath: url.path) {
                 try fileManager.removeItem(at: url)
@@ -250,6 +279,17 @@ extension Canonical {
             }
 
             try atomicWrite(newBytes, to: primaryURL)
+
+            // Phase 12 (12.00b.2-G, P12-003): a saved workspace is no longer
+            // the one a scrub cleared. Removed after the write, so a crash in
+            // between never leaves an empty workspace without the record. Best
+            // effort: the snapshot is already saved, a leftover record matters
+            // only if this snapshot is later lost with no save in between, and
+            // the next save retries.
+            if fileManager.fileExists(atPath: accountScrubClearedMarkerURL.path) {
+                do { try fileManager.removeItem(at: accountScrubClearedMarkerURL) }
+                catch { print("TradeReadySnapshotRepository stage=scrub-cleared-record") }
+            }
         }
 
         /// Retains the exact pre-conversion source bytes. Existing backups are

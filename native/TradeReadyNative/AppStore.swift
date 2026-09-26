@@ -328,6 +328,11 @@ final class AppStore: ObservableObject {
     /// passes `.live()` (the convenience init); nil in host tests and previews,
     /// so they never touch this machine's Documents or Keychain.
     private let legacySourceEraser: NativeLegacySourceEraser?
+    /// Phase 12 (12.00b.2-G): a host test's fixture source, read by the launch
+    /// migration and by "Try again" alike (`migrateLegacySource`). The app
+    /// passes neither, and both read the device's live legacy data.
+    private let legacyMigrationSource: LegacyMigrationSource?
+    private let legacyMigrationSourceProvider: (() throws -> LegacyMigrationSource)?
     /// Task 11.15: the one secure store for the auth session and the user's
     /// provider keys (`NativeKeychainSecureSettingsStore`, the system Keychain
     /// in production). The account-scrub paths wipe the same store the AI
@@ -563,6 +568,8 @@ final class AppStore: ObservableObject {
         self.widgetActionReplayTransport = widgetActionReplayTransport ?? (try? .live())
         self.appGroupAccountScrubber = appGroupAccountScrubber
         self.legacySourceEraser = legacySourceEraser
+        self.legacyMigrationSource = legacyMigrationSource
+        self.legacyMigrationSourceProvider = legacyMigrationSourceProvider
         self.pendingOpenURLConsumer = pendingOpenURLConsumer
         self.initialSyncService = initialSyncService
         self.subscriptionService = subscriptionService ?? NativeRevenueCatSubscriptionService()
@@ -653,12 +660,21 @@ final class AppStore: ObservableObject {
             || FileManager.default.fileExists(atPath: repository.backupURL.path)
         var launchOutcome: LegacyMigrationOutcome?
         var launchError: Error?
+        var migratedWorkspaceClearedByScrub = false
         if automaticallyMigrateLegacyData && accountScrubRecoveryError == nil {
             do {
                 let journalStatus = try migrationJournal.read().entries.last {
                     $0.migration == .reactNativeAsyncStorage
                 }?.status
-                let shouldAttempt = !hadNativeSnapshot
+                // Phase 12 (12.00b.2-G, P12-003): a migrated device after a
+                // sign-out (completed journal, no snapshot, the scrub's own
+                // record) is signed out, not missing its snapshot. It takes the
+                // steady-state branch below: no migration attempt, no Keychain
+                // read, the re-protect still runs. A snapshot lost with no scrub
+                // still attempts and lands in `missingMigratedSnapshot`.
+                migratedWorkspaceClearedByScrub = !hadNativeSnapshot
+                    && isMigratedWorkspaceClearedByAccountScrub(journalStatus: journalStatus)
+                let shouldAttempt = (!hadNativeSnapshot && !migratedWorkspaceClearedByScrub)
                     || journalStatus == .started
                     || journalStatus == .failed
                 if shouldAttempt {
@@ -670,23 +686,10 @@ final class AppStore: ObservableObject {
                         journal: migrationJournal,
                         secureStore: secureSettingsStore
                     )
-                    let source = legacyMigrationSource
-                    let currentSettings = settings
                     // Task 11.12: a LegacyMigration signpost around the same
                     // synchronous call (a throw ends it as failed and rethrows).
                     launchOutcome = try NativePerformanceMetrics.shared.measure(.legacyMigration) {
-                        if let source {
-                            return try coordinator.migrate(currentSettings: currentSettings, source: source)
-                        }
-                        // Phase 12 (12.00b.2-F): a host test's fixture source,
-                        // read here (after any pending scrub) as `liveSource()` is.
-                        if let legacyMigrationSourceProvider {
-                            return try coordinator.migrate(
-                                currentSettings: currentSettings,
-                                source: try legacyMigrationSourceProvider()
-                            )
-                        }
-                        return try coordinator.migrate(currentSettings: currentSettings)
+                        try self.migrateLegacySource(with: coordinator)
                     }
                 } else {
                     // Phase 12.00b.2-E fix round 2 (L267.a, Important 1): once a
@@ -710,7 +713,8 @@ final class AppStore: ObservableObject {
             }
         }
 
-        let completedWithoutSnapshot = launchOutcome?.status == .alreadyCompleted && !hadNativeSnapshot
+        let completedWithoutSnapshot = (launchOutcome?.status == .alreadyCompleted && !hadNativeSnapshot)
+            || migratedWorkspaceClearedByScrub
         if accountScrubRecoveryError == nil {
             // Task 11.12: a SnapshotLoad signpost (record count, and failed
             // when the stored snapshot could not be read).
@@ -4187,17 +4191,59 @@ final class AppStore: ObservableObject {
     }
 
     func retryLegacyMigration() {
+        // Phase 12 (12.00b.2-G, P12-003): the launch gate's signed-out case.
+        // There is nothing to migrate, so nothing is read; the empty
+        // workspace opens.
+        let journalStatus = try? migrationJournal.read().entries.last {
+            $0.migration == .reactNativeAsyncStorage
+        }?.status
+        if !FileManager.default.fileExists(atPath: fileURL.path),
+           !FileManager.default.fileExists(atPath: repository.backupURL.path),
+           isMigratedWorkspaceClearedByAccountScrub(journalStatus: journalStatus) {
+            load(seedIfMissing: false)
+            isLegacyMigrationBlocked = false
+            launchMigrationNotice = nil
+            migrationMessage = nil
+            return
+        }
         do {
-            let outcome = try LegacyMigrationCoordinator(
+            let outcome = try migrateLegacySource(with: LegacyMigrationCoordinator(
                 repository: repository,
                 journal: migrationJournal,
                 secureStore: secureSettingsStore
-            ).migrate(currentSettings: settings)
+            ))
             if outcome.status == .migrated { load(seedIfMissing: false) }
             applyLaunchMigrationState(outcome: outcome, error: nil, hadNativeSnapshot: false)
         } catch {
             applyLaunchMigrationState(outcome: nil, error: error, hadNativeSnapshot: false)
         }
+    }
+
+    /// Phase 12 (12.00b.2-G, P12-003): with no snapshot on disk, whether the
+    /// migration completed and an account scrub then cleared its workspace
+    /// (`SnapshotRepository.isLiveWorkspaceClearedByAccountScrub`) — the
+    /// signed-out state of a migrated device — rather than the snapshot having
+    /// been lost.
+    private func isMigratedWorkspaceClearedByAccountScrub(
+        journalStatus: Canonical.MigrationJournalStatus?
+    ) -> Bool {
+        journalStatus == .completed && repository.isLiveWorkspaceClearedByAccountScrub
+    }
+
+    /// The launch migration's and "Try again"'s one read of the legacy source:
+    /// a host test's fixture source when one was injected (Phase 12.00b.2-F:
+    /// the provider is read here, after any pending scrub, as `liveSource()`
+    /// is), otherwise the device's live legacy data.
+    private func migrateLegacySource(
+        with coordinator: LegacyMigrationCoordinator
+    ) throws -> LegacyMigrationOutcome {
+        if let legacyMigrationSource {
+            return try coordinator.migrate(currentSettings: settings, source: legacyMigrationSource)
+        }
+        if let legacyMigrationSourceProvider {
+            return try coordinator.migrate(currentSettings: settings, source: try legacyMigrationSourceProvider())
+        }
+        return try coordinator.migrate(currentSettings: settings)
     }
 
     func dismissLaunchMigrationNotice() {
@@ -11221,6 +11267,15 @@ extension AppStore {
     /// have. Production never calls this.
     func testApplyLaunchIdentityOutcome(_ outcome: NativeAuthenticatedIdentityActivationOutcome) {
         applyAuthenticatedIdentityOutcome(outcome, email: nil, allowUnboundWorkspaceAdoption: true)
+    }
+
+    /// Test-only (Phase 12 12.00b.2-G, Task 9b review M1): the real
+    /// `markInitialSyncCompleted` an initial sync runs once its pull commits.
+    /// Its once-per-account backfill queues the local workspace for the push,
+    /// so a host test can check what would be sent under the new account. The
+    /// pull before it needs the network. Production never calls this.
+    func testMarkInitialSyncCompleted(subject: String) {
+        markInitialSyncCompleted(subject: subject)
     }
 
     /// Test-only (task 11.09): feeds one sync-coordinator status through the

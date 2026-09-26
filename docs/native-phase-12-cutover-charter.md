@@ -636,9 +636,10 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L223.e | IPAD-MT-3: Stage Manager's first frame may shift column geometry | S3 | Open | device row IPAD-MT-3 |
 | L249.e | iOS 17/18 destructive text and the "On my way" hit-test are unverified | S3 | Open | device rows A11B-FR1-1/2 |
 
-### New in Phase 12 (2)
+### New in Phase 12 (3)
 
 | ID | Item | Sev | Found (date, source) | Handling | Status |
 |---|---|---|---|---|---|
 | P12-001 | Permanent account deletion left the React Native source files (AsyncStorage, Documents photos, legacy SecureStore items), so the next launch re-imported the deleted account: its records, owner marker, legacy session and provider key. Account B's sign-in then met the account-mismatch gate, or B's launch adopted A's data when the RN data had no owner keys (§5.4 item 5, G6-Q1) | **S1** | Open @`1bb701c` (reproduced 2026-09-25, 12.00b.2-F host test `native/run-legacy-reimport-tests.sh`) | 12.00b.2-F | Fixed — 12.00b.2-F (host) (`fix(native): phase 12.00b.2 - deleted account's legacy data is never re-imported (P12-001)`); device row P12-B2F-1 |
 | P12-002 | Phase 11 docs (runsheet OI-3 row; `native-phase-11-performance.md` §1.2 scenario B) stated the 429 push backoff as the poor-network test harness's 30 s/60 s values, not the app's real exponential backoff (5 s base, doubling, 300 s cap; `N/NativeSyncCoordinator.swift:140-141,388`) | S3 | 2026-09-25, Task 2 12.00 doc batch | doc batch | Closed — 12.00 doc batch (this commit) |
+| P12-003 | On a migrated device, sign-out (the `.live` scrub) removed the native snapshot and kept the completed migration journal (rightly: the journal stops the next account re-importing the RN data), but nothing recorded why the snapshot was gone. The next launch read that as a lost migrated snapshot (`missingMigratedSnapshot`): a failed-migration notice, local writes blocked, "Try again" the same, and the next sign-in, as either account, stopped at `preflight/local-recovery/missing-migrated-snapshot` (§2 Migration S1 example; TH-2). The scrub now records that it cleared the workspace; a snapshot lost with no scrub still blocks | **S1** | 2026-09-25, Task 9b characterization | 12.00b.2-G | Fixed — 12.00b.2-G (host) (`fix(native): phase 12.00b.2 - sign-out on a migrated device relaunches cleanly (P12-003)`); device row P12-B2G-1 |

@@ -12,6 +12,8 @@ import Foundation
 // launch path, crosses one account boundary with the real AppStore code, and
 // relaunches on the same files. Nothing here reads or writes the real
 // Keychain, App Group, Documents or network.
+// Phase 12 (12.00b.2-G, P12-003): the launch after a sign-out on a migrated
+// device is an ordinary signed-out launch (section 2).
 // Run with TZ=America/Phoenix.
 
 // MARK: - Harness
@@ -80,6 +82,18 @@ struct TempAppGroup {
             suiteName: suiteName, defaults: defaults,
             lockFile: directory.appendingPathComponent(WidgetAppGroup.lockFileName)
         )
+    }
+
+    /// A file where the lock's directory goes: the scrub's App Group step
+    /// fails (`WidgetAppGroupLock` cannot create the directory).
+    func blockLock() throws {
+        try FileManager.default.removeItem(at: directory)
+        try Data("blocked".utf8).write(to: directory)
+    }
+
+    func unblockLock() throws {
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     func cleanUp() {
@@ -195,6 +209,15 @@ final class FixtureDevice {
     var journalComplete: Bool { (try? journal.isComplete(.reactNativeAsyncStorage)) == true }
     var auxiliaryURL: URL { appDirectory.appendingPathComponent(NativeAuxiliaryStateStore.filename) }
     var legacyBackupsURL: URL { appDirectory.appendingPathComponent("LegacyBackups", isDirectory: true) }
+    var scrubMarkerURL: URL { storeURL.appendingPathExtension("account-scrub-pending") }
+    /// Phase 12 (12.00b.2-G, P12-003): the scrub's record that it cleared the
+    /// live workspace (`SnapshotRepository.accountScrubClearedMarkerURL`).
+    var scrubClearedMarkerURL: URL { storeURL.appendingPathExtension("account-scrub-cleared") }
+    /// The record IDs in the push queue on disk (what a sync would send).
+    var queuedRecordIDs: [String] {
+        Canonical.NativeMutationQueue(fileURL: appDirectory.appendingPathComponent("mutation-queue.json"))
+            .load().map(\.recordId)
+    }
 
     func writeManifest(_ manifest: [String: String]) throws {
         try FileManager.default.createDirectory(at: asyncStorageDirectory, withIntermediateDirectories: true)
@@ -220,13 +243,14 @@ final class FixtureDevice {
     /// convenience init's settings, with host-test stand-ins). The source is
     /// read when the launch migration runs, after any pending scrub, as
     /// `liveSource()` is.
-    func launch() throws -> AppStore {
+    func launch(repository: Canonical.SnapshotRepository? = nil) throws -> AppStore {
         AppStore(
             fileURL: storeURL,
             seedIfMissing: false,
             automaticallyMigrateLegacyData: true,
             legacyMigrationSourceProvider: { try self.source() },
             legacySourceEraser: eraser,
+            repository: repository,
             appGroupAccountScrubber: group.scrubber,
             subscriptionService: SubscriptionStub(),
             widgetTimelineReloader: NoopReloader(),
@@ -356,7 +380,15 @@ func testDeletionThenRelaunch(ownerKeys: Bool) async throws {
     expect(isConfigurationPreflight(relaunched.authenticationGateState),
            "\(label) [P12-001]: B's sign-in adopts an empty workspace and heads for B's initial sync (got \(relaunched.authenticationGateState))")
     expectEqual(relaunched.customers.map(\.id), [], "\(label) [P12-001]: B sees none of A's records")
-    expectEqual(relaunched.syncStatus.pendingCount, 0, "\(label) [P12-001]: nothing of A's is queued under B")
+    // 12.00b.2-G (Task 9b review M1): the initial sync's completion (an empty
+    // cloud here) backfills the local workspace into B's push queue once
+    // (`markInitialSyncCompleted`); A's record must not be in it. Driven only
+    // where the real app would reach it (the gate heads for the sync).
+    if isConfigurationPreflight(relaunched.authenticationGateState) {
+        relaunched.testMarkInitialSyncCompleted(subject: "user-b")
+        expect(!device.queuedRecordIDs.contains("rn-a-1"),
+               "\(label) [P12-001]: B's initial-sync backfill queues none of A's records (queued: \(device.queuedRecordIDs))")
+    }
 
     // B relaunches (the launch activation, which adopts an unbound workspace).
     let bLaunch = try device.launch()
@@ -370,7 +402,16 @@ func testDeletionThenRelaunch(ownerKeys: Bool) async throws {
     expect(isConfigurationPreflight(bLaunch.authenticationGateState),
            "\(label) [P12-001]: B's launch heads for B's initial sync over an empty workspace (got \(bLaunch.authenticationGateState))")
     expectEqual(bLaunch.customers.map(\.id), [], "\(label) [P12-001]: A's customer is not in B's local workspace")
-    expectEqual(bLaunch.syncStatus.pendingCount, 0, "\(label) [P12-001]: nothing of A's is queued under B after the relaunch")
+    // The launch path's own completion (M1). Once B's backfill has run above
+    // it is stamped for B and runs no second time, as in the app; the queue
+    // it filled is still checked. Without the erase, the interactive gate
+    // stops at account-mismatch, so this is where A's adopted record would
+    // first be queued (12.00b.2-G evidence: m1-mutation-no-eraser.log).
+    if isConfigurationPreflight(bLaunch.authenticationGateState) {
+        bLaunch.testMarkInitialSyncCompleted(subject: "user-b")
+        expect(!device.queuedRecordIDs.contains("rn-a-1"),
+               "\(label) [P12-001]: B's launch-path initial-sync backfill queues none of A's records (queued: \(device.queuedRecordIDs))")
+    }
 }
 
 /// A deletion whose scrub was interrupted is finished by the next launch,
@@ -514,11 +555,19 @@ func testEraser() throws {
 /// G6: a sign-out keeps the RN sources (the Expo rollback build reads them)
 /// and the completed journal, so nothing is imported again. The launches
 /// carry the eraser, as the app does; a sign-out never calls it.
+///
+/// Phase 12 (12.00b.2-G, P12-003): the relaunch after that sign-out is an
+/// ordinary signed-out launch (no failed-migration notice, no write block),
+/// and the next sign-in, as A or as B, heads for that account's initial sync,
+/// which is where A's cloud data comes back. RN clears its local data on
+/// sign-out and pulls on the next sign-in. Before the fix the relaunch
+/// reported a failed migration and blocked writes, "Try again" did the same,
+/// and the sign-in stopped at `preflight/local-recovery/missing-migrated-snapshot`.
 @MainActor
-func testSignOutThenRelaunch() async throws {
-    let label = "sign-out"
+func testSignOutThenRelaunch(ownerKeys: Bool, signer: String) async throws {
+    let label = "sign-out (\(ownerKeys ? "RN owner keys" : "no RN owner keys"), then \(signer))"
     resetHostKeychain()
-    let device = try FixtureDevice("signout", ownerKeys: false)
+    let device = try FixtureDevice("signout-\(ownerKeys ? "owner" : "plain")-\(signer)", ownerKeys: ownerKeys)
     defer { device.cleanUp() }
     let first = try migrateFirstLaunch(device, label)
     let journalEntries = device.journalEntryCount
@@ -530,32 +579,186 @@ func testSignOutThenRelaunch() async throws {
     expect(exists(device.manifestURL) && exists(device.photoURL), "\(label): the RN files are kept for the Expo rollback build")
     expectEqual(device.legacySecureStore.legacyItemCount, 2, "\(label): the RN SecureStore items are kept for the Expo rollback build")
     expect(nativeSession() == nil, "\(label): the native session is cleared")
+    expect(exists(device.scrubClearedMarkerURL), "\(label) [P12-003]: the sign-out records that it cleared the workspace")
+    let clearedRecord = (try? Data(contentsOf: device.scrubClearedMarkerURL)).flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    }
+    expect(clearedRecord.map { Set($0.keys) == ["schemaVersion"] } == true,
+           "\(label) [P12-003]: that record holds no account data")
 
     let relaunched = try device.launch()
     expectEqual(relaunched.customers.map(\.id), [], "\(label): the relaunch imports nothing")
-    // Observed, a separate finding (not P12-001, reported to the controller):
-    // a completed journal with no snapshot reads as a failed migration
-    // (`applyLaunchMigrationState`, `.alreadyCompleted` without a snapshot)
-    // and blocks local writes until a snapshot exists again.
-    expectEqual(relaunched.launchMigrationNotice, .failed,
-                "\(label) [separate finding]: the relaunch reports the completed-journal-without-snapshot block")
-    expect(relaunched.isLegacyMigrationBlocked, "\(label) [separate finding]: the relaunch blocks local writes")
+    expect(relaunched.launchMigrationNotice == nil,
+           "\(label) [P12-003]: the signed-out relaunch reports no failed migration (got \(String(describing: relaunched.launchMigrationNotice)))")
+    expect(!relaunched.isLegacyMigrationBlocked, "\(label) [P12-003]: the signed-out relaunch does not block local writes")
+    expect(!relaunched.isAccountScrubBlocked, "\(label): the signed-out relaunch has no cleanup pending")
     expectEqual(device.journalEntryCount, journalEntries, "\(label): the relaunch writes no journal entry (the importer did not run)")
+    expect(device.journalComplete, "\(label) [P12-003]: the journal stays complete, so no account re-imports A's RN data")
     expect(nativeSession() == nil, "\(label): the relaunch re-publishes no legacy session")
 
+    relaunched.retryLegacyMigration()
+    expect(!relaunched.isLegacyMigrationBlocked && relaunched.launchMigrationNotice == nil,
+           "\(label) [P12-003]: \"Try again\" leaves the signed-out state usable")
+    expectEqual(relaunched.customers.map(\.id), [], "\(label): \"Try again\" imports nothing")
+    expectEqual(device.journalEntryCount, journalEntries, "\(label): \"Try again\" writes no journal entry")
+
+    let session = signer == "A" ? sessionA : sessionB
+    let subject = signer == "A" ? "user-a" : "user-b"
+    let outcome = try await device.signInOutcome(session, subject: subject)
+    relaunched.testBindInteractiveOwner(outcome, email: "\(signer.lowercased())@example.invalid")
+    if ownerKeys && signer == "B" {
+        // Phase 3 rule ("exact legacy-owner mismatch is a blocking root
+        // state"), unchanged here: the sign-out keeps A's auxiliary state for
+        // A's rollback, and it names A as the owner, so B is held at the
+        // account-mismatch gate. Reported by 12.00b.2-G; pinned as observed.
+        expectEqual(outcome.accountState, .ownerMismatch, "\(label): A's kept auxiliary state names another owner")
+        expectEqual(relaunched.authenticationGateState, .accountMismatch,
+                    "\(label) [observed, Phase 3 rule]: B's sign-in is held at the account-mismatch gate")
+    } else {
+        if ownerKeys {
+            expectEqual(outcome.accountState, .staged, "\(label): A's own auxiliary state activates for A")
+        }
+        expect(isConfigurationPreflight(relaunched.authenticationGateState),
+               "\(label) [P12-003]: \(signer)'s sign-in heads for \(signer)'s initial sync (got \(relaunched.authenticationGateState))")
+        // The sync's completion (an empty cloud here): its backfill queues
+        // none of A's legacy records (Task 9b review M1).
+        if isConfigurationPreflight(relaunched.authenticationGateState) {
+            relaunched.testMarkInitialSyncCompleted(subject: subject)
+            expect(!device.queuedRecordIDs.contains("rn-a-1"),
+                   "\(label): \(signer)'s initial-sync backfill queues none of the RN-era records (queued: \(device.queuedRecordIDs))")
+        }
+    }
+    expectEqual(relaunched.customers.map(\.id), [], "\(label): the sign-in shows none of the RN-era local records")
+
+    let later = try device.launch()
+    expectEqual(later.customers.map(\.id), [], "\(label): a later launch imports nothing")
+    expectEqual(device.journalEntryCount, journalEntries, "\(label): a later launch writes no journal entry")
+}
+
+/// P12-003's boundary: a snapshot lost with no account scrub still reads as
+/// a lost migrated snapshot (writes blocked, "Try again" too, and a sign-in
+/// stops at the local-recovery block). Only the scrub's own record makes an
+/// empty workspace after a completed migration legitimate.
+@MainActor
+func testLostSnapshotStillBlocks() async throws {
+    let label = "lost snapshot"
+    resetHostKeychain()
+    let device = try FixtureDevice("lost-snapshot", ownerKeys: false)
+    defer { device.cleanUp() }
+    _ = try migrateFirstLaunch(device, label)
+    for url in [device.storeURL, device.storeURL.appendingPathExtension("backup")] where exists(url) {
+        try FileManager.default.removeItem(at: url)
+    }
+    expect(!exists(device.scrubClearedMarkerURL), "\(label): sanity: no scrub ran")
+
+    let relaunched = try device.launch()
+    expectEqual(relaunched.launchMigrationNotice, .failed, "\(label): the relaunch reports the lost migrated snapshot")
+    expect(relaunched.isLegacyMigrationBlocked, "\(label): the relaunch blocks local writes")
+    expectEqual(relaunched.customers.map(\.id), [], "\(label): the relaunch imports nothing")
+    relaunched.retryLegacyMigration()
+    expect(relaunched.isLegacyMigrationBlocked && relaunched.launchMigrationNotice == .failed,
+           "\(label): \"Try again\" keeps the block")
     let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
     relaunched.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
-    expect(relaunched.authenticationGateState != .accountMismatch, "\(label): B's sign-in is not gated by A's data")
-    // Observed, a separate finding (not P12-001, reported to the controller):
-    // B's first sign-in after that relaunch stops at the local-recovery block.
     expect(isLocalRecoveryPreflight(relaunched.authenticationGateState, "missing-migrated-snapshot"),
-           "\(label) [separate finding]: B's sign-in stops at the missing-migrated-snapshot block (got \(relaunched.authenticationGateState))")
-    expectEqual(relaunched.customers.map(\.id), [], "\(label): B sees none of A's records")
-    expectEqual(relaunched.syncStatus.pendingCount, 0, "\(label): nothing of A's is queued under B")
+           "\(label): a sign-in stops at the missing-migrated-snapshot block (got \(relaunched.authenticationGateState))")
+}
 
-    let bLaunch = try device.launch()
-    expectEqual(bLaunch.customers.map(\.id), [], "\(label): B's relaunch imports nothing")
-    expectEqual(device.journalEntryCount, journalEntries, "\(label): B's relaunch writes no journal entry")
+/// The scrub's record lasts only until the next save: once the signed-in
+/// account has saved a workspace, losing that snapshot blocks again.
+@MainActor
+func testSaveEndsTheScrubClearedState() async throws {
+    let label = "save after sign-out"
+    resetHostKeychain()
+    let device = try FixtureDevice("save-after-signout", ownerKeys: false)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    try await first.signOut(revokeRemote: false)
+
+    let relaunched = try device.launch()
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    relaunched.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    expect(relaunched.upsert(Customer(name: "Saved After Sign-In")),
+           "\(label) [P12-003]: the signed-out workspace accepts the next account's write")
+    expect(exists(device.storeURL), "\(label): the write saves a snapshot")
+    expect(!exists(device.scrubClearedMarkerURL), "\(label) [P12-003]: the save ends the scrub-cleared state")
+
+    for url in [device.storeURL, device.storeURL.appendingPathExtension("backup")] where exists(url) {
+        try FileManager.default.removeItem(at: url)
+    }
+    let lost = try device.launch()
+    expectEqual(lost.launchMigrationNotice, .failed, "\(label) [P12-003]: a snapshot lost after that save blocks again")
+    expect(lost.isLegacyMigrationBlocked, "\(label) [P12-003]: …and blocks local writes")
+}
+
+/// A sign-out stopped part-way stays pending (its scrub marker), and the
+/// launch or Retry that finishes it records the cleared workspace, so the
+/// launch after an interrupted sign-out is never blocked as a lost snapshot.
+@MainActor
+func testInterruptedSignOutRelaunchesCleanly() async throws {
+    for stage in ["marker only", "snapshot removed", "launch scrub failed"] {
+        let label = "interrupted sign-out (\(stage))"
+        resetHostKeychain()
+        let device = try FixtureDevice("interrupted-\(stage.replacingOccurrences(of: " ", with: "-"))", ownerKeys: false)
+        defer { device.cleanUp() }
+        _ = try migrateFirstLaunch(device, label)
+        let repository = Canonical.SnapshotRepository(primaryURL: device.storeURL)
+        try repository.beginAccountScrub(scope: .live)
+        if stage != "marker only" { try repository.removeLiveAccountData() }
+
+        if stage == "launch scrub failed" {
+            try device.group.blockLock()
+            let blocked = try device.launch()
+            expect(blocked.isAccountScrubBlocked, "\(label): sanity: the launch's scrub fails and blocks")
+            expect(!blocked.isLegacyMigrationBlocked && blocked.launchMigrationNotice == nil,
+                   "\(label): it is blocked as the scrub, not as a lost snapshot")
+            expect(exists(device.scrubMarkerURL), "\(label): the sign-out stays pending")
+            try device.group.unblockLock()
+            blocked.retryAccountScrub()
+            expect(!blocked.isAccountScrubBlocked && !exists(device.scrubMarkerURL), "\(label): Retry finishes the sign-out")
+            expect(!blocked.isLegacyMigrationBlocked && blocked.launchMigrationNotice == nil,
+                   "\(label) [P12-003]: Retry leaves the app signed out and usable")
+        }
+
+        let relaunched = try device.launch()
+        expect(!relaunched.isAccountScrubBlocked && !exists(device.scrubMarkerURL), "\(label): the sign-out is finished")
+        expect(!exists(device.storeURL), "\(label): the snapshot is gone")
+        expect(relaunched.launchMigrationNotice == nil && !relaunched.isLegacyMigrationBlocked,
+               "\(label) [P12-003]: the next launch is an ordinary signed-out launch (notice \(String(describing: relaunched.launchMigrationNotice)))")
+        expect(device.journalComplete, "\(label): the journal stays complete")
+        expectEqual(relaunched.customers.map(\.id), [], "\(label): nothing is imported")
+        expect(nativeSession() == nil, "\(label): the session is cleared")
+        let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
+        relaunched.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
+        expect(isConfigurationPreflight(relaunched.authenticationGateState),
+               "\(label) [P12-003]: B's sign-in heads for B's initial sync (got \(relaunched.authenticationGateState))")
+    }
+}
+
+/// Task 9 (L267.a) in the signed-out state: the launch that skips the
+/// migration still re-protects the published legacy backup copy, once.
+@MainActor
+func testSignedOutLaunchReprotects() async throws {
+    let label = "signed-out re-protect"
+    resetHostKeychain()
+    let device = try FixtureDevice("signout-reprotect", ownerKeys: false)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    try await first.signOut(revokeRemote: false)
+
+    final class Counter { var count = 0 }
+    let counter = Counter()
+    let repository = Canonical.SnapshotRepository(
+        primaryURL: device.storeURL,
+        legacyFileEnumerator: { url in
+            counter.count += 1
+            return FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+        }
+    )
+    let relaunched = try device.launch(repository: repository)
+    expect(!relaunched.isLegacyMigrationBlocked && relaunched.launchMigrationNotice == nil,
+           "\(label) [P12-003]: the signed-out launch is not blocked")
+    expectEqual(counter.count, 1, "\(label): the signed-out launch re-protects the legacy backup copy exactly once")
 }
 
 // MARK: - 3. Recovery exits and the account switch
@@ -676,7 +879,15 @@ struct LegacyReimportTests {
             try testPendingDeletionFinishedAtLaunch()
             try await testEraseFailureKeepsDeletionPending()
             try testEraser()
-            try await testSignOutThenRelaunch()
+            for ownerKeys in [false, true] {
+                for signer in ["A", "B"] {
+                    try await testSignOutThenRelaunch(ownerKeys: ownerKeys, signer: signer)
+                }
+            }
+            try await testLostSnapshotStillBlocks()
+            try await testSaveEndsTheScrubClearedState()
+            try await testInterruptedSignOutRelaunchesCleanly()
+            try await testSignedOutLaunchReprotects()
             try await testWorkspaceRetainingExits()
         } catch {
             failures += 1
