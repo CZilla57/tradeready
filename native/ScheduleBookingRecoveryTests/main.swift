@@ -15,8 +15,17 @@ import FoundationNetworking
 // Each scenario stages its item through the real flow (the server change
 // succeeds, the local snapshot save fails), relaunches a fresh AppStore on
 // the same files, activates it as the app does (`performForegroundRefresh`),
-// and then records what the owner sees, what the cloud rows hold, what the
+// and then checks what the owner sees, what the cloud rows hold, what the
 // server holds and whether the item is still on the device.
+//
+// Characterized before the fix (the test commit before it): nothing
+// finished a mirror, so the display copy and the cloud row kept the old
+// token or flag and the item stayed; after a lost first Create the owner was
+// stuck on this device; a proof outlived a declined, confirmed or deleted
+// request. Since the fix, recovery runs for the verified owner at launch
+// (the gate-open points) and on every activation: a mirror is re-applied
+// only after a fresh `status` read proves it current (never a server
+// mutation), and a proof is kept only while a resolve can still succeed.
 //
 // Everything here is production code except the network: the real AppStore,
 // queue, sync coordinator, push transport and delta pull in front of the
@@ -211,6 +220,14 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
         _ = try? await data.data(for: request)
     }
 
+    /// Another device's settings save (its own mirror of a link change).
+    func upsertSettings(_ record: [String: Any]) async {
+        var request = URLRequest(url: URL(string: "https://project.supabase.co/rest/v1/settings")!)
+        request.httpMethod = "POST"
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["user_id": userID, "data": record])
+        _ = try? await data.data(for: request)
+    }
+
     func settingsRow() async -> [String: Any]? {
         var request = URLRequest(url: URL(string: "https://project.supabase.co/rest/v1/settings?user_id=eq.\(userID)")!)
         request.httpMethod = "GET"
@@ -373,6 +390,8 @@ final class Device {
         store.testSeedNativeSignedInOwner(subject: subject, binding: binding)
         store.scheduleBookingTestCredentials = NativeSyncCredentials(subject: subject, sessionBytes: Self.session)
         store.scheduleBookingSessionOverride = Self.session
+        store.scheduleBookingRecoveryAdminService = bookingService
+        store.scheduleBookingRecoveryPortalService = portalService
         store.testMarkInitialSyncCompleted(subject: subject)
         for _ in 0..<20 { await Task.yield() }
         connect(store, subject: subject)
@@ -408,11 +427,18 @@ final class Device {
         )
     }
 
-    /// The pending-work items on the device, every owner's.
-    var items: [NativeScheduleBookingPendingWork] {
+    var workStore: NativeScheduleBookingPendingWorkStore {
         NativeScheduleBookingPendingWorkStore(
             fileURL: dir.appendingPathComponent("schedule-booking-pending-work.json")
-        ).load()
+        )
+    }
+
+    /// The pending-work items on the device, every owner's.
+    var items: [NativeScheduleBookingPendingWork] { workStore.load() }
+
+    func stage(_ kind: NativeScheduleBookingPendingWork.Kind, binding: String? = nil) {
+        do { try workStore.stage(.init(kind: kind, ownerBinding: binding ?? self.binding)) }
+        catch { print("FAIL: fixture: the item is staged (\(error))") }
     }
 
     var disk: Canonical.Snapshot? { (try? repository().load())?.snapshot }
@@ -450,6 +476,7 @@ func linkScreenTitle(shareable: Bool, serverEnabled: Bool?, localToken: String?)
     return localToken == nil ? "No link yet" : "Needs recovery"
 }
 
+
 // MARK: - Tests
 
 @main
@@ -472,7 +499,7 @@ struct ScheduleBookingRecoveryTests {
         }
     }
 
-    /// A line for the characterization record (the evidence file keeps it).
+    /// A line for the evidence record.
     @MainActor
     static func observed(_ id: String, _ text: String) {
         print("OBSERVED \(id): \(text)")
@@ -480,6 +507,9 @@ struct ScheduleBookingRecoveryTests {
 
     @MainActor
     static func main() async throws {
+        let root = CommandLine.arguments.count > 1
+            ? URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+            : URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         expectEqual(TimeZone.current.identifier, "America/Phoenix", "runner: TZ=America/Phoenix")
 
         await bookingMintLost()
@@ -488,8 +518,18 @@ struct ScheduleBookingRecoveryTests {
         await portalRotateLost()
         await portalDisableLost()
         await portalMintLost()
+        await supersededMirrorIsDropped()
+        await mirrorsThatCanNeverApply()
+        await networkDownKeepsTheItem()
         await rescheduleProofOutcomes()
+        await terminalProofCleanup()
+        await anotherAccountsWorkIsNeverTouched()
+        await accountChangeDuringTheStatusRead()
+        await closedGateDoesNothing()
+        await recoveryIsIdempotent()
+        await launchGateOpenRecovers()
         await rescheduleDraftFromTheRequestRows()
+        sources(root)
 
         if failures == 0 {
             print("PASS: schedule booking recovery tests (\(checks) checks)")
@@ -503,11 +543,16 @@ struct ScheduleBookingRecoveryTests {
 
     /// Signs in, pushes the workspace, runs `stage` with snapshot saves
     /// failing (the server change succeeds, the local save does not), then
-    /// relaunches on the same files and activates the new AppStore the way
-    /// `TradeReadyNativeApp` does on `.active` (`performForegroundRefresh`),
-    /// followed by one more push pass so anything queued reaches the cloud.
+    /// relaunches on the same files. `beforeActivation` runs on the new
+    /// AppStore before it is activated the way `TradeReadyNativeApp` does on
+    /// `.active` (`performForegroundRefresh`); one more push pass follows so
+    /// anything queued reaches the cloud.
     @MainActor
-    static func stageThenRelaunch(_ d: Device, _ id: String, stage: (AppStore) async -> String) async -> AppStore {
+    static func stageThenRelaunch(
+        _ d: Device, _ id: String,
+        beforeActivation: (AppStore) async -> Void = { _ in },
+        stage: (AppStore) async -> String
+    ) async -> AppStore {
         let first = d.launch()
         await d.signIn(first)
         await d.sync()
@@ -520,101 +565,110 @@ struct ScheduleBookingRecoveryTests {
         d.links.resetLog()
         let relaunched = d.launch()
         await d.signIn(relaunched)
+        await beforeActivation(relaunched)
         await relaunched.performForegroundRefresh()
         await d.sync()
         return relaunched
+    }
+
+    @MainActor
+    static func bookingScreen(_ store: AppStore, _ d: Device) async -> String {
+        let reconciled = await store.reconcileBookingLinkForSharing(adminService: d.bookingService)
+        return linkScreenTitle(shareable: reconciled.shareURL != nil, serverEnabled: reconciled.status?.enabled,
+                               localToken: d.localBookingLink?.token)
+    }
+
+    @MainActor
+    static func bookingDevice(_ tag: String, link: (token: String, enabled: Bool)?) -> Device {
+        let d = Device(tag, settings: fixtureSettings(bookingLink: link))
+        if let link {
+            d.links.bookingToken = link.token
+            d.links.bookingEnabled = link.enabled
+            d.links.bookingRevision = 1
+        }
+        return d
     }
 
     // MARK: B. Booking link
 
     /// B1: the first Create's local save fails. The server has the link; the
     /// raw token exists only in the staged item (hash-only storage, §1.4).
+    /// Characterized: "No link yet" for good (Create answered already_exists).
     @MainActor
     static func bookingMintLost() async {
         let id = "B1 booking mint"
-        let d = Device("b1")
+        let d = bookingDevice("b1", link: nil)
         defer { d.cleanup() }
         let store = await stageThenRelaunch(d, id) { store in
             String(describing: await store.administerBookingLink(action: .mint, adminService: d.bookingService))
         }
         let serverToken = d.links.bookingToken
         expect(serverToken != nil && d.links.bookingEnabled, "\(id): the server has an enabled link")
-        let local = d.localBookingLink
+        let reads = d.links.statusReads
         let cloud = await d.cloudBookingLink()
-        let reconciled = await store.reconcileBookingLinkForSharing(adminService: d.bookingService)
-        let title = linkScreenTitle(shareable: reconciled.shareURL != nil, serverEnabled: reconciled.status?.enabled,
-                                    localToken: local?.token)
-        observed(id, "local=\(local?.token == nil ? "none" : "token") cloud=\(cloud.token == nil ? "none" : "token") "
-                 + "items=\(d.items.count) screen=\(title) mutationsAfterRelaunch=\(d.links.mutations)")
-        expectEqual(d.links.mutations, [], "\(id): nothing after the relaunch changes the server")
-        expect(local == nil, "\(id) [P12-013 characterized]: the display copy has no link")
-        expect(cloud.token == nil, "\(id) [P12-013 characterized]: the cloud settings row has no link")
-        expectEqual(d.items.count, 1, "\(id) [P12-013 characterized]: the item stays on the device")
-        expectEqual(title, "No link yet", "\(id) [P12-013 characterized]: the owner sees No link yet")
-        // The screen offers Create only (no local token). Create is refused:
-        // the owner cannot reach the existing link from this device.
-        let create = await store.administerBookingLink(action: .mint, adminService: d.bookingService)
-        observed(id, "Create after the relaunch -> \(create)")
-        expectEqual(create, .alreadyExists, "\(id) [P12-013 characterized]: Create answers already_exists")
-        expect(d.localBookingLink == nil, "\(id) [P12-013 characterized]: …and the display copy still has no link")
-        expectEqual(d.links.bookingToken, serverToken, "\(id): the refused Create changes nothing on the server")
+        let title = await bookingScreen(store, d)
+        observed(id, "local=\(d.localBookingLink?.token == serverToken ? "server's" : "other") "
+                 + "cloud=\(cloud.token == serverToken ? "server's" : "other") items=\(d.items.count) screen=\(title)")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expectEqual(reads, 1, "\(id): recovery read the link status once")
+        expectEqual(d.localBookingLink?.token, serverToken, "\(id) [P12-013]: the display copy has the server's link")
+        expectEqual(d.localBookingLink?.enabled, true, "\(id) [P12-013]: …enabled")
+        expectEqual(cloud.token, serverToken, "\(id) [P12-013]: the cloud settings row has it too")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the item is removed")
+        expectEqual(title, "Published", "\(id) [P12-013]: the owner sees the verified link")
+        let readiness = store.rollbackReadiness()
+        expectEqual(readiness.bookingWorkCount, 0, "\(id): the rollback check counts no booking work")
+        expect(!readiness.notes.contains(.bookingWorkPending), "\(id): …and has no booking-work note")
     }
 
     /// B2: a confirmed Rotate's local save fails. The old link is dead.
+    /// Characterized: the dead token stayed, locally and in the cloud row.
     @MainActor
     static func bookingRotateLost() async {
         let id = "B2 booking rotate"
-        let d = Device("b2", settings: fixtureSettings(bookingLink: (bookingTokenA, true)))
+        let d = bookingDevice("b2", link: (bookingTokenA, true))
         defer { d.cleanup() }
-        d.links.bookingToken = bookingTokenA
-        d.links.bookingEnabled = true
-        d.links.bookingRevision = 1
         let store = await stageThenRelaunch(d, id) { store in
             String(describing: await store.administerBookingLink(action: .rotate, adminService: d.bookingService))
         }
         let serverToken = d.links.bookingToken
         expect(serverToken != nil && serverToken != bookingTokenA, "\(id): the server has the new link")
-        let local = d.localBookingLink
         let cloud = await d.cloudBookingLink()
-        let reconciled = await store.reconcileBookingLinkForSharing(adminService: d.bookingService)
-        let title = linkScreenTitle(shareable: reconciled.shareURL != nil, serverEnabled: reconciled.status?.enabled,
-                                    localToken: local?.token)
-        observed(id, "local=\(local?.token == bookingTokenA ? "old" : "other") cloud=\(cloud.token == bookingTokenA ? "old" : "other") "
-                 + "items=\(d.items.count) screen=\(title)")
-        expectEqual(d.links.mutations, [], "\(id): nothing after the relaunch changes the server")
-        expectEqual(local?.token, bookingTokenA, "\(id) [P12-013 characterized]: the display copy keeps the dead token")
-        expectEqual(cloud.token, bookingTokenA, "\(id) [P12-013 characterized]: the cloud settings row keeps the dead token")
-        expectEqual(d.items.count, 1, "\(id) [P12-013 characterized]: the item stays on the device")
-        expectEqual(title, "Needs recovery", "\(id) [P12-013 characterized]: the owner is told to rotate again")
-        expect(reconciled.shareURL == nil, "\(id): the dead token is never offered for sharing")
+        let title = await bookingScreen(store, d)
+        observed(id, "local=\(d.localBookingLink?.token == serverToken ? "new" : "other") "
+                 + "cloud=\(cloud.token == serverToken ? "new" : "other") items=\(d.items.count) screen=\(title)")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expectEqual(d.localBookingLink?.token, serverToken, "\(id) [P12-013]: the display copy has the new token")
+        expectEqual(cloud.token, serverToken, "\(id) [P12-013]: the cloud settings row has the new token")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the item is removed")
+        expectEqual(title, "Published", "\(id) [P12-013]: the owner sees the verified link")
+        let settings = d.disk?.payload.settings
+        expect(settings?.businessName == "Ada Electric" && settings?.laborRate == 95,
+               "\(id): only the link's display fields changed")
     }
 
     /// B3: a Disable's local save fails (a token-less mirror).
+    /// Characterized: the display copy and the cloud row still said enabled.
     @MainActor
     static func bookingDisableLost() async {
         let id = "B3 booking disable"
-        let d = Device("b3", settings: fixtureSettings(bookingLink: (bookingTokenA, true)))
+        let d = bookingDevice("b3", link: (bookingTokenA, true))
         defer { d.cleanup() }
-        d.links.bookingToken = bookingTokenA
-        d.links.bookingEnabled = true
-        d.links.bookingRevision = 1
         let store = await stageThenRelaunch(d, id) { store in
             String(describing: await store.administerBookingLink(action: .setEnabled, enabled: false,
                                                                  adminService: d.bookingService))
         }
         expect(!d.links.bookingEnabled, "\(id): the server link is disabled")
-        let local = d.localBookingLink
         let cloud = await d.cloudBookingLink()
-        let reconciled = await store.reconcileBookingLinkForSharing(adminService: d.bookingService)
-        let title = linkScreenTitle(shareable: reconciled.shareURL != nil, serverEnabled: reconciled.status?.enabled,
-                                    localToken: local?.token)
-        observed(id, "local.enabled=\(local?.enabled.description ?? "nil") cloud.enabled=\(cloud.enabled?.description ?? "nil") "
-                 + "items=\(d.items.count) screen=\(title)")
-        expectEqual(d.links.mutations, [], "\(id): nothing after the relaunch changes the server")
-        expectEqual(local?.enabled, true, "\(id) [P12-013 characterized]: the display copy still says enabled")
-        expectEqual(cloud.enabled, true, "\(id) [P12-013 characterized]: the cloud settings row still says enabled")
-        expectEqual(d.items.count, 1, "\(id) [P12-013 characterized]: the item stays on the device")
-        expectEqual(title, "Link ready", "\(id): the screen reads the server (disabled) after its status read")
+        let title = await bookingScreen(store, d)
+        observed(id, "local.enabled=\(d.localBookingLink?.enabled.description ?? "nil") "
+                 + "cloud.enabled=\(cloud.enabled?.description ?? "nil") items=\(d.items.count) screen=\(title)")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expectEqual(d.localBookingLink?.enabled, false, "\(id) [P12-013]: the display copy says disabled")
+        expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id): …and keeps its token")
+        expectEqual(cloud.enabled, false, "\(id) [P12-013]: the cloud settings row says disabled")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the item is removed")
+        expectEqual(title, "Link ready", "\(id): the screen shows the verified, disabled link")
     }
 
     // MARK: P. Customer portal link
@@ -628,13 +682,14 @@ struct ScheduleBookingRecoveryTests {
     }
 
     @MainActor
-    static func portalScreen(_ store: AppStore, _ d: Device) async -> (title: String, shareable: Bool) {
+    static func portalScreen(_ store: AppStore, _ d: Device) async -> String {
         let reconciled = await store.reconcilePortalLinkForSharing(customerID: "cust-1", portalService: d.portalService)
-        return (linkScreenTitle(shareable: reconciled.shareURL != nil, serverEnabled: reconciled.status?.enabled,
-                                localToken: d.localPortal?.token), reconciled.shareURL != nil)
+        return linkScreenTitle(shareable: reconciled.shareURL != nil, serverEnabled: reconciled.status?.enabled,
+                               localToken: d.localPortal?.token)
     }
 
     /// P1: a confirmed portal Rotate's local save fails.
+    /// Characterized: the dead token stayed, locally and in the cloud row.
     @MainActor
     static func portalRotateLost() async {
         let id = "P1 portal rotate"
@@ -647,17 +702,19 @@ struct ScheduleBookingRecoveryTests {
         let serverToken = d.links.portals["cust-1"]?.token
         expect(serverToken != nil && serverToken != portalTokenC, "\(id): the server has the new link")
         let cloud = d.cloudPortal()
-        let screen = await portalScreen(store, d)
-        observed(id, "local=\(d.localPortal?.token == portalTokenC ? "old" : "other") cloud=\(cloud.token == portalTokenC ? "old" : "other") "
-                 + "items=\(d.items.count) screen=\(screen.title)")
-        expectEqual(d.links.mutations, [], "\(id): nothing after the relaunch changes the server")
-        expectEqual(d.localPortal?.token, portalTokenC, "\(id) [P12-013 characterized]: the display copy keeps the dead token")
-        expectEqual(cloud.token, portalTokenC, "\(id) [P12-013 characterized]: the cloud customer row keeps the dead token")
-        expectEqual(d.items.count, 1, "\(id) [P12-013 characterized]: the item stays on the device")
-        expectEqual(screen.title, "Needs recovery", "\(id) [P12-013 characterized]: the owner is told to rotate again")
+        let title = await portalScreen(store, d)
+        observed(id, "local=\(d.localPortal?.token == serverToken ? "new" : "other") "
+                 + "cloud=\(cloud.token == serverToken ? "new" : "other") items=\(d.items.count) screen=\(title)")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expectEqual(d.localPortal?.token, serverToken, "\(id) [P12-013]: the display copy has the new token")
+        expectEqual(cloud.token, serverToken, "\(id) [P12-013]: the cloud customer row has the new token")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the item is removed")
+        expectEqual(title, "Published", "\(id) [P12-013]: the owner sees the verified link")
+        expectEqual(d.disk?.payload.customers?.first?.name, "Nora", "\(id): only the portal's display fields changed")
     }
 
     /// P2: a portal Disable's local save fails (a token-less mirror).
+    /// Characterized: the display copy and the cloud row still said enabled.
     @MainActor
     static func portalDisableLost() async {
         let id = "P2 portal disable"
@@ -669,16 +726,19 @@ struct ScheduleBookingRecoveryTests {
         }
         expectEqual(d.links.portals["cust-1"]?.enabled, false, "\(id): the server portal is disabled")
         let cloud = d.cloudPortal()
-        let screen = await portalScreen(store, d)
-        observed(id, "local.enabled=\(d.localPortal?.enabled.description ?? "nil") cloud.enabled=\(cloud.enabled?.description ?? "nil") "
-                 + "items=\(d.items.count) screen=\(screen.title)")
-        expectEqual(d.links.mutations, [], "\(id): nothing after the relaunch changes the server")
-        expectEqual(d.localPortal?.enabled, true, "\(id) [P12-013 characterized]: the display copy still says enabled")
-        expectEqual(cloud.enabled, true, "\(id) [P12-013 characterized]: the cloud customer row still says enabled")
-        expectEqual(d.items.count, 1, "\(id) [P12-013 characterized]: the item stays on the device")
+        let title = await portalScreen(store, d)
+        observed(id, "local.enabled=\(d.localPortal?.enabled.description ?? "nil") "
+                 + "cloud.enabled=\(cloud.enabled?.description ?? "nil") items=\(d.items.count) screen=\(title)")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expectEqual(d.localPortal?.enabled, false, "\(id) [P12-013]: the display copy says disabled")
+        expectEqual(d.localPortal?.token, portalTokenC, "\(id): …and keeps its token")
+        expectEqual(cloud.enabled, false, "\(id) [P12-013]: the cloud customer row says disabled")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the item is removed")
     }
 
     /// P3: the first portal Create's local save fails.
+    /// Characterized: "No link yet", Create answered needs-explicit-rotate
+    /// and the screen hides Rotate without a local token.
     @MainActor
     static func portalMintLost() async {
         let id = "P3 portal mint"
@@ -688,21 +748,96 @@ struct ScheduleBookingRecoveryTests {
             String(describing: await store.administerPortalLink(customerID: "cust-1", action: .mint,
                                                                 portalService: d.portalService))
         }
-        expect(d.links.portals["cust-1"] != nil, "\(id): the server has the portal link")
+        let serverToken = d.links.portals["cust-1"]?.token
+        expect(serverToken != nil, "\(id): the server has the portal link")
         let cloud = d.cloudPortal()
-        let screen = await portalScreen(store, d)
-        observed(id, "local=\(d.localPortal == nil ? "none" : "token") cloud=\(cloud.token == nil ? "none" : "token") "
-                 + "items=\(d.items.count) screen=\(screen.title)")
-        expect(d.localPortal == nil, "\(id) [P12-013 characterized]: the display copy has no link")
-        expect(cloud.token == nil, "\(id) [P12-013 characterized]: the cloud customer row has no link")
-        expectEqual(d.items.count, 1, "\(id) [P12-013 characterized]: the item stays on the device")
-        expectEqual(screen.title, "No link yet", "\(id) [P12-013 characterized]: the owner sees No link yet")
-        // Create is refused and the only way on is Rotate, which the screen
-        // hides while there is no local token (NativeCustomerPortalView).
-        let create = await store.administerPortalLink(customerID: "cust-1", action: .mint, portalService: d.portalService)
-        observed(id, "Create after the relaunch -> \(create)")
-        expectEqual(create, .needsExplicitRotate, "\(id) [P12-013 characterized]: Create answers needs-explicit-rotate")
-        expect(d.localPortal == nil, "\(id) [P12-013 characterized]: …and the display copy still has no link")
+        let title = await portalScreen(store, d)
+        observed(id, "local=\(d.localPortal?.token == serverToken ? "server's" : "other") "
+                 + "cloud=\(cloud.token == serverToken ? "server's" : "other") items=\(d.items.count) screen=\(title)")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expectEqual(d.localPortal?.token, serverToken, "\(id) [P12-013]: the display copy has the server's link")
+        expectEqual(cloud.token, serverToken, "\(id) [P12-013]: the cloud customer row has it too")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the item is removed")
+        expectEqual(title, "Published", "\(id) [P12-013]: the owner sees the verified link")
+    }
+
+    // MARK: D. A mirror the server no longer backs
+
+    /// The staged token was replaced by a later rotation on another device
+    /// (whose own mirror reached the cloud row). The status read says the
+    /// staged token is not current, so it is never applied: the item is
+    /// dropped and the display copy is the other device's current link.
+    @MainActor
+    static func supersededMirrorIsDropped() async {
+        let id = "D superseded mirror"
+        let d = bookingDevice("d", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let store = await stageThenRelaunch(d, id, beforeActivation: { _ in
+            // Another device rotates and saves its settings.
+            let later = d.links.freshToken()
+            d.links.bookingToken = later
+            d.links.bookingRevision += 1
+            if var row = await d.links.settingsRow() {
+                row["bookingLink"] = ["token": later, "enabled": true]
+                await d.links.upsertSettings(row)
+            }
+        }) { store in
+            String(describing: await store.administerBookingLink(action: .rotate, adminService: d.bookingService))
+        }
+        let current = d.links.bookingToken
+        let staged = d.items.first
+        observed(id, "local=\(d.localBookingLink?.token == current ? "current" : "other") items=\(d.items.count)")
+        expectEqual(d.links.statusReads >= 1, true, "\(id): recovery read the link status")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expect(staged == nil, "\(id) [P12-013]: the item the server no longer backs is removed")
+        expectEqual(d.localBookingLink?.token, current, "\(id): the display copy is the other device's current link")
+        expectEqual(await bookingScreen(store, d), "Published", "\(id): …which the screen verifies")
+    }
+
+    // MARK: M. Mirrors that can never apply (no network)
+
+    /// A flag-only booking item with no local link, a portal item for a
+    /// customer no longer on the device, and a portal item for a customer
+    /// the server does not know (404): nothing truthful to mirror, so each
+    /// is removed and nothing is written.
+    @MainActor
+    static func mirrorsThatCanNeverApply() async {
+        let id = "M mirrors that cannot apply"
+        let d = Device("m", customers: [fixtureCustomer(portal: (portalTokenC, true))])
+        defer { d.cleanup() }
+        let store = d.launch()
+        await d.signIn(store)
+        await d.sync()
+        d.stage(.bookingMirror(token: nil, enabled: true, revision: 2, operationId: "op-flag"))
+        d.stage(.portalMirror(customerId: "cust-gone", token: d.links.freshToken(), enabled: true, operationId: "op-gone"))
+        d.stage(.portalMirror(customerId: "cust-1", token: nil, enabled: false, operationId: "op-unknown"))
+        d.links.resetLog()
+        await store.performForegroundRefresh()
+        observed(id, "items=\(d.items.count) reads=\(d.links.log)")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: all three are removed")
+        expectEqual(d.links.log, ["portal/status"], "\(id): only the known customer's status is read (404 here)")
+        expect(d.localBookingLink == nil, "\(id): no booking link is invented")
+        expectEqual(d.localPortal?.enabled, true, "\(id): the portal the server does not know is left as it was")
+        expectEqual(d.queued("settings") + d.queued("customers"), 0, "\(id): nothing is queued")
+    }
+
+    // MARK: N. The link service cannot be reached
+
+    /// A read that fails keeps the item for the next activation.
+    @MainActor
+    static func networkDownKeepsTheItem() async {
+        let id = "N link service unreachable"
+        let d = bookingDevice("n", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let store = await stageThenRelaunch(d, id, beforeActivation: { _ in d.links.unreachable = true }) { store in
+            String(describing: await store.administerBookingLink(action: .rotate, adminService: d.bookingService))
+        }
+        expectEqual(d.items.count, 1, "\(id): the item is kept while the status read fails")
+        expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id): nothing is applied")
+        d.links.unreachable = false
+        await store.performForegroundRefresh()
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the next activation finishes it")
+        expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id) [P12-013]: …with the server's token")
     }
 
     // MARK: R. Reschedule proofs
@@ -725,7 +860,8 @@ struct ScheduleBookingRecoveryTests {
     }
 
     /// Prepares the reschedule (the proof is staged), produces the outcome,
-    /// then relaunches and activates.
+    /// then relaunches and activates. Characterized: the proof stayed in
+    /// every case.
     @MainActor
     static func rescheduleProof(_ proofCase: ProofCase) async {
         let id = proofCase.rawValue
@@ -791,39 +927,259 @@ struct ScheduleBookingRecoveryTests {
         let local = d.localRequestStatus ?? "gone"
         let kept = d.items.count
         observed(id, "outcome=\(outcome) server=\(server) local=\(local) proofKept=\(kept == 1)")
-        expectEqual(d.links.mutations, [], "\(id): nothing after the relaunch sends a respond call")
+        expectEqual(d.links.log, [], "\(id): recovery sends nothing for a proof")
         switch proofCase {
         case .needsReviewDeclinedElsewhere:
             expectEqual(outcome, "needsReview(currentStatus: \"declined\")", "\(id): sanity: the outcome")
             expectEqual(local, "declined", "\(id): the pull brings the declined request")
-            expectEqual(kept, 1, "\(id) [P12-013 characterized]: the proof outlives the request")
+            expectEqual(kept, 0, "\(id) [P12-013]: no resolve can succeed: the proof is removed")
         case .needsReviewScheduleChanged:
             expectEqual(outcome, "needsReview(currentStatus: \"reschedule_requested\")", "\(id): sanity: the outcome")
             expectEqual(d.disk?.payload.jobs?.first?.scheduledDate, "2026-09-24", "\(id): the pull brings the other schedule")
-            expectEqual(kept, 1, "\(id) [P12-013 characterized]: the proof for the old schedule stays")
+            expectEqual(kept, 0, "\(id) [P12-013]: the proof no longer matches the job: removed")
         case .missing:
             expectEqual(outcome, "missing", "\(id): sanity: the outcome")
             expectEqual(local, "gone", "\(id): the pull removes the request")
-            expectEqual(kept, 1, "\(id) [P12-013 characterized]: the proof outlives the request")
+            expectEqual(kept, 0, "\(id) [P12-013]: the request is gone: the proof is removed")
         case .unknownOutcomeCommitted:
             expectEqual(outcome, "unknownOutcome", "\(id): sanity: the outcome")
             expectEqual(server, "confirmed", "\(id): the server confirmed")
             expectEqual(local, "confirmed", "\(id): the next pull brings the confirmed request")
-            expectEqual(kept, 1, "\(id) [P12-013 characterized]: the proof outlives the confirmation")
+            expectEqual(kept, 0, "\(id) [P12-013]: the request is confirmed: the proof is removed")
         case .unknownOutcomeNotCommitted:
             expectEqual(outcome, "unknownOutcome", "\(id): sanity: the outcome")
             expectEqual(local, "reschedule_requested", "\(id): the request still asks for a reschedule")
-            expectEqual(kept, 1, "\(id): the proof stays while a resolve can still succeed")
+            expectEqual(kept, 1, "\(id): the proof stays while a resolve can still succeed (the owner retries)")
+            expectEqual(relaunched.rollbackReadiness().bookingWorkCount, 1, "\(id): the rollback check counts it")
         case .failed:
             expectEqual(outcome, "failed(reason: \"rateLimited\")", "\(id): sanity: the outcome")
             expectEqual(local, "reschedule_requested", "\(id): the request still asks for a reschedule")
-            expectEqual(kept, 1, "\(id): the proof stays while a resolve can still succeed")
+            expectEqual(kept, 1, "\(id): the proof stays while a resolve can still succeed (the owner retries)")
         case .declineAfterAwaitingAck:
             expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false)", "\(id): sanity: the decline")
             expectEqual(server, "declined", "\(id): the server declined")
             expectEqual(local, "declined", "\(id): the local request is declined")
-            expectEqual(kept, 1, "\(id) [P12-013 characterized]: the proof outlives the declined request")
+            expectEqual(kept, 0, "\(id) [P12-013]: no resolve can succeed: the proof is removed")
         }
+    }
+
+    // MARK: T. Terminal-proof cleanup (local state only, no network)
+
+    @MainActor
+    static func terminalProofCleanup() async {
+        let proof = NativeScheduleProof(jobId: "job-1", updatedAt: writeStamp, date: "2026-09-23", start: "09:00")
+        var moved = fixtureJob()
+        moved.scheduledDate = "2026-09-23"
+        moved.scheduledStartTime = "09:00"
+        var elsewhere = moved
+        elsewhere.scheduledDate = "2026-09-30"
+        let cases: [(id: String, jobs: [Canonical.Job], requests: [Canonical.BookingRequest], offline: Bool, kept: Bool)] = [
+            ("T1 request not on the device", [moved], [], false, false),
+            ("T2 request declined", [moved], [fixtureRequest(status: "declined")], false, false),
+            ("T3 request confirmed", [moved], [fixtureRequest(status: "confirmed")], false, false),
+            ("T4 request cancelled", [moved], [fixtureRequest(status: "cancelled")], false, false),
+            ("T5 job rescheduled again", [elsewhere], [fixtureRequest()], false, false),
+            ("T6 job deleted", [], [fixtureRequest()], false, false),
+            ("T7 resolvable, job change acknowledged", [moved], [fixtureRequest()], false, true),
+            ("T8 resolvable, job change not yet acknowledged", [moved], [fixtureRequest()], true, true),
+        ]
+        for (index, c) in cases.enumerated() {
+            let d = Device("t\(index)", customers: [fixtureCustomer(portal: nil)], jobs: c.jobs, requests: c.requests)
+            defer { d.cleanup() }
+            let store = d.launch()
+            await d.signIn(store)
+            await d.sync()
+            d.stage(.rescheduleProof(requestId: "req-1", proof: proof, writeStamp: writeStamp))
+            // Another account's proof on the same device is its own (its
+            // boundary scrubs it): never touched here.
+            let other = String(repeating: "c", count: 64)
+            d.stage(.rescheduleProof(requestId: "req-other", proof: proof, writeStamp: writeStamp), binding: other)
+            if c.offline {
+                d.reach.online = false
+                _ = try? d.queue.enqueue(table: "jobs", op: .upsert, recordId: "job-1",
+                                     payload: .object(["id": .string("job-1")]))
+            }
+            d.links.resetLog()
+            await store.performForegroundRefresh()
+            let mine = d.items.filter { $0.ownerBinding == d.binding }.count
+            observed(c.id, "proofKept=\(mine == 1)")
+            expectEqual(mine, c.kept ? 1 : 0, "\(c.id) [P12-013]: \(c.kept ? "kept" : "removed")")
+            expectEqual(d.items.filter { $0.ownerBinding == other }.count, 1, "\(c.id): another account's proof is untouched")
+            expectEqual(d.links.log, [], "\(c.id): nothing is sent")
+        }
+    }
+
+    // MARK: G. Account boundaries
+
+    /// Account A's items on the device while B is signed in: B's activation
+    /// and an explicit recovery for A's binding read nothing and write
+    /// nothing, and A's items stay for A's own boundary to scrub.
+    @MainActor
+    static func anotherAccountsWorkIsNeverTouched() async {
+        let id = "G1 another account"
+        let d = bookingDevice("g1", link: nil)
+        defer { d.cleanup() }
+        let bindingA = String(repeating: "a", count: 64)
+        let tokenA = d.links.freshToken()
+        d.links.bookingToken = tokenA
+        d.links.bookingEnabled = true
+        d.stage(.bookingMirror(token: tokenA, enabled: true, revision: 1, operationId: "op-a"), binding: bindingA)
+        d.stage(.rescheduleProof(requestId: "req-1",
+                                 proof: NativeScheduleProof(jobId: "job-1", updatedAt: writeStamp, date: "2026-09-23", start: "09:00"),
+                                 writeStamp: writeStamp), binding: bindingA)
+        let before = d.items
+        let store = d.launch()
+        await d.signIn(store)   // B, the device's owner now
+        await d.sync()
+        d.links.resetLog()
+        await store.performForegroundRefresh()
+        let explicit = await store.recoverScheduleBookingPendingWork(ownerBinding: bindingA)
+        observed(id, "reads=\(d.links.log) items=\(d.items.count)")
+        expectEqual(d.links.log, [], "\(id): nothing is read for A")
+        expectEqual(d.items, before, "\(id): A's items are untouched")
+        expect(d.localBookingLink == nil, "\(id): A's token never reaches B's snapshot")
+        expectEqual(d.queued("settings"), 0, "\(id): …nor B's push queue")
+        expect(explicit.reappliedMirrors == 0 && explicit.retained == 0 && explicit.proofsReady.isEmpty
+               && explicit.proofsSuperseded.isEmpty, "\(id): an explicit recovery for A's binding does nothing")
+    }
+
+    /// The owner changes, or an account boundary passes and the same owner
+    /// is seeded again (only the account generation tells them apart),
+    /// while the recovery's status read is suspended: the pass stops,
+    /// applies nothing and keeps the item. The owner's next launch and
+    /// activation finish it.
+    @MainActor
+    static func accountChangeDuringTheStatusRead() async {
+        for boundary in ["sign-out", "boundary then the same owner"] {
+            let id = "G2 \(boundary) during the status read"
+            let d = bookingDevice("g2-\(boundary.count)", link: (bookingTokenA, true))
+            defer { d.cleanup() }
+            let first = d.launch()
+            await d.signIn(first)
+            await d.sync()
+            d.failSnapshotSaves(true)
+            _ = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+            d.failSnapshotSaves(false)
+            expectEqual(d.items.count, 1, "\(id): sanity: one item is staged")
+            d.links.resetLog()
+            let relaunched = d.launch()
+            await d.signIn(relaunched)
+            d.links.duringNextStatus = {
+                if boundary == "sign-out" {
+                    relaunched.scheduleBookingTestClearOwner()
+                } else {
+                    relaunched.testApplyCompletedSignOutState()
+                    relaunched.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+                    relaunched.testMarkInitialSyncCompleted(subject: d.subject)
+                }
+            }
+            await relaunched.performForegroundRefresh()
+            observed(id, "reads=\(d.links.statusReads) items=\(d.items.count)")
+            expectEqual(d.links.statusReads, 1, "\(id): recovery started its status read")
+            expectEqual(d.items.count, 1, "\(id) [P12-013]: the item is kept")
+            expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id) [P12-013]: nothing is applied")
+            expectEqual(d.queued("settings"), 0, "\(id): nothing is queued")
+            let next = d.launch()
+            await d.signIn(next)
+            await next.performForegroundRefresh()
+            expectEqual(d.items.count, 0, "\(id): the owner's next activation finishes it")
+            expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id): …with the server's token")
+        }
+    }
+
+    /// Before the initial sync has completed for the signed-in owner, the
+    /// activation does not recover.
+    @MainActor
+    static func closedGateDoesNothing() async {
+        let id = "G3 initial sync not completed"
+        let d = bookingDevice("g3", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.failSnapshotSaves(true)
+        _ = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+        d.failSnapshotSaves(false)
+        d.links.resetLog()
+        let relaunched = d.launch()
+        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+            accountBinding: d.binding, stage: .done,
+            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
+        ))
+        relaunched.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+        relaunched.scheduleBookingSessionOverride = Device.session
+        relaunched.scheduleBookingRecoveryAdminService = d.bookingService
+        await relaunched.performForegroundRefresh()
+        let explicit = await relaunched.recoverScheduleBookingPendingWork(ownerBinding: d.binding)
+        expectEqual(d.links.log, [], "\(id): nothing is read")
+        expectEqual(d.items.count, 1, "\(id): the item is kept")
+        expectEqual(explicit.reappliedMirrors, 0, "\(id): an explicit recovery does nothing either")
+        expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id): nothing is applied")
+    }
+
+    // MARK: I. Idempotence
+
+    /// Two activations, and a second recovery started while the first is
+    /// suspended in its status read: the item is applied once, the second
+    /// pass reads nothing, and nothing more is queued.
+    @MainActor
+    static func recoveryIsIdempotent() async {
+        let id = "I idempotence"
+        let d = bookingDevice("i", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        var overlapping: AppStore.PendingWorkRecovery?
+        let store = await stageThenRelaunch(d, id, beforeActivation: { store in
+            d.links.duringNextStatus = {
+                overlapping = await store.recoverScheduleBookingPendingWork(ownerBinding: d.binding)
+            }
+        }) { store in
+            String(describing: await store.administerBookingLink(action: .rotate, adminService: d.bookingService))
+        }
+        expectEqual(d.links.statusReads, 1, "\(id): one status read for the one item")
+        expect(overlapping != nil && overlapping?.reappliedMirrors == 0 && overlapping?.retained == 0,
+               "\(id): a recovery started meanwhile does nothing (\(String(describing: overlapping)))")
+        expectEqual(d.items.count, 0, "\(id): applied")
+        let token = d.localBookingLink?.token
+        d.links.resetLog()
+        await store.performForegroundRefresh()
+        let again = await store.recoverScheduleBookingPendingWork(ownerBinding: d.binding)
+        expectEqual(d.links.log, [], "\(id): the second activation reads nothing")
+        expectEqual(d.queued("settings"), 0, "\(id): …and queues nothing")
+        expectEqual(d.localBookingLink?.token, token, "\(id): the display copy is unchanged")
+        expect(again.reappliedMirrors == 0 && again.retained == 0, "\(id): the third pass finds nothing to do")
+    }
+
+    // MARK: L. Launch: the gate-open points
+
+    /// The first sign-in's starting point opens the signed-in gate (as the
+    /// subscription gate and a returning launch do): recovery runs there,
+    /// without waiting for a scene activation.
+    @MainActor
+    static func launchGateOpenRecovers() async {
+        let id = "L launch gate open"
+        let d = bookingDevice("l", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.failSnapshotSaves(true)
+        _ = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+        d.failSnapshotSaves(false)
+        expectEqual(d.items.count, 1, "\(id): sanity: one item is staged")
+        let relaunched = d.launch()
+        await d.signIn(relaunched)
+        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+            accountBinding: d.binding, stage: .personalized,
+            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
+        ))
+        do { try relaunched.completeStartingPoint(.fresh) } catch {
+            expect(false, "\(id): sanity: the starting point completes (\(error))")
+        }
+        for _ in 0..<200 where !d.items.isEmpty {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the gate-open recovery removes the item")
+        expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id) [P12-013]: …with the server's token")
     }
 
     // MARK: F. Separate finding (not P12-013)
@@ -852,5 +1208,52 @@ struct ScheduleBookingRecoveryTests {
         observed(id, "prepare from the row's draft -> \(prepared); proofs staged=\(d.items.count)")
         expectEqual(prepared, .scheduleConflict, "\(id) [separate finding]: the row's draft is a baseline conflict")
         expectEqual(d.items.count, 0, "\(id) [separate finding]: no proof is staged")
+    }
+
+    // MARK: S. Source pins: where recovery runs, and where it does not
+
+    @MainActor
+    static func sources(_ root: URL) {
+        func read(_ path: String) -> String {
+            (try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)) ?? ""
+        }
+        func body(_ source: String, from start: String, to end: String = "\n    }\n") -> String? {
+            guard let lower = source.range(of: start),
+                  let upper = source.range(of: end, range: lower.upperBound..<source.endIndex)
+            else { return nil }
+            return String(source[lower.lowerBound..<upper.upperBound])
+        }
+        let store = read("native/TradeReadyNative/AppStore.swift")
+        let app = read("native/TradeReadyNative/TradeReadyNativeApp.swift")
+        expect(!store.isEmpty && !app.isEmpty, "S: sources found")
+        let launch = "startScheduleBookingRecoveryIfPossible()"
+        // Activation: TradeReadyNativeApp's `.active` task runs the
+        // foreground refresh, which recovers after its sync.
+        let active = body(app, from: "case .active:", to: "case .background:") ?? ""
+        expect(active.contains("await store.performForegroundRefresh()"), "S: activation runs the foreground refresh")
+        let foreground = body(store, from: "    func performForegroundRefresh() async {") ?? ""
+        expect(foreground.contains("await recoverScheduleBookingPendingWorkIfPossible()"),
+               "S [P12-013]: the foreground refresh recovers pending booking and portal work")
+        if let sync = foreground.range(of: "await syncNowAndWait(trigger: .foreground)"),
+           let recover = foreground.range(of: "await recoverScheduleBookingPendingWorkIfPossible()") {
+            expect(sync.lowerBound < recover.lowerBound, "S: …after its sync, so the pulled request states are current")
+        }
+        // Launch: every point that opens the signed-in gate after the
+        // initial sync (the same points that replay widget actions).
+        let subscription = body(store, from: "    private func advancePastSubscriptionGate() {") ?? ""
+        expect(subscription.contains(launch), "S [P12-013]: the subscription gate's signed-in exit starts recovery")
+        let startingPoint = body(store, from: "    func completeStartingPoint(") ?? ""
+        expect(startingPoint.contains(launch), "S [P12-013]: the starting point's exit starts recovery")
+        let consumers = body(store, from: "        if activateConsumers, case .signedIn = authenticationGateState {",
+                             to: "\n        }\n") ?? ""
+        expect(consumers.contains(launch), "S [P12-013]: a returning launch's signed-in gate starts recovery")
+        // Never from the rollback-readiness check (section L of those
+        // tests: the check never removes booking work).
+        let readiness = body(store, from: "    private func prepareRollbackReadiness(\n") ?? ""
+        expect(!readiness.isEmpty && !readiness.contains("recoverScheduleBookingPendingWork"),
+               "S: the rollback-readiness check never recovers")
+        // The pass re-checks the account boundary after its awaits.
+        let recovery = body(store, from: "    func recoverScheduleBookingPendingWork(") ?? ""
+        expect(recovery.contains("accountBoundaryGeneration"), "S: recovery compares the account generation")
     }
 }

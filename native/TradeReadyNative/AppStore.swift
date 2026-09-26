@@ -524,6 +524,9 @@ final class AppStore: ObservableObject {
     private var bookingIntakeInFlight = false
     private var bookingAdminInFlight = false
     private var portalAdminInFlight: Set<String> = []
+    /// Phase 12 (12.00b.2-I, P12-013): one pending-work recovery pass at a
+    /// time (launch and activation can both start one).
+    private var scheduleBookingRecoveryInFlight = false
     /// Task 8.08 test seam: explicit session bytes for owner transports.
     /// Production passes nil and reads the Keychain; tests inject bytes so
     /// owner rechecks and service calls exercise without a live session.
@@ -531,6 +534,11 @@ final class AppStore: ObservableObject {
     /// Task 8.08 test seam: explicit sync credentials so the verified-pull
     /// half of intake exercises without a live Keychain session.
     var scheduleBookingTestCredentials: NativeSyncCredentials?
+    /// Phase 12 (12.00b.2-I) test seams: the booking-admin and portal-manage
+    /// clients pending-work recovery reads `status` through. Production
+    /// leaves them nil and resolves the configured endpoints.
+    var scheduleBookingRecoveryAdminService: NativeBookingAdministrationService?
+    var scheduleBookingRecoveryPortalService: NativePortalAdministrationService?
     /// Task 10.13 test seam: overrides for the coach provider keys so host
     /// tests can force each provider-precedence branch deterministically,
     /// the same way `scheduleBookingSessionOverride` avoids the real
@@ -5181,6 +5189,8 @@ final class AppStore: ObservableObject {
         authenticationGateState = .signedIn(email: authenticatedEmail)
         consumePendingDeepLinks()
         replayVerifiedWidgetActionsIfPossible()
+        // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work.
+        startScheduleBookingRecoveryIfPossible()
     }
 
     /// Explicit sign-out is the only auth transition allowed to remove local
@@ -6038,6 +6048,8 @@ final class AppStore: ObservableObject {
         if activateConsumers, case .signedIn = authenticationGateState {
             consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
+            // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work.
+            startScheduleBookingRecoveryIfPossible()
         }
     }
 
@@ -6262,6 +6274,9 @@ final class AppStore: ObservableObject {
             authenticationGateState = .signedIn(email: authenticatedEmail)
             consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
+            // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work,
+            // once the initial sync has committed (a cold launch lands here).
+            startScheduleBookingRecoveryIfPossible()
         }
     }
 
@@ -7869,6 +7884,11 @@ final class AppStore: ObservableObject {
         refreshRecurringJobs()
         refreshRecurringInvoices()
         rescheduleInvoiceDeliveries()
+        // Phase 12 (12.00b.2-I, P12-013): finish unfinished booking/portal
+        // link work and clear reschedule proofs that can no longer resolve,
+        // after the sync so the pulled request and job states are current.
+        // Offline, a mirror's status read fails and the item waits.
+        await recoverScheduleBookingPendingWorkIfPossible()
         guard synced else { return }
         let photos = await performJobPhotoTransfer()
         if photos.uploadedCount > 0 {
@@ -8099,9 +8119,12 @@ final class AppStore: ObservableObject {
             // round 2, R46). A mirror item records a change the server
             // already made; a reschedule proof guards a server resolve whose
             // job change is in the ordinary queue (counted above). Neither
-            // holds business data the Expo build would miss, and nothing
-            // finishes a stuck item yet (P12-013). Another binding's items
-            // are that account's (its boundary scrubs them), never this one's.
+            // holds business data the Expo build would miss. Activation and
+            // launch recover them (12.00b.2-I, P12-013), never this check:
+            // an item still here is a mirror whose status read has not
+            // succeeded yet, or a proof whose resolve can still succeed.
+            // Another binding's items are that account's (its boundary
+            // scrubs them), never this one's.
             if let work = pendingScheduleBookingWorkStore().loadIfReadable() {
                 readiness.bookingWorkCount = work.filter { $0.ownerBinding == binding }.count
                 if readiness.bookingWorkCount > 0 { readiness.note(.bookingWorkPending) }
@@ -9279,9 +9302,22 @@ extension AppStore {
 
     struct PendingWorkRecovery: Equatable {
         var reappliedMirrors: Int = 0
+        /// Phase 12 (12.00b.2-I): mirrors removed without a write, because a
+        /// fresh `status` read says the server no longer backs them (a later
+        /// change replaced the staged token, or the server does not know the
+        /// customer) or because there is nothing to merge them into.
+        var droppedMirrors: Int = 0
         var proofsReady: [String] = []
         var proofsSuperseded: [String] = []
+        /// Phase 12 (12.00b.2-I): proofs whose request no longer asks for a
+        /// reschedule (resolved, declined, cancelled or gone). The server
+        /// resolves only from `reschedule_requested`, so none can succeed.
+        var proofsClosed: [String] = []
         var retained: Int = 0
+        /// Phase 12 (12.00b.2-I): the pass stopped at an account boundary or
+        /// owner change; what it had not finished waits for the owner's next
+        /// pass.
+        var stoppedForAccountChange = false
     }
 
     // MARK: State and seams
@@ -10210,47 +10246,228 @@ extension AppStore {
 
     // MARK: Pending-work recovery and scrub
 
-    /// Recovers owner-bound incomplete work after relaunch or failure:
-    /// re-applies display-only mirrors (never repeating a committed server
-    /// mutation) and reports reschedule proofs whose exact job-mutation
-    /// acknowledgment is now verifiable. Items owned by another binding are
-    /// left untouched here — scrubbing is an explicit account-boundary act.
-    func recoverScheduleBookingPendingWork(ownerBinding: String) -> PendingWorkRecovery {
+    /// Phase 12 (12.00b.2-I, P12-013): the owner binding pending-work
+    /// recovery may run for, or nil. The same owner gate as widget/Siri
+    /// replay (the exact signed-in workspace, the `.signedIn` gate, no
+    /// account boundary open, pending or blocked), plus a committed initial
+    /// sync for this subject (so request and job states are the pulled
+    /// ones) and writable persistence.
+    private var scheduleBookingRecoveryBinding: String? {
+        guard let binding = widgetActionReplayBinding,
+              binding == verifiedAccountBinding,
+              let subject = authenticatedUserSubject,
+              initialSyncCompletedSubject == subject,
+              hasExactSignedInWorkspace,
+              !persistenceWritesBlocked
+        else { return nil }
+        return binding
+    }
+
+    /// Phase 12 (12.00b.2-I, P12-013): launch. Called where the signed-in
+    /// gate opens after the initial sync (the points that also replay
+    /// widget actions). Starts a pass only when the owner has items, so a
+    /// launch with nothing staged does no work.
+    private func startScheduleBookingRecoveryIfPossible() {
+        guard let binding = scheduleBookingRecoveryBinding,
+              pendingScheduleBookingWorkStore().load().contains(where: { $0.ownerBinding == binding })
+        else { return }
+        Task { [weak self] in
+            await self?.recoverScheduleBookingPendingWorkIfPossible()
+        }
+    }
+
+    /// Phase 12 (12.00b.2-I, P12-013): activation (`performForegroundRefresh`)
+    /// and launch. Recovers the verified owner's pending work, or does
+    /// nothing while the gate is closed.
+    @discardableResult
+    func recoverScheduleBookingPendingWorkIfPossible() async -> PendingWorkRecovery? {
+        guard let binding = scheduleBookingRecoveryBinding else { return nil }
+        return await recoverScheduleBookingPendingWork(ownerBinding: binding)
+    }
+
+    /// Recovers owner-bound incomplete work after relaunch or failure.
+    /// Items owned by another binding are left untouched here — scrubbing is
+    /// an explicit account-boundary act.
+    ///
+    /// Phase 12 (12.00b.2-I, P12-013), replacing the uncalled synchronous
+    /// pass:
+    /// - It runs only for the gated owner (`scheduleBookingRecoveryBinding`)
+    ///   and re-checks the account generation, the owner and the gate after
+    ///   every `await`; on any change it stops and keeps what is left.
+    /// - A mirror is applied only after a fresh `status` read (contract §6):
+    ///   a staged token must read `tokenValid`, and the flag written is the
+    ///   server's current one. A mirror the server no longer backs, or with
+    ///   nothing to merge into, is removed without a write. It never sends a
+    ///   mutation: an operation ID replays for 30 days only (§1.3), and the
+    ///   server already holds the change.
+    /// - A proof is kept only while a resolve can still succeed: its request
+    ///   still asks for a reschedule and the job still has the proven
+    ///   schedule. Recovery never resolves; the owner does (RN resolves only
+    ///   on a tap, `utils/bookingRespond.ts:20-46`).
+    /// - Writes follow the commit rule: save a copy, then apply, then queue.
+    /// - One pass at a time; an item is removed by value, so an item staged
+    ///   again meanwhile stays.
+    func recoverScheduleBookingPendingWork(ownerBinding: String) async -> PendingWorkRecovery {
         var recovery = PendingWorkRecovery()
-        var items = pendingScheduleBookingWorkStore().load()
-        for item in items where item.ownerBinding == ownerBinding {
+        guard !scheduleBookingRecoveryInFlight,
+              scheduleBookingRecoveryBinding == ownerBinding
+        else { return recovery }
+        scheduleBookingRecoveryInFlight = true
+        defer { scheduleBookingRecoveryInFlight = false }
+        let generation = accountBoundaryGeneration
+        let capture = scheduleBookingOwnerCapture()
+        let stillCurrent = { [unowned self] in
+            accountBoundaryGeneration == generation
+                && scheduleBookingOwnerStillCurrent(capture)
+                && scheduleBookingRecoveryBinding == ownerBinding
+        }
+        let store = pendingScheduleBookingWorkStore()
+        let owned = store.load().filter { $0.ownerBinding == ownerBinding }
+        for item in owned {
+            guard stillCurrent() else {
+                recovery.stoppedForAccountChange = true
+                return recovery
+            }
+            // Removed meanwhile (an admin action finished it): nothing to do.
+            guard store.load().contains(item) else { continue }
+            let step: PendingWorkStep
             switch item.kind {
-            case let .bookingMirror(token, enabled, _, _):
-                if mergeBookingDisplayMirrorForRecovery(token: token, enabled: enabled) {
-                    recovery.reappliedMirrors += 1
-                    items.removeAll { $0 == item }
-                } else {
-                    recovery.retained += 1
-                }
-            case let .portalMirror(customerID, token, enabled, _):
-                if mergePortalDisplayFields(customerID: customerID, token: token, enabled: enabled) {
-                    recovery.reappliedMirrors += 1
-                    items.removeAll { $0 == item }
-                } else {
-                    recovery.retained += 1
-                }
+            case let .bookingMirror(token, _, _, _):
+                step = await recoverBookingMirror(token: token, stillCurrent: stillCurrent)
+            case let .portalMirror(customerID, token, _, _):
+                step = await recoverPortalMirror(customerID: customerID, token: token, stillCurrent: stillCurrent)
             case let .rescheduleProof(requestID, proof, _):
-                let acked = !mutationQueue.load().contains {
-                    $0.table == "jobs" && $0.recordId == proof.jobId
-                }
-                let job = snapshot.payload.jobs?.first(where: { $0.id == proof.jobId })
-                if NativeScheduleBookingPolicy.proofMatchesCurrentJob(proof, job: job), acked {
-                    recovery.proofsReady.append(requestID)
-                } else if !NativeScheduleBookingPolicy.proofMatchesCurrentJob(proof, job: job) {
-                    recovery.proofsSuperseded.append(requestID)
-                    items.removeAll { $0 == item }
-                } else {
-                    recovery.retained += 1
-                }
+                step = recoverRescheduleProof(requestID: requestID, proof: proof)
+            }
+            switch step {
+            case .applied:
+                recovery.reappliedMirrors += 1
+            case .dropped:
+                recovery.droppedMirrors += 1
+            case let .proofReady(requestID):
+                recovery.proofsReady.append(requestID)
+            case let .proofSuperseded(requestID):
+                recovery.proofsSuperseded.append(requestID)
+            case let .proofClosed(requestID):
+                recovery.proofsClosed.append(requestID)
+            case .retained:
+                recovery.retained += 1
+            case .stopped:
+                recovery.stoppedForAccountChange = true
+                return recovery
+            }
+            if step.removesItem {
+                try? store.remove { $0 == item }
             }
         }
-        try? pendingScheduleBookingWorkStore().save(items)
         return recovery
+    }
+
+    private enum PendingWorkStep {
+        case applied, dropped, retained, stopped
+        case proofReady(String), proofSuperseded(String), proofClosed(String)
+
+        var removesItem: Bool {
+            switch self {
+            case .applied, .dropped, .proofSuperseded, .proofClosed: return true
+            case .retained, .stopped, .proofReady: return false
+            }
+        }
+    }
+
+    /// A booking-link mirror. A staged token (mint or rotate) is applied only
+    /// if the server still reads it as current; a flag-only item (enable or
+    /// disable) takes the server's current flag and needs an existing link
+    /// (recovery never invents a token).
+    private func recoverBookingMirror(
+        token: String?,
+        stillCurrent: () -> Bool
+    ) async -> PendingWorkStep {
+        guard !bookingAdminInFlight else { return .retained }
+        if let token, !NativeBookingAdministrationService.isValidCapabilityToken(token) { return .dropped }
+        if token == nil, snapshot.payload.settings?.bookingLink == nil { return .dropped }
+        guard let bytes = scheduleBookingSessionBytes(explicit: nil),
+              let service = scheduleBookingRecoveryAdminService
+                ?? (try? NativeBookingAdministrationService(endpoint: NativeBookingAdministrationService.resolvedEndpoint()))
+        else { return .retained }
+        let wired = NativeBookingAdministrationService(
+            endpoint: service.endpoint,
+            loader: service.loader,
+            refreshSession: { [weak self] in await self?.scheduleBookingRefreshedSession(excluding: bytes) }
+        )
+        bookingAdminInFlight = true
+        defer { bookingAdminInFlight = false }
+        let status: NativeBookingLinkStatus
+        do {
+            status = try await wired.status(token: token, sessionBytes: bytes)
+        } catch {
+            return stillCurrent() ? .retained : .stopped
+        }
+        guard stillCurrent() else { return .stopped }
+        if token != nil, !status.tokenValid { return .dropped }
+        if token == nil, snapshot.payload.settings?.bookingLink == nil { return .dropped }
+        return mergeBookingDisplayMirrorForRecovery(token: token, enabled: status.enabled) ? .applied : .retained
+    }
+
+    /// A portal-link mirror, with the same rules per customer. A customer no
+    /// longer on the device, or one the server does not know, is dropped.
+    private func recoverPortalMirror(
+        customerID: String,
+        token: String?,
+        stillCurrent: () -> Bool
+    ) async -> PendingWorkStep {
+        guard !portalAdminInFlight.contains(customerID) else { return .retained }
+        if let token, !NativePortalAdministrationService.isValidCapabilityToken(token) { return .dropped }
+        guard let customer = snapshot.payload.customers?.first(where: { $0.id == customerID }) else { return .dropped }
+        if token == nil, customer.portal == nil { return .dropped }
+        guard let bytes = scheduleBookingSessionBytes(explicit: nil),
+              let service = scheduleBookingRecoveryPortalService
+                ?? (try? NativePortalAdministrationService(endpoint: NativePortalAdministrationService.resolvedEndpoint()))
+        else { return .retained }
+        let wired = NativePortalAdministrationService(
+            endpoint: service.endpoint,
+            loader: service.loader,
+            refreshSession: { [weak self] in await self?.scheduleBookingRefreshedSession(excluding: bytes) }
+        )
+        portalAdminInFlight.insert(customerID)
+        defer { portalAdminInFlight.remove(customerID) }
+        let status: NativePortalLinkStatus
+        do {
+            status = try await wired.status(customerId: customerID, token: token, sessionBytes: bytes)
+        } catch NativePortalAdminError.notFound {
+            return stillCurrent() ? .dropped : .stopped
+        } catch {
+            return stillCurrent() ? .retained : .stopped
+        }
+        guard stillCurrent() else { return .stopped }
+        if token != nil, !status.tokenValid { return .dropped }
+        guard let current = snapshot.payload.customers?.first(where: { $0.id == customerID }),
+              token != nil || current.portal != nil
+        else { return .dropped }
+        return mergePortalDisplayFields(customerID: customerID, token: token, enabled: status.enabled)
+            ? .applied : .retained
+    }
+
+    /// A reschedule proof, from local state only (the activation's sync has
+    /// just pulled). The server resolves only from `reschedule_requested`
+    /// (`backend-workers/lib/booking/respond.js` TRANSITIONS) and only while
+    /// the job has the proven schedule, so any other state is terminal:
+    /// `.missing`, `needsReview` after another device declined or confirmed,
+    /// a committed unknown outcome once the pull shows `confirmed`, and a
+    /// decline after `awaitingAck`. A proof that can still succeed stays for
+    /// the owner's retry (`unknownOutcome` not committed, `failed`); the
+    /// store holds one per request.
+    private func recoverRescheduleProof(requestID: String, proof: NativeScheduleProof) -> PendingWorkStep {
+        let request = snapshot.payload.bookingRequests?.first(where: { $0.id == requestID })
+        guard request?.status == "reschedule_requested" else { return .proofClosed(requestID) }
+        let job = snapshot.payload.jobs?.first(where: { $0.id == proof.jobId })
+        guard NativeScheduleBookingPolicy.proofMatchesCurrentJob(proof, job: job) else {
+            return .proofSuperseded(requestID)
+        }
+        let acked = !mutationQueue.load().contains {
+            $0.table == "jobs" && $0.recordId == proof.jobId
+        }
+        return acked ? .proofReady(requestID) : .retained
     }
 
     private func mergeBookingDisplayMirrorForRecovery(token: String?, enabled: Bool) -> Bool {
@@ -10259,7 +10476,8 @@ extension AppStore {
         else { return false }
         do {
             // Recovery never invents a token: a nil-token mirror with no
-            // existing link fails closed and stays staged.
+            // existing link fails closed (the recovery pass drops that item
+            // before it reads status).
             settings = try NativeBookingAdminMirror.apply(to: settings, token: token, enabled: enabled)
             var updated = snapshot
             updated.payload.settings = settings

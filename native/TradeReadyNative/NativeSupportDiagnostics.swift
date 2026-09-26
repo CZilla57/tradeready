@@ -355,8 +355,10 @@ struct NativeRollbackReadiness: Equatable {
         /// (`NativeScheduleBookingPendingWorkStore`). A mirror item records
         /// a change the server already made (display copy only); a
         /// reschedule proof guards a server resolve whose job change is in
-        /// the ordinary queue (counted by `pendingChanges`). Nothing
-        /// finishes a stuck item yet (defect P12-013).
+        /// the ordinary queue (counted by `pendingChanges`). Launch and
+        /// activation finish or clear them (12.00b.2-I, P12-013); one that
+        /// stays is a mirror whose status read has not succeeded yet, or a
+        /// proof whose resolve can still succeed.
         case bookingWorkPending = "booking-work-pending"
         /// That file is on disk and does not decode.
         case bookingWorkUnreadable = "booking-work-unreadable"

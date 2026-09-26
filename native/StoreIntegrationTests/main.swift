@@ -2183,7 +2183,7 @@ struct StoreIntegrationTests {
             expect(freshLink.shareURL?.absoluteString.contains("b=\(token48A)") == true,
                    "8.08 fresh tokenValid read adopts the display copy for sharing")
             // set_enabled with no link fails closed into staged recovery work.
-            let (store2, _) = try seed08Store(settings: settings08(), tag: "badminrecovery")
+            let (store2, dir2) = try seed08Store(settings: settings08(), tag: "badminrecovery")
             seed08Owner(store2, binding: "bind-recover")
             loader.handler = { request in
                 let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
@@ -2197,9 +2197,20 @@ struct StoreIntegrationTests {
             let pending = store2.pendingScheduleBookingWorkStore().load()
             expect(pending.count == 1 && pending.first?.ownerBinding == "bind-recover",
                    "8.08 incomplete mirror persists as owner-bound pending work")
-            let recovery = store2.recoverScheduleBookingPendingWork(ownerBinding: "bind-recover")
-            expect(recovery.retained == 1 && recovery.reappliedMirrors == 0,
-                   "8.08 token-less mirror recovery fails closed and stays staged")
+            // Phase 12 (12.00b.2-I, P12-013): recovery runs only once the
+            // owner's initial sync has committed, and drops a flag-only
+            // mirror with no link to merge into (it never invents a token)
+            // instead of keeping it for good. Before, it stayed staged.
+            store2.testMarkInitialSyncCompleted(subject: "user-1")
+            let recovery = await store2.recoverScheduleBookingPendingWork(ownerBinding: "bind-recover")
+            let recoveredSettings = try snapshot08(dir2.appendingPathComponent("store.json")).payload.settings
+            expect(recovery.droppedMirrors == 1 && recovery.reappliedMirrors == 0 && recovery.retained == 0
+                   && store2.pendingScheduleBookingWorkStore().load().isEmpty
+                   && recoveredSettings != nil && recoveredSettings?.bookingLink == nil,
+                   "8.08 token-less mirror recovery fails closed: no link is invented and the item is dropped")
+            try store2.pendingScheduleBookingWorkStore().stage(.init(
+                kind: .bookingMirror(token: nil, enabled: true, revision: 2, operationId: op08),
+                ownerBinding: "bind-recover"))
             store2.scrubScheduleBookingPendingWork(binding: "bind-recover")
             expect(store2.pendingScheduleBookingWorkStore().load().isEmpty,
                    "8.08 account boundary scrubs owner-bound pending work")

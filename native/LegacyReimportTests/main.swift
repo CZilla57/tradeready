@@ -942,8 +942,9 @@ func testRetriedSignOutClearsPendingBookingWork() async throws {
     let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
     first.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
     expect(bOutcome.verifiedAccountBinding != bindingA, "\(label): sanity: B's binding is not A's")
-    let recovery = first.recoverScheduleBookingPendingWork(ownerBinding: bOutcome.verifiedAccountBinding)
-    expectEqual(recovery.reappliedMirrors + recovery.retained + recovery.proofsReady.count, 0,
+    let recovery = await first.recoverScheduleBookingPendingWork(ownerBinding: bOutcome.verifiedAccountBinding)
+    expectEqual(recovery.reappliedMirrors + recovery.droppedMirrors + recovery.retained
+                + recovery.proofsReady.count + recovery.proofsSuperseded.count + recovery.proofsClosed.count, 0,
                 "\(label) [P12-004]: B's recovery acts on none of A's items")
     expect(work.load().allSatisfy { $0.ownerBinding != bOutcome.verifiedAccountBinding },
            "\(label) [P12-004]: no item is re-owned by B")
