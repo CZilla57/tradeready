@@ -2510,6 +2510,19 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      a sign-out or deletion is running. The blocked screen says "Account deletion cleanup
      paused" for a deletion and "Sign-out cleanup paused" otherwise.
    - Test: `native/run-legacy-reimport-tests.sh`.
+   **Amended by Phase 12 12.00b.2-G fix round 1 (2026-09-25; defect P12-005):**
+   - A sign-out used to keep the RN-era auxiliary artifact (account state and the
+     `__dataOwner` owner marker) and its staged copy for an exact-owner rollback. With
+     RN owner keys, every other account's sign-in then met the Phase 3 exact-owner gate
+     (`.accountMismatch`), so no second account could use the device.
+   - The `.live` scrub now removes both, before the snapshot, as RN's sign-out clears
+     `__dataOwner` and every account key. The next account gets a clean workspace and
+     none of the previous account's state. The same account's sign-in takes the
+     ordinary path; its device-local RN-era state is gone, as on RN.
+   - Unchanged: the Phase 3 rule still holds another account while a workspace no
+     scrub cleared is on the device; the completed journal, `LegacyBackups/` and the
+     RN source files stay (G6).
+   - Test: `native/run-legacy-reimport-tests.sh`.
 5. the silent AI-key wipe failure (final review 1b): **fixed** in `5f2f397`. The wipe
    tries every kind under a durable `ai-key-wipe-pending` marker and counts and logs a
    failure without key material; while pending the coach reads no client key and no key

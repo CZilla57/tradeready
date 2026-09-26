@@ -172,8 +172,16 @@ extension Canonical {
         }
 
         /// Deletes every repository copy that `load()` could make live again.
-        /// Immutable legacy migration backups remain available for recovery and
-        /// are still protected by the exact-owner activation gate.
+        /// Immutable legacy migration backups remain available for recovery
+        /// (G6), and the completed migration journal stays, so no later
+        /// account re-imports the React Native data.
+        ///
+        /// Phase 12 (12.00b.2-G fix round 1, P12-005): the RN-era account
+        /// state and owner marker go too (the auxiliary artifact and its staged
+        /// copy), as RN's sign-out drops every account key and `__dataOwner`
+        /// (`utils/storage/lifecycle.ts:106-159`). Kept, its owner marker held
+        /// every other account at the exact-owner gate after the sign-out, and
+        /// its account state was one owner match away from activation.
         func removeLiveAccountData() throws {
             // Phase 12 (12.00b.2-G, P12-003): recorded first, so a scrub that
             // stops part-way (its marker stays pending and it reruns) can never
@@ -184,6 +192,13 @@ extension Canonical {
                 to: accountScrubClearedMarkerURL
             )
             let directory = primaryURL.deletingLastPathComponent()
+            // P12-005: before the snapshot, so nothing activates it meanwhile.
+            for url in [
+                directory.appendingPathComponent("auxiliary-state.json"),
+                directory.appendingPathComponent("AuxiliaryActivation", isDirectory: true)
+            ] where fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
             let quarantinePrefix = "\(primaryURL.lastPathComponent).corrupt-"
             let entries = if fileManager.fileExists(atPath: directory.path) {
                 try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -206,15 +221,15 @@ extension Canonical {
             }
         }
 
-        /// Permanent account deletion also removes recovery-only artifacts that
-        /// normal sign-out intentionally retains for an exact-owner rollback.
+        /// Permanent account deletion also removes the recovery-only artifacts
+        /// that a sign-out retains: the legacy backups (G6), the migration
+        /// journal and the support report. (The auxiliary artifact and its
+        /// staged copy go with the live data: P12-005.)
         func removeAllAccountData() throws {
             try removeLiveAccountData()
             let directory = primaryURL.deletingLastPathComponent()
             let deletionTargets = [
                 legacyBackupDirectoryURL,
-                directory.appendingPathComponent("AuxiliaryActivation", isDirectory: true),
-                directory.appendingPathComponent("auxiliary-state.json"),
                 directory.appendingPathComponent("migration-journal.json"),
                 directory.appendingPathComponent("tradeready-support-report.json"),
                 // Phase 12 (12.00b.2-G): with the journal gone the record

@@ -17,6 +17,11 @@ import Foundation
 // review items M2 and M3: every scrub path clears the same stores, an
 // unreadable scrub marker fails closed, and scene activation retries a
 // pending scrub (sections 1 and 5).
+// Phase 12 (12.00b.2-G fix round 1, P12-005): a sign-out also drops the
+// RN-era account state and owner marker (the auxiliary artifact and its
+// staged copy), as RN's sign-out does, so another account can use the device
+// and inherits none of it (section 2); a workspace no scrub cleared still
+// holds another account at the exact-owner gate (section 3).
 // Run with TZ=America/Phoenix.
 
 // MARK: - Harness
@@ -187,6 +192,12 @@ final class FixtureDevice {
         if ownerKeys {
             manifest["onboardingComplete"] = "true"
             manifest["__dataOwner"] = #""user-a""#
+            // Phase 12 (12.00b.2-G fix round 1, P12-005): A's typed account
+            // state, so a test can tell whether another account inherits it.
+            manifest["invoiceReminderPromptShown"] = "true"
+            manifest["insightMutes"] = #"[{"id":"fixture-insight-a"}]"#
+            manifest["setupChecklistState"] = #"{"dismissed":true}"#
+            manifest["review_requests"] = #"[{"jobId":"rn-job-a","customerId":"rn-a-1","customerName":"Deleted Owner Customer","customerPhone":"","customerEmail":"","scheduledAt":"2026-01-01T00:00:00.000Z","sentAt":null}]"#
         }
         try writeManifest(manifest)
         try FileManager.default.createDirectory(at: photoURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -211,6 +222,12 @@ final class FixtureDevice {
     var journalEntryCount: Int { (try? journal.read().entries.count) ?? -1 }
     var journalComplete: Bool { (try? journal.isComplete(.reactNativeAsyncStorage)) == true }
     var auxiliaryURL: URL { appDirectory.appendingPathComponent(NativeAuxiliaryStateStore.filename) }
+    /// The staged copy of the auxiliary state (`NativeAuxiliaryActivationStore`).
+    var activationURL: URL { appDirectory.appendingPathComponent("AuxiliaryActivation", isDirectory: true) }
+    /// The owner-bound invoice-reminder flag's store.
+    var reminderPromptStore: NativeReminderPromptStore {
+        NativeReminderPromptStore(fileURL: appDirectory.appendingPathComponent("invoice-reminder-prompt.json"))
+    }
     var legacyBackupsURL: URL { appDirectory.appendingPathComponent("LegacyBackups", isDirectory: true) }
     var scrubMarkerURL: URL { storeURL.appendingPathExtension("account-scrub-pending") }
     /// Phase 12 (12.00b.2-G, P12-003): the scrub's record that it cleared the
@@ -576,6 +593,16 @@ func testEraser() throws {
 /// sign-out and pulls on the next sign-in. Before the fix the relaunch
 /// reported a failed migration and blocked writes, "Try again" did the same,
 /// and the sign-in stopped at `preflight/local-recovery/missing-migrated-snapshot`.
+///
+/// Phase 12 (12.00b.2-G fix round 1, P12-005): the sign-out also drops A's
+/// RN-era account state and owner marker (the auxiliary artifact and its
+/// staged copy), as RN's `clearAllUserData` drops every account key and
+/// `__dataOwner` (`utils/storage/lifecycle.ts:106-159`); RN's next initial
+/// sync sets the new owner (`utils/sync.ts:406`). With RN owner keys, B was
+/// held at the account-mismatch gate, whose only action is "Use another
+/// account"; now B gets a clean workspace and none of A's state, and A's own
+/// sign-in takes the ordinary path (A's device-local RN-era state is gone, as
+/// on RN).
 @MainActor
 func testSignOutThenRelaunch(ownerKeys: Bool, signer: String) async throws {
     let label = "sign-out (\(ownerKeys ? "RN owner keys" : "no RN owner keys"), then \(signer))"
@@ -584,11 +611,26 @@ func testSignOutThenRelaunch(ownerKeys: Bool, signer: String) async throws {
     defer { device.cleanUp() }
     let first = try migrateFirstLaunch(device, label)
     let journalEntries = device.journalEntryCount
+    // A is signed in before signing out, as in the app, so A's RN-era account
+    // state is staged for A first.
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    if ownerKeys {
+        expectEqual(aOutcome.accountState, .staged, "\(label): sanity: A's RN-era account state is staged for A")
+        expect(aOutcome.typedAccountState?.invoiceReminderPromptShown == true
+               && first.reviewRequestRecords.count == 1
+               && (first.insightMutes ?? []).contains { $0.id == "fixture-insight-a" }
+               && first.setupChecklistState?.dismissed == true,
+               "\(label): sanity: A's review request, reminder flag, insight mute and checklist are active for A")
+        expect(exists(device.activationURL), "\(label): sanity: A's staged copy exists")
+    }
 
     try await first.signOut(revokeRemote: false)
     expect(!exists(device.storeURL), "\(label): the sign-out removes the snapshot")
     expect(device.journalComplete && device.journalEntryCount == journalEntries, "\(label): the completed journal is kept")
-    expect(exists(device.legacyBackupsURL) && exists(device.auxiliaryURL), "\(label): the exact-owner recovery artifacts are kept")
+    expect(exists(device.legacyBackupsURL), "\(label): G6: the legacy backup copy is kept")
+    expect(!exists(device.auxiliaryURL) && !exists(device.activationURL),
+           "\(label) [P12-005]: the sign-out drops A's RN-era account state and owner marker (the auxiliary artifact and its staged copy)")
     expect(exists(device.manifestURL) && exists(device.photoURL), "\(label): the RN files are kept for the Expo rollback build")
     expectEqual(device.legacySecureStore.legacyItemCount, 2, "\(label): the RN SecureStore items are kept for the Expo rollback build")
     expect(nativeSession() == nil, "\(label): the native session is cleared")
@@ -619,27 +661,26 @@ func testSignOutThenRelaunch(ownerKeys: Bool, signer: String) async throws {
     let subject = signer == "A" ? "user-a" : "user-b"
     let outcome = try await device.signInOutcome(session, subject: subject)
     relaunched.testBindInteractiveOwner(outcome, email: "\(signer.lowercased())@example.invalid")
-    if ownerKeys && signer == "B" {
-        // Phase 3 rule ("exact legacy-owner mismatch is a blocking root
-        // state"), unchanged here: the sign-out keeps A's auxiliary state for
-        // A's rollback, and it names A as the owner, so B is held at the
-        // account-mismatch gate. Reported by 12.00b.2-G; pinned as observed.
-        expectEqual(outcome.accountState, .ownerMismatch, "\(label): A's kept auxiliary state names another owner")
-        expectEqual(relaunched.authenticationGateState, .accountMismatch,
-                    "\(label) [observed, Phase 3 rule]: B's sign-in is held at the account-mismatch gate")
-    } else {
-        if ownerKeys {
-            expectEqual(outcome.accountState, .staged, "\(label): A's own auxiliary state activates for A")
-        }
-        expect(isConfigurationPreflight(relaunched.authenticationGateState),
-               "\(label) [P12-003]: \(signer)'s sign-in heads for \(signer)'s initial sync (got \(relaunched.authenticationGateState))")
-        // The sync's completion (an empty cloud here): its backfill queues
-        // none of A's legacy records (Task 9b review M1).
-        if isConfigurationPreflight(relaunched.authenticationGateState) {
-            relaunched.testMarkInitialSyncCompleted(subject: subject)
-            expect(!device.queuedRecordIDs.contains("rn-a-1"),
-                   "\(label): \(signer)'s initial-sync backfill queues none of the RN-era records (queued: \(device.queuedRecordIDs))")
-        }
+    // P12-005: no RN-era account state or owner marker is left to activate or
+    // to name another owner, for A or for B, with or without RN owner keys.
+    expectEqual(outcome.accountState, .noAuxiliaryArtifact,
+                "\(label) [P12-005]: nothing of A's RN-era account state is left to activate or to name an owner")
+    expect(isConfigurationPreflight(relaunched.authenticationGateState),
+           "\(label) [P12-003/P12-005]: \(signer)'s sign-in heads for \(signer)'s initial sync (got \(relaunched.authenticationGateState))")
+    expect(outcome.typedAccountState == nil && relaunched.migratedAccountState == nil,
+           "\(label) [P12-005]: \(signer) gets no migrated account state")
+    expect(relaunched.reviewRequestRecords.isEmpty, "\(label) [P12-005]: \(signer) gets none of the RN-era review requests")
+    expect(!(relaunched.insightMutes ?? []).contains { $0.id == "fixture-insight-a" },
+           "\(label) [P12-005]: \(signer) gets none of the RN-era insight mutes")
+    expect(relaunched.setupChecklistState?.dismissed != true, "\(label) [P12-005]: \(signer) gets none of the RN-era checklist state")
+    expect((try? device.reminderPromptStore.wasShown(for: outcome.verifiedAccountBinding)) == false,
+           "\(label) [P12-005]: \(signer) does not inherit the RN-era invoice-reminder flag")
+    // The sync's completion (an empty cloud here): its backfill queues none
+    // of A's legacy records (Task 9b review M1).
+    if isConfigurationPreflight(relaunched.authenticationGateState) {
+        relaunched.testMarkInitialSyncCompleted(subject: subject)
+        expect(!device.queuedRecordIDs.contains("rn-a-1"),
+               "\(label): \(signer)'s initial-sync backfill queues none of the RN-era records (queued: \(device.queuedRecordIDs))")
     }
     expectEqual(relaunched.customers.map(\.id), [], "\(label): the sign-in shows none of the RN-era local records")
 
@@ -709,10 +750,11 @@ func testSaveEndsTheScrubClearedState() async throws {
 /// launch after an interrupted sign-out is never blocked as a lost snapshot.
 @MainActor
 func testInterruptedSignOutRelaunchesCleanly() async throws {
+    for ownerKeys in [false, true] {
     for stage in ["marker only", "snapshot removed", "launch scrub failed", "launch scrub failed, activation"] {
-        let label = "interrupted sign-out (\(stage))"
+        let label = "interrupted sign-out (\(stage)\(ownerKeys ? ", RN owner keys" : ""))"
         resetHostKeychain()
-        let device = try FixtureDevice("interrupted-\(stage.replacingOccurrences(of: " ", with: "-"))", ownerKeys: false)
+        let device = try FixtureDevice("interrupted-\(ownerKeys ? "owner-" : "")\(stage.replacingOccurrences(of: " ", with: "-"))", ownerKeys: ownerKeys)
         defer { device.cleanUp() }
         _ = try migrateFirstLaunch(device, label)
         let repository = Canonical.SnapshotRepository(primaryURL: device.storeURL)
@@ -746,10 +788,15 @@ func testInterruptedSignOutRelaunchesCleanly() async throws {
         expect(device.journalComplete, "\(label): the journal stays complete")
         expectEqual(relaunched.customers.map(\.id), [], "\(label): nothing is imported")
         expect(nativeSession() == nil, "\(label): the session is cleared")
+        // P12-005: the scrub that finishes the sign-out drops A's RN-era
+        // account state too, however far the first attempt got.
+        expect(!exists(device.auxiliaryURL) && !exists(device.activationURL),
+               "\(label) [P12-005]: A's RN-era account state is gone")
         let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
         relaunched.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
         expect(isConfigurationPreflight(relaunched.authenticationGateState),
-               "\(label) [P12-003]: B's sign-in heads for B's initial sync (got \(relaunched.authenticationGateState))")
+               "\(label) [P12-003/P12-005]: B's sign-in heads for B's initial sync (got \(relaunched.authenticationGateState))")
+    }
     }
 }
 
@@ -780,6 +827,38 @@ func testSignedOutLaunchReprotects() async throws {
 }
 
 // MARK: - 3. Recovery exits and the account switch
+
+/// P12-005's boundary (the Phase 3 exact-owner rule, unchanged): while A's
+/// migrated workspace is on the device and no sign-out or deletion cleared
+/// it, the RN owner marker still holds another account at the
+/// account-mismatch gate, on the interactive sign-in and on B's launch.
+@MainActor
+func testUnscrubbedWorkspaceStillBlocksAnotherAccount() async throws {
+    let label = "unscrubbed workspace"
+    resetHostKeychain()
+    let device = try FixtureDevice("unscrubbed-owner", ownerKeys: true)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
+    expectEqual(bOutcome.accountState, .ownerMismatch, "\(label): A's RN owner marker names another owner")
+    first.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
+    expectEqual(first.authenticationGateState, .accountMismatch,
+                "\(label) [Phase 3 rule]: B's sign-in is held at the account-mismatch gate")
+    expect(first.migratedAccountState == nil && first.reviewRequestRecords.isEmpty,
+           "\(label): B gets none of A's migrated account state")
+    expect(exists(device.storeURL) && exists(device.auxiliaryURL), "\(label): A's workspace and RN-era state are kept")
+
+    let relaunched = try device.launch()
+    expectEqual(relaunched.customers.map(\.id), ["rn-a-1"], "\(label): sanity: the relaunch loads A's workspace")
+    guard let launchOutcome = try await device.launchOutcome() else {
+        expect(false, "\(label): B's session is stored")
+        return
+    }
+    expectEqual(launchOutcome.verifiedUserSubject, "user-b", "\(label): the launch verifies B")
+    relaunched.testApplyLaunchIdentityOutcome(launchOutcome)
+    expectEqual(relaunched.authenticationGateState, .accountMismatch,
+                "\(label) [Phase 3 rule]: B's launch is held at the account-mismatch gate too")
+}
 
 /// These exits keep the workspace (and the journal), so a relaunch loads the
 /// same snapshot and never runs the importer.
@@ -1030,6 +1109,7 @@ struct LegacyReimportTests {
             try await testInterruptedSignOutRelaunchesCleanly()
             try await testSignedOutLaunchReprotects()
             try await testWorkspaceRetainingExits()
+            try await testUnscrubbedWorkspaceStillBlocksAnotherAccount()
             try await testRetriedSignOutClearsPendingBookingWork()
             try await testUnreadableDeletionMarkerFailsClosed()
         } catch {

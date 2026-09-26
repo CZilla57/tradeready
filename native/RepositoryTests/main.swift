@@ -288,6 +288,20 @@ struct RepositoryTests {
         try Data("account-bound-onboarding-backup".utf8).write(
             to: workspace.appendingPathExtension("backup"), options: .atomic
         )
+        // Phase 12 (12.00b.2-G fix round 1, P12-005): the RN-era account state
+        // and owner marker (the auxiliary artifact and its staged copy), and
+        // the completed journal that must outlive a sign-out.
+        let scrubDirectory = scrubPrimary.deletingLastPathComponent()
+        let auxiliaryArtifact = scrubDirectory.appendingPathComponent("auxiliary-state.json")
+        let activationDirectory = scrubDirectory.appendingPathComponent("AuxiliaryActivation", isDirectory: true)
+        let journalFile = scrubDirectory.appendingPathComponent("migration-journal.json")
+        try Data("owner-bound-auxiliary-state".utf8).write(to: auxiliaryArtifact, options: .atomic)
+        try FileManager.default.createDirectory(
+            at: activationDirectory.appendingPathComponent("Accounts", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("staged".utf8).write(to: activationDirectory.appendingPathComponent("Accounts/envelope.json"))
+        try Data("journal".utf8).write(to: journalFile, options: .atomic)
         try scrubRepository.beginAccountScrub()
         expect(scrubRepository.isAccountScrubPending
                && (try? scrubRepository.pendingAccountScrubScope) == .live,
@@ -313,6 +327,11 @@ struct RepositoryTests {
                "account scrub removes snapshots, quarantines, live media, and onboarding state")
         expect((try? Data(contentsOf: retained)) == Data("immutable-recovery-source".utf8),
                "account scrub preserves the immutable migration recovery source")
+        expect(!FileManager.default.fileExists(atPath: auxiliaryArtifact.path)
+               && !FileManager.default.fileExists(atPath: activationDirectory.path),
+               "P12-005: a sign-out removes the RN-era account state and owner marker, and its staged copy")
+        expect((try? Data(contentsOf: journalFile)) == Data("journal".utf8),
+               "P12-005: a sign-out keeps the completed migration journal")
         expect(scrubRepository.isAccountScrubPending,
                "account scrub marker remains until other account surfaces are cleared")
         try scrubRepository.finishAccountScrub()
