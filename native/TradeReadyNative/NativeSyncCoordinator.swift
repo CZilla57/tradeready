@@ -66,6 +66,13 @@ struct NativeSyncStatus: Equatable {
     var lastSuccessfulSyncAt: Date?
     var nextEarliestAttempt: Date?
     var diagnosticCode: String?
+    /// Phase 12 (12.02, charter TH-5): how many queued changes this pass
+    /// dropped as unsendable (`record-contract/<table>`), and the first one's
+    /// table. A pass whose only problem was a drop still ends `.completed`,
+    /// so `AppStore` reports from these, not from the outcome. Counts and a
+    /// table name only.
+    var discardedCount = 0
+    var discardedTable: String?
 }
 
 /// The minimal push surface the coordinator drives. `NativeSupabaseMutationPushService`
@@ -160,6 +167,8 @@ final class NativeSyncCoordinator {
     private var lastPullResult: NativeSyncPullResult?
     private var lastSuccessfulSyncAt: Date?
     private var diagnosticCode: String?
+    private var passDiscardedCount = 0
+    private var passDiscardedTable: String?
     private var retryTask: Task<Void, Never>?
     private var accountGeneration: UInt64 = 0
 
@@ -198,7 +207,9 @@ final class NativeSyncCoordinator {
             lastPullResult: lastPullResult,
             lastSuccessfulSyncAt: lastSuccessfulSyncAt,
             nextEarliestAttempt: nextEarliestAttempt,
-            diagnosticCode: diagnosticCode
+            diagnosticCode: diagnosticCode,
+            discardedCount: passDiscardedCount,
+            discardedTable: passDiscardedTable
         )
     }
 
@@ -216,6 +227,8 @@ final class NativeSyncCoordinator {
         lastPullResult = nil
         lastSuccessfulSyncAt = nil
         diagnosticCode = nil
+        passDiscardedCount = 0
+        passDiscardedTable = nil
         publishStatus()
     }
 
@@ -235,6 +248,10 @@ final class NativeSyncCoordinator {
             return .alreadyRunning
         }
         isRunning = true
+        // 12.02 (TH-5): the discards are this pass's (a coalesced rerun
+        // included), never an earlier pass's.
+        passDiscardedCount = 0
+        passDiscardedTable = nil
         publishStatus()
         defer {
             isRunning = false
@@ -373,6 +390,7 @@ final class NativeSyncCoordinator {
         )
         guard generation == accountGeneration else { throw SyncInvalidation.accountChanged }
         outcome = settle(outcome, startedItems: items)
+        countDiscarded(outcome)
         var authRefreshed = false
         var attemptedRemainder = outcome.remaining
         var queuedRemainder: [Canonical.MutationItem]
@@ -401,6 +419,7 @@ final class NativeSyncCoordinator {
                 )
                 guard generation == accountGeneration else { throw SyncInvalidation.accountChanged }
                 outcome = settle(outcome, startedItems: retryItems)
+                countDiscarded(outcome)
                 attemptedRemainder = outcome.remaining
                 queuedRemainder = try queue.reconcilePush(
                     startedItems: retryItems,
@@ -468,6 +487,14 @@ final class NativeSyncCoordinator {
         return result
     }
 
+    /// Phase 12 (12.02, TH-5): a settled attempt's drops are final (the queue
+    /// commit below removes them), so they count for this pass.
+    private func countDiscarded(_ outcome: NativeMutationPushOutcome) {
+        guard let first = outcome.discarded.first else { return }
+        passDiscardedCount += outcome.discarded.count
+        if passDiscardedTable == nil { passDiscardedTable = first.table }
+    }
+
     /// Returns `items` to the attempt's remainder, in queue order.
     private func keepQueued(
         _ items: [Canonical.MutationItem],
@@ -477,6 +504,8 @@ final class NativeSyncCoordinator {
         let kept = startedItems.filter { outcome.remaining.contains($0) || items.contains($0) }
         outcome.remaining = kept
         outcome.rejected.removeAll { items.contains($0.item) }
+        // 12.02 (TH-5): a change kept queued was not discarded.
+        outcome.discarded.removeAll { kept.contains($0) }
         outcome.failedTables = kept.reduce(into: [String]()) { tables, item in
             if !tables.contains(item.table) { tables.append(item.table) }
         }

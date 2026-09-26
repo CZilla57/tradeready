@@ -44,6 +44,11 @@ struct NativeMutationPushOutcome: Equatable {
     /// got a 403 for. The coordinator's one retry after a refresh passes them
     /// back, so only a change whose 403 repeats is refused.
     var forbiddenKeys: Set<String> = []
+    /// Phase 12 (12.02, charter TH-5): changes dropped as unsendable (code
+    /// `record-contract/<table>`). They are in neither `remaining` nor
+    /// `rejected`; the coordinator counts them for the pass, so the drop is
+    /// reported even when the pass otherwise completes.
+    var discarded: [Canonical.MutationItem] = []
 }
 
 /// Phase 4 write path for the existing JSON-blob sync contract.
@@ -145,6 +150,7 @@ struct NativeSupabaseMutationPushService {
         var authRejected = false
         var rejected: [NativeMutationRejection] = []
         var forbiddenKeys: Set<String> = []
+        var discarded: [Canonical.MutationItem] = []
 
         for item in items {
             let request: URLRequest
@@ -161,6 +167,7 @@ struct NativeSupabaseMutationPushService {
                 // and record a bounded diagnostic.
                 Self.reportDiagnostic(stage: "record-contract", table: item.table)
                 Self.appendUnique(item.table, to: &failedTables)
+                discarded.append(item)
                 continue
             }
 
@@ -203,7 +210,8 @@ struct NativeSupabaseMutationPushService {
             authRejected: authRejected,
             lastDiagnosticCode: Self.lastDiagnosticCode,
             rejected: rejected,
-            forbiddenKeys: forbiddenKeys
+            forbiddenKeys: forbiddenKeys,
+            discarded: discarded
         )
     }
 

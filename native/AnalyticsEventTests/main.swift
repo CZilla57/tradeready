@@ -56,12 +56,17 @@ struct NoopReloader: NativeWidgetTimelineReloading {
 
 @MainActor
 final class SubscriptionStub: NativeSubscriptionServing {
+    /// 12.02 (L178): a cancelled or failed purchase for the TH-10 emitter test.
+    var purchaseCancelled = false
+    var purchaseError: Error?
+
     func prepare(appUserID: String, apiKey: String, entitlementID: String) async throws -> NativeSubscriptionEntitlement {
         .init(isActive: false, isTrialing: false)
     }
     func loadOffering() async throws -> NativeSubscriptionOffering { .init(packages: []) }
     func purchase(packageID: String) async throws -> NativeSubscriptionPurchaseResult {
-        .init(entitlement: .init(isActive: false, isTrialing: false), userCancelled: false)
+        if let purchaseError { throw purchaseError }
+        return .init(entitlement: .init(isActive: false, isTrialing: false), userCancelled: purchaseCancelled)
     }
     func restore() async throws -> NativeSubscriptionEntitlement { .init(isActive: false, isTrialing: false) }
     func logOut() async {}
@@ -142,6 +147,8 @@ struct AnalyticsEventTests {
         signInLandingOnAccountMismatch()
         screenAppearances(root: root)
         throwingTransportDoesNotAffectCommits()
+        paymentEmittersReadByCharter()
+        await subscriptionEmitterReadByCharter()
 
         if failures > 0 {
             print("Analytics event tests FAILED: \(failures) of \(checks) checks")
@@ -859,5 +866,132 @@ struct AnalyticsEventTests {
         expect(relaunched.customers.contains { $0.id == customer.id }, "throwing: the customer is on disk after relaunch")
         expect(relaunched.jobs.first { $0.id == job.id }?.status == .inProgress,
                "throwing: the advanced job status is on disk after relaunch")
+    }
+
+    // MARK: 11. Payment emitters a charter metric reads (12.02, L178)
+
+    /// Phase 12 (12.02, charter L178 and TH-9): the charter's payment
+    /// reconciliation cross-check counts `payment_recorded` and
+    /// `invoice_paid`. The journey above covers a partial payment, a void and
+    /// Mark paid; this covers the two other emitters of `invoice_paid`: a
+    /// recorded payment that settles the balance, and bulk Mark paid (which
+    /// also sends `bulk_invoices_marked_paid`). A commit that fails sends
+    /// nothing, so the counts never run ahead of what was saved.
+    @MainActor
+    static func paymentEmittersReadByCharter() {
+        let adapter = FakeSDKAdapter()
+        let recorder = Recorder()
+        let (store, directory) = makeStore(transport(adapter, recorder), tag: "payments")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        store.testFinishInteractiveSignIn(subject: "user-p", binding: hexBinding("c7"), email: "p@example.com", method: .password)
+
+        func invoice(_ number: String, amount: Double) -> Invoice {
+            var value = Invoice()
+            value.customer = "Payment Customer"
+            value.number = number
+            value.amount = amount
+            return value
+        }
+        func captures() -> [AdapterCall] {
+            adapter.calls.filter { if case .capture = $0 { true } else { false } }
+        }
+
+        let full = invoice("INV-2001", amount: 80)
+        store.upsert(full)
+        adapter.calls.removeAll()
+        var payment = Payment()
+        payment.amount = 80
+        payment.method = "Card"
+        if case .failure = store.recordPayment(invoiceID: full.id, payment: payment) {
+            expect(false, "payments: the settling payment is recorded")
+        }
+        if case .failure = store.recordPayment(invoiceID: full.id, payment: payment) {
+            expect(false, "payments: the retried payment is idempotent")
+        }
+        expectEqual(captures(), [
+            .capture("payment_recorded", ["amount": 80, "method": "card", "balanceRemaining": 0]),
+            .capture("invoice_paid", ["amount": 80]),
+        ], "payments: a payment that settles the balance sends payment_recorded, then invoice_paid, once")
+
+        let first = invoice("INV-2002", amount: 120)
+        let second = invoice("INV-2003", amount: 45.5)
+        store.upsert(first)
+        store.upsert(second)
+        adapter.calls.removeAll()
+        let bulk = store.commitBulkSettleInvoices(ids: [first.id, second.id, full.id])
+        expect(bulk.settled.count == 2 && bulk.skipped == 1, "payments: bulk settles the two open invoices and skips the paid one")
+        expectEqual(captures(), [
+            .capture("invoice_paid", ["amount": 120]),
+            .capture("invoice_paid", ["amount": 45.5]),
+            .capture("bulk_invoices_marked_paid", ["count": 2]),
+        ], "payments: bulk Mark paid sends invoice_paid per settled invoice, then bulk_invoices_marked_paid")
+
+        // A failed commit (the store directory is read-only) sends nothing.
+        let blocked = invoice("INV-2004", amount: 60)
+        store.upsert(blocked)
+        adapter.calls.removeAll()
+        do {
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        } catch {
+            expect(false, "payments: the store directory can be made read-only (\(error))")
+        }
+        var blockedPayment = Payment()
+        blockedPayment.amount = 60
+        blockedPayment.method = "Cash"
+        if case .success = store.recordPayment(invoiceID: blocked.id, payment: blockedPayment) {
+            expect(false, "payments: a payment on a read-only store fails")
+        }
+        let blockedBulk = store.commitBulkSettleInvoices(ids: [blocked.id])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        expect(blockedBulk.settled.isEmpty, "payments: bulk Mark paid on a read-only store settles nothing")
+        expectEqual(captures(), [], "payments: a failed commit sends no payment or paid event")
+        expect(recorder.diagnostics.isEmpty && recorder.violations.isEmpty, "payments: nothing stripped, every event in the catalog")
+    }
+
+    // MARK: 12. The subscription emitter a charter metric reads (12.02, L178)
+
+    /// Phase 12 (12.02, charter L178 and TH-10): the monitoring doc reads
+    /// PostHog `subscription_purchased` as TH-10's cross-check against
+    /// RevenueCat. RN `PaywallScreen.tsx:90` sends it once `purchasePackage`
+    /// resolves without a cancel; a cancel or a thrown purchase sends nothing.
+    @MainActor
+    static func subscriptionEmitterReadByCharter() async {
+        let adapter = FakeSDKAdapter()
+        let recorder = Recorder()
+        let stub = SubscriptionStub()
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "tradeready-analytics-events-subscription-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppStore(
+            fileURL: directory.appending(path: "store.json"),
+            seedIfMissing: false,
+            subscriptionService: stub,
+            analytics: transport(adapter, recorder),
+            widgetTimelineReloader: NoopReloader(),
+            secureSettingsStore: hostTestSecureSettingsStore()
+        )
+        store.testFinishInteractiveSignIn(subject: "user-s", binding: hexBinding("c8"), email: "s@example.com", method: .password)
+        adapter.calls.removeAll()
+        func captures() -> [AdapterCall] {
+            adapter.calls.filter { if case .capture = $0 { true } else { false } }
+        }
+
+        stub.purchaseCancelled = true
+        _ = await store.purchaseSubscription(packageID: "$rc_annual")
+        stub.purchaseCancelled = false
+        stub.purchaseError = NSError(domain: "RevenueCat.ErrorCode", code: 2)
+        _ = await store.purchaseSubscription(packageID: "$rc_annual")
+        expectEqual(captures(), [], "subscription: a cancelled or failed purchase sends no subscription_purchased")
+
+        stub.purchaseError = nil
+        _ = await store.purchaseSubscription(packageID: "$rc_annual")
+        expectEqual(captures(), [.capture("subscription_purchased", [:])],
+                    "subscription: a completed purchase sends subscription_purchased once")
+        expect(recorder.diagnostics.isEmpty && recorder.violations.isEmpty,
+               "subscription: nothing stripped, the event is in the catalog")
     }
 }

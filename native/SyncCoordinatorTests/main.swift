@@ -353,6 +353,85 @@ private func rejectedChanges(
            "12.00b.1: the newer change stays queued for the next pass")
 }
 
+/// Phase 12 (12.02, charter TH-5): a change the push drops as unsendable
+/// (`record-contract/<table>`) leaves the queue and the pass can still end
+/// `.completed`, so the status carries the pass's discarded count and table
+/// for `AppStore`'s remote signal. Only a real drop counts: a settle that
+/// keeps the attempt queued discards nothing, and every pass starts at zero.
+@MainActor
+private func discardedChanges(
+    makeQueue: (String) -> Canonical.NativeMutationQueue,
+    seed: (Canonical.NativeMutationQueue, [String]) throws -> Void,
+    credentials: NativeSyncCredentials,
+    expect: (Bool, String) -> Void
+) async throws {
+    func dropping(_ bad: [Canonical.MutationItem], pushed: Int) -> NativeMutationPushOutcome {
+        var outcome = NativeMutationPushOutcome(
+            remaining: [], pushedCount: pushed,
+            failedTables: bad.isEmpty ? [] : ["jobs"], authRejected: false,
+            lastDiagnosticCode: bad.isEmpty ? nil : "record-contract/jobs"
+        )
+        outcome.discarded = bad
+        return outcome
+    }
+
+    let queue = makeQueue("discarded")
+    try seed(queue, ["good", "unsendable"])
+    let unsendable = queue.load()[1]
+    var settled: [NativeMutationPushSettlement] = []
+    let coordinator = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, index in dropping(index == 0 ? [unsendable] : [], pushed: 1) },
+        queue: queue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { settled.append($0) }
+    )
+    expect(await coordinator.sync(trigger: .foreground) == .completed(pushed: 1, authRefreshed: false),
+           "12.02 TH-5: a pass whose only problem is a discarded change still completes")
+    expect(queue.load().isEmpty, "12.02 TH-5: the discarded change left the queue")
+    expect(coordinator.status().discardedCount == 1 && coordinator.status().discardedTable == "jobs",
+           "12.02 TH-5: the status carries the pass's discarded count and table")
+    expect(coordinator.status().diagnosticCode == "record-contract/jobs",
+           "12.02 TH-5: the bounded record-contract code stays on the status")
+
+    try seed(queue, ["later"])
+    _ = await coordinator.sync(trigger: .foreground)
+    expect(coordinator.status().discardedCount == 0 && coordinator.status().discardedTable == nil,
+           "12.02 TH-5: a later pass that discards nothing starts again from zero")
+
+    // A settle that cannot record the attempt keeps every started change
+    // queued, the unsendable one included: nothing was discarded.
+    let keptQueue = makeQueue("discarded-settle-failed")
+    try seed(keptQueue, ["kept-good", "kept-unsendable"])
+    let keptUnsendable = keptQueue.load()[1]
+    let kept = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, _ in dropping([keptUnsendable], pushed: 1) },
+        queue: keptQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { _ in throw SettleFailed() }
+    )
+    _ = await kept.sync(trigger: .foreground)
+    expect(keptQueue.load().count == 2 && kept.status().discardedCount == 0,
+           "12.02 TH-5: a failed settle keeps the change queued and counts no discard")
+
+    // An account boundary clears it with the rest of the status.
+    let resetQueue = makeQueue("discarded-reset")
+    try seed(resetQueue, ["reset-unsendable"])
+    let resetUnsendable = resetQueue.load()[0]
+    let resetting = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, _ in dropping([resetUnsendable], pushed: 0) },
+        queue: resetQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials }
+    )
+    _ = await resetting.sync(trigger: .foreground)
+    expect(resetting.status().discardedCount == 1, "12.02 TH-5: sanity: the drop was counted")
+    resetting.reset()
+    expect(resetting.status() == NativeSyncStatus(), "12.02 TH-5: reset clears the discarded count and table")
+    expect(settled.count >= 1, "12.02 TH-5: sanity: the settle step saw the attempt")
+}
+
 @main
 struct SyncCoordinatorTests {
     @MainActor
@@ -801,6 +880,7 @@ struct SyncCoordinatorTests {
                "an account-boundary reset clears retries and prior status")
 
         try await rejectedChanges(makeQueue: makeQueue, seed: seed, credentials: credentials, expect: expect)
+        try await discardedChanges(makeQueue: makeQueue, seed: seed, credentials: credentials, expect: expect)
 
         if failures == 0 { print("PASS: native sync coordinator tests") }
         else { exit(1) }

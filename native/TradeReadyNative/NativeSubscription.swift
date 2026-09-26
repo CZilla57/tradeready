@@ -131,6 +131,19 @@ func nativeSubscriptionMessage(for error: Error) -> String {
     return NativeSubscriptionError.unavailable.localizedDescription
 }
 
+/// Phase 12 (12.02, charter TH-10): RN `PaywallScreen` skips
+/// `reportError(err, {context: 'purchase'})` when `err.userCancelled`.
+/// RevenueCat throws `ErrorCode.purchaseCancelledError` (code 1 in the
+/// `RevenueCat.ErrorCode` domain) for a cancel it did not return as
+/// `userCancelled`, so that one is not reported either.
+func nativeSubscriptionIsUserCancellation(_ error: Error) -> Bool {
+    #if canImport(RevenueCat)
+    if let code = error as? RevenueCat.ErrorCode, code == .purchaseCancelledError { return true }
+    #endif
+    let ns = error as NSError
+    return ns.domain == "RevenueCat.ErrorCode" && ns.code == 1
+}
+
 /// RevenueCat is configured only after Supabase independently verifies the
 /// account. The Supabase UUID intentionally remains the RevenueCat App User ID:
 /// the existing webhook keys subscription rows by that exact stable value.

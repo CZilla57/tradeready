@@ -74,6 +74,45 @@ extension Canonical {
             case completed(protected: Int, failed: Int)
         }
 
+        /// Phase 12 (12.02, L267.a): a running, counts-only tally of every
+        /// `LegacyFileProtectionOutcome` this process produced (the migration's
+        /// own pass and each launch's re-protect), for the support report. A
+        /// class so every copy of the repository shares it; bounded; never a
+        /// path or filename.
+        final class LegacyFileProtectionTally: @unchecked Sendable {
+            struct Summary: Equatable {
+                var checks = 0
+                var enumeratorUnavailable = 0
+                var lastProtected = 0
+                var lastFailed = 0
+                var failedTotal = 0
+            }
+
+            static let maximumCount = 9_999
+            private let lock = NSLock()
+            private var current = Summary()
+
+            var summary: Summary {
+                lock.lock(); defer { lock.unlock() }
+                return current
+            }
+
+            func record(_ outcome: LegacyFileProtectionOutcome) {
+                lock.lock(); defer { lock.unlock() }
+                current.checks = min(Self.maximumCount, current.checks + 1)
+                switch outcome {
+                case .enumeratorUnavailable:
+                    current.enumeratorUnavailable = min(Self.maximumCount, current.enumeratorUnavailable + 1)
+                    current.lastProtected = 0
+                    current.lastFailed = 0
+                case let .completed(protected, failed):
+                    current.lastProtected = min(Self.maximumCount, max(0, protected))
+                    current.lastFailed = min(Self.maximumCount, max(0, failed))
+                    current.failedTotal = min(Self.maximumCount, current.failedTotal + max(0, failed))
+                }
+            }
+        }
+
         /// Task 11.13 fix round 3: everything under `LegacyBackups/` is the
         /// exact pre-conversion source, which can hold an RN-era plaintext
         /// Square access token (contract §17.2 G6). It is written with
@@ -88,6 +127,8 @@ extension Canonical {
         let accountScrubMarkerURL: URL
         let accountScrubClearedMarkerURL: URL
         let liveMediaDirectoryURL: URL
+        /// Phase 12 (12.02, L267.a): see `LegacyFileProtectionTally`.
+        let legacyFileProtectionTally = LegacyFileProtectionTally()
 
         private let fileManager: FileManager
         private let now: () -> Date
@@ -486,6 +527,7 @@ extension Canonical {
         private func protectCopiedLegacyFiles(in directory: URL) -> LegacyFileProtectionOutcome {
             guard let files = legacyFileEnumerator(directory) else {
                 print("TradeReadyLegacyBackup stage=file-protection")
+                legacyFileProtectionTally.record(.enumeratorUnavailable)
                 return .enumeratorUnavailable
             }
             var protected = 0
@@ -498,6 +540,7 @@ extension Canonical {
                 } catch { failed += 1 }
             }
             if failed > 0 { print("TradeReadyLegacyBackup stage=file-protection") }
+            legacyFileProtectionTally.record(.completed(protected: protected, failed: failed))
             return .completed(protected: protected, failed: failed)
         }
 

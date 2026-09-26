@@ -291,7 +291,7 @@ struct ImportSettings: View {
                     Label("Prepare support report", systemImage: "wrench.and.screwdriver")
                 }
             }
-            Text("Includes only app version, data counts, backup state, and migration status. It never includes customer records or credentials.")
+            Text("Includes only app version and build, data counts, backup, migration, cleanup and sync status, and error codes. It never includes customer records, names, contact details or credentials.")
                 .font(.caption).foregroundStyle(.secondary)
             if let supportReportError {
                 Text(supportReportError).font(.caption).foregroundStyle(Color.tradeDangerText)

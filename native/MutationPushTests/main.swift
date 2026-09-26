@@ -165,6 +165,12 @@ struct MutationPushTests {
                "an unsendable record is dropped rather than wedging the queue")
         expect(mismatchOutcome.lastDiagnosticCode == "record-contract/jobs",
                "a contract failure exposes only a bounded diagnostic code")
+        // Phase 12 (12.02, charter TH-5): the dropped change is handed back
+        // as discarded, so the pass can report it remotely; an accepted one
+        // never is.
+        expect(mismatchOutcome.discarded == [item("jobs", .upsert, "j1", jobBlob("DIFFERENT"))],
+               "12.02 TH-5: the unsendable change is returned as discarded")
+        expect(jobsOutcome.discarded.isEmpty, "12.02 TH-5: an accepted change is never discarded")
 
         // Transient failure retains the item for retry.
         let failLoader = PushLoader { _ in 500 }

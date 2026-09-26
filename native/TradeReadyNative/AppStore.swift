@@ -174,7 +174,11 @@ final class AppStore: ObservableObject {
     @Published var migrationMessage: String?
     @Published private(set) var launchMigrationNotice: LegacyLaunchMigrationNotice?
     @Published private(set) var isLegacyMigrationBlocked = false
-    @Published private(set) var isAccountScrubBlocked = false
+    @Published private(set) var isAccountScrubBlocked = false {
+        // Phase 12 (12.02): an unblocked cleanup ends the reported episode,
+        // so the next blocked one reports again (`markAccountScrubBlocked`).
+        didSet { if !isAccountScrubBlocked { accountScrubBlockedReported = false } }
+    }
     /// Phase 12 (12.00b.2-G, Task 9b review M3): what the blocked cleanup is
     /// finishing, so the blocked screen says "account deletion" for a
     /// deletion (`.all`). Nil when nothing is blocked or the marker cannot be
@@ -472,6 +476,16 @@ final class AppStore: ObservableObject {
     private(set) var boundaryStepMarkerWriteFailureCount = 0
     private(set) var boundaryStepRecordFailureCount = 0
     private static let boundaryStepFailureCap = 99
+    /// Phase 12 (12.02): the support report's and the charter monitors'
+    /// state (`NativeSupportDiagnostics.swift`). Codes and bounded counts
+    /// only: the codes `reportError` sent, the sync monitor's streaks and
+    /// totals, the last launch-migration result, and the blocked account
+    /// scrub's attempts (reported once per blocked episode).
+    private(set) var supportCodeHistory = NativeSupportCodeHistory()
+    private(set) var syncMonitor = NativeSyncMonitor()
+    private(set) var legacyMigrationSummary = NativeLegacyMigrationSummary()
+    private(set) var accountScrubBlockedCount = 0
+    private var accountScrubBlockedReported = false
     private let initialSyncService: (any NativeInitialSyncServing)?
     private let subscriptionService: NativeSubscriptionServing
     private let injectedJobPhotoTransferService: (any NativeJobPhotoTransferring)?
@@ -754,7 +768,7 @@ final class AppStore: ObservableObject {
             persistenceWritesBlocked = true
             persistenceBlockReason = .accountScrub
             persistenceBlockDetail = nil
-            markAccountScrubBlocked(scope: try? pendingAccountScrubScope())
+            markAccountScrubBlocked(scope: try? pendingAccountScrubScope(), operation: "launch")
             migrationMessage = accountScrubBlockedScope == .all
                 ? "A previous account deletion could not be safely completed. Local data remains hidden until cleanup succeeds."
                 : "A previous sign-out could not be safely completed. Local data remains hidden until cleanup succeeds."
@@ -762,7 +776,8 @@ final class AppStore: ObservableObject {
         applyLaunchMigrationState(
             outcome: launchOutcome,
             error: launchError,
-            hadNativeSnapshot: hadNativeSnapshot || FileManager.default.fileExists(atPath: repository.backupURL.path)
+            hadNativeSnapshot: hadNativeSnapshot || FileManager.default.fileExists(atPath: repository.backupURL.path),
+            operation: "launch"
         )
         syncStatus = NativeSyncStatus(pendingCount: mutationQueue.load().count)
     }
@@ -865,15 +880,182 @@ final class AppStore: ObservableObject {
     /// Creates a metadata-only JSON report that the user can explicitly share
     /// with support. The closed report schema excludes customer records,
     /// identifiers, file paths, errors, credentials, sessions, and raw values.
-    func createPersistenceSupportReport(appVersion: String? = nil) throws -> URL {
-        let resolvedVersion = appVersion
-            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "unknown"
-        let data = try persistenceDiagnostics().encodedSupportReport(appVersion: resolvedVersion)
+    ///
+    /// Phase 12 (12.02): the v3 report (`NativeSupportReport`), with the v2
+    /// persistence report nested under `persistence`. Versions, booleans,
+    /// bounded counts, age buckets and bounded codes only, within
+    /// `NativeSupportDiagnostics.maximumReportBytes`.
+    func createPersistenceSupportReport(appVersion: String? = nil, appBuild: String? = nil) throws -> URL {
+        let data = try NativeSupportDiagnostics.encode(supportReport(appVersion: appVersion, appBuild: appBuild))
         let reportURL = fileURL.deletingLastPathComponent()
             .appendingPathComponent("tradeready-support-report.json")
         try data.write(to: reportURL, options: .atomic)
         return reportURL
+    }
+
+    /// Phase 12 (12.02): the support report's contents. Every string is a
+    /// `NativeSupportCode`; nothing here reads a record, a credential or a
+    /// marker's bytes (the scrub marker's scope, and whether it could be read,
+    /// is reported as a code; the Keychain deletion record as its presence).
+    func supportReport(appVersion: String? = nil, appBuild: String? = nil) -> NativeSupportReport {
+        let now = Date()
+        let version = NativeSupportCode(appVersion
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "unknown")
+        let build = NativeSupportCode(appBuild
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? "unknown")
+        let count = NativeSupportDiagnostics.boundedCount
+
+        var persistence: Canonical.PersistenceSupportReport?
+        var persistenceUnavailableCode = NativeSupportCode(nil)
+        do {
+            persistence = Canonical.PersistenceSupportReport(
+                appVersion: version.value, diagnostics: try persistenceDiagnostics()
+            )
+        } catch {
+            persistenceUnavailableCode = NativeSupportCode(NativeSupportDiagnostics.errorCode(error))
+        }
+
+        let migration = legacyMigrationSummary
+        let launchMigration = NativeSupportReport.LaunchMigration(
+            notice: NativeSupportCode(launchMigrationNotice?.id),
+            blocked: isLegacyMigrationBlocked,
+            persistenceBlockReason: NativeSupportCode(persistenceBlockReason?.rawValue),
+            persistenceBlockDetail: NativeSupportCode(persistenceBlockDetail),
+            lastOutcome: NativeSupportCode(migration.outcome),
+            lastOperation: NativeSupportCode(migration.operation),
+            lastFailureCode: NativeSupportCode(migration.failureCode),
+            importedCount: count(migration.importedCount),
+            missingPhotoCount: count(migration.missingPhotoCount),
+            adoptedPhotoCount: count(migration.adoptedPhotoCount),
+            deferredPhotoCount: count(migration.deferredPhotoCount)
+        )
+
+        let scrubPendingScope: String
+        do {
+            scrubPendingScope = try repository.pendingAccountScrubScope?.rawValue ?? NativeSupportDiagnostics.none
+        } catch Canonical.SnapshotRepository.AccountScrubMarkerError.undecodable {
+            scrubPendingScope = "undecodable"
+        } catch {
+            scrubPendingScope = "unreadable"
+        }
+        let deletionRecord: String
+        do {
+            deletionRecord = try secureSettingsStore.isAccountDeletionScrubRecorded() ? "present" : "absent"
+        } catch {
+            deletionRecord = "unreadable"
+        }
+        let accountBoundary = NativeSupportReport.AccountBoundary(
+            scrubPending: repository.isAccountScrubPending,
+            scrubPendingScope: NativeSupportCode(scrubPendingScope),
+            scrubBlocked: isAccountScrubBlocked,
+            scrubBlockedScope: NativeSupportCode(isAccountScrubBlocked
+                ? accountScrubBlockedScope?.rawValue ?? "unknown"
+                : NativeSupportDiagnostics.none),
+            scrubBlockedCount: count(accountScrubBlockedCount),
+            deletionPendingWithoutMarker: accountDeletionPendingWithoutMarker,
+            deletionRecordUnverified: accountDeletionRecordUnverified,
+            deletionRecord: NativeSupportCode(deletionRecord),
+            workspaceClearedRecord: repository.isLiveWorkspaceClearedByAccountScrub,
+            cleanupPending: isAccountBoundaryCleanupPending,
+            boundarySteps: Canonical.SnapshotRepository.BoundaryStep.allCases.map {
+                NativeSupportReport.BoundaryStep(
+                    step: NativeSupportCode($0.rawValue),
+                    pending: isBoundaryStepPending($0),
+                    unverified: boundaryStepsUnverified.contains($0)
+                )
+            },
+            boundaryStepMarkerWriteFailureCount: count(boundaryStepMarkerWriteFailureCount),
+            boundaryStepRecordFailureCount: count(boundaryStepRecordFailureCount),
+            aiProviderKeyWipeFailureCount: count(aiProviderKeyWipeFailureCount)
+        )
+
+        let queued = mutationQueue.load()
+        let oldestQueued = queued.compactMap { NativeSupportDiagnostics.queuedDate($0.ts) }.min()
+        let status = syncStatus
+        // Refused changes on file for this owner, including one hidden while a
+        // newer change for its record is queued (the persistence part counts
+        // the ones Cloud Sync shows). The list last shown if unreadable.
+        let rejectedOnFile = (try? rejectedChangeStore.load(binding: verifiedAccountBinding))?.count
+            ?? rejectedChanges.count
+        let sync = NativeSupportReport.Sync(
+            pendingCount: count(queued.count),
+            oldestPendingAge: NativeSupportCode(NativeSupportDiagnostics.ageBucket(from: oldestQueued, now: now)),
+            isSyncing: status.isSyncing,
+            consecutiveFailures: count(status.consecutiveFailures),
+            lastOutcome: NativeSupportCode(Self.supportCode(for: status.lastOutcome)),
+            diagnosticCode: NativeSupportCode(status.diagnosticCode),
+            lastPullState: NativeSupportCode(Self.supportCode(for: status.lastPullResult?.state)),
+            lastPullCode: NativeSupportCode(status.lastPullResult?.diagnosticCode),
+            backoffActive: status.nextEarliestAttempt.map { $0 > now } ?? false,
+            lastSuccessfulSyncAge: NativeSupportCode(
+                NativeSupportDiagnostics.ageBucket(from: status.lastSuccessfulSyncAt, now: now)
+            ),
+            rejectedChangeCount: count(rejectedOnFile),
+            rejectedChangeOverflowCount: count(rejectedChangeOverflowCount),
+            rejectedChangeScrubFailureCount: count(rejectedChangeScrubFailureCount),
+            discardedChangeCount: count(syncMonitor.discardedChangeCount),
+            throttledPassCount: count(syncMonitor.throttledPassCount),
+            consecutiveThrottledPasses: count(syncMonitor.consecutiveThrottledPasses),
+            maxConsecutiveThrottledPasses: count(syncMonitor.maxConsecutiveThrottledPasses),
+            recentCodes: supportCodeHistory.entries,
+            recentCodesOmitted: count(supportCodeHistory.omittedCount)
+        )
+
+        let replay = widgetActionReplayDiagnostics
+        let widgets = NativeSupportReport.Widgets(
+            mirrorDirty: isWidgetMirrorDirty,
+            mirrorLockBusyCount: count(widgetMirrorLockBusyCount),
+            ownerDroppedActionCount: count(replay.ownerDroppedActionCount),
+            quarantinedQueueCount: count(replay.quarantinedQueueCount),
+            accountSwitchScrubFailureCount: count(replay.accountSwitchScrubFailureCount),
+            setAsideActionCount: count(replay.setAsideActionCount),
+            quarantinedClaimCount: count(replay.quarantinedClaimCount),
+            unreadableClaimCount: count(replay.unreadableClaimCount)
+        )
+
+        let protection = repository.legacyFileProtectionTally.summary
+        return NativeSupportReport(
+            app: .init(version: version, build: build),
+            persistence: persistence,
+            persistenceUnavailableCode: persistenceUnavailableCode,
+            launchMigration: launchMigration,
+            accountBoundary: accountBoundary,
+            sync: sync,
+            widgets: widgets,
+            legacyBackupProtection: .init(
+                checks: count(protection.checks),
+                enumeratorUnavailable: count(protection.enumeratorUnavailable),
+                lastProtectedFiles: count(protection.lastProtected),
+                lastFailedFiles: count(protection.lastFailed),
+                failedFileTotal: count(protection.failedTotal)
+            )
+        )
+    }
+
+    private static func supportCode(for outcome: NativeSyncOutcome?) -> String {
+        switch outcome {
+        case nil: NativeSupportDiagnostics.none
+        case .idleNoChanges?: "idle-no-changes"
+        case .offline?: "offline"
+        case .notAuthenticated?: "not-authenticated"
+        case .backoffDeferred?: "backoff-deferred"
+        case .alreadyRunning?: "already-running"
+        case .completed?: "completed"
+        case .partial?: "partial"
+        case .failed?: "failed"
+        }
+    }
+
+    private static func supportCode(for state: NativeSyncPullResult.State?) -> String {
+        switch state {
+        case nil: NativeSupportDiagnostics.none
+        case .completed?: "completed"
+        case .partial?: "partial"
+        case .failed?: "failed"
+        case .skipped?: "skipped"
+        }
     }
 
     @discardableResult
@@ -1915,6 +2097,10 @@ final class AppStore: ObservableObject {
             return (settledPublished, skipped)
         } catch {
             migrationMessage = "Could not mark the invoices paid: \(error.localizedDescription)"
+            reportInvoicePaymentFailure(
+                code: "invoice-payment/bulkMarkPaid/\(NativeSupportDiagnostics.errorCode(error))",
+                operation: "bulkMarkPaid", count: settledCanonical.count
+            )
             return ([], ids.count)
         }
     }
@@ -4239,9 +4425,9 @@ final class AppStore: ObservableObject {
                 secureStore: secureSettingsStore
             ))
             if outcome.status == .migrated { load(seedIfMissing: false) }
-            applyLaunchMigrationState(outcome: outcome, error: nil, hadNativeSnapshot: false)
+            applyLaunchMigrationState(outcome: outcome, error: nil, hadNativeSnapshot: false, operation: "retry")
         } catch {
-            applyLaunchMigrationState(outcome: nil, error: error, hadNativeSnapshot: false)
+            applyLaunchMigrationState(outcome: nil, error: error, hadNativeSnapshot: false, operation: "retry")
         }
     }
 
@@ -4841,6 +5027,10 @@ final class AppStore: ObservableObject {
             advancePastSubscriptionGate()
             return .completed
         } catch {
+            // Phase 12 (12.02, TH-10): RN `PaywallScreen.tsx:94`.
+            if !nativeSubscriptionIsUserCancellation(error) {
+                reportError(error, context: ["context": "purchase"])
+            }
             return .failed(message: subscriptionMessage(for: error))
         }
     }
@@ -4861,6 +5051,8 @@ final class AppStore: ObservableObject {
             advancePastSubscriptionGate()
             return .completed
         } catch {
+            // Phase 12 (12.02, TH-10): RN `PaywallScreen.tsx:115`.
+            reportError(error, context: ["context": "restorePurchases"])
             return .failed(message: subscriptionMessage(for: error))
         }
     }
@@ -4918,7 +5110,7 @@ final class AppStore: ObservableObject {
             try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .live)
         } catch {
             if repository.isAccountScrubPending {
-                markAccountScrubBlocked(scope: try? repository.pendingAccountScrubScope)
+                markAccountScrubBlocked(scope: try? repository.pendingAccountScrubScope, operation: "signOut")
             } else {
                 isAccountScrubBlocked = false
                 accountScrubBlockedScope = nil
@@ -5002,7 +5194,7 @@ final class AppStore: ObservableObject {
             persistenceWritesBlocked = true
             persistenceBlockReason = .accountScrub
             persistenceBlockDetail = nil
-            markAccountScrubBlocked(scope: .all)
+            markAccountScrubBlocked(scope: .all, operation: "deleteAccount")
             applyEmptySnapshot()
             throw NativeAccountSignOutError.localScrubFailed
         }
@@ -5066,7 +5258,7 @@ final class AppStore: ObservableObject {
             // Task 11.05: widgets were reloaded right after the App Group
             // wipe inside `scrubWidgetAccountState()`.
         } catch {
-            markAccountScrubBlocked(scope: scope)
+            markAccountScrubBlocked(scope: scope, operation: "retry")
             migrationMessage = scope == .all
                 ? "Account deletion cleanup is still incomplete. No local account data was opened."
                 : "Sign-out cleanup is still incomplete. No local account data was opened."
@@ -5119,9 +5311,29 @@ final class AppStore: ObservableObject {
 
     /// Phase 12 (12.00b.2-G, Task 9b review M3): the blocked cleanup screen,
     /// with the scope it is finishing (nil reads as a sign-out).
-    private func markAccountScrubBlocked(scope: Canonical.SnapshotRepository.AccountScrubScope?) {
+    ///
+    /// Phase 12 (12.02, P12-001/P12-006): the first blocked attempt of an
+    /// episode reports `account-scrub/blocked/<live|all|unknown>` (plus
+    /// `/without-marker` for a deletion recorded only in the Keychain), with
+    /// the operation and the running attempt count. A retry that stays
+    /// blocked does not report again; an unblocked cleanup re-arms it
+    /// (`isAccountScrubBlocked`'s `didSet`). The scope is a code, never the
+    /// marker's bytes.
+    private func markAccountScrubBlocked(
+        scope: Canonical.SnapshotRepository.AccountScrubScope?,
+        operation: String
+    ) {
+        accountScrubBlockedCount = min(Self.boundaryStepFailureCap, accountScrubBlockedCount + 1)
         isAccountScrubBlocked = true
         accountScrubBlockedScope = scope
+        guard !accountScrubBlockedReported else { return }
+        accountScrubBlockedReported = true
+        let scopeCode = scope?.rawValue ?? "unknown"
+        let markerCode = repository.isAccountScrubPending ? "" : "/without-marker"
+        reportError(
+            ["code": "account-scrub/blocked/\(scopeCode)\(markerCode)", "message": "Account cleanup could not finish"],
+            context: ["context": "accountScrub", "operation": operation, "count": accountScrubBlockedCount]
+        )
     }
 
     /// Phase 12 (review M1): every scene activation retries the pending
@@ -5152,6 +5364,9 @@ final class AppStore: ObservableObject {
         // Phase 12 (12.00b.2-G fix round 1, R31): a completed sign-out or
         // deletion is never overwritten by a suspended identity check.
         accountBoundaryGeneration &+= 1
+        // Phase 12 (12.02): the next account starts a new throttle streak
+        // and pending-age episode; the counts stay for the support report.
+        syncMonitor.resetForAccountBoundary()
         // Task 11.08 (§9.4): sign-out, completed deletion, the paywall
         // sign-out and a retried scrub all end here — reset first.
         applyAnalyticsIdentityBoundary()
@@ -5735,6 +5950,7 @@ final class AppStore: ObservableObject {
             authenticationGateState = .initialSyncUnavailable(
                 message: "Local data must be recovered before cloud data can be safely applied.\n\nDiagnostic code: preflight/local-recovery/\(reason)\(detail)"
             )
+            reportInitialSyncUnavailable(code: "preflight/local-recovery/\(reason)\(detail)", operation: "preflight")
             return
         }
         guard let supabaseURL = BuildEnvironment.supabaseURL,
@@ -5745,6 +5961,7 @@ final class AppStore: ObservableObject {
                 message: NativeInitialSyncError.invalidConfiguration.localizedDescription
                     + "\n\nDiagnostic code: preflight/configuration-or-session"
             )
+            reportInitialSyncUnavailable(code: "preflight/configuration-or-session", operation: "preflight")
             return
         }
         let service = initialSyncService ?? NativeSupabaseInitialSyncService(
@@ -5845,8 +6062,19 @@ final class AppStore: ObservableObject {
                 self.authenticationGateState = .initialSyncUnavailable(
                     message: message + "\n\nDiagnostic code: \(diagnosticCode)"
                 )
+                self.reportInitialSyncUnavailable(code: diagnosticCode, operation: "pull")
             }
         }
+    }
+
+    /// Phase 12 (12.02): RN `initialSync` (`reportError(err, {context:
+    /// 'initialSync'})`). The gate's refusal, as the bounded diagnostic code
+    /// its screen shows; "preflight" before the network, "pull" after it.
+    private func reportInitialSyncUnavailable(code: String, operation: String) {
+        reportError(
+            ["code": code, "message": "Initial sync did not complete"],
+            context: ["context": "initialSync", "operation": operation]
+        )
     }
 
     private func advancePastInitialSync(
@@ -8277,12 +8505,25 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Phase 12 (12.02, charter TH-1/TH-2): `operation` is "launch" or
+    /// "retry" (the blocked screen's Try again). A failed migration reports
+    /// `legacy-migration/failed/<domain>/<code>` and a completed journal with
+    /// no snapshot reports `legacy-migration/missing-migrated-snapshot`, each
+    /// under `legacyMigration`. The P12-003 signed-out steady state never
+    /// reaches here with an outcome, so it stays silent. Every outcome is also
+    /// kept for the support report (`legacyMigrationSummary`), counts only.
     private func applyLaunchMigrationState(
         outcome: LegacyMigrationOutcome?,
         error: Error?,
-        hadNativeSnapshot: Bool
+        hadNativeSnapshot: Bool,
+        operation: String
     ) {
-        if error != nil {
+        if let error {
+            let failureCode = NativeSupportDiagnostics.errorCode(error)
+            legacyMigrationSummary = NativeLegacyMigrationSummary(
+                outcome: "failed", operation: operation, failureCode: failureCode
+            )
+            reportLegacyMigrationFailure(code: "legacy-migration/failed/\(failureCode)", operation: operation)
             migrationMessage = "We couldn't finish moving your previous-app data. The source data is still safe."
             if !hadNativeSnapshot {
                 persistenceWritesBlocked = true
@@ -8294,8 +8535,16 @@ final class AppStore: ObservableObject {
             return
         }
         guard let outcome else { return }
+        var summary = NativeLegacyMigrationSummary(
+            outcome: "no-data", operation: operation,
+            importedCount: NativeSupportDiagnostics.boundedCount(outcome.importedCount),
+            missingPhotoCount: NativeSupportDiagnostics.boundedCount(outcome.missingPhotoCount),
+            adoptedPhotoCount: NativeSupportDiagnostics.boundedCount(outcome.adoptedPhotoCount),
+            deferredPhotoCount: NativeSupportDiagnostics.boundedCount(outcome.deferredPhotoCount)
+        )
         switch outcome.status {
         case .migrated:
+            summary.outcome = "migrated"
             isLegacyMigrationBlocked = false
             launchMigrationNotice = .migrated(
                 count: outcome.importedCount,
@@ -8303,10 +8552,14 @@ final class AppStore: ObservableObject {
                 deferredPhotos: outcome.deferredPhotoCount
             )
         case .nativeSnapshotConflict:
+            summary.outcome = "conflict"
             launchMigrationNotice = .conflict
             migrationMessage = "Previous-app data was found, but this app already has data. Nothing was changed."
         case .alreadyCompleted:
+            summary.outcome = "already-completed"
             if !hadNativeSnapshot {
+                summary.outcome = "missing-migrated-snapshot"
+                reportLegacyMigrationFailure(code: "legacy-migration/missing-migrated-snapshot", operation: operation)
                 persistenceWritesBlocked = true
                 persistenceBlockReason = .missingMigratedSnapshot
                 persistenceBlockDetail = nil
@@ -8317,6 +8570,16 @@ final class AppStore: ObservableObject {
         case .noData:
             break
         }
+        legacyMigrationSummary = summary
+    }
+
+    /// Phase 12 (12.02): TH-1/TH-2's remote signal. A bounded code only:
+    /// never the error's message, path or user info.
+    private func reportLegacyMigrationFailure(code: String, operation: String) {
+        reportError(
+            ["code": code, "message": "Previous-app data migration did not finish"],
+            context: ["context": "legacyMigration", "operation": operation]
+        )
     }
 
     /// Phase 7 atomic payment commit. The invoice mutation and the resulting
@@ -8341,6 +8604,7 @@ final class AppStore: ObservableObject {
             replaceOrAppend(result, in: &invoiceRecords, id: \Canonical.Invoice.id)
             snapshot.payload.invoices = invoiceRecords
             guard let published = try? CanonicalUIAdapters.invoice(from: result) else {
+                reportInvoicePaymentFailure(code: "invoice-payment/projection", operation: "commit")
                 return .failure(.persistenceUnavailable)
             }
             var jobRecords = snapshot.payload.jobs ?? []
@@ -8371,8 +8635,20 @@ final class AppStore: ObservableObject {
             return .success(published)
         } catch {
             migrationMessage = "Could not record the payment: \(error.localizedDescription)"
+            reportInvoicePaymentFailure(
+                code: "invoice-payment/commit/\(NativeSupportDiagnostics.errorCode(error))", operation: "commit"
+            )
             return .failure(.persistenceUnavailable)
         }
+    }
+
+    /// Phase 12 (12.02, charter TH-9): a payment the owner entered that could
+    /// not be saved. The operation, the error's domain and code, and (bulk)
+    /// how many invoices it was settling: never an invoice, id or amount.
+    private func reportInvoicePaymentFailure(code: String, operation: String, count: Int? = nil) {
+        var context: [String: Any] = ["context": "invoicePayment", "operation": operation]
+        if let count { context["count"] = count }
+        reportError(["code": code, "message": "Payment could not be saved"], context: context)
     }
 
     /// The same "link decision beats on-site decision, cancellation beats
@@ -10764,8 +11040,15 @@ extension AppStore {
     /// RN `reportError(error, context)`. Call it after the commit it
     /// describes, never inside one: the reporter swallows every failure and
     /// runs off the caller's thread. Only the §10.3 extra keys survive.
+    ///
+    /// Phase 12 (12.02): each report's context and code (never its message)
+    /// also land in `supportCodeHistory`, the support report's recent codes.
     func reportError(_ value: Any?, context: [String: Any]) {
         crashReporting.reportError(value, context: context)
+        supportCodeHistory.record(
+            context: context["context"] as? String,
+            code: NativeSupportDiagnostics.reportedCode(value)
+        )
     }
 
     /// RN `utils/sync.ts` `reportError(firstError, {context: 'pushQueue'})`
@@ -10782,6 +11065,11 @@ extension AppStore {
         // Phase 12 (12.00b.1): the Cloud Sync list follows each pass (a
         // change queued for a refused record hides its entry).
         refreshRejectedChanges()
+        reportSyncPassFailure(status)
+        monitorSyncPass(status)
+    }
+
+    private func reportSyncPassFailure(_ status: NativeSyncStatus) {
         let code = status.diagnosticCode
         switch status.lastOutcome {
         case .failed(let remaining)?, .partial(_, let remaining, _)?:
@@ -10805,6 +11093,37 @@ extension AppStore {
             )
         default:
             return
+        }
+    }
+
+    /// Phase 12 (12.02): the charter's cross-pass signals
+    /// (`NativeSyncMonitor`), after the per-pass reports above: TH-5
+    /// `pushDiscarded` (a change dropped as unsendable, which the pass
+    /// otherwise reports as completed), TH-6/OI-3 `syncThrottle` (three
+    /// throttled network passes in a row, once per streak) and TH-3
+    /// `pendingAge` (a change queued over 24 hours at the end of a network
+    /// pass, once until the queue moves on). Counts and table names only.
+    private func monitorSyncPass(_ status: NativeSyncStatus) {
+        guard NativeSyncMonitor.isNetworkPass(status.lastOutcome) else { return }
+        let oldest = mutationQueue.load().compactMap { NativeSupportDiagnostics.queuedDate($0.ts) }.min()
+        for signal in syncMonitor.recordPass(status, oldestPendingAt: oldest, now: Date()) {
+            switch signal {
+            case let .discarded(table, count):
+                reportError(
+                    ["code": "record-contract/\(table)", "message": "Sync push dropped unsendable changes"],
+                    context: ["context": "pushDiscarded", "collection": table, "count": count]
+                )
+            case let .throttled(passes):
+                reportError(
+                    ["code": "throttle/consecutive-passes", "message": "Sync passes throttled in a row"],
+                    context: ["context": "syncThrottle", "count": passes]
+                )
+            case let .pendingAge(count):
+                reportError(
+                    ["code": "pending-age/over-24h", "message": "Changes pending for over 24 hours"],
+                    context: ["context": "pendingAge", "count": count]
+                )
+            }
         }
     }
 

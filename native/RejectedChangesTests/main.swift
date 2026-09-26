@@ -402,8 +402,13 @@ func testAppStoreSettleAndOwner() async {
     if let url = try? store.createPersistenceSupportReport(appVersion: "test"),
        let text = try? String(contentsOf: url, encoding: .utf8) {
         expect(text.contains("\"rejectedChangeCount\":2"), "report: the support report carries the count")
-        expect(text.contains("\"reportSchemaVersion\":2"), "report: the schema version is 2")
-        for secret in ["J1", "I1", "Private title", "jobs/", bindingA] {
+        // Phase 12 (12.02): the v3 report, with the v2 persistence part nested.
+        expect(text.contains("\"reportSchemaVersion\":3") && text.contains("\"reportSchemaVersion\":2"),
+               "report: the schema versions are 3, with the persistence part at 2")
+        // Its recent codes carry the refusal's bounded code
+        // (`rejected/<table>/<status>`, as sent to Sentry), never a record key.
+        expect(text.contains("\"rejected/jobs/422\""), "report: the refusal's bounded code")
+        for secret in ["J1", "I1", "Private title", "jobs/J1", "invoices/I1", bindingA] {
             expect(!text.contains(secret), "report: the support report never carries '\(secret)'")
         }
     } else {
