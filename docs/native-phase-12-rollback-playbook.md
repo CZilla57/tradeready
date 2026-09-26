@@ -44,8 +44,10 @@ staging exists (D4).
   check that drains the device before any advisory, and the journal adoption rule
   (defect `P12-011`);
 - a G6 test showing that nothing except a permanent deletion removes the legacy sources;
-- the native run marker that the Expo build's E-1 reads to tell one native run from the
-  next (§5.3; review fix round 2, R45a).
+- the native run marker that the Expo build's E-1 reads at app start to tell one native
+  run from the next. A restart after a missing or unreadable marker is random, not a
+  fixed value that could repeat a recorded run (§5.3; review fix rounds 2 and 3, R45a
+  and R48).
 
 **Open:**
 
@@ -53,7 +55,7 @@ staging exists (D4).
 |---|---|---|
 | The rehearsal (plan 12.06 step 5) | owner | §8 and evidence index rows P12-RB-2 to P12-RB-5 and P12-RB-7 |
 | Staffing (step 6) | owner | §8.4 and row P12-RB-6 |
-| The Expo-side rule (1) of the rollback data decision | the owner decides who builds it on the Expo release branch | §5.3 |
+| The Expo-side rule (1) of the rollback data decision: E-1 detects at app start, clears (recommended) or holds, and pulls; E-2 to E-4 (R48) | the owner decides who builds it on the Expo release branch. The branch owner records E-1's keys, the clear-or-hold choice, the marker path under `expo-file-system` and the owner's acceptance of residual 5 | §5.3; §5.6 item 5 |
 | Defect `P12-012` (S1): the Expo build pushes its stale pre-upgrade queue before it pulls | owner: a ruling on Stage A entry (R43), then the §5.3 build | charter §10; §5.3 |
 | Defect `P12-013`: unfinished booking and portal link work has no automatic recovery | filed by the controller; Task 12b wires the recovery and adds the charter row | §5.1 |
 | Version numbers (VER-1) | owner; 12.01 sets the scheme | §3 |
@@ -119,6 +121,10 @@ installs must stop (charter §7; §6 step 1 below).
    Expo build's stale queue on every device that ran the Expo build before the native
    one (defect `P12-012`, charter §10). Rolling back is then itself an S1 risk for those
    devices (§5.3), so the owner records that risk in the decision row.
+
+   An E-1 that looks only when R syncs does not meet the rule. It misses an offline
+   start and a first sign-in, and edits queued before its check are dropped or reverted
+   (§5.3 E-1).
 
 **Fix forward** in every other case. The stage stays paused, or the app stays off sale,
 until the fixed native build is released on a watch day.
@@ -405,78 +411,184 @@ Citations are at `9e84478`; they are React Native files, read-only here.
    The foreground sync (`context/AuthContext.tsx:118`) and the sync banner's "Sync now"
    (`components/SyncBanner.tsx:65-73`) push the same queue, and the banner counts it as
    "N changes pending" (`components/SyncBanner.tsx:47`).
+
+   The stale queue is not the only source. Every save queues the whole collection it
+   saves (`utils/sync.ts:121-123`, `utils/storage/collections.ts:29-31`), and the launch
+   migrations and the push-token save run at every launch (`App.tsx:390-403`). So any
+   save before the pull queues pre-native copies as well, including a save made
+   offline, when no sync runs at all (`utils/sync.ts:318-319`). Review fix round 3
+   (R48) moved E-1's check to app start for this reason.
 3. **Where it is already safe:**
    - **A native-only install.** It has no `__initDone_` key, so `initialSync` takes the
      full-pull path: an empty cursor, then a pull (`utils/sync.ts:397-398`).
    - **Another account signing in.** A different owner marker wipes the local
-     collections and the queue first (`utils/sync.ts:393-395`).
+     collections and the queue first (`utils/sync.ts:394-395`), then resets the cursor
+     and pulls (`utils/sync.ts:397-398`).
 
 **Requirements for the Expo release branch** (to build into R before it is uploaded):
 
-- **E-1. Once per native run: drop the queue that predates it, then pull.** Defined in
-  review fix round 2 (R45, R45a).
-  - **When R looks.** Before the first push of each launch, in `syncIfOnline` before
-    `pushQueue` (`utils/sync.ts:316-321`). That is `pushQueue`'s only caller, so the
-    launch sync, the foreground sync and Sync now all pass the check.
+- **E-1. Once per native run: detect it at app start, drop the queue that predates it,
+  clear the stale copies, then pull.** Defined in review fix rounds 2 and 3 (R45, R45a,
+  R48).
+  - **When R looks: at app start, on every launch.** The check runs as soon as R's
+    JavaScript starts, before anything reads or writes a collection:
+    - before the first screen renders;
+    - before `initialSync` (`context/AuthContext.tsx:42`);
+    - before the launch migrations and the push-token save (`App.tsx:390-403`);
+    - before the background refresh task syncs (`utils/backgroundRefresh.ts:100`).
+
+    It runs online or offline, signed in or signed out, because it reads only a file and
+    AsyncStorage. It must not wait for a sync, for two reasons:
+    - Offline, `syncIfOnline` returns before `pushQueue` (`utils/sync.ts:318-319`), but
+      every save still enqueues (`utils/storage/collections.ts:29-31`).
+    - The first sign-in path of `initialSync` pulls without calling `syncIfOnline`
+      (`utils/sync.ts:390-398`).
   - **The signal: the native run marker.**
     `Application Support/TradeReadyNative/native-run-marker.json` holds
-    `{"run":<n>,"schemaVersion":1}` (`N/NativeRunMarker.swift`). Every native launch adds
-    one to `run` after its launch work (`N/AppStore.swift:804`), including a signed-out
-    or blocked launch. No account boundary removes it. The sign-out's `.live` scrub
-    deletes `store.json` and its backup (`N/Domain/SnapshotRepository.swift:252-253`) but
-    not this file, and a deletion (`.all`) keeps it too, so `run` never repeats a value.
-    Deleting the app removes it, together with R's AsyncStorage. It holds no account data.
-    R reads it with `expo-file-system`, which the Expo build already has. Host test:
+    `{"run":<n>,"schemaVersion":1}` (`N/NativeRunMarker.swift`).
+    - Every native launch adds one to `run` after its launch work
+      (`N/AppStore.swift:804`), including a signed-out or blocked launch.
+    - A missing or unreadable marker restarts at a random run in 1…2,147,483,647, not
+      at a fixed value (review fix round 3). The chance that a restart repeats the run
+      R recorded is about one in two billion.
+    - No account boundary removes it. The sign-out's `.live` scrub deletes `store.json`
+      and its backup (`N/Domain/SnapshotRepository.swift:252-253`) but not this file. A
+      deletion (`.all`) keeps it too.
+    - Deleting the app removes it, together with R's AsyncStorage.
+    - It holds no account data.
+
+    R reads it with `expo-file-system`, which the Expo build already has. That module
+    has no Application Support constant, so the branch owner must build the path and
+    confirm on a device that the module can read it. Without that read, E-1 has no
+    signal and the §5.3 build is not done. Host test:
     `native/run-rollback-readiness-tests.sh`, section M.
-  - **R's record.** R keeps the last run it saw in its own AsyncStorage, for example
-    `__nativeRunSeen` (the branch owner names the key). The record is device state, so
-    the Expo sign-out (E-4) keeps it.
-  - **A new native run** is a marker whose `run` differs from R's record. With no record
-    yet, the native directory `Application Support/TradeReadyNative/`, or any file in it,
-    also counts. That fallback serves the first detection only. The directory is
-    permanent (every native launch creates it, `N/AppStore.swift:567-569`), so it cannot
-    tell one run from the next. `store.json` alone is never a signal: a signed-out native
-    device has none, yet its stale queue survives (item 2).
-  - **On a new native run**, R makes one AsyncStorage write that:
-    - drops the `__syncQueue` entries as they stand (all of them predate the detection);
-    - resets `__lastSyncedAt` to the empty cursor;
+  - **R's record.** R keeps one small AsyncStorage key, for example `__nativeRun` (the
+    branch owner names it), holding `{"run":<n>,"state":"pending"|"seen"}`. The record
+    is device state, so the Expo sign-out (E-4) keeps it.
+  - **A new native run** is a marker whose `run` differs from the record's.
+    - **No record yet.** The native directory `Application Support/TradeReadyNative/`,
+      or any file in it, also counts, even with no marker. The directory is permanent
+      (every native launch creates it, `N/AppStore.swift:567-569`), so it cannot tell
+      one run from the next. When it fires with no marker (a native build that never
+      reached `N/AppStore.swift:804`, or whose marker writes all failed), R records the
+      sentinel run `0`. No marker can hold 0 (`run` is at least 1,
+      `N/NativeRunMarker.swift:44`), so the fallback fires once, and any later marker
+      still counts as new.
+    - `store.json` alone is never a signal. A signed-out native device has none, yet its
+      stale queue survives (item 2).
+  - **On a new native run, one write.** Before anything else runs, R makes one
+    `AsyncStorage.multiSet` that:
+    - sets `__syncQueue` to empty, because every entry in it predates the detection;
+    - sets `__lastSyncedAt` to the empty cursor, so the next pull is a full pull;
+    - sets every pulled collection (`COLLECTION_TABLES`, `utils/sync.ts:77`) to an
+      empty list and `customerNotes` to an empty map, the keys the other-owner path
+      clears (`utils/sync.ts:394`);
+    - sets E-1's held settings keys (below) to empty, since a later native run drops R's
+      earlier edits along with its queue;
     - records the run as pending.
 
-    R then runs the full pull, as the other-owner path does (`utils/sync.ts:395`, `:397`),
-    so that the cloud is authoritative. After the pull it records the run as seen. A
-    relaunch that finds the same run still pending resumes the pull and drops nothing
-    more.
+    The collections are written empty, not removed. A missing collection makes the
+    loaders show sample data (`utils/storage/collections.ts:17-24`).
 
-    Until that pull lands, R must not queue an edit made on its pre-native copy of a
-    record. The queued payload is the whole record, so it would carry stale fields over
-    the native-era row. R either clears its local collections at the detection, as the
-    other-owner path does (`utils/sync.ts:394`), or holds edits until the pull lands.
-    The branch owner records which.
+    Every value in the write is under 1,024 characters. AsyncStorage 2.2.0 keeps such
+    values in its manifest and writes the manifest once, atomically (iOS
+    `RNCAsyncStorage.mm`, `_writeEntry` and `_writeManifest`). A larger value would go
+    to its own file first, so the write must stay small. If R stops before the write
+    lands, the record still holds the old run. The next launch then detects again and
+    repeats the write before anything renders.
+  - **While the run is pending** (on every launch, until the pull lands):
+    - **R lists no pre-native record**, so none can be shown, edited or queued. It says
+      it is getting the latest data (the owner approves the wording), so empty lists are
+      not taken for lost data.
+    - **A record the user creates is queued and pushed as usual.** It is new, not a
+      stale copy.
+    - **Settings are held.** Settings are one record, and they cannot be cleared: with no
+      settings key, R falls back to the defaults (`utils/storage/settings.ts:63`). The
+      push-token save can change them at any launch (`utils/pushToken.ts:26`). While the
+      run is pending, `enqueue` (`utils/sync.ts:99-106`) does not queue `settings`
+      (`utils/storage/settings.ts:79`). R keeps the changed keys in its own key instead,
+      for example `__nativeRunHeldSettings`.
+    - **A relaunch** finds the record pending and the marker unchanged. It detects
+      nothing, clears nothing and drops nothing more. It keeps the settings hold and the
+      pending notice.
+  - **The pull completes the run.** Only the pull waits for the first online, signed-in
+    sync. The run completes when a pull reads every table, the settings and the customer
+    notes without an error, whichever path runs it:
+    - `syncIfOnline` (`utils/sync.ts:316-321`);
+    - `initialSync`'s first sign-in (`utils/sync.ts:397-398`);
+    - the other-owner path (`utils/sync.ts:394-398`).
+
+    Today `pullRemote` swallows a table's failure (`utils/sync.ts:283`) and any other
+    error (`utils/sync.ts:310-312`), so the branch must make it report success. On
+    success, in this order:
+    1. apply the held settings keys over the pulled settings, save them and queue that
+       settings record;
+    2. then record the run as seen and remove the held keys.
+
+    The order makes a crash harmless. Until the run is seen, the held keys stay, so the
+    next full pull applies them again. Queuing settings again replaces the earlier entry
+    (`utils/sync.ts:100-104`). Held keys found while the run is already seen are
+    removed, never applied.
+
+    Held keys that belong to another account are discarded, never applied: the
+    other-owner path and the Expo sign-out (E-4) remove them.
+  - **Invariants.**
+    - **R never drops an edit it made after a detection.** Only a later native run
+      drops it (below).
+    - **The pull never silently reverts an edit R made.** Nothing R shows before the pull
+      is a pre-native copy. A record R created survives the pull, because the pull
+      replaces by id and keeps local-only records (`utils/sync.ts:262-272`). Held
+      settings keys are applied after the pull.
+    - **R never pushes a stale copy.** The queue is emptied at the detection. No
+      pre-native copy is left to be queued, although every save queues the whole
+      collection (`utils/sync.ts:121-123`). Settings are queued only after the pull.
+  - **Clear, not hold: recommended.** The branch owner records the choice. A hold would
+    keep the pre-native copies on screen and hold every enqueue until the pull. The
+    clear is preferred for three reasons:
+    - **The invariants hold by construction, not by merge code.** Nothing stale stays on
+      the device, so no stale copy can be shown, edited, queued or pushed, and no pull
+      can revert an edit made to one.
+    - **It reuses a path R already runs** when another account signs in
+      (`utils/sync.ts:394-398`).
+    - **A hold keeps stale copies on screen.** An invoice paid in the native window
+      shows as unpaid and invites a second payment. Replaying held edits after the pull
+      also needs a per-field merge for every table, including the invoice
+      payment-ledger union (`utils/syncMerge.ts:47`) and deletes. That is new merge code
+      whose failure pushes stale fields: the `P12-012` class.
+
+    **The cost** (residual 5, §5.6 item 5): until the pull, R lists no records, whether
+    offline or before sign-in, and a record created then can duplicate one in the
+    cloud. Settings are the only hold, and it is limited to the changed keys.
   - **No new native run: E-1 does nothing.**
-    - Queue entries that R creates after a detection are never dropped by that
-      detection.
-    - A relaunch of R with its own pending queue and no native run since drops nothing,
-      and the sync pushes that queue (§8.2 step 12).
-  - **After N2, then R again** (a later native run), the stranded pre-N2 R queue is
-    dropped. It is never pushed, because those entries predate N2's rows and a push would
-    overwrite them: the `P12-012` class. This is residual 1 (§5.6 item 1).
-  - The branch owner records the signal and keys used. The rehearsal checks:
-    - the signed-out case (§8.2, steps S1–S5);
-    - the relaunch case (§8.2 step 12).
+    - A detection never drops a queue entry that R creates after it.
+    - A relaunch of R with its own pending queue and no native run since drops
+      nothing, and the sync pushes that queue (§8.2 step 12).
+  - **After N2, then R again** (a later native run), E-1 at app start drops the stranded
+    pre-N2 R queue and clears the pre-N2 copies. It never pushes them, because those
+    entries predate N2's rows and a push would overwrite them: the `P12-012` class. This
+    is residual 1 (§5.6 item 1).
+  - **The branch owner records** the record key, the clear or hold choice, the marker
+    path and the pending-state wording. The rehearsal checks:
+    - R's first action offline (§8.2 step 8);
+    - the relaunch case (§8.2 step 12);
+    - the signed-out native case (§8.2 steps S1–S5);
+    - R starting signed out (§8.2 step D3).
 - **E-2.** Show an unsynced-changes warning when the Expo build cannot confirm that the
   native build's changes were drained. For example: "Changes made in the newer version
   that hadn't finished uploading may be missing. Open the newer version again to upload
   them, or contact support."
 
-  An Expo build cannot read the native queue reliably. Warn on each E-1 detection, so
-  once per native run, unless the owner accepts a narrower signal. A relaunch with no
-  native run since does not warn again.
+  An Expo build cannot read the native queue reliably. Warn on each E-1 detection, at
+  app start and once per native run, unless the owner accepts a narrower signal. A
+  relaunch with no native run since does not warn again. The warning is separate from
+  E-1's pending notice, which stays until the pull lands.
 - **E-3.** Never modify or delete the native store, its journal, `LegacyBackups/`, the
   native run marker or the native Keychain items. They make the re-upgrade safe (§5.2)
   and let E-1 work, and a deletion would contradict Phase 0 step 4.
 - **E-4.** Keep the existing sign-out rule: the Expo sign-out clears the queue and the
-  owner marker (`utils/storage/lifecycle.ts:106-159`). It keeps E-1's run record, which
-  is device state.
+  owner marker (`utils/storage/lifecycle.ts:106-159`). It also clears E-1's held
+  settings keys, which are account data. It keeps E-1's run record, which is device
+  state, and a pending run stays pending until the next account's full pull.
 
 **Who makes the change.** The owner, as the holder of every role (D5), or an agent the
 owner assigns to the Expo release branch outside Phase 12's lanes. Until it is built:
@@ -522,8 +634,9 @@ The rehearsal (P12-RB-2, P12-RB-3) checks both directions on a device.
    re-imports AsyncStorage (rule 3), so N2 never shows it. The edit stays in the React
    Native files (G6), but no build pushes it:
    - A user cannot install R once N2 is the App Store version.
-   - If R runs again after N2 (TestFlight), E-1 sees N2's run and drops that stranded
-     queue rather than push it over N2-era rows (§5.3).
+   - If R runs again after N2 (TestFlight), E-1 sees N2's run at app start. It drops
+     that stranded queue and clears the pre-N2 copies rather than push them over N2-era
+     rows (§5.3).
 
    The procedure is to sync the Expo build before the re-upgrade (§6 step 10, §7.2
    part C). Relaunching R before then is safe: with no native run since, E-1 drops
@@ -543,15 +656,32 @@ The rehearsal (P12-RB-2, P12-RB-3) checks both directions on a device.
 3. **The sign-in state after each transition is not predicted here.** The Expo and
    native builds keep separate sessions, and the Supabase refresh token rotates. The
    rehearsal records whether each transition asked for a sign-in. It never shows another
-   account's data.
-4. **E-1's queue drop relies on native having pushed the records it imported.** The
-   pre-upgrade `__syncQueue` holds edits that the native build imported at the upgrade.
-   E-1 loses nothing when native has already pushed those records to the cloud. If
-   native never finished its initial sync on that device, E-1 drops the queue while the
-   edits exist only in native's store: R does not show them, and they come back only at
-   the re-upgrade, when N2 pushes them, with the same-record overwrite of item 2. The
-   check guards this: it reads `initial-sync-incomplete` and support does not advise the
-   rollback (§5.1), so only a device that skipped the check reaches it.
+   account's data. R starting signed out does not weaken E-1: the check runs at app
+   start, before the sign-in, and the first sign-in's pull completes the run (§5.3;
+   §8.2 step D3).
+4. **E-1's queue drop and clear rely on native having pushed the records it imported.**
+   The pre-upgrade `__syncQueue` and collections hold edits that the native build
+   imported at the upgrade. E-1 loses nothing when native has already pushed those
+   records to the cloud.
+
+   If native never finished its initial sync on that device, E-1 drops the queue and
+   clears the copies while the edits exist only in native's store. R does not show
+   them. They come back only at the re-upgrade, when N2 pushes them, with the
+   same-record overwrite of item 2.
+
+   The check guards this: it reads `initial-sync-incomplete`, and support does not
+   advise the rollback (§5.1). Only a device that skipped the check reaches this case.
+5. **Until R's first full pull after a native run, R lists no records** (the cost of
+   E-1's clear, §5.3). This holds offline or before sign-in. R shows its pending notice
+   instead.
+
+   A record created in that window is kept and pushed, but it can duplicate a record
+   that is already in the cloud. A settings change made in that window is applied after
+   the pull.
+
+   This is not data loss. It needs the owner's acceptance with the §5.3 build. If the
+   owner rules for the hold instead, this residual is replaced by the hold's replay rule
+   (§5.3 E-1).
 
 ## 6. The rollback, step by step
 
@@ -753,10 +883,16 @@ shows the last check. Read its blocker codes and counts (§5.1).
 
 **Part B — after the rollback update (the Expo build R installed)**
 
-> Version `<ROLLBACK_VERSION>` is installed. Open it and sign in if it asks. Your data
-> comes from the cloud, so it can take a minute to appear. If something you entered
-> recently is missing, don't re-enter it yet and don't delete the app. Reply to this
+> Version `<ROLLBACK_VERSION>` is installed. Connect to Wi-Fi or mobile data, open it
+> and sign in if it asks. Your data comes from the cloud, so it can take a minute to
+> appear. Until it has, the app shows no records. If something you entered recently is
+> missing after that, don't re-enter it yet and don't delete the app. Reply to this
 > message and tell us what's missing, and we'll check.
+
+If the user says R shows no records, it has not finished its first pull after the
+native build (§5.3 E-1, §5.6 item 5). Ask them to connect and sign in. A record they
+created in the meantime is kept. If it duplicates one that appears after the pull, they
+can remove the extra one.
 
 If R carries the §5.3 warning and the user saw it, ask whether they had been offline
 before the update. Their changes may still be in the newer version's storage, and they
@@ -833,7 +969,7 @@ The rehearsal also needs:
   - before each deletion, sign out of the build that is installed, in its Settings.
     Keychain items survive deleting the app (charter §10, `P12-006`), so a session left
     signed in could meet the next sequence's data.
-- one team account A with synthetic data, whose records are labelled `RB-C1` … `RB-C8`.
+- one team account A with synthetic data, whose records are labelled `RB-C1` … `RB-C9`.
 
 No staging is needed. No step deletes an account.
 
@@ -852,23 +988,37 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
 
 **Native window, then T1: native N → Expo R**
 
-4. Online, edit `RB-C1` again (suffix ` n1`) and `RB-C2` (suffix ` n1`), and let them
-   sync.
+4. Online, edit `RB-C1` again (suffix ` n1`) and `RB-C2` (suffix ` n1`). In Settings,
+   change the business name (suffix ` n1`). Let them sync.
 5. Offline, edit `RB-C3` (suffix ` n2`). Open Settings › Cloud Sync and tap Check
    everything is saved. Expect "Not ready yet: 1 change waiting to upload". Export the
    support report.
 6. Online, tap the check again. Expect "Ready". Export the support report.
 7. Offline, edit `RB-C4` (suffix ` n3`) and force-quit **without** running the check.
    This is the ignored-guard case of §5.6 residual 2.
-8. Online, and without opening N, install R from TestFlight. Open R and sign in if asked.
-   Pull to refresh.
+8. Online, and without opening N, install R from TestFlight. Do not open it yet: turn
+   airplane mode on first. This is **R's first action offline** (§5.3 E-1 at app start).
+   - Open R offline. Expect the E-2 warning and R's pending notice. No customers or jobs
+     are listed, and no sample data shows: E-1 cleared the pre-native copies before the
+     first screen.
+   - Create customer `RB-C9`. In Settings, change your name (suffix ` r0`).
+   - Force-quit R and open it again, still offline. `RB-C9` and ` r0` are still there,
+     and nothing from before the upgrade is listed.
+   - Go online. Sign in if asked. Pull to refresh.
+
+   If R opens offline asking for a sign-in, it cannot sign in there. Record that this
+   case was not exercised (§8.2 step D3 covers a signed-out start). Then go online, sign
+   in as A, make the same two edits and pull to refresh.
 
 **Expo window, then T2: Expo R → native N2**
 
-9. In R, check the records:
+9. In R, after the pull, check the records:
    - `RB-C1` shows ` n1`, not ` t0` (§5.3 E-1: the stale queue did not overwrite it).
    - `RB-C2` shows ` n1` and `RB-C3` shows ` n2` (both drained).
-   - `RB-C4` does **not** show ` n3` (never uploaded), and R shows the §5.3 E-2 warning.
+   - `RB-C4` does **not** show ` n3` (never uploaded). R showed the §5.3 E-2 warning at
+     step 8.
+   - `RB-C9` is still listed, and your name shows ` r0`: the pull reverted neither.
+   - The business name shows ` n1`: R pushed no stale settings.
    - Native-written records of every table used (customer, job with photo) render.
 10. Online in R, edit `RB-C5` (suffix ` e1`) and `RB-C4` (suffix ` e1`), and let them
     sync. The `RB-C4` edit is the same-record conflict of §5.6 residual 2.
@@ -903,6 +1053,8 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
     - `RB-C5` shows ` e1` and `RB-C6` shows ` e2`: they arrived through the cloud.
     - `RB-C2` shows ` e4`: the edit left pending across the R relaunch (step 12) was
       pushed, not dropped.
+    - `RB-C9` is listed, and Settings shows the business name ` n1` and your name
+      ` r0`. R's step 8 edits came through the cloud, and no stale settings did.
     - `RB-C3` shows ` n2`, not ` e3`: the unsynced R edit stays in R's AsyncStorage (G6)
       and does not reach N2 (§5.6 residual 1). Record it for the owner's ruling.
     - `RB-C4`: record which value wins, ` n3` or ` e1` (§5.6 residual 2). Nothing else
@@ -916,7 +1068,8 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
 1. In N2, sign out (Settings › Account › Sign out), then delete the app (§8.1). This is
    the rehearsal's first deletion, of up to three. It is safe because the round trip is
    already recorded.
-2. Install L from the App Store and sign in to a second team account.
+2. Install L from the App Store. If L opens signed in, sign out first: another build's
+   session survives the deletion (§8.1). Then sign in to a second team account.
 3. Create two customers.
 4. Upgrade to N2 from TestFlight.
 
@@ -929,8 +1082,9 @@ E-1):
 
 - S1. Start with no TradeReady on the device (§8.1): a second iPhone (preferred), or on
   the same iPhone sign out of N2, which P12-RB-5 left signed in to the second team
-  account, and then delete the app. Install L from the App Store, sign in as A and pull
-  to refresh. Online, create customer `RB-C8` and let it sync. Offline, edit `RB-C8`
+  account, and then delete the app. Install L from the App Store. If L opens signed in,
+  sign out first: another build's session survives the deletion (§8.1). Sign in as A
+  and pull to refresh. Online, create customer `RB-C8` and let it sync. Offline, edit `RB-C8`
   (suffix ` s0`) and force-quit. The Expo queue now holds the stale edit.
 - S2. Online, install N from TestFlight over L (Previous Builds), with no delete. Open it,
   let it migrate and sign in as A if asked. Check that `RB-C8` shows ` s0`. Edit
@@ -940,17 +1094,20 @@ E-1):
 - S4. Online, install R from TestFlight over N, with no delete. Open R, and sign in as A,
   the same user, if asked: the Expo build's own session survives the native sign-out.
   Pull to refresh.
-- S5. Check that `RB-C8` shows ` s1`, not ` s0`: E-1 found the native run marker (the
-  sign-out removed `store.json`, not the marker) and dropped the stale queue before any
-  push. Record whether R showed the E-2 warning. If `RB-C8` shows ` s0`, the stale queue
-  was pushed: that is `P12-012`, and the cloud row now holds the stale value (a §10.4
-  query can confirm it). Record it as a failed step.
+- S5. Check that `RB-C8` shows ` s1`, not ` s0`. E-1 found the native run marker at app
+  start (the sign-out removed `store.json`, not the marker). It dropped the stale queue
+  and cleared the stale copy before any push. Record whether R showed the E-2 warning.
+  If `RB-C8` shows ` s0`, the stale queue was pushed: that is `P12-012`, and the cloud
+  row now holds the stale value (a §10.4 query can confirm it). Record it as a failed
+  step.
 
 **P12-RB-7 (P12-011 on a device)** runs last. It checks the case that `P12-011` fixed: a
 native-only install, signed out, then the Expo window, then N2:
 
-- D1. Start with no TradeReady on the device (§8.1): a second iPhone (preferred), or on
-  the same iPhone sign out of R (signed in as A since S4), and then delete the app.
+- D1. Start with no TradeReady on the device (§8.1). A second iPhone is preferred. This
+  step assumes the signed-out variant ran on the same iPhone: sign out of R (signed in
+  as A since S4), and then delete the app. After any other history, follow §8.1
+  instead.
   Online, install N from TestFlight (Previous Builds). With no L before it, this is a
   native-only install. Open it: no migration notice. Sign in as A, pull to refresh, and
   let it sync.
@@ -958,10 +1115,17 @@ native-only install, signed out, then the Expo window, then N2:
   `persistence.migrationStatuses` shows no status for
   `react-native-async-storage-to-v1` (nothing was imported). Sign out (Settings ›
   Account › Sign out) and confirm.
-- D3. Online, install R from TestFlight over N, with no delete. Open R and sign in as A.
-  Record whether R shows the E-2 warning. Pull to refresh: A's records appear. Create
-  customer `RB-C7` and edit `RB-C5` (suffix ` e7`), and let them sync until no "changes
-  pending" banner shows. Force-quit R.
+- D3. **R starts signed out** (§5.3 E-1 runs before the sign-in). Online, install R
+  from TestFlight over N, with no delete.
+  - Open R. It starts signed out, because it has no session on this device. Record it
+    if it does not. Record whether R shows the E-2 warning before the sign-in.
+  - Sign in as A. As soon as R shows its lists, and before pulling to refresh, create
+    customer `RB-C7`. Record whether A's records were already listed then, which means
+    the first sign-in's pull had finished.
+  - Pull to refresh. A's records appear, and `RB-C7` is still listed.
+  - Edit `RB-C5` (suffix ` e7`), and let the changes sync until no "changes pending"
+    banner shows.
+  - Force-quit R.
 - D4. Install N2 from TestFlight over R, with no delete. Open it. Before signing in,
   check that it shows the signed-out start: no records, no migration notice, and no
   conflict or local-recovery screen. N2 did not take over R's session or records.
@@ -1003,11 +1167,14 @@ Steps
 Readiness check (steps 5, 6, 17; S2; D2, D6): lastCheck / drainOutcome / blockers / notes / counts
 Transition timings: T0 <MIN>, T1 <MIN>, T2 <MIN>; manual steps: <LIST>
 N2 launchMigration (step 15): <outcome>; migrationStatuses react-native-async-storage-to-v1: <status>
+R offline first action (step 8): pending notice <yes/no>; pre-upgrade records listed before the pull <none | some>; sample data <none | shown>; sign-in asked offline <yes/no>;
+  after the pull RB-C9 <listed | missing>, your name <r0 | other>, business name <n1 | other>; in N2 (step 16) <same | other>
 R relaunch (step 12): banner after relaunch <1 pending | cleared>; E-2 warning again <yes/no>; RB-C2 in N2 <e4 | other>
 RB-C3 in N2 (residual 1): <n2 | e3>
 RB-C4 winner (residual 2): <n3 | e1>
 Signed-out variant: RB-C8 in R <s1 | s0>; E-2 warning <yes/no>
-P12-RB-7: before sign-in <signed-out start | other: describe>; launchMigration <outcome>;
+P12-RB-7: R at D3 started signed out <yes/no>; E-2 before sign-in <yes/no>; A's records listed when RB-C7 was created <yes/no>;
+  N2 before sign-in <signed-out start | other: describe>; launchMigration <outcome>;
   RB-C7 and RB-C5 e7 after sign-in <present | missing>
 Defects raised: <P12-… or none>
 SC4 (P12-RB-5): migration ran <yes/no>, records shown <COUNT>
@@ -1040,12 +1207,12 @@ These rows are appended to `docs/native-phase-12-evidence-index.md` §23:
 | Row | Stage | What it covers |
 |---|---|---|
 | P12-RB-1 | X | The rollback candidate R uploaded and processed, not submitted, with its numbering recorded |
-| P12-RB-2 | A | Rehearsal T0 and T1: Expo L → native N → Expo R, with unsynced edits and the readiness check; and the signed-out variant (E-1) |
+| P12-RB-2 | A | Rehearsal T0 and T1: Expo L → native N → Expo R, with unsynced edits, the readiness check and R's first action offline; and the signed-out variant (E-1) |
 | P12-RB-3 | A | Rehearsal T2: Expo R → native N2, with a synced Expo edit, one left pending across an R relaunch, an unsynced one, no re-import and the residuals recorded |
 | P12-RB-4 | A | The readiness check's states, its accessibility and the v4 support report on a device |
 | P12-RB-5 | A | SC4: the legacy migration still runs in N2 after the round trip |
 | P12-RB-6 | X | Staffing for the cutover window |
-| P12-RB-7 | A | P12-011 on a device: a native-only install signed out, the Expo window, then N2 adopts native and cloud state |
+| P12-RB-7 | A | P12-011 on a device: a native-only install signed out, the Expo window starting signed out, then N2 adopts native and cloud state |
 
 ## 10. Commands (all owner-gated, placeholders only)
 
