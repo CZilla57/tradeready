@@ -364,6 +364,13 @@ struct SyncSettings: View {
                     Text(NativeRollbackReadinessCopy.summary(check.readiness))
                         .font(.subheadline)
                         .foregroundStyle(check.readiness.isReady ? Color.tradeSuccessText : Color.tradeWarningText)
+                    // Fix round 2 (R46): a neutral note; it never changes
+                    // the result above.
+                    if let note = NativeRollbackReadinessCopy.note(check.readiness) {
+                        Text(note)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } footer: {
                 Text("Support may ask you to run this before an app update. It uploads waiting changes, then says whether anything is still only on this device.")

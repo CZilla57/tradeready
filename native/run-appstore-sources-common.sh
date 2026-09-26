@@ -138,5 +138,6 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeInvoiceBulk.swift
 $ROOT_DIR/native/TradeReadyNative/NativeAnalyticsEvents.swift
 $ROOT_DIR/native/TradeReadyNative/NativePerformanceMetrics.swift
 $ROOT_DIR/native/TradeReadyNative/NativeSupportDiagnostics.swift
+$ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 "

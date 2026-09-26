@@ -206,7 +206,7 @@ func section(_ json: [String: Any], _ key: String) -> [String: Any] {
 }
 
 let rollbackReportKeys: Set<String> = [
-    "lastCheck", "lastCheckAge", "drainOutcome", "blockers", "pendingChangeCount", "rejectedChangeCount",
+    "lastCheck", "lastCheckAge", "drainOutcome", "blockers", "notes", "pendingChangeCount", "rejectedChangeCount",
     "widgetActionCount", "photosPendingUploadCount", "bookingWorkCount", "migrationJournal",
 ]
 
@@ -249,7 +249,8 @@ struct RollbackReadinessTests {
         try await accountChangeDuringTheDrain()
         try await everyFailClosedFlagSendsNothing()
         try await secondTapIsRefused()
-        try await bookingWorkBlocksUntilFinished()
+        try await bookingWorkIsANoteNotABlocker()
+        try await nativeRunMarker()
         reportBeforeAnyCheck()
         sources(root)
 
@@ -690,10 +691,10 @@ struct RollbackReadinessTests {
         expect(third?.readiness.isReady == true, "K2: a later tap runs and drains both (\(third?.readiness.blockers ?? []))")
     }
 
-    // MARK: L. Booking and portal link work (fix round 1)
+    // MARK: L. Booking and portal link work: a note, never a blocker (fix round 2, R46)
 
     @MainActor
-    static func bookingWorkBlocksUntilFinished() async throws {
+    static func bookingWorkIsANoteNotABlocker() async throws {
         do {
             let h = Harness(tag: "booking-work")
             defer { h.cleanup() }
@@ -714,32 +715,54 @@ struct RollbackReadinessTests {
             ))
 
             let before = h.store.rollbackReadiness()
-            expectEqual(before.blockers, [.bookingWorkPending], "L: this owner's unfinished booking work: not ready")
+            expectEqual(before.blockers, [], "L: booking work alone does not block")
+            expect(before.isReady, "L: booking work alone leaves the check ready")
+            expectEqual(before.notes, [.bookingWorkPending], "L: it is reported as a note")
             expectEqual(before.bookingWorkCount, 1, "L: counting only this owner's item")
-            expect(!before.failsClosed, "L: it does not fail closed, so the drain still runs")
 
             let check = await h.store.prepareRollbackReadiness()
             expectEqual(check?.drainOutcome, "completed", "L: the forced push pass ran")
-            expectEqual(check?.readiness.blockers, [.bookingWorkPending],
-                        "L: the push pass does not finish booking work: still not ready")
+            expect(check?.readiness.isReady == true,
+                   "L: with booking work left the check reads Ready (\(check?.readiness.blockers ?? []))")
+            expectEqual(check?.readiness.notes, [.bookingWorkPending], "L: the note stays after the drain")
             expectEqual(check?.readiness.bookingWorkCount, 1, "L: with its count")
             expectEqual(work.load().count, 2, "L: the check never removes booking work")
             let summary = check.map { NativeRollbackReadinessCopy.summary($0.readiness) } ?? ""
-            expect(summary.contains("1 booking or portal link change not finished yet"),
-                   "L: the Settings line says what is left (\(summary))")
+            expectEqual(summary, NativeRollbackReadinessCopy.ready, "L: the result line is the Ready line")
+            let note = check.flatMap { NativeRollbackReadinessCopy.note($0.readiness) } ?? ""
+            expect(note.contains("1 booking or portal link update hasn't finished on this device")
+                   && note.contains("doesn't change the result"),
+                   "L: a neutral note line says what is left (\(note))")
             let report = section(h.report(), "rollbackReadiness")
             expectEqual(Set(report.keys), rollbackReportKeys, "L: the closed rollbackReadiness schema")
-            expectEqual(report["blockers"] as? [String], ["booking-work-pending"], "L: report: the blocker code")
+            expectEqual(report["lastCheck"] as? String, "ready", "L: report: ready")
+            expectEqual(report["blockers"] as? [String], [], "L: report: no blocker")
+            expectEqual(report["notes"] as? [String], ["booking-work-pending"], "L: report: the note code")
             expectEqual(report["bookingWorkCount"] as? Int, 1, "L: report: the count")
             let text = h.reportText()
             expect(!text.contains("c-portal-private") && !text.contains("op-private"),
                    "L: the report never carries the work item")
 
-            // The flow that staged it finishes it (its own removal): ready.
+            // A real blocker still decides the result; the note stays beside it.
+            h.reach.online = false
+            expect(h.store.upsert(Customer(name: "Cedar Roofing", email: "cedar@example.test")),
+                   "L: an offline edit saves")
+            let blocked = await h.store.prepareRollbackReadiness()
+            expectEqual(blocked?.readiness.blockers, [.pendingChanges], "L: the waiting change blocks")
+            expectEqual(blocked?.readiness.notes, [.bookingWorkPending], "L: the note is still reported")
+            let blockedSummary = blocked.map { NativeRollbackReadinessCopy.summary($0.readiness) } ?? ""
+            expect(blockedSummary.hasPrefix("Not ready yet:") && !blockedSummary.contains("booking"),
+                   "L: the result line names only the blocker (\(blockedSummary))")
+            h.reach.online = true
+
+            // Finished (the flow that staged it removes it): no note.
             try work.remove { $0.ownerBinding == h.binding }
             let finished = await h.store.prepareRollbackReadiness()
-            expect(finished?.readiness.isReady == true, "L: once finished: ready (\(finished?.readiness.blockers ?? []))")
+            expect(finished?.readiness.isReady == true, "L: ready (\(finished?.readiness.blockers ?? []))")
+            expectEqual(finished?.readiness.notes, [], "L: once finished: no note")
             expectEqual(finished?.readiness.bookingWorkCount, 0, "L: nothing of this owner's left")
+            expectEqual(finished.flatMap { NativeRollbackReadinessCopy.note($0.readiness) }, nil,
+                        "L: and no note line")
         }
         do {
             let h = Harness(tag: "booking-unreadable")
@@ -749,16 +772,97 @@ struct RollbackReadinessTests {
             let url = h.store.pendingScheduleBookingWorkStore().fileURL
             try Data("{not booking work".utf8).write(to: url)
             let torn = h.store.rollbackReadiness()
-            expectEqual(torn.blockers, [.bookingWorkUnreadable], "L: an unreadable booking-work file is not an empty one")
-            expect(!torn.failsClosed, "L: unreadable does not fail closed")
-            let summary = NativeRollbackReadinessCopy.summary(torn)
-            expect(summary.contains("booking and portal link changes can't be checked"), "L: its Settings line (\(summary))")
+            expectEqual(torn.blockers, [], "L: an unreadable booking-work file does not block")
+            expect(torn.isReady, "L: …so the check is ready")
+            expectEqual(torn.notes, [.bookingWorkUnreadable], "L: it is noted as unreadable, never as empty")
+            let note = NativeRollbackReadinessCopy.note(torn) ?? ""
+            expect(note.contains("booking and portal link updates can't be checked"), "L: its note line (\(note))")
             try Data(#"{"schemaVersion":2,"items":[]}"#.utf8).write(to: url)
-            expectEqual(h.store.rollbackReadiness().blockers, [.bookingWorkUnreadable],
+            expectEqual(h.store.rollbackReadiness().notes, [.bookingWorkUnreadable],
                         "L: a schema this build does not know is unreadable")
             try h.store.pendingScheduleBookingWorkStore().removeAll()
-            expect(h.store.rollbackReadiness().isReady, "L: an emptied booking-work file is empty: ready")
+            expectEqual(h.store.rollbackReadiness().notes, [], "L: an emptied booking-work file is empty: no note")
         }
+    }
+
+    // MARK: M. The native run marker (fix round 2, R45a)
+
+    /// The file the Expo rollback build reads to tell one native run from
+    /// the next (playbook §5.3 E-1): written by every production launch,
+    /// advanced by the next, never touched by an account boundary.
+    @MainActor
+    static func nativeRunMarker() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tradeready-native-run-marker-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let storeURL = dir.appendingPathComponent("store.json")
+        let markerURL = dir.appendingPathComponent("native-run-marker.json")
+        let markers = NativeRunMarkerStore(directory: dir)
+        func launch(recordsNativeRun: Bool = true) -> AppStore {
+            AppStore(
+                fileURL: storeURL,
+                seedIfMissing: false,
+                secureSettingsStore: hostTestSecureSettingsStore(),
+                recordsNativeRun: recordsNativeRun
+            )
+        }
+        func markerKeys() -> Set<String> {
+            guard let data = try? Data(contentsOf: markerURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return [] }
+            return Set(json.keys)
+        }
+
+        expectEqual(markers.fileURL.path, markerURL.path, "M: the marker sits beside store.json")
+        _ = launch(recordsNativeRun: false)
+        expectEqual(markers.load(), nil, "M: a store that does not record runs (host tests) writes nothing")
+
+        var store = launch()
+        expectEqual(markers.load(), NativeRunMarker(schemaVersion: 1, run: 1), "M: the first launch writes run 1")
+        expectEqual(markerKeys(), ["run", "schemaVersion"], "M: it holds a run counter and its schema only")
+        expect(!FileManager.default.fileExists(atPath: storeURL.path), "M: recording the run writes no snapshot")
+
+        store = launch()
+        expectEqual(markers.load()?.run, 2, "M: the next launch advances it")
+
+        // Sign-out (the `.live` scrub) leaves it alone.
+        try? NativeOnboardingStore(snapshotURL: storeURL).save(NativeOnboardingDocument(
+            accountBinding: String(repeating: "b", count: 64), stage: .done,
+            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
+        ))
+        store.testSeedNativeSignedInOwner(subject: "11111111-2222-3333-4444-555555555555",
+                                          binding: String(repeating: "b", count: 64))
+        expect(store.upsert(Customer(name: "Dune Glass", email: "dune@example.test")), "M: sanity: a signed-in save")
+        expect(FileManager.default.fileExists(atPath: storeURL.path), "M: sanity: the workspace is on disk")
+        do { try await store.signOut(revokeRemote: false) } catch { expect(false, "M: signOut threw \(error)") }
+        expect(!FileManager.default.fileExists(atPath: storeURL.path), "M: sanity: the sign-out removed store.json")
+        expectEqual(markers.load()?.run, 2, "M: the sign-out does not touch it")
+        try Canonical.SnapshotRepository(primaryURL: storeURL).removeLiveAccountData()
+        expectEqual(markers.load()?.run, 2, "M: the `.live` scrub does not touch it")
+
+        // A signed-out launch is a native run too.
+        store = launch()
+        expectEqual(markers.load()?.run, 3, "M: a signed-out launch advances it")
+
+        // Decision (R45a): `.all` keeps it, so the counter never repeats.
+        try Canonical.SnapshotRepository(primaryURL: storeURL).removeAllAccountData()
+        expectEqual(markers.load()?.run, 3, "M: the `.all` scrub keeps it")
+        store = launch()
+        expectEqual(markers.load()?.run, 4, "M: …and the next launch continues from it")
+
+        // A launch whose snapshot cannot be read (writes blocked) still runs.
+        try Data("{not a snapshot".utf8).write(to: storeURL)
+        store = launch()
+        expect(store.rollbackReadiness().blockers.contains(.writesBlocked), "M: sanity: this launch blocked writes")
+        expectEqual(markers.load()?.run, 5, "M: a blocked launch advances it")
+        expectEqual(try? Data(contentsOf: storeURL), Data("{not a snapshot".utf8), "M: …and leaves the snapshot alone")
+
+        // An unreadable marker starts again at 1 (E-1 compares for inequality).
+        try Data("{torn".utf8).write(to: markerURL)
+        _ = launch()
+        expectEqual(markers.load()?.run, 1, "M: an unreadable marker is replaced, starting at 1")
+        _ = store
     }
 
     // MARK: I. The report before any check
@@ -777,6 +881,7 @@ struct RollbackReadinessTests {
         expectEqual(report["blockers"] as? [String], [], "I: no blockers listed")
         expectEqual(report["pendingChangeCount"] as? Int, 0, "I: zero counts")
         expectEqual(report["bookingWorkCount"] as? Int, 0, "I: zero booking work")
+        expectEqual(report["notes"] as? [String], [], "I: no notes listed")
     }
 
     // MARK: J. Sources
@@ -804,9 +909,21 @@ struct RollbackReadinessTests {
             let body = String(settings[start.lowerBound..<end.lowerBound])
             expect(body.contains("store.prepareRollbackReadiness()"), "J: Settings › Cloud Sync runs the check")
             expect(body.contains("NativeRollbackReadinessCopy.summary("), "J: …and shows its result line")
+            expect(body.contains("NativeRollbackReadinessCopy.note("), "J: …and its note line (fix round 2)")
         } else {
             expect(false, "J: SyncSettings was found")
         }
+        // Fix round 2 (R45a): the app's launch (the convenience init the app
+        // uses, `TradeReadyNativeApp`) records the run.
+        if let start = store.range(of: "    convenience init(\n        analytics: NativeAnalytics"),
+           let end = store.range(of: "\n    }\n", range: start.upperBound..<store.endIndex) {
+            expect(store[start.lowerBound..<end.upperBound].contains("recordsNativeRun: true"),
+                   "J: the production launch records the native run")
+        } else {
+            expect(false, "J: the production convenience init was found")
+        }
+        let app = read("native/TradeReadyNative/TradeReadyNativeApp.swift")
+        expect(app.contains("AppStore(analytics:"), "J: the app launches through that convenience init")
         let aggregate = read("native/run-all-domain-tests.sh")
         expect(aggregate.contains(#"sh "$ROOT_DIR/native/run-rollback-readiness-tests.sh""#),
                "J: the aggregate runs this suite")

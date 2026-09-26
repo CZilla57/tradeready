@@ -574,7 +574,8 @@ final class AppStore: ObservableObject {
             legacySourceEraser: .live(),
             pendingOpenURLConsumer: .live(),
             analytics: analytics,
-            crashReporting: crashReporting
+            crashReporting: crashReporting,
+            recordsNativeRun: true
         )
     }
 
@@ -602,7 +603,8 @@ final class AppStore: ObservableObject {
         crashReporting: NativeCrashReporting = NativeNoOpCrashReporting(),
         widgetTimelineReloader: any NativeWidgetTimelineReloading = NativeWidgetCenterTimelineReloader(),
         secureSettingsStore: NativeKeychainSecureSettingsStore = .init(),
-        rejectedChangeFiles: (any NativeRejectedChangeFileBacking)? = nil
+        rejectedChangeFiles: (any NativeRejectedChangeFileBacking)? = nil,
+        recordsNativeRun: Bool = false
     ) {
         self.analytics = analytics
         self.secureSettingsStore = secureSettingsStore
@@ -796,6 +798,20 @@ final class AppStore: ObservableObject {
             operation: "launch"
         )
         syncStatus = NativeSyncStatus(pendingCount: mutationQueue.load().count)
+        // Phase 12 (12.06 fix round 2, R45a): the app's launch tells the
+        // Expo rollback build that a native build ran (playbook §5.3 E-1),
+        // after the launch work and whatever it found. Not a snapshot write.
+        if recordsNativeRun { recordNativeRun() }
+    }
+
+    /// Best effort: a failed write leaves the marker at the last run, so
+    /// the Expo build sees no new run for this launch. A bounded line, no path.
+    private func recordNativeRun() {
+        do {
+            try NativeRunMarkerStore(directory: fileURL.deletingLastPathComponent()).recordRun()
+        } catch {
+            print("TradeReadyNativeRunMarker stage=record failed=true")
+        }
     }
 
     func load() { load(seedIfMissing: true) }
@@ -1041,6 +1057,7 @@ final class AppStore: ObservableObject {
                 lastCheckAge: NativeSupportCode(NativeSupportDiagnostics.ageBucket(from: check.checkedAt, now: now)),
                 drainOutcome: NativeSupportCode(check.drainOutcome),
                 blockers: readiness.blockers.map { NativeSupportCode($0.rawValue) },
+                notes: readiness.notes.map { NativeSupportCode($0.rawValue) },
                 pendingChangeCount: count(readiness.pendingChangeCount),
                 rejectedChangeCount: count(readiness.rejectedChangeCount),
                 widgetActionCount: count(readiness.widgetActionCount),
@@ -1050,7 +1067,7 @@ final class AppStore: ObservableObject {
             )
         } else {
             rollback = .init(
-                lastCheck: "none", lastCheckAge: "none", drainOutcome: "none", blockers: [],
+                lastCheck: "none", lastCheckAge: "none", drainOutcome: "none", blockers: [], notes: [],
                 pendingChangeCount: 0, rejectedChangeCount: 0, widgetActionCount: 0,
                 photosPendingUploadCount: 0, bookingWorkCount: 0, migrationJournal: "none"
             )
@@ -8010,9 +8027,9 @@ final class AppStore: ObservableObject {
     ///
     /// RN parity: the Expo build pushes its own AsyncStorage `__syncQueue`
     /// before it pulls (`utils/sync.ts:316-326`), and it never sees this
-    /// device's native queue, refused changes, widget replay queue, native
-    /// photo files or booking/portal link work; so all of them must be empty
-    /// here first.
+    /// device's native queue, refused changes, widget replay queue or native
+    /// photo files; so all of them must be empty here first. Booking/portal
+    /// link work is reported as a note only (fix round 2, R46).
     func rollbackReadiness() -> NativeRollbackReadiness {
         var readiness = NativeRollbackReadiness()
         let binding = verifiedAccountBinding
@@ -8078,16 +8095,18 @@ final class AppStore: ObservableObject {
             } else {
                 readiness.block(.widgetActionsUnreadable)
             }
-            // 8.08 booking/portal link work: a server-committed change whose
-            // local mirror did not finish, or a reschedule proof still
-            // waiting. The Expo build never sees this file and the push pass
-            // does not finish it. Another binding's items are that account's
-            // (its boundary scrubs them), never this one's.
+            // 8.08 booking/portal link work: a note, never a blocker (fix
+            // round 2, R46). A mirror item records a change the server
+            // already made; a reschedule proof guards a server resolve whose
+            // job change is in the ordinary queue (counted above). Neither
+            // holds business data the Expo build would miss, and nothing
+            // finishes a stuck item yet (P12-013). Another binding's items
+            // are that account's (its boundary scrubs them), never this one's.
             if let work = pendingScheduleBookingWorkStore().loadIfReadable() {
                 readiness.bookingWorkCount = work.filter { $0.ownerBinding == binding }.count
-                if readiness.bookingWorkCount > 0 { readiness.block(.bookingWorkPending) }
+                if readiness.bookingWorkCount > 0 { readiness.note(.bookingWorkPending) }
             } else {
-                readiness.block(.bookingWorkUnreadable)
+                readiness.note(.bookingWorkUnreadable)
             }
         }
 

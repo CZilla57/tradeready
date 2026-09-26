@@ -280,8 +280,8 @@ struct NativeLegacyMigrationSummary: Equatable {
 /// safe to move to the Expo rollback build. The Expo build reads the legacy
 /// AsyncStorage left at the upgrade, so anything still only on this device
 /// (a queued change, a refused change, an unreplayed widget/Siri action, a
-/// photo whose bytes never uploaded, unfinished booking or portal link work)
-/// would be missing there. Made by
+/// photo whose bytes never uploaded) would be missing there; unfinished
+/// booking or portal link work is reported as a note only. Made by
 /// `AppStore.rollbackReadiness()`, which reads local state only, and by the
 /// "Check everything is saved" drain (`AppStore.prepareRollbackReadiness`).
 struct NativeRollbackReadiness: Equatable {
@@ -321,13 +321,6 @@ struct NativeRollbackReadiness: Equatable {
         case widgetActionsUnreadable = "widget-actions-unreadable"
         /// A photo with local bytes and no `uploadedAt`.
         case photosPendingUpload = "photos-pending-upload"
-        /// This owner's 8.08 booking/portal link work
-        /// (`NativeScheduleBookingPendingWorkStore`): a server-committed
-        /// change whose local mirror did not finish, or a reschedule proof
-        /// still waiting. The push pass does not finish it.
-        case bookingWorkPending = "booking-work-pending"
-        /// That file is on disk and does not decode.
-        case bookingWorkUnreadable = "booking-work-unreadable"
 
         /// The conditions under which the check sends nothing.
         var failsClosed: Bool {
@@ -337,8 +330,7 @@ struct NativeRollbackReadiness: Equatable {
                  .migrationIncomplete, .migrationUnreadable:
                 return true
             case .pendingChanges, .pendingChangesUnreadable, .rejectedChanges, .rejectedChangesUnreadable,
-                 .widgetActionsPending, .widgetActionsUnreadable, .photosPendingUpload,
-                 .bookingWorkPending, .bookingWorkUnreadable:
+                 .widgetActionsPending, .widgetActionsUnreadable, .photosPendingUpload:
                 return false
             }
         }
@@ -355,7 +347,24 @@ struct NativeRollbackReadiness: Equatable {
         case unreadable
     }
 
+    /// Phase 12 (12.06 fix round 2, R46): reported, never blocking. Each
+    /// is something only this device holds that is not business data the
+    /// Expo build would miss, so "Ready" never depends on it.
+    enum Note: String, CaseIterable, Equatable {
+        /// This owner's 8.08 booking/portal link work
+        /// (`NativeScheduleBookingPendingWorkStore`). A mirror item records
+        /// a change the server already made (display copy only); a
+        /// reschedule proof guards a server resolve whose job change is in
+        /// the ordinary queue (counted by `pendingChanges`). Nothing
+        /// finishes a stuck item yet (defect P12-013).
+        case bookingWorkPending = "booking-work-pending"
+        /// That file is on disk and does not decode.
+        case bookingWorkUnreadable = "booking-work-unreadable"
+    }
+
     private(set) var blockers: [Blocker] = []
+    /// In declaration order.
+    private(set) var notes: [Note] = []
     var pendingChangeCount = 0
     var rejectedChangeCount = 0
     /// The refused changes (`table/recordId`) the owner must Retry or Discard
@@ -375,6 +384,13 @@ struct NativeRollbackReadiness: Equatable {
         blockers.append(blocker)
         let order = Blocker.allCases
         blockers.sort { order.firstIndex(of: $0)! < order.firstIndex(of: $1)! }
+    }
+
+    mutating func note(_ note: Note) {
+        guard !notes.contains(note) else { return }
+        notes.append(note)
+        let order = Note.allCases
+        notes.sort { order.firstIndex(of: $0)! < order.firstIndex(of: $1)! }
     }
 }
 
@@ -426,13 +442,27 @@ enum NativeRollbackReadinessCopy {
             case .widgetActionsUnreadable: add("widget and Siri actions can't be checked")
             case .photosPendingUpload:
                 add(plural(readiness.photosPendingUploadCount, "photo waiting to upload", "photos waiting to upload"))
-            case .bookingWorkPending:
-                add(plural(readiness.bookingWorkCount, "booking or portal link change not finished yet",
-                           "booking or portal link changes not finished yet"))
-            case .bookingWorkUnreadable: add("booking and portal link changes can't be checked")
             }
         }
         return "Not ready yet: " + parts.joined(separator: "; ") + "."
+    }
+
+    /// A neutral line under the result for the notes, or nil. It never
+    /// changes the result above it.
+    static func note(_ readiness: NativeRollbackReadiness) -> String? {
+        var parts: [String] = []
+        for note in readiness.notes {
+            switch note {
+            case .bookingWorkPending:
+                let count = readiness.bookingWorkCount
+                parts.append("\(count) booking or portal link update \(count == 1 ? "hasn't" : "haven't") finished on this device")
+            case .bookingWorkUnreadable:
+                parts.append("booking and portal link updates can't be checked on this device")
+            }
+        }
+        guard !parts.isEmpty else { return nil }
+        return "Also: " + parts.joined(separator: "; ")
+            + ". This work holds no changes that need uploading, so it doesn't change the result."
     }
 }
 
@@ -552,11 +582,15 @@ struct NativeSupportReport: Encodable, Equatable {
         var drainOutcome: NativeSupportCode
         /// `NativeRollbackReadiness.Blocker` codes.
         var blockers: [NativeSupportCode]
+        /// `NativeRollbackReadiness.Note` codes: reported, never blocking
+        /// (fix round 2).
+        var notes: [NativeSupportCode]
         var pendingChangeCount: Int
         var rejectedChangeCount: Int
         var widgetActionCount: Int
         var photosPendingUploadCount: Int
-        /// Unfinished booking/portal link work items (fix round 1).
+        /// Unfinished booking/portal link work items (fix round 1; a note
+        /// since fix round 2, never a blocker).
         var bookingWorkCount: Int
         /// none / completed / no-entry / started / failed / unreadable.
         var migrationJournal: NativeSupportCode
