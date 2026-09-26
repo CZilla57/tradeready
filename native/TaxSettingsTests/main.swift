@@ -178,9 +178,17 @@ private func testTaxWindowAndCopy() {
 // MARK: - JS number parity (12.00b.3)
 //
 // The sheet runs `rate.trim()` then `parseFloat` and checks the JS double
-// against 0…60 (TaxSettingsModal.tsx:66-77). Every row below was produced by
-// node v26 running that exact expression (task 10 evidence
-// `rn-parsefloat-vectors.node.txt`). A money input, so each edge is pinned.
+// against 0…60 (TaxSettingsModal.tsx:66-77). A money input, so each edge is
+// pinned. Provenance (task 10 evidence, node v26.7.0):
+// - `rateVectors`: 54 of the 56 rows are the node run of that exact expression
+//   (`rn-parsefloat-vectors.node.txt`). The two all-whitespace blank rows
+//   ("\t\u{B}\u{C}\n\r" and "\u{FEFF}\u{A0}\u{3000}") were derived from the
+//   spec (the TrimString whitespace set) and checked in node afterwards
+//   (`fix1-node-crosscheck.txt`, 2026-09-25). "1e-130" and "5e-324" are node
+//   inputs whose native outcome differs on purpose (see the note on those rows).
+// - `toString`: 15 of the 19 rows are node's toString list; -0, -12.5, NaN and
+//   Infinity were derived from the spec (Number::toString) and checked in node
+//   afterwards (same cross-check file).
 
 private enum RateOutcome: Equatable {
     case blank
@@ -233,7 +241,7 @@ private func testJSNumberParity() {
     expectEqual(NativeTaxSettings.jsParseFloat("Infinityx"), .infinity, "parseFloat reads the Infinity prefix")
     expectEqual(NativeTaxSettings.jsTrim("\u{85} 1 \u{FEFF}"), "\u{85} 1", "trim keeps NEL, drops space and BOM")
 
-    // Number::toString — what `String(settings.taxIncomeRate)` shows (node v26).
+    // Number::toString — what `String(settings.taxIncomeRate)` shows (provenance above).
     let toString: [(Double, String)] = [
         (18, "18"), (12.5, "12.5"), (0, "0"), (-0.0, "0"), (1e-7, "1e-7"), (0.000001, "0.000001"),
         (1e21, "1e+21"), (1.2345678901234568e20, "123456789012345680000"), (0.1 + 0.2, "0.30000000000000004"),
@@ -401,6 +409,70 @@ private func testCardOpensEditor(_ root: URL?) {
     expect(save.contains("editor.save()"), "save validates through the editor model")
     expect(save.contains("if store.commitTaxSettings(draft)"), "save commits through AppStore.commitTaxSettings")
     expect(save.contains("dismiss()"), "a successful save closes the sheet (TaxSetAsideCard :60)")
+    testSaveFlowShape(view, save)
+}
+
+/// Review M3: pin the save flow's shape, not only its tokens. The `.failure`
+/// arm only raises the rate alert (TaxSettingsModal.tsx:70-74). In the
+/// `.success` arm the commit runs once, and `dismiss()` is the whole success
+/// branch of `if store.commitTaxSettings(draft)`, so the sheet closes only after
+/// the commit reports a durable save (TaxSetAsideCard.tsx:56-60); the else
+/// branch keeps the sheet open. Cancel dismisses without committing.
+private func testSaveFlowShape(_ view: SourceFile, _ save: String) {
+    let body = SourceFile(relativePath: "NativeTaxSettingsView.save()", text: save)
+    let code = body.codeText
+    func offset(_ index: String.Index) -> Int { code.distance(from: code.startIndex, to: index) }
+    func block(at start: Int) -> (text: String, end: Int)? {
+        let open = body.skipSpace(start)
+        guard open < body.code.count, body.code[open] == "{", let close = body.matching(open) else { return nil }
+        return (body.rawSlice((open + 1)..<close).trimmingCharacters(in: .whitespacesAndNewlines), close + 1)
+    }
+
+    expect(code.hasPrefix("switch editor.save() {"), "save is a switch on the editor's validation result")
+    guard let failure = code.range(of: "case .failure:"),
+          let success = code.range(of: "case .success(let draft):"),
+          failure.upperBound <= success.lowerBound else {
+        expect(false, "save has a .failure arm followed by a .success(let draft) arm")
+        return
+    }
+    expectEqual(code[failure.upperBound..<success.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines),
+                "showingRateAlert = true", "a refused rate only raises the rate alert and commits nothing")
+
+    let commits = body.occurrences(of: "commitTaxSettings")
+    expectEqual(commits.count, 1, "save commits exactly once")
+    expectEqual(view.occurrences(of: "commitTaxSettings").count, 1, "save() is the view's only commit")
+    guard let commit = commits.first else { return }
+    expect(commit > offset(success.upperBound), "the commit runs in the .success arm")
+    expectEqual(commit >= 9 ? body.codeSlice((commit - 9)..<commit) : "", "if store.",
+                "the commit result is the if condition")
+    let paren = body.skipSpace(commit + "commitTaxSettings".count)
+    guard paren < body.code.count, body.code[paren] == "(", let parenClose = body.matching(paren) else {
+        expect(false, "commitTaxSettings call parsed")
+        return
+    }
+    expectEqual(body.rawSlice((paren + 1)..<parenClose), "draft", "the commit takes the validated draft")
+    guard let then = block(at: parenClose + 1) else {
+        expect(false, "the commit's success branch parsed")
+        return
+    }
+    expectEqual(then.text, "dismiss()", "dismiss() is the whole success branch, after the commit")
+    let elseStart = body.skipSpace(then.end)
+    expectEqual(body.identifier(at: elseStart)?.0, "else", "a failed commit takes the else branch")
+    if let elseWord = body.identifier(at: elseStart), elseWord.0 == "else", let otherwise = block(at: elseWord.1) {
+        expectEqual(otherwise.text, "showingSaveFailure = true", "a failed commit keeps the sheet open with an alert")
+    } else {
+        expect(false, "the commit's else branch parsed")
+    }
+    expectEqual(body.occurrences(of: "dismiss").count, 1, "save dismisses in one place only")
+
+    let dismissCalls = view.occurrences(of: "dismiss").filter { hit in
+        let next = view.skipSpace(hit + "dismiss".count)
+        return next < view.code.count && view.code[next] == "("
+    }
+    expectEqual(dismissCalls.count, 2, "the sheet closes only from Cancel and a committed save")
+    expect(structText(view, "NativeTaxSettingsView").contains("Button(\"Cancel\") { dismiss() }"),
+           "Cancel dismisses without committing")
+    expect(structText(view, "NativeTaxSettingsView").contains("Button(\"Save\") { save() }"), "Save runs save()")
 }
 
 // MARK: - run

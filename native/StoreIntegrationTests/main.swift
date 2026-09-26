@@ -2654,12 +2654,19 @@ struct StoreIntegrationTests {
                    && edited.preservation.unknownFields["forwardCompat"] == .string("keep"),
                    "12.00b.3 the sheet's save writes the parsed rate and the new method only")
             expect(store.taxSettingsEditor.rateText == "12.5", "12.00b.3 the next open re-seeds from the saved rate")
+            // Review M1: the blank-rate save also changes the method, so a skipped
+            // or no-op commit fails here.
             var blankRate = store.taxSettingsEditor
             blankRate.rateText = ""
-            if case .success(let draft) = blankRate.save() { store.commitTaxSettings(draft) }
+            blankRate.select(.mileage)
+            if case .success(let draft) = blankRate.save() {
+                expect(store.commitTaxSettings(draft), "12.00b.3 the blank-rate draft commits")
+            } else {
+                expect(false, "12.00b.3 a blank rate is not a refusal (RN leaves the rate out of the draft)")
+            }
             let blankSaved = try snapshot9(settingsURL).payload.settings!
-            expect(blankSaved.taxIncomeRate == Decimal(string: "12.5") && blankSaved.vehicleDeductionMethod == "actual",
-                   "12.00b.3 a blank rate keeps the stored rate (RN merges { ...full, ...draft })")
+            expect(blankSaved.taxIncomeRate == Decimal(string: "12.5") && blankSaved.vehicleDeductionMethod == "mileage",
+                   "12.00b.3 a blank rate keeps the stored rate and saves the new method (RN merges { ...full, ...draft })")
             // Restore the values the rest of this block asserts on.
             store.commitTaxSettings(NativeTaxSettingsDraft(taxIncomeRate: Decimal(string: "22"), vehicleDeductionMethod: .mileage))
             // The full settings write path must not drop the two fields.
@@ -2670,6 +2677,97 @@ struct StoreIntegrationTests {
                    && rewritten.vehicleDeductionMethod == "mileage",
                    "9.08 the settings edit path round-trips the tax fields")
         } catch { expect(false, "9.08 tax settings block aborted: \(error)") }
+
+        // 12.00b.3 (G2, review M2): `tax_settings_saved` fires once per committed
+        // sheet save with RN's properties (TaxSetAsideCard.tsx:61-64), including
+        // the empty draft, and never for a blocked write, a refused rate or a
+        // cancel. Each step mirrors the sheet: commit only after `save()` succeeds.
+        do {
+            let taxJSON = """
+            {"businessName":"Ada Electric","contactName":"","phone":"","email":"","address":"",
+             "trade":"Plumbing","laborRate":85,"materialMarkup":20,"overheadPercent":15,"marginPercent":20,
+             "minimumJobFee":75,"travelFeePerMile":0,"emergencyMultiplier":1.5,"mileageRate":0.7,
+             "paymentNotes":"","provider":"stripe","providerKey":"","providerKeys":{},"rules":[],
+             "autoOutreachEnabled":false,"autoSendEmailEnabled":false,"appointmentRemindersEnabled":false,
+             "appointmentConfirmTemplate":"","onMyWayTemplate":"","estimateFollowUpsEnabled":true,
+             "autoInvoiceOnComplete":false,"autoEmailInvoiceOnComplete":false,"anthropicKey":"","groqKey":"",
+             "reviewRequestEnabled":false,"reviewRequestTemplate":"","googleReviewLink":"",
+             "reviewRequestDelayHours":3}
+            """
+            let recorder = RecordingAnalytics()
+            let taxURL = phase9Directory.appendingPathComponent("TaxAnalytics/store.json")
+            try Canonical.SnapshotRepository(primaryURL: taxURL).save(
+                Canonical.Snapshot(payload: .init(settings: try canonicalRecord(taxJSON)))
+            )
+            let store = AppStore(fileURL: taxURL, seedIfMissing: false, analytics: recorder,
+                                 secureSettingsStore: hostTestSecureSettingsStore())
+            func taxEvents() -> [[String: String]] {
+                recorder.calls.filter { $0.event == "tax_settings_saved" }.map(\.properties)
+            }
+            let untouched = try Data(contentsOf: taxURL)
+
+            // A refused rate raises the alert; the sheet never commits.
+            var refused = store.taxSettingsEditor
+            refused.rateText = "75"
+            refused.select(.actual)
+            let refusedResult = refused.save()
+            expect(refusedResult == .failure(.rateOutOfRange), "12.00b.3 a 75% rate is refused before any commit")
+            if case .success(let draft) = refusedResult { store.commitTaxSettings(draft) }
+            // Cancel drops the edited copy; the sheet never commits.
+            var cancelled = store.taxSettingsEditor
+            cancelled.rateText = "20"
+            cancelled.select(.mileage)
+            _ = cancelled
+            expect(taxEvents().isEmpty, "12.00b.3 a refused rate and a cancel emit no tax_settings_saved")
+            let afterRefusedAndCancel = try Data(contentsOf: taxURL)
+            expect(afterRefusedAndCancel == untouched, "12.00b.3 a refused rate and a cancel write nothing")
+
+            // Blank rate, no method: the empty draft writes nothing but is tracked.
+            if case .success(let draft) = store.taxSettingsEditor.save() {
+                expect(draft == NativeTaxSettingsDraft(), "12.00b.3 an untouched unset sheet is the empty draft")
+                expect(store.commitTaxSettings(draft), "12.00b.3 the empty draft is accepted")
+            } else {
+                expect(false, "12.00b.3 an untouched unset sheet saves")
+            }
+            expect(taxEvents() == [["hasIncomeRate": "false", "vehicleMethod": "unset"]],
+                   "12.00b.3 the empty draft emits exactly one {hasIncomeRate: false, vehicleMethod: unset}")
+            let afterEmptyDraft = try Data(contentsOf: taxURL)
+            expect(afterEmptyDraft == untouched, "12.00b.3 the empty draft writes nothing")
+
+            // A real sheet save.
+            var sheet = store.taxSettingsEditor
+            sheet.rateText = "15"
+            sheet.select(.actual)
+            if case .success(let draft) = sheet.save() {
+                expect(store.commitTaxSettings(draft), "12.00b.3 the sheet save commits")
+            } else {
+                expect(false, "12.00b.3 15 + actual saves")
+            }
+            expect(taxEvents() == [
+                ["hasIncomeRate": "false", "vehicleMethod": "unset"],
+                ["hasIncomeRate": "true", "vehicleMethod": "actual"],
+            ], "12.00b.3 the sheet save emits exactly one {hasIncomeRate: true, vehicleMethod: actual}")
+
+            // Writes blocked (a newer snapshot schema): ensurePersistenceWritable
+            // refuses before anything is written or tracked, empty draft included.
+            let blockedURL = phase9Directory.appendingPathComponent("TaxAnalyticsBlocked/store.json")
+            try FileManager.default.createDirectory(at: blockedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let blockedBytes = try Canonical.SnapshotCodec.encode(Canonical.Snapshot(
+                schemaVersion: Canonical.Snapshot.currentSchemaVersion + 1,
+                payload: .init(settings: try canonicalRecord(taxJSON))
+            ))
+            try blockedBytes.write(to: blockedURL, options: .atomic)
+            let blockedRecorder = RecordingAnalytics()
+            let blocked = AppStore(fileURL: blockedURL, seedIfMissing: false, analytics: blockedRecorder,
+                                   secureSettingsStore: hostTestSecureSettingsStore())
+            expect(!blocked.commitTaxSettings(NativeTaxSettingsDraft(taxIncomeRate: 15, vehicleDeductionMethod: .actual)),
+                   "12.00b.3 a blocked store refuses the tax save")
+            expect(!blocked.commitTaxSettings(NativeTaxSettingsDraft()), "12.00b.3 a blocked store refuses the empty draft too")
+            expect(!blockedRecorder.calls.contains { $0.event == "tax_settings_saved" },
+                   "12.00b.3 a blocked write emits no tax_settings_saved")
+            let afterBlocked = try Data(contentsOf: blockedURL)
+            expect(afterBlocked == blockedBytes, "12.00b.3 a blocked write leaves the snapshot bytes alone")
+        } catch { expect(false, "12.00b.3 tax_settings_saved block aborted: \(error)") }
 
         // Import: commit report, provenance, history, same-file warning, undo.
         do {
