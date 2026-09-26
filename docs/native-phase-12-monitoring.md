@@ -139,8 +139,10 @@ own record counts, which TH-1 compares exactly, and carry no content:
   `booking-work-pending`, or `booking-work-unreadable` when its file does not decode, and
   never as a blocker: the items hold no native-only business data. A mirror item records
   a change the server already made, and a reschedule proof guards a server resolve whose
-  job change is in the ordinary queue. A count that stays is defect `P12-013` (no
-  automatic recovery yet; Task 12b).
+  job change is in the ordinary queue. Launch and every activation finish or clear
+  them (2026-09-26, 12.00b.2-I, defect `P12-013`), so a count that stays is a mirror
+  whose status read has not succeeded yet (for example offline), or a reschedule proof
+  waiting for the owner's resolve.
 
 **Code rule.** A code keeps only `A–Z a–z 0–9 . _ / -`, at most 96 bytes, with no run of
 6 or more digits, no run of 12 or more hex characters containing a digit, and nothing

@@ -296,6 +296,12 @@ Chosen invariant (8.06 implements; current code characterized in G4-02):
   success → `status` read shows `tokenValid:false` → explicit confirmed
   rotate with a NEW `operationId` (never silent re-mint: a timeout is unknown
   outcome, §1.5).
+  *Note (2026-09-26, Phase 12 task 12.00b.2-I, defect `P12-013`):* when the
+  device staged the server's result (booking or portal), launch and activation
+  first read `status` with the staged token. `tokenValid:true` adopts it into the
+  display copy (the §6 rule; no mutation, no new `operationId`).
+  `tokenValid:false` or a 404 drops the staged item. The explicit rotate above
+  stays the path when nothing was staged.
 - Unknown-token fallback restricted to **unadopted** customers: post-adoption
   (≥1 `portal_tokens` row for the customer), an unknown hash fails closed
   (404) even if a stale enabled blob token exists — pinned residual G4-05
@@ -362,6 +368,11 @@ preconditions frozen here):
    unverified — limitation L2. The server records the transition without
    publication evidence; 8.14 qualifies the divergence. Native never sends
    proof-less resolves.
+5. *Note (2026-09-26, Phase 12 task 12.00b.2-I, defect `P12-013`):* a staged
+   proof is kept only while step 2 can still succeed. It is kept while the
+   request is still `reschedule_requested` and the job still carries the proven
+   `(date, start)`. Launch and activation remove any other proof. Native never
+   resends a resolve on its own; the owner retries.
 
 Manage/ICS slot presentation (frozen): `GET manage` and `?format=ics`
 return the ORIGINAL booked `request.slot` forever — `request.slot` is

@@ -49,6 +49,11 @@ staging exists (D4).
   fixed value that could repeat a recorded run (§5.3; review fix rounds 2 and 3, R45a
   and R48).
 
+**Built with host tests since (2026-09-26, Task 12b, 12.00b.2-I):**
+
+- launch and every activation finish or clear unfinished booking and portal link work
+  (defect `P12-013`, charter §10; §5.1).
+
 **Open:**
 
 | Open item | Who clears it | Where |
@@ -57,7 +62,6 @@ staging exists (D4).
 | Staffing (step 6) | owner | §8.4 and row P12-RB-6 |
 | The Expo-side rule (1) of the rollback data decision: E-1 detects at app start, clears (recommended) or holds, and pulls; E-2 to E-4 (R48). Until the pull, E-1 also holds the widget and Siri replay and invoice creation (R49) | the owner decides who builds it on the Expo release branch. The branch owner records E-1's keys, the clear-or-hold choice, the marker path under `expo-file-system` and the owner's acceptance of residual 5 | §5.3; §5.6 item 5 |
 | Defect `P12-012` (S1): the Expo build pushes its stale pre-upgrade queue before it pulls | owner: a ruling on Stage A entry (R43), then the §5.3 build | charter §10; §5.3 |
-| Defect `P12-013`: unfinished booking and portal link work has no automatic recovery | filed by the controller; Task 12b wires the recovery and adds the charter row | §5.1 |
 | Version numbers (VER-1) | owner; 12.01 sets the scheme | §3 |
 | The Expo release branch itself | owner | §4 |
 
@@ -288,13 +292,22 @@ no native-only business data, so "Ready" does not depend on it:
 - A reschedule proof guards a server resolve call. Its job change is in the ordinary
   queue, which `pending-changes` counts.
 
-The check counts this account's items only and never removes one. An item leaves when
-the flow that staged it succeeds on a later try, or at the account's sign-out scrub. A
-failed or unknown resolve keeps its proof (`N/AppStore.swift:9788-9793` removes it only
-after success), and nothing retries staged items at launch, activation or sync
-(`AppStore.recoverScheduleBookingPendingWork`, `N/AppStore.swift:10218`, has no caller).
-A stuck item can therefore stay. That is defect `P12-013`, filed by the controller; Task
-12b wires the recovery and adds its charter row.
+The check counts this account's items only and never removes one. Launch and every
+activation recover them (2026-09-26, 12.00b.2-I, defect `P12-013`):
+`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10310`) runs for the
+verified owner after the initial sync, from the signed-in gate and from
+`performForegroundRefresh` after its sync (`N/AppStore.swift:7891`).
+
+- A mirror is applied only after a fresh status read proves it current. One the server no
+  longer backs is removed without a write. Recovery never sends a change to the server.
+- A proof stays only while its resolve can still succeed: the request still asks for a
+  reschedule and the job still has the proven schedule. Recovery never resolves; the
+  owner does. A failed or unknown resolve keeps its proof (`N/AppStore.swift:9824-9829`
+  removes it only after success) until the owner resolves again or the request moves on.
+
+An item also leaves when the flow that staged it succeeds on a later try, or at the
+account's sign-out scrub. A count that stays is a mirror whose status read has not
+succeeded yet (for example offline), or a proof waiting for the owner.
 
 **Not ready, fail-closed: nothing was sent.** The drain outcome is `skipped`.
 
@@ -994,7 +1007,7 @@ What support does with the answer. The first line is the result. A second line s
 | "N changes waiting to upload" or "N photos waiting to upload" | "Please stay connected, open the app for a minute, and tap Check everything is saved again." Repeat until Ready. If it stays, ask for the support report (below) |
 | "N changes the cloud refused need Retry or Discard above" | Explain Retry and Discard (charter §5.3): Retry sends the change again; Discard replaces it with the cloud's version. Ask the user to choose for each, then check again. Never choose for them |
 | "N widget or Siri actions not applied yet" | The check already tried to apply them. Ask the user to check again once; if the line stays, ask for the support report and escalate |
-| The note "Also: … booking or portal link updates …" (under either result) | Act on the result line only. The work it names holds no changes that need uploading (§5.1). If the user says a booking link, portal link or reschedule looks unfinished, ask them to make that change again; nothing retries it by itself yet (defect `P12-013`) |
+| The note "Also: … booking or portal link updates …" (under either result) | Act on the result line only. The work it names holds no changes that need uploading (§5.1). If the user says a booking link, portal link or reschedule looks unfinished, ask them to open the app while connected and check again: opening the app finishes link updates (defect `P12-013`, fixed). A reschedule waits for the user to confirm it again |
 | "sign in to your account", "the first sync hasn't finished", "saving is paused on this device", "an account change is still finishing", "moving data from the previous app hasn't finished", "… can't be read" or "… can't be checked" | Do not advise the update. Ask for the support report and escalate as S1 or S2 (charter §2) |
 | "the account changed during the check, so run it again" | Ask the user to run it again while signed in to their own account |
 

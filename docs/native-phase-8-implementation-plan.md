@@ -285,6 +285,17 @@ conversion, customer deletion, account switch and stale response pass. Do not
 publish a whole stale booking request to repair one owned field. Refresh updates
 reminder scheduling through existing infrastructure without inventing another sender.
 
+**Note (2026-09-26, Phase 12 task 12.00b.2-I, defect `P12-013`):** the "recover"
+half of the pending-work requirement was missing. Work was staged, but
+`recoverScheduleBookingPendingWork` had no caller, so after a relaunch nothing finished
+a staged link mirror or cleared a reschedule proof. It now runs for the verified owner at
+launch (the signed-in gate-open points, after the initial sync) and on every activation
+(`performForegroundRefresh`). It re-checks the account generation and owner after every
+await. A mirror is applied only after a fresh `status` read proves it current
+(contract §6) and is dropped when the server no longer backs it. It never sends a
+mutation. A reschedule proof is kept only while its resolve can still succeed (contract
+§7); recovery never resolves. Host evidence: `native/run-schedule-booking-recovery-tests.sh`.
+
 ### 8.09 — Calendar UI
 
 **Depends on:** 8.01 and schedule slice of 8.08. **Requirements:** S2, S3.
