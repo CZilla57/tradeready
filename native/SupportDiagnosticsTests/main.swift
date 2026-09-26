@@ -363,7 +363,8 @@ let reportKeys: [String: Set<String>] = [
     "legacyBackupProtection": ["checks", "enumeratorUnavailable", "lastProtectedFiles", "lastFailedFiles", "failedFileTotal"],
     // Phase 12 (12.06): the last rollback-readiness check, codes and counts only.
     "rollbackReadiness": ["lastCheck", "lastCheckAge", "drainOutcome", "blockers", "pendingChangeCount",
-                          "rejectedChangeCount", "widgetActionCount", "photosPendingUploadCount", "migrationJournal"],
+                          "rejectedChangeCount", "widgetActionCount", "photosPendingUploadCount", "bookingWorkCount",
+                          "migrationJournal"],
     "persistence": ["reportSchemaVersion", "appVersion", "snapshotSchemaVersion", "snapshotStatus", "backupAvailable",
                     "recordCounts", "migrationStatuses", "rejectedChangeCount"],
 ]

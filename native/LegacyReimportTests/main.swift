@@ -1580,9 +1580,14 @@ func testReupgradeConflictThenSignOut(ownerKeys: Bool) async throws {
 }
 
 /// R6: as R5, but the snapshot survives only as its backup (the primary is
-/// lost) when the next launch runs. The resumed migration skipped the
-/// conflict guard (it checks only the primary) and saved the import as the
-/// primary, over the newer native backup (P12-011).
+/// lost) when the next launch runs (P12-011). Pre-fix the conflict guard
+/// checked only the primary, so the migration resumed and the importer ran
+/// again. In this fixture it then failed on
+/// `NativeSecureSettingsStoreError/3` (the journal gained a started and a
+/// failed entry), the workspace still came back from the backup, and only
+/// the journal-count check failed (6 entries, not 4). The fix settles the
+/// launch as native-state-adopted before the legacy source is read, so no
+/// journal entry is written.
 @MainActor
 func testReupgradeOverBackupOnly() async throws {
     let label = "re-upgrade over a backup-only snapshot"

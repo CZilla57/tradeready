@@ -5,7 +5,7 @@ set -eu
 # support advises installing the Expo rollback build, "Check everything is
 # saved" (Settings > Cloud Sync) forces a push pass and reports whether the
 # account is safe to roll back: queue, I2 rejected store, widget/Siri replay
-# queue, photo uploads and the migration journal. It fails closed with
+# queue, photo uploads, booking/portal link work and the migration journal. It fails closed with
 # nothing sent, and an account change during its await voids the result.
 # The real AppStore, sync coordinator, push transport and widget claim
 # transport run in front of the shared in-memory server. No network.

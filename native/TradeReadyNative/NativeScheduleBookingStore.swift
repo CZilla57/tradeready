@@ -527,6 +527,19 @@ struct NativeScheduleBookingPendingWorkStore: Sendable {
         return document.items
     }
 
+    /// Phase 12 (12.06 fix round 1): `load()` for the rollback-readiness
+    /// check, which must never read a file it cannot decode as "no work".
+    /// No file is no work; a file that does not read, does not decode or
+    /// carries another schema version is nil (unreadable).
+    func loadIfReadable() -> [NativeScheduleBookingPendingWork]? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        guard let data = try? Data(contentsOf: fileURL),
+              let document = try? JSONDecoder().decode(Document.self, from: data),
+              document.schemaVersion == 1
+        else { return nil }
+        return document.items
+    }
+
     func save(_ items: [NativeScheduleBookingPendingWork]) throws {
         let document = Document(items: items)
         let data = try JSONEncoder().encode(document)

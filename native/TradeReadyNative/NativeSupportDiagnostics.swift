@@ -280,7 +280,8 @@ struct NativeLegacyMigrationSummary: Equatable {
 /// safe to move to the Expo rollback build. The Expo build reads the legacy
 /// AsyncStorage left at the upgrade, so anything still only on this device
 /// (a queued change, a refused change, an unreplayed widget/Siri action, a
-/// photo whose bytes never uploaded) would be missing there. Made by
+/// photo whose bytes never uploaded, unfinished booking or portal link work)
+/// would be missing there. Made by
 /// `AppStore.rollbackReadiness()`, which reads local state only, and by the
 /// "Check everything is saved" drain (`AppStore.prepareRollbackReadiness`).
 struct NativeRollbackReadiness: Equatable {
@@ -320,6 +321,13 @@ struct NativeRollbackReadiness: Equatable {
         case widgetActionsUnreadable = "widget-actions-unreadable"
         /// A photo with local bytes and no `uploadedAt`.
         case photosPendingUpload = "photos-pending-upload"
+        /// This owner's 8.08 booking/portal link work
+        /// (`NativeScheduleBookingPendingWorkStore`): a server-committed
+        /// change whose local mirror did not finish, or a reschedule proof
+        /// still waiting. The push pass does not finish it.
+        case bookingWorkPending = "booking-work-pending"
+        /// That file is on disk and does not decode.
+        case bookingWorkUnreadable = "booking-work-unreadable"
 
         /// The conditions under which the check sends nothing.
         var failsClosed: Bool {
@@ -329,7 +337,8 @@ struct NativeRollbackReadiness: Equatable {
                  .migrationIncomplete, .migrationUnreadable:
                 return true
             case .pendingChanges, .pendingChangesUnreadable, .rejectedChanges, .rejectedChangesUnreadable,
-                 .widgetActionsPending, .widgetActionsUnreadable, .photosPendingUpload:
+                 .widgetActionsPending, .widgetActionsUnreadable, .photosPendingUpload,
+                 .bookingWorkPending, .bookingWorkUnreadable:
                 return false
             }
         }
@@ -354,6 +363,8 @@ struct NativeRollbackReadiness: Equatable {
     var rejectedChangeIDs: [String] = []
     var widgetActionCount = 0
     var photosPendingUploadCount = 0
+    /// This owner's unfinished booking/portal link work items.
+    var bookingWorkCount = 0
     var migrationJournal: JournalState = .noEntry
 
     var isReady: Bool { blockers.isEmpty }
@@ -415,6 +426,10 @@ enum NativeRollbackReadinessCopy {
             case .widgetActionsUnreadable: add("widget and Siri actions can't be checked")
             case .photosPendingUpload:
                 add(plural(readiness.photosPendingUploadCount, "photo waiting to upload", "photos waiting to upload"))
+            case .bookingWorkPending:
+                add(plural(readiness.bookingWorkCount, "booking or portal link change not finished yet",
+                           "booking or portal link changes not finished yet"))
+            case .bookingWorkUnreadable: add("booking and portal link changes can't be checked")
             }
         }
         return "Not ready yet: " + parts.joined(separator: "; ") + "."
@@ -541,6 +556,8 @@ struct NativeSupportReport: Encodable, Equatable {
         var rejectedChangeCount: Int
         var widgetActionCount: Int
         var photosPendingUploadCount: Int
+        /// Unfinished booking/portal link work items (fix round 1).
+        var bookingWorkCount: Int
         /// none / completed / no-entry / started / failed / unreadable.
         var migrationJournal: NativeSupportCode
     }

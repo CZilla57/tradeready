@@ -1045,13 +1045,14 @@ final class AppStore: ObservableObject {
                 rejectedChangeCount: count(readiness.rejectedChangeCount),
                 widgetActionCount: count(readiness.widgetActionCount),
                 photosPendingUploadCount: count(readiness.photosPendingUploadCount),
+                bookingWorkCount: count(readiness.bookingWorkCount),
                 migrationJournal: NativeSupportCode(readiness.migrationJournal.rawValue)
             )
         } else {
             rollback = .init(
                 lastCheck: "none", lastCheckAge: "none", drainOutcome: "none", blockers: [],
                 pendingChangeCount: 0, rejectedChangeCount: 0, widgetActionCount: 0,
-                photosPendingUploadCount: 0, migrationJournal: "none"
+                photosPendingUploadCount: 0, bookingWorkCount: 0, migrationJournal: "none"
             )
         }
 
@@ -8009,8 +8010,9 @@ final class AppStore: ObservableObject {
     ///
     /// RN parity: the Expo build pushes its own AsyncStorage `__syncQueue`
     /// before it pulls (`utils/sync.ts:316-326`), and it never sees this
-    /// device's native queue, refused changes, widget replay queue or native
-    /// photo files; so all of them must be empty here first.
+    /// device's native queue, refused changes, widget replay queue, native
+    /// photo files or booking/portal link work; so all of them must be empty
+    /// here first.
     func rollbackReadiness() -> NativeRollbackReadiness {
         var readiness = NativeRollbackReadiness()
         let binding = verifiedAccountBinding
@@ -8075,6 +8077,17 @@ final class AppStore: ObservableObject {
                 if pending > 0 { readiness.block(.widgetActionsPending) }
             } else {
                 readiness.block(.widgetActionsUnreadable)
+            }
+            // 8.08 booking/portal link work: a server-committed change whose
+            // local mirror did not finish, or a reschedule proof still
+            // waiting. The Expo build never sees this file and the push pass
+            // does not finish it. Another binding's items are that account's
+            // (its boundary scrubs them), never this one's.
+            if let work = pendingScheduleBookingWorkStore().loadIfReadable() {
+                readiness.bookingWorkCount = work.filter { $0.ownerBinding == binding }.count
+                if readiness.bookingWorkCount > 0 { readiness.block(.bookingWorkPending) }
+            } else {
+                readiness.block(.bookingWorkUnreadable)
             }
         }
 
@@ -12232,6 +12245,34 @@ extension AppStore {
             let outcome = await self.drainForRollbackReadiness()
             await afterDrain()
             return outcome
+        }
+    }
+
+    /// Test-only (Phase 12 12.06 fix round 1): the private flags
+    /// `rollbackReadiness()` fails closed on that no host path sets alone
+    /// (a blocked scrub keeps its marker, a blocked migration also blocks
+    /// writes, cleanup-pending mirrors a pending boundary step: each of which
+    /// the check also reads).
+    enum TestRollbackReadinessFlag: String, CaseIterable {
+        case accountSwitchInFlight, authenticationOperationInFlight, identityActivationInFlight
+        case accountScrubBlocked, accountDeletionPendingWithoutMarker, accountDeletionRecordUnverified
+        case widgetMirrorSuspended, boundaryCleanupPending, legacyMigrationBlocked
+    }
+
+    /// Test-only (Phase 12 12.06 fix round 1): sets one of those flags, so
+    /// the table-driven fail-closed test isolates each condition. Production
+    /// never calls this.
+    func testSetRollbackReadinessFlag(_ flag: TestRollbackReadinessFlag, _ value: Bool) {
+        switch flag {
+        case .accountSwitchInFlight: accountSwitchInFlight = value
+        case .authenticationOperationInFlight: authenticationOperationInFlight = value
+        case .identityActivationInFlight: identityActivationInFlight = value
+        case .accountScrubBlocked: isAccountScrubBlocked = value
+        case .accountDeletionPendingWithoutMarker: accountDeletionPendingWithoutMarker = value
+        case .accountDeletionRecordUnverified: accountDeletionRecordUnverified = value
+        case .widgetMirrorSuspended: widgetMirrorSuspendedForAccountBoundary = value
+        case .boundaryCleanupPending: isAccountBoundaryCleanupPending = value
+        case .legacyMigrationBlocked: isLegacyMigrationBlocked = value
         }
     }
 

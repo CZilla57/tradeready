@@ -13,12 +13,14 @@ import FoundationNetworking
 // is safe to roll back: the queue is empty, the I2 rejected store is empty (or
 // its entries are listed as needing Retry or Discard, never discarded by the
 // check), the widget/Siri replay queue is empty, no photo is waiting to
-// upload, and the migration journal is complete. It fails closed, with nothing
-// sent, while writes are blocked, a scrub or boundary step is pending, the
-// journal is incomplete, the initial sync has not completed, or the device is
-// not the verified signed-in owner. An account change while it is suspended
-// in the drain voids the result. The support report carries the last result
-// as codes and counts only.
+// upload, no booking or portal link work is unfinished, and the migration
+// journal is complete. It fails closed, with nothing sent, while writes are
+// blocked, a scrub or boundary step is pending, an account operation is in
+// flight, the journal is incomplete or the migration blocked, the initial
+// sync has not completed, or the device is not the verified signed-in owner
+// (section K covers each private flag, table-driven; K2 the second tap). An
+// account change while it is suspended in the drain voids the result. The
+// support report carries the last result as codes and counts only.
 //
 // Everything here is production code except the network: the real AppStore,
 // the real durable queue, the real `NativeSyncCoordinator` (wired as
@@ -38,6 +40,18 @@ final class MemoryWidgetActionQueue: NativeWidgetActionQueueBacking {
     var value: String?
     func read() -> String? { value }
     func write(_ value: String?) { self.value = value }
+}
+
+/// The server behind a request counter: "nothing sent" means no request at
+/// all (no push, no pull), not only no row.
+final class CountingLoader: NativeInitialSyncHTTPDataLoading, NativeMutationPushHTTPLoading, @unchecked Sendable {
+    let server: InMemorySupabase
+    private(set) var requests = 0
+    init(_ server: InMemorySupabase) { self.server = server }
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        requests += 1
+        return try await server.data(for: request)
+    }
 }
 
 /// The photo worker: records uploads, or refuses them.
@@ -63,6 +77,7 @@ final class Harness {
     let dir: URL
     let store: AppStore
     let server: InMemorySupabase
+    let wire: CountingLoader
     let reach = SwitchReachability()
     let widgetQueue = MemoryWidgetActionQueue()
     let photos = FakePhotoTransfer()
@@ -88,6 +103,8 @@ final class Harness {
         self.subject = subject
         self.binding = binding
         self.server = server
+        let wire = CountingLoader(server)
+        self.wire = wire
         dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("tradeready-rollback-readiness-\(tag)-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -108,7 +125,7 @@ final class Harness {
                 lockFile: dir.appendingPathComponent("app-group.lock")
             ),
             initialSyncService: NativeSupabaseInitialSyncService(
-                supabaseURL: Self.supabaseURL, publishableKey: "publishable-key", loader: server
+                supabaseURL: Self.supabaseURL, publishableKey: "publishable-key", loader: wire
             ),
             jobPhotoTransferService: photos,
             secureSettingsStore: hostTestSecureSettingsStore()
@@ -144,7 +161,7 @@ final class Harness {
         let coordinator = NativeSyncCoordinator(
             push: NativeSupabaseMutationPushService(
                 supabaseURL: Self.supabaseURL, publishableKey: "publishable-key",
-                allowsWrites: true, loader: server
+                allowsWrites: true, loader: wire
             ),
             queue: queue,
             reachability: reach,
@@ -190,7 +207,7 @@ func section(_ json: [String: Any], _ key: String) -> [String: Any] {
 
 let rollbackReportKeys: Set<String> = [
     "lastCheck", "lastCheckAge", "drainOutcome", "blockers", "pendingChangeCount", "rejectedChangeCount",
-    "widgetActionCount", "photosPendingUploadCount", "migrationJournal",
+    "widgetActionCount", "photosPendingUploadCount", "bookingWorkCount", "migrationJournal",
 ]
 
 // MARK: - Tests
@@ -230,6 +247,9 @@ struct RollbackReadinessTests {
         try await failsClosedWithNothingSent()
         try await unreadableStateIsNotReady()
         try await accountChangeDuringTheDrain()
+        try await everyFailClosedFlagSendsNothing()
+        try await secondTapIsRefused()
+        try await bookingWorkBlocksUntilFinished()
         reportBeforeAnyCheck()
         sources(root)
 
@@ -572,6 +592,175 @@ struct RollbackReadinessTests {
         }
     }
 
+    // MARK: K. Every other fail-closed flag, table-driven (fix round 1)
+
+    /// Each private flag `rollbackReadiness()` fails closed on, alone, over a
+    /// device that is otherwise only waiting on a queued change and a widget
+    /// action: the check sends nothing (no request, no replay) and names the
+    /// flag's blocker.
+    @MainActor
+    static func everyFailClosedFlagSendsNothing() async throws {
+        let rows: [(flag: AppStore.TestRollbackReadinessFlag, blocker: NativeRollbackReadiness.Blocker, label: String)] = [
+            (.accountSwitchInFlight, .accountOperationInFlight, "account switch in flight"),
+            (.authenticationOperationInFlight, .accountOperationInFlight, "sign-in, sign-out or deletion in flight"),
+            (.identityActivationInFlight, .accountOperationInFlight, "identity check in flight"),
+            (.accountScrubBlocked, .accountScrubPending, "scrub blocked"),
+            (.accountDeletionPendingWithoutMarker, .accountScrubPending, "deletion pending without its marker"),
+            (.accountDeletionRecordUnverified, .accountScrubPending, "deletion record unverified"),
+            (.widgetMirrorSuspended, .boundaryStepPending, "widget mirror suspended"),
+            (.boundaryCleanupPending, .boundaryStepPending, "boundary cleanup pending"),
+            (.legacyMigrationBlocked, .migrationIncomplete, "legacy migration blocked"),
+        ]
+        expectEqual(Set(rows.map(\.flag)), Set(AppStore.TestRollbackReadinessFlag.allCases), "K: the table covers every flag")
+        for row in rows {
+            let h = Harness(tag: "flag-\(row.flag.rawValue)")
+            defer { h.cleanup() }
+            await h.signIn()
+            expectEqual(await h.syncBaseline(), [], "K \(row.label): sanity: the device starts synced")
+            _ = try h.queue.enqueue(
+                table: "customers", op: .upsert, recordId: "c-queued",
+                payload: .object(["id": .string("c-queued"), "name": .string("Queued")])
+            )
+            let tag = NativeWidgetOwnerTag.make(binding: h.binding)
+            let action = #"[{"ownerTag":"\#(tag)","id":"k-trip","type":"trip_log","at":"2026-09-24T16:05:00.000Z","date":"2026-09-24","odometerStart":100,"odometerEnd":112}]"#
+            h.widgetQueue.value = action
+            let open = h.store.rollbackReadiness()
+            expectEqual(open.blockers, [.pendingChanges, .widgetActionsPending],
+                        "K \(row.label): sanity: without the flag the check would drain")
+
+            h.store.testSetRollbackReadinessFlag(row.flag, true)
+            let sent = h.wire.requests
+            let check = await h.store.prepareRollbackReadiness()
+            expectEqual(check?.readiness.blockers, [row.blocker, .pendingChanges, .widgetActionsPending],
+                        "K \(row.label): blocked by \(row.blocker.rawValue)")
+            expect(check?.readiness.failsClosed == true, "K \(row.label): fails closed")
+            expectEqual(check?.drainOutcome, "skipped", "K \(row.label): no push pass ran")
+            expectEqual(h.wire.requests, sent, "K \(row.label): nothing was sent (no request at all)")
+            expectEqual(h.widgetQueue.value, action, "K \(row.label): the widget action was not replayed")
+            expectEqual(h.queue.load().count, 1, "K \(row.label): the queued change is still queued")
+            expectEqual(h.photos.uploaded, [], "K \(row.label): no photo upload")
+            let report = section(h.report(), "rollbackReadiness")
+            expect((report["blockers"] as? [String])?.contains(row.blocker.rawValue) == true,
+                   "K \(row.label): report: the blocker code")
+            h.store.testSetRollbackReadinessFlag(row.flag, false)
+        }
+    }
+
+    // MARK: K2. A second tap while a check runs is refused, with nothing sent
+
+    @MainActor
+    static func secondTapIsRefused() async throws {
+        let h = Harness(tag: "second-tap")
+        defer { h.cleanup() }
+        await h.signIn()
+        expectEqual(await h.syncBaseline(), [], "K2: sanity: the device starts synced")
+        _ = try h.queue.enqueue(
+            table: "customers", op: .upsert, recordId: "c-first",
+            payload: .object(["id": .string("c-first"), "name": .string("First")])
+        )
+        let tag = NativeWidgetOwnerTag.make(binding: h.binding)
+        let action = #"[{"ownerTag":"\#(tag)","id":"k2-trip","type":"trip_log","at":"2026-09-24T16:05:00.000Z","date":"2026-09-24","odometerStart":100,"odometerEnd":112}]"#
+        var second: NativeRollbackReadinessCheck?? = .none
+        var sentBefore = 0
+        var sentAfter = 0
+        var runningDuring = false
+        let first = await h.store.testPrepareRollbackReadiness(afterDrain: {
+            // While the first check is suspended: a new change and a widget
+            // action arrive, and the owner taps again.
+            _ = try? h.queue.enqueue(
+                table: "customers", op: .upsert, recordId: "c-second",
+                payload: .object(["id": .string("c-second"), "name": .string("Second")])
+            )
+            h.widgetQueue.value = action
+            runningDuring = h.store.isRollbackReadinessCheckRunning
+            sentBefore = h.wire.requests
+            second = .some(await h.store.prepareRollbackReadiness())
+            sentAfter = h.wire.requests
+        })
+        expect(runningDuring, "K2: sanity: the first check is running when the second tap lands")
+        expect(second == .some(nil), "K2: the second tap is refused (nil)")
+        expectEqual(sentAfter, sentBefore, "K2: the second tap sent nothing (no request at all)")
+        expectEqual(h.widgetQueue.value, action, "K2: the second tap replayed nothing")
+        expectEqual(h.serverRows("customers"), 1, "K2: only the first check's drain reached the server")
+        expectEqual(first?.drainOutcome, "completed", "K2: the first check's drain ran")
+        expectEqual(first?.readiness.blockers, [.pendingChanges, .widgetActionsPending],
+                    "K2: the first check reports what arrived after its drain")
+        expect(!h.store.isRollbackReadinessCheckRunning, "K2: the running flag clears")
+        let third = await h.store.prepareRollbackReadiness()
+        expect(third?.readiness.isReady == true, "K2: a later tap runs and drains both (\(third?.readiness.blockers ?? []))")
+    }
+
+    // MARK: L. Booking and portal link work (fix round 1)
+
+    @MainActor
+    static func bookingWorkBlocksUntilFinished() async throws {
+        do {
+            let h = Harness(tag: "booking-work")
+            defer { h.cleanup() }
+            await h.signIn()
+            expectEqual(await h.syncBaseline(), [], "L: sanity: the device starts synced")
+            let work = h.store.pendingScheduleBookingWorkStore()
+            expectEqual(work.fileURL.deletingLastPathComponent().path, h.dir.path,
+                        "L: sanity: the file the booking flows stage into, next to store.json")
+            try work.stage(.init(
+                kind: .portalMirror(customerId: "c-portal-private", token: nil, enabled: false, operationId: "op-private"),
+                ownerBinding: h.binding
+            ))
+            // Another account's item is not this account's (its own boundary
+            // scrubs it).
+            try work.stage(.init(
+                kind: .bookingMirror(token: nil, enabled: false, revision: 2, operationId: "op-other"),
+                ownerBinding: String(repeating: "c", count: 64)
+            ))
+
+            let before = h.store.rollbackReadiness()
+            expectEqual(before.blockers, [.bookingWorkPending], "L: this owner's unfinished booking work: not ready")
+            expectEqual(before.bookingWorkCount, 1, "L: counting only this owner's item")
+            expect(!before.failsClosed, "L: it does not fail closed, so the drain still runs")
+
+            let check = await h.store.prepareRollbackReadiness()
+            expectEqual(check?.drainOutcome, "completed", "L: the forced push pass ran")
+            expectEqual(check?.readiness.blockers, [.bookingWorkPending],
+                        "L: the push pass does not finish booking work: still not ready")
+            expectEqual(check?.readiness.bookingWorkCount, 1, "L: with its count")
+            expectEqual(work.load().count, 2, "L: the check never removes booking work")
+            let summary = check.map { NativeRollbackReadinessCopy.summary($0.readiness) } ?? ""
+            expect(summary.contains("1 booking or portal link change not finished yet"),
+                   "L: the Settings line says what is left (\(summary))")
+            let report = section(h.report(), "rollbackReadiness")
+            expectEqual(Set(report.keys), rollbackReportKeys, "L: the closed rollbackReadiness schema")
+            expectEqual(report["blockers"] as? [String], ["booking-work-pending"], "L: report: the blocker code")
+            expectEqual(report["bookingWorkCount"] as? Int, 1, "L: report: the count")
+            let text = h.reportText()
+            expect(!text.contains("c-portal-private") && !text.contains("op-private"),
+                   "L: the report never carries the work item")
+
+            // The flow that staged it finishes it (its own removal): ready.
+            try work.remove { $0.ownerBinding == h.binding }
+            let finished = await h.store.prepareRollbackReadiness()
+            expect(finished?.readiness.isReady == true, "L: once finished: ready (\(finished?.readiness.blockers ?? []))")
+            expectEqual(finished?.readiness.bookingWorkCount, 0, "L: nothing of this owner's left")
+        }
+        do {
+            let h = Harness(tag: "booking-unreadable")
+            defer { h.cleanup() }
+            await h.signIn()
+            expectEqual(await h.syncBaseline(), [], "L: sanity: the device starts synced")
+            let url = h.store.pendingScheduleBookingWorkStore().fileURL
+            try Data("{not booking work".utf8).write(to: url)
+            let torn = h.store.rollbackReadiness()
+            expectEqual(torn.blockers, [.bookingWorkUnreadable], "L: an unreadable booking-work file is not an empty one")
+            expect(!torn.failsClosed, "L: unreadable does not fail closed")
+            let summary = NativeRollbackReadinessCopy.summary(torn)
+            expect(summary.contains("booking and portal link changes can't be checked"), "L: its Settings line (\(summary))")
+            try Data(#"{"schemaVersion":2,"items":[]}"#.utf8).write(to: url)
+            expectEqual(h.store.rollbackReadiness().blockers, [.bookingWorkUnreadable],
+                        "L: a schema this build does not know is unreadable")
+            try h.store.pendingScheduleBookingWorkStore().removeAll()
+            expect(h.store.rollbackReadiness().isReady, "L: an emptied booking-work file is empty: ready")
+        }
+    }
+
     // MARK: I. The report before any check
 
     @MainActor
@@ -587,6 +776,7 @@ struct RollbackReadinessTests {
         expectEqual(report["drainOutcome"] as? String, "none", "I: no drain")
         expectEqual(report["blockers"] as? [String], [], "I: no blockers listed")
         expectEqual(report["pendingChangeCount"] as? Int, 0, "I: zero counts")
+        expectEqual(report["bookingWorkCount"] as? Int, 0, "I: zero booking work")
     }
 
     // MARK: J. Sources
