@@ -804,10 +804,21 @@ struct RollbackReadinessTests {
         let groupSuite = "com.tradeready.rollback-readiness.tests.marker.\(UUID().uuidString)"
         let groupDefaults = UserDefaults(suiteName: groupSuite)
         defer { groupDefaults?.removePersistentDomain(forName: groupSuite) }
+        // Fix round 4: a temporary widget replay transport as well, as the
+        // Harness injects one, so the readiness read and the sign-out's claim
+        // removal never reach the host's App Group queue or its
+        // `Application Support/WidgetActionClaims`.
+        let widgetQueue = MemoryWidgetActionQueue()
+        let claimDirectory = dir.appendingPathComponent("WidgetActionClaims", isDirectory: true)
         func launch(recordsNativeRun: Bool = true) -> AppStore {
             AppStore(
                 fileURL: storeURL,
                 seedIfMissing: false,
+                widgetActionReplayTransport: NativeWidgetActionClaimTransport(
+                    queue: widgetQueue,
+                    claimDirectory: claimDirectory,
+                    lockFile: dir.appendingPathComponent("app-group.lock")
+                ),
                 appGroupAccountScrubber: NativeAppGroupAccountScrubber(
                     suiteName: groupSuite,
                     defaults: groupDefaults,
@@ -850,12 +861,21 @@ struct RollbackReadinessTests {
                                           binding: String(repeating: "b", count: 64))
         expect(store.upsert(Customer(name: "Dune Glass", email: "dune@example.test")), "M: sanity: a signed-in save")
         expect(FileManager.default.fileExists(atPath: storeURL.path), "M: sanity: the workspace is on disk")
+        let widgetTag = NativeWidgetOwnerTag.make(binding: String(repeating: "b", count: 64))
+        widgetQueue.value = #"[{"ownerTag":"\#(widgetTag)","id":"m-trip","type":"trip_log","at":"2026-09-24T16:05:00.000Z","date":"2026-09-24","odometerStart":100,"odometerEnd":112}]"#
+        expectEqual(store.rollbackReadiness().widgetActionCount, 1,
+                    "M: the readiness check reads the test's temporary widget queue, not the host's (fix round 4)")
+        widgetQueue.value = nil
+        try FileManager.default.createDirectory(at: claimDirectory, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: claimDirectory.appendingPathComponent("synthetic-claim.json"))
         let groupKey = NativeAppGroupAccountScrubber.accountKeys.first ?? "widgetSnapshot"
         groupDefaults?.set("synthetic", forKey: groupKey)
         do { try await store.signOut(revokeRemote: false) } catch { expect(false, "M: signOut threw \(error)") }
         expect(!FileManager.default.fileExists(atPath: storeURL.path), "M: sanity: the sign-out removed store.json")
         expect(groupDefaults?.object(forKey: groupKey) == nil,
                "M: the sign-out scrubbed the test's temporary App Group suite, not the host's (fix round 3)")
+        expect(!FileManager.default.fileExists(atPath: claimDirectory.path),
+               "M: the sign-out removed the test's temporary widget claims, not the host's (fix round 4)")
         expectEqual(markers.load()?.run, first + 1, "M: the sign-out does not touch it")
         try Canonical.SnapshotRepository(primaryURL: storeURL).removeLiveAccountData()
         expectEqual(markers.load()?.run, first + 1, "M: the `.live` scrub does not touch it")
