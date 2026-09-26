@@ -1,12 +1,15 @@
 import CryptoKit
 import Foundation
 
-// Phase 12 (12.00b.2-F, charter G6-Q1) host tests: does a permanent account
-// deletion leave the React Native sources the launch migration reads, so the
-// next launch re-imports the deleted account? Each scenario builds a fixture
-// device (AsyncStorage manifest, Documents photo, legacy SecureStore items,
-// App Group values) in a temp directory, migrates it with the real launch
-// path, crosses one account boundary with the real AppStore code, and
+// Phase 12 (12.00b.2-F, charter G6-Q1, P12-001) host tests. The rule: after
+// a PERMANENT account deletion nothing from that account may be re-imported,
+// so the deletion (`.all`) scrub erases the React Native sources the launch
+// migration reads (`NativeLegacySourceEraser`). A sign-out, the recovery
+// exits and the account switch keep them for the Expo rollback build (G6),
+// and the completed journal stops a second import. Each scenario builds a
+// fixture device (AsyncStorage manifest, Documents photo, legacy SecureStore
+// items, App Group values) in a temp directory, migrates it with the real
+// launch path, crosses one account boundary with the real AppStore code, and
 // relaunches on the same files. Nothing here reads or writes the real
 // Keychain, App Group, Documents or network.
 // Run with TZ=America/Phoenix.
@@ -85,9 +88,25 @@ struct TempAppGroup {
     }
 }
 
-/// The legacy Expo SecureStore services the importer reads, in memory.
-final class FakeLegacySecureStore {
+/// The legacy Expo SecureStore services the importer reads, in memory. It
+/// is also the eraser's secure store, and fails on demand (a locked device).
+final class FakeLegacySecureStore: LegacySecureStoreServiceErasing {
     var services: [String: [String: Data]] = [:]
+    var failRemove = false
+    var failRead = false
+    /// A delete that reports success but leaves the items.
+    var ignoreRemove = false
+
+    func removeAllItems(service: String) throws {
+        if failRemove { throw NativeLegacySourceEraseError.secureStoreUnavailable(status: -25308) }
+        if ignoreRemove { return }
+        services[service] = nil
+    }
+
+    func hasItems(service: String) throws -> Bool {
+        if failRead { throw NativeLegacySourceEraseError.secureStoreUnavailable(status: -25308) }
+        return !(services[service]?.isEmpty ?? true)
+    }
 
     /// Inventories in `LegacyDataImporter.legacySecureStoreServices` order,
     /// exactly what `readSecureSettings` reads from the Keychain.
@@ -191,14 +210,23 @@ final class FixtureDevice {
         )
     }
 
+    /// The eraser the production convenience init passes (`.live()`), on
+    /// this device's locations and legacy secure store.
+    var eraser: NativeLegacySourceEraser {
+        NativeLegacySourceEraser(locations: locations, secureStore: legacySecureStore)
+    }
+
     /// A cold launch of the native app on this device (the production
-    /// convenience init's settings, with host-test stand-ins).
+    /// convenience init's settings, with host-test stand-ins). The source is
+    /// read when the launch migration runs, after any pending scrub, as
+    /// `liveSource()` is.
     func launch() throws -> AppStore {
         AppStore(
             fileURL: storeURL,
             seedIfMissing: false,
             automaticallyMigrateLegacyData: true,
-            legacyMigrationSource: try source(),
+            legacyMigrationSourceProvider: { try self.source() },
+            legacySourceEraser: eraser,
             appGroupAccountScrubber: group.scrubber,
             subscriptionService: SubscriptionStub(),
             widgetTimelineReloader: NoopReloader(),
@@ -278,8 +306,12 @@ func migrateFirstLaunch(_ device: FixtureDevice, _ label: String) throws -> AppS
 
 // MARK: - 1. Deletion (.all scrub), relaunch, then B
 
-/// CHARACTERIZATION (commit 1): pins what the code does today. P12-001 is
-/// reproduced when these pass: the deleted account's data comes back.
+/// The deletion's scrub erases the RN sources with everything else, so the
+/// next launch has nothing to import and B never meets A's data.
+/// (Characterized before the fix, commit 1: the relaunch re-imported A's
+/// records, owner marker, backups, session and provider key; B's sign-in
+/// stopped at the account-mismatch gate, and B's launch adopted A's
+/// workspace when the RN data had no owner keys.)
 @MainActor
 func testDeletionThenRelaunch(ownerKeys: Bool) async throws {
     let label = ownerKeys ? "deletion (RN owner keys)" : "deletion (no RN owner keys)"
@@ -297,51 +329,52 @@ func testDeletionThenRelaunch(ownerKeys: Bool) async throws {
     expect(nativeSession() == nil && nativeProviderKey() == nil, "\(label): the scrub clears the native Keychain")
     expect(LegacyDataImporter.readAppGroupValues(defaults: device.group.defaults).isEmpty,
            "\(label): the scrub wipes the App Group values")
+    expect(!exists(device.asyncStorageDirectory), "\(label) [P12-001]: the scrub erases the RN AsyncStorage directory")
+    expect(!exists(device.photoURL.deletingLastPathComponent()), "\(label) [P12-001]: the scrub erases the RN Documents photo directory")
+    expectEqual(device.legacySecureStore.legacyItemCount, 0, "\(label) [P12-001]: the scrub erases the RN SecureStore items")
+    expect(exists(device.unrelatedDocumentURL), "\(label): the scrub leaves other Documents files alone")
+    expectEqual(device.legacySecureStore.services["com.example.unrelated"]?.count, 1,
+                "\(label): the scrub leaves other Keychain services alone")
+    expect(!first.isAccountScrubBlocked && !exists(device.storeURL.appendingPathExtension("account-scrub-pending")),
+           "\(label): the scrub finishes")
 
-    // Observed: the RN sources survive the deletion.
-    expect(exists(device.manifestURL), "\(label) [P12-001]: the RN AsyncStorage manifest survives the deletion")
-    expect(exists(device.photoURL), "\(label) [P12-001]: the RN Documents photo survives the deletion")
-    expectEqual(device.legacySecureStore.legacyItemCount, 2, "\(label) [P12-001]: the RN SecureStore items survive the deletion")
-
-    // Relaunch: no snapshot and no journal, so the importer runs again.
+    // Relaunch: nothing to import.
     let relaunched = try device.launch()
-    expectEqual(relaunched.customers.map(\.id), ["rn-a-1"], "\(label) [P12-001]: the relaunch re-imports the deleted account's customer")
-    expect(isMigratedNotice(relaunched.launchMigrationNotice), "\(label) [P12-001]: the relaunch reports a fresh migration")
-    expect(device.journalComplete, "\(label) [P12-001]: the relaunch writes a completed journal again")
-    expect(exists(device.auxiliaryURL) && exists(device.legacyBackupsURL),
-           "\(label) [P12-001]: the relaunch re-creates the auxiliary state and the legacy backups")
-    expectEqual(nativeSession(), sessionA, "\(label) [P12-001]: the relaunch re-publishes the deleted account's legacy session")
-    expectEqual(nativeProviderKey(), Data(providerKeyA.utf8), "\(label) [P12-001]: the relaunch re-publishes the deleted account's provider key")
+    expectEqual(relaunched.customers.map(\.id), [], "\(label) [P12-001]: the relaunch imports nothing")
+    expect(relaunched.launchMigrationNotice == nil, "\(label) [P12-001]: the relaunch reports no migration")
+    expect(!relaunched.isLegacyMigrationBlocked, "\(label): the relaunch is not blocked")
+    expect(!exists(device.journal.fileURL), "\(label) [P12-001]: the relaunch writes no journal")
+    expect(!exists(device.auxiliaryURL) && !exists(device.legacyBackupsURL),
+           "\(label) [P12-001]: the relaunch re-creates no auxiliary state or legacy backup")
+    expect(nativeSession() == nil, "\(label) [P12-001]: the relaunch publishes no legacy session")
+    expect(nativeProviderKey() == nil, "\(label) [P12-001]: the relaunch publishes no provider key")
 
     // B signs in on the same launch (the interactive gate).
     let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
-    expectEqual(bOutcome.accountState, ownerKeys ? .ownerMismatch : .noAccountState,
-                "\(label): B's activation reads the re-imported owner marker")
+    expectEqual(bOutcome.accountState, .noAuxiliaryArtifact, "\(label): B's activation finds no auxiliary state of A's")
     relaunched.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
-    expectEqual(relaunched.authenticationGateState, .accountMismatch,
-                "\(label) [P12-001]: B's sign-in stops at the account-mismatch gate over A's re-imported data")
+    expect(isConfigurationPreflight(relaunched.authenticationGateState),
+           "\(label) [P12-001]: B's sign-in adopts an empty workspace and heads for B's initial sync (got \(relaunched.authenticationGateState))")
+    expectEqual(relaunched.customers.map(\.id), [], "\(label) [P12-001]: B sees none of A's records")
+    expectEqual(relaunched.syncStatus.pendingCount, 0, "\(label) [P12-001]: nothing of A's is queued under B")
 
-    // B relaunches (the launch activation adopts an unbound workspace).
+    // B relaunches (the launch activation, which adopts an unbound workspace).
     let bLaunch = try device.launch()
-    expect(bLaunch.launchMigrationNotice == nil, "\(label): B's relaunch runs no second migration")
+    expect(bLaunch.launchMigrationNotice == nil, "\(label): B's relaunch runs no migration")
     guard let bLaunchOutcome = try await device.launchOutcome() else {
         expect(false, "\(label): B's session is stored")
         return
     }
     expectEqual(bLaunchOutcome.verifiedUserSubject, "user-b", "\(label): the launch verifies B")
     bLaunch.testApplyLaunchIdentityOutcome(bLaunchOutcome)
-    if ownerKeys {
-        expectEqual(bLaunch.authenticationGateState, .accountMismatch,
-                    "\(label) [P12-001]: B's launch stops at the account-mismatch gate (A's owner marker)")
-    } else {
-        expect(isConfigurationPreflight(bLaunch.authenticationGateState),
-               "\(label) [P12-001]: B's launch adopts A's re-imported workspace and heads for B's initial sync (got \(bLaunch.authenticationGateState))")
-    }
-    expectEqual(bLaunch.customers.map(\.id), ["rn-a-1"], "\(label) [P12-001]: A's customer is in B's local workspace")
+    expect(isConfigurationPreflight(bLaunch.authenticationGateState),
+           "\(label) [P12-001]: B's launch heads for B's initial sync over an empty workspace (got \(bLaunch.authenticationGateState))")
+    expectEqual(bLaunch.customers.map(\.id), [], "\(label) [P12-001]: A's customer is not in B's local workspace")
+    expectEqual(bLaunch.syncStatus.pendingCount, 0, "\(label) [P12-001]: nothing of A's is queued under B after the relaunch")
 }
 
 /// A deletion whose scrub was interrupted is finished by the next launch,
-/// which then runs the migration in the same launch.
+/// erasing the RN sources before that launch's migration step.
 @MainActor
 func testPendingDeletionFinishedAtLaunch() throws {
     let label = "pending deletion"
@@ -353,15 +386,134 @@ func testPendingDeletionFinishedAtLaunch() throws {
 
     let relaunched = try device.launch()
     expect(!relaunched.isAccountScrubBlocked, "\(label): the launch finishes the pending scrub")
-    expectEqual(relaunched.customers.map(\.id), ["rn-a-1"], "\(label) [P12-001]: the same launch re-imports the deleted account's customer")
-    expect(device.journalComplete, "\(label) [P12-001]: the same launch writes a completed journal")
-    expectEqual(nativeSession(), sessionA, "\(label) [P12-001]: the same launch re-publishes the deleted account's session")
+    expect(!exists(device.manifestURL) && device.legacySecureStore.legacyItemCount == 0,
+           "\(label) [P12-001]: the launch erases the RN sources")
+    expectEqual(relaunched.customers.map(\.id), [], "\(label) [P12-001]: the same launch imports nothing")
+    expect(!exists(device.journal.fileURL), "\(label) [P12-001]: the same launch writes no journal")
+    expect(nativeSession() == nil, "\(label) [P12-001]: the same launch publishes no legacy session")
+}
+
+/// An erase that fails (a locked Keychain) leaves the deletion pending: the
+/// relaunch keeps everything hidden and imports nothing, and a later
+/// launch, or Retry, finishes it.
+@MainActor
+func testEraseFailureKeepsDeletionPending() async throws {
+    let label = "erase failure"
+    for retry in ["relaunch", "retry"] {
+        resetHostKeychain()
+        let device = try FixtureDevice("erase-fail-\(retry)", ownerKeys: false)
+        defer { device.cleanUp() }
+        let first = try migrateFirstLaunch(device, "\(label) (\(retry))")
+        let marker = device.storeURL.appendingPathExtension("account-scrub-pending")
+
+        device.legacySecureStore.failRemove = true
+        var scrubThrew = false
+        do { try first.testRunAccountDeletionLocalScrub() } catch { scrubThrew = true }
+        expect(scrubThrew, "\(label) (\(retry)): the scrub reports the failed erase")
+        expect(nativeSession() == nil, "\(label) (\(retry)): the deletion's Keychain wipe ran before the erase failed")
+        expectEqual(Canonical.SnapshotRepository(primaryURL: device.storeURL).pendingAccountScrubScope, .all,
+                    "\(label) (\(retry)): the deletion scrub stays pending")
+        expectEqual(device.legacySecureStore.legacyItemCount, 2, "\(label) (\(retry)): sanity: the RN SecureStore items remain")
+
+        let blocked = try device.launch()
+        expect(blocked.isAccountScrubBlocked, "\(label) (\(retry)): the relaunch stays blocked while the erase fails")
+        expectEqual(blocked.customers.map(\.id), [], "\(label) (\(retry)): the blocked relaunch imports nothing")
+        expect(!exists(device.journal.fileURL), "\(label) (\(retry)): the blocked relaunch runs no migration")
+        expect(nativeSession() == nil, "\(label) (\(retry)): the blocked relaunch publishes no legacy session")
+        expect(exists(marker), "\(label) (\(retry)): the deletion is still pending")
+
+        device.legacySecureStore.failRemove = false
+        let finished: AppStore
+        if retry == "relaunch" {
+            finished = try device.launch()
+        } else {
+            blocked.retryAccountScrub()
+            finished = blocked
+        }
+        expect(!finished.isAccountScrubBlocked && !exists(marker), "\(label) (\(retry)): the deletion finishes")
+        expectEqual(device.legacySecureStore.legacyItemCount, 0, "\(label) (\(retry)): the RN SecureStore items are erased")
+        expectEqual(finished.customers.map(\.id), [], "\(label) (\(retry)): nothing is imported")
+
+        let later = try device.launch()
+        expectEqual(later.customers.map(\.id), [], "\(label) (\(retry)): a later launch imports nothing")
+        expect(later.launchMigrationNotice == nil && !exists(device.journal.fileURL),
+               "\(label) (\(retry)): a later launch runs no migration")
+    }
+}
+
+/// The eraser itself: exactly the set the importer reads, idempotent and
+/// verified.
+@MainActor
+func testEraser() throws {
+    let root = tempDirectory("eraser")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let locations = LegacySourceLocations(
+        libraryDirectory: root.appendingPathComponent("Library", isDirectory: true),
+        applicationSupportDirectory: root.appendingPathComponent("AppSupport", isDirectory: true),
+        documentsDirectory: root.appendingPathComponent("Documents", isDirectory: true),
+        bundleID: "com.gettradereadyapp.tradeready"
+    )
+    expectEqual(locations.asyncStorageCandidates.count, 6, "eraser: six AsyncStorage candidates")
+    expectEqual(locations.photoDirectories.map(\.lastPathComponent), LegacyDataImporter.legacyPhotoDirectories,
+                "eraser: the photo directories are the importer's")
+    for directory in locations.asyncStorageCandidates + locations.photoDirectories {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: directory.appendingPathComponent("item"))
+    }
+    let kept = [
+        locations.documentsDirectory.appendingPathComponent("unrelated.txt"),
+        root.appendingPathComponent("AppSupport/TradeReadyNative/store.json"),
+        root.appendingPathComponent("Library/Preferences/other.plist")
+    ]
+    for url in kept {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("kept".utf8).write(to: url)
+    }
+    let secure = FakeLegacySecureStore()
+    for service in LegacyDataImporter.legacySecureStoreServices {
+        secure.services[service] = ["supabase_session": Data("s".utf8), "supabase_session_chunk_1": Data("c".utf8)]
+    }
+    secure.services["com.example.unrelated"] = ["other": Data("kept".utf8)]
+    let eraser = NativeLegacySourceEraser(locations: locations, secureStore: secure)
+
+    do { try eraser.erase() } catch { expect(false, "eraser: erase threw \(error)") }
+    for directory in locations.asyncStorageCandidates + locations.photoDirectories {
+        expect(!exists(directory), "eraser: \(directory.lastPathComponent) is erased")
+    }
+    expectEqual(secure.legacyItemCount, 0, "eraser: every legacy SecureStore item is erased")
+    expect(kept.allSatisfy(exists), "eraser: other files are kept")
+    expectEqual(secure.services["com.example.unrelated"]?.count, 1, "eraser: other Keychain services are kept")
+    do { try eraser.erase() } catch { expect(false, "eraser: a second erase threw \(error)") }
+
+    // Verification: a delete that leaves items, or an unreadable service, throws.
+    secure.services["app"] = ["providerKey": Data("p".utf8)]
+    secure.ignoreRemove = true
+    do {
+        try eraser.erase()
+        expect(false, "eraser: items left after the delete are reported")
+    } catch NativeLegacySourceEraseError.secureStoreItemsRemain {
+    } catch { expect(false, "eraser: unexpected error \(error)") }
+    secure.ignoreRemove = false
+    secure.failRead = true
+    do {
+        try eraser.erase()
+        expect(false, "eraser: an unreadable service is reported")
+    } catch NativeLegacySourceEraseError.secureStoreUnavailable {
+    } catch { expect(false, "eraser: unexpected error \(error)") }
+    secure.failRead = false
+    do { try eraser.erase() } catch { expect(false, "eraser: the retry threw \(error)") }
+    expectEqual(secure.legacyItemCount, 0, "eraser: the retry erases the rest")
+
+    // The error carries codes only.
+    let described = String(describing: NativeLegacySourceEraseError.fileRemains(kind: "async-storage"))
+    expect(!described.contains("/"), "eraser: an error names no path")
 }
 
 // MARK: - 2. Sign-out (.live scrub)
 
 /// G6: a sign-out keeps the RN sources (the Expo rollback build reads them)
-/// and the completed journal, so nothing is imported again.
+/// and the completed journal, so nothing is imported again. The launches
+/// carry the eraser, as the app does; a sign-out never calls it.
 @MainActor
 func testSignOutThenRelaunch() async throws {
     let label = "sign-out"
@@ -440,6 +592,78 @@ func testWorkspaceRetainingExits() async throws {
     }
 }
 
+// MARK: - 4. Source pins
+
+@MainActor
+func testSources() {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let n = root.appendingPathComponent("native/TradeReadyNative")
+    let appStore = (try? String(contentsOf: n.appendingPathComponent("AppStore.swift"), encoding: .utf8)) ?? ""
+    let coordinator = (try? String(contentsOf: n.appendingPathComponent("LegacyMigrationCoordinator.swift"), encoding: .utf8)) ?? ""
+    let app = (try? String(contentsOf: n.appendingPathComponent("TradeReadyNativeApp.swift"), encoding: .utf8)) ?? ""
+    expect(!appStore.isEmpty && !coordinator.isEmpty && !app.isEmpty, "source: the sources are readable")
+
+    // The app's only AppStore is the convenience init, which passes the live eraser.
+    expect(app.contains("AppStore(analytics:"), "source: the app builds its store with the convenience init")
+    expect(sourceBody(appStore, "convenience init(")?.contains("legacySourceEraser: .live()") == true,
+           "source: the convenience init passes the live eraser")
+
+    // Exactly the three `.all` scrub sites erase, each in the `.all` branch
+    // right after the deletion's Keychain wipe, inside the scrub marker.
+    let lines = appStore.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+    let erases = lines.indices.filter { lines[$0] == "try eraseLegacySourcesForDeletedAccount()" }
+    expectEqual(erases.count, 3, "source: three scrub sites erase the legacy sources")
+    expect(erases.allSatisfy { $0 >= 2 && lines[$0 - 1].hasSuffix(".clearAllValues()") && lines[$0 - 2] == "case .all:" },
+           "source: each erase is in a .all branch, right after the deletion's Keychain wipe")
+    for marker in ["private func performLocalAccountScrub(", "func retryAccountScrub("] {
+        if let body = sourceBody(appStore, marker),
+           let erase = body.range(of: "try eraseLegacySourcesForDeletedAccount()"),
+           let finish = body.range(of: "try repository.finishAccountScrub()") {
+            expect(erase.upperBound < finish.lowerBound, "source: \(marker) erases before the scrub marker is cleared")
+        } else {
+            expect(false, "source: \(marker) erases the legacy sources")
+        }
+    }
+    expect(appStore.components(separatedBy: "case .live: try repository.removeLiveAccountData()").count - 1 == 3,
+           "source: the three .live branches are single removals (a sign-out never erases)")
+
+    // One definition of the locations: the importer's live source and the eraser.
+    expect(sourceBody(coordinator, "private func liveSource(")?.contains("LegacySourceLocations.live(") == true,
+           "source: the launch migration reads the shared locations")
+    expect(sourceBody(coordinator, "static func live() -> NativeLegacySourceEraser")?.contains("locations: .live()") == true,
+           "source: the live eraser erases the shared locations")
+    expect(sourceBody(coordinator, "static func live() -> NativeLegacySourceEraser")?.contains("LegacyKeychainSecureStoreEraser()") == true,
+           "source: the live eraser erases the system Keychain's legacy items")
+}
+
+/// The text of the declaration that starts at `marker`, through its closing
+/// brace (the parameter list is skipped, since a default argument can hold
+/// parentheses).
+func sourceBody(_ text: String, _ marker: String) -> String? {
+    guard let start = text.range(of: marker) else { return nil }
+    var index = start.upperBound
+    if marker.hasSuffix("(") {
+        var parens = 1
+        while index < text.endIndex, parens > 0 {
+            if text[index] == "(" { parens += 1 }
+            if text[index] == ")" { parens -= 1 }
+            index = text.index(after: index)
+        }
+    }
+    guard let open = text[index...].firstIndex(of: "{") else { return nil }
+    var depth = 0
+    index = open
+    while index < text.endIndex {
+        if text[index] == "{" { depth += 1 }
+        if text[index] == "}" {
+            depth -= 1
+            if depth == 0 { return String(text[start.lowerBound...index]) }
+        }
+        index = text.index(after: index)
+    }
+    return nil
+}
+
 // MARK: - Main
 
 @main
@@ -450,12 +674,15 @@ struct LegacyReimportTests {
             try await testDeletionThenRelaunch(ownerKeys: true)
             try await testDeletionThenRelaunch(ownerKeys: false)
             try testPendingDeletionFinishedAtLaunch()
+            try await testEraseFailureKeepsDeletionPending()
+            try testEraser()
             try await testSignOutThenRelaunch()
             try await testWorkspaceRetainingExits()
         } catch {
             failures += 1
             print("FAIL: threw \(error)")
         }
+        testSources()
         resetHostKeychain()
         if failures > 0 {
             print("legacy re-import tests: \(failures) of \(checks) checks FAILED")

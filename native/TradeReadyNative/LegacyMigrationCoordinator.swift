@@ -465,6 +465,14 @@ struct LegacySourceLocations: Equatable {
         self.documentsDirectory = documentsDirectory
     }
 
+    /// The Documents photo directories the importer reads and adopts
+    /// (`LegacyDataImporter.legacyPhotoDirectories`).
+    var photoDirectories: [URL] {
+        LegacyDataImporter.legacyPhotoDirectories.map {
+            documentsDirectory.appending(path: $0, directoryHint: .isDirectory)
+        }
+    }
+
     /// This installation's locations.
     static func live(fileManager: FileManager = .default) -> LegacySourceLocations {
         LegacySourceLocations(
@@ -473,6 +481,128 @@ struct LegacySourceLocations: Equatable {
             documentsDirectory: fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0],
             bundleID: Bundle.main.bundleIdentifier ?? "com.gettradereadyapp.tradeready"
         )
+    }
+}
+
+/// The legacy Expo SecureStore services the importer reads, whole.
+/// Phase 12 (12.00b.2-F, P12-001).
+protocol LegacySecureStoreServiceErasing {
+    /// Deletes every item in `service`. An empty service is success.
+    func removeAllItems(service: String) throws
+    /// Whether `service` still holds an item. An unreadable service throws.
+    func hasItems(service: String) throws -> Bool
+}
+
+/// The system Keychain's legacy Expo SecureStore items: the generic
+/// passwords under the services `LegacyDataImporter.readSecureSettings`
+/// reads. Only attributes are ever read back, never a value.
+struct LegacyKeychainSecureStoreEraser: LegacySecureStoreServiceErasing {
+    func removeAllItems(service: String) throws {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw NativeLegacySourceEraseError.secureStoreUnavailable(status: status)
+        }
+        #else
+        throw NativeLegacySourceEraseError.secureStoreUnavailable(status: 0)
+        #endif
+    }
+
+    func hasItems(service: String) throws -> Bool {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: kCFBooleanTrue as Any
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else {
+            throw NativeLegacySourceEraseError.secureStoreUnavailable(status: status)
+        }
+        return true
+        #else
+        throw NativeLegacySourceEraseError.secureStoreUnavailable(status: 0)
+        #endif
+    }
+}
+
+/// Codes only: no path, service, key or value.
+enum NativeLegacySourceEraseError: Error, Equatable {
+    case fileRemains(kind: String)
+    case secureStoreUnavailable(status: Int32)
+    case secureStoreItemsRemain
+}
+
+/// Phase 12 (12.00b.2-F, P12-001, charter §5.4 G6-Q1): erases everything the
+/// launch migration imports from the React Native app on this installation:
+/// every AsyncStorage candidate directory, the Documents photo directories
+/// and the legacy Expo SecureStore services. After a permanent account
+/// deletion a relaunch then finds nothing to import, so the deleted account
+/// can never come back (its journal is gone, so nothing else would stop it).
+///
+/// Only the permanent-deletion (`.all`) account scrub calls it, under the
+/// account-scrub marker: a failure leaves the scrub pending, the launch
+/// migration does not run while it is pending, and the launch and
+/// `retryAccountScrub` retry it. It is idempotent: absent items are
+/// success and every removal is verified. A sign-out never calls it: G6
+/// keeps these files for the Expo rollback build of a live account. The App
+/// Group values the importer also reads are wiped by every scrub already
+/// (`NativeAppGroupAccountScrubber`).
+struct NativeLegacySourceEraser {
+    let locations: LegacySourceLocations
+    let secureStore: any LegacySecureStoreServiceErasing
+    let fileManager: FileManager
+
+    init(
+        locations: LegacySourceLocations,
+        secureStore: any LegacySecureStoreServiceErasing,
+        fileManager: FileManager = .default
+    ) {
+        self.locations = locations
+        self.secureStore = secureStore
+        self.fileManager = fileManager
+    }
+
+    /// This installation's sources: the locations `liveSource()` reads and
+    /// the system Keychain.
+    static func live() -> NativeLegacySourceEraser {
+        NativeLegacySourceEraser(
+            locations: .live(),
+            secureStore: LegacyKeychainSecureStoreEraser()
+        )
+    }
+
+    func erase() throws {
+        for directory in locations.asyncStorageCandidates {
+            try remove(directory, kind: "async-storage")
+        }
+        for directory in locations.photoDirectories {
+            try remove(directory, kind: "documents-photos")
+        }
+        for service in LegacyDataImporter.legacySecureStoreServices {
+            try secureStore.removeAllItems(service: service)
+            guard try !secureStore.hasItems(service: service) else {
+                throw NativeLegacySourceEraseError.secureStoreItemsRemain
+            }
+        }
+    }
+
+    private func remove(_ directory: URL, kind: String) throws {
+        if fileManager.fileExists(atPath: directory.path) {
+            do { try fileManager.removeItem(at: directory) } catch {
+                throw NativeLegacySourceEraseError.fileRemains(kind: kind)
+            }
+        }
+        guard !fileManager.fileExists(atPath: directory.path) else {
+            throw NativeLegacySourceEraseError.fileRemains(kind: kind)
+        }
     }
 }
 

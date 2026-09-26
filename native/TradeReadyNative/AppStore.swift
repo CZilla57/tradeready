@@ -323,6 +323,11 @@ final class AppStore: ObservableObject {
     /// and previews that never construct the coordinator.
     var onAppRatingWin: (@MainActor (NativeAppRatingWin) -> Void)?
     private let appGroupAccountScrubber: NativeAppGroupAccountScrubber
+    /// Phase 12 (12.00b.2-F, P12-001): erases the React Native sources the
+    /// launch migration reads when an account is permanently deleted. The app
+    /// passes `.live()` (the convenience init); nil in host tests and previews,
+    /// so they never touch this machine's Documents or Keychain.
+    private let legacySourceEraser: NativeLegacySourceEraser?
     /// Task 11.15: the one secure store for the auth session and the user's
     /// provider keys (`NativeKeychainSecureSettingsStore`, the system Keychain
     /// in production). The account-scrub paths wipe the same store the AI
@@ -512,6 +517,7 @@ final class AppStore: ObservableObject {
             fileURL: directory.appending(path: "store.json"),
             seedIfMissing: false,
             automaticallyMigrateLegacyData: true,
+            legacySourceEraser: .live(),
             pendingOpenURLConsumer: .live(),
             analytics: analytics,
             crashReporting: crashReporting
@@ -524,6 +530,8 @@ final class AppStore: ObservableObject {
         seedIfMissing: Bool = true,
         automaticallyMigrateLegacyData: Bool = false,
         legacyMigrationSource: LegacyMigrationSource? = nil,
+        legacyMigrationSourceProvider: (() throws -> LegacyMigrationSource)? = nil,
+        legacySourceEraser: NativeLegacySourceEraser? = nil,
         repository injectedRepository: Canonical.SnapshotRepository? = nil,
         widgetActionReplayTransport: NativeWidgetActionClaimTransport? = nil,
         appGroupAccountScrubber: NativeAppGroupAccountScrubber = .init(),
@@ -554,6 +562,7 @@ final class AppStore: ObservableObject {
         self.repository = injectedRepository ?? Canonical.SnapshotRepository(primaryURL: fileURL)
         self.widgetActionReplayTransport = widgetActionReplayTransport ?? (try? .live())
         self.appGroupAccountScrubber = appGroupAccountScrubber
+        self.legacySourceEraser = legacySourceEraser
         self.pendingOpenURLConsumer = pendingOpenURLConsumer
         self.initialSyncService = initialSyncService
         self.subscriptionService = subscriptionService ?? NativeRevenueCatSubscriptionService()
@@ -622,7 +631,9 @@ final class AppStore: ObservableObject {
                 try pendingScheduleBookingWorkStore().removeAll()
                 switch pendingScope {
                 case .live: try secureSettingsStore.clearAccountValues()
-                case .all: try secureSettingsStore.clearAllValues()
+                case .all:
+                    try secureSettingsStore.clearAllValues()
+                    try eraseLegacySourcesForDeletedAccount()
                 }
                 try repository.finishAccountScrub()
                 NativeGoogleSignInProvider.clearLocalCredential()
@@ -666,6 +677,14 @@ final class AppStore: ObservableObject {
                     launchOutcome = try NativePerformanceMetrics.shared.measure(.legacyMigration) {
                         if let source {
                             return try coordinator.migrate(currentSettings: currentSettings, source: source)
+                        }
+                        // Phase 12 (12.00b.2-F): a host test's fixture source,
+                        // read here (after any pending scrub) as `liveSource()` is.
+                        if let legacyMigrationSourceProvider {
+                            return try coordinator.migrate(
+                                currentSettings: currentSettings,
+                                source: try legacyMigrationSourceProvider()
+                            )
                         }
                         return try coordinator.migrate(currentSettings: currentSettings)
                     }
@@ -4869,7 +4888,9 @@ final class AppStore: ObservableObject {
             try removeImportHistory()
             switch repository.pendingAccountScrubScope ?? .live {
             case .live: try secureSettingsStore.clearAccountValues()
-            case .all: try secureSettingsStore.clearAllValues()
+            case .all:
+                try secureSettingsStore.clearAllValues()
+                try eraseLegacySourcesForDeletedAccount()
             }
             try repository.finishAccountScrub()
             isAccountScrubBlocked = false
@@ -5072,6 +5093,17 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Phase 12 (12.00b.2-F, P12-001, charter §5.4 G6-Q1): the last step of a
+    /// permanent-deletion (`.all`) scrub, at launch recovery, `retryAccountScrub`
+    /// and `performLocalAccountScrub`. It runs after everything else is wiped
+    /// and before the scrub marker is cleared, so a failure (a locked Keychain)
+    /// leaves the deletion pending: the launch migration does not run while it
+    /// is pending, and the next launch or Retry erases again. A sign-out never
+    /// erases: G6 keeps the sources for a live account's Expo rollback build.
+    private func eraseLegacySourcesForDeletedAccount() throws {
+        try legacySourceEraser?.erase()
+    }
+
     private func performLocalAccountScrub(
         sessionStore: NativeKeychainSecureSettingsStore,
         scope: Canonical.SnapshotRepository.AccountScrubScope
@@ -5106,7 +5138,9 @@ final class AppStore: ObservableObject {
         try pendingScheduleBookingWorkStore().removeAll()
         switch scope {
         case .live: try sessionStore.clearAccountValues()
-        case .all: try sessionStore.clearAllValues()
+        case .all:
+            try sessionStore.clearAllValues()
+            try eraseLegacySourcesForDeletedAccount()
         }
         try repository.finishAccountScrub()
         // Phase 12 (review M1): a switch/recovery step still pending is run

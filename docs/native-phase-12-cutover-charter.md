@@ -28,7 +28,7 @@ only by the rating prompt).
 | G1 waiver, G6 retention policy, OI-3 429 policy | §5 | approve each |
 | Rollback data decision | §6 | approve (12.06 implements it) |
 | Exposure control, including two corrections to plan 12.07 | §7 | approve |
-| Open question G6-Q1 (account deletion and the RN source files) | §5.4 | decide after 12.06's host test |
+| G6-Q1 (account deletion and the RN source files): **resolved 2026-09-25** by 12.00b.2-F (`P12-001`). Rule: after a permanent account deletion nothing from that account is re-imported; the deletion erases the RN source files, and the G6 retention policy applies to live accounts only | §5.4 item 5 | approve with the G6 policy |
 
 ## 1. Roles (RACI) and the single-person risk
 
@@ -307,15 +307,18 @@ drained before a rollback advisory; 12.06 reports them as not drainable (§6).
 ### 5.4 G6 — retention of the RN source files and legacy backups
 
 **Policy (provisional): keep, never delete, until a future release series removes the
-legacy migration code** (plan §1, SC4). It agrees with 12.06 step 1(d) and Phase 0 rollback
-step 4 ("do not delete native migration journals or legacy AsyncStorage backups"), and the
-Expo rollback build can still read the files it reads today.
+legacy migration code** (plan §1, SC4). It covers live accounts only: a permanent account
+deletion erases the RN source files (item 5, G6-Q1 resolved 2026-09-25). It agrees with
+12.06 step 1(d) and Phase 0 rollback step 4 ("do not delete native migration journals or
+legacy AsyncStorage backups"), and the Expo rollback build can still read the files it
+reads today.
 
 1. **RN AsyncStorage source files and the RN Documents files** stay where the Expo build
    wrote them, untouched. Native reads them (`asyncStorageCandidates`,
    `N/LegacyDataImporter.swift:441`; `liveSource`, `N/LegacyMigrationCoordinator.swift:780`)
-   and no `N/` code modifies, re-protects or deletes them. Documents stays "the immutable
-   Expo source throughout recovery" (`N/LegacyMigrationCoordinator.swift:705`). They keep
+   and no `N/` code modifies or re-protects them; only a permanent account deletion
+   deletes them (item 5). Documents stays "the immutable Expo source throughout recovery"
+   (`N/LegacyMigrationCoordinator.swift:705`). They keep
    whatever protection class the Expo build gave them; raising it could break the rollback
    build's reads while the device is locked.
 2. **`LegacyBackups/` copies** are kept, immutable and protected: `preserveLegacyBytes`
@@ -330,24 +333,41 @@ Expo rollback build can still read the files it reads today.
    (`removeLiveAccountData`, `N/Domain/SnapshotRepository.swift:116`). Permanent account
    deletion removes `LegacyBackups/`, the journal and the support report
    (`removeAllAccountData`, `:142`). 12.06 step 1(d) is about rollback, not a user's own
-   deletion, so this stays. Neither boundary touches the RN source files.
+   deletion, so this stays. Sign-out does not touch the RN source files; permanent
+   deletion erases them (item 5).
 4. **Accepted residual.** An RN-era plaintext Square token can remain in the RN source files
-   on an upgraded device. It stays in the app's own sandbox, where the Expo build left it,
-   with the protection that build gave it. Native adds no copy outside the protected,
-   backup-excluded `LegacyBackups/`, and heals imported copies in its own store (contract
-   §17.2 G4). With no production users, only team devices that ran a pre-2026-08 Expo
-   build can hold one.
-5. **Open question G6-Q1 (for 12.00b.2-F (Task 9b, plan ruling R10 on 2026-09-25) and
-   the owner).** Permanent deletion removes the journal but not the RN source files. By
-   code reading, the next launch finds no snapshot
-   (`shouldAttempt`, `N/AppStore.swift:588`) and no completed journal
-   (`N/LegacyMigrationCoordinator.swift:628`), so it would import the deleted account's
-   RN-era local data again. No host test covers this, and whether another account could
-   then see that data was not checked. 12.00b.2-F (Task 9b, plan ruling R10 on
-   2026-09-25) adds the test; if confirmed, it becomes `P12-001`, classified by §2.
-   Candidate fixes: a durable "legacy source retired" marker that survives deletion, or
-   deleting the RN source on permanent deletion (a rollback build does not need a
-   deleted account's data).
+   on an upgraded device until a permanent deletion erases them (item 5). It stays in the
+   app's own sandbox, where the Expo build left it, with the protection that build gave it.
+   Native adds no copy outside the protected, backup-excluded `LegacyBackups/`, and heals
+   imported copies in its own store (contract §17.2 G4). With no production users, only
+   team devices that ran a pre-2026-08 Expo build can hold one.
+5. **G6-Q1, resolved 2026-09-25 by 12.00b.2-F (Task 9b, plan ruling R10): defect
+   `P12-001` (S1, §10).** The host test (`native/run-legacy-reimport-tests.sh`)
+   reproduced it at `1bb701c`. Permanent deletion removed the snapshot, the journal, the
+   auxiliary state, `LegacyBackups/`, the native Keychain and the App Group values, but not
+   the RN source files. The next launch found no snapshot (`shouldAttempt`,
+   `N/AppStore.swift:588`) and no completed journal
+   (`N/LegacyMigrationCoordinator.swift:628`) and imported the deleted account again: its
+   records, its auxiliary state with the owner marker, new backups, and its legacy Supabase
+   session and provider key, published to the native Keychain. A deletion left pending
+   and finished at launch did the same in that launch. Account B's sign-in then stopped at
+   the account-mismatch gate, and B's launch activation adopted A's re-imported workspace
+   when the RN data had no owner keys, so B's initial sync would queue A's records under B.
+   **Rule:** after a permanent account deletion nothing from that account is re-imported.
+   The retention above applies to live accounts only; a deleted account has nothing to
+   roll back to. **Fix (option a):** the deletion (`.all`) scrub ends by erasing what the
+   importer reads from the RN app: every AsyncStorage candidate directory, the Documents
+   photo directories and the legacy Expo SecureStore services (`NativeLegacySourceEraser`,
+   `N/LegacyMigrationCoordinator.swift`); every scrub already wipes the App Group values.
+   It runs under the account-scrub marker, after the rest of the wipe, so a failure (a
+   locked Keychain, say) leaves the deletion pending, the launch migration does not run,
+   and the next launch or Retry erases again. Each removal is verified, and an absent item
+   counts as done. A tombstone (option b) was not chosen: it would keep the deleted
+   account's data on the device, and a Keychain tombstone survives a reinstall. Sign-out,
+   the recovery exits and the account switch keep the RN source files and the completed
+   journal, so nothing is imported again (tested). 12.06's host test that no code path
+   deletes the RN source files or `LegacyBackups/` after a verified import must exempt
+   this one path. Device row: P12-B2F-1 (evidence index §23).
 
 ### 5.5 OI-3 — 429 push policy
 
@@ -392,7 +412,8 @@ drainable. Rule (1) is Expo-side and Phase 12 agents do not edit RN code, so 12.
 whether the release branch's existing pull meets it and who makes any change. Today a
 completed import returns `.alreadyCompleted` without reading the source again
 (`N/LegacyMigrationCoordinator.swift:628`), and a native snapshot without migration
-provenance is never replaced (`:668`). Permanent deletion loses the journal: G6-Q1 (§5.4).
+provenance is never replaced (`:668`). Permanent deletion loses the journal, so it also
+erases the RN source files (G6-Q1, resolved: §5.4 item 5); rule (3) is about live accounts.
 
 ## 7. Exposure control at cutover
 
@@ -615,8 +636,9 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L223.e | IPAD-MT-3: Stage Manager's first frame may shift column geometry | S3 | Open | device row IPAD-MT-3 |
 | L249.e | iOS 17/18 destructive text and the "On my way" hit-test are unverified | S3 | Open | device rows A11B-FR1-1/2 |
 
-### New in Phase 12 (1)
+### New in Phase 12 (2)
 
 | ID | Item | Sev | Found (date, source) | Handling | Status |
 |---|---|---|---|---|---|
+| P12-001 | Permanent account deletion left the React Native source files (AsyncStorage, Documents photos, legacy SecureStore items), so the next launch re-imported the deleted account: its records, owner marker, legacy session and provider key. Account B's sign-in then met the account-mismatch gate, or B's launch adopted A's data when the RN data had no owner keys (§5.4 item 5, G6-Q1) | **S1** | Open @`1bb701c` (reproduced 2026-09-25, 12.00b.2-F host test `native/run-legacy-reimport-tests.sh`) | 12.00b.2-F | Fixed — 12.00b.2-F (host) (`fix(native): phase 12.00b.2 - deleted account's legacy data is never re-imported (P12-001)`); device row P12-B2F-1 |
 | P12-002 | Phase 11 docs (runsheet OI-3 row; `native-phase-11-performance.md` §1.2 scenario B) stated the 429 push backoff as the poor-network test harness's 30 s/60 s values, not the app's real exponential backoff (5 s base, doubling, 300 s cap; `N/NativeSyncCoordinator.swift:140-141,388`) | S3 | 2026-09-25, Task 2 12.00 doc batch | doc batch | Closed — 12.00 doc batch (this commit) |
