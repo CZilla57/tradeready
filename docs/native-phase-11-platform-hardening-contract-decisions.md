@@ -2538,6 +2538,17 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      cache describes the session stored now.
    - Test: `native/run-legacy-reimport-tests.sh` (section 6; the background and
      sync-refresh checks need a configured Supabase build, so they are source pins).
+   - Fix round 2 (2026-09-25; Task 9c re-review Minor 1): the password-recovery exits
+     are boundaries too. Without them, a check that started in password recovery and
+     resumed after the owner cancelled it re-applied the recovery gate over the
+     signed-out state and left an identity cached for a session no longer stored.
+     `updateRecoveredPassword` (once the update succeeds), `cancelPasswordRecovery` and
+     `dismissInvalidPasswordRecovery` (when it drops an active recovery session) advance
+     the generation before they clear the session, and the shared
+     `applyRecoverySignedOutState` advances it again. A dismissal without an active
+     recovery session clears no session and is not a boundary. Test: section 6, cancel
+     and dismissal variants (`updateRecoveredPassword` needs a configured Supabase
+     build, so it is a source pin).
    **Amended by Phase 12 12.00b.2-G fix round 1 (2026-09-25; defect P12-006):**
    - A deletion whose local scrub could not write its marker ran no step and left
      nothing on disk saying it was pending. The Retry button and the activation retry

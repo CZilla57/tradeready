@@ -411,7 +411,9 @@ final class AppStore: ObservableObject {
     private var identityActivationWaiters: [CheckedContinuation<Void, Never>] = []
     /// Phase 12 (12.00b.2-G fix round 1, R31): advanced by every account
     /// boundary (an account scrub once its marker is written, a completed
-    /// sign-out or deletion, an account switch). Each identity check reads it
+    /// sign-out or deletion, an account switch; since fix round 2 the
+    /// password-recovery exits, before they clear the session, and their
+    /// shared recovery sign-out). Each identity check reads it
     /// before its activator await and drops its result if it moved, so a
     /// check that resumes afterwards never overwrites the boundary
     /// (`discardIdentityActivationOvertakenByAccountBoundary`).
@@ -4352,8 +4354,9 @@ final class AppStore: ObservableObject {
     /// Phase 12 (12.00b.2-G fix round 1, R31): the check can be suspended in
     /// `/auth/v1/user` while an account boundary finishes (scene activation's
     /// retry of a pending sign-out, the Retry button, a sign-out, a deletion,
-    /// an account switch). The boundary is final: a result, or an error, that
-    /// arrives after it is dropped rather than applied over it.
+    /// an account switch, a password-recovery exit). The boundary is final: a
+    /// result, or an error, that arrives after it is dropped rather than
+    /// applied over it.
     private func completeIdentityActivation(
         _ activator: NativeAuthenticatedIdentityActivator,
         recoveryState: NativePasswordRecoveryState?,
@@ -4715,6 +4718,11 @@ final class AppStore: ObservableObject {
         // The password update is already authoritative. Remote revocation is
         // best effort, but local recovery credentials are always removed and
         // business data is retained behind the normal identity gate.
+        // Phase 12 (12.00b.2-G fix round 2, R31): the recovery session ends
+        // here. Advanced before it is cleared, so a check suspended in
+        // `/auth/v1/user` that resumes at any point from now on (the actor
+        // may let it cache its identity after `clearSession`) is dropped.
+        accountBoundaryGeneration &+= 1
         try? await configured.client.revoke(sessionBytes: session)
         try await configured.activator.clearSession()
         try recoveryStore.clear()
@@ -4725,6 +4733,8 @@ final class AppStore: ObservableObject {
         guard !authenticationOperationInFlight else { return }
         authenticationOperationInFlight = true
         defer { authenticationOperationInFlight = false }
+        // Phase 12 (12.00b.2-G fix round 2, R31): see `updateRecoveredPassword`.
+        accountBoundaryGeneration &+= 1
         let sessionStore = secureSettingsStore
         if let session = try? sessionStore.readSupabaseSession(),
            let configured = try? configuredAuthentication()
@@ -4745,6 +4755,12 @@ final class AppStore: ObservableObject {
         recoveryStore: NativePasswordRecoveryStore = NativePasswordRecoveryStore()
     ) async {
         if (try? recoveryStore.read()?.activeUserSubject) != nil {
+            // Phase 12 (12.00b.2-G fix round 2, R31): it drops the recovery
+            // session, so a suspended check must not re-apply the recovery
+            // gate over it (the fresh check below decides the gate). Without
+            // an active recovery session nothing is cleared and the stored
+            // session stays: no boundary.
+            accountBoundaryGeneration &+= 1
             try? secureSettingsStore.clearSupabaseSession()
             // Task 11.15 fix round 1: dropping the recovery session is an
             // account boundary too (same rule as the two recovery exits).
@@ -6205,6 +6221,9 @@ final class AppStore: ObservableObject {
     }
 
     private func applyRecoverySignedOutState() {
+        // Phase 12 (12.00b.2-G fix round 2, R31): as `applyCompletedSignOutState`,
+        // a completed recovery exit is never overwritten by a suspended check.
+        accountBoundaryGeneration &+= 1
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
         pendingCustomerMergeUndo = nil
@@ -11490,15 +11509,20 @@ extension AppStore {
     /// Test-only (Phase 12 12.00b.2-G fix round 1, R31): the identity check a
     /// scene activation runs (`activateMigratedAuthenticatedIdentity` past its
     /// guards: the shared `completeIdentityActivation`), with an injected
-    /// activator, no password recovery pending and not the initial check. The
-    /// public entry needs a configured Supabase build, which this host binary
-    /// does not have. Production never calls this.
-    func testRunIdentityActivation(_ activator: NativeAuthenticatedIdentityActivator) async {
+    /// activator and not the initial check. `recoveryState` stands for the
+    /// password-recovery state the public entry reads from the Keychain (fix
+    /// round 2: nil, none pending, unless a test passes one). The public entry
+    /// needs a configured Supabase build, which this host binary does not
+    /// have. Production never calls this.
+    func testRunIdentityActivation(
+        _ activator: NativeAuthenticatedIdentityActivator,
+        recoveryState: NativePasswordRecoveryState? = nil
+    ) async {
         guard !authenticationOperationInFlight, !identityActivationInFlight else { return }
         identityActivationInFlight = true
         defer { finishIdentityActivation() }
         authenticatedIdentityActivator = activator
-        await completeIdentityActivation(activator, recoveryState: nil, isInitialCheck: false)
+        await completeIdentityActivation(activator, recoveryState: recoveryState, isInitialCheck: false)
     }
 
     /// Test-only (Phase 12 12.00b.2-G, Task 9b review M1): the real

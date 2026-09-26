@@ -24,7 +24,8 @@ import Foundation
 // holds another account at the exact-owner gate (section 3).
 // R31 (fix round 1): an identity check that an account boundary overtook
 // (sign-out, deletion, Retry, activation, account switch) drops its result
-// and the identity it cached (section 6).
+// and the identity it cached (section 6); fix round 2 adds the
+// password-recovery exits.
 // P12-006 (fix round 1): a deletion whose scrub marker cannot be written
 // stays pending, and Retry, activation or the launch finish it (section 7).
 // Run with TZ=America/Phoenix.
@@ -1115,6 +1116,88 @@ func testIdentityCheckOvertakenByAccountBoundary() async throws {
     }
 }
 
+/// R31 fix round 2 (Task 9c re-review Minor 1): the password-recovery exits
+/// are account boundaries too. A check that started while the gate was
+/// `.passwordRecovery` (a recovery session is pending) and is suspended in
+/// `/auth/v1/user` while the owner cancels the recovery, or dismisses an
+/// invalid one, must not re-apply the recovery gate over the exit, nor leave
+/// a verified identity cached for a session no longer stored.
+/// Characterized before the fix: the resumed check re-applied
+/// `.passwordRecovery` over `.signedOut` (cancel) and over the fresh check the
+/// dismissal starts, and left A's identity cached in the Keychain.
+@MainActor
+func testIdentityCheckOvertakenByRecoveryExit() async throws {
+    for exitName in ["cancel recovery", "dismiss invalid recovery"] {
+        let label = "identity check overtaken (\(exitName))"
+        resetHostKeychain()
+        let device = try FixtureDevice("overtaken-\(exitName.replacingOccurrences(of: " ", with: "-"))", ownerKeys: true)
+        defer { device.cleanUp() }
+        let first = try migrateFirstLaunch(device, label)
+        let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+        first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+        let recovery = NativePasswordRecoveryState(activeUserSubject: "user-a")
+
+        // A's recovery session is pending: the launch check routes to the
+        // password-recovery gate.
+        await first.testRunIdentityActivation(
+            NativeAuthenticatedIdentityActivator(
+                snapshotURL: device.storeURL,
+                sessionStore: hostTestSecureSettingsStore(),
+                verifier: FixtureVerifier(),
+                bindingProvider: FixtureBindingProvider()
+            ),
+            recoveryState: recovery
+        )
+        expectEqual(first.authenticationGateState, .passwordRecovery(email: nil),
+                    "\(label): sanity: the check routes A's pending recovery to the password-recovery gate")
+
+        // The next check (a scene activation), suspended in `/auth/v1/user`.
+        let gate = VerifierGate()
+        let activator = NativeAuthenticatedIdentityActivator(
+            snapshotURL: device.storeURL,
+            sessionStore: hostTestSecureSettingsStore(),
+            verifier: GatedVerifier(gate: gate),
+            bindingProvider: FixtureBindingProvider()
+        )
+        let check = Task { await first.testRunIdentityActivation(activator, recoveryState: recovery) }
+        await gate.waitForArrival()
+
+        if exitName == "cancel recovery" {
+            // The host has no Supabase configuration: the fallback clears the
+            // stored session, then the shared recovery sign-out runs.
+            await first.cancelPasswordRecovery()
+            expect(nativeSession() == nil && cachedVerifiedIdentity() == nil,
+                   "\(label): sanity: the exit clears A's session and cached identity while the check is suspended")
+            expectEqual(first.authenticationGateState, .signedOut, "\(label): sanity: the exit signs out")
+            await gate.open()
+            await check.value
+            expectEqual(first.authenticationGateState, .signedOut,
+                        "\(label) [R31]: the resumed check leaves the gate signed out, not in password recovery")
+            expectEqual(first.authenticatedAccountState, .noMigratedSession,
+                        "\(label) [R31]: the resumed check leaves no verified account")
+        } else {
+            // The dismissal clears the recovery session, then starts a fresh
+            // check, which waits for the suspended one to finish.
+            let store = NativePasswordRecoveryStore(backend: HostInMemoryKeychain())
+            try store.markActive(userSubject: "user-a")
+            let dismissal = Task { await first.dismissInvalidPasswordRecovery(recoveryStore: store) }
+            for _ in 0..<200 where nativeSession() != nil { await Task.yield() }
+            expect(nativeSession() == nil && cachedVerifiedIdentity() == nil,
+                   "\(label): sanity: the exit clears A's session and cached identity while the check is suspended")
+            await gate.open()
+            await check.value
+            await dismissal.value
+            // The fresh check runs in this unconfigured host: `.unavailable`.
+            expect(first.authenticationGateState != .passwordRecovery(email: nil),
+                   "\(label) [R31]: the resumed check does not re-apply the password-recovery gate (got \(first.authenticationGateState))")
+            expectEqual(first.authenticationGateState, .unavailable,
+                        "\(label) [R31]: the fresh check the dismissal starts decides the gate")
+        }
+        expect(cachedVerifiedIdentity() == nil,
+               "\(label) [R31]: the resumed check leaves no cached identity for a session no longer stored")
+    }
+}
+
 // MARK: - 7. A deletion whose scrub marker cannot be written
 
 /// Makes the app directory read-only, so no new file can be created there
@@ -1306,10 +1389,31 @@ func testSources() {
             expect(false, "source [R31]: \(marker) re-checks the boundary generation")
         }
     }
+    // Fix round 2 (Task 9c re-review Minor 1): the password-recovery exits
+    // too, each before it clears the session, and their shared sign-out.
     for marker in ["private func performLocalAccountScrub(", "func retryAccountScrub(",
-                   "private func applyCompletedSignOutState(", "func useAnotherAccount("] {
+                   "private func applyCompletedSignOutState(", "func useAnotherAccount(",
+                   "private func applyRecoverySignedOutState(", "func updateRecoveredPassword(",
+                   "func cancelPasswordRecovery(", "func dismissInvalidPasswordRecovery("] {
         expect(sourceBody(appStore, marker)?.contains("accountBoundaryGeneration &+= 1") == true,
                "source [R31]: \(marker) advances the boundary generation")
+    }
+    for (marker, clear) in [("func updateRecoveredPassword(", "try await configured.activator.clearSession()"),
+                            ("func cancelPasswordRecovery(", "if let session = try? sessionStore.readSupabaseSession()"),
+                            ("func dismissInvalidPasswordRecovery(", "try? secureSettingsStore.clearSupabaseSession()")] {
+        if let body = sourceBody(appStore, marker),
+           let bump = body.range(of: "accountBoundaryGeneration &+= 1"),
+           let cleared = body.range(of: clear) {
+            expect(bump.upperBound < cleared.lowerBound,
+                   "source [R31]: \(marker) advances the boundary generation before it clears the session")
+        } else {
+            expect(false, "source [R31]: \(marker) advances the boundary generation before it clears the session")
+        }
+    }
+    if let body = sourceBody(appStore, "private func applyRecoverySignedOutState(") {
+        expect(body.range(of: "accountBoundaryGeneration &+= 1").map { bump in
+            body.range(of: "authenticationGateState = .signedOut").map { bump.upperBound < $0.lowerBound } ?? false
+        } ?? false, "source [R31]: the recovery sign-out advances it before it sets the signed-out gate")
     }
     if let scrub = sourceBody(appStore, "private func performLocalAccountScrub("),
        let begin = scrub.range(of: "try repository.beginAccountScrub(scope: scope)"),
@@ -1382,6 +1486,7 @@ struct LegacyReimportTests {
             try await testRetriedSignOutClearsPendingBookingWork()
             try await testUnreadableDeletionMarkerFailsClosed()
             try await testIdentityCheckOvertakenByAccountBoundary()
+            try await testIdentityCheckOvertakenByRecoveryExit()
             for finish in ["retry", "activation", "relaunch"] {
                 try await testDeletionWithUnwritableMarker(finish: finish)
             }
