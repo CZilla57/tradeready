@@ -131,8 +131,10 @@ own record counts, which TH-1 compares exactly, and carry no content:
 - `rollbackReadiness` (12.06, v4): the last Settings › Cloud Sync › Check everything is
   saved on this account (`none`, `ready`, `not-ready`), its age bucket, the drain's sync
   outcome code (`skipped` when a fail-closed condition held), the blocker codes, the
-  waiting-change, refused-change, widget-action and photo-upload counts, and the
-  migration journal state; `none` before any check and after an account change
+  waiting-change, refused-change, widget-action, photo-upload and booking-work counts
+  (`bookingWorkCount`: this account's unfinished booking or portal link work, blocker
+  `booking-work-pending`, or `booking-work-unreadable` when its file does not decode),
+  and the migration journal state; `none` before any check and after an account change
   (`docs/native-phase-12-rollback-playbook.md` §5.1).
 
 **Code rule.** A code keeps only `A–Z a–z 0–9 . _ / -`, at most 96 bytes, with no run of
@@ -144,7 +146,8 @@ survives as a code.
 **Cap.** 16,384 bytes (`NativeSupportDiagnostics.maximumReportBytes`). Over it the oldest
 recent codes are dropped first and counted; a report that still does not fit is not
 written (`reportTooLarge`) and the action says the report could not be created. The dry-run
-report was 2,450 bytes (2,673 with the v4 `rollbackReadiness` section in the 12.06 host run).
+report was 2,450 bytes (2,694 with the v4 `rollbackReadiness` section, booking-work count
+included, in the 12.06 host run).
 
 **Never included:** records, names, contact details, notes, record ids, the owner
 binding or Supabase subject, file paths, error messages, keys, tokens, sessions, marker
