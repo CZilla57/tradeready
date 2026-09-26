@@ -1712,6 +1712,9 @@ API (`AppStore.reportError(_:context:)`) and these sites:
 | `utils/sync.ts:211` `{context: 'pushQueue', failedCount, tables}` | `AppStore.applySyncStatus`: once per sync pass that ends `.failed`/`.partial`, `{code: <diagnosticCode>, message}` with `{context: 'pushQueue', count: <remaining>}` (`tables` is not an allowed extra) |
 | `utils/sync.ts:312` `{context: 'pullRemote'}` | `AppStore.applySyncStatus`: once per completed push whose pull ends failed or partial |
 | `screens/SettingsAccountScreen.tsx:61` `{context: 'deleteAccount'}` | `SettingsView.performDeleteAccount` catch |
+| `utils/sync.ts:410` `{context: 'initialSync'}` *(12.02)* | `AppStore.beginInitialSyncGate`: each refusal of the initial-sync gate, `{code: <the gate's diagnostic code>, message}` with `{context: 'initialSync', operation: 'preflight' or 'pull'}` |
+| `screens/PaywallScreen.tsx:94` `{context: 'purchase'}` *(12.02)* | `AppStore.purchaseSubscription` catch, except a user cancel (RN reports only `!err.userCancelled`) |
+| `screens/PaywallScreen.tsx:115` `{context: 'restorePurchases'}` *(12.02)* | `AppStore.restoreSubscription` catch |
 
 The other RN sites (screen-level load/save catches, photo sync and storage, imports,
 booking and payment settings, auto-invoice, subscription, PDF and logo files, and the
@@ -1721,6 +1724,14 @@ failures in the UI or folds them into the coordinator's bounded diagnostic codes
 later task adds a site by calling `store.reportError(error, context: ["context": "<name>"])`
 after the commit it describes. The SwiftUI ErrorBoundary analog (`componentStack`) has no
 native trigger yet; `componentStack` stays allow-listed for it.
+
+*2026-09-26 (Phase 12 12.02, charter L193.b):* the three rows marked 12.02 above are now
+mapped, so `initialSync` and the subscription sites leave the unmapped list. Native-only
+contexts with no RN site, each a bounded `{code, message}` through the same builder:
+`pushRejected` (12.00b.1), `widgetLock` (12.00b.2-B), and from 12.02 `legacyMigration`,
+`pushDiscarded`, `syncThrottle`, `pendingAge`, `invoicePayment` and `accountScrub`. Each
+report's context and code (never its message) also go to the support report's recent codes.
+The signals, codes and backlog are in `docs/native-phase-12-monitoring.md` §3 and §8.
 
 ---
 
