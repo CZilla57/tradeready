@@ -1454,8 +1454,11 @@ func testSources(root: URL) {
         expect(false, "M1: the scene activation branch found")
     }
     // M3 (L286.7): each session-rejected catch tears down through
-    // `applyRejectedSessionState()` and nothing else.
-    if let activation = functionBody(appStore, "func activateMigratedAuthenticatedIdentity(") {
+    // `applyRejectedSessionState()` and nothing else. (Phase 12 12.00b.2-G
+    // fix round 1, R31: the catches live in the check's shared completion.)
+    expect(functionBody(appStore, "func activateMigratedAuthenticatedIdentity(")?.contains("await completeIdentityActivation(") == true,
+           "M3: the launch/activation identity check ends in its shared completion")
+    if let activation = functionBody(appStore, "private func completeIdentityActivation(") {
         for error in ["rejectedSession", "malformedStoredSession", "missingAccessToken", "missingRefreshToken"] {
             guard let caught = activation.range(of: "catch NativeAuthenticatedIdentityError.\(error) {"),
                   let close = activation.range(of: "}", range: caught.upperBound..<activation.endIndex)
@@ -1464,7 +1467,7 @@ func testSources(root: URL) {
             expectEqual(handler, "applyRejectedSessionState()", "M3: the \(error) catch runs applyRejectedSessionState() only")
         }
     } else {
-        expect(false, "M3: activateMigratedAuthenticatedIdentity found")
+        expect(false, "M3: completeIdentityActivation found")
     }
 }
 

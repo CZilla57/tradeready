@@ -409,6 +409,13 @@ final class AppStore: ObservableObject {
     private var accountSwitchInFlight = false
     private var identityActivationInFlight = false
     private var identityActivationWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Phase 12 (12.00b.2-G fix round 1, R31): advanced by every account
+    /// boundary (an account scrub once its marker is written, a completed
+    /// sign-out or deletion, an account switch). Each identity check reads it
+    /// before its activator await and drops its result if it moved, so a
+    /// check that resumes afterwards never overwrites the boundary
+    /// (`discardIdentityActivationOvertakenByAccountBoundary`).
+    private var accountBoundaryGeneration: UInt64 = 0
     /// Task 11.06 (contract §6.2 step 4): at most one route parked across
     /// the auth/onboarding/subscription gate (newest wins). Read-only outside
     /// the store so host tests can observe parking.
@@ -4270,10 +4277,6 @@ final class AppStore: ObservableObject {
         defer { finishIdentityActivation() }
         let isInitialCheck = !didCheckMigratedAuthenticatedIdentity
         didCheckMigratedAuthenticatedIdentity = true
-        let priorAccountState = authenticatedAccountState
-        let priorGateState = authenticationGateState
-        let hadVerifiedSubject = authenticatedUserSubject != nil
-        let hadVerifiedBinding = verifiedAccountBinding != nil
         guard let supabaseURL = BuildEnvironment.supabaseURL,
               let publishableKey = BuildEnvironment.supabasePublishableKey
         else {
@@ -4300,8 +4303,6 @@ final class AppStore: ObservableObject {
             return
         }
 
-        authenticatedAccountState = .checking
-        if isInitialCheck { authenticationGateState = .loading }
         let verifier = NativeSupabaseAuthenticatedIdentityVerifier(
             supabaseURL: supabaseURL,
             publishableKey: publishableKey
@@ -4319,8 +4320,42 @@ final class AppStore: ObservableObject {
             authenticatedIdentityActivator = created
             activator = created
         }
+        await completeIdentityActivation(
+            activator,
+            recoveryState: recoveryState,
+            isInitialCheck: isInitialCheck
+        )
+    }
+
+    /// The identity check's verifier await and its outcome: the part of
+    /// `activateMigratedAuthenticatedIdentity` after its guards, shared with
+    /// the host-test seam `testRunIdentityActivation`.
+    ///
+    /// Phase 12 (12.00b.2-G fix round 1, R31): the check can be suspended in
+    /// `/auth/v1/user` while an account boundary finishes (scene activation's
+    /// retry of a pending sign-out, the Retry button, a sign-out, a deletion,
+    /// an account switch). The boundary is final: a result, or an error, that
+    /// arrives after it is dropped rather than applied over it.
+    private func completeIdentityActivation(
+        _ activator: NativeAuthenticatedIdentityActivator,
+        recoveryState: NativePasswordRecoveryState?,
+        isInitialCheck: Bool
+    ) async {
+        let priorAccountState = authenticatedAccountState
+        let priorGateState = authenticationGateState
+        let hadVerifiedSubject = authenticatedUserSubject != nil
+        let hadVerifiedBinding = verifiedAccountBinding != nil
+        authenticatedAccountState = .checking
+        if isInitialCheck { authenticationGateState = .loading }
+        let boundaryGeneration = accountBoundaryGeneration
+        let activation: Result<NativeAuthenticatedIdentityActivationOutcome?, Error>
+        do { activation = .success(try await activator.activate()) } catch { activation = .failure(error) }
+        guard accountBoundaryGeneration == boundaryGeneration else {
+            discardIdentityActivationOvertakenByAccountBoundary()
+            return
+        }
         do {
-            let outcome = try await activator.activate()
+            let outcome = try activation.get()
             guard let outcome else {
                 if recoveryState?.activeUserSubject != nil {
                     try NativePasswordRecoveryStore().clear()
@@ -4399,6 +4434,23 @@ final class AppStore: ObservableObject {
         parkedDeepLink = keptByParkingRule
     }
 
+    /// Phase 12 (12.00b.2-G fix round 1, R31): an identity check an account
+    /// boundary overtook leaves the state as the boundary set it. Its
+    /// activator stored the checked session's verified identity in the
+    /// Keychain cache after the await, possibly after the boundary had
+    /// cleared it, so the cache is cleared too unless it describes the
+    /// session stored now. Best effort: a cache left behind names a session
+    /// that is no longer stored, is read only for that exact session, and is
+    /// replaced at the next sign-in.
+    private func discardIdentityActivationOvertakenByAccountBoundary() {
+        let cache = NativeVerifiedSessionIdentityCache(backend: secureSettingsStore.backend)
+        if let current = try? secureSettingsStore.readSupabaseSession(),
+           (try? cache.identity(forExactSession: current)) != nil {
+            return
+        }
+        try? cache.clear()
+    }
+
     private func finishIdentityActivation() {
         identityActivationInFlight = false
         let waiters = identityActivationWaiters
@@ -4429,6 +4481,9 @@ final class AppStore: ObservableObject {
         // gate. Clear Google's Keychain-backed app credential on every exit so
         // the next attempt can actually select a different Google account.
         defer { clearGoogleCredential() }
+        // Phase 12 (12.00b.2-G fix round 1, R31): a suspended identity check
+        // of the session being cleared drops its result.
+        accountBoundaryGeneration &+= 1
         // Task 11.06 (11.05 handoff d): an account switch is an account
         // boundary for every held route. Cleared before the first await, so
         // nothing parked or deep-linked in the previous session can surface
@@ -4920,6 +4975,9 @@ final class AppStore: ObservableObject {
             scheduleWidgetMirrorRefresh()
             return
         }
+        // Phase 12 (12.00b.2-G fix round 1, R31): the pending scrub is a
+        // boundary for a suspended identity check too.
+        accountBoundaryGeneration &+= 1
         var scope: Canonical.SnapshotRepository.AccountScrubScope?
         do {
             // Phase 12 (12.00b.2-G, Task 9b review M2): read once. A marker
@@ -4988,6 +5046,9 @@ final class AppStore: ObservableObject {
     }
 
     private func applyCompletedSignOutState() {
+        // Phase 12 (12.00b.2-G fix round 1, R31): a completed sign-out or
+        // deletion is never overwritten by a suspended identity check.
+        accountBoundaryGeneration &+= 1
         // Task 11.08 (§9.4): sign-out, completed deletion, the paywall
         // sign-out and a retried scrub all end here — reset first.
         applyAnalyticsIdentityBoundary()
@@ -5212,6 +5273,11 @@ final class AppStore: ObservableObject {
         scope: Canonical.SnapshotRepository.AccountScrubScope
     ) throws {
         try repository.beginAccountScrub(scope: scope)
+        // Phase 12 (12.00b.2-G fix round 1, R31): from here the account's
+        // local data is going, so a suspended identity check drops its result
+        // (it could otherwise resume during `signOut`'s or `deleteAccount`'s
+        // RevenueCat logout await, before their teardown).
+        accountBoundaryGeneration &+= 1
         try scrubWidgetAccountState()
         switch scope {
         case .live: try repository.removeLiveAccountData()
@@ -7516,8 +7582,15 @@ final class AppStore: ObservableObject {
             activator = created
         }
 
+        // Phase 12 (12.00b.2-G fix round 1, R31): see `completeIdentityActivation`.
+        let boundaryGeneration = accountBoundaryGeneration
         do {
-            guard let outcome = try await activator.activate(),
+            let activated = try await activator.activate()
+            guard accountBoundaryGeneration == boundaryGeneration else {
+                discardIdentityActivationOvertakenByAccountBoundary()
+                return false
+            }
+            guard let outcome = activated,
                   !Task.isCancelled,
                   outcome.accountState != .ownerMismatch,
                   hasCompletedPersistedWorkspace(binding: outcome.verifiedAccountBinding)
@@ -7557,6 +7630,9 @@ final class AppStore: ObservableObject {
             )
             return true
         } catch {
+            if accountBoundaryGeneration != boundaryGeneration {
+                discardIdentityActivationOvertakenByAccountBoundary()
+            }
             return false
         }
     }
@@ -8062,8 +8138,15 @@ final class AppStore: ObservableObject {
     /// the rest of the app uses. Returns whether a usable session is now present.
     private func refreshSyncSession() async -> Bool {
         guard let configured = try? configuredAuthentication() else { return false }
-        do { return try await configured.activator.activate() != nil }
-        catch { return false }
+        // Phase 12 (12.00b.2-G fix round 1, R31): see `completeIdentityActivation`
+        // (here only the Keychain cache the activator wrote is at stake).
+        let boundaryGeneration = accountBoundaryGeneration
+        let refreshed = (try? await configured.activator.activate()) != nil
+        guard accountBoundaryGeneration == boundaryGeneration else {
+            discardIdentityActivationOvertakenByAccountBoundary()
+            return false
+        }
+        return refreshed
     }
 
     private func recordLocalSyncFailure(_ code: String) {
@@ -11303,6 +11386,20 @@ extension AppStore {
     /// have. Production never calls this.
     func testApplyLaunchIdentityOutcome(_ outcome: NativeAuthenticatedIdentityActivationOutcome) {
         applyAuthenticatedIdentityOutcome(outcome, email: nil, allowUnboundWorkspaceAdoption: true)
+    }
+
+    /// Test-only (Phase 12 12.00b.2-G fix round 1, R31): the identity check a
+    /// scene activation runs (`activateMigratedAuthenticatedIdentity` past its
+    /// guards: the shared `completeIdentityActivation`), with an injected
+    /// activator, no password recovery pending and not the initial check. The
+    /// public entry needs a configured Supabase build, which this host binary
+    /// does not have. Production never calls this.
+    func testRunIdentityActivation(_ activator: NativeAuthenticatedIdentityActivator) async {
+        guard !authenticationOperationInFlight, !identityActivationInFlight else { return }
+        identityActivationInFlight = true
+        defer { finishIdentityActivation() }
+        authenticatedIdentityActivator = activator
+        await completeIdentityActivation(activator, recoveryState: nil, isInitialCheck: false)
     }
 
     /// Test-only (Phase 12 12.00b.2-G, Task 9b review M1): the real

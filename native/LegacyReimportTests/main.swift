@@ -22,6 +22,9 @@ import Foundation
 // staged copy), as RN's sign-out does, so another account can use the device
 // and inherits none of it (section 2); a workspace no scrub cleared still
 // holds another account at the exact-owner gate (section 3).
+// R31 (fix round 1): an identity check that an account boundary overtook
+// (sign-out, deletion, Retry, activation, account switch) drops its result
+// and the identity it cached (section 6).
 // Run with TZ=America/Phoenix.
 
 // MARK: - Harness
@@ -992,6 +995,124 @@ func testUnreadableDeletionMarkerFailsClosed() async throws {
     expect(later.launchMigrationNotice == nil && !exists(device.journal.fileURL), "\(label) [M2]: a later launch runs no migration")
 }
 
+// MARK: - 6. An identity check overtaken by an account boundary
+
+/// Holds `/auth/v1/user` until the test opens it (a slow network), so an
+/// account boundary can finish while an identity check is suspended there.
+actor VerifierGate {
+    private var arrived = false
+    private var opened = false
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var openWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func arrive() async {
+        arrived = true
+        arrivalWaiters.forEach { $0.resume() }
+        arrivalWaiters.removeAll()
+        guard !opened else { return }
+        await withCheckedContinuation { openWaiters.append($0) }
+    }
+
+    func waitForArrival() async {
+        guard !arrived else { return }
+        await withCheckedContinuation { arrivalWaiters.append($0) }
+    }
+
+    func open() {
+        opened = true
+        openWaiters.forEach { $0.resume() }
+        openWaiters.removeAll()
+    }
+}
+
+/// `FixtureVerifier`, held at the gate first.
+struct GatedVerifier: NativeAuthenticatedIdentityVerifying {
+    let gate: VerifierGate
+    func verify(sessionBytes: Data) async throws -> NativeVerifiedAuxiliaryIdentity {
+        await gate.arrive()
+        return try await FixtureVerifier().verify(sessionBytes: sessionBytes)
+    }
+}
+
+/// The Keychain's verified-identity cache item (`NativeVerifiedSessionIdentityCache`).
+func cachedVerifiedIdentity() -> Data? {
+    (try? HostInMemoryKeychain.shared.read(key: NativeKeychainSecureSettingsStore.verifiedSessionIdentityAccount)) ?? nil
+}
+
+/// R31 (Task 9c review Minor 1, 12.00b.2-G fix round 1): the identity check
+/// a launch or scene activation runs awaits `/auth/v1/user`. An account
+/// boundary that finishes meanwhile is final: the activation's own retry of a
+/// pending sign-out, the Retry button, a sign-out, a deletion (the check
+/// resuming before its teardown, as during the RevenueCat logout await) and
+/// an account switch. The resumed check's result is dropped, so it never
+/// re-applies the previous owner over the boundary, and the verified identity
+/// the activator cached in the Keychain after the await is cleared.
+/// Characterized before the fix: the resumed check applied A's outcome over
+/// the signed-out state (A's gate and verified account state) and left A's
+/// cached identity in the Keychain.
+@MainActor
+func testIdentityCheckOvertakenByAccountBoundary() async throws {
+    for boundary in ["activation retry", "Retry button", "sign-out", "deletion", "account switch"] {
+        let label = "identity check overtaken (\(boundary))"
+        resetHostKeychain()
+        let device = try FixtureDevice("overtaken-\(boundary.replacingOccurrences(of: " ", with: "-"))", ownerKeys: true)
+        defer { device.cleanUp() }
+        let first = try migrateFirstLaunch(device, label)
+        let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+        first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+        expect(cachedVerifiedIdentity() != nil, "\(label): sanity: A's verified identity is cached")
+
+        if boundary == "activation retry" || boundary == "Retry button" {
+            // A sign-out whose scrub failed: pending, A's session still stored.
+            try device.group.blockLock()
+            do { try await first.signOut(revokeRemote: false) } catch {}
+            expect(first.isAccountScrubBlocked && nativeSession() == sessionA,
+                   "\(label): sanity: the sign-out is pending with A's session still stored")
+        }
+
+        // The scene activation's identity check, suspended in `/auth/v1/user`.
+        let gate = VerifierGate()
+        let activator = NativeAuthenticatedIdentityActivator(
+            snapshotURL: device.storeURL,
+            sessionStore: hostTestSecureSettingsStore(),
+            verifier: GatedVerifier(gate: gate),
+            bindingProvider: FixtureBindingProvider()
+        )
+        let check = Task { await first.testRunIdentityActivation(activator) }
+        await gate.waitForArrival()
+
+        switch boundary {
+        case "activation retry":
+            try device.group.unblockLock()
+            first.retryAccountBoundaryCleanupOnActivation()
+        case "Retry button":
+            try device.group.unblockLock()
+            first.retryAccountScrub()
+        case "sign-out":
+            try await first.signOut(revokeRemote: false)
+        case "deletion":
+            try first.testRunAccountDeletionLocalScrub()
+        default:
+            await first.useAnotherAccount(clearGoogleCredential: {})
+        }
+        expect(nativeSession() == nil && cachedVerifiedIdentity() == nil,
+               "\(label): sanity: the boundary clears A's session and cached identity while the check is suspended")
+
+        await gate.open()
+        await check.value
+        if boundary == "deletion" {
+            // `deleteAccount`'s teardown, after its RevenueCat logout await.
+            first.testApplyCompletedSignOutState()
+        }
+
+        expectEqual(first.authenticationGateState, .signedOut, "\(label) [R31]: the resumed check leaves the gate signed out")
+        expectEqual(first.authenticatedAccountState, .noMigratedSession, "\(label) [R31]: the resumed check leaves no verified account")
+        expect(cachedVerifiedIdentity() == nil, "\(label) [R31]: the resumed check leaves no cached identity of A's in the Keychain")
+        expect(first.migratedAccountState == nil && first.reviewRequestRecords.isEmpty,
+               "\(label) [R31]: the resumed check activates none of A's account state")
+    }
+}
+
 // MARK: - 4. Source pins
 
 @MainActor
@@ -1049,6 +1170,42 @@ func testSources() {
            && activation.contains("guard !authenticationOperationInFlight else { return }")
            && activation.contains("retryAccountScrub()"),
            "source [M3]: activation retries a pending scrub unless a sign-out or deletion is running")
+
+    // R31: the launch/activation check and its seam share one completion
+    // (section 6 drives the seam), and every activator await in AppStore
+    // outside an account operation re-checks the boundary generation before
+    // it uses its result. The background and sync-refresh checks need a
+    // configured Supabase build, so they are pinned here instead.
+    expect(sourceBody(appStore, "func activateMigratedAuthenticatedIdentity(")?.contains("await completeIdentityActivation(") == true
+           && sourceBody(appStore, "func testRunIdentityActivation(")?.contains("await completeIdentityActivation(") == true,
+           "source [R31]: the launch/activation identity check and its test seam share one completion")
+    for marker in ["private func completeIdentityActivation(", "private func prepareBackgroundIdentityIfNeeded(",
+                   "private func refreshSyncSession("] {
+        let body = sourceBody(appStore, marker) ?? ""
+        if let capture = body.range(of: "let boundaryGeneration = accountBoundaryGeneration"),
+           let awaited = body.range(of: "activator.activate()"),
+           let check = body.range(of: "guard accountBoundaryGeneration == boundaryGeneration else {") {
+            let applied = body.range(of: "applyAuthenticatedIdentityOutcome(")
+                ?? body.range(of: "verifiedAccountBinding = outcome.verifiedAccountBinding")
+            expect(capture.upperBound < awaited.lowerBound && awaited.upperBound < check.lowerBound
+                   && applied.map { check.upperBound < $0.lowerBound } != false,
+                   "source [R31]: \(marker) re-checks the boundary generation after the activator's await, before using its result")
+        } else {
+            expect(false, "source [R31]: \(marker) re-checks the boundary generation")
+        }
+    }
+    for marker in ["private func performLocalAccountScrub(", "func retryAccountScrub(",
+                   "private func applyCompletedSignOutState(", "func useAnotherAccount("] {
+        expect(sourceBody(appStore, marker)?.contains("accountBoundaryGeneration &+= 1") == true,
+               "source [R31]: \(marker) advances the boundary generation")
+    }
+    if let scrub = sourceBody(appStore, "private func performLocalAccountScrub("),
+       let begin = scrub.range(of: "try repository.beginAccountScrub(scope: scope)"),
+       let bump = scrub.range(of: "accountBoundaryGeneration &+= 1") {
+        expect(begin.upperBound < bump.lowerBound, "source [R31]: the scrub advances it once its marker is written")
+    }
+    expectEqual(appStore.components(separatedBy: "activator.activate()").count - 1, 4,
+                "source [R31]: four activator awaits: the three checks above and deletion's own session refresh")
 
     // One definition of the locations: the importer's live source and the eraser.
     expect(sourceBody(coordinator, "private func liveSource(")?.contains("LegacySourceLocations.live(") == true,
@@ -1112,6 +1269,7 @@ struct LegacyReimportTests {
             try await testUnscrubbedWorkspaceStillBlocksAnotherAccount()
             try await testRetriedSignOutClearsPendingBookingWork()
             try await testUnreadableDeletionMarkerFailsClosed()
+            try await testIdentityCheckOvertakenByAccountBoundary()
         } catch {
             failures += 1
             print("FAIL: threw \(error)")

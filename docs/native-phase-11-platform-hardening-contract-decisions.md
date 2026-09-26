@@ -2523,6 +2523,21 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      scrub cleared is on the device; the completed journal, `LegacyBackups/` and the
      RN source files stay (G6).
    - Test: `native/run-legacy-reimport-tests.sh`.
+   **Amended by Phase 12 12.00b.2-G fix round 1 (2026-09-25; Task 9c review Minor 1):**
+   - An identity check (launch, scene activation, background refresh, the sync's
+     session refresh) awaits `/auth/v1/user`. A boundary that finished during that
+     await could be overwritten when the check resumed: the check re-cached the old
+     session's verified identity in the Keychain and applied the old owner's outcome
+     over the signed-out state. The boundaries are the activation's retry of a pending
+     sign-out, the Retry button, a sign-out, a deletion and an account switch.
+   - The store now keeps an account-boundary generation. It advances when an account
+     scrub has written its marker, when a sign-out or deletion completes, and when an
+     account switch starts. Each check reads the generation before the await. If it
+     moved, the check drops its result, or its error, and leaves the state as the
+     boundary set it. The check also clears the Keychain identity cache unless the
+     cache describes the session stored now.
+   - Test: `native/run-legacy-reimport-tests.sh` (section 6; the background and
+     sync-refresh checks need a configured Supabase build, so they are source pins).
 5. the silent AI-key wipe failure (final review 1b): **fixed** in `5f2f397`. The wipe
    tries every kind under a durable `ai-key-wipe-pending` marker and counts and logs a
    failure without key material; while pending the coach reads no client key and no key
