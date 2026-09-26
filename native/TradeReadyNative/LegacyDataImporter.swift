@@ -261,8 +261,20 @@ enum LegacyDataImporter {
     /// mistaken for an account with no secrets.
     static func readSecureSettings() throws -> LegacySecureSettings {
         #if canImport(Security)
-        let inventories = try legacySecureStoreServices.map(readSecureStoreInventory(service:))
+        return try secureSettings(
+            serviceInventories: try legacySecureStoreServices.map(readSecureStoreInventory(service:))
+        )
+        #else
+        return LegacySecureSettings()
+        #endif
+    }
 
+    #if canImport(Security)
+    /// The read rules `readSecureSettings` applies to the three service
+    /// inventories, in `legacySecureStoreServices` order. Phase 12 (G6-Q1):
+    /// split out so a host test reads a fixture device's legacy secure store
+    /// through the same rules the launch migration uses.
+    static func secureSettings(serviceInventories inventories: [[String: Data]]) throws -> LegacySecureSettings {
         func readSingle(_ key: String) throws -> String? {
             for inventory in inventories {
                 guard let data = inventory[key] else { continue }
@@ -284,10 +296,8 @@ enum LegacyDataImporter {
                 serviceInventories: inventories
             )
         )
-        #else
-        return LegacySecureSettings()
-        #endif
     }
+    #endif
 
     /// Reconstructs one complete Expo SecureStore value from a single service.
     /// A base item is mandatory; all numbered chunks must be contiguous. This

@@ -651,7 +651,14 @@ final class AppStore: ObservableObject {
                     || journalStatus == .started
                     || journalStatus == .failed
                 if shouldAttempt {
-                    let coordinator = LegacyMigrationCoordinator(repository: repository, journal: migrationJournal)
+                    // Phase 12 (G6-Q1): the injected store (the same system
+                    // Keychain in the app), so a host test never publishes a
+                    // fixture's legacy secrets into the real Keychain.
+                    let coordinator = LegacyMigrationCoordinator(
+                        repository: repository,
+                        journal: migrationJournal,
+                        secureStore: secureSettingsStore
+                    )
                     let source = legacyMigrationSource
                     let currentSettings = settings
                     // Task 11.12: a LegacyMigration signpost around the same
@@ -4132,7 +4139,8 @@ final class AppStore: ObservableObject {
         do {
             let coordinator = LegacyMigrationCoordinator(
                 repository: repository,
-                journal: migrationJournal
+                journal: migrationJournal,
+                secureStore: secureSettingsStore
             )
             let result = try coordinator.migrate(currentSettings: settings)
             switch result.status {
@@ -4163,7 +4171,8 @@ final class AppStore: ObservableObject {
         do {
             let outcome = try LegacyMigrationCoordinator(
                 repository: repository,
-                journal: migrationJournal
+                journal: migrationJournal,
+                secureStore: secureSettingsStore
             ).migrate(currentSettings: settings)
             if outcome.status == .migrated { load(seedIfMissing: false) }
             applyLaunchMigrationState(outcome: outcome, error: nil, hadNativeSnapshot: false)
@@ -11160,6 +11169,24 @@ extension AppStore {
     /// network call cannot run here). Production never calls this.
     func testRunAccountDeletionLocalScrub() throws {
         try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)
+    }
+
+    /// Test-only (Phase 12, G6-Q1): binds a verified outcome through the real
+    /// shared tail of the interactive sign-ins and sign-up
+    /// (`bindInteractiveOwner`), with no landing override, so the real
+    /// exact-owner and workspace-adoption gates decide. The provider calls
+    /// before it need the network. Production never calls this.
+    func testBindInteractiveOwner(_ outcome: NativeAuthenticatedIdentityActivationOutcome, email: String?) {
+        bindInteractiveOwner(outcome, email: email)
+    }
+
+    /// Test-only (Phase 12, G6-Q1): applies a verified outcome exactly as a
+    /// launch's `activateMigratedAuthenticatedIdentity` does with no password
+    /// recovery pending (`allowUnboundWorkspaceAdoption: true`). That path
+    /// needs a configured Supabase build, which this host binary does not
+    /// have. Production never calls this.
+    func testApplyLaunchIdentityOutcome(_ outcome: NativeAuthenticatedIdentityActivationOutcome) {
+        applyAuthenticatedIdentityOutcome(outcome, email: nil, allowUnboundWorkspaceAdoption: true)
     }
 
     /// Test-only (task 11.09): feeds one sync-coordinator status through the

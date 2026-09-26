@@ -422,6 +422,58 @@ struct LegacyMigrationSource {
     let documentsDirectory: URL
     let secureSettings: LegacySecureSettings
     let appGroupValues: [String: String]
+
+    /// The source a launch reads from `locations`: the first AsyncStorage
+    /// candidate that holds a manifest, and the Documents directory.
+    /// `LegacyMigrationCoordinator.liveSource()` builds its source here.
+    static func reading(
+        _ locations: LegacySourceLocations,
+        secureSettings: LegacySecureSettings,
+        appGroupValues: [String: String],
+        fileManager: FileManager = .default
+    ) -> LegacyMigrationSource {
+        LegacyMigrationSource(
+            asyncStorageDirectory: locations.asyncStorageCandidates.first {
+                fileManager.fileExists(atPath: $0.appending(path: "manifest.json").path)
+            },
+            documentsDirectory: locations.documentsDirectory,
+            secureSettings: secureSettings,
+            appGroupValues: appGroupValues
+        )
+    }
+}
+
+/// Where the React Native app kept the files the launch migration imports.
+/// Phase 12 (G6-Q1): one definition, so a host test can build the same
+/// locations on a fixture device.
+struct LegacySourceLocations: Equatable {
+    let asyncStorageCandidates: [URL]
+    let documentsDirectory: URL
+
+    init(
+        libraryDirectory: URL,
+        applicationSupportDirectory: URL,
+        documentsDirectory: URL,
+        bundleID: String
+    ) {
+        asyncStorageCandidates = LegacyDataImporter.asyncStorageCandidates(
+            libraryDirectory: libraryDirectory,
+            applicationSupportDirectory: applicationSupportDirectory,
+            documentsDirectory: documentsDirectory,
+            bundleID: bundleID
+        )
+        self.documentsDirectory = documentsDirectory
+    }
+
+    /// This installation's locations.
+    static func live(fileManager: FileManager = .default) -> LegacySourceLocations {
+        LegacySourceLocations(
+            libraryDirectory: fileManager.urls(for: .libraryDirectory, in: .userDomainMask)[0],
+            applicationSupportDirectory: fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0],
+            documentsDirectory: fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0],
+            bundleID: Bundle.main.bundleIdentifier ?? "com.gettradereadyapp.tradeready"
+        )
+    }
 }
 
 enum NativeAuxiliaryStateScope: String, Codable, Equatable {
@@ -791,23 +843,11 @@ struct LegacyMigrationCoordinator {
     }
 
     private func liveSource() throws -> LegacyMigrationSource {
-        let library = fileManager.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-        let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let candidates = LegacyDataImporter.asyncStorageCandidates(
-            libraryDirectory: library,
-            applicationSupportDirectory: applicationSupport,
-            documentsDirectory: documents,
-            bundleID: Bundle.main.bundleIdentifier ?? "com.gettradereadyapp.tradeready"
-        )
-        let asyncStorageDirectory = candidates.first {
-            fileManager.fileExists(atPath: $0.appending(path: "manifest.json").path)
-        }
-        return LegacyMigrationSource(
-            asyncStorageDirectory: asyncStorageDirectory,
-            documentsDirectory: documents,
+        LegacyMigrationSource.reading(
+            LegacySourceLocations.live(fileManager: fileManager),
             secureSettings: try LegacyDataImporter.readSecureSettings(),
-            appGroupValues: LegacyDataImporter.readAppGroupValues()
+            appGroupValues: LegacyDataImporter.readAppGroupValues(),
+            fileManager: fileManager
         )
     }
 

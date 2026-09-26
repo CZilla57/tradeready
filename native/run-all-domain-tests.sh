@@ -84,6 +84,8 @@ sh "$ROOT_DIR/native/run-performance-metrics-tests.sh"
 sh "$ROOT_DIR/native/run-poor-network-tests.sh"
 # Phase 12 (12.00b.1, I2): the rejected-change store and its account boundaries.
 sh "$ROOT_DIR/native/run-rejected-changes-tests.sh"
+# Phase 12 (12.00b.2-F, G6-Q1): a deleted account's legacy data is never re-imported.
+sh "$ROOT_DIR/native/run-legacy-reimport-tests.sh"
 # Task 11.13: Phase 11 cross-client qualification (RN decoders, vectors, catalog).
 sh "$ROOT_DIR/native/run-phase11-qualification-tests.sh"
 "$ROOT_DIR/native/run-business-rules-tests.sh"
