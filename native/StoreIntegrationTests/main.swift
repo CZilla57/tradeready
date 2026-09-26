@@ -1112,11 +1112,11 @@ struct StoreIntegrationTests {
         let expectedSupportReportBytes = try diagnostics.encodedSupportReport(appVersion: "test-version")
         expect(supportReportURL.lastPathComponent == "tradeready-support-report.json",
                "AppStore prepares a predictably named support attachment")
-        // Phase 12 (12.02): the v3 report nests the closed v2 diagnostics
+        // Phase 12 (12.02; 12.06: v4): the v4 report nests the closed v2 diagnostics
         // report under `persistence`, unchanged.
         let supportReportObject = try JSONSerialization.jsonObject(with: supportReportBytes) as? [String: Any]
         let expectedPersistence = try JSONSerialization.jsonObject(with: expectedSupportReportBytes) as? NSDictionary
-        expect(supportReportObject?["reportSchemaVersion"] as? Int == 3
+        expect(supportReportObject?["reportSchemaVersion"] as? Int == 4
                && (supportReportObject?["persistence"] as? NSDictionary).map { $0 == expectedPersistence } == true,
                "AppStore support attachment uses the closed diagnostics schema")
         let supportReportText = String(decoding: supportReportBytes, as: UTF8.self)

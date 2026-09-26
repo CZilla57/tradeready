@@ -17,8 +17,8 @@ import Foundation
 enum NativeSupportDiagnostics {
     /// 3: the Phase 12 (12.02) report. The Phase 3 persistence report (v2,
     /// `Canonical.PersistenceSupportReport`) is nested unchanged under
-    /// `persistence`.
-    static let reportSchemaVersion = 3
+    /// `persistence`. 4 (12.06): adds `rollbackReadiness`.
+    static let reportSchemaVersion = 4
     static let maximumReportBytes = 16_384
     static let maximumRecentCodes = 16
     static let maximumCodeBytes = 96
@@ -276,6 +276,151 @@ struct NativeLegacyMigrationSummary: Equatable {
     var deferredPhotoCount = 0
 }
 
+/// Phase 12 (12.06, charter §6 item 2): whether this device's account is
+/// safe to move to the Expo rollback build. The Expo build reads the legacy
+/// AsyncStorage left at the upgrade, so anything still only on this device
+/// (a queued change, a refused change, an unreplayed widget/Siri action, a
+/// photo whose bytes never uploaded) would be missing there. Made by
+/// `AppStore.rollbackReadiness()`, which reads local state only, and by the
+/// "Check everything is saved" drain (`AppStore.prepareRollbackReadiness`).
+struct NativeRollbackReadiness: Equatable {
+    /// Every reason the account is not ready, in declaration order. The
+    /// first nine fail closed: the check then sends nothing.
+    enum Blocker: String, CaseIterable, Equatable {
+        /// Not the verified signed-in owner with its exact workspace.
+        case notVerifiedOwner = "not-verified-owner"
+        /// The initial sync has not completed for this owner.
+        case initialSyncIncomplete = "initial-sync-incomplete"
+        case writesBlocked = "writes-blocked"
+        /// An account scrub is pending or blocked, or a deletion is recorded
+        /// without its marker (or its record could not be read).
+        case accountScrubPending = "account-scrub-pending"
+        /// A boundary step (widget scrub, AI-key wipe, rejected-store scrub)
+        /// is pending or unverified, or a boundary is suspending the mirror.
+        case boundaryStepPending = "boundary-step-pending"
+        /// A sign-in, sign-out, deletion, account switch or identity check
+        /// is running.
+        case accountOperationInFlight = "account-operation-in-flight"
+        /// The account changed while the check was suspended in its drain.
+        case accountChanged = "account-changed"
+        /// The journal records a started or failed import, or the legacy
+        /// migration is blocked.
+        case migrationIncomplete = "migration-incomplete"
+        case migrationUnreadable = "migration-unreadable"
+        case pendingChanges = "pending-changes"
+        /// A queue file is on disk that does not decode (`load` reads it as
+        /// empty; this check never does).
+        case pendingChangesUnreadable = "pending-changes-unreadable"
+        /// The I2 rejected store holds entries: the owner must Retry or
+        /// Discard each one. The check never discards them.
+        case rejectedChanges = "rejected-changes"
+        case rejectedChangesUnreadable = "rejected-changes-unreadable"
+        case widgetActionsPending = "widget-actions-pending"
+        /// No claim transport, or the App Group lock or queue failed.
+        case widgetActionsUnreadable = "widget-actions-unreadable"
+        /// A photo with local bytes and no `uploadedAt`.
+        case photosPendingUpload = "photos-pending-upload"
+
+        /// The conditions under which the check sends nothing.
+        var failsClosed: Bool {
+            switch self {
+            case .notVerifiedOwner, .initialSyncIncomplete, .writesBlocked, .accountScrubPending,
+                 .boundaryStepPending, .accountOperationInFlight, .accountChanged,
+                 .migrationIncomplete, .migrationUnreadable:
+                return true
+            case .pendingChanges, .pendingChangesUnreadable, .rejectedChanges, .rejectedChangesUnreadable,
+                 .widgetActionsPending, .widgetActionsUnreadable, .photosPendingUpload:
+                return false
+            }
+        }
+    }
+
+    /// The React Native import's last journal entry. A native-only install
+    /// has none: its first launch found no previous-app data (`.noData`
+    /// writes no entry), so there is nothing to migrate.
+    enum JournalState: String, Equatable {
+        case completed
+        case noEntry = "no-entry"
+        case started
+        case failed
+        case unreadable
+    }
+
+    private(set) var blockers: [Blocker] = []
+    var pendingChangeCount = 0
+    var rejectedChangeCount = 0
+    /// The refused changes (`table/recordId`) the owner must Retry or Discard
+    /// in Settings › Cloud Sync. In memory only: the report carries the count.
+    var rejectedChangeIDs: [String] = []
+    var widgetActionCount = 0
+    var photosPendingUploadCount = 0
+    var migrationJournal: JournalState = .noEntry
+
+    var isReady: Bool { blockers.isEmpty }
+    var failsClosed: Bool { blockers.contains { $0.failsClosed } }
+
+    mutating func block(_ blocker: Blocker) {
+        guard !blockers.contains(blocker) else { return }
+        blockers.append(blocker)
+        let order = Blocker.allCases
+        blockers.sort { order.firstIndex(of: $0)! < order.firstIndex(of: $1)! }
+    }
+}
+
+/// One run of the check: the forced push pass's outcome and the readiness
+/// after it.
+struct NativeRollbackReadinessCheck: Equatable {
+    var readiness: NativeRollbackReadiness
+    /// A sync outcome code (`completed`, `partial`, `offline`, …), or
+    /// `not-configured` (no sync in this build), or `skipped` (a fail-closed
+    /// condition held, so nothing was sent).
+    var drainOutcome: String
+    var checkedAt: Date
+    /// The account boundary it belongs to; another account never sees it.
+    var accountGeneration: UInt64
+}
+
+/// The Settings › Cloud Sync line for a check.
+enum NativeRollbackReadinessCopy {
+    static let ready = "Ready: everything on this device is saved to the cloud."
+
+    static func summary(_ readiness: NativeRollbackReadiness) -> String {
+        guard !readiness.isReady else { return ready }
+        func plural(_ count: Int, _ one: String, _ many: String) -> String {
+            "\(count) \(count == 1 ? one : many)"
+        }
+        var parts: [String] = []
+        func add(_ part: String) { if !parts.contains(part) { parts.append(part) } }
+        for blocker in readiness.blockers {
+            switch blocker {
+            case .notVerifiedOwner: add("sign in to your account")
+            case .initialSyncIncomplete: add("the first sync hasn't finished")
+            case .writesBlocked: add("saving is paused on this device")
+            case .accountScrubPending, .boundaryStepPending, .accountOperationInFlight:
+                add("an account change is still finishing")
+            case .accountChanged: add("the account changed during the check, so run it again")
+            case .migrationIncomplete, .migrationUnreadable:
+                add("moving data from the previous app hasn't finished")
+            case .pendingChanges:
+                add(plural(readiness.pendingChangeCount, "change waiting to upload", "changes waiting to upload"))
+            case .pendingChangesUnreadable: add("the list of waiting changes can't be read")
+            case .rejectedChanges:
+                add(plural(readiness.rejectedChangeCount,
+                           "change the cloud refused needs Retry or Discard above",
+                           "changes the cloud refused need Retry or Discard above"))
+            case .rejectedChangesUnreadable: add("the list of refused changes can't be read")
+            case .widgetActionsPending:
+                add(plural(readiness.widgetActionCount, "widget or Siri action not applied yet",
+                           "widget or Siri actions not applied yet"))
+            case .widgetActionsUnreadable: add("widget and Siri actions can't be checked")
+            case .photosPendingUpload:
+                add(plural(readiness.photosPendingUploadCount, "photo waiting to upload", "photos waiting to upload"))
+            }
+        }
+        return "Not ready yet: " + parts.joined(separator: "; ") + "."
+    }
+}
+
 /// A string field of the report: always a bounded code.
 struct NativeSupportCode: Encodable, Equatable, ExpressibleByStringLiteral {
     let value: String
@@ -289,7 +434,7 @@ struct NativeSupportCode: Encodable, Equatable, ExpressibleByStringLiteral {
     }
 }
 
-/// The v3 support report. A closed schema: every field is a version, a
+/// The v4 support report. A closed schema: every field is a version, a
 /// boolean, a bounded count, an age bucket or a `NativeSupportCode`.
 struct NativeSupportReport: Encodable, Equatable {
     /// Named `AppInfo`, not `App`: the 11.10b accessibility audit reads
@@ -382,6 +527,24 @@ struct NativeSupportReport: Encodable, Equatable {
         var failedFileTotal: Int
     }
 
+    /// Phase 12 (12.06): the last rollback-readiness check for this account
+    /// (`lastCheck` `none`, zero counts and no blockers until one runs).
+    struct RollbackReadiness: Encodable, Equatable {
+        /// none / ready / not-ready.
+        var lastCheck: NativeSupportCode
+        var lastCheckAge: NativeSupportCode
+        /// none / skipped / not-configured / a sync outcome code.
+        var drainOutcome: NativeSupportCode
+        /// `NativeRollbackReadiness.Blocker` codes.
+        var blockers: [NativeSupportCode]
+        var pendingChangeCount: Int
+        var rejectedChangeCount: Int
+        var widgetActionCount: Int
+        var photosPendingUploadCount: Int
+        /// none / completed / no-entry / started / failed / unreadable.
+        var migrationJournal: NativeSupportCode
+    }
+
     var reportSchemaVersion = NativeSupportDiagnostics.reportSchemaVersion
     var app: AppInfo
     /// The v2 persistence report, or null when the snapshot cannot be read
@@ -393,10 +556,11 @@ struct NativeSupportReport: Encodable, Equatable {
     var sync: Sync
     var widgets: Widgets
     var legacyBackupProtection: LegacyBackupProtection
+    var rollbackReadiness: RollbackReadiness
 
     private enum CodingKeys: String, CodingKey {
         case reportSchemaVersion, app, persistence, persistenceUnavailableCode, launchMigration
-        case accountBoundary, sync, widgets, legacyBackupProtection
+        case accountBoundary, sync, widgets, legacyBackupProtection, rollbackReadiness
     }
 
     func encode(to encoder: Encoder) throws {
@@ -414,5 +578,6 @@ struct NativeSupportReport: Encodable, Equatable {
         try values.encode(sync, forKey: .sync)
         try values.encode(widgets, forKey: .widgets)
         try values.encode(legacyBackupProtection, forKey: .legacyBackupProtection)
+        try values.encode(rollbackReadiness, forKey: .rollbackReadiness)
     }
 }

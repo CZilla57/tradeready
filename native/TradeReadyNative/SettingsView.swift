@@ -347,6 +347,27 @@ struct SyncSettings: View {
             } footer: {
                 Text("Pending changes stay on this device and retry automatically. Diagnostic codes contain no customer data, account identifiers, or credentials.")
             }
+            // Phase 12 (12.06): the rollback-readiness check support asks
+            // for before an older app version is installed.
+            Section {
+                Button {
+                    Task { await store.prepareRollbackReadiness() }
+                } label: {
+                    if store.isRollbackReadinessCheckRunning {
+                        HStack { ProgressView(); Text("Checking…") }
+                    } else {
+                        Label("Check everything is saved", systemImage: "checkmark.icloud")
+                    }
+                }
+                .disabled(store.isRollbackReadinessCheckRunning || store.syncStatus.isSyncing)
+                if let check = store.currentRollbackReadinessCheck {
+                    Text(NativeRollbackReadinessCopy.summary(check.readiness))
+                        .font(.subheadline)
+                        .foregroundStyle(check.readiness.isReady ? Color.tradeSuccessText : Color.tradeWarningText)
+                }
+            } footer: {
+                Text("Support may ask you to run this before an app update. It uploads waiting changes, then says whether anything is still only on this device.")
+            }
         })
         .task { store.refreshRejectedChanges() }
     }

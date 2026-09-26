@@ -90,6 +90,8 @@ sh "$ROOT_DIR/native/run-legacy-reimport-tests.sh"
 sh "$ROOT_DIR/native/run-support-diagnostics-tests.sh"
 # Phase 12 (12.00b.2-H, P12-008): a failed snapshot save leaves nothing unsaved in memory.
 sh "$ROOT_DIR/native/run-save-rollback-tests.sh"
+# Phase 12 (12.06): the rollback-readiness check (drain before any rollback advisory).
+sh "$ROOT_DIR/native/run-rollback-readiness-tests.sh"
 # Task 11.13: Phase 11 cross-client qualification (RN decoders, vectors, catalog).
 sh "$ROOT_DIR/native/run-phase11-qualification-tests.sh"
 "$ROOT_DIR/native/run-business-rules-tests.sh"

@@ -1308,6 +1308,439 @@ func testDeletionWithUnwritableMarker(finish: String) async throws {
            "\(label) [P12-006]: B's initial sync queues none of A's records for B's push (queued: \(device.queuedRecordIDs))")
 }
 
+// MARK: - 8. Re-upgrade after an Expo rollback window (12.06, charter §6)
+//
+// Phase 12 (12.06, charter §6 rollback data decision, item 3): on a
+// re-upgrade (native → the Expo rollback build → native) the journal adopts
+// the newer native or cloud state and never re-imports the stale legacy
+// AsyncStorage over it. Edits made in the Expo build reach native only
+// through the cloud (the native pull), never through AsyncStorage.
+// Characterized first, against the unchanged code: every `OBSERVED` line is
+// what a re-upgrade did (evidence-task12/p2-characterization.log).
+
+/// The Expo rollback build's own session for A (opaque fixture bytes).
+let sessionExpo = Data(#"{"access_token":"fixture-access-expo","refresh_token":"fixture-refresh-expo","user":{"id":"user-a"}}"#.utf8)
+
+/// The Expo rollback build, installed over the native app, runs on the same
+/// container and writes what RN writes: its AsyncStorage (a stale name for
+/// the upgraded record, and a record made in the rollback window) and its
+/// SecureStore session. `ownerKeys`: its initial sync finished, so RN wrote
+/// `__dataOwner` (`utils/sync.ts:406`).
+@MainActor
+func runExpoRollbackWindow(_ device: FixtureDevice, ownerKeys: Bool) throws {
+    var manifest: [String: String] = [
+        "customers": #"[{"id":"rn-a-1","name":"Stale Expo Name","email":"","phone":"","address":"","notes":""},{"id":"rn-expo-2","name":"Expo Window Customer","email":"","phone":"","address":"","notes":""}]"#
+    ]
+    if ownerKeys {
+        manifest["onboardingComplete"] = "true"
+        manifest["__dataOwner"] = #""user-a""#
+    }
+    try device.writeManifest(manifest)
+    device.legacySecureStore.services["app:no-auth"] = [LegacyDataImporter.supabaseSessionKey: sessionExpo]
+}
+
+/// A native install that never ran the Expo app: no RN data at the first
+/// launch, so the migration finds nothing and writes no journal entry.
+@MainActor
+func removeLegacySources(_ device: FixtureDevice) throws {
+    try FileManager.default.removeItem(at: device.asyncStorageDirectory)
+    try FileManager.default.removeItem(at: device.photoURL.deletingLastPathComponent())
+    device.legacySecureStore.services["app:no-auth"] = nil
+    device.group.defaults.removeObject(forKey: "widgetSnapshot")
+}
+
+func sessionName(_ session: Data?) -> String {
+    switch session {
+    case nil: return "none"
+    case sessionA?: return "A"
+    case sessionB?: return "B"
+    case sessionExpo?: return "Expo rollback build's"
+    default: return "other"
+    }
+}
+
+/// What a re-upgrade did, printed as the characterization record.
+@MainActor
+func observe(_ label: String, _ store: AppStore, _ device: FixtureDevice) {
+    let journal = ((try? device.journal.read().entries) ?? []).map(\.status.rawValue)
+    let customers = store.customers.map { "\($0.id)=\($0.name)" }.sorted()
+    let migration = store.supportReport(appVersion: "1.0", appBuild: "1").launchMigration
+    print("OBSERVED \(label): customers=\(customers) journal=\(journal) nativeSession=\(sessionName(nativeSession())) "
+          + "migration=\(migration.lastOperation.value)/\(migration.lastOutcome.value)/\(migration.lastFailureCode.value) "
+          + "notice=\(store.launchMigrationNotice.map { "\($0)" } ?? "none") blocked=\(store.isLegacyMigrationBlocked) "
+          + "queued=\(device.queuedRecordIDs.sorted())")
+}
+
+/// The rule: nothing of the legacy source reaches the native workspace, the
+/// journal or the native Keychain, and the source stays readable (G6).
+@MainActor
+func expectNoReimport(
+    _ label: String, _ store: AppStore, _ device: FixtureDevice, journalEntries: Int, session: Data?
+) {
+    expect(!store.customers.contains { $0.id == "rn-expo-2" || $0.name == "Stale Expo Name" },
+           "\(label) [P12-011]: nothing from the Expo build's AsyncStorage is imported (customers: \(store.customers.map(\.name)))")
+    expectEqual(device.journalEntryCount, journalEntries,
+                "\(label) [P12-011]: no journal entry is written (the importer did not run)")
+    expectEqual(sessionName(nativeSession()), sessionName(session),
+                "\(label) [P12-011]: the Expo build's legacy session is not published to the native Keychain")
+    expect(exists(device.manifestURL), "\(label) [G6]: the Expo build's AsyncStorage stays readable")
+}
+
+/// B signs in on the device after the re-upgrade, then relaunches (the
+/// launch activation, which adopts an unbound workspace): none of the
+/// legacy records may reach B's workspace or B's push queue.
+@MainActor
+func expectAnotherAccountGetsNothing(_ label: String, _ store: AppStore, _ device: FixtureDevice) async throws {
+    let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
+    store.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
+    if isConfigurationPreflight(store.authenticationGateState) {
+        store.testMarkInitialSyncCompleted(subject: "user-b")
+    }
+    let bLaunch = try device.launch()
+    if let bLaunchOutcome = try await device.launchOutcome() {
+        bLaunch.testApplyLaunchIdentityOutcome(bLaunchOutcome)
+        if isConfigurationPreflight(bLaunch.authenticationGateState) {
+            bLaunch.testMarkInitialSyncCompleted(subject: "user-b")
+        }
+    }
+    observe("\(label), then B", bLaunch, device)
+    expect(!bLaunch.customers.contains { $0.id.hasPrefix("rn-") },
+           "\(label) [P12-011]: B's workspace holds none of the legacy records (customers: \(bLaunch.customers.map(\.id)))")
+    expect(!device.queuedRecordIDs.contains { $0.hasPrefix("rn-") },
+           "\(label) [P12-011]: none of the legacy records is queued for B's account (queued: \(device.queuedRecordIDs))")
+}
+
+/// R1: migrated, signed in, a native edit, then the rollback window. The
+/// completed journal and the snapshot already stop every import path.
+@MainActor
+func testReupgradeWhileSignedIn() async throws {
+    let label = "re-upgrade (migrated, signed in)"
+    resetHostKeychain()
+    let device = try FixtureDevice("reupgrade-signed-in", ownerKeys: true)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    let nativeEdit = Customer(name: "Native Edit")
+    expect(first.upsert(nativeEdit), "\(label): sanity: the native edit saves")
+    let entries = device.journalEntryCount
+
+    try runExpoRollbackWindow(device, ownerKeys: true)
+    let reupgraded = try device.launch()
+    observe(label, reupgraded, device)
+    expectNoReimport(label, reupgraded, device, journalEntries: entries, session: sessionA)
+    expect(reupgraded.launchMigrationNotice == nil && !reupgraded.isLegacyMigrationBlocked,
+           "\(label): the re-upgrade launch reports nothing and blocks nothing")
+    expectEqual(Set(reupgraded.customers.map(\.id)), Set(["rn-a-1", nativeEdit.id]),
+                "\(label): the native workspace is kept, the native edit included")
+
+    // Settings › Import React Native data.
+    reupgraded.importLegacyData()
+    observe("\(label), Import", reupgraded, device)
+    expectNoReimport("\(label), Import", reupgraded, device, journalEntries: entries, session: sessionA)
+    expectEqual(Set(reupgraded.customers.map(\.id)), Set(["rn-a-1", nativeEdit.id]),
+                "\(label), Import: the native workspace is unchanged")
+}
+
+/// R2: migrated, then signed out (the P12-003 steady state), then the
+/// rollback window: the completed journal stops the import.
+@MainActor
+func testReupgradeAfterMigratedSignOut() async throws {
+    let label = "re-upgrade (migrated, signed out)"
+    resetHostKeychain()
+    let device = try FixtureDevice("reupgrade-migrated-signed-out", ownerKeys: true)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    try await first.signOut(revokeRemote: false)
+    let entries = device.journalEntryCount
+
+    try runExpoRollbackWindow(device, ownerKeys: true)
+    let reupgraded = try device.launch()
+    observe(label, reupgraded, device)
+    expectNoReimport(label, reupgraded, device, journalEntries: entries, session: nil)
+    expect(reupgraded.launchMigrationNotice == nil && !reupgraded.isLegacyMigrationBlocked,
+           "\(label): the re-upgrade launch reports nothing and blocks nothing")
+    expectEqual(reupgraded.customers.map(\.id), [], "\(label): the signed-out workspace stays empty")
+    reupgraded.retryLegacyMigration()
+    expectNoReimport("\(label), Try again", reupgraded, device, journalEntries: entries, session: nil)
+}
+
+/// R3/R4: a native install (no RN data at its first launch, so no journal
+/// entry), signed in and edited, then the rollback window. Signed in, the
+/// snapshot stops the import. Signed out (the P12-003 record, no snapshot),
+/// the launch attempted the migration and imported the Expo build's
+/// AsyncStorage and published its session (P12-011).
+@MainActor
+func testReupgradeOnNativeInstall(signedOut: Bool, ownerKeys: Bool) async throws {
+    let label = "re-upgrade (native install, \(signedOut ? "signed out" : "signed in"), "
+        + "Expo window \(ownerKeys ? "with" : "without") RN owner keys)"
+    resetHostKeychain()
+    let device = try FixtureDevice("reupgrade-native-\(signedOut ? "out" : "in")-\(ownerKeys ? "owner" : "plain")", ownerKeys: false)
+    defer { device.cleanUp() }
+    try removeLegacySources(device)
+    let first = try device.launch()
+    expect(first.customers.isEmpty && first.launchMigrationNotice == nil && device.journalEntryCount <= 0,
+           "\(label): sanity: the first launch finds no RN data and writes no journal entry")
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    let nativeEdit = Customer(name: "Native Edit")
+    expect(first.upsert(nativeEdit), "\(label): sanity: the native edit saves")
+    if signedOut {
+        try await first.signOut(revokeRemote: false)
+        expect(exists(device.scrubClearedMarkerURL) && !exists(device.storeURL),
+               "\(label): sanity: the sign-out cleared the workspace and recorded it")
+    }
+    let entries = device.journalEntryCount
+    let session = nativeSession()
+
+    try runExpoRollbackWindow(device, ownerKeys: ownerKeys)
+    let reupgraded = try device.launch()
+    observe(label, reupgraded, device)
+    expectNoReimport(label, reupgraded, device, journalEntries: entries, session: session)
+    expect(reupgraded.launchMigrationNotice == nil && !reupgraded.isLegacyMigrationBlocked,
+           "\(label): the re-upgrade launch reports nothing and blocks nothing")
+    expectEqual(Set(reupgraded.customers.map(\.id)), signedOut ? [] : Set([nativeEdit.id]),
+                "\(label): the native workspace is kept as it was")
+    expect(!exists(device.legacyBackupsURL), "\(label) [P12-011]: no legacy backup copy is made")
+    if signedOut {
+        reupgraded.retryLegacyMigration()
+        observe("\(label), Try again", reupgraded, device)
+        expectNoReimport("\(label), Try again", reupgraded, device, journalEntries: entries, session: session)
+        expect(reupgraded.launchMigrationNotice == nil && !reupgraded.isLegacyMigrationBlocked,
+               "\(label), Try again: the signed-out state stays usable")
+        try await expectAnotherAccountGetsNothing(label, reupgraded, device)
+    } else {
+        reupgraded.importLegacyData()
+        observe("\(label), Import", reupgraded, device)
+        expectNoReimport("\(label), Import", reupgraded, device, journalEntries: entries, session: session)
+        expectEqual(Set(reupgraded.customers.map(\.id)), Set([nativeEdit.id]), "\(label), Import: unchanged")
+    }
+}
+
+/// The first native launch's migration stops after its snapshot save and
+/// before the journal is completed (a crash, or a failed journal write):
+/// the snapshot is saved, the journal is not complete.
+struct InterruptedAfterSnapshot: Error {}
+
+@MainActor
+func interruptFirstMigration(_ device: FixtureDevice, _ label: String) throws {
+    let coordinator = LegacyMigrationCoordinator(
+        repository: Canonical.SnapshotRepository(primaryURL: device.storeURL),
+        journal: device.journal,
+        secureStore: hostTestSecureSettingsStore(),
+        checkpoint: { if $0 == .snapshotPersisted { throw InterruptedAfterSnapshot() } }
+    )
+    do {
+        _ = try coordinator.migrate(currentSettings: BusinessSettings(), source: try device.source())
+        expect(false, "\(label): sanity: the interruption throws")
+    } catch is InterruptedAfterSnapshot {}
+    expect(exists(device.storeURL) && !device.journalComplete,
+           "\(label): sanity: the interrupted migration saved its snapshot and left the journal incomplete")
+}
+
+/// R5: an interrupted first migration, then the rollback window before the
+/// next launch. The re-upgrade's resumed migration finds the source changed
+/// and keeps the native snapshot (a conflict, journal failed). A then signs
+/// out. The next launch attempted the migration again (journal failed) and
+/// imported the Expo build's AsyncStorage and session (P12-011).
+@MainActor
+func testReupgradeConflictThenSignOut(ownerKeys: Bool) async throws {
+    let label = "re-upgrade conflict, then sign-out (\(ownerKeys ? "RN owner keys" : "no RN owner keys"))"
+    resetHostKeychain()
+    let device = try FixtureDevice("reupgrade-conflict-\(ownerKeys ? "owner" : "plain")", ownerKeys: ownerKeys)
+    defer { device.cleanUp() }
+    try interruptFirstMigration(device, label)
+
+    try runExpoRollbackWindow(device, ownerKeys: ownerKeys)
+    let reupgraded = try device.launch()
+    observe("\(label): re-upgrade", reupgraded, device)
+    expectEqual(reupgraded.launchMigrationNotice, .conflict,
+                "\(label): the re-upgrade keeps the native snapshot and reports the conflict")
+    expectEqual(reupgraded.customers.map(\.name), ["Deleted Owner Customer"],
+                "\(label): the native snapshot is kept, not the Expo build's stale name")
+    expect(!device.journalComplete, "\(label): sanity: the journal is not complete")
+
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    reupgraded.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    expect(reupgraded.upsert(Customer(name: "Native Edit")), "\(label): sanity: a native edit saves")
+    try await reupgraded.signOut(revokeRemote: false)
+    expect(exists(device.scrubClearedMarkerURL) && !exists(device.storeURL),
+           "\(label): sanity: the sign-out cleared the workspace and recorded it")
+    let entries = device.journalEntryCount
+
+    let relaunched = try device.launch()
+    observe("\(label): relaunch", relaunched, device)
+    expectNoReimport("\(label): relaunch", relaunched, device, journalEntries: entries, session: nil)
+    expect(relaunched.launchMigrationNotice == nil && !relaunched.isLegacyMigrationBlocked,
+           "\(label): the signed-out relaunch reports nothing and blocks nothing")
+    expectEqual(relaunched.customers.map(\.id), [], "\(label): the signed-out workspace stays empty")
+    try await expectAnotherAccountGetsNothing(label, relaunched, device)
+}
+
+/// R6: as R5, but the snapshot survives only as its backup (the primary is
+/// lost) when the next launch runs. The resumed migration skipped the
+/// conflict guard (it checks only the primary) and saved the import as the
+/// primary, over the newer native backup (P12-011).
+@MainActor
+func testReupgradeOverBackupOnly() async throws {
+    let label = "re-upgrade over a backup-only snapshot"
+    resetHostKeychain()
+    let device = try FixtureDevice("reupgrade-backup-only", ownerKeys: false)
+    defer { device.cleanUp() }
+    try interruptFirstMigration(device, label)
+    try runExpoRollbackWindow(device, ownerKeys: false)
+    let reupgraded = try device.launch()
+    expectEqual(reupgraded.launchMigrationNotice, .conflict, "\(label): sanity: the re-upgrade reports the conflict")
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    reupgraded.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    let nativeEdit = Customer(name: "Native Edit")
+    expect(reupgraded.upsert(nativeEdit), "\(label): sanity: a native edit saves")
+    expect(reupgraded.upsert(Customer(name: "Second Native Edit")), "\(label): sanity: a second native edit saves")
+    let backupURL = device.storeURL.appendingPathExtension("backup")
+    try FileManager.default.removeItem(at: device.storeURL)
+    expect(exists(backupURL), "\(label): sanity: the native snapshot survives as its backup")
+    let entries = device.journalEntryCount
+
+    let relaunched = try device.launch()
+    observe(label, relaunched, device)
+    expectNoReimport(label, relaunched, device, journalEntries: entries, session: sessionA)
+    expect(relaunched.customers.contains { $0.id == nativeEdit.id },
+           "\(label): the launch recovers the native backup (customers: \(relaunched.customers.map(\.name)))")
+    expect(!relaunched.isLegacyMigrationBlocked, "\(label): the recovered workspace is not blocked")
+}
+
+// MARK: - 9. G6: after a verified import only a deletion removes the legacy sources (12.06)
+//
+// Charter §5.4 G6 and plan 12.06 step 1(d): the RN AsyncStorage files, the
+// RN photo files and SecureStore items, and the `LegacyBackups/` copies stay
+// readable by the Expo rollback build. Exactly one path removes them: the
+// permanent account deletion (`.all`, P12-001, charter §5.4 item 5), through
+// `removeAllAccountData` and `NativeLegacySourceEraser`, called only from the
+// three `.all` branches in `N/AppStore.swift` (section 1 proves that erase).
+
+/// Every regular file under `url`, by relative path, with its bytes.
+func fileTree(_ url: URL) -> [String: Data] {
+    guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey])
+    else { return [:] }
+    var files: [String: Data] = [:]
+    let base = url.standardizedFileURL.path
+    for case let file as URL in enumerator {
+        guard (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+        let path = file.standardizedFileURL.path
+        files[path.hasPrefix(base) ? String(path.dropFirst(base.count)) : path] = try? Data(contentsOf: file)
+    }
+    return files
+}
+
+@MainActor
+func testG6LegacySourcesSurviveEveryPathButDeletion() async throws {
+    let label = "G6"
+    resetHostKeychain()
+    let device = try FixtureDevice("g6-retention", ownerKeys: true)
+    defer { device.cleanUp() }
+    // The verified import.
+    _ = try migrateFirstLaunch(device, label)
+    let photos = device.photoURL.deletingLastPathComponent()
+    var sources = fileTree(device.asyncStorageDirectory).merging(fileTree(photos)) { $1 }
+    var secureItems = device.legacySecureStore.legacyItemCount
+    let backups = fileTree(device.legacyBackupsURL)
+    expect(!sources.isEmpty && !backups.isEmpty && secureItems == 2,
+           "\(label): sanity: RN sources on disk and a published legacy backup")
+    func expectKept(_ step: String) {
+        expectEqual(fileTree(device.asyncStorageDirectory).merging(fileTree(photos)) { $1 }, sources,
+                    "\(label) after \(step): the RN AsyncStorage and photo files are all kept, unchanged")
+        expectEqual(fileTree(device.legacyBackupsURL), backups,
+                    "\(label) after \(step): LegacyBackups/ is kept, unchanged")
+        expectEqual(device.legacySecureStore.legacyItemCount, secureItems,
+                    "\(label) after \(step): the RN SecureStore items are kept")
+    }
+    expectKept("the import")
+
+    let second = try device.launch()
+    expectKept("a launch")
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    second.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    second.importLegacyData()
+    expectKept("Settings › Import React Native data")
+    try await second.signOut(revokeRemote: false)
+    expectKept("a sign-out (.live)")
+    let signedOut = try device.launch()
+    expectKept("the signed-out launch")
+    signedOut.retryLegacyMigration()
+    expectKept("the migration's Try again")
+
+    // Native → Expo → native: the Expo build rewrites its own AsyncStorage
+    // and session; the re-upgrade keeps both, and the published backup.
+    try runExpoRollbackWindow(device, ownerKeys: true)
+    sources = fileTree(device.asyncStorageDirectory).merging(fileTree(photos)) { $1 }
+    secureItems = device.legacySecureStore.legacyItemCount
+    let reupgraded = try device.launch()
+    expectKept("the re-upgrade launch")
+    reupgraded.retryLegacyMigration()
+    expectKept("the re-upgrade's Try again")
+    reupgraded.importLegacyData()
+    expectKept("the re-upgrade's Import")
+
+    // The one exemption: a permanent deletion (P12-001).
+    let aAgain = try await device.signInOutcome(sessionA, subject: "user-a")
+    reupgraded.testBindInteractiveOwner(aAgain, email: "a@example.invalid")
+    try reupgraded.testRunAccountDeletionLocalScrub()
+    expect(!exists(device.asyncStorageDirectory) && !exists(photos) && device.legacySecureStore.legacyItemCount == 0
+           && !exists(device.legacyBackupsURL),
+           "\(label): the permanent deletion (.all) removes the RN sources and LegacyBackups/ (the one exemption)")
+}
+
+/// The deleters, pinned: nothing but the `.all` path can reach them.
+@MainActor
+func testG6DeletionSites() {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let n = root.appendingPathComponent("native/TradeReadyNative")
+    let appStore = (try? String(contentsOf: n.appendingPathComponent("AppStore.swift"), encoding: .utf8)) ?? ""
+    let coordinator = (try? String(contentsOf: n.appendingPathComponent("LegacyMigrationCoordinator.swift"), encoding: .utf8)) ?? ""
+    let repository = (try? String(contentsOf: n.appendingPathComponent("Domain/SnapshotRepository.swift"), encoding: .utf8)) ?? ""
+    expect(!appStore.isEmpty && !coordinator.isEmpty && !repository.isEmpty, "G6 source: the sources are readable")
+    let lines = appStore.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+
+    // `removeAllAccountData` (the only remover of LegacyBackups/): the three
+    // `.all` branches, and no other call in the app target.
+    expectEqual(lines.filter { $0 == "case .all: try repository.removeAllAccountData()" }.count, 3,
+                "G6 source: three .all branches remove the recovery artifacts")
+    let appFiles = (FileManager.default.enumerator(at: n, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+        .filter { $0.pathExtension == "swift" }
+    var removeAllCalls = 0
+    var eraseCalls = 0
+    var serviceRemovals = 0
+    for file in appFiles {
+        let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        removeAllCalls += text.components(separatedBy: "removeAllAccountData()").count - 1
+        eraseCalls += text.components(separatedBy: ".erase()").count - 1
+        serviceRemovals += text.components(separatedBy: ".removeAllItems(service:").count - 1
+    }
+    expectEqual(removeAllCalls, 4, "G6 source: removeAllAccountData() is its definition and the three .all calls only")
+    // `NativeLegacySourceEraser.erase()` (the only remover of the RN sources):
+    // one call, inside `eraseLegacySourcesForDeletedAccount`, whose three
+    // calls are the `.all` branches (section 4 pins their placement).
+    expectEqual(eraseCalls, 1, "G6 source: the legacy source eraser has one caller")
+    expect(sourceBody(appStore, "private func eraseLegacySourcesForDeletedAccount(")?
+        .contains("try legacySourceEraser?.erase()") == true,
+           "G6 source: that caller is eraseLegacySourcesForDeletedAccount")
+    expectEqual(lines.filter { $0 == "try eraseLegacySourcesForDeletedAccount()" }.count, 3,
+                "G6 source: it is called from the three .all branches only")
+    expectEqual(serviceRemovals, 1, "G6 source: the legacy SecureStore services are removed only by the eraser")
+    // Repository: LegacyBackups/ is a deletion target only of removeAllAccountData;
+    // a sign-out's removeLiveAccountData never names it.
+    expect(sourceBody(repository, "func removeAllAccountData(")?.contains("legacyBackupDirectoryURL,") == true
+           && sourceBody(repository, "func removeLiveAccountData(")?.contains("legacyBackupDirectoryURL") == false,
+           "G6 source: only removeAllAccountData lists LegacyBackups/ for removal")
+    // Coordinator: its one file removal is the eraser's.
+    expectEqual(coordinator.components(separatedBy: "removeItem(").count - 1, 1,
+                "G6 source: the coordinator file removes files only in the eraser")
+    expect(sourceBody(coordinator, "struct NativeLegacySourceEraser")?.contains("fileManager.removeItem(at: directory)") == true,
+           "G6 source: that removal is NativeLegacySourceEraser's")
+}
+
 // MARK: - 4. Source pins
 
 @MainActor
@@ -1490,11 +1923,26 @@ struct LegacyReimportTests {
             for finish in ["retry", "activation", "relaunch"] {
                 try await testDeletionWithUnwritableMarker(finish: finish)
             }
+            // Phase 12 (12.06): re-upgrade after an Expo rollback window.
+            try await testReupgradeWhileSignedIn()
+            try await testReupgradeAfterMigratedSignOut()
+            for signedOut in [false, true] {
+                for ownerKeys in [true, false] {
+                    try await testReupgradeOnNativeInstall(signedOut: signedOut, ownerKeys: ownerKeys)
+                }
+            }
+            for ownerKeys in [true, false] {
+                try await testReupgradeConflictThenSignOut(ownerKeys: ownerKeys)
+            }
+            try await testReupgradeOverBackupOnly()
+            // Phase 12 (12.06, G6): only a deletion removes the legacy sources.
+            try await testG6LegacySourcesSurviveEveryPathButDeletion()
         } catch {
             failures += 1
             print("FAIL: threw \(error)")
         }
         testSources()
+        testG6DeletionSites()
         resetHostKeychain()
         if failures > 0 {
             print("legacy re-import tests: \(failures) of \(checks) checks FAILED")

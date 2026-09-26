@@ -194,6 +194,12 @@ final class AppStore: ObservableObject {
     /// wipe) is still pending. Drives the non-blocking "Try cleanup again"
     /// banner; `retryAccountScrub` runs the pending steps.
     @Published private(set) var isAccountBoundaryCleanupPending = false
+    /// Phase 12 (12.06): the last "Check everything is saved" result
+    /// (`prepareRollbackReadiness`). Read it through
+    /// `currentRollbackReadinessCheck`, which hides a result made before the
+    /// last account boundary.
+    @Published private(set) var rollbackReadinessCheck: NativeRollbackReadinessCheck?
+    @Published private(set) var isRollbackReadinessCheckRunning = false
     @Published private(set) var authenticatedAccountState: NativeAuthenticatedAccountState = .notChecked
     @Published private(set) var authenticationGateState: NativeAuthenticationGateState = .loading {
         didSet {
@@ -757,8 +763,12 @@ final class AppStore: ObservableObject {
             }
         }
 
+        // Phase 12 (12.06, P12-011): an adopted native state seeds nothing
+        // either (the signed-out steady state of a device with no completed
+        // migration, or a snapshot that survives as its backup).
         let completedWithoutSnapshot = (launchOutcome?.status == .alreadyCompleted && !hadNativeSnapshot)
             || migratedWorkspaceClearedByScrub
+            || launchOutcome?.status == .nativeStateAdopted
         if accountScrubRecoveryError == nil {
             // Task 11.12: a SnapshotLoad signpost (record count, and failed
             // when the stored snapshot could not be read).
@@ -887,7 +897,7 @@ final class AppStore: ObservableObject {
     /// with support. The closed report schema excludes customer records,
     /// identifiers, file paths, errors, credentials, sessions, and raw values.
     ///
-    /// Phase 12 (12.02): the v3 report (`NativeSupportReport`), with the v2
+    /// Phase 12 (12.02; 12.06: v4): the v4 report (`NativeSupportReport`), with the v2
     /// persistence report nested under `persistence`. Versions, booleans,
     /// bounded counts, age buckets and bounded codes only, within
     /// `NativeSupportDiagnostics.maximumReportBytes`.
@@ -1021,6 +1031,30 @@ final class AppStore: ObservableObject {
             unreadableClaimCount: count(replay.unreadableClaimCount)
         )
 
+        // Phase 12 (12.06): the last rollback-readiness check for this
+        // account, as codes and counts (never a refused change's key).
+        let rollback: NativeSupportReport.RollbackReadiness
+        if let check = currentRollbackReadinessCheck {
+            let readiness = check.readiness
+            rollback = .init(
+                lastCheck: readiness.isReady ? "ready" : "not-ready",
+                lastCheckAge: NativeSupportCode(NativeSupportDiagnostics.ageBucket(from: check.checkedAt, now: now)),
+                drainOutcome: NativeSupportCode(check.drainOutcome),
+                blockers: readiness.blockers.map { NativeSupportCode($0.rawValue) },
+                pendingChangeCount: count(readiness.pendingChangeCount),
+                rejectedChangeCount: count(readiness.rejectedChangeCount),
+                widgetActionCount: count(readiness.widgetActionCount),
+                photosPendingUploadCount: count(readiness.photosPendingUploadCount),
+                migrationJournal: NativeSupportCode(readiness.migrationJournal.rawValue)
+            )
+        } else {
+            rollback = .init(
+                lastCheck: "none", lastCheckAge: "none", drainOutcome: "none", blockers: [],
+                pendingChangeCount: 0, rejectedChangeCount: 0, widgetActionCount: 0,
+                photosPendingUploadCount: 0, migrationJournal: "none"
+            )
+        }
+
         let protection = repository.legacyFileProtectionTally.summary
         return NativeSupportReport(
             app: .init(version: version, build: build),
@@ -1036,7 +1070,8 @@ final class AppStore: ObservableObject {
                 lastProtectedFiles: count(protection.lastProtected),
                 lastFailedFiles: count(protection.lastFailed),
                 failedFileTotal: count(protection.failedTotal)
-            )
+            ),
+            rollbackReadiness: rollback
         )
     }
 
@@ -4413,7 +4448,10 @@ final class AppStore: ObservableObject {
                 journal: migrationJournal,
                 secureStore: secureSettingsStore
             )
-            let result = try coordinator.migrate(currentSettings: settings)
+            // Phase 12 (12.06): the same one read of the legacy source as the
+            // launch and "Try again" (the live source in the app), so a host
+            // test drives this button on its fixture device.
+            let result = try migrateLegacySource(with: coordinator)
             switch result.status {
             case .noData:
                 migrationMessage = "No React Native AsyncStorage data was found on this installation."; return
@@ -4422,6 +4460,10 @@ final class AppStore: ObservableObject {
             case .nativeSnapshotConflict:
                 migrationMessage = "Previous-app data was found, but this app already has data. Nothing was changed."
                 launchMigrationNotice = .conflict
+                return
+            case .nativeStateAdopted:
+                // Phase 12 (12.06, P12-011): never over this device's native state.
+                migrationMessage = "This device already has data from this app, so previous-app data was not imported. Nothing was changed."
                 return
             case .migrated:
                 break
@@ -4460,7 +4502,10 @@ final class AppStore: ObservableObject {
                 journal: migrationJournal,
                 secureStore: secureSettingsStore
             ))
-            if outcome.status == .migrated { load(seedIfMissing: false) }
+            // Phase 12 (12.06, P12-011): an adopted native state opens as it
+            // is (recovered from its backup, or the empty signed-out workspace).
+            if outcome.status == .migrated || outcome.status == .nativeStateAdopted { load(seedIfMissing: false) }
+            if outcome.status == .nativeStateAdopted { migrationMessage = nil }
             applyLaunchMigrationState(outcome: outcome, error: nil, hadNativeSnapshot: false, operation: "retry")
         } catch {
             applyLaunchMigrationState(outcome: nil, error: error, hadNativeSnapshot: false, operation: "retry")
@@ -4485,6 +4530,9 @@ final class AppStore: ObservableObject {
     private func migrateLegacySource(
         with coordinator: LegacyMigrationCoordinator
     ) throws -> LegacyMigrationOutcome {
+        // Phase 12 (12.06, P12-011): a completed journal or an adopted native
+        // state is decided before any legacy source is read.
+        if let settled = try coordinator.settledOutcome() { return settled }
         if let legacyMigrationSource {
             return try coordinator.migrate(currentSettings: settings, source: legacyMigrationSource)
         }
@@ -7942,6 +7990,165 @@ final class AppStore: ObservableObject {
         return result
     }
 
+    // MARK: Phase 12 (12.06): rollback readiness
+
+    /// The last check for the account now on this device, or nil (none yet,
+    /// or it was made before an account boundary).
+    var currentRollbackReadinessCheck: NativeRollbackReadinessCheck? {
+        guard let check = rollbackReadinessCheck, check.accountGeneration == accountBoundaryGeneration else {
+            return nil
+        }
+        return check
+    }
+
+    /// Phase 12 (12.06, charter §6 item 2): whether this account is safe to
+    /// move to the Expo rollback build, from local state only (no network,
+    /// no write). Each fail-closed condition is a blocker of its own; so is
+    /// anything still only on this device. A refused change is listed for
+    /// Retry or Discard (Settings › Cloud Sync), never dropped.
+    ///
+    /// RN parity: the Expo build pushes its own AsyncStorage `__syncQueue`
+    /// before it pulls (`utils/sync.ts:316-326`), and it never sees this
+    /// device's native queue, refused changes, widget replay queue or native
+    /// photo files; so all of them must be empty here first.
+    func rollbackReadiness() -> NativeRollbackReadiness {
+        var readiness = NativeRollbackReadiness()
+        let binding = verifiedAccountBinding
+        if !hasExactSignedInWorkspace { readiness.block(.notVerifiedOwner) }
+        if authenticatedUserSubject == nil || initialSyncCompletedSubject != authenticatedUserSubject {
+            readiness.block(.initialSyncIncomplete)
+        }
+        if persistenceWritesBlocked { readiness.block(.writesBlocked) }
+        if repository.isAccountScrubPending || isAccountScrubBlocked
+            || accountDeletionPendingWithoutMarker || accountDeletionRecordUnverified {
+            readiness.block(.accountScrubPending)
+        }
+        if isAccountBoundaryCleanupPending || widgetMirrorSuspendedForAccountBoundary
+            || Canonical.SnapshotRepository.BoundaryStep.allCases.contains(where: isBoundaryStepPending) {
+            readiness.block(.boundaryStepPending)
+        }
+        if accountSwitchInFlight || authenticationOperationInFlight || identityActivationInFlight {
+            readiness.block(.accountOperationInFlight)
+        }
+
+        do {
+            switch try migrationJournal.read().entries.last(where: { $0.migration == .reactNativeAsyncStorage })?.status {
+            case .completed?: readiness.migrationJournal = .completed
+            case nil: readiness.migrationJournal = .noEntry
+            case .started?:
+                readiness.migrationJournal = .started
+                readiness.block(.migrationIncomplete)
+            case .failed?:
+                readiness.migrationJournal = .failed
+                readiness.block(.migrationIncomplete)
+            }
+        } catch {
+            readiness.migrationJournal = .unreadable
+            readiness.block(.migrationUnreadable)
+        }
+        if isLegacyMigrationBlocked { readiness.block(.migrationIncomplete) }
+
+        if let queued = mutationQueue.loadIfReadable() {
+            readiness.pendingChangeCount = queued.count
+            if !queued.isEmpty { readiness.block(.pendingChanges) }
+        } else {
+            readiness.block(.pendingChangesUnreadable)
+        }
+
+        // Every entry on file, including one hidden while its Retry is
+        // queued. A file with no entry for this owner is another owner's or
+        // does not decode (the store removes an emptied file): never "none".
+        do {
+            let refused = try rejectedChangeStore.load(binding: binding)
+            readiness.rejectedChangeCount = refused.count
+            readiness.rejectedChangeIDs = refused.map(\.id)
+            if !refused.isEmpty { readiness.block(.rejectedChanges) }
+            if refused.isEmpty && rejectedChangeStore.fileIsPresent() { readiness.block(.rejectedChangesUnreadable) }
+        } catch {
+            readiness.block(.rejectedChangesUnreadable)
+        }
+
+        if let binding {
+            if let widgetActionReplayTransport,
+               let pending = try? widgetActionReplayTransport.pendingActionCount(verifiedAccountBinding: binding) {
+                readiness.widgetActionCount = pending
+                if pending > 0 { readiness.block(.widgetActionsPending) }
+            } else {
+                readiness.block(.widgetActionsUnreadable)
+            }
+        }
+
+        // A photo never uploaded whose bytes are still here. One whose bytes
+        // are gone cannot upload from anywhere, so it cannot hold the check.
+        let mediaRoot = repository.liveMediaDirectoryURL
+        readiness.photosPendingUploadCount = (snapshot.payload.jobPhotos ?? []).filter { photo in
+            guard photo.uploadedAt == nil,
+                  let url = try? NativeJobPhotoStorage.photoURL(root: mediaRoot, photoID: photo.id)
+            else { return false }
+            return FileManager.default.fileExists(atPath: url.path)
+        }.count
+        if readiness.photosPendingUploadCount > 0 { readiness.block(.photosPendingUpload) }
+        return readiness
+    }
+
+    /// Phase 12 (12.06): "Check everything is saved" (Settings › Cloud Sync),
+    /// run before support advises installing the Expo rollback build. Unless
+    /// a fail-closed condition holds (then nothing is sent), it replays the
+    /// widget/Siri queue, forces a push pass, uploads waiting photos (and
+    /// pushes their metadata), then reads `rollbackReadiness()`. Returns nil
+    /// while a check is already running.
+    @discardableResult
+    func prepareRollbackReadiness() async -> NativeRollbackReadinessCheck? {
+        await prepareRollbackReadiness { await self.drainForRollbackReadiness() }
+    }
+
+    /// The forced push pass: `manual` bypasses the backoff window. Returns
+    /// the pass's outcome code (the second pass's when photos uploaded).
+    private func drainForRollbackReadiness() async -> String {
+        guard let outcome = await syncNowAndWait(trigger: .manual) else { return "not-configured" }
+        let photos = await performJobPhotoTransfer()
+        if photos.uploadedCount > 0, let metadata = await syncNowAndWait(trigger: .localChange) {
+            return Self.supportCode(for: metadata)
+        }
+        return Self.supportCode(for: outcome)
+    }
+
+    /// The check with its drain injected, so a host test can change the
+    /// owner while it is suspended. An account boundary, or any change of
+    /// the verified subject or binding, during the await voids the result:
+    /// it reports `accountChanged` only (nothing about the account now on
+    /// the device) and is kept under the account it started with, so the
+    /// next account never sees it.
+    private func prepareRollbackReadiness(
+        drain: () async -> String
+    ) async -> NativeRollbackReadinessCheck? {
+        guard !isRollbackReadinessCheckRunning else { return nil }
+        isRollbackReadinessCheckRunning = true
+        defer { isRollbackReadinessCheckRunning = false }
+        let generation = accountBoundaryGeneration
+        let subject = authenticatedUserSubject
+        let binding = verifiedAccountBinding
+        var drainOutcome = "skipped"
+        if !rollbackReadiness().failsClosed {
+            replayVerifiedWidgetActionsIfPossible()
+            drainOutcome = await drain()
+        }
+        var readiness: NativeRollbackReadiness
+        if generation != accountBoundaryGeneration || subject != authenticatedUserSubject
+            || binding != verifiedAccountBinding {
+            readiness = NativeRollbackReadiness()
+            readiness.block(.accountChanged)
+        } else {
+            readiness = rollbackReadiness()
+        }
+        let check = NativeRollbackReadinessCheck(
+            readiness: readiness, drainOutcome: drainOutcome, checkedAt: Date(), accountGeneration: generation
+        )
+        rollbackReadinessCheck = check
+        print("TradeReadyRollbackReadiness stage=checked ready=\(readiness.isReady) blockers=\(readiness.blockers.count)")
+        return check
+    }
+
     /// Runs the bounded work behind a BGAppRefreshTask. A suspended process can
     /// reuse its already verified identity. A cold background launch performs
     /// the same server verification/refresh as foreground activation, but it
@@ -8673,6 +8880,12 @@ final class AppStore: ObservableObject {
                 launchMigrationNotice = .failed
                 migrationMessage = "The previous-app migration is marked complete, but its native snapshot is unavailable."
             }
+        case .nativeStateAdopted:
+            // Phase 12 (12.06, P12-011): nothing was imported and nothing is
+            // missing. Silent, like the P12-003 signed-out steady state.
+            summary.outcome = "native-state-adopted"
+            isLegacyMigrationBlocked = false
+            launchMigrationNotice = nil
         case .noData:
             break
         }
@@ -11995,6 +12208,31 @@ extension AppStore {
     /// calls this.
     func testSettleRejectedChanges(_ settlement: NativeMutationPushSettlement) throws {
         try settleRejectedChanges(settlement)
+    }
+
+    /// Test-only (Phase 12 12.06): the sync coordinator this build would
+    /// configure from BuildEnvironment, which this host binary does not have.
+    /// The rollback-readiness host tests wire it exactly as
+    /// `syncCoordinatorIfConfigured` does, so the real drain runs through it.
+    /// Production never calls this.
+    func testUseSyncCoordinator(_ coordinator: NativeSyncCoordinator) {
+        syncCoordinator = coordinator
+        syncStatus = coordinator.status()
+    }
+
+    /// Test-only (Phase 12 12.06): the real rollback-readiness check with
+    /// `afterDrain` run once its real drain returns, while the check is
+    /// still suspended, so a test can sign out or switch the owner there.
+    /// Production never calls this.
+    @discardableResult
+    func testPrepareRollbackReadiness(
+        afterDrain: () async -> Void
+    ) async -> NativeRollbackReadinessCheck? {
+        await prepareRollbackReadiness {
+            let outcome = await self.drainForRollbackReadiness()
+            await afterDrain()
+            return outcome
+        }
     }
 
     /// Test-only (task 11.05): runs the real widget/Siri replay trigger body

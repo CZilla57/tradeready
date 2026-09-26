@@ -103,6 +103,19 @@ extension Canonical {
             return document.items
         }
 
+        /// Phase 12 (12.06): the queue, or nil when a file is on disk that
+        /// `load` would read as empty because it cannot be read or decoded.
+        /// The rollback-readiness check fails closed on it.
+        func loadIfReadable() -> [MutationItem]? {
+            guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
+            guard let data = try? Data(contentsOf: fileURL) else { return nil }
+            guard !data.isEmpty else { return [] }
+            guard let document = try? Self.decoder.decode(MutationQueueDocument.self, from: data),
+                  document.schemaVersion == MutationQueueDocument.currentSchemaVersion
+            else { return nil }
+            return document.items
+        }
+
         /// Atomically publishes the queue, retaining the previous decodable file
         /// as a last-known-good backup so a torn write cannot lose pending work.
         func save(_ items: [MutationItem]) throws {

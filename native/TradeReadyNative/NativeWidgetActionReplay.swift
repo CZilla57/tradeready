@@ -1018,6 +1018,24 @@ struct NativeWidgetActionClaimTransport {
         }
     }
 
+    /// Phase 12 (12.06): the widget/Siri actions not yet replayed, for the
+    /// rollback-readiness check. Read-only, under the §4.2 lock: every entry
+    /// of the shared queue (another owner's included, until a replay drops
+    /// it), a queue that is not a JSON list counting as one, plus this
+    /// owner's unacknowledged claim files. Set-aside records are not counted:
+    /// they can never apply.
+    func pendingActionCount(verifiedAccountBinding: String) throws -> Int {
+        try Self.requireBinding(verifiedAccountBinding)
+        return try withLock {
+            var count = 0
+            if let raw = try queue.read(), !raw.isEmpty {
+                count += NativeWidgetActionBatchPlanner.rawEntries(of: Data(raw.utf8))?.count ?? 1
+            }
+            count += try files(prefix: Self.claimFilePrefix + verifiedAccountBinding + "-").count
+            return count
+        }
+    }
+
     /// The quarantine records kept for `accountBinding` (diagnostics/tests).
     func quarantinedQueues(accountBinding: String) throws -> [NativeWidgetActionQuarantine] {
         try Self.requireBinding(accountBinding)

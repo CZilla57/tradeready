@@ -338,10 +338,10 @@ func section(_ json: [String: Any], _ key: String) -> [String: Any] {
     (json[key] as? [String: Any]) ?? [:]
 }
 
-/// The closed report schema (v3). A new key must be added here on purpose.
+/// The closed report schema (v4). A new key must be added here on purpose.
 let reportKeys: [String: Set<String>] = [
     "top": ["reportSchemaVersion", "app", "persistence", "persistenceUnavailableCode", "launchMigration",
-            "accountBoundary", "sync", "widgets", "legacyBackupProtection"],
+            "accountBoundary", "sync", "widgets", "legacyBackupProtection", "rollbackReadiness"],
     "app": ["version", "build"],
     "launchMigration": ["notice", "blocked", "persistenceBlockReason", "persistenceBlockDetail", "lastOutcome",
                         "lastOperation", "lastFailureCode", "importedCount", "missingPhotoCount",
@@ -361,6 +361,9 @@ let reportKeys: [String: Set<String>] = [
     "widgets": ["mirrorDirty", "mirrorLockBusyCount", "ownerDroppedActionCount", "quarantinedQueueCount",
                 "accountSwitchScrubFailureCount", "setAsideActionCount", "quarantinedClaimCount", "unreadableClaimCount"],
     "legacyBackupProtection": ["checks", "enumeratorUnavailable", "lastProtectedFiles", "lastFailedFiles", "failedFileTotal"],
+    // Phase 12 (12.06): the last rollback-readiness check, codes and counts only.
+    "rollbackReadiness": ["lastCheck", "lastCheckAge", "drainOutcome", "blockers", "pendingChangeCount",
+                          "rejectedChangeCount", "widgetActionCount", "photosPendingUploadCount", "migrationJournal"],
     "persistence": ["reportSchemaVersion", "appVersion", "snapshotSchemaVersion", "snapshotStatus", "backupAvailable",
                     "recordCounts", "migrationStatuses", "rejectedChangeCount"],
 ]
@@ -937,7 +940,8 @@ struct SupportDiagnosticsTests {
 
         let json = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         expectEqual(Set(json.keys), reportKeys["top"]!, "export: the closed top-level schema")
-        for key in ["app", "launchMigration", "accountBoundary", "sync", "widgets", "legacyBackupProtection", "persistence"] {
+        for key in ["app", "launchMigration", "accountBoundary", "sync", "widgets", "legacyBackupProtection",
+                    "rollbackReadiness", "persistence"] {
             expectEqual(Set(section(json, key).keys), reportKeys[key]!, "export: the closed \(key) schema")
         }
         for step in (section(json, "accountBoundary")["boundarySteps"] as? [[String: Any]]) ?? [] {
@@ -947,7 +951,7 @@ struct SupportDiagnosticsTests {
         for entry in recent {
             expectEqual(Set(entry.keys), reportKeys["recentCode"]!, "export: the closed recent-code schema")
         }
-        expectEqual(json["reportSchemaVersion"] as? Int, 3, "export: schema 3")
+        expectEqual(json["reportSchemaVersion"] as? Int, 4, "export: schema 4")
         expectEqual(section(json, "persistence")["reportSchemaVersion"] as? Int, 2, "export: the persistence part is the v2 report")
         expectEqual(section(json, "app")["version"] as? String, "1.2.3", "export: app version")
         expectEqual(section(json, "app")["build"] as? String, "45", "export: build")
@@ -1213,7 +1217,7 @@ struct SupportDiagnosticsTests {
     /// screens (`RootView`: migration paused, cleanup paused) carry the
     /// Settings action itself (`NativeSupportReportAction`). The report reads
     /// diagnostics only: it is created while owner writes are blocked, it is
-    /// the v3 report, and no other file changes.
+    /// the v4 report, and no other file changes.
     @MainActor
     static func reportFromBlockedScreens(root: URL) throws {
         func check(_ name: String, _ store: AppStore, _ f: Fixture, blockReason: String, blocked: () -> Bool) throws {
@@ -1222,7 +1226,7 @@ struct SupportDiagnosticsTests {
             let before = ownerFiles(f)
             expect(!before.isEmpty, "blocked report \(name): sanity: the blocked launch left files to compare")
             let report = try reportJSON(store)
-            expectEqual(report.json["reportSchemaVersion"] as? Int, 3, "blocked report \(name): the v3 report")
+            expectEqual(report.json["reportSchemaVersion"] as? Int, 4, "blocked report \(name): the v4 report")
             expectEqual(Set(report.json.keys), reportKeys["top"] ?? [], "blocked report \(name): the closed top-level schema")
             expectEqual(section(report.json, "launchMigration")["persistenceBlockReason"] as? String, blockReason,
                         "blocked report \(name): created while owner writes are blocked")

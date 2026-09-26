@@ -763,6 +763,16 @@ struct LegacyMigrationOutcome {
         case migrated
         case alreadyCompleted
         case nativeSnapshotConflict
+        /// Phase 12 (12.06, charter §6 rollback data decision item 3,
+        /// P12-011): this device already holds native state that no completed
+        /// migration produced — a saved native snapshot survives as its backup,
+        /// or an account scrub cleared a native workspace (the P12-003 record)
+        /// — and there is no snapshot for an interrupted migration to compare
+        /// with. The native (and, through the pull, the cloud) state is adopted:
+        /// the legacy source is never read and nothing is written, not even a
+        /// journal entry. Edits made in the Expo rollback build reach native
+        /// only through the cloud.
+        case nativeStateAdopted
     }
 
     let status: Status
@@ -803,14 +813,33 @@ struct LegacyMigrationCoordinator {
     }
 
     func migrate(currentSettings: BusinessSettings) throws -> LegacyMigrationOutcome {
+        // Phase 12 (12.06): decided before the legacy source, and the legacy
+        // Keychain items, are read.
+        if let settled = try settledOutcome() { return settled }
         let source = try liveSource()
         return try migrate(currentSettings: currentSettings, source: source)
     }
 
-    func migrate(
-        currentSettings: BusinessSettings,
-        source: LegacyMigrationSource
-    ) throws -> LegacyMigrationOutcome {
+    /// Phase 12 (12.06): the outcome that needs no legacy source, or nil when
+    /// the source must be read. Every caller checks it before reading one
+    /// (`AppStore.migrateLegacySource`, `migrate(currentSettings:)`), and
+    /// `migrate(currentSettings:source:)` checks it again first.
+    ///
+    /// - A completed journal: `.alreadyCompleted`.
+    /// - P12-011 (charter §6, item 3): no primary snapshot, but native state on
+    ///   this device — the snapshot's backup, or the P12-003 record that an
+    ///   account scrub cleared a native workspace: `.nativeStateAdopted`. On a
+    ///   re-upgrade after an Expo rollback window the legacy AsyncStorage is
+    ///   stale (the Expo build wrote it after this app last ran), so it is
+    ///   never imported over the native or cloud state. Before 12.06 such a
+    ///   launch imported it and published the Expo build's session, and with
+    ///   no RN owner keys another account's launch adopted those records and
+    ///   queued them for its own push.
+    ///
+    /// A primary snapshot is left to `migrate(currentSettings:source:)`: the
+    /// conflict guard (no journal entry) or the interrupted resume, which only
+    /// completes the journal when the snapshot equals the adoption.
+    func settledOutcome() throws -> LegacyMigrationOutcome? {
         let kind = Canonical.MigrationKind.reactNativeAsyncStorage
         if try journal.isComplete(kind) {
             // Phase 12.00b.2-E fix round 1 (L267.a, Important 1): reached via
@@ -828,6 +857,27 @@ struct LegacyMigrationCoordinator {
                 missingPhotoCount: 0, adoptedPhotoCount: 0, deferredPhotoCount: 0
             )
         }
+        let hasPrimarySnapshot = fileManager.fileExists(atPath: repository.primaryURL.path)
+        let hasNativeState = fileManager.fileExists(atPath: repository.backupURL.path)
+            || repository.isLiveWorkspaceClearedByAccountScrub
+        if !hasPrimarySnapshot && hasNativeState {
+            // The published legacy backup, if an earlier attempt made one,
+            // keeps its protection (L267.a; best effort, never throws).
+            _ = repository.reprotectPublishedLegacyDirectory(migration: kind, name: "AsyncStorage")
+            return .init(
+                status: .nativeStateAdopted, snapshot: nil, importedCount: 0,
+                missingPhotoCount: 0, adoptedPhotoCount: 0, deferredPhotoCount: 0
+            )
+        }
+        return nil
+    }
+
+    func migrate(
+        currentSettings: BusinessSettings,
+        source: LegacyMigrationSource
+    ) throws -> LegacyMigrationOutcome {
+        let kind = Canonical.MigrationKind.reactNativeAsyncStorage
+        if let settled = try settledOutcome() { return settled }
 
         let result: LegacyImportResult
         if let asyncStorageDirectory = source.asyncStorageDirectory {
