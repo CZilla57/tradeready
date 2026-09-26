@@ -39,8 +39,8 @@ context" filters on that context's fixed message (§3).
 
 | ID | Source (live or runnable) | Event or query | Threshold (charter §3) | Window | Alert route | Owner |
 |---|---|---|---|---|---|---|
-| TH-1 | Support report per upgraded device (runnable now); Sentry `legacyMigration` for the failure half | Report `launchMigration.importedCount`, `missingPhotoCount`, `adoptedPhotoCount`, `deferredPhotoCount` and `persistence.recordCounts`, compared with the Expo data set's known counts; photos adopted + deferred = photos found. A lost record has no remote signal by design: the device cannot know the Expo counts | 0; any is S1 and a §4.8 stop trigger | per upgrade (12.04 SA2 rows) | The SA2 row check itself; a `legacyMigration` issue alert (TH-2) | owner |
-| TH-2 | Sentry `legacyMigration` and `initialSync` (new, §3); support report `launchMigration` | Issues whose title starts `[legacy-migration/failed/`, `[legacy-migration/missing-migrated-snapshot]` or `[preflight/local-recovery/missing-migrated-snapshot]`; the `operation` extra says where (launch or retry; preflight or pull for `initialSync`). Recovered = a later report shows `launchMigration.lastOutcome` `migrated` and `blocked` false | 0 (S1); a failure that completes on retry is S2 until explained; more than one in a stage blocks its exit | §3 | Issue alert on `exception.value` contains `legacy-migration/` or `missing-migrated-snapshot`: immediate | owner |
+| TH-1 | Support report per upgraded device (runnable now; from Settings, or from the "Data migration paused" screen when the migration stops, §4); Sentry `legacyMigration` for the failure half | Report `launchMigration.importedCount`, `missingPhotoCount`, `adoptedPhotoCount`, `deferredPhotoCount` and `persistence.recordCounts`, compared with the Expo data set's known counts; photos adopted + deferred = photos found. A lost record has no remote signal by design: the device cannot know the Expo counts | 0; any is S1 and a §4.8 stop trigger | per upgrade (12.04 SA2 rows) | The SA2 row check itself; a `legacyMigration` issue alert (TH-2) | owner |
+| TH-2 | Sentry `legacyMigration` and `initialSync` (new, §3); support report `launchMigration`, exportable from the "Data migration paused" screen itself (§4, Reach) | Issues whose title starts `[legacy-migration/failed/`, `[legacy-migration/missing-migrated-snapshot]` or `[preflight/local-recovery/missing-migrated-snapshot]`; the `operation` extra says where (launch or retry; preflight or pull for `initialSync`). Recovered = a later report shows `launchMigration.lastOutcome` `migrated` and `blocked` false | 0 (S1); a failure that completes on retry is S2 until explained; more than one in a stage blocks its exit | §3 | Issue alert on `exception.value` contains `legacy-migration/` or `missing-migrated-snapshot`: immediate | owner |
 | TH-3 | Sentry `pendingAge` (new), `pushQueue`, `pullRemote`; support report `sync` | `[pending-age/over-24h]` issues (count extra = the device's pending changes); `pushQueue`/`pullRemote` issues with a non-transport code whose users stay affected for 24 h; report `sync.oldestPendingAge` `over-24h` and `lastSuccessfulSyncAge` | 0 open; each S2 until classified; 2 or more users with the same code unrecovered for 24 h is a stop trigger | 24 h age, inside §3 | Issue alert on `pending-age/`: immediate. Issue alert "affects more than 1 user in 24 hours" on contexts `pushQueue`/`pullRemote` | owner |
 | TH-4 (PERF-7) | Sentry, as TH-3; PostHog for the denominator | Numerator: users per day with a `pushQueue`/`pullRemote` event whose code is not `transport/…`, `non-http-response/…`, `…/401`, a first `…/403` or `…/429` (Sentry issue search, users affected per day). Denominator: PostHog unique users per day with `Application Opened`, or the cohort size where PostHog has no data | ≤ 5% of daily active users (7-day average); every new code triaged whatever the rate | 7-day average | Every new sync issue already alerts (TH-3); the rate is read at the daily watch, since small cohorts make an automatic rate alert noise | owner |
 | TH-5 | Sentry `pushDiscarded` (new); support report `sync.discardedChangeCount` | `[record-contract/<table>] Sync push dropped unsendable changes`, with `collection` and `count` | 0; each S1 until shown harmless; a §4.8 stop trigger | §3 | Issue alert on `record-contract/`: immediate | owner |
@@ -64,17 +64,17 @@ and an error's domain and number, never from a message, record, path or identifi
 |---|---|---|---|---|---|
 | `legacyMigration` | `legacy-migration/failed/<domain>/<code>` or `legacy-migration/missing-migrated-snapshot`; "Previous-app data migration did not finish" | the launch migration or its Try again throws; a completed journal with no native snapshot. Never for the P12-003 signed-out steady state (completed journal, no snapshot, the scrub-cleared record) | `operation` launch/retry | once per launch or retry | TH-1, TH-2 |
 | `initialSync` | the gate's own diagnostic code (`preflight/local-recovery/<reason>`, `preflight/configuration-or-session`, or the pull's code); "Initial sync did not complete" | the initial-sync gate refuses (RN `utils/sync.ts:410`) | `operation` preflight/pull | once per refusal | TH-2, TH-3 |
-| `pushDiscarded` | `record-contract/<table>`; "Sync push dropped unsendable changes" | a pass dropped a queued change as unsendable (the pass can still end completed) | `collection`, `count` | once per pass with a drop | TH-5 |
+| `pushDiscarded` | `record-contract/<table>`; "Sync push dropped unsendable changes" | a pass dropped a queued change as unsendable, whatever the pass's last outcome: it can end completed, or deferred or offline when a trigger that arrived mid-pass reran it | `collection` = the pass's first dropped table only (a pass that drops from two tables names the first); `count` = every drop in the pass | once per pass with a drop | TH-5 |
 | `syncThrottle` | `throttle/consecutive-passes`; "Sync passes throttled in a row" | the third network pass in a row with a `/429` code (push or pull) | `count` = streak | once per streak; a pass without a 429 or an account boundary re-arms it | TH-6 |
 | `pendingAge` | `pending-age/over-24h`; "Changes pending for over 24 hours" | a network pass ends with a queued change older than 24 h | `count` = pending changes | once per episode; re-arms when the oldest change is under 24 h or at an account boundary | TH-3 |
 | `invoicePayment` | `invoice-payment/commit/<domain>/<code>`, `invoice-payment/projection` or `invoice-payment/bulkMarkPaid/<domain>/<code>`; "Payment could not be saved" | a payment the owner entered, or a bulk mark-paid, could not be saved | `operation` commit/bulkMarkPaid; `count` (bulk) | once per failed save | TH-9 |
 | `purchase` | the RevenueCat error as is (its redacted description) | a purchase throws, except a user cancel (RN `screens/PaywallScreen.tsx:94`) | — | once per failure | TH-10 |
 | `restorePurchases` | the RevenueCat error as is (its redacted description) | Restore Purchases throws (RN `screens/PaywallScreen.tsx:115`) | — | once per failure | TH-10 |
-| `accountScrub` | `account-scrub/blocked/<live/all/unknown>`, plus `/without-marker` for a deletion held only by the Keychain record; "Account cleanup could not finish" | a sign-out's or deletion's local cleanup is blocked (P12-001, P12-006) | `operation` launch/signOut/deleteAccount/retry; `count` = attempts (cap 99) | once per blocked episode; an unblocked cleanup re-arms it | charter §2 privacy row; support |
+| `accountScrub` | `account-scrub/blocked/<live/all/unknown>`, plus `/without-marker` for a deletion held only by the Keychain record; "Account cleanup could not finish" | a sign-out's or deletion's local cleanup is blocked (P12-001, P12-006) | `operation` launch/signOut/deleteAccount/retry; `count` = blocked attempts this launch (cap 99) | once per blocked episode within a launch; an unblocked cleanup re-arms it. The episode flag and the count are held in memory, so a cleanup still blocked at the next launch reports again, with the count back at 1: at most once per launch | charter §2 privacy row; support |
 
 Already live before 12.02: `pushQueue` "Sync push left changes queued" and `pullRemote`
 "Sync pull did not complete" (Phase 11, `utils/sync.ts:211`, `:312`), `deleteAccount`
-(Phase 11, `N/SettingsView.swift:995`), `pushRejected` "Sync push refused changes"
+(Phase 11, `N/SettingsView.swift:973`), `pushRejected` "Sync push refused changes"
 (12.00b.1) and `widgetLock` "App Group lock busy" (12.00b.2-B).
 
 **Why Sentry, not PostHog.** (1) The analytics catalog is closed to the RN events: Q4
@@ -89,16 +89,20 @@ carries the same facts as counts.
 
 ## 4. The support export
 
-Settings › Migration support › "Prepare support report" (`N/SettingsView.swift:291`)
-calls `AppStore.createPersistenceSupportReport` (`N/AppStore.swift:888`), which now
+"Prepare support report" (`N/NativeSupportReportAction.swift`), in Settings › Migration
+support and on both blocked screens (`N/RootView.swift`; Reach below), calls
+`AppStore.createPersistenceSupportReport` (`N/AppStore.swift:888`), which now
 writes the version 3 report built by `AppStore.supportReport` (`N/AppStore.swift:900`)
 from the types in `N/NativeSupportDiagnostics.swift`. The user shares
 `tradeready-support-report.json` from the share sheet, usually into the Contact support
 email. The v2 persistence report (Phase 2) is kept whole under `persistence`, so nothing
 it carried is lost.
 
-**Schema (closed).** Every field is a version, a boolean, a bounded count (capped at
-9,999), an age bucket (`none`, `under-1h`, `1h-to-24h`, `over-24h`) or a bounded code:
+**Schema (closed).** Every field the v3 report adds is a version, a boolean, a count
+capped at 9,999, an age bucket (`none`, `under-1h`, `1h-to-24h`, `over-24h`) or a bounded
+code. The nested v2 part keeps its own counts uncapped, as Phase 2 and 12.00b.1 wrote them
+(`persistence.recordCounts` and `persistence.rejectedChangeCount`): they are the owner's
+own record counts, which TH-1 compares exactly, and carry no content:
 
 - `reportSchemaVersion` (3), `app {version, build}`;
 - `persistence`: the v2 report (record and file counts, backups, journal, rejected
@@ -131,7 +135,7 @@ survives as a code.
 
 **Cap.** 16,384 bytes (`NativeSupportDiagnostics.maximumReportBytes`). Over it the oldest
 recent codes are dropped first and counted; a report that still does not fit is not
-written (`reportTooLarge`) and Settings says the report could not be created. The dry-run
+written (`reportTooLarge`) and the action says the report could not be created. The dry-run
 report was 2,450 bytes.
 
 **Never included:** records, names, contact details, notes, record ids, the owner
@@ -147,11 +151,17 @@ file (§12; `native/SupportDiagnosticsTests/main.swift` section 13).
 `deletionPendingWithoutMarker` when the marker could not be written), and remotely as
 `accountScrub` `account-scrub/blocked/all[/without-marker]`.
 
-**Reach.** The report is in Settings, so a device held on the "Data migration paused" or
-"cleanup paused" screen (`N/RootView.swift`) cannot export it; those screens offer only
-Try again and Contact support. For TH-2 and P12-001/P12-006 the remote signals in §3 are
-the source on such a device; the support email then asks for the device model, OS and
-app version. Recorded as a follow-up (§11).
+**Reach.** A device held on "Data migration paused" or on the cleanup-paused screen
+("Sign-out cleanup paused", "Account deletion cleanup paused"; `N/RootView.swift`) never
+reaches Settings, so both screens show the same action under Try again and Contact
+support (review fix round 1, 2026-09-26). It only reads diagnostics and writes the
+report file beside the store, never an owner record, so it works while owner writes are
+blocked. Host tests create the v3 report in each blocked state (a failed migration, a
+missing migrated snapshot, a blocked sign-out cleanup and a blocked deletion cleanup),
+with owner writes still blocked, and prove no other file changes (§12). For TH-1/TH-2 and
+P12-001/P12-006 the blocked device's report is therefore a source alongside the remote
+signals in §3. No device row reaches these screens on demand: each needs an injected
+failure.
 
 ## 5. OI-3: 429 bursts (TH-6)
 
@@ -219,8 +229,9 @@ Proposed for the owner to confirm at Stage A entry:
 
 - **Channel.** The in-app Contact support email (Settings › Contact support,
   `N/SettingsView.swift:124`; the blocked cleanup and migration screens link the same
-  address with their own subject, `N/RootView.swift:24`, `N/RootView.swift:36`) and, in
-  Stages A and B, TestFlight feedback. Users attach the support report (§4) from Settings.
+  address with their own subject, `N/RootView.swift:24`, `N/RootView.swift:41`) and, in
+  Stages A and B, TestFlight feedback. Users attach the support report (§4) from Settings,
+  or from the blocked screen itself.
 - **Log.** A private log outside this repository, one row per contact: date received,
   channel, app version and build, severity (S1/S2/S3/not a defect), charter metric, defect
   ID (`P12-…`), status, and whether the SLA was met. Contact details stay in the mail
@@ -246,8 +257,9 @@ Native-only contexts with no RN site: `pushRejected` (12.00b.1), `widgetLock`
 (12.00b.2-B), and `legacyMigration`, `pushDiscarded`, `syncThrottle`, `pendingAge`,
 `invoicePayment` and `accountScrub` (12.02). There is still no ErrorBoundary analog.
 
-**Backlog (68 RN sites, none read by a charter metric; S3).** Native surfaces these
-failures in the UI or folds them into the coordinator's codes:
+**Backlog (68 RN sites, none read by a charter metric; S3; charter §10 Backlog row
+L193.b-rest).** Native surfaces these failures in the UI or folds them into the
+coordinator's codes:
 
 | Area | Sites |
 |---|---|
@@ -291,39 +303,64 @@ Host fixtures only, a stub link on `dry-run.invalid`, no network
 
 ## 11. Findings and follow-ups
 
-1. **Crash messages keep file paths.** The Phase 11 redactor (contract §10.4) has no
+1. **Crash messages keep file paths.** The Phase 11 redactor (contract §10.1) has no
    file-path rule, so a crash or error message that names a file keeps its path. On iOS
    that is the app container, with no user name, but an `NSError` description can carry a
-   file name. Proposed: a path rule in `N/NativeErrorRedaction.swift` (a §10.1 contract
-   change, outside 12.02). CR-6 inspects stored events for it.
-2. **A failed payment save leaves memory changed.** `commitInvoicePayment` and
-   `commitBulkSettleInvoices` change the in-memory snapshot before `repository.save`; a
-   failed save leaves the screen showing a payment that is neither saved nor queued until
-   the next load. `invoicePayment` now makes it visible remotely; the fix is a TH-9
-   divergence item for the owner to classify.
+   file name. Logged as **P12-007** (charter §10, S3, Open, backlog): a §10.1 path rule in
+   `N/NativeErrorRedaction.swift` lands before any file-I/O backlog site (`photoStorage`,
+   `invoicePdfFile`, §8) is wired. Today only `deleteAccount`, `purchase` and
+   `restorePurchases` pass raw errors, and native file names are record ids or invoice
+   numbers. CR-6 inspects stored events for it.
+2. **A failed payment save leaves the in-memory snapshot changed.** `commitInvoicePayment`
+   and `commitBulkSettleInvoices` write the payment into the in-memory snapshot before
+   `repository.save`, and do not roll it back when the save (or the payment's projection)
+   fails. `apply` is never reached, so the screens do not show the payment and nothing is
+   queued. The hazard is later: the next unrelated save writes the whole in-memory
+   snapshot, so it persists the payment without ever queueing it for sync, and the
+   snapshot's `didSet` already refreshes the widget mirror from it. `invoicePayment`
+   (§3) makes the failed save visible remotely. The controller logged it as **P12-008**;
+   Task 11b fixes it (not changed in 12.02).
 3. **Pending age follows the last write.** A queued change's timestamp is its last edit
    (last-writer-wins), so a change edited again inside 24 hours never looks old to
    `pendingAge`.
 4. **A thrown cancel shows as failed.** RevenueCat can report a cancel by throwing
-   (`purchaseCancelledError`); native no longer reports it to Sentry but still shows the
-   failed state, where RN shows nothing.
+   (`purchaseCancelledError`); native does not report it to Sentry (host-tested with
+   `RevenueCat.ErrorCode` 1) but still shows the failed state, where RN shows nothing. An
+   S3 parity gap, charter §10 Backlog row 12.02-F4; no code change in 12.02.
 5. **Two rejected counts.** `sync.rejectedChangeCount` counts refused changes on file;
    `persistence.rejectedChangeCount` counts the ones Cloud Sync shows. They differ while a
    newer change for a refused record is queued.
-6. **The report is not reachable from the blocked screens** (§4, Reach).
+6. **The report was not reachable from the blocked screens.** Resolved in review fix
+   round 1: both blocked screens show the Settings action (§4, Reach).
 7. **PERF-3 (proposed decision, owner to ratify):** no UI-test target in Phase 12. Adding
    one changes the Xcode project and needs a signed device run; TH-12 is advisory and
    reads Instruments App Launch traces (12.04) and Organizer (PERF-4). PERF-3 stays open
    until the owner logs the decision.
+8. **A deferred rerun hides its pass's network outcome.** A sync trigger that arrives
+   mid-pass is rerun inside the same pass (`NativeSyncCoordinator.sync`), and the pass's
+   status then carries the rerun's outcome. After a partial or failed first run the rerun
+   is usually deferred by the backoff, so the pass ends `.backoffDeferred`: its discards
+   still report (TH-5, fixed in review fix round 1), but the first run's `pushQueue` or
+   `pullRemote` report, its `/429` count toward `syncThrottle` and the `pendingAge` check
+   are skipped for that pass. The next network pass reports the same state, so a
+   persistent failure is late by one pass, not lost. Pre-existing for `pushQueue` and
+   `pullRemote` (Phase 11); left for the owner to classify, since a fix changes the
+   contract §10.4 per-pass semantics.
 
 ## 12. Tests and commands
 
 All `TZ=America/Phoenix`, host only:
 
-- `sh native/run-support-diagnostics-tests.sh` (new; 184 checks): the signals in §3 at
-  their sites, including the P12-003 steady state staying silent and one report per
-  blocked episode; the pure code, age and count rules; the export's closed schema, cap
-  and seeded-secret exclusions; the boundary and migration state; the dry run.
+- `sh native/run-support-diagnostics-tests.sh` (new; 238 checks): the signals in §3 at
+  their sites, including the P12-003 steady state staying silent, one report per
+  blocked episode in a launch, a discard in a pass whose coalesced rerun was deferred (reported once)
+  and a thrown RevenueCat cancel (not reported); the pure code, age and count rules; the
+  export's closed schema, cap and seeded-secret exclusions; the boundary and migration
+  state; the report from both blocked screens (the v3 report while owner writes are
+  blocked, no other file changed, and one shared action in Settings and in both
+  `RootView` blocked branches); the dry run.
+- `sh native/run-accessibility-audit-tests.sh`: the shared action
+  (`N/NativeSupportReportAction.swift`) is in the reviewed view inventory.
 - `sh native/run-sync-coordinator-tests.sh` and `sh native/run-mutation-push-tests.sh`:
   the discarded count and table (TH-5), reset at each pass.
 - `sh native/run-analytics-event-tests.sh` (545 checks): §9.

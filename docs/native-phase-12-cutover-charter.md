@@ -504,9 +504,10 @@ the Phase 11 controller-ledger line (`L130`; `L205.c` is the third item on line 
 was found by the triage. The evidence column stays in plan §7. **State @`6d573a7`** is
 frozen; **Status** is the live column later tasks update (§8).
 
-Counts: 88 defect rows (S1 2, S2 17, S3 69; 16 closed) plus 3 pointers to 12.03.
+Counts: 90 defect rows (S1 2, S2 17, S3 71; 16 closed) plus 3 pointers to 12.03.
 Handling: 12.00b.1 1, 12.00b.2 10, rider 6, doc batch 11, 12.01 check 2, 12.02 1,
-backlog 34, record 23 (16 closed, 7 accepted). Open S1/S2 needing code (Stage A blockers):
+backlog 36, record 23 (16 closed, 7 accepted). The 12.02 review added the backlog rows
+L193.b-rest and 12.02-F4 (2026-09-26). Open S1/S2 needing code (Stage A blockers):
 L238, L74, L96, L130, L131, L237.d, L267.a, L286.1, L286.4, L286.5a, L286.5b.
 
 What each handling means: **12.00b.1 / 12.00b.2** — fixed in that build item; blocks Stage
@@ -576,7 +577,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 |---|---|---|---|---|---|
 | L193.b | Only 3 of about 74 RN `reportError` sites are wired natively, with no ErrorBoundary equivalent (contract §10.4) | S3 | Open | 12.02 wires the sites that the charter's crash/error metrics read; the rest go to backlog | Done — 12.02 (`feat(native): phase 12.02 - privacy-safe support diagnostics`), 2026-09-26: RN `initialSync`, `purchase` and `restorePurchases` wired, plus native-only `legacyMigration`, `pushDiscarded`, `syncThrottle`, `pendingAge`, `invoicePayment` and `accountScrub`; the other 68 RN sites and the ErrorBoundary analog are backlog (`docs/native-phase-12-monitoring.md` §8) |
 
-### Backlog — post-cutover S3 work (does not block Stage A) (34)
+### Backlog — post-cutover S3 work (does not block Stage A) (36)
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
@@ -614,6 +615,8 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L264.d | Square-link check keeps a leading U+FEFF that RN's `.trim()` strips | S3 | Open | backlog (a real native difference; RN is the spec) | Open |
 | L267.c | Legacy photo backup copies keep default file protection | S3 | Open | backlog | Open |
 | L286.6 | `signOut`/`deleteAccount` refused mid-switch show their normal failure copy | S3 | Open | backlog | Open |
+| L193.b-rest | The 68 RN `reportError` sites 12.02 did not wire (none read by a charter metric) and the ErrorBoundary analog | S3 | — (added by the 12.02 review, 2026-09-26) | backlog; the grouped list is `docs/native-phase-12-monitoring.md` §8. Wire a file-I/O site only after P12-007 | Open |
+| 12.02-F4 | Parity gap: a purchase that RevenueCat cancels by throwing (`purchaseCancelledError`) shows native's failed state; RN shows nothing. Not reported to Sentry (host-tested) | S3 | — (added by the 12.02 review, 2026-09-26) | backlog; `docs/native-phase-12-monitoring.md` §11 finding 4 | Open |
 
 ### Record — no action (closed, or accepted behaviour) (23)
 
@@ -651,7 +654,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L223.e | IPAD-MT-3: Stage Manager's first frame may shift column geometry | S3 | Open | device row IPAD-MT-3 |
 | L249.e | iOS 17/18 destructive text and the "On my way" hit-test are unverified | S3 | Open | device rows A11B-FR1-1/2 |
 
-### New in Phase 12 (6)
+### New in Phase 12 (7)
 
 | ID | Item | Sev | Found (date, source) | Handling | Status |
 |---|---|---|---|---|---|
@@ -661,3 +664,4 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | P12-004 | A sign-out or deletion whose scrub failed and was finished by "Try cleanup again" (`retryAccountScrub`) left the previous account's pending schedule/booking work (booking and portal link mirrors, with their link tokens) on the device; the launch recovery and the first attempt cleared it. No leak: each item carries its owner's exact binding and every send, apply and recovery path acts only on the signed-in account's binding, so the next account could neither send nor apply it. The three paths now clear one shared list of stores | S3 | 2026-09-25, Task 9b characterization | 12.00b.2-G | Fixed — 12.00b.2-G (host) (`fix(native): phase 12.00b.2 - every account-scrub path clears the same stores (P12-004)`) |
 | P12-005 | On an upgraded device whose RN data carried owner keys (RN writes `__dataOwner` at every initial sync, `utils/sync.ts:406`), sign-out kept the RN-era auxiliary artifact (account state and owner marker) for an exact-owner rollback, so every other account's sign-in was held at the account-mismatch gate, whose only action is "Use another account": no second account could use the device. RN's sign-out clears `__dataOwner` and every account key (`utils/storage/lifecycle.ts:106-159`). The sign-out scrub now drops the auxiliary artifact and its staged copy (a deletion already did): the next account gets a clean workspace and none of the previous account's state, the same account's sign-in takes the ordinary path, and a workspace no scrub cleared still holds another account at the gate | S2 | 2026-09-25, Task 9c review | 12.00b.2-G | Fixed — 12.00b.2-G (host) (`fix(native): phase 12.00b.2 - a signed-out upgraded device accepts another account (P12-005)`); device row P12-B2G-1 |
 | P12-006 | A permanent deletion whose local scrub could not write its account-scrub marker (`beginAccountScrub` throws, as on a full or failing volume) ran none of its steps and left nothing on disk saying the deletion was pending: only the in-memory blocked screen. "Try cleanup again" and the scene-activation retry then took the not-pending branch and unblocked without scrubbing, and the next launch loaded the deleted account's records. The snapshot, journal, legacy backups, session, provider key and RN source files all stayed; account B's sign-in met the account-mismatch gate, B's next launch adopted the workspace when the RN data had no owner keys, and B's initial-sync backfill queued A's records for B's push (nothing was re-imported: the snapshot and completed journal were still there). The P12-001 pattern. The deletion is now also recorded in the Keychain (`account-deletion-scrub-pending.v1`, schema version only) and held in memory; Retry, scene activation and the launch write the marker from it first and run the whole `.all` scrub, eraser included, and until then it stays blocked with nothing loaded. Residuals (accepted): if the Keychain write fails too, only the in-memory copy remains (Retry and activation still finish it; a relaunch first does not), counted and logged by stage code. A record that cannot be read at launch does not block the launch (the snapshot it guards is unreadable in the same before-first-unlock window); scene activation re-reads it. The record (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`) survives an uninstall, so uninstalling the native app, installing the RN build, using another account there and then reinstalling the native app would run the `.all` scrub, including the install-wide RN source eraser, on that other account's RN data; reachable only before cutover, by testers, after a marker-write failure (Task 9c re-review Minor 2) | **S1** | 2026-09-25, Task 9c review (Minor 4); reproduced by host test `native/run-legacy-reimport-tests.sh` section 7 | 12.00b.2-G | Fixed — 12.00b.2-G (host) (`fix(native): phase 12.00b.2 - a deletion whose scrub marker cannot be written stays pending (P12-006)`); no device row: the marker-write failure is injected on the host (a read-only app directory) and cannot be produced on a device on demand |
+| P12-007 | Crash and error messages keep file paths: the Phase 11 redactor (contract §10.1) has no path rule, so a crash message or an `NSError` description that names a file reaches Sentry with its path (on iOS the app container, with no user name) | S3 | 2026-09-26, Task 11 (12.02) dry run (`native/SupportDiagnosticsTests/main.swift` section 16; `docs/native-phase-12-monitoring.md` §11 finding 1) | A §10.1 contract path rule lands before any file-I/O backlog site (`photoStorage`, `invoicePdfFile`) is wired; today only `deleteAccount`, `purchase` and `restorePurchases` pass raw errors, and native file names are record ids or invoice numbers | Open (backlog) |
