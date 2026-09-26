@@ -91,25 +91,27 @@ carries the same facts as counts.
 
 "Prepare support report" (`N/NativeSupportReportAction.swift`), in Settings › Migration
 support and on both blocked screens (`N/RootView.swift`; Reach below), calls
-`AppStore.createPersistenceSupportReport` (`N/AppStore.swift:888`), which now
-writes the version 3 report built by `AppStore.supportReport` (`N/AppStore.swift:900`)
+`AppStore.createPersistenceSupportReport` (`N/AppStore.swift:904`), which now
+writes the version 4 report built by `AppStore.supportReport` (`N/AppStore.swift:916`)
 from the types in `N/NativeSupportDiagnostics.swift`. The user shares
 `tradeready-support-report.json` from the share sheet, usually into the Contact support
 email. The v2 persistence report (Phase 2) is kept whole under `persistence`, so nothing
 it carried is lost.
 
-**Schema (closed).** Every field the v3 report adds is a version, a boolean, a count
+**Schema (closed).** Every field the v3 and v4 reports add is a version, a boolean, a count
 capped at 9,999, an age bucket (`none`, `under-1h`, `1h-to-24h`, `over-24h`) or a bounded
 code. The nested v2 part keeps its own counts uncapped, as Phase 2 and 12.00b.1 wrote them
 (`persistence.recordCounts` and `persistence.rejectedChangeCount`): they are the owner's
 own record counts, which TH-1 compares exactly, and carry no content:
 
-- `reportSchemaVersion` (3), `app {version, build}`;
+- `reportSchemaVersion` (4; 12.06 raised it from 3 by adding `rollbackReadiness`),
+  `app {version, build}`;
 - `persistence`: the v2 report (record and file counts, backups, journal, rejected
   count), or `null` with `persistenceUnavailableCode` when the snapshot cannot be read;
 - `launchMigration`: notice, blocked, block reason and detail, the last outcome
   (`not-attempted`, `migrated`, `conflict`, `already-completed`,
-  `missing-migrated-snapshot`, `no-data`, `failed`), operation, failure code, and the
+  `native-state-adopted` (12.06, `P12-011`), `missing-migrated-snapshot`, `no-data`,
+  `failed`), operation, failure code, and the
   imported, missing, adopted and deferred counts;
 - `accountBoundary`: scrub pending and its scope (`none`, `live`, `all`, `unreadable`,
   `undecodable`; never the marker's bytes), scrub blocked with scope and attempt count,
@@ -125,7 +127,13 @@ own record counts, which TH-1 compares exactly, and carry no content:
   codes, consecutive repeats merged into a count) with `recentCodesOmitted`;
 - `widgets`: mirror dirty, lock-busy count, and the replay quarantine and set-aside counts;
 - `legacyBackupProtection` (L267.a, counts only): checks run, enumerator unavailable,
-  files protected and failed at the last check, failures in total.
+  files protected and failed at the last check, failures in total;
+- `rollbackReadiness` (12.06, v4): the last Settings › Cloud Sync › Check everything is
+  saved on this account (`none`, `ready`, `not-ready`), its age bucket, the drain's sync
+  outcome code (`skipped` when a fail-closed condition held), the blocker codes, the
+  waiting-change, refused-change, widget-action and photo-upload counts, and the
+  migration journal state; `none` before any check and after an account change
+  (`docs/native-phase-12-rollback-playbook.md` §5.1).
 
 **Code rule.** A code keeps only `A–Z a–z 0–9 . _ / -`, at most 96 bytes, with no run of
 6 or more digits, no run of 12 or more hex characters containing a digit, and nothing
@@ -136,7 +144,7 @@ survives as a code.
 **Cap.** 16,384 bytes (`NativeSupportDiagnostics.maximumReportBytes`). Over it the oldest
 recent codes are dropped first and counted; a report that still does not fit is not
 written (`reportTooLarge`) and the action says the report could not be created. The dry-run
-report was 2,450 bytes.
+report was 2,450 bytes (2,673 with the v4 `rollbackReadiness` section in the 12.06 host run).
 
 **Never included:** records, names, contact details, notes, record ids, the owner
 binding or Supabase subject, file paths, error messages, keys, tokens, sessions, marker
@@ -156,7 +164,7 @@ file (§12; `native/SupportDiagnosticsTests/main.swift` section 13).
 reaches Settings, so both screens show the same action under Try again and Contact
 support (review fix round 1, 2026-09-26). It only reads diagnostics and writes the
 report file beside the store, never an owner record, so it works while owner writes are
-blocked. Host tests create the v3 report in each blocked state (a failed migration, a
+blocked. Host tests create the v4 report in each blocked state (a failed migration, a
 missing migrated snapshot, a blocked sign-out cleanup and a blocked deletion cleanup),
 with owner writes still blocked, and prove no other file changes (§12). For TH-1/TH-2 and
 P12-001/P12-006 the blocked device's report is therefore a source alongside the remote
@@ -358,12 +366,12 @@ Host fixtures only, a stub link on `dry-run.invalid`, no network
 
 All `TZ=America/Phoenix`, host only:
 
-- `sh native/run-support-diagnostics-tests.sh` (new; 238 checks): the signals in §3 at
+- `sh native/run-support-diagnostics-tests.sh` (new; 239 checks since 12.06): the signals in §3 at
   their sites, including the P12-003 steady state staying silent, one report per
   blocked episode in a launch, a discard in a pass whose coalesced rerun was deferred (reported once)
   and a thrown RevenueCat cancel (not reported); the pure code, age and count rules; the
   export's closed schema, cap and seeded-secret exclusions; the boundary and migration
-  state; the report from both blocked screens (the v3 report while owner writes are
+  state; the report from both blocked screens (the v4 report while owner writes are
   blocked, no other file changed, and one shared action in Settings and in both
   `RootView` blocked branches); the dry run.
 - `sh native/run-accessibility-audit-tests.sh`: the shared action
@@ -372,7 +380,9 @@ All `TZ=America/Phoenix`, host only:
   the discarded count and table (TH-5), reset at each pass.
 - `sh native/run-analytics-event-tests.sh` (545 checks): §9.
 - `sh native/run-store-integration-tests.sh` and `sh native/run-rejected-changes-tests.sh`:
-  the v3 report around the v2 part, and the I2 count in it.
+  the v4 report around the v2 part, and the I2 count in it.
+- `sh native/run-rollback-readiness-tests.sh` (12.06): the `rollbackReadiness` section
+  and the check behind it.
 - `sh native/run-error-redaction-tests.sh`, unchanged.
 - `sh native/run-all-domain-tests.sh`; it ends at the AGG-1 `npm test` step (charter §4.1).
 
