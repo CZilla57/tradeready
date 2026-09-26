@@ -554,6 +554,14 @@ struct SupportDiagnosticsTests {
         stub.purchaseCancelled = true
         _ = await store.purchaseSubscription(packageID: "annual")
         expectEqual(f.captures(), [], "subscription: a cancelled purchase reports nothing (RN: !err.userCancelled)")
+        // Review fix 1 (Minor 2): RevenueCat can also report a cancel by
+        // throwing `purchaseCancelledError` (code 1); that is not reported either.
+        stub.purchaseCancelled = false
+        stub.purchaseError = NSError(domain: "RevenueCat.ErrorCode", code: 1, userInfo: [:])
+        let thrownCancel = await store.purchaseSubscription(packageID: "annual")
+        if case .failed = thrownCancel {} else { expect(false, "subscription: sanity: the thrown cancel returned failed") }
+        expectEqual(f.captures(), [], "subscription: a thrown cancel (RevenueCat.ErrorCode 1) reports nothing")
+        f.clear()
 
         let storeProblem = NSError(domain: "RevenueCat.ErrorCode", code: 2, userInfo: [
             NSLocalizedDescriptionKey: "Store problem for riley.secret@example.com",
