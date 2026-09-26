@@ -2062,8 +2062,11 @@ final class AppStore: ObservableObject {
         }
         guard !settledCanonical.isEmpty else { return ([], skipped) }
         do {
-            snapshot.payload.invoices = invoiceRecords
-            var jobRecords = snapshot.payload.jobs ?? []
+            // P12-008: built on a copy and committed through `commitSnapshot`
+            // (see `commitInvoicePayment`).
+            var next = snapshot
+            next.payload.invoices = invoiceRecords
+            var jobRecords = next.payload.jobs ?? []
             var advancedJobIDs: [String] = []
             let currentJobs = jobs.map(\.lifecycleJob)
             let advanced = JobLifecycleRules.advancePaidInvoiceJobs(
@@ -2079,9 +2082,8 @@ final class AppStore: ObservableObject {
                 jobRecords[index] = try CanonicalUIAdapters.canonical(from: jobEdit)
                 advancedJobIDs.append(after.id)
             }
-            snapshot.payload.jobs = jobRecords
-            try repository.save(snapshot)
-            try apply(snapshot)
+            next.payload.jobs = jobRecords
+            try commitSnapshot(next)
             for record in settledCanonical {
                 enqueueUpsert(table: "invoices", recordId: record.id, record: record)
             }
@@ -2201,10 +2203,15 @@ final class AppStore: ObservableObject {
               records[index].autoEmailRequestedAt != nil
         else { return }
         records[index].autoEmailRequestedAt = nil
-        snapshot.payload.invoices = records
-        refreshAndSave()
-        if let record = snapshot.payload.invoices?.first(where: { $0.id == invoiceID }) {
+        let record = records[index]
+        var next = snapshot
+        next.payload.invoices = records
+        do {
+            // P12-008: queued only once saved; a failed clear changes nothing.
+            try commitSnapshot(next)
             enqueueUpsert(table: "invoices", recordId: record.id, record: record)
+        } catch {
+            migrationMessage = "Could not save data: \(error.localizedDescription)"
         }
     }
 
@@ -3149,7 +3156,10 @@ final class AppStore: ObservableObject {
                 result = try CanonicalUIAdapters.canonical(from: edit)
             } else { result = try CanonicalUIAdapters.canonical(from: value) }
             replaceOrAppend(result, in: &records, id: \Canonical.Invoice.id)
-            snapshot.payload.invoices = records; refreshAndSave()
+            // P12-008: saved before it is queued; a failed save changes nothing.
+            var next = snapshot
+            next.payload.invoices = records
+            try commitSnapshot(next)
             enqueueUpsert(table: "invoices", recordId: result.id, record: result)
         } catch { migrationMessage = "Could not update invoice: \(error.localizedDescription)" }
     }
@@ -3216,9 +3226,10 @@ final class AppStore: ObservableObject {
                 var result = try CanonicalUIAdapters.canonical(from: edit)
                 Self.reconcileInvoicePaidFields(&result)
                 replaceOrAppend(result, in: &records, id: \Canonical.Invoice.id)
-                snapshot.payload.invoices = records
-                try repository.save(snapshot)
-                try apply(snapshot)
+                // P12-008: a failed save changes nothing in memory.
+                var next = snapshot
+                next.payload.invoices = records
+                try commitSnapshot(next)
                 enqueueUpsert(table: "invoices", recordId: result.id, record: result)
                 guard let published = try? CanonicalUIAdapters.invoice(from: result, calendar: calendar) else {
                     return .failure(.persistenceUnavailable)
@@ -3252,9 +3263,11 @@ final class AppStore: ObservableObject {
             var result = try CanonicalUIAdapters.canonical(from: value)
             Self.reconcileInvoicePaidFields(&result)
             records.append(result)
-            snapshot.payload.invoices = records
-            try repository.save(snapshot)
-            try apply(snapshot)
+            // P12-008: a failed save leaves no phantom invoice in memory (a
+            // retry would otherwise add a second one with the same number).
+            var next = snapshot
+            next.payload.invoices = records
+            try commitSnapshot(next)
             enqueueUpsert(table: "invoices", recordId: result.id, record: result)
             guard let published = try? CanonicalUIAdapters.invoice(from: result, calendar: calendar) else {
                 return .failure(.persistenceUnavailable)
@@ -3312,7 +3325,10 @@ final class AppStore: ObservableObject {
                 result = try CanonicalUIAdapters.canonical(from: edit)
             } else { result = try CanonicalUIAdapters.canonical(from: value) }
             replaceOrAppend(result, in: &records, id: \Canonical.Expense.id)
-            snapshot.payload.expenses = records; refreshAndSave()
+            // P12-008: saved before it is queued; a failed save changes nothing.
+            var next = snapshot
+            next.payload.expenses = records
+            try commitSnapshot(next)
             enqueueUpsert(table: "expenses", recordId: result.id, record: result)
         } catch { migrationMessage = "Could not update expense: \(error.localizedDescription)" }
     }
@@ -4152,8 +4168,15 @@ final class AppStore: ObservableObject {
     func deleteExpense(id: String) {
         guard ensurePersistenceWritable() else { return }
         let existed = snapshot.payload.expenses?.contains { $0.id == id } ?? false
-        snapshot.payload.expenses?.removeAll { $0.id == id }; refreshAndSave()
-        if existed { enqueueDelete(table: "expenses", recordId: id) }
+        var next = snapshot
+        next.payload.expenses?.removeAll { $0.id == id }
+        do {
+            // P12-008: the delete is queued only once saved.
+            try commitSnapshot(next)
+            if existed { enqueueDelete(table: "expenses", recordId: id) }
+        } catch {
+            migrationMessage = "Could not delete expense: \(error.localizedDescription)"
+        }
     }
 
     func nextInvoiceNumber() -> String {
@@ -5991,14 +6014,7 @@ final class AppStore: ObservableObject {
                       generation == self.initialSyncGateGeneration
                 else { return }
 
-                let previous = self.snapshot
-                do {
-                    try self.apply(candidate)
-                    try self.repository.save(self.snapshot)
-                } catch {
-                    try? self.apply(previous)
-                    throw error
-                }
+                try self.commitSnapshot(candidate)
                 NativePerformanceMetrics.shared.end(initialSync, count: self.performanceRecordCount())
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
@@ -6251,38 +6267,42 @@ final class AppStore: ObservableObject {
         updated.contactName = draft.contactName
         updated.trade = draft.trade.rawValue
         if updated.email.isEmpty { updated.email = authenticatedEmail ?? "" }
-        if let baseline = snapshot.payload.settings {
+        // P12-008: a failed save changes nothing in memory, so the next
+        // unrelated save cannot persist the personalization unqueued.
+        var next = snapshot
+        if let baseline = next.payload.settings {
             var edit = try CanonicalUIAdapters.edit(baseline)
             edit.value = updated
-            snapshot.payload.settings = try CanonicalUIAdapters.canonical(from: edit)
+            next.payload.settings = try CanonicalUIAdapters.canonical(from: edit)
         } else {
-            snapshot.payload.settings = try CanonicalUIAdapters.canonical(from: updated)
+            next.payload.settings = try CanonicalUIAdapters.canonical(from: updated)
         }
-        try repository.save(snapshot)
-        try apply(snapshot)
+        try commitSnapshot(next)
     }
 
     private func commitStartingPoint(_ document: NativeOnboardingDocument) throws {
         guard ensurePersistenceWritable() else { throw NativeOnboardingError.corruptState }
+        // P12-008: built on a copy; a failed save changes nothing in memory.
+        var next = snapshot
         switch document.stage {
         case .sampleCommit:
             guard let namespace = document.sampleNamespace,
                   let anchor = document.sampleAnchor
             else { throw NativeOnboardingError.corruptState }
-            try mergeSampleData(namespace: namespace, anchor: anchor, trade: document.draft.trade)
+            try mergeSampleData(into: &next, namespace: namespace, anchor: anchor, trade: document.draft.trade)
         case .freshCommit:
-            snapshot.payload.customers?.removeAll { Self.isNativeSampleID($0.id) }
-            snapshot.payload.jobs?.removeAll { Self.isNativeSampleID($0.id) }
-            snapshot.payload.invoices?.removeAll { Self.isNativeSampleID($0.id) }
-            snapshot.payload.expenses?.removeAll { Self.isNativeSampleID($0.id) }
+            next.payload.customers?.removeAll { Self.isNativeSampleID($0.id) }
+            next.payload.jobs?.removeAll { Self.isNativeSampleID($0.id) }
+            next.payload.invoices?.removeAll { Self.isNativeSampleID($0.id) }
+            next.payload.expenses?.removeAll { Self.isNativeSampleID($0.id) }
         default:
             throw NativeOnboardingError.corruptState
         }
-        try repository.save(snapshot)
-        try apply(snapshot)
+        try commitSnapshot(next)
     }
 
     private func mergeSampleData(
+        into next: inout Canonical.Snapshot,
         namespace: String,
         anchor: Date,
         trade: NativeTypedAccountState.Trade
@@ -6336,7 +6356,7 @@ final class AppStore: ObservableObject {
             category: .materials,
             notes: "Sample expense"
         )
-        var customerRecords = snapshot.payload.customers ?? []
+        var customerRecords = next.payload.customers ?? []
         let canonicalCustomer: Canonical.Customer
         if let baseline = customerRecords.first(where: { $0.id == customer.id }) {
             var edit = try CanonicalUIAdapters.edit(baseline); edit.value = customer
@@ -6344,7 +6364,7 @@ final class AppStore: ObservableObject {
         } else { canonicalCustomer = try CanonicalUIAdapters.canonical(from: customer) }
         replaceOrAppend(canonicalCustomer, in: &customerRecords, id: \Canonical.Customer.id)
 
-        var jobRecords = snapshot.payload.jobs ?? []
+        var jobRecords = next.payload.jobs ?? []
         let canonicalJob: Canonical.Job
         if let baseline = jobRecords.first(where: { $0.id == job.id }) {
             var edit = try CanonicalUIAdapters.edit(baseline); edit.value = job
@@ -6352,7 +6372,7 @@ final class AppStore: ObservableObject {
         } else { canonicalJob = try CanonicalUIAdapters.canonical(from: job) }
         replaceOrAppend(canonicalJob, in: &jobRecords, id: \Canonical.Job.id)
 
-        var invoiceRecords = snapshot.payload.invoices ?? []
+        var invoiceRecords = next.payload.invoices ?? []
         let canonicalInvoice: Canonical.Invoice
         if let baseline = invoiceRecords.first(where: { $0.id == invoice.id }) {
             var edit = try CanonicalUIAdapters.edit(baseline); edit.value = invoice
@@ -6360,7 +6380,7 @@ final class AppStore: ObservableObject {
         } else { canonicalInvoice = try CanonicalUIAdapters.canonical(from: invoice) }
         replaceOrAppend(canonicalInvoice, in: &invoiceRecords, id: \Canonical.Invoice.id)
 
-        var expenseRecords = snapshot.payload.expenses ?? []
+        var expenseRecords = next.payload.expenses ?? []
         let canonicalExpense: Canonical.Expense
         if let baseline = expenseRecords.first(where: { $0.id == expense.id }) {
             var edit = try CanonicalUIAdapters.edit(baseline); edit.value = expense
@@ -6368,10 +6388,10 @@ final class AppStore: ObservableObject {
         } else { canonicalExpense = try CanonicalUIAdapters.canonical(from: expense) }
         replaceOrAppend(canonicalExpense, in: &expenseRecords, id: \Canonical.Expense.id)
 
-        snapshot.payload.customers = customerRecords
-        snapshot.payload.jobs = jobRecords
-        snapshot.payload.invoices = invoiceRecords
-        snapshot.payload.expenses = expenseRecords
+        next.payload.customers = customerRecords
+        next.payload.jobs = jobRecords
+        next.payload.invoices = invoiceRecords
+        next.payload.expenses = expenseRecords
     }
 
     private static func isNativeSampleID(_ id: String) -> Bool {
@@ -6821,6 +6841,53 @@ final class AppStore: ObservableObject {
         catch { throw SnapshotProjectionError(family: family, underlying: error) }
     }
 
+    /// Phase 12 (12.00b.2-H, P12-008): the one way a change to the live
+    /// snapshot is committed. `next` is projected (so a snapshot the screens
+    /// cannot show is never saved), saved, and only then kept; when the
+    /// projection or the save throws, the previous snapshot, the screens and
+    /// the pending estimate follow-up are restored before the error is
+    /// rethrown. Callers build `next` on a copy (`var next = snapshot`) and
+    /// queue, emit and prompt only after this returns, so a change that was
+    /// not saved is never queued, tracked, shown or mirrored to the widget,
+    /// and the next unrelated save cannot persist it without queueing it.
+    /// (RN `saveInvoices` persists and queues together and re-upserts every
+    /// record on each save, `utils/storage/collections.ts:26-35`,
+    /// `utils/sync.ts:108-124`, so it never persists a change unqueued.)
+    /// The widget mirror refresh `snapshot.didSet` schedules runs on a later
+    /// main-actor turn and reads the restored snapshot. A source pin
+    /// (`native/SaveRollbackTests`) keeps every live-snapshot write in
+    /// `apply` and the two commit helpers.
+    private func commitSnapshot(_ next: Canonical.Snapshot) throws {
+        let previous = snapshot
+        let previousFollowUp = pendingEstimateFollowUpJobID
+        do {
+            try apply(next)
+            try repository.save(snapshot)
+        } catch {
+            if (try? apply(previous)) == nil { snapshot = previous }
+            pendingEstimateFollowUpJobID = previousFollowUp
+            throw error
+        }
+    }
+
+    /// P12-008: the settings-only commit (a Settings edit, the Square token
+    /// heal). Saved first and kept only once saved, like `commitSnapshot`,
+    /// but without re-projecting every record on each Settings keystroke;
+    /// the caller owns the published `settings`.
+    private func commitSettings(_ value: Canonical.Settings) throws {
+        var next = snapshot
+        next.payload.settings = value
+        try repository.save(next)
+        snapshot = next
+    }
+
+    /// Shows the saved settings (a blocked or failed Settings save).
+    private func showSavedSettings() {
+        isApplyingProjection = true
+        settings = snapshot.payload.settings.map { CanonicalUIAdapters.settings(from: $0) } ?? BusinessSettings()
+        isApplyingProjection = false
+    }
+
     private func applyEmptySnapshot() {
         do { try apply(Canonical.Snapshot(payload: .init())) }
         catch { migrationMessage = "Could not initialize data: \(error.localizedDescription)" }
@@ -6834,8 +6901,7 @@ final class AppStore: ObservableObject {
         _ = try migrationJournal.begin(kind)
         do {
             try repository.preserveLegacyBytes(sourceData, migration: kind)
-            try apply(migrated)
-            try repository.save(snapshot)
+            try commitSnapshot(migrated)
             try migrationJournal.complete(kind)
         } catch {
             try? migrationJournal.fail(kind)
@@ -6876,12 +6942,9 @@ final class AppStore: ObservableObject {
         else { return false }
         var healed = current
         healed.providerKeys = cleaned
-        let previous = snapshot
         do {
-            snapshot.payload.settings = healed
-            try repository.save(snapshot)
+            try commitSettings(healed)
         } catch {
-            snapshot = previous
             print("TradeReadySquareTokenScrub stage=save")
             return false
         }
@@ -6889,20 +6952,14 @@ final class AppStore: ObservableObject {
         // still holds the credential; a second write rotates the healed
         // snapshot into it. Best effort: the primary is already healed.
         do { try repository.save(snapshot) } catch { print("TradeReadySquareTokenScrub stage=backup") }
-        isApplyingProjection = true
-        settings = CanonicalUIAdapters.settings(from: healed)
-        isApplyingProjection = false
+        showSavedSettings()
         enqueueSettingsUpsert(healed)
         return true
     }
 
     private func mergeSettingsAndSave() {
         guard ensurePersistenceWritable() else {
-            if let canonicalSettings = snapshot.payload.settings {
-                isApplyingProjection = true
-                settings = CanonicalUIAdapters.settings(from: canonicalSettings)
-                isApplyingProjection = false
-            }
+            if snapshot.payload.settings != nil { showSavedSettings() }
             return
         }
         // Fix round 2 (G5): a Square value that is not a payment link never
@@ -6913,21 +6970,27 @@ final class AppStore: ObservableObject {
             settings.paymentProviderKeys = cleaned
             isApplyingProjection = false
         }
+        let merged: Canonical.Settings
         do {
             if let baseline = snapshot.payload.settings {
                 var edit = try CanonicalUIAdapters.edit(baseline); edit.value = settings
-                snapshot.payload.settings = try CanonicalUIAdapters.canonical(from: edit)
-            } else { snapshot.payload.settings = try CanonicalUIAdapters.canonical(from: settings) }
-            save()
-            if let canonicalSettings = snapshot.payload.settings {
-                enqueueSettingsUpsert(canonicalSettings)
-            }
-        } catch { migrationMessage = "Could not update settings: \(error.localizedDescription)" }
-    }
-
-    private func refreshAndSave() {
-        do { try apply(snapshot); save() }
-        catch { migrationMessage = "Could not refresh data: \(error.localizedDescription)" }
+                merged = try CanonicalUIAdapters.canonical(from: edit)
+            } else { merged = try CanonicalUIAdapters.canonical(from: settings) }
+        } catch {
+            migrationMessage = "Could not update settings: \(error.localizedDescription)"
+            return
+        }
+        do {
+            try commitSettings(merged)
+        } catch {
+            // P12-008: a failed save is neither kept nor queued, and the
+            // screen goes back to the saved settings (as when writes are
+            // blocked above) instead of showing an edit that was not saved.
+            migrationMessage = "Could not update settings: \(error.localizedDescription)"
+            showSavedSettings()
+            return
+        }
+        enqueueSettingsUpsert(merged)
     }
 
     private static let persistenceReadOnlyMessage =
@@ -7554,14 +7617,8 @@ final class AppStore: ObservableObject {
         for table in rebase.heldCursorTables {
             committedCursor.tables[table] = cursor.tables[table]
         }
-        let previous = snapshot
-        do {
-            try apply(rebase.snapshot)
-            try repository.save(snapshot)
-        } catch {
-            try? apply(previous)
-            return .failed("pull/local-commit")
-        }
+        do { try commitSnapshot(rebase.snapshot) }
+        catch { return .failed("pull/local-commit") }
         do { try syncCursorStore.save(committedCursor) }
         catch { return .failed("pull/cursor-commit") }
         // Sync completion is the generation trigger (mirrors RN app-open /
@@ -7771,14 +7828,7 @@ final class AppStore: ObservableObject {
                     recordId: photos[index].id,
                     payload: try Self.mutationPayload(photos[index])
                 )
-                let previous = snapshot
-                do {
-                    try apply(committed)
-                    try repository.save(snapshot)
-                } catch {
-                    try? apply(previous)
-                    throw error
-                }
+                try commitSnapshot(committed)
                 result.uploadedCount += 1
             } catch {
                 result.failedCount += 1
@@ -8169,13 +8219,10 @@ final class AppStore: ObservableObject {
               !persistenceWritesBlocked,
               (try? visibleRejectedChanges())?.first(where: { $0.id == id }) == entry
         else { return Self.rejectedChangeRaceMessage }
-        let previous = snapshot
         do {
             let next = try fetcher.applyingServerRecord(record, table: table, recordId: recordId, to: snapshot)
-            try apply(next)
-            try repository.save(snapshot)
+            try commitSnapshot(next)
         } catch {
-            try? apply(previous)
             return Self.rejectedChangeCommitMessage
         }
         // Fix round 2 (G5) rule: a settings row from the server can carry a
@@ -8602,12 +8649,17 @@ final class AppStore: ObservableObject {
             var result = try CanonicalUIAdapters.canonical(from: edit)
             Self.reconcileInvoicePaidFields(&result)
             replaceOrAppend(result, in: &invoiceRecords, id: \Canonical.Invoice.id)
-            snapshot.payload.invoices = invoiceRecords
             guard let published = try? CanonicalUIAdapters.invoice(from: result) else {
                 reportInvoicePaymentFailure(code: "invoice-payment/projection", operation: "commit")
                 return .failure(.persistenceUnavailable)
             }
-            var jobRecords = snapshot.payload.jobs ?? []
+            // P12-008: built on a copy and committed through `commitSnapshot`,
+            // so a save that throws leaves the live snapshot, the screens and
+            // the widget mirror exactly as they were: nothing unsaved for the
+            // next unrelated save to persist without queueing it.
+            var next = snapshot
+            next.payload.invoices = invoiceRecords
+            var jobRecords = next.payload.jobs ?? []
             var advancedJobIDs: [String] = []
             let currentJobs = jobs.map(\.lifecycleJob)
             let advanced = JobLifecycleRules.advancePaidInvoiceJobs(
@@ -8624,9 +8676,8 @@ final class AppStore: ObservableObject {
                 jobRecords[index] = try CanonicalUIAdapters.canonical(from: jobEdit)
                 advancedJobIDs.append(after.id)
             }
-            snapshot.payload.jobs = jobRecords
-            try repository.save(snapshot)
-            try apply(snapshot)
+            next.payload.jobs = jobRecords
+            try commitSnapshot(next)
             enqueueUpsert(table: "invoices", recordId: result.id, record: result)
             for jobID in advancedJobIDs {
                 guard let record = snapshot.payload.jobs?.first(where: { $0.id == jobID }) else { continue }
@@ -8733,7 +8784,8 @@ final class AppStore: ObservableObject {
                 customers: try [tom, bakery, dental].map { try CanonicalUIAdapters.canonical(from: $0) },
                 settings: try CanonicalUIAdapters.canonical(from: demoSettings),
                 expenses: try [Expense(merchant: "Ferguson", amount: 126.42, date: .now, category: .materials, notes: "Faucet supplies")].map { try CanonicalUIAdapters.canonical(from: $0) })
-            try apply(Canonical.Snapshot(payload: payload)); save()
+            // P12-008: a failed save keeps the data the owner already had.
+            try commitSnapshot(Canonical.Snapshot(payload: payload))
         } catch { migrationMessage = "Could not create demo data: \(error.localizedDescription)" }
     }
 

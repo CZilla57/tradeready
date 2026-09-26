@@ -262,6 +262,17 @@ Native writes the mirror:
 1. After every committed canonical write that changes jobs, time sessions, invoices or
    payments. Invoices are included because `outstandingTotal` depends on them; RN
    mirrors on `saveInvoices` too.
+   **Amended by Phase 12 12.00b.2-H (2026-09-26; defect P12-008):** "committed" means
+   saved. The payment, bulk Mark paid and invoice editor commits (and eight other
+   sites) changed the live snapshot before `repository.save` and kept the change when
+   the save threw, so this trigger mirrored an unsaved payment and the next unrelated
+   save persisted it without queueing it. Every live-snapshot change now goes through
+   `AppStore.commitSnapshot` (project, save, and restore the previous snapshot and
+   screens if either throws) or `commitSettings` (save a copy, keep it once saved);
+   callers queue, emit analytics and prompt only after it returns. The coalesced mirror
+   refresh runs on a later main-actor turn and reads the restored snapshot. A source
+   pin in `native/run-save-rollback-tests.sh` keeps every live-snapshot write inside
+   those helpers and `apply`.
 2. On launch and foreground, **after** widget-action replay. This way a just-applied
    `timer_start` is reflected, and a stale snapshot is refreshed.
 3. From an observer registered on the 10.09 post-sync-commit seam
