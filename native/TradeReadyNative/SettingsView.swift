@@ -186,7 +186,14 @@ private struct SettingsPage<Content: View>: View {
     let title: String
     let content: Content
     var body: some View {
-        Form { content }.nativeContentColumn(.list).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        Form {
+            // P12-008 review (fix round 1, R41): an edit that was not saved
+            // says so here; the fields show the saved settings.
+            if let failure = store.settingsSaveFailure {
+                Section { Text(failure).font(.caption).foregroundStyle(Color.tradeDangerText) }
+            }
+            content
+        }.nativeContentColumn(.list).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas).onDisappear { store.save() }
             .nativeKeyboardDoneBar()
     }
@@ -543,12 +550,17 @@ struct PaymentsSettings: View {
 
     private func saveSquareDraft() {
         switch store.setPaymentProviderKey(squareDraft, for: NativeSquareProviderKeyPolicy.providerID) {
-        case let .save(value):
+        case let .saved(value):
             squareDraft = value
             squareFeedback = (value.isEmpty ? "Square link cleared." : "Square link saved.", false)
-        case let .reject(message):
+        case let .rejected(message):
             // Fix round 3: a refused value (a pasted token) is not left on screen.
             squareDraft = ""
+            squareFeedback = (message, true)
+        case let .notSaved(message):
+            // P12-008 review (fix round 1, R41): the save failed, so the field
+            // shows the saved link again beside the failure, never "saved".
+            squareDraft = store.settings.providerKey(for: NativeSquareProviderKeyPolicy.providerID)
             squareFeedback = (message, true)
         }
     }

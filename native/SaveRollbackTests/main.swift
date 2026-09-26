@@ -9,7 +9,11 @@ import Foundation
 // AppStore on a throwaway workspace whose snapshot saves fail on demand, then
 // an unrelated save, a relaunch and (money paths) a server pull, and prints
 // what it observed (`OBSERVED:` lines) beside its checks. A source pin keeps
-// every write of the live snapshot inside `apply` and the two commit helpers.
+// every write of the live snapshot inside `apply` and the two commit helpers,
+// and every other `apply(X)` directly after `repository.save(X)`. Fix round 1
+// (R41) adds the owner-facing outcomes: a failed Settings save (a plain field
+// and the Square link) and a failed bulk Mark paid say so, and a failed reset
+// to demo data keeps a blocked source blocked.
 // No network. Run with TZ=America/Phoenix (the runner defaults it).
 
 // MARK: - Fakes
@@ -106,6 +110,11 @@ func hexBinding(_ tag: String) -> String {
 let ownerSubject = "user-p12-008"
 let ownerBinding = hexBinding("b8")
 
+/// Fix round 1 (R41): the owner-facing copy the store's failure outcomes carry.
+let settingsNotSavedCopy = "Could not save this change. Your saved settings are shown."
+let bulkNotSavedCopy = "Could not mark the invoices paid. Nothing was changed and existing data was preserved."
+let readOnlyCopy = "Local data is read-only so its recovery source can be preserved."
+
 /// Lets the main-actor widget mirror refresh (scheduled for after the commit
 /// turn) run.
 @MainActor
@@ -196,6 +205,19 @@ final class Workspace {
         }
     }
 
+    /// Fails every write into the workspace directory (the snapshot's primary
+    /// file included). For a source whose primary cannot be decoded, where a
+    /// save writes no backup first and `failSnapshotSaves` has no effect.
+    func failWorkspaceWrites(_ fail: Bool) {
+        do {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: fail ? 0o555 : 0o755], ofItemAtPath: directory.path
+            )
+        } catch {
+            expect(false, "fixture: the workspace directory permissions changed (\(error))")
+        }
+    }
+
     /// A push that sent everything: the queue is empty.
     func clearQueue() {
         try? FileManager.default.removeItem(at: queueURL)
@@ -231,6 +253,7 @@ final class Workspace {
 
     func cleanup() {
         crash.waitUntilIdle()
+        failWorkspaceWrites(false)
         failSnapshotSaves(false)
         try? FileManager.default.removeItem(at: directory)
         defaults.removePersistentDomain(forName: suiteName)
@@ -278,12 +301,16 @@ struct SaveRollbackTests {
         await invoiceEdit()
         await invoiceCreate()
         await settingsEdit()
+        await squareLinkSave()
         await autoEmailClear()
         await legacyInvoiceExpenseAPIs()
         onboardingCommits()
         demoReset()
+        demoResetWhileBlocked()
         await squareHeal()
         await pullCommit()
+        failureNoticeSources(root: root)
+        pinScopes()
         sourcePin(root: root)
 
         print("save-rollback tests: \(checks - failures)/\(checks) checks passed")
@@ -424,11 +451,15 @@ struct SaveRollbackTests {
         w.clearSignals()
 
         w.failSnapshotSaves(true)
-        let result = store.commitBulkSettleInvoices(ids: [first.id, second.id])
+        let result: AppStore.BulkSettleResult = store.commitBulkSettleInvoices(ids: [first.id, second.id])
         await settle()
         w.failSnapshotSaves(false)
 
         expect(result.settled.isEmpty, "\(site): nothing is reported settled")
+        // Fix round 1 (R41 carry-forward): the result carries the failure the
+        // Invoices list shows, so a failed save no longer reads as "already paid".
+        observed(site, "the failed run reports failure=\(result.failure ?? "nil")")
+        expectEqual(result.failure, bulkNotSavedCopy, "\(site): the result reports the failed save")
         expect(store.migrationMessage?.hasPrefix("Could not mark the invoices paid") == true, "\(site): the store reports the error")
         expect(store.invoices.filter { [first.id, second.id].contains($0.id) }.allSatisfy { !$0.isPaid },
                "\(site): both invoices still show unpaid")
@@ -471,6 +502,15 @@ struct SaveRollbackTests {
         observed(site, "pull with one server row changed: changed row paid=\(firstAfterPull?.isPaid ?? false), unchanged row paid=\(secondAfterPull?.isPaid ?? false) (server: both unpaid)")
         expect(firstAfterPull?.isPaid == false && secondAfterPull?.isPaid == false,
                "\(site): after a pull the local copy agrees with the server (both unpaid)")
+
+        // With saves working the run settles both and reports no failure; a run
+        // over invoices that are already paid is a skip, not a failure.
+        let settledRun: AppStore.BulkSettleResult = relaunched.commitBulkSettleInvoices(ids: [first.id, second.id])
+        expect(settledRun.settled.count == 2 && settledRun.failure == nil,
+               "\(site): a later run settles both and reports no failure")
+        let paidRun: AppStore.BulkSettleResult = relaunched.commitBulkSettleInvoices(ids: [first.id, second.id])
+        expect(paidRun.settled.isEmpty && paidRun.skipped == 2 && paidRun.failure == nil,
+               "\(site): a run over paid invoices skips them and reports no failure")
     }
 
     // MARK: 3. The invoice editor, edit (performInvoiceEdit)
@@ -584,6 +624,7 @@ struct SaveRollbackTests {
         let store = await w.launchSignedIn()
         store.settings.businessName = "Saved Name"
         expectEqual(w.disk?.payload.settings?.businessName, "Saved Name", "\(site): sanity: a settings edit saves")
+        expectEqual(store.settingsSaveFailure, nil, "\(site): sanity: a saved edit reports no failure")
         w.clearQueue()
 
         w.failSnapshotSaves(true)
@@ -596,6 +637,9 @@ struct SaveRollbackTests {
         observed(site, "after the failed save the screen shows '\(store.settings.businessName)', queued name=\(queuedName ?? "nil")")
         expectEqual(store.settings.businessName, "Saved Name", "\(site): the screen goes back to the saved settings")
         expect(store.migrationMessage?.hasPrefix("Could not update settings") == true, "\(site): the store reports the error")
+        // Fix round 1 (R41, Minor 2): the Settings screens show the failure.
+        observed(site, "after the failed save the Settings failure is '\(store.settingsSaveFailure ?? "nil")'")
+        expectEqual(store.settingsSaveFailure, settingsNotSavedCopy, "\(site): the Settings screens say the edit was not saved")
         expectEqual(queuedName, nil, "\(site): nothing is queued for the failed edit")
 
         unrelatedSave(store, site)
@@ -608,6 +652,48 @@ struct SaveRollbackTests {
         store.settings.businessName = "Later Name"
         expectEqual(w.disk?.payload.settings?.businessName, "Later Name", "\(site): a later edit saves")
         expect(w.queued("settings", "settings") != nil, "\(site): a later edit is queued")
+        expectEqual(store.settingsSaveFailure, nil, "\(site): a later saved edit clears the failure")
+    }
+
+    // MARK: 5b. The Square link (setPaymentProviderKey), fix round 1 (R41, Minor 2)
+
+    /// The Payments page said "Square link saved." whenever the link passed
+    /// validation, even when the save failed and the screen went back to the
+    /// saved link. The setter now returns what happened to the save.
+    @MainActor
+    static func squareLinkSave() async {
+        let site = "square-save"
+        let w = Workspace(site)
+        defer { w.cleanup() }
+        let store = await w.launchSignedIn()
+        let saved = "https://square.link/u/p12saved"
+        let unsaved = "https://square.link/u/p12unsaved"
+        let first: AppStore.ProviderKeySaveOutcome = store.setPaymentProviderKey(saved, for: "square")
+        expectEqual(first, .saved(saved), "\(site): sanity: a Square link saves")
+        expectEqual(w.disk?.payload.settings?.providerKeys["square"], saved, "\(site): sanity: the link is on disk")
+        w.clearQueue()
+
+        w.failSnapshotSaves(true)
+        let outcome: AppStore.ProviderKeySaveOutcome = store.setPaymentProviderKey(unsaved, for: "square")
+        w.failSnapshotSaves(false)
+        observed(site, "a failed save returns \(outcome); the screen shows '\(store.settings.providerKey(for: "square"))'")
+        expectEqual(outcome, .notSaved(settingsNotSavedCopy), "\(site): a failed save is reported as not saved")
+        expectEqual(store.settings.providerKey(for: "square"), saved, "\(site): the screen shows the saved link")
+        expectEqual(store.settingsSaveFailure, settingsNotSavedCopy, "\(site): the Payments page shows the failure")
+        expect(w.queued("settings", "settings") == nil, "\(site): nothing is queued for the failed save")
+        unrelatedSave(store, site)
+        expectEqual(w.disk?.payload.settings?.providerKeys["square"], saved,
+                    "\(site): the unsaved link is not persisted by the next unrelated save")
+
+        // A refused token is a validation result, not a failed save.
+        let token: AppStore.ProviderKeySaveOutcome = store.setPaymentProviderKey("EAAAp12token", for: "square")
+        expectEqual(token, .rejected(NativeSquareProviderKeyPolicy.rejectionMessage), "\(site): a pasted token is rejected")
+
+        let retried: AppStore.ProviderKeySaveOutcome = store.setPaymentProviderKey(unsaved, for: "square")
+        expectEqual(retried, .saved(unsaved), "\(site): once saves work the link saves")
+        expectEqual(store.settingsSaveFailure, nil, "\(site): a saved link clears the failure")
+        expectEqual(w.disk?.payload.settings?.providerKeys["square"], unsaved, "\(site): the saved link is on disk")
+        expect(w.queued("settings", "settings") != nil, "\(site): the saved link is queued")
     }
 
     // MARK: 6. Clearing an automatic send (clearInvoiceAutoEmailRequest)
@@ -789,6 +875,75 @@ struct SaveRollbackTests {
         expect(!w.launch().customers.contains { $0.name == "Tom Nguyen" }, "\(site): after a relaunch no demo data shows")
     }
 
+    // MARK: 9a. Reset to demo data over a blocked source, fix round 1 (R41, Minor 3)
+
+    /// `resetDemoData` may replace a source the launch refused to overwrite
+    /// (an unreadable file, or data from a newer app version), but it cleared
+    /// the write block before its save: a failed reset left the blocked
+    /// contents in memory with writes allowed, and the next save overwrote the
+    /// recovery source. The block now lifts only once the demo data is saved.
+    @MainActor
+    static func demoResetWhileBlocked() {
+        for source in ["unreadable-snapshot", "newer-schema"] {
+            let site = "demo-reset-blocked/\(source)"
+            let w = Workspace("demo-reset-blocked-\(source)")
+            defer { w.cleanup() }
+            let sourceBytes: Data
+            if source == "unreadable-snapshot" {
+                sourceBytes = Data("{ not a snapshot".utf8)
+            } else {
+                let future = Canonical.Snapshot(
+                    schemaVersion: Canonical.Snapshot.currentSchemaVersion + 1,
+                    payload: .init(unknownFields: ["futurePayload": .string("retain")])
+                )
+                sourceBytes = (try? Canonical.SnapshotCodec.encode(future)) ?? Data()
+            }
+            do { try sourceBytes.write(to: w.storeURL, options: .atomic) } catch {
+                expect(false, "\(site): fixture written (\(error))")
+            }
+            let store = w.launch()
+            let blockedAt = store.supportReport().launchMigration
+            expectEqual(blockedAt.persistenceBlockReason.value, source, "\(site): sanity: the launch blocks writes")
+
+            // The reset's save fails. An undecodable primary gets no backup
+            // first, so its save is failed at the workspace directory.
+            func failSave(_ fail: Bool) {
+                if source == "unreadable-snapshot" { w.failWorkspaceWrites(fail) } else { w.failSnapshotSaves(fail) }
+            }
+            failSave(true)
+            store.resetDemoData()
+            failSave(false)
+            let resetMessage = store.migrationMessage
+
+            let afterReset = store.supportReport().launchMigration
+            var unrelated = Customer()
+            unrelated.name = "Unrelated Customer \(source)"
+            let unrelatedSaved = store.upsert(unrelated)
+            let onDisk = try? Data(contentsOf: w.storeURL)
+            observed(site, "after the failed reset: block reason=\(afterReset.persistenceBlockReason.value), unrelated save allowed=\(unrelatedSaved), recovery source unchanged=\(onDisk == sourceBytes)")
+            expect(resetMessage?.hasPrefix("Could not create demo data") == true, "\(site): the store reports the failed reset")
+            expect(!store.customers.contains { $0.name == "Tom Nguyen" }, "\(site): no demo data shows")
+            expectEqual(afterReset.persistenceBlockReason, blockedAt.persistenceBlockReason, "\(site): the block reason is intact")
+            expectEqual(afterReset.persistenceBlockDetail, blockedAt.persistenceBlockDetail, "\(site): the block detail is intact")
+            expect(!unrelatedSaved, "\(site): writes are still blocked (an unrelated save is refused)")
+            expect(onDisk == sourceBytes, "\(site): the recovery source on disk is unchanged after the attempted save")
+            let bulk: AppStore.BulkSettleResult = store.commitBulkSettleInvoices(ids: ["any-invoice"])
+            expectEqual(bulk.failure, readOnlyCopy, "\(site): bulk Mark paid on blocked data reports the read-only failure")
+            let shownName = store.settings.businessName
+            store.settings.businessName = "Blocked Edit"
+            expectEqual(store.settings.businessName, shownName, "\(site): a Settings edit on blocked data goes back to the saved settings")
+            expectEqual(store.settingsSaveFailure, readOnlyCopy, "\(site): the Settings screens say the data is read-only")
+
+            // The explicit reset may still replace the blocked source once it saves.
+            store.resetDemoData()
+            expect(store.customers.contains { $0.name == "Tom Nguyen" }, "\(site): a reset that saves shows the demo data")
+            expectEqual(store.supportReport().launchMigration.persistenceBlockReason, NativeSupportCode(nil),
+                        "\(site): a reset that saves lifts the block")
+            expectEqual(store.settingsSaveFailure, nil, "\(site): a reset that saves clears the read-only notice")
+            expect(store.upsert(unrelated), "\(site): after a saved reset an unrelated save is allowed")
+        }
+    }
+
     // MARK: 9b. The Square token heal (scrubLegacySquareToken, already rolled back)
 
     @MainActor
@@ -852,59 +1007,420 @@ struct SaveRollbackTests {
         expectEqual(w.diskInvoice(target.id)?.desc, "Server description", "\(site): the next pull saves the server row")
     }
 
-    // MARK: 11. Source pin: the live snapshot is written only by the commit helpers
+    // MARK: 10b. Where the owner sees a failed save (fix round 1, R41)
 
-    /// Every write of the live snapshot (`snapshot = …`, `snapshot.payload… = …`,
-    /// a mutating call on `snapshot.payload…`, `&snapshot`) sits in `apply`
-    /// or one of the two commit helpers (`commitSettings` saves a copy and
-    /// keeps it only once saved), and `repository.save(snapshot)` only in
-    /// `commitSnapshot`, `save()` (re-saves the unchanged snapshot) and the
-    /// Square token heal's backup rotation (after its `commitSettings`). A new
-    /// in-place commit fails here.
+    /// The views that show these outcomes are not host-testable, so their
+    /// branches are pinned on the source: the Invoices list shows the bulk
+    /// result's failure before its "already paid" notice, the Payments page
+    /// never says "Square link saved." for a link that was not saved, and
+    /// every surface where the owner edits settings shows the store's
+    /// Settings save failure.
+    static func failureNoticeSources(root: URL) {
+        func source(_ file: String) -> [UInt8] {
+            let url = root.appendingPathComponent("native/TradeReadyNative/\(file)")
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                expect(false, "notice: \(file) is readable")
+                return []
+            }
+            return Array(text.utf8)
+        }
+        let invoices = source("InvoicesView.swift")
+        let bulk = functionBody(invoices, "private func runBulkSettle()")
+        let failureBranch = bulk.range(of: "if let failure = result.failure")
+        let alreadyPaid = bulk.range(of: "Nothing to settle")
+        expect(failureBranch != nil && bulk.contains("bulkNotice = failure"),
+               "notice: InvoicesView.runBulkSettle shows the bulk result's failure")
+        expect(failureBranch.map { branch in alreadyPaid.map { branch.lowerBound < $0.lowerBound } ?? true } ?? false,
+               "notice: the failure branch comes before the \"already paid\" notice")
+
+        let settingsView = source("SettingsView.swift")
+        let square = functionBody(settingsView, "private func saveSquareDraft()")
+        let notSaved = square.range(of: "case let .notSaved(")
+        let notSavedCase = notSaved.map { start -> Substring in
+            let rest = square[start.upperBound...]
+            return rest.range(of: "case ").map { rest[..<$0.lowerBound] } ?? rest
+        }
+        expect(notSavedCase.map { $0.contains("squareFeedback = (") && $0.contains(", true)") && !$0.contains("Square link saved") } ?? false,
+               "notice: saveSquareDraft shows a link that was not saved as an error, never \"Square link saved.\"")
+        expect(functionBody(settingsView, "private struct SettingsPage<Content: View>: View").contains("store.settingsSaveFailure"),
+               "notice: every Settings page (SettingsPage) shows the Settings save failure")
+        for file in ["NativeRecurringInvoicesView.swift", "NativeMileageLogView.swift"] {
+            expect(String(decoding: source(file), as: UTF8.self).contains("store.settingsSaveFailure"),
+                   "notice: \(file), which edits a setting, shows the Settings save failure")
+        }
+    }
+
+    /// The raw text of the brace-delimited body that follows `signature`
+    /// (braces counted on the sanitized source, so a brace in a string or a
+    /// comment does not count).
+    static func functionBody(_ bytes: [UInt8], _ signature: String) -> String {
+        let sanitized = sanitizedSwift(bytes)
+        let code = Array(sanitized.utf8)
+        guard let found = sanitized.range(of: signature),
+              let open = code[sanitized.utf8.distance(from: sanitized.startIndex, to: found.lowerBound)...]
+                .firstIndex(of: UInt8(ascii: "{"))
+        else { return "" }
+        var depth = 0
+        for index in open..<code.count {
+            if code[index] == UInt8(ascii: "{") { depth += 1 }
+            if code[index] == UInt8(ascii: "}") {
+                depth -= 1
+                if depth == 0 { return String(decoding: bytes[open...index], as: UTF8.self) }
+            }
+        }
+        return ""
+    }
+
+    // MARK: 11. Source pin: the live snapshot changes only through a save-first commit
+
+    /// The `apply(X)` calls exempt from rule 4 of `sourcePin`, by scope, with
+    /// the reason each one shows a snapshot that is already saved (or needs
+    /// no save).
+    static let applyAllowlist: [String: String] = [
+        "commitSnapshot": "the commit itself: projects `next`, saves it, and re-applies the previous snapshot when the save throws",
+        "load": "shows the snapshot just read from disk (nothing new to save)",
+        "applyEmptySnapshot": "shows an empty workspace (no stored data, an unreadable source, an account scrub): nothing to keep",
+        "replayVerifiedWidgetActionsIfPossible": "shows `committed`, which the widget replay coordinator saved first (NativeWidgetActionReplay.swift, `repository.save(result.snapshot)`), and reloads the saved snapshot from disk after a failed acknowledgement",
+        "importLegacyData": "shows the snapshot the legacy migration coordinator saved first (LegacyMigrationCoordinator.swift, `repository.save(adoption.snapshot)`)",
+    ]
+
+    /// Standard-library mutating methods a `snapshot…` path could be changed
+    /// through. `sourcePin` adds every `mutating func` declared under
+    /// `native/TradeReadyNative`.
+    static let standardMutators = [
+        "removeAll", "removeFirst", "removeLast", "remove", "removeValue", "removeSubrange",
+        "append", "insert", "sort", "reverse", "swapAt", "shuffle", "partition",
+        "merge", "updateValue", "formUnion", "formIntersection", "formSymmetricDifference", "subtract",
+        "popLast", "popFirst", "replaceSubrange", "reserveCapacity", "toggle", "negate",
+    ]
+
+    /// Fix round 1 (R41, Minor 1). The pin reads AppStore.swift with comments
+    /// removed and string contents blanked (interpolated code kept), and
+    /// attributes each offset to its innermost function-like scope: `func`,
+    /// `init`, `deinit`, `subscript`, a computed property and each accessor or
+    /// observer (`get`, `set`, `didSet`, `willSet`). A nested function is a
+    /// scope of its own (`outer.inner`), and the outer function resumes after
+    /// its closing brace.
+    ///
+    /// 1. Every write of the live snapshot (`snapshot = …` or a compound
+    ///    assignment, `snapshot.payload… = …` through `?`, `!` and subscripts,
+    ///    a mutating call on a `snapshot…` path, `&snapshot`, a `\.snapshot`
+    ///    key path) sits in `apply` or one of the two commit helpers
+    ///    (`commitSnapshot`; `commitSettings` saves a copy and keeps it only
+    ///    once saved).
+    /// 2. `repository.save(snapshot)` appears only in `commitSnapshot`,
+    ///    `save()` (re-saves the unchanged snapshot) and the Square token
+    ///    heal's backup rotation (after its `commitSettings`).
+    /// 3. AppStore never calls its own `save()`: `apply(next); save()` (the
+    ///    old demo-reset shape) kept `next` in memory when the save failed.
+    /// 4. Every `apply(X)` outside `applyAllowlist` directly follows
+    ///    `repository.save(X)` (only whitespace, `;` and `try` between), so a
+    ///    copy site shows only what it saved: `try apply(next); try
+    ///    repository.save(next)` and a bare `try apply(next)` both fail, and
+    ///    `apply` is never referenced without being called.
+    ///
+    /// What a lexical pin cannot close (none of these occurs today):
+    /// - a mutating method the pin does not know: one declared outside
+    ///   `native/TradeReadyNative` and missing from `standardMutators`;
+    /// - aliasing: a closure, a key path held in a variable or a pointer that
+    ///   writes through to `snapshot` from elsewhere (`&snapshot` and
+    ///   `\.snapshot` literals are caught where they are formed);
+    /// - rule 4 compares `X` as text, so `repository.save(makeNext())` then
+    ///   `apply(makeNext())` passes although the two calls may build different
+    ///   values (every copy site passes a local or a local result's property);
+    /// - a local `let`/`var snapshot` shadow is skipped only at its
+    ///   declaration: later writes to it count as live-snapshot writes (a
+    ///   false alarm, never a miss).
+    /// `snapshot` and `apply` are `private` members of AppStore, visible only
+    /// in AppStore.swift, so no other file can write the live snapshot.
     static func sourcePin(root: URL) {
         let url = root.appendingPathComponent("native/TradeReadyNative/AppStore.swift")
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             expect(false, "pin: AppStore.swift is readable")
             return
         }
-        let function = try! NSRegularExpression(
-            pattern: #"^\s*(?:@\w+\s+)*(?:(?:private|fileprivate|internal|public|static|final|override|nonisolated|mutating)\s+)*func\s+(\w+)"#
-        )
-        let path = #"(?:self\.)?snapshot(?:(?:\.[A-Za-z_]\w*|\[[^\]]*\])\??)*"#
-        let write = try! NSRegularExpression(
-            pattern: #"(?<![\w.])"# + path + #"\s*(?:=(?!=)|\+=|-=)"#
-                + #"|(?<![\w.])(?:self\.)?snapshot(?:(?:\.[A-Za-z_]\w*|\[[^\]]*\])\??)+\.(?:removeAll|removeFirst|removeLast|remove|append|insert|sort|reverse|swapAt)\b"#
-                + #"|&(?:self\.)?snapshot\b"#
-        )
-        let declaration = try! NSRegularExpression(pattern: #"\b(?:let|var)\s+snapshot\b"#)
-        let save = try! NSRegularExpression(pattern: #"repository\.save\((?:self\.)?snapshot\)"#)
-        // `apply(next); save()` (the old demo-reset shape) keeps `next` in
-        // memory when the save fails, so AppStore never calls its own
-        // `save()`; only a view's explicit re-save (Settings) does.
-        let resave = try! NSRegularExpression(pattern: #"(?<![\w.])(?:self\.)?save\(\)"#)
-        var current = "<top level>"
-        var writers: [String: Int] = [:]
-        var savers: [String: Int] = [:]
-        var resavers: [String: Int] = [:]
-        for line in text.components(separatedBy: "\n") {
-            let range = NSRange(line.startIndex..., in: line)
-            var definesFunction = false
-            if let match = function.firstMatch(in: line, range: range), let name = Range(match.range(at: 1), in: line) {
-                current = String(line[name])
-                definesFunction = true
-            }
-            let code = line.trimmingCharacters(in: .whitespaces)
-            if code.hasPrefix("//") || declaration.firstMatch(in: line, range: range) != nil { continue }
-            if write.firstMatch(in: line, range: range) != nil { writers[current, default: 0] += 1 }
-            savers[current, default: 0] += save.numberOfMatches(in: line, range: range)
-            if !definesFunction { resavers[current, default: 0] += resave.numberOfMatches(in: line, range: range) }
+        let declared = declaredMutatingMethods(under: root.appendingPathComponent("native/TradeReadyNative"))
+        expect(declared.contains("setProviderKey"), "pin: sanity: the app's mutating methods are collected")
+        let mutators = Array(Set(standardMutators).union(declared)).sorted { $0.count > $1.count }
+        let source = ScopedSource(sanitizedSwift(Array(text.utf8)))
+        let code = source.code
+        let full = NSRange(location: 0, length: code.length)
+        func matches(_ pattern: String) -> [NSTextCheckingResult] {
+            (try! NSRegularExpression(pattern: pattern)).matches(in: code as String, range: full)
         }
-        savers = savers.filter { $0.value > 0 }
-        resavers = resavers.filter { $0.value > 0 }
-        expectEqual(resavers, [:], "pin: AppStore never commits through its own save()")
+        func tally(_ pattern: String) -> [String: Int] {
+            var counts: [String: Int] = [:]
+            for match in matches(pattern) { counts[source.scope(at: match.range.location), default: 0] += 1 }
+            return counts
+        }
+
+        let unshadowed = #"(?<!\b(?:let|var)\s{1,8})(?<![\w.])"#
+        let path = #"(?:self[?!]?\.)?snapshot(?:[?!]?(?:\.[A-Za-z_]\w*|\[[^\]\n]*\]))*"#
+        let writers = tally(
+            unshadowed + path + #"(?:[?!](?=\s+=))?\s*(?:[-+*/%&|^]|&[-+*]|<<|>>)?=(?!=)"#
+                + "|" + unshadowed + path + #"[?!]?\.(?:"# + mutators.joined(separator: "|") + #")\b"#
+                + #"|(?<![&\w])&(?:self[?!]?\.)?snapshot\b"#
+                + #"|\\(?:[A-Za-z_]\w*)?\.snapshot\b"#
+        )
+        let savers = tally(#"(?<![\w.])(?:self[?!]?\.)?repository\.save\(\s*(?:self[?!]?\.)?snapshot\s*\)"#)
+        let resavers = tally(#"(?<!func )(?<![\w.])(?:self[?!]?\.)?save\(\s*\)"#)
         expectEqual(Set(writers.keys), ["apply", "commitSnapshot", "commitSettings"],
                     "pin: only apply and the commit helpers write the live snapshot (writers: \(writers))")
         expectEqual(savers, ["commitSnapshot": 1, "save": 1, "scrubLegacySquareToken": 1],
                     "pin: only commitSnapshot, save() and the Square heal's backup rotation save the live snapshot")
+        expectEqual(resavers, [:], "pin: AppStore never commits through its own save()")
+
+        // Rule 4: save first, then apply what was saved.
+        var saveFirst = 0
+        var allowlisted: [String: Int] = [:]
+        var unsaved: [String] = []
+        for call in matches(#"(?<!func )(?<![\w.])(?:self[?!]?\.)?apply\s*\("#) {
+            let scope = source.scope(at: call.range.location)
+            if applyAllowlist[scope] != nil { allowlisted[scope, default: 0] += 1; continue }
+            let argument = source.balancedArgument(openingAt: call.range.location + call.range.length - 1)
+            let words = argument.split(whereSeparator: \.isWhitespace).map { NSRegularExpression.escapedPattern(for: String($0)) }
+            let before = code.substring(to: call.range.location)
+            let saved = words.isEmpty ? nil : try! NSRegularExpression(
+                pattern: #"(?<![\w.])(?:self[?!]?\.)?repository\.save\(\s*"# + words.joined(separator: #"\s+"#)
+                    + #"\s*\)\s*;?\s*(?:try[?!]?\s+)?$"#
+            ).firstMatch(in: before, range: NSRange(location: 0, length: (before as NSString).length))
+            if saved != nil { saveFirst += 1 } else {
+                unsaved.append("\(scope) (line \(source.line(at: call.range.location))): apply(\(argument))")
+            }
+        }
+        observed("pin", "\(saveFirst) apply(X) call(s) follow repository.save(X); allowlisted: \(allowlisted.sorted { $0.key < $1.key })")
+        expectEqual(unsaved, [], "pin: every apply(X) outside the allowlist directly follows repository.save(X)")
+        expectEqual(Set(allowlisted.keys), Set(applyAllowlist.keys),
+                    "pin: every allowlisted scope still applies a snapshot (the allowlist is not stale)")
+        expect(saveFirst > 0, "pin: sanity: the save-first copy sites are found")
+        let references = matches(#"(?<!func )(?<![\w.])(?:self[?!]?\.)?apply\b(?!\s*\()"#)
+            .map { "\(source.scope(at: $0.range.location)) (line \(source.line(at: $0.range.location)))" }
+        expectEqual(references, [], "pin: apply is only ever called, never passed or stored")
+    }
+
+    /// The pin's scope attribution on a fixed probe: a nested function does
+    /// not hide the rest of its outer function (the earlier line-based pin
+    /// attributed `performJobPhotoTransfer`'s save to its nested
+    /// `ownerIsCurrent`), and
+    /// `init`, observers and accessors are scopes of their own; comments and
+    /// string contents are not code, interpolated code is.
+    static func pinScopes() {
+        let probe = #"""
+        final class Probe {
+            var value = 0 { didSet { snapshot = value } }
+            func outer() throws {
+                func inner() -> Bool { true }
+                try repository.save(next); try apply(next)
+            }
+            init() { snapshot.payload.invoices![0].paid = true }
+            var computed: Int { get { 1 } set { snapshot.payload.x = newValue } }
+            func literal() { let s = "apply(a) { \(apply(b)) }" // apply(c) {
+                /* apply(d) { */ let r = #"apply(e) { "# }
+        }
+        """#
+        let source = ScopedSource(sanitizedSwift(Array(probe.utf8)))
+        let code = source.code
+        func scope(of needle: String) -> String {
+            let range = code.range(of: needle)
+            return range.location == NSNotFound ? "<missing \(needle)>" : source.scope(at: range.location)
+        }
+        expectEqual(scope(of: "snapshot = value"), "didSet", "pin scopes: a didSet is its own scope")
+        expectEqual(scope(of: "true }"), "outer.inner", "pin scopes: a nested function is its own scope")
+        expectEqual(scope(of: "repository.save(next)"), "outer", "pin scopes: the outer function resumes after a nested function")
+        expectEqual(scope(of: "snapshot.payload.invoices!"), "init", "pin scopes: init is its own scope")
+        expectEqual(scope(of: "snapshot.payload.x"), "computed.set", "pin scopes: a setter is its own scope")
+        expectEqual(scope(of: "let r"), "literal", "pin scopes: braces in comments and strings do not open scopes")
+        expect(code.range(of: "apply(b)").location != NSNotFound, "pin scopes: interpolated code is kept")
+        expect(["apply(a)", "apply(c)", "apply(d)", "apply(e)"].allSatisfy { code.range(of: $0).location == NSNotFound },
+               "pin scopes: comments and string contents are blanked")
+    }
+
+    /// Every `mutating func` name declared in the app's Swift sources.
+    static func declaredMutatingMethods(under directory: URL) -> Set<String> {
+        let regex = try! NSRegularExpression(pattern: #"\bmutating\s+func\s+([A-Za-z_]\w*)"#)
+        var names = Set<String>()
+        let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
+        while let file = files?.nextObject() as? URL {
+            guard file.pathExtension == "swift", let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            let code = sanitizedSwift(Array(text.utf8))
+            for match in regex.matches(in: code, range: NSRange(location: 0, length: (code as NSString).length)) {
+                names.insert((code as NSString).substring(with: match.range(at: 1)))
+            }
+        }
+        return names
+    }
+
+    /// Swift source as ASCII of the same length in bytes (one UTF-16 unit
+    /// each): comments and string literal contents (plain, multiline, raw)
+    /// blanked with newlines kept, interpolated code kept, non-ASCII bytes
+    /// blanked.
+    static func sanitizedSwift(_ source: [UInt8]) -> String {
+        let n = source.count
+        var out = source.map { $0 >= 0x80 ? UInt8(ascii: " ") : $0 }
+        let newline = UInt8(ascii: "\n"), slash = UInt8(ascii: "/"), star = UInt8(ascii: "*")
+        let quote = UInt8(ascii: "\""), hash = UInt8(ascii: "#"), backslash = UInt8(ascii: "\\")
+        let open = UInt8(ascii: "("), close = UInt8(ascii: ")")
+        enum Mode { case code(parens: Int), literal(hashes: Int, multiline: Bool) }
+        var modes: [Mode] = [.code(parens: 0)]
+        func at(_ k: Int) -> UInt8 { k < n ? source[k] : 0 }
+        func blank(_ k: Int) { if k < n, source[k] != newline { out[k] = UInt8(ascii: " ") } }
+        func run(_ start: Int, _ byte: UInt8, _ count: Int) -> Bool { (0..<count).allSatisfy { at(start + $0) == byte } }
+        var i = 0
+        while i < n {
+            switch modes[modes.count - 1] {
+            case let .code(parens):
+                if at(i) == slash, at(i + 1) == slash {
+                    while i < n, source[i] != newline { blank(i); i += 1 }
+                    continue
+                }
+                if at(i) == slash, at(i + 1) == star {
+                    var depth = 0
+                    repeat {
+                        if at(i) == slash, at(i + 1) == star { depth += 1; blank(i); blank(i + 1); i += 2 }
+                        else if at(i) == star, at(i + 1) == slash { depth -= 1; blank(i); blank(i + 1); i += 2 }
+                        else { blank(i); i += 1 }
+                    } while depth > 0 && i < n
+                    continue
+                }
+                var hashes = 0
+                while at(i + hashes) == hash { hashes += 1 }
+                if at(i + hashes) == quote {
+                    let multiline = run(i + hashes, quote, 3)
+                    modes.append(.literal(hashes: hashes, multiline: multiline))
+                    i += hashes + (multiline ? 3 : 1)
+                    continue
+                }
+                if modes.count > 1 {
+                    if at(i) == open { modes[modes.count - 1] = .code(parens: parens + 1) }
+                    else if at(i) == close {
+                        if parens == 0 { modes.removeLast(); blank(i) }
+                        else { modes[modes.count - 1] = .code(parens: parens - 1) }
+                    }
+                }
+                i += 1
+            case let .literal(hashes, multiline):
+                if at(i) == backslash, run(i + 1, hash, hashes) {
+                    let next = i + 1 + hashes
+                    for k in i...next { blank(k) }
+                    if at(next) == open { modes.append(.code(parens: 0)) }
+                    i = next + 1
+                    continue
+                }
+                let closing = multiline ? 3 : 1
+                if run(i, quote, closing), run(i + closing, hash, hashes) {
+                    modes.removeLast()
+                    i += closing + hashes
+                    continue
+                }
+                blank(i)
+                i += 1
+            }
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    /// Sanitized source with the innermost function-like scope of every offset.
+    struct ScopedSource {
+        let code: NSString
+        private let scopeAt: [Int32]
+        private let names: [String]
+        private let lineStarts: [Int]
+
+        init(_ sanitized: String) {
+            let code = sanitized as NSString
+            self.code = code
+            let full = NSRange(location: 0, length: code.length)
+            struct Declaration { let offset: Int; let label: String; let isType: Bool }
+            var declarations: [Declaration] = []
+            func collect(_ pattern: String, isType: Bool = false, _ label: (NSTextCheckingResult) -> String) {
+                for match in (try! NSRegularExpression(pattern: pattern)).matches(in: sanitized, range: full) {
+                    declarations.append(Declaration(offset: match.range.location, label: label(match), isType: isType))
+                }
+            }
+            func group(_ match: NSTextCheckingResult) -> String { code.substring(with: match.range(at: 1)) }
+            collect(#"\bfunc\s+([A-Za-z_]\w*)"#, group)
+            collect(#"(?<![\w.])init\s*[?!]?\s*[(<]"#) { _ in "init" }
+            collect(#"(?<![\w.])deinit\s*\{"#) { _ in "deinit" }
+            collect(#"(?<![\w.])subscript\s*[(<]"#) { _ in "subscript" }
+            collect(#"(?<![\w.])(didSet|willSet|get|set|_read|_modify)\s*(?:\(\s*\w+\s*\))?\s*(?:async\s+)?(?:throws\s*)?\{"#, group)
+            collect(#"(?<![\w.])var\s+([A-Za-z_]\w*)\s*:[^=\n{}]*\{"#, group)
+            collect(#"\b(?:class|struct|enum|extension|actor|protocol)\s+(?!func\b|var\b|let\b)([A-Za-z_][\w.]*)"#, isType: true) {
+                "<type \(group($0))>"
+            }
+            declarations.sort { $0.offset < $1.offset }
+
+            struct Frame { let label: String?; let isType: Bool }
+            var frames: [Frame] = []
+            var names = ["<top level>"]
+            var ids = ["<top level>": Int32(0)]
+            func currentID() -> Int32 {
+                var parts: [String] = []
+                var name = "<top level>"
+                for frame in frames.reversed() {
+                    guard let label = frame.label else { continue }
+                    if frame.isType { name = label; break }
+                    parts.append(label)
+                }
+                if !parts.isEmpty { name = parts.reversed().joined(separator: ".") }
+                if let id = ids[name] { return id }
+                names.append(name)
+                ids[name] = Int32(names.count - 1)
+                return Int32(names.count - 1)
+            }
+            let bytes = Array(sanitized.utf8)
+            var scopeAt = [Int32](repeating: 0, count: bytes.count)
+            var pending: (label: String, isType: Bool, depth: Int)?
+            var next = 0
+            var depth = 0
+            var current: Int32 = 0
+            var lineStarts = [0]
+            for offset in 0..<bytes.count {
+                while next < declarations.count, declarations[next].offset <= offset {
+                    pending = (declarations[next].label, declarations[next].isType, depth)
+                    next += 1
+                }
+                switch bytes[offset] {
+                case UInt8(ascii: "("), UInt8(ascii: "["): depth += 1
+                case UInt8(ascii: ")"), UInt8(ascii: "]"): depth -= 1
+                case UInt8(ascii: "{"):
+                    if let declaration = pending, declaration.depth == depth {
+                        frames.append(Frame(label: declaration.label, isType: declaration.isType))
+                        pending = nil
+                    } else {
+                        frames.append(Frame(label: nil, isType: false))
+                    }
+                    current = currentID()
+                case UInt8(ascii: "}"):
+                    if !frames.isEmpty { frames.removeLast() }
+                    current = currentID()
+                case UInt8(ascii: "\n"): lineStarts.append(offset + 1)
+                default: break
+                }
+                scopeAt[offset] = current
+            }
+            self.scopeAt = scopeAt
+            self.names = names
+            self.lineStarts = lineStarts
+        }
+
+        func scope(at offset: Int) -> String { names[Int(scopeAt[offset])] }
+
+        func line(at offset: Int) -> Int { lineStarts.lastIndex { $0 <= offset }.map { $0 + 1 } ?? 1 }
+
+        /// The text inside the parentheses that open at `offset`.
+        func balancedArgument(openingAt offset: Int) -> String {
+            var depth = 0
+            var index = offset
+            while index < code.length {
+                let unit = code.character(at: index)
+                if unit == 0x28 { depth += 1 }
+                if unit == 0x29 {
+                    depth -= 1
+                    if depth == 0 { return code.substring(with: NSRange(location: offset + 1, length: index - offset - 1)) }
+                }
+                index += 1
+            }
+            return ""
+        }
     }
 }

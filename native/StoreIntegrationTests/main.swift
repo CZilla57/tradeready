@@ -4913,7 +4913,7 @@ struct StoreIntegrationTests {
                 seed08Owner(store, subject: "user-sq", binding: "bind-sq")
                 let queuedBefore = pendingMutations(dir.appendingPathComponent("store.json")).count
                 let result = store.setPaymentProviderKey(token, for: "square")
-                expect(result == .reject(NativeSquareProviderKeyPolicy.rejectionMessage),
+                expect(result == .rejected(NativeSquareProviderKeyPolicy.rejectionMessage),
                        "G5 a pasted Square token is rejected with the RN hint copy")
                 expect(store.settings.providerKey(for: "square").isEmpty, "G5 a rejected token never reaches the settings projection")
                 expect(persistedSquare(dir) == nil, "G5 a rejected token never reaches the persisted snapshot")
@@ -4935,13 +4935,13 @@ struct StoreIntegrationTests {
             do {
                 let (store, dir) = try seed08Store(settings: settings08(), tag: "sq-link")
                 seed08Owner(store, subject: "user-sq", binding: "bind-sq")
-                expect(store.setPaymentProviderKey(squareLink, for: "square") == .save(squareLink), "G5 a Square payment link saves")
+                expect(store.setPaymentProviderKey(squareLink, for: "square") == .saved(squareLink), "G5 a Square payment link saves")
                 expect(store.settings.providerKey(for: "square") == squareLink && persistedSquare(dir) == squareLink,
                        "G5 the saved link is projected and persisted")
                 expect(queuedSquare(settingsUpserts(dir).last) == .string(squareLink), "G5 the saved link is queued for sync")
-                expect(store.setPaymentProviderKey("   ", for: "square") == .save(""), "G5 an empty Square entry saves")
+                expect(store.setPaymentProviderKey("   ", for: "square") == .saved(""), "G5 an empty Square entry saves")
                 expect(persistedSquare(dir) == "", "G5 an empty Square entry clears the stored link")
-                expect(store.setPaymentProviderKey("johndoe", for: "venmo") == .save("johndoe")
+                expect(store.setPaymentProviderKey("johndoe", for: "venmo") == .saved("johndoe")
                            && store.settings.providerKey(for: "venmo") == "johndoe",
                        "G5 other providers keep RN's unvalidated save")
             }

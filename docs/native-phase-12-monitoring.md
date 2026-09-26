@@ -321,10 +321,11 @@ Host fixtures only, a stub link on `dry-run.invalid`, no network
    (§3) makes the failed save visible remotely. Logged as **P12-008** (charter §10, S1
    once characterized: after the next unrelated save the payment showed paid, unqueued,
    and a pull left it diverged or dropped it). **Fixed in 12.00b.2-H (2026-09-26):**
-   every live-snapshot change, these two and nine other sites included, commits through
-   `AppStore.commitSnapshot` or `commitSettings`, which keep the previous snapshot and
-   screens when the save throws, so nothing unsaved is mirrored, queued or persisted by
-   a later save; the `invoicePayment` capture still fires once. Tests:
+   every change made to the live snapshot before its save, these two and nine other
+   sites included, commits through `AppStore.commitSnapshot` or `commitSettings`, which
+   keep the previous snapshot and screens when the save throws, and copy sites save
+   first, then apply, so nothing unsaved is mirrored, queued or persisted by a later
+   save; the `invoicePayment` capture still fires once. Tests:
    `native/run-save-rollback-tests.sh` (each site, plus a source pin).
 3. **Pending age follows the last write.** A queued change's timestamp is its last edit
    (last-writer-wins), so a change edited again inside 24 hours never looks old to

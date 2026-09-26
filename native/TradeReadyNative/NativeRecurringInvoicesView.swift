@@ -57,6 +57,11 @@ struct NativeRecurringInvoicesView: View {
                     set: { store.settings.autoSendRecurringInvoicesEnabled = $0 }))
                 Text("When on, newly generated plan invoices can be emailed automatically. Each plan still opts in individually, and only the newest invoice ever sends.")
                     .font(.caption).foregroundStyle(.secondary)
+                // P12-008 review (fix round 1, R41): a setting that was not
+                // saved says so; the toggle shows the saved value.
+                if let failure = store.settingsSaveFailure {
+                    Text(failure).font(.caption).foregroundStyle(Color.tradeDangerText)
+                }
             } footer: {
                 Text("Turning this on never emails pre-existing invoices.")
             }

@@ -275,7 +275,11 @@ struct InvoicesView: View {
     private func runBulkSettle() {
         let ids = Array(selectedIDs)
         let result = store.commitBulkSettleInvoices(ids: ids)
-        if result.settled.isEmpty {
+        // P12-008 review (fix round 1, R41): a save that failed (or blocked
+        // writes) is reported as such, never as "already paid".
+        if let failure = result.failure {
+            bulkNotice = failure
+        } else if result.settled.isEmpty {
             bulkNotice = "Nothing to settle — the selected invoices are already paid."
         } else if result.skipped > 0 {
             bulkNotice = "Marked \(result.settled.count) paid. \(result.skipped) skipped (already paid)."

@@ -149,6 +149,12 @@ final class AppStore: ObservableObject {
     @Published var settings = BusinessSettings() {
         didSet { if !isApplyingProjection { mergeSettingsAndSave() } }
     }
+    /// P12-008 review (fix round 1, R41): why the last Settings edit was not
+    /// saved (writes are blocked, or the save failed), shown wherever the
+    /// owner edits settings while the fields show the saved settings. Cleared
+    /// by the next Settings edit that saves, and whenever `apply` shows a
+    /// whole snapshot (launch, reset, import, pull, account scrub, a commit).
+    @Published private(set) var settingsSaveFailure: String?
     @Published var selectedTab: AppTab = .today
     /// RN's Today `selectedDate` state (task 10.11): the week-strip/schedule
     /// anchor. Starts at launch-time "today" and only changes on explicit
@@ -792,7 +798,7 @@ final class AppStore: ObservableObject {
                 persistenceWritesBlocked = false
                 persistenceBlockReason = nil
                 persistenceBlockDetail = nil
-                seedIfMissing ? seedDemoData() : applyEmptySnapshot()
+                if seedIfMissing { seedDemoData() } else { applyEmptySnapshot() }
                 return
             }
             outcome = loaded
@@ -2029,14 +2035,21 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// A bulk settlement's result. P12-008 review (fix round 1, R41):
+    /// `failure` says why nothing was settled when the commit did not happen
+    /// (writes are blocked, or the save failed), so the Invoices list never
+    /// reports a failed save as "already paid"; nil when the run saved or
+    /// only skipped.
+    typealias BulkSettleResult = (settled: [Invoice], skipped: Int, failure: String?)
+
     /// Phase 7 bulk settlement: resolves the latest selected records and
     /// settles every applicable invoice plus its job reconciliation in ONE
     /// canonical snapshot save. Already-paid and missing records are skipped
     /// and reported, never failed. Settlement IDs are stable per
     /// (invoice, day) so a repeated run cannot double-record.
     @discardableResult
-    func commitBulkSettleInvoices(ids: [String], on date: Date = .now) -> (settled: [Invoice], skipped: Int) {
-        guard ensurePersistenceWritable() else { return ([], ids.count) }
+    func commitBulkSettleInvoices(ids: [String], on date: Date = .now) -> BulkSettleResult {
+        guard ensurePersistenceWritable() else { return ([], ids.count, Self.persistenceReadOnlyMessage) }
         let day = NativeInvoiceEditing.dayString(date)
         var invoiceRecords = snapshot.payload.invoices ?? []
         var settledCanonical: [Canonical.Invoice] = []
@@ -2060,7 +2073,7 @@ final class AppStore: ObservableObject {
                 skipped += 1
             }
         }
-        guard !settledCanonical.isEmpty else { return ([], skipped) }
+        guard !settledCanonical.isEmpty else { return ([], skipped, nil) }
         do {
             // P12-008: built on a copy and committed through `commitSnapshot`
             // (see `commitInvoicePayment`).
@@ -2096,14 +2109,14 @@ final class AppStore: ObservableObject {
             emitAnalytics(.bulkInvoicesMarkedPaid(count: settledPublished.count))
             // One owner action, one win, however many invoices it settled.
             if !settledPublished.isEmpty { onAppRatingWin?(.invoicePaid) }
-            return (settledPublished, skipped)
+            return (settledPublished, skipped, nil)
         } catch {
             migrationMessage = "Could not mark the invoices paid: \(error.localizedDescription)"
             reportInvoicePaymentFailure(
                 code: "invoice-payment/bulkMarkPaid/\(NativeSupportDiagnostics.errorCode(error))",
                 operation: "bulkMarkPaid", count: settledCanonical.count
             )
-            return ([], ids.count)
+            return ([], ids.count, Self.bulkSettleNotSavedMessage)
         }
     }
 
@@ -6793,13 +6806,17 @@ final class AppStore: ObservableObject {
     }
 
     func resetDemoData() {
-        // This explicit user action is allowed to replace an unreadable source.
+        // This explicit user action is allowed to replace an unreadable source,
+        // but only once the demo data is saved (P12-008 review, fix round 1
+        // R41): a failed reset keeps the data it could not replace, so writes
+        // stay blocked (the next save cannot overwrite the recovery source)
+        // and the undo offers still match what is on screen.
+        guard seedDemoData() else { return }
         persistenceWritesBlocked = false
         persistenceBlockReason = nil
         persistenceBlockDetail = nil
         pendingCustomerMergeUndo = nil
         pendingRecordDeleteUndo = nil
-        seedDemoData()
     }
 
     private func apply(_ value: Canonical.Snapshot) throws {
@@ -6826,6 +6843,10 @@ final class AppStore: ObservableObject {
         pricebookEntries = value.payload.pricebook ?? []
         settings = CanonicalUIAdapters.settings(from: canonicalSettings)
         isApplyingProjection = false
+        // P12-008 review (fix round 1, R41): the fields now show this
+        // snapshot's saved settings, so an earlier edit's failure (or a
+        // read-only notice a reset or import has since lifted) is stale.
+        settingsSaveFailure = nil
         if let pendingEstimateFollowUpJobID,
            !NativeEstimateFollowUp.canOpenNotification(
                 exactOwnerWorkspace: hasExactSignedInWorkspace,
@@ -6856,7 +6877,8 @@ final class AppStore: ObservableObject {
     /// The widget mirror refresh `snapshot.didSet` schedules runs on a later
     /// main-actor turn and reads the restored snapshot. A source pin
     /// (`native/SaveRollbackTests`) keeps every live-snapshot write in
-    /// `apply` and the two commit helpers.
+    /// `apply` and the two commit helpers, and every other `apply(X)` (bar a
+    /// named allowlist) directly after `repository.save(X)`.
     private func commitSnapshot(_ next: Canonical.Snapshot) throws {
         let previous = snapshot
         let previousFollowUp = pendingEstimateFollowUpJobID
@@ -6909,18 +6931,38 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// P12-008 review (fix round 1, R41): what became of a payment provider
+    /// key entry, so the Payments page never reports a save that failed.
+    enum ProviderKeySaveOutcome: Equatable {
+        /// Saved as this value (empty clears the field).
+        case saved(String)
+        /// Refused by the Square policy (a pasted token); nothing was written.
+        case rejected(String)
+        /// Valid but not saved (writes are blocked, or the save failed): the
+        /// fields show the saved settings, and this says why.
+        case notSaved(String)
+    }
+
     /// Task 11.13 fix round 2 (G5): the only Settings write path for a
     /// payment provider key. A Square value `isSquarePaymentLink` refuses (a
     /// pasted access token) is rejected and never reaches the snapshot, disk
     /// or the mutation queue; an empty Square entry clears the field; every
-    /// other provider keeps RN's unvalidated save.
+    /// other provider keeps RN's unvalidated save. P12-008 review: returns
+    /// `.notSaved` when the settings save does not happen.
     @discardableResult
-    func setPaymentProviderKey(_ entry: String, for provider: String) -> NativeSquareProviderKeyPolicy.Decision {
-        let decision = NativeSquareProviderKeyPolicy.validate(entry, provider: provider)
-        if case let .save(value) = decision {
+    func setPaymentProviderKey(_ entry: String, for provider: String) -> ProviderKeySaveOutcome {
+        switch NativeSquareProviderKeyPolicy.validate(entry, provider: provider) {
+        case let .reject(message):
+            return .rejected(message)
+        case let .save(value):
+            isApplyingProjection = true
             settings.setProviderKey(value, for: provider)
+            isApplyingProjection = false
+            guard mergeSettingsAndSave() else {
+                return .notSaved(settingsSaveFailure ?? Self.settingsNotSavedMessage)
+            }
+            return .saved(value)
         }
-        return decision
     }
 
     /// Task 11.13 fix round 2 (G4/G5): the port of RN `scrubLegacySquareToken`
@@ -6957,10 +6999,15 @@ final class AppStore: ObservableObject {
         return true
     }
 
-    private func mergeSettingsAndSave() {
+    /// Saves the published settings and returns whether they were saved.
+    /// P12-008 review (fix round 1, R41): when they were not, the fields go
+    /// back to the saved settings and `settingsSaveFailure` says why.
+    @discardableResult
+    private func mergeSettingsAndSave() -> Bool {
         guard ensurePersistenceWritable() else {
             if snapshot.payload.settings != nil { showSavedSettings() }
-            return
+            settingsSaveFailure = Self.persistenceReadOnlyMessage
+            return false
         }
         // Fix round 2 (G5): a Square value that is not a payment link never
         // persists, whatever path wrote it (`setPaymentProviderKey` rejects it
@@ -6978,7 +7025,9 @@ final class AppStore: ObservableObject {
             } else { merged = try CanonicalUIAdapters.canonical(from: settings) }
         } catch {
             migrationMessage = "Could not update settings: \(error.localizedDescription)"
-            return
+            settingsSaveFailure = Self.settingsNotSavedMessage
+            showSavedSettings()
+            return false
         }
         do {
             try commitSettings(merged)
@@ -6987,11 +7036,21 @@ final class AppStore: ObservableObject {
             // screen goes back to the saved settings (as when writes are
             // blocked above) instead of showing an edit that was not saved.
             migrationMessage = "Could not update settings: \(error.localizedDescription)"
+            settingsSaveFailure = Self.settingsNotSavedMessage
             showSavedSettings()
-            return
+            return false
         }
+        settingsSaveFailure = nil
         enqueueSettingsUpsert(merged)
+        return true
     }
+
+    /// P12-008 review (fix round 1, R41): the owner-facing copy for a Settings
+    /// edit or a bulk Mark paid whose save failed.
+    private static let settingsNotSavedMessage =
+        "Could not save this change. Your saved settings are shown."
+    private static let bulkSettleNotSavedMessage =
+        "Could not mark the invoices paid. Nothing was changed and existing data was preserved."
 
     private static let persistenceReadOnlyMessage =
         "Local data is read-only so its recovery source can be preserved."
@@ -8760,7 +8819,9 @@ final class AppStore: ObservableObject {
         else { values.append(value) }
     }
 
-    private func seedDemoData() {
+    /// Returns whether the demo data was saved.
+    @discardableResult
+    private func seedDemoData() -> Bool {
         do {
             let calendar = Calendar.current
             let tom = Customer(name: "Tom Nguyen", email: "tom.nguyen@gmail.com", phone: "(555) 874-9900", address: "88 Oak Lane, Austin TX 78745", notes: "Dog in backyard — keep gate closed.")
@@ -8786,7 +8847,11 @@ final class AppStore: ObservableObject {
                 expenses: try [Expense(merchant: "Ferguson", amount: 126.42, date: .now, category: .materials, notes: "Faucet supplies")].map { try CanonicalUIAdapters.canonical(from: $0) })
             // P12-008: a failed save keeps the data the owner already had.
             try commitSnapshot(Canonical.Snapshot(payload: payload))
-        } catch { migrationMessage = "Could not create demo data: \(error.localizedDescription)" }
+            return true
+        } catch {
+            migrationMessage = "Could not create demo data: \(error.localizedDescription)"
+            return false
+        }
     }
 
     /// Returns only error kind and whitelisted schema keys. Dynamic dictionary

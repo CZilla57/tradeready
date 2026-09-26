@@ -154,6 +154,11 @@ struct NativeMileageLogView: View {
             Text(NativeMileageLog.rateDisclosure)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            // P12-008 review (fix round 1, R41): a rate that was not saved
+            // says so; the field shows the saved rate.
+            if let failure = store.settingsSaveFailure {
+                Text(failure).font(.caption).foregroundStyle(Color.tradeDangerText)
+            }
         }
     }
 
