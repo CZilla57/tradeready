@@ -444,6 +444,15 @@ final class AppStore: ObservableObject {
     /// gate as pending, but their body runs only once a retry can read the
     /// record: it never wipes the current owner's data on a guess.
     private var boundaryStepsUnverified: Set<Canonical.SnapshotRepository.BoundaryStep> = []
+    /// Phase 12 (12.00b.2-G fix round 1, P12-006): a permanent deletion whose
+    /// account-scrub marker could not be written, so none of its steps ran.
+    /// It is also recorded in the Keychain (`recordAccountDeletionScrub`).
+    /// Retry, scene activation and the launch write the marker from it first
+    /// and run the whole `.all` scrub; until then the deletion stays blocked.
+    private var accountDeletionPendingWithoutMarker = false
+    /// That Keychain record could not be read at launch; scene activation
+    /// re-reads it.
+    private var accountDeletionRecordUnverified = false
     /// Final review 1b: bounded, payload-free count of failed boundary AI-key
     /// wipes (no key material, no account).
     private(set) var aiProviderKeyWipeFailureCount = 0
@@ -628,12 +637,20 @@ final class AppStore: ObservableObject {
         for step in Canonical.SnapshotRepository.BoundaryStep.allCases {
             loadBoundaryStepRecord(step)
         }
+        // Phase 12 (12.00b.2-G fix round 1, P12-006): a deletion whose marker
+        // could not be written was recorded in the Keychain instead.
+        loadAccountDeletionRecord()
         var accountScrubRecoveryError: Error?
         do {
+            // P12-006: its marker first (a failure blocks the launch below,
+            // with nothing loaded), then the ordinary `.all` recovery.
+            if accountDeletionPendingWithoutMarker {
+                try repository.beginAccountScrub(scope: .all)
+            }
             // Phase 12 (12.00b.2-G, Task 9b review M2): a marker that cannot
             // be read throws here, before any step runs. Its scope is unknown,
             // so the scrub stays pending (blocked) and is retried later.
-            if let pendingScope = try repository.pendingAccountScrubScope {
+            if let pendingScope = try pendingAccountScrubScope() {
                 try scrubWidgetAccountState()
                 switch pendingScope {
                 case .live: try repository.removeLiveAccountData()
@@ -647,6 +664,7 @@ final class AppStore: ObservableObject {
                     try eraseLegacySourcesForDeletedAccount()
                 }
                 try repository.finishAccountScrub()
+                accountDeletionPendingWithoutMarker = false
                 NativeGoogleSignInProvider.clearLocalCredential()
                 // Task 11.05: widgets were reloaded right after the App Group
                 // wipe inside `scrubWidgetAccountState()`.
@@ -734,7 +752,7 @@ final class AppStore: ObservableObject {
             persistenceWritesBlocked = true
             persistenceBlockReason = .accountScrub
             persistenceBlockDetail = nil
-            markAccountScrubBlocked(scope: try? repository.pendingAccountScrubScope)
+            markAccountScrubBlocked(scope: try? pendingAccountScrubScope())
             migrationMessage = accountScrubBlockedScope == .all
                 ? "A previous account deletion could not be safely completed. Local data remains hidden until cleanup succeeds."
                 : "A previous sign-out could not be safely completed. Local data remains hidden until cleanup succeeds."
@@ -4941,6 +4959,13 @@ final class AppStore: ObservableObject {
             }
         }
 
+        try await finishAccountDeletionLocally()
+    }
+
+    /// `deleteAccount` once the server has confirmed the deletion: the local
+    /// `.all` scrub and the teardown. Its caller holds the account-operation
+    /// flag; a host-test seam drives it (the server call cannot run there).
+    private func finishAccountDeletionLocally() async throws {
         // Task 11.08 (§9.4): the server deletion is authoritative, so the
         // deleted account's analytics identity resets now, before the local
         // scrub, the RevenueCat logout await or any later event can run. The
@@ -4951,6 +4976,11 @@ final class AppStore: ObservableObject {
         do {
             try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)
         } catch {
+            // Phase 12 (12.00b.2-G fix round 1, P12-006): no marker means no
+            // step ran, and nothing on disk says the deletion is pending.
+            if !repository.isAccountScrubPending {
+                recordAccountDeletionPendingWithoutMarker()
+            }
             // The server-side deletion is already authoritative. Hide all
             // in-memory account state until cleanup can be retried locally.
             persistenceWritesBlocked = true
@@ -4967,7 +4997,10 @@ final class AppStore: ObservableObject {
     }
 
     func retryAccountScrub() {
-        guard repository.isAccountScrubPending else {
+        // Phase 12 (12.00b.2-G fix round 1, P12-006): a deletion recorded
+        // without its marker is pending too; it used to take this branch and
+        // unblock without scrubbing.
+        guard repository.isAccountScrubPending || accountDeletionPendingWithoutMarker else {
             isAccountScrubBlocked = false
             accountScrubBlockedScope = nil
             // Final review 1a/1b: a pending switch/recovery boundary step.
@@ -4978,12 +5011,18 @@ final class AppStore: ObservableObject {
         // Phase 12 (12.00b.2-G fix round 1, R31): the pending scrub is a
         // boundary for a suspended identity check too.
         accountBoundaryGeneration &+= 1
-        var scope: Canonical.SnapshotRepository.AccountScrubScope?
+        var scope: Canonical.SnapshotRepository.AccountScrubScope? = accountDeletionPendingWithoutMarker ? .all : nil
         do {
+            // P12-006: the marker first, so a step that fails below leaves it
+            // pending as usual (and a marker that still cannot be written
+            // leaves the deletion as it was).
+            if accountDeletionPendingWithoutMarker {
+                try repository.beginAccountScrub(scope: .all)
+            }
             // Phase 12 (12.00b.2-G, Task 9b review M2): read once. A marker
             // that cannot be read throws before any step runs, so an unknown
             // scope is never finished as a sign-out; the scrub stays pending.
-            let pendingScope = try repository.pendingAccountScrubScope ?? .live
+            let pendingScope = try pendingAccountScrubScope() ?? .live
             scope = pendingScope
             try scrubWidgetAccountState()
             switch pendingScope {
@@ -5000,6 +5039,7 @@ final class AppStore: ObservableObject {
                 try eraseLegacySourcesForDeletedAccount()
             }
             try repository.finishAccountScrub()
+            accountDeletionPendingWithoutMarker = false
             isAccountScrubBlocked = false
             accountScrubBlockedScope = nil
             // Phase 12 (L286.4): a switch/recovery step still pending (the
@@ -5015,6 +5055,50 @@ final class AppStore: ObservableObject {
                 ? "Account deletion cleanup is still incomplete. No local account data was opened."
                 : "Sign-out cleanup is still incomplete. No local account data was opened."
         }
+    }
+
+    /// The pending account scrub's scope: `.all` for a deletion recorded
+    /// without its marker (P12-006), whatever a marker says; otherwise the
+    /// marker's (nil when none is pending; an unreadable one throws, M2).
+    private func pendingAccountScrubScope() throws -> Canonical.SnapshotRepository.AccountScrubScope? {
+        if accountDeletionPendingWithoutMarker { return .all }
+        return try repository.pendingAccountScrubScope
+    }
+
+    /// Phase 12 (12.00b.2-G fix round 1, P12-006): the deletion's second
+    /// record, as `recordBoundaryStepPending` does for a boundary step. If the
+    /// Keychain write fails too, it is held in memory only: Retry and scene
+    /// activation still finish it, a relaunch first does not (counted, and
+    /// logged with a stage code).
+    private func recordAccountDeletionPendingWithoutMarker() {
+        accountDeletionPendingWithoutMarker = true
+        // R31: a boundary for a suspended identity check, as the scrub's own
+        // marker is (`performLocalAccountScrub`).
+        accountBoundaryGeneration &+= 1
+        do { try secureSettingsStore.recordAccountDeletionScrub() } catch {
+            countAccountDeletionRecordFailure(stage: "record-write")
+        }
+    }
+
+    /// Phase 12 (12.00b.2-G fix round 1, P12-006): reads the deletion's
+    /// Keychain record. An unreadable record is not taken as pending (every
+    /// launch reads it, and the snapshot it guards is unreadable in the same
+    /// before-first-unlock window); scene activation re-reads it.
+    private func loadAccountDeletionRecord() {
+        do {
+            if try secureSettingsStore.isAccountDeletionScrubRecorded() {
+                accountDeletionPendingWithoutMarker = true
+            }
+            accountDeletionRecordUnverified = false
+        } catch {
+            accountDeletionRecordUnverified = true
+            countAccountDeletionRecordFailure(stage: "record-read")
+        }
+    }
+
+    private func countAccountDeletionRecordFailure(stage: String) {
+        boundaryStepRecordFailureCount = min(Self.boundaryStepFailureCap, boundaryStepRecordFailureCount + 1)
+        print("TradeReadyAccountBoundary stage=\(stage) step=account-deletion-scrub")
     }
 
     /// Phase 12 (12.00b.2-G, Task 9b review M3): the blocked cleanup screen,
@@ -5037,7 +5121,10 @@ final class AppStore: ObservableObject {
     /// leaves them, as the launch does. Never while a sign-out or deletion is
     /// running: that call owns the marker and reports its own result.
     func retryAccountBoundaryCleanupOnActivation() {
-        if repository.isAccountScrubPending {
+        // Phase 12 (12.00b.2-G fix round 1, P12-006): a deletion record that
+        // was unreadable at launch is re-read; a recorded one is retried here.
+        if accountDeletionRecordUnverified { loadAccountDeletionRecord() }
+        if repository.isAccountScrubPending || accountDeletionPendingWithoutMarker {
             guard !authenticationOperationInFlight else { return }
             retryAccountScrub()
             return
@@ -11368,6 +11455,18 @@ extension AppStore {
     /// network call cannot run here). Production never calls this.
     func testRunAccountDeletionLocalScrub() throws {
         try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)
+    }
+
+    /// Test-only (Phase 12 12.00b.2-G fix round 1, P12-006): `deleteAccount`
+    /// after its server call (which cannot run here): the real local half,
+    /// its failure handling included, under the same account-operation flag.
+    /// Production never calls this.
+    func testFinishAccountDeletionLocally() async throws {
+        guard !authenticationOperationInFlight else { throw NativeAccountDeletionError.rejected }
+        authenticationOperationInFlight = true
+        defer { authenticationOperationInFlight = false }
+        defer { widgetMirrorSuspendedForAccountBoundary = false }
+        try await finishAccountDeletionLocally()
     }
 
     /// Test-only (Phase 12, G6-Q1): binds a verified outcome through the real

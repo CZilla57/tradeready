@@ -846,10 +846,14 @@ func testSources() {
     }
     expect(sourceBody(appStore, "private func applyRecoverySignedOutState(")?.contains("scrubRejectedChangesForAccountBoundary()") == true,
            "source: the recovery sign-out scrubs the store")
+    // Phase 12 12.00b.2-G fix round 1 (P12-006): the local half is
+    // `finishAccountDeletionLocally`, called after the server deletion.
     if let deletion = sourceBody(appStore, "func deleteAccount("),
        let server = deletion.range(of: "try await client.deleteAccount("),
-       let scrub = deletion.range(of: "try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)") {
-        expect(server.upperBound < scrub.lowerBound, "source: deleteAccount runs the local .all scrub after the server deletion")
+       let local = deletion.range(of: "try await finishAccountDeletionLocally()"),
+       sourceBody(appStore, "private func finishAccountDeletionLocally(")?
+           .contains("try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .all)") == true {
+        expect(server.upperBound < local.lowerBound, "source: deleteAccount runs the local .all scrub after the server deletion")
     } else {
         expect(false, "source: deleteAccount runs the local .all scrub")
     }

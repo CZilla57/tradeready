@@ -25,6 +25,8 @@ import Foundation
 // R31 (fix round 1): an identity check that an account boundary overtook
 // (sign-out, deletion, Retry, activation, account switch) drops its result
 // and the identity it cached (section 6).
+// P12-006 (fix round 1): a deletion whose scrub marker cannot be written
+// stays pending, and Retry, activation or the launch finish it (section 7).
 // Run with TZ=America/Phoenix.
 
 // MARK: - Harness
@@ -1113,6 +1115,116 @@ func testIdentityCheckOvertakenByAccountBoundary() async throws {
     }
 }
 
+// MARK: - 7. A deletion whose scrub marker cannot be written
+
+/// Makes the app directory read-only, so no new file can be created there
+/// (the scrub marker's write fails, as on a full volume), or writable again.
+func setWritable(_ directory: URL, _ writable: Bool) throws {
+    try FileManager.default.setAttributes([.posixPermissions: writable ? 0o755 : 0o555], ofItemAtPath: directory.path)
+}
+
+/// P12-006 (R32, Task 9c review Minor 4, 12.00b.2-G fix round 1): the server
+/// has deleted A, but the local scrub cannot write its marker, so it stops
+/// before any step. The deletion must stay pending anyway, and Retry, scene
+/// activation or the next launch must run the whole `.all` scrub, eraser
+/// included; until then no launch loads A's data, and B never gets it.
+/// Characterized before the fix (all three variants): Retry and scene
+/// activation took the not-pending branch and cleared the blocked screen
+/// without scrubbing; the snapshot, journal, legacy backups, A's session and
+/// provider key and the RN sources all stayed; the relaunch loaded the
+/// deleted account's records; B's sign-in met the account-mismatch gate,
+/// B's next launch adopted the workspace (no RN owner keys) and B's
+/// initial-sync backfill queued A's record for B's push. Nothing was
+/// re-imported from the RN sources: the snapshot and the completed journal
+/// were still there.
+@MainActor
+func testDeletionWithUnwritableMarker(finish: String) async throws {
+    let label = "deletion, marker unwritable (\(finish))"
+    resetHostKeychain()
+    let device = try FixtureDevice("deletion-unwritable-\(finish)", ownerKeys: false)
+    defer {
+        try? setWritable(device.appDirectory, true)
+        device.cleanUp()
+    }
+    let first = try migrateFirstLaunch(device, label)
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+
+    // `deleteAccount` after the server has confirmed the deletion.
+    try setWritable(device.appDirectory, false)
+    var threw = false
+    do { try await first.testFinishAccountDeletionLocally() } catch { threw = true }
+    expect(threw && first.isAccountScrubBlocked && first.accountScrubBlockedScope == .all,
+           "\(label): sanity: the local deletion fails and blocks with the deletion wording")
+    expect(!exists(device.scrubMarkerURL) && exists(device.storeURL),
+           "\(label): sanity: no scrub marker could be written, and nothing was removed")
+    expectEqual(first.customers.map(\.id), [], "\(label): the deleted account's records are hidden")
+    expect(((try? HostInMemoryKeychain.shared.read(key: "account-deletion-scrub-pending.v1")) ?? nil) != nil,
+           "\(label) [P12-006]: the deletion is recorded in the Keychain instead")
+
+    // Still unwritable: Retry keeps it pending and removes nothing.
+    first.retryAccountScrub()
+    expect(first.isAccountScrubBlocked && first.accountScrubBlockedScope == .all,
+           "\(label) [P12-006]: Retry keeps the deletion pending while its marker cannot be written")
+    expectEqual(first.customers.map(\.id), [], "\(label) [P12-006]: …and the records hidden")
+
+    var finished: AppStore = first
+    switch finish {
+    case "retry":
+        try setWritable(device.appDirectory, true)
+        first.retryAccountScrub()
+    case "activation":
+        try setWritable(device.appDirectory, true)
+        first.retryAccountBoundaryCleanupOnActivation()
+    default:
+        // Relaunch while the marker still cannot be written: blocked, and
+        // neither the deleted records nor a migration are loaded.
+        let blocked = try device.launch()
+        expect(blocked.isAccountScrubBlocked && blocked.accountScrubBlockedScope == .all,
+               "\(label) [P12-006]: a relaunch keeps the deletion pending (blocked, deletion wording)")
+        expectEqual(blocked.customers.map(\.id), [], "\(label) [P12-006]: a relaunch loads none of the deleted account's records")
+        expect(blocked.launchMigrationNotice == nil, "\(label) [P12-006]: a relaunch runs no migration")
+        try setWritable(device.appDirectory, true)
+        finished = try device.launch()
+    }
+
+    // The whole `.all` scrub ran, eraser included.
+    expect(!finished.isAccountScrubBlocked && !exists(device.scrubMarkerURL),
+           "\(label) [P12-006]: the deletion finishes (got blocked \(finished.isAccountScrubBlocked))")
+    expect(!exists(device.storeURL) && !exists(device.journal.fileURL) && !exists(device.legacyBackupsURL),
+           "\(label) [P12-006]: the snapshot, the migration journal and the legacy backups are removed")
+    expect(nativeSession() == nil && nativeProviderKey() == nil, "\(label) [P12-006]: the native Keychain is cleared")
+    expect(!exists(device.asyncStorageDirectory) && device.legacySecureStore.legacyItemCount == 0,
+           "\(label) [P12-006]: the RN sources are erased")
+    expect(((try? HostInMemoryKeychain.shared.read(key: "account-deletion-scrub-pending.v1")) ?? nil) == nil,
+           "\(label) [P12-006]: the deletion's Keychain record goes with the scrub")
+    if finish != "relaunch" {
+        expectEqual(finished.authenticationGateState, .signedOut, "\(label) [P12-006]: the store ends signed out")
+    }
+
+    // A later launch and B: nothing of A's.
+    let later = try device.launch()
+    expectEqual(later.customers.map(\.id), [], "\(label) [P12-006]: a later launch loads none of the deleted account's records")
+    expect(later.launchMigrationNotice == nil, "\(label): a later launch re-imports nothing from the RN sources")
+    let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
+    later.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
+    expect(isConfigurationPreflight(later.authenticationGateState),
+           "\(label) [P12-006]: B's sign-in heads for B's initial sync (got \(later.authenticationGateState))")
+    if isConfigurationPreflight(later.authenticationGateState) {
+        later.testMarkInitialSyncCompleted(subject: "user-b")
+    }
+    let bLaunch = try device.launch()
+    if let bLaunchOutcome = try await device.launchOutcome() {
+        bLaunch.testApplyLaunchIdentityOutcome(bLaunchOutcome)
+        if isConfigurationPreflight(bLaunch.authenticationGateState) {
+            bLaunch.testMarkInitialSyncCompleted(subject: "user-b")
+        }
+    }
+    expectEqual(bLaunch.customers.map(\.id), [], "\(label) [P12-006]: B's launch adopts none of A's records")
+    expect(!device.queuedRecordIDs.contains("rn-a-1"),
+           "\(label) [P12-006]: B's initial sync queues none of A's records for B's push (queued: \(device.queuedRecordIDs))")
+}
+
 // MARK: - 4. Source pins
 
 @MainActor
@@ -1270,6 +1382,9 @@ struct LegacyReimportTests {
             try await testRetriedSignOutClearsPendingBookingWork()
             try await testUnreadableDeletionMarkerFailsClosed()
             try await testIdentityCheckOvertakenByAccountBoundary()
+            for finish in ["retry", "activation", "relaunch"] {
+                try await testDeletionWithUnwritableMarker(finish: finish)
+            }
         } catch {
             failures += 1
             print("FAIL: threw \(error)")

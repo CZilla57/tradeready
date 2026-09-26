@@ -398,7 +398,8 @@ struct NativeKeychainSecureSettingsStore: NativeSecureSettingsStoring {
     /// Permanent deletion removes the entire native Keychain service, including
     /// inactive session generations and the device-local binding secret.
     /// Phase 12 (review M7): another backend removes the account-boundary step
-    /// records by name as well, as the whole-service delete does.
+    /// records by name as well, as the whole-service delete does (and, since
+    /// 12.00b.2-G fix round 1, P12-006, the deletion's own record).
     func clearAllValues() throws {
         if let keychain = backend as? NativeKeychainBackend {
             try keychain.removeAllValues()
@@ -406,6 +407,7 @@ struct NativeKeychainSecureSettingsStore: NativeSecureSettingsStoring {
             try clearAccountValues()
             try backend.remove(key: "auxiliary-account-binding-key.v1")
             try removeAllBoundaryStepRecords()
+            try removeAccountDeletionScrubRecord()
         }
     }
 

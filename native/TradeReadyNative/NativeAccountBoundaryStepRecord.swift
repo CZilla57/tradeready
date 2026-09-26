@@ -47,3 +47,37 @@ extension NativeKeychainSecureSettingsStore {
         }
     }
 }
+
+// Phase 12 (12.00b.2-G fix round 1, P12-006): the same second record for a
+// permanent deletion whose account-scrub marker could not be written, so none
+// of its steps ran. It keeps the deletion pending across a relaunch: the
+// launch writes the marker from it and runs the whole `.all` scrub. It holds
+// only a schema version. A sign-out's `clearAccountValues` leaves it; the
+// `.all` scrub's `clearAllValues` removes it with everything else, once the
+// scrub's own marker is on disk.
+extension NativeKeychainSecureSettingsStore {
+    static let accountDeletionScrubRecordAccount = "account-deletion-scrub-pending.v1"
+
+    /// Whether the deletion is recorded. A Keychain read error throws; the
+    /// caller must treat that as "unknown", never as "not recorded".
+    func isAccountDeletionScrubRecorded() throws -> Bool {
+        try backend.read(key: Self.accountDeletionScrubRecordAccount) != nil
+    }
+
+    /// A verified upsert of the record.
+    func recordAccountDeletionScrub() throws {
+        let data = Data(#"{"schemaVersion":1}"#.utf8)
+        try backend.upsert(data, key: Self.accountDeletionScrubRecordAccount)
+        guard try backend.read(key: Self.accountDeletionScrubRecordAccount) == data else {
+            throw NativeSecureSettingsStoreError.verificationFailed(key: Self.accountDeletionScrubRecordAccount)
+        }
+    }
+
+    /// A verified remove of the record (absent is success).
+    func removeAccountDeletionScrubRecord() throws {
+        try backend.remove(key: Self.accountDeletionScrubRecordAccount)
+        guard try backend.read(key: Self.accountDeletionScrubRecordAccount) == nil else {
+            throw NativeSecureSettingsStoreError.verificationFailed(key: Self.accountDeletionScrubRecordAccount)
+        }
+    }
+}

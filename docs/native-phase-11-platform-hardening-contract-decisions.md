@@ -2538,6 +2538,23 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
      cache describes the session stored now.
    - Test: `native/run-legacy-reimport-tests.sh` (section 6; the background and
      sync-refresh checks need a configured Supabase build, so they are source pins).
+   **Amended by Phase 12 12.00b.2-G fix round 1 (2026-09-25; defect P12-006):**
+   - A deletion whose local scrub could not write its marker ran no step and left
+     nothing on disk saying it was pending. The Retry button and the activation retry
+     then unblocked without scrubbing, and the next launch loaded the deleted account's
+     data, which the next account could adopt.
+   - Such a deletion is now also recorded in the Keychain
+     (`account-deletion-scrub-pending.v1`, schema version only) and held in memory, and
+     it advances the boundary generation. Retry, scene activation and the launch write
+     the marker from it first and run the whole `.all` scrub, eraser included. Until
+     then the deletion stays blocked with nothing loaded. The `.all` scrub's
+     `clearAllValues` removes the record on every backend.
+   - A record that cannot be read at launch does not block the launch (the snapshot it
+     guards is unreadable in the same before-first-unlock window); scene activation
+     re-reads it. If the Keychain write fails as well, only the in-memory copy remains:
+     Retry and activation still finish it, a relaunch first does not. Both failures are
+     counted and logged by stage code.
+   - Test: `native/run-legacy-reimport-tests.sh` (section 7).
 5. the silent AI-key wipe failure (final review 1b): **fixed** in `5f2f397`. The wipe
    tries every kind under a durable `ai-key-wipe-pending` marker and counts and logs a
    failure without key material; while pending the coach reads no client key and no key
