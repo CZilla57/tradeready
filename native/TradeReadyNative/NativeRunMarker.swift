@@ -7,9 +7,11 @@ import Foundation
 /// `Application Support/TradeReadyNative/native-run-marker.json`, beside
 /// `store.json`: `{"run":<n>,"schemaVersion":1}`. Every production launch adds
 /// one to `run` after the store's launch work, whatever that work found (a
-/// blocked or signed-out launch is still a native run). The native directory
-/// itself is permanent, so it can only say that native has ever run; this
-/// counter tells one native run from the next.
+/// blocked or signed-out launch is still a native run). A missing or
+/// unreadable marker starts at a random run instead (fix round 3), so a
+/// restart cannot land on a value the Expo build already recorded. The native
+/// directory itself is permanent, so it can only say that native has ever
+/// run; this counter tells one native run from the next.
 ///
 /// It holds no account data, identifier or time, and it is not a snapshot
 /// write (the Task 11b commit rule does not apply). No account boundary
@@ -44,14 +46,18 @@ struct NativeRunMarkerStore {
         return marker
     }
 
-    /// Records one more native run. A missing or unreadable marker starts
-    /// again at 1 (the Expo build compares for inequality, §5.3 E-1).
+    /// Records one more native run: the previous run plus one, wrapping at
+    /// `Int.max` to 1. A missing or unreadable marker starts at a random run
+    /// in 1...Int32.max, never a fixed value: the Expo build compares for
+    /// inequality (playbook §5.3 E-1), so a restart that repeated the run it
+    /// last recorded would hide this native run from it.
     @discardableResult
     func recordRun() throws -> NativeRunMarker {
-        let previous = load()?.run ?? 0
+        let run = load().map { $0.run == Int.max ? 1 : $0.run + 1 }
+            ?? Int.random(in: 1...Int(Int32.max))
         let marker = NativeRunMarker(
             schemaVersion: NativeRunMarker.currentSchemaVersion,
-            run: previous == Int.max ? 1 : previous + 1
+            run: run
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

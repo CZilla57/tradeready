@@ -799,10 +799,20 @@ struct RollbackReadinessTests {
         let storeURL = dir.appendingPathComponent("store.json")
         let markerURL = dir.appendingPathComponent("native-run-marker.json")
         let markers = NativeRunMarkerStore(directory: dir)
+        // Fix round 3 (Minor 4): a temporary App Group suite and lock, so the
+        // sign-out below never reaches the host's real suite or lock.
+        let groupSuite = "com.tradeready.rollback-readiness.tests.marker.\(UUID().uuidString)"
+        let groupDefaults = UserDefaults(suiteName: groupSuite)
+        defer { groupDefaults?.removePersistentDomain(forName: groupSuite) }
         func launch(recordsNativeRun: Bool = true) -> AppStore {
             AppStore(
                 fileURL: storeURL,
                 seedIfMissing: false,
+                appGroupAccountScrubber: NativeAppGroupAccountScrubber(
+                    suiteName: groupSuite,
+                    defaults: groupDefaults,
+                    lockFile: dir.appendingPathComponent("app-group.lock")
+                ),
                 secureSettingsStore: hostTestSecureSettingsStore(),
                 recordsNativeRun: recordsNativeRun
             )
@@ -819,12 +829,17 @@ struct RollbackReadinessTests {
         expectEqual(markers.load(), nil, "M: a store that does not record runs (host tests) writes nothing")
 
         var store = launch()
-        expectEqual(markers.load(), NativeRunMarker(schemaVersion: 1, run: 1), "M: the first launch writes run 1")
+        // Fix round 3 (Minor 3): a missing marker starts at a random run in
+        // 1...Int32.max, so a restart cannot land on a value the Expo build
+        // recorded; every later launch adds one.
+        let first = markers.load()?.run ?? 0
+        expect(first > 0 && first <= Int(Int32.max), "M: the first launch writes a run in 1...Int32.max (\(first))")
+        expectEqual(markers.load()?.schemaVersion, 1, "M: …with schema 1")
         expectEqual(markerKeys(), ["run", "schemaVersion"], "M: it holds a run counter and its schema only")
         expect(!FileManager.default.fileExists(atPath: storeURL.path), "M: recording the run writes no snapshot")
 
         store = launch()
-        expectEqual(markers.load()?.run, 2, "M: the next launch advances it")
+        expectEqual(markers.load()?.run, first + 1, "M: the next launch advances it (previous + 1)")
 
         // Sign-out (the `.live` scrub) leaves it alone.
         try? NativeOnboardingStore(snapshotURL: storeURL).save(NativeOnboardingDocument(
@@ -835,33 +850,59 @@ struct RollbackReadinessTests {
                                           binding: String(repeating: "b", count: 64))
         expect(store.upsert(Customer(name: "Dune Glass", email: "dune@example.test")), "M: sanity: a signed-in save")
         expect(FileManager.default.fileExists(atPath: storeURL.path), "M: sanity: the workspace is on disk")
+        let groupKey = NativeAppGroupAccountScrubber.accountKeys.first ?? "widgetSnapshot"
+        groupDefaults?.set("synthetic", forKey: groupKey)
         do { try await store.signOut(revokeRemote: false) } catch { expect(false, "M: signOut threw \(error)") }
         expect(!FileManager.default.fileExists(atPath: storeURL.path), "M: sanity: the sign-out removed store.json")
-        expectEqual(markers.load()?.run, 2, "M: the sign-out does not touch it")
+        expect(groupDefaults?.object(forKey: groupKey) == nil,
+               "M: the sign-out scrubbed the test's temporary App Group suite, not the host's (fix round 3)")
+        expectEqual(markers.load()?.run, first + 1, "M: the sign-out does not touch it")
         try Canonical.SnapshotRepository(primaryURL: storeURL).removeLiveAccountData()
-        expectEqual(markers.load()?.run, 2, "M: the `.live` scrub does not touch it")
+        expectEqual(markers.load()?.run, first + 1, "M: the `.live` scrub does not touch it")
 
         // A signed-out launch is a native run too.
         store = launch()
-        expectEqual(markers.load()?.run, 3, "M: a signed-out launch advances it")
+        expectEqual(markers.load()?.run, first + 2, "M: a signed-out launch advances it")
 
         // Decision (R45a): `.all` keeps it, so the counter never repeats.
         try Canonical.SnapshotRepository(primaryURL: storeURL).removeAllAccountData()
-        expectEqual(markers.load()?.run, 3, "M: the `.all` scrub keeps it")
+        expectEqual(markers.load()?.run, first + 2, "M: the `.all` scrub keeps it")
         store = launch()
-        expectEqual(markers.load()?.run, 4, "M: …and the next launch continues from it")
+        expectEqual(markers.load()?.run, first + 3, "M: …and the next launch continues from it")
 
         // A launch whose snapshot cannot be read (writes blocked) still runs.
         try Data("{not a snapshot".utf8).write(to: storeURL)
         store = launch()
         expect(store.rollbackReadiness().blockers.contains(.writesBlocked), "M: sanity: this launch blocked writes")
-        expectEqual(markers.load()?.run, 5, "M: a blocked launch advances it")
+        expectEqual(markers.load()?.run, first + 4, "M: a blocked launch advances it")
         expectEqual(try? Data(contentsOf: storeURL), Data("{not a snapshot".utf8), "M: …and leaves the snapshot alone")
 
-        // An unreadable marker starts again at 1 (E-1 compares for inequality).
-        try Data("{torn".utf8).write(to: markerURL)
+        // Fix round 3 (Minor 3): an unreadable marker restarts at a random
+        // run, never the value it replaced (the Expo build compares for
+        // inequality, so a repeat would hide a native run). The torn file
+        // below held run 1, the value a fixed restart would write.
+        try Data(#"{"run":1,"schem"#.utf8).write(to: markerURL)
         _ = launch()
-        expectEqual(markers.load()?.run, 1, "M: an unreadable marker is replaced, starting at 1")
+        let restarted = markers.load()?.run ?? 0
+        expect(restarted > 0 && restarted <= Int(Int32.max), "M: a torn marker is replaced with a run in 1...Int32.max (\(restarted))")
+        expect(restarted != 1, "M: …that is not the value the torn marker held")
+        _ = launch()
+        expectEqual(markers.load()?.run, restarted + 1, "M: …and the next launch adds one")
+
+        // Two installs that never had a marker do not start at the same run.
+        let freshA = dir.appendingPathComponent("fresh-a", isDirectory: true)
+        let freshB = dir.appendingPathComponent("fresh-b", isDirectory: true)
+        let runA = (try? NativeRunMarkerStore(directory: freshA).recordRun().run) ?? 0
+        let runB = (try? NativeRunMarkerStore(directory: freshB).recordRun().run) ?? 0
+        expect(runA > 0 && runB > 0, "M: a missing marker starts above 0")
+        expect(runA != runB, "M: a missing marker starts at a random run, not a fixed one (\(runA), \(runB))")
+
+        // The counter wraps at Int.max to 1 rather than overflowing.
+        let wrapDir = dir.appendingPathComponent("wrap", isDirectory: true)
+        try FileManager.default.createDirectory(at: wrapDir, withIntermediateDirectories: true)
+        try JSONEncoder().encode(NativeRunMarker(schemaVersion: 1, run: Int.max))
+            .write(to: wrapDir.appendingPathComponent(NativeRunMarker.filename))
+        expectEqual(try? NativeRunMarkerStore(directory: wrapDir).recordRun().run, 1, "M: Int.max wraps to 1")
         _ = store
     }
 
