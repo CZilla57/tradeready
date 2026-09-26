@@ -307,8 +307,9 @@ drained before a rollback advisory; 12.06 reports them as not drainable (§6).
 ### 5.4 G6 — retention of the RN source files and legacy backups
 
 **Policy (provisional): keep, never delete, until a future release series removes the
-legacy migration code** (plan §1, SC4). It covers live accounts only: a permanent account
-deletion erases the RN source files (item 5, G6-Q1 resolved 2026-09-25). It agrees with
+legacy migration code** (plan §1, SC4). A permanent account deletion ends it for the whole
+install: the deletion erases the RN source files on the device, whichever account the RN
+build last held (item 5, G6-Q1 resolved 2026-09-25). It agrees with
 12.06 step 1(d) and Phase 0 rollback step 4 ("do not delete native migration journals or
 legacy AsyncStorage backups"), and the Expo rollback build can still read the files it
 reads today.
@@ -354,8 +355,11 @@ reads today.
    the account-mismatch gate, and B's launch activation adopted A's re-imported workspace
    when the RN data had no owner keys, so B's initial sync would queue A's records under B.
    **Rule:** after a permanent account deletion nothing from that account is re-imported.
-   The retention above applies to live accounts only; a deleted account has nothing to
-   roll back to. **Fix (option a):** the deletion (`.all`) scrub ends by erasing what the
+   The retention above ends at a permanent deletion, and the erase is install-wide, not
+   per account: the RN source files hold whichever account the RN build last had. If A
+   signed out and B then deletes B's account on the same device, A's RN-era files go too;
+   A's synced data stays in A's cloud account, but that device no longer has A's RN-era
+   rollback source. **Fix (option a):** the deletion (`.all`) scrub ends by erasing what the
    importer reads from the RN app: every AsyncStorage candidate directory, the Documents
    photo directories and the legacy Expo SecureStore services (`NativeLegacySourceEraser`,
    `N/LegacyMigrationCoordinator.swift`); every scrub already wipes the App Group values.
@@ -636,10 +640,11 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 | L223.e | IPAD-MT-3: Stage Manager's first frame may shift column geometry | S3 | Open | device row IPAD-MT-3 |
 | L249.e | iOS 17/18 destructive text and the "On my way" hit-test are unverified | S3 | Open | device rows A11B-FR1-1/2 |
 
-### New in Phase 12 (3)
+### New in Phase 12 (4)
 
 | ID | Item | Sev | Found (date, source) | Handling | Status |
 |---|---|---|---|---|---|
 | P12-001 | Permanent account deletion left the React Native source files (AsyncStorage, Documents photos, legacy SecureStore items), so the next launch re-imported the deleted account: its records, owner marker, legacy session and provider key. Account B's sign-in then met the account-mismatch gate, or B's launch adopted A's data when the RN data had no owner keys (§5.4 item 5, G6-Q1) | **S1** | Open @`1bb701c` (reproduced 2026-09-25, 12.00b.2-F host test `native/run-legacy-reimport-tests.sh`) | 12.00b.2-F | Fixed — 12.00b.2-F (host) (`fix(native): phase 12.00b.2 - deleted account's legacy data is never re-imported (P12-001)`); device row P12-B2F-1 |
 | P12-002 | Phase 11 docs (runsheet OI-3 row; `native-phase-11-performance.md` §1.2 scenario B) stated the 429 push backoff as the poor-network test harness's 30 s/60 s values, not the app's real exponential backoff (5 s base, doubling, 300 s cap; `N/NativeSyncCoordinator.swift:140-141,388`) | S3 | 2026-09-25, Task 2 12.00 doc batch | doc batch | Closed — 12.00 doc batch (this commit) |
 | P12-003 | On a migrated device, sign-out (the `.live` scrub) removed the native snapshot and kept the completed migration journal (rightly: the journal stops the next account re-importing the RN data), but nothing recorded why the snapshot was gone. The next launch read that as a lost migrated snapshot (`missingMigratedSnapshot`): a failed-migration notice, local writes blocked, "Try again" the same, and the next sign-in, as either account, stopped at `preflight/local-recovery/missing-migrated-snapshot` (§2 Migration S1 example; TH-2). The scrub now records that it cleared the workspace; a snapshot lost with no scrub still blocks | **S1** | 2026-09-25, Task 9b characterization | 12.00b.2-G | Fixed — 12.00b.2-G (host) (`fix(native): phase 12.00b.2 - sign-out on a migrated device relaunches cleanly (P12-003)`); device row P12-B2G-1 |
+| P12-004 | A sign-out or deletion whose scrub failed and was finished by "Try cleanup again" (`retryAccountScrub`) left the previous account's pending schedule/booking work (booking and portal link mirrors, with their link tokens) on the device; the launch recovery and the first attempt cleared it. No leak: each item carries its owner's exact binding and every send, apply and recovery path acts only on the signed-in account's binding, so the next account could neither send nor apply it. The three paths now clear one shared list of stores | S3 | 2026-09-25, Task 9b characterization | 12.00b.2-G | Fixed — 12.00b.2-G (host) (`fix(native): phase 12.00b.2 - every account-scrub path clears the same stores (P12-004)`) |

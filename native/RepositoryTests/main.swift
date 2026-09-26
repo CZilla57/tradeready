@@ -290,7 +290,7 @@ struct RepositoryTests {
         )
         try scrubRepository.beginAccountScrub()
         expect(scrubRepository.isAccountScrubPending
-               && scrubRepository.pendingAccountScrubScope == .live,
+               && (try? scrubRepository.pendingAccountScrubScope) == .live,
                "account scrub publishes its crash-recovery marker first")
         expect(!scrubRepository.isLiveWorkspaceClearedByAccountScrub,
                "P12-003: sanity: no scrub-cleared record before the removal")
@@ -342,7 +342,7 @@ struct RepositoryTests {
             )
         }
         try deletionRepository.beginAccountScrub(scope: .all)
-        expect(deletionRepository.pendingAccountScrubScope == .all,
+        expect((try? deletionRepository.pendingAccountScrubScope) == .all,
                "permanent deletion survives interruption without storing an account identifier")
         try deletionRepository.removeAllAccountData()
         expect(!FileManager.default.fileExists(atPath: deletionLegacy.path)
@@ -352,6 +352,34 @@ struct RepositoryTests {
         expect(!deletionRepository.isLiveWorkspaceClearedByAccountScrub,
                "P12-003: permanent deletion leaves no scrub-cleared record (its journal is gone too)")
         try deletionRepository.finishAccountScrub()
+
+        // Phase 12 (12.00b.2-G, Task 9b review M2): a marker that exists but
+        // cannot be read or decoded throws (its scope is unknown); the
+        // content-free Phase 3 marker still reads as a sign-out.
+        func scopeResult(_ repository: Canonical.SnapshotRepository) -> String {
+            do { return (try repository.pendingAccountScrubScope)?.rawValue ?? "none" }
+            catch { return "threw \(error)" }
+        }
+        let markerPrimary = root.appendingPathComponent("Marker/store.json")
+        let markerRepository = Canonical.SnapshotRepository(primaryURL: markerPrimary)
+        expect(scopeResult(markerRepository) == "none", "M2: no marker reads as nothing pending")
+        try markerRepository.beginAccountScrub(scope: .all)
+        expect(scopeResult(markerRepository) == "all", "M2: a deletion marker reads as .all")
+        let markerPath = markerRepository.accountScrubMarkerURL.path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: markerPath)
+        expect(scopeResult(markerRepository) == "threw unreadable",
+               "M2: an unreadable marker throws instead of reading as a sign-out (got \(scopeResult(markerRepository)))")
+        expect(markerRepository.isAccountScrubPending, "M2: …and stays pending")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: markerPath)
+        for bytes in ["{not-json", #"{"schemaVersion":1,"scope":"future"}"#] {
+            try Data(bytes.utf8).write(to: markerRepository.accountScrubMarkerURL, options: .atomic)
+            expect(scopeResult(markerRepository) == "threw undecodable",
+                   "M2: an undecodable marker throws (got \(scopeResult(markerRepository)))")
+        }
+        try Data().write(to: markerRepository.accountScrubMarkerURL, options: .atomic)
+        expect(scopeResult(markerRepository) == "live", "M2: the content-free Phase 3 marker still reads as a sign-out")
+        let markerError = String(describing: Canonical.SnapshotRepository.AccountScrubMarkerError.unreadable)
+        expect(!markerError.contains("/"), "M2: the marker error names no path")
 
         if failures == 0 { print("PASS: snapshot repository and migration journal tests") }
         else { print("FAILED: \(failures) repository test(s)"); exit(1) }

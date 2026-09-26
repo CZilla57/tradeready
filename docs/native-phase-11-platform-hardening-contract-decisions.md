@@ -2497,6 +2497,19 @@ one a disposition; its fix wave is logged in the plan §7 "Final review fix wave
    - Deletion's `clearAllValues` removes the step records on any backend (review M7).
    - Tests: `run-ai-provider-key` (the triple failure, then a relaunch; owner-only
      reads; activation; the post-scrub retry; deletion).
+   **Amended by Phase 12 12.00b.2-G (2026-09-25; defect P12-004 and the Task 9b review
+   M2, M3):**
+   - The launch recovery, "Try cleanup again" (`retryAccountScrub`) and the first
+     attempt of a sign-out or deletion clear one shared list of stores. Retry used to
+     skip the pending schedule/booking work. That was not a leak: each item carries its
+     owner's exact binding, so the next account could neither send nor apply it (S3).
+   - A scrub marker that exists but cannot be read (before first unlock, say) or
+     decoded keeps the scrub pending and blocked, and none of it runs. It used to read as
+     a sign-out, which skipped a deletion's legacy-source erase and cleared its marker.
+   - Scene activation also retries a pending account scrub, with the same gates, unless
+     a sign-out or deletion is running. The blocked screen says "Account deletion cleanup
+     paused" for a deletion and "Sign-out cleanup paused" otherwise.
+   - Test: `native/run-legacy-reimport-tests.sh`.
 5. the silent AI-key wipe failure (final review 1b): **fixed** in `5f2f397`. The wipe
    tries every kind under a durable `ai-key-wipe-pending` marker and counts and logs a
    failure without key material; while pending the coach reads no client key and no key

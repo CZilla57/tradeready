@@ -175,6 +175,11 @@ final class AppStore: ObservableObject {
     @Published private(set) var launchMigrationNotice: LegacyLaunchMigrationNotice?
     @Published private(set) var isLegacyMigrationBlocked = false
     @Published private(set) var isAccountScrubBlocked = false
+    /// Phase 12 (12.00b.2-G, Task 9b review M3): what the blocked cleanup is
+    /// finishing, so the blocked screen says "account deletion" for a
+    /// deletion (`.all`). Nil when nothing is blocked or the marker cannot be
+    /// read (the sign-out wording).
+    @Published private(set) var accountScrubBlockedScope: Canonical.SnapshotRepository.AccountScrubScope?
     /// Phase 12 (L286.4): a switch/recovery boundary step (widget wipe, AI-key
     /// wipe) is still pending. Drives the non-blocking "Try cleanup again"
     /// banner; `retryAccountScrub` runs the pending steps.
@@ -617,25 +622,17 @@ final class AppStore: ObservableObject {
             loadBoundaryStepRecord(step)
         }
         var accountScrubRecoveryError: Error?
-        if let pendingScope = repository.pendingAccountScrubScope {
-            do {
+        do {
+            // Phase 12 (12.00b.2-G, Task 9b review M2): a marker that cannot
+            // be read throws here, before any step runs. Its scope is unknown,
+            // so the scrub stays pending (blocked) and is retried later.
+            if let pendingScope = try repository.pendingAccountScrubScope {
                 try scrubWidgetAccountState()
                 switch pendingScope {
                 case .live: try repository.removeLiveAccountData()
                 case .all: try repository.removeAllAccountData()
                 }
-                try mutationQueue.removeAll()
-                // Phase 12 (12.00b.1): refused changes are this account's queued writes too.
-                try rejectedChangeStore.removeAll()
-                try syncBackfill.removeAll()
-                try syncCursorStore.removeAll()
-                try customerDuplicateDismissalStore.removeAll()
-                try reviewRequestStore.removeAll()
-                try reminderPromptStore.removeAll()
-                try insightMuteStore.removeAll()
-                try setupChecklistStore.removeAll()
-                try removeImportHistory()
-                try pendingScheduleBookingWorkStore().removeAll()
+                try removeAccountScrubStores()
                 switch pendingScope {
                 case .live: try secureSettingsStore.clearAccountValues()
                 case .all:
@@ -646,9 +643,9 @@ final class AppStore: ObservableObject {
                 NativeGoogleSignInProvider.clearLocalCredential()
                 // Task 11.05: widgets were reloaded right after the App Group
                 // wipe inside `scrubWidgetAccountState()`.
-            } catch {
-                accountScrubRecoveryError = error
             }
+        } catch {
+            accountScrubRecoveryError = error
         }
         if accountScrubRecoveryError == nil {
             // Final review 1a/1b: a boundary step left pending by an earlier
@@ -730,8 +727,10 @@ final class AppStore: ObservableObject {
             persistenceWritesBlocked = true
             persistenceBlockReason = .accountScrub
             persistenceBlockDetail = nil
-            isAccountScrubBlocked = true
-            migrationMessage = "A previous sign-out could not be safely completed. Local data remains hidden until cleanup succeeds."
+            markAccountScrubBlocked(scope: try? repository.pendingAccountScrubScope)
+            migrationMessage = accountScrubBlockedScope == .all
+                ? "A previous account deletion could not be safely completed. Local data remains hidden until cleanup succeeds."
+                : "A previous sign-out could not be safely completed. Local data remains hidden until cleanup succeeds."
         }
         applyLaunchMigrationState(
             outcome: launchOutcome,
@@ -4829,7 +4828,12 @@ final class AppStore: ObservableObject {
         do {
             try performLocalAccountScrub(sessionStore: secureSettingsStore, scope: .live)
         } catch {
-            isAccountScrubBlocked = repository.isAccountScrubPending
+            if repository.isAccountScrubPending {
+                markAccountScrubBlocked(scope: try? repository.pendingAccountScrubScope)
+            } else {
+                isAccountScrubBlocked = false
+                accountScrubBlockedScope = nil
+            }
             throw NativeAccountSignOutError.localScrubFailed
         }
 
@@ -4897,7 +4901,7 @@ final class AppStore: ObservableObject {
             persistenceWritesBlocked = true
             persistenceBlockReason = .accountScrub
             persistenceBlockDetail = nil
-            isAccountScrubBlocked = true
+            markAccountScrubBlocked(scope: .all)
             applyEmptySnapshot()
             throw NativeAccountSignOutError.localScrubFailed
         }
@@ -4910,29 +4914,28 @@ final class AppStore: ObservableObject {
     func retryAccountScrub() {
         guard repository.isAccountScrubPending else {
             isAccountScrubBlocked = false
+            accountScrubBlockedScope = nil
             // Final review 1a/1b: a pending switch/recovery boundary step.
             retryPendingBoundarySteps()
             scheduleWidgetMirrorRefresh()
             return
         }
+        var scope: Canonical.SnapshotRepository.AccountScrubScope?
         do {
+            // Phase 12 (12.00b.2-G, Task 9b review M2): read once. A marker
+            // that cannot be read throws before any step runs, so an unknown
+            // scope is never finished as a sign-out; the scrub stays pending.
+            let pendingScope = try repository.pendingAccountScrubScope ?? .live
+            scope = pendingScope
             try scrubWidgetAccountState()
-            switch repository.pendingAccountScrubScope ?? .live {
+            switch pendingScope {
             case .live: try repository.removeLiveAccountData()
             case .all: try repository.removeAllAccountData()
             }
-            try mutationQueue.removeAll()
-            // Phase 12 (12.00b.1): refused changes are this account's queued writes too.
-            try rejectedChangeStore.removeAll()
-            try syncBackfill.removeAll()
-            try syncCursorStore.removeAll()
-            try customerDuplicateDismissalStore.removeAll()
-            try reviewRequestStore.removeAll()
-            try reminderPromptStore.removeAll()
-            try insightMuteStore.removeAll()
-            try setupChecklistStore.removeAll()
-            try removeImportHistory()
-            switch repository.pendingAccountScrubScope ?? .live {
+            // Phase 12 (12.00b.2-G, P12-004): the shared list, which now
+            // includes the pending schedule/booking work this path skipped.
+            try removeAccountScrubStores()
+            switch pendingScope {
             case .live: try secureSettingsStore.clearAccountValues()
             case .all:
                 try secureSettingsStore.clearAllValues()
@@ -4940,6 +4943,7 @@ final class AppStore: ObservableObject {
             }
             try repository.finishAccountScrub()
             isAccountScrubBlocked = false
+            accountScrubBlockedScope = nil
             // Phase 12 (L286.4): a switch/recovery step still pending (the
             // AI-key wipe) is retried with the scrub, not left for a sign-in.
             retryPendingBoundarySteps()
@@ -4948,9 +4952,18 @@ final class AppStore: ObservableObject {
             // Task 11.05: widgets were reloaded right after the App Group
             // wipe inside `scrubWidgetAccountState()`.
         } catch {
-            isAccountScrubBlocked = true
-            migrationMessage = "Sign-out cleanup is still incomplete. No local account data was opened."
+            markAccountScrubBlocked(scope: scope)
+            migrationMessage = scope == .all
+                ? "Account deletion cleanup is still incomplete. No local account data was opened."
+                : "Sign-out cleanup is still incomplete. No local account data was opened."
         }
+    }
+
+    /// Phase 12 (12.00b.2-G, Task 9b review M3): the blocked cleanup screen,
+    /// with the scope it is finishing (nil reads as a sign-out).
+    private func markAccountScrubBlocked(scope: Canonical.SnapshotRepository.AccountScrubScope?) {
+        isAccountScrubBlocked = true
+        accountScrubBlockedScope = scope
     }
 
     /// Phase 12 (review M1): every scene activation retries the pending
@@ -4958,7 +4971,19 @@ final class AppStore: ObservableObject {
     /// (for example before first unlock) is re-read, so the owner's gates
     /// reopen without a tap, a sign-in or a relaunch; a pending step is
     /// re-run (it is idempotent). Nothing runs when nothing is pending.
+    ///
+    /// Phase 12 (12.00b.2-G, Task 9b review M3): a pending account scrub (a
+    /// sign-out or deletion that a locked launch could not finish) is retried
+    /// here too, through the same `retryAccountScrub` as the "Try cleanup
+    /// again" button; a successful one retries the steps itself, a failed one
+    /// leaves them, as the launch does. Never while a sign-out or deletion is
+    /// running: that call owns the marker and reports its own result.
     func retryAccountBoundaryCleanupOnActivation() {
+        if repository.isAccountScrubPending {
+            guard !authenticationOperationInFlight else { return }
+            retryAccountScrub()
+            return
+        }
         retryPendingBoundarySteps()
     }
 
@@ -4974,6 +4999,7 @@ final class AppStore: ObservableObject {
         // registration time).
         derivedStatePublisher.reset()
         isAccountScrubBlocked = false
+        accountScrubBlockedScope = nil
         persistenceWritesBlocked = false
         persistenceBlockReason = nil
         persistenceBlockDetail = nil
@@ -5150,16 +5176,13 @@ final class AppStore: ObservableObject {
         try legacySourceEraser?.erase()
     }
 
-    private func performLocalAccountScrub(
-        sessionStore: NativeKeychainSecureSettingsStore,
-        scope: Canonical.SnapshotRepository.AccountScrubScope
-    ) throws {
-        try repository.beginAccountScrub(scope: scope)
-        try scrubWidgetAccountState()
-        switch scope {
-        case .live: try repository.removeLiveAccountData()
-        case .all: try repository.removeAllAccountData()
-        }
+    /// Phase 12 (12.00b.2-G, P12-004): the account-owned stores every account
+    /// scrub clears, in one list for all three paths (`performLocalAccountScrub`,
+    /// `retryAccountScrub` and the launch recovery), so a store added later
+    /// cannot be missed by one of them. It runs after the snapshot removal and
+    /// before the Keychain step, under the scrub marker: a failure leaves the
+    /// scrub pending, and the next launch or Retry runs the whole list again.
+    private func removeAccountScrubStores() throws {
         // Pending local changes belong to the account being scrubbed. Removing
         // the queue before the scrub marker is cleared means a failure here
         // leaves the marker pending so the next launch retries, and no other
@@ -5182,6 +5205,19 @@ final class AppStore: ObservableObject {
         // reschedule proofs) belongs to the scrubbed account and can never be
         // inherited by the next one.
         try pendingScheduleBookingWorkStore().removeAll()
+    }
+
+    private func performLocalAccountScrub(
+        sessionStore: NativeKeychainSecureSettingsStore,
+        scope: Canonical.SnapshotRepository.AccountScrubScope
+    ) throws {
+        try repository.beginAccountScrub(scope: scope)
+        try scrubWidgetAccountState()
+        switch scope {
+        case .live: try repository.removeLiveAccountData()
+        case .all: try repository.removeAllAccountData()
+        }
+        try removeAccountScrubStores()
         switch scope {
         case .live: try sessionStore.clearAccountValues()
         case .all:

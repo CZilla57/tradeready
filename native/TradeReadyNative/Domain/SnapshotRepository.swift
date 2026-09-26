@@ -57,6 +57,14 @@ extension Canonical {
             case corruptPrimaryNoUsableBackup(primary: Error, backup: Error?)
         }
 
+        /// Phase 12 (12.00b.2-G, Task 9b review M2): a scrub marker that exists
+        /// but cannot be read (for example before first unlock) or decoded
+        /// (a scope this build does not know). Codes only.
+        enum AccountScrubMarkerError: Error, Equatable {
+            case unreadable
+            case undecodable
+        }
+
         /// Phase 12.00b.2-E fix round 1 (L267.a, Important 1 & 2): the outcome
         /// of raising a copied `LegacyBackups/` file's protection class, so a
         /// caller (and a host test) can observe the failure mode instead of a
@@ -120,13 +128,23 @@ extension Canonical {
             fileManager.fileExists(atPath: accountScrubMarkerURL.path)
         }
 
+        /// The pending scrub's scope, or nil when none is pending.
+        ///
+        /// Phase 12 (12.00b.2-G, Task 9b review M2): a marker that cannot be
+        /// read or decoded throws instead of reading as `.live`. Finishing an
+        /// unknown scope as a sign-out would skip a deletion's erase and clear
+        /// its marker (P12-001), so callers keep the scrub pending and retry.
         var pendingAccountScrubScope: AccountScrubScope? {
-            guard isAccountScrubPending else { return nil }
-            guard let data = try? Data(contentsOf: accountScrubMarkerURL), !data.isEmpty else {
+            get throws {
+                guard isAccountScrubPending else { return nil }
+                let data: Data
+                do { data = try Data(contentsOf: accountScrubMarkerURL) }
+                catch { throw AccountScrubMarkerError.unreadable }
                 // Compatibility with the initial content-free Phase 3 marker.
-                return .live
+                guard !data.isEmpty else { return .live }
+                do { return try JSONDecoder().decode(AccountScrubMarker.self, from: data).scope }
+                catch { throw AccountScrubMarkerError.undecodable }
             }
-            return (try? JSONDecoder().decode(AccountScrubMarker.self, from: data).scope) ?? .live
         }
 
         /// Phase 12 (12.00b.2-G, P12-003): an account scrub removed the live

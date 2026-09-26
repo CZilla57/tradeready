@@ -821,8 +821,16 @@ func testSources() {
     let scrubs = appStore.components(separatedBy: "scrubRejectedChangesForAccountBoundary()").count - 1
     expect(wipes >= 5, "source: sanity: the AI-key wipe call sites are found")
     expectEqual(scrubs, wipes, "source: every switch/recovery boundary that wipes AI keys also scrubs the rejected store")
-    let fullScrubRemovals = appStore.components(separatedBy: "try rejectedChangeStore.removeAll()").count - 1
-    expect(fullScrubRemovals >= 4, "source: the full scrub, its retry, launch recovery and the boundary step remove the store")
+    // Phase 12 (12.00b.2-G, P12-004): the full scrub, its retry and launch
+    // recovery clear one shared list of stores, so the removal is written
+    // there once instead of three times.
+    let sharedScrubStores = sourceBody(appStore, "private func removeAccountScrubStores(") ?? ""
+    expect(sharedScrubStores.contains("try rejectedChangeStore.removeAll()"),
+           "source: the shared account-scrub list removes the store")
+    expectEqual(appStore.components(separatedBy: "try removeAccountScrubStores()").count - 1, 3,
+                "source: the full scrub, its retry and launch recovery all run the shared list")
+    let boundaryScrub = sourceBody(appStore, "private func scrubRejectedChangesForAccountBoundary(") ?? ""
+    expect(boundaryScrub.contains("try rejectedChangeStore.removeAll()"), "source: the boundary step removes the store")
 
     // Review fix round 1 (M6): the exits no host test can drive end in a path
     // one does. `updateRecoveredPassword` needs a configured Supabase client;

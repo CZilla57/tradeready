@@ -13,7 +13,10 @@ import Foundation
 // relaunches on the same files. Nothing here reads or writes the real
 // Keychain, App Group, Documents or network.
 // Phase 12 (12.00b.2-G, P12-003): the launch after a sign-out on a migrated
-// device is an ordinary signed-out launch (section 2).
+// device is an ordinary signed-out launch (section 2). P12-004 and the Task 9b
+// review items M2 and M3: every scrub path clears the same stores, an
+// unreadable scrub marker fails closed, and scene activation retries a
+// pending scrub (sections 1 and 5).
 // Run with TZ=America/Phoenix.
 
 // MARK: - Harness
@@ -440,7 +443,7 @@ func testPendingDeletionFinishedAtLaunch() throws {
 @MainActor
 func testEraseFailureKeepsDeletionPending() async throws {
     let label = "erase failure"
-    for retry in ["relaunch", "retry"] {
+    for retry in ["relaunch", "retry", "activation"] {
         resetHostKeychain()
         let device = try FixtureDevice("erase-fail-\(retry)", ownerKeys: false)
         defer { device.cleanUp() }
@@ -452,7 +455,7 @@ func testEraseFailureKeepsDeletionPending() async throws {
         do { try first.testRunAccountDeletionLocalScrub() } catch { scrubThrew = true }
         expect(scrubThrew, "\(label) (\(retry)): the scrub reports the failed erase")
         expect(nativeSession() == nil, "\(label) (\(retry)): the deletion's Keychain wipe ran before the erase failed")
-        expectEqual(Canonical.SnapshotRepository(primaryURL: device.storeURL).pendingAccountScrubScope, .all,
+        expectEqual(try? Canonical.SnapshotRepository(primaryURL: device.storeURL).pendingAccountScrubScope, .all,
                     "\(label) (\(retry)): the deletion scrub stays pending")
         expectEqual(device.legacySecureStore.legacyItemCount, 2, "\(label) (\(retry)): sanity: the RN SecureStore items remain")
 
@@ -462,16 +465,26 @@ func testEraseFailureKeepsDeletionPending() async throws {
         expect(!exists(device.journal.fileURL), "\(label) (\(retry)): the blocked relaunch runs no migration")
         expect(nativeSession() == nil, "\(label) (\(retry)): the blocked relaunch publishes no legacy session")
         expect(exists(marker), "\(label) (\(retry)): the deletion is still pending")
+        // Task 9b review M3: the blocked screen names a deletion as one.
+        expectEqual(blocked.accountScrubBlockedScope, .all, "\(label) (\(retry)) [M3]: the blocked launch knows it is finishing a deletion")
+        expect(blocked.migrationMessage?.contains("account deletion") == true,
+               "\(label) (\(retry)) [M3]: its message says account deletion (got \(blocked.migrationMessage ?? "nil"))")
 
         device.legacySecureStore.failRemove = false
         let finished: AppStore
         if retry == "relaunch" {
             finished = try device.launch()
-        } else {
+        } else if retry == "retry" {
             blocked.retryAccountScrub()
+            finished = blocked
+        } else {
+            // 12.00b.2-G (Task 9b review M3): the next scene activation, with
+            // no tap, as after a locked background launch.
+            blocked.retryAccountBoundaryCleanupOnActivation()
             finished = blocked
         }
         expect(!finished.isAccountScrubBlocked && !exists(marker), "\(label) (\(retry)): the deletion finishes")
+        expect(finished.accountScrubBlockedScope == nil, "\(label) (\(retry)) [M3]: nothing is left blocked")
         expectEqual(device.legacySecureStore.legacyItemCount, 0, "\(label) (\(retry)): the RN SecureStore items are erased")
         expectEqual(finished.customers.map(\.id), [], "\(label) (\(retry)): nothing is imported")
 
@@ -696,7 +709,7 @@ func testSaveEndsTheScrubClearedState() async throws {
 /// launch after an interrupted sign-out is never blocked as a lost snapshot.
 @MainActor
 func testInterruptedSignOutRelaunchesCleanly() async throws {
-    for stage in ["marker only", "snapshot removed", "launch scrub failed"] {
+    for stage in ["marker only", "snapshot removed", "launch scrub failed", "launch scrub failed, activation"] {
         let label = "interrupted sign-out (\(stage))"
         resetHostKeychain()
         let device = try FixtureDevice("interrupted-\(stage.replacingOccurrences(of: " ", with: "-"))", ownerKeys: false)
@@ -706,7 +719,7 @@ func testInterruptedSignOutRelaunchesCleanly() async throws {
         try repository.beginAccountScrub(scope: .live)
         if stage != "marker only" { try repository.removeLiveAccountData() }
 
-        if stage == "launch scrub failed" {
+        if stage.hasPrefix("launch scrub failed") {
             try device.group.blockLock()
             let blocked = try device.launch()
             expect(blocked.isAccountScrubBlocked, "\(label): sanity: the launch's scrub fails and blocks")
@@ -714,8 +727,13 @@ func testInterruptedSignOutRelaunchesCleanly() async throws {
                    "\(label): it is blocked as the scrub, not as a lost snapshot")
             expect(exists(device.scrubMarkerURL), "\(label): the sign-out stays pending")
             try device.group.unblockLock()
-            blocked.retryAccountScrub()
-            expect(!blocked.isAccountScrubBlocked && !exists(device.scrubMarkerURL), "\(label): Retry finishes the sign-out")
+            if stage.hasSuffix("activation") {
+                // Task 9b review M3: the next scene activation retries it.
+                blocked.retryAccountBoundaryCleanupOnActivation()
+            } else {
+                blocked.retryAccountScrub()
+            }
+            expect(!blocked.isAccountScrubBlocked && !exists(device.scrubMarkerURL), "\(label): the retry finishes the sign-out")
             expect(!blocked.isLegacyMigrationBlocked && blocked.launchMigrationNotice == nil,
                    "\(label) [P12-003]: Retry leaves the app signed out and usable")
         }
@@ -795,6 +813,106 @@ func testWorkspaceRetainingExits() async throws {
     }
 }
 
+// MARK: - 5. Every scrub path, and an unreadable scrub marker
+
+/// P12-004 (12.00b.2-G): a sign-out whose scrub fails and is finished by
+/// Retry clears A's pending schedule/booking work (booking and portal link
+/// mirrors with their tokens), as the launch recovery and the first attempt
+/// do. Characterized before the fix: Retry left A's items on the device,
+/// but B could not send or apply them. Every item carries A's exact
+/// binding, and B's recovery acts only on B's.
+@MainActor
+func testRetriedSignOutClearsPendingBookingWork() async throws {
+    let label = "retried sign-out"
+    resetHostKeychain()
+    let device = try FixtureDevice("retry-booking-work", ownerKeys: false)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    let aOutcome = try await device.signInOutcome(sessionA, subject: "user-a")
+    first.testBindInteractiveOwner(aOutcome, email: "a@example.invalid")
+    let bindingA = aOutcome.verifiedAccountBinding
+    let work = first.pendingScheduleBookingWorkStore()
+    try work.stage(.init(
+        kind: .bookingMirror(token: "fixture-booking-token-a", enabled: true, revision: 1, operationId: "op-a-1"),
+        ownerBinding: bindingA
+    ))
+    try work.stage(.init(
+        kind: .portalMirror(customerId: "rn-a-1", token: "fixture-portal-token-a", enabled: true, operationId: "op-a-2"),
+        ownerBinding: bindingA
+    ))
+    expectEqual(work.load().count, 2, "\(label): sanity: A has two pending items")
+
+    try device.group.blockLock()
+    var threw = false
+    do { try await first.signOut(revokeRemote: false) } catch { threw = true }
+    expect(threw && first.isAccountScrubBlocked && exists(device.scrubMarkerURL),
+           "\(label): sanity: the sign-out's scrub fails and stays pending")
+    expectEqual(first.accountScrubBlockedScope, .live, "\(label) [M3]: a blocked sign-out keeps the sign-out wording")
+    try device.group.unblockLock()
+    first.retryAccountScrub()
+    expect(!first.isAccountScrubBlocked && !exists(device.scrubMarkerURL), "\(label): Retry finishes the sign-out")
+    expectEqual(work.load().count, 0, "\(label) [P12-004]: Retry clears A's pending booking and portal work")
+
+    // Whatever is left, B can neither send nor apply it.
+    let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
+    first.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
+    expect(bOutcome.verifiedAccountBinding != bindingA, "\(label): sanity: B's binding is not A's")
+    let recovery = first.recoverScheduleBookingPendingWork(ownerBinding: bOutcome.verifiedAccountBinding)
+    expectEqual(recovery.reappliedMirrors + recovery.retained + recovery.proofsReady.count, 0,
+                "\(label) [P12-004]: B's recovery acts on none of A's items")
+    expect(work.load().allSatisfy { $0.ownerBinding != bOutcome.verifiedAccountBinding },
+           "\(label) [P12-004]: no item is re-owned by B")
+    let written = [device.storeURL, device.appDirectory.appendingPathComponent("mutation-queue.json")]
+        .compactMap { try? String(contentsOf: $0, encoding: .utf8) }.joined()
+    expect(!written.contains("fixture-booking-token-a") && !written.contains("fixture-portal-token-a"),
+           "\(label) [P12-004]: A's link tokens reach neither B's snapshot nor B's push queue")
+}
+
+/// Task 9b review M2 (12.00b.2-G): a deletion whose scrub marker cannot be
+/// read (for example before first unlock) stays pending. The launch
+/// neither finishes it as a sign-out nor clears it, and nothing is
+/// imported. Readable again, the next scene activation (M3) finishes it as
+/// the deletion it is. Before the fix the launch read it as a sign-out,
+/// cleared it, skipped the erase and re-imported the deleted account.
+@MainActor
+func testUnreadableDeletionMarkerFailsClosed() async throws {
+    let label = "unreadable deletion marker"
+    resetHostKeychain()
+    let device = try FixtureDevice("unreadable-marker", ownerKeys: false)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    device.legacySecureStore.failRemove = true
+    do { try first.testRunAccountDeletionLocalScrub() } catch {}
+    device.legacySecureStore.failRemove = false
+    expectEqual(try? Canonical.SnapshotRepository(primaryURL: device.storeURL).pendingAccountScrubScope, .all,
+                "\(label): sanity: the deletion is pending")
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: device.scrubMarkerURL.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: device.scrubMarkerURL.path) }
+    expect((try? Data(contentsOf: device.scrubMarkerURL)) == nil, "\(label): sanity: the marker cannot be read")
+
+    let blocked = try device.launch()
+    expect(blocked.isAccountScrubBlocked, "\(label) [M2]: the launch stays blocked")
+    expect(blocked.accountScrubBlockedScope == nil, "\(label) [M2]: an unknown scope reads as the generic sign-out wording")
+    expect(exists(device.scrubMarkerURL), "\(label) [M2]: the marker is kept")
+    expectEqual(device.legacySecureStore.legacyItemCount, 2, "\(label) [M2]: no step runs while the scope is unknown")
+    expectEqual(blocked.customers.map(\.id), [], "\(label) [M2]: the launch imports nothing")
+    expect(!exists(device.journal.fileURL), "\(label) [M2]: the launch runs no migration")
+    expect(nativeSession() == nil, "\(label) [M2]: the launch publishes no legacy session")
+    blocked.retryAccountScrub()
+    expect(blocked.isAccountScrubBlocked && exists(device.scrubMarkerURL), "\(label) [M2]: Retry keeps it pending while unreadable")
+    blocked.retryAccountBoundaryCleanupOnActivation()
+    expect(blocked.isAccountScrubBlocked && exists(device.scrubMarkerURL), "\(label) [M2]: so does an activation")
+
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: device.scrubMarkerURL.path)
+    blocked.retryAccountBoundaryCleanupOnActivation()
+    expect(!blocked.isAccountScrubBlocked && !exists(device.scrubMarkerURL), "\(label) [M3]: the next activation finishes the deletion")
+    expectEqual(device.legacySecureStore.legacyItemCount, 0, "\(label) [M2]: …as a deletion: the RN SecureStore items are erased")
+    expect(!exists(device.manifestURL), "\(label) [M2]: …and the RN AsyncStorage files")
+    let later = try device.launch()
+    expectEqual(later.customers.map(\.id), [], "\(label) [M2]: a later launch imports nothing")
+    expect(later.launchMigrationNotice == nil && !exists(device.journal.fileURL), "\(label) [M2]: a later launch runs no migration")
+}
+
 // MARK: - 4. Source pins
 
 @MainActor
@@ -829,6 +947,29 @@ func testSources() {
     }
     expect(appStore.components(separatedBy: "case .live: try repository.removeLiveAccountData()").count - 1 == 3,
            "source: the three .live branches are single removals (a sign-out never erases)")
+
+    // P12-004: the three scrub paths share one list of stores.
+    for marker in ["private func performLocalAccountScrub(", "func retryAccountScrub("] {
+        expect(sourceBody(appStore, marker)?.contains("try removeAccountScrubStores()") == true,
+               "source [P12-004]: \(marker) clears the shared list of stores")
+    }
+    expectEqual(lines.filter { $0 == "try removeAccountScrubStores()" }.count, 3,
+                "source [P12-004]: the launch recovery, Retry and the first attempt all clear the shared list")
+    expectEqual(lines.filter { $0 == "try pendingScheduleBookingWorkStore().removeAll()" }.count, 1,
+                "source [P12-004]: the booking-work removal is in the shared list only")
+    // M3: the blocked screen's deletion wording.
+    let rootView = (try? String(contentsOf: n.appendingPathComponent("RootView.swift"), encoding: .utf8)) ?? ""
+    expect(rootView.contains("store.accountScrubBlockedScope == .all")
+           && rootView.contains("\"Account deletion cleanup paused\"")
+           && rootView.contains("\"Sign-out cleanup paused\"")
+           && rootView.contains("TradeReady%20account%20deletion"),
+           "source [M3]: the blocked screen says account deletion for a deletion and sign-out otherwise")
+    // M3: activation retries a pending scrub, never on top of a running one.
+    let activation = sourceBody(appStore, "func retryAccountBoundaryCleanupOnActivation(") ?? ""
+    expect(activation.contains("repository.isAccountScrubPending")
+           && activation.contains("guard !authenticationOperationInFlight else { return }")
+           && activation.contains("retryAccountScrub()"),
+           "source [M3]: activation retries a pending scrub unless a sign-out or deletion is running")
 
     // One definition of the locations: the importer's live source and the eraser.
     expect(sourceBody(coordinator, "private func liveSource(")?.contains("LegacySourceLocations.live(") == true,
@@ -889,6 +1030,8 @@ struct LegacyReimportTests {
             try await testInterruptedSignOutRelaunchesCleanly()
             try await testSignedOutLaunchReprotects()
             try await testWorkspaceRetainingExits()
+            try await testRetriedSignOutClearsPendingBookingWork()
+            try await testUnreadableDeletionMarkerFailsClosed()
         } catch {
             failures += 1
             print("FAIL: threw \(error)")

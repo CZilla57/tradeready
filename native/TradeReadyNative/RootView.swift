@@ -6,14 +6,24 @@ struct RootView: View {
     var body: some View {
         Group {
             if store.isAccountScrubBlocked {
+                // Phase 12 (12.00b.2-G, Task 9b review M3): a deletion's
+                // cleanup is named as one.
+                let isDeletion = store.accountScrubBlockedScope == .all
                 ContentUnavailableView {
-                    Label("Sign-out cleanup paused", systemImage: "person.crop.circle.badge.xmark")
+                    Label(
+                        isDeletion ? "Account deletion cleanup paused" : "Sign-out cleanup paused",
+                        systemImage: "person.crop.circle.badge.xmark"
+                    )
                 } description: {
-                    Text("TradeReady is keeping local account data hidden until it can finish removing it safely.")
+                    Text(isDeletion
+                         ? "Your account is deleted. TradeReady is keeping its local data hidden until it can finish removing it safely."
+                         : "TradeReady is keeping local account data hidden until it can finish removing it safely.")
                 } actions: {
                     Button("Try cleanup again") { store.retryAccountScrub() }
                         .tradeReadyProminentButtonStyle()
-                    Link("Contact support", destination: URL(string: "mailto:support@gettradereadyapp.com?subject=TradeReady%20sign-out")!)
+                    Link("Contact support", destination: URL(string: isDeletion
+                        ? "mailto:support@gettradereadyapp.com?subject=TradeReady%20account%20deletion"
+                        : "mailto:support@gettradereadyapp.com?subject=TradeReady%20sign-out")!)
                 }
             } else if store.isLegacyMigrationBlocked {
                 ContentUnavailableView {
