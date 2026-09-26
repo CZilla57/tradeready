@@ -2,7 +2,8 @@
 set -eu
 
 # Phase 12 (12.02): the privacy-safe support report
-# (`NativeSupportDiagnostics.swift`, Settings > Prepare support report) and
+# (`NativeSupportDiagnostics.swift`, "Prepare support report" in Settings and
+# on both blocked screens) and
 # the monitoring signals the cutover charter reads (TH-1/TH-2 migration,
 # TH-3 pending age, TH-5 discarded changes, TH-6 429 bursts, TH-9 payment
 # commits, TH-10 purchases, the initial sync and the blocked account scrub),

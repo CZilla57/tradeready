@@ -260,8 +260,6 @@ struct InvoiceNumberSettings: View {
 struct ImportSettings: View {
     @EnvironmentObject private var store: AppStore
     @State private var showingResult = false
-    @State private var supportReportURL: URL?
-    @State private var supportReportError: String?
     var body: some View { SettingsPage(title: "Import Data", content: Group {
         Section { Label("Move your existing business records into TradeReady.", systemImage: "tray.and.arrow.down.fill").foregroundStyle(.secondary) }
         Section("FROM THE PREVIOUS APP") { Button { store.importLegacyData(); showingResult = true } label: { Label("Import React Native data", systemImage: "iphone.and.arrow.forward") }; Text("Available when this build replaces the Expo app using the same bundle identifier.").font(.caption).foregroundStyle(.secondary) }
@@ -275,27 +273,7 @@ struct ImportSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section("MIGRATION SUPPORT") {
-            if let supportReportURL {
-                ShareLink(item: supportReportURL) {
-                    Label("Share support report", systemImage: "square.and.arrow.up")
-                }
-            } else {
-                Button {
-                    do {
-                        supportReportURL = try store.createPersistenceSupportReport()
-                        supportReportError = nil
-                    } catch {
-                        supportReportError = "The support report could not be created."
-                    }
-                } label: {
-                    Label("Prepare support report", systemImage: "wrench.and.screwdriver")
-                }
-            }
-            Text("Includes only app version and build, data counts, backup, migration, cleanup and sync status, and error codes. It never includes customer records, names, contact details or credentials.")
-                .font(.caption).foregroundStyle(.secondary)
-            if let supportReportError {
-                Text(supportReportError).font(.caption).foregroundStyle(Color.tradeDangerText)
-            }
+            NativeSupportReportAction()
         }
     }).alert("Import", isPresented: $showingResult) { Button("OK") {} } message: { Text(store.migrationMessage ?? "Import finished.") }
     .nativeAnalyticsScreen(.settingsImport) }

@@ -1,7 +1,8 @@
 import Foundation
 
 // Phase 12 (12.02) host tests: the privacy-safe support report
-// (`NativeSupportDiagnostics.swift`, Settings > Prepare support report) and
+// (`NativeSupportDiagnostics.swift`, "Prepare support report" in Settings and
+// on both blocked screens) and
 // the remote monitoring signals the cutover charter reads (§3): TH-1/TH-2
 // (`legacyMigration`), TH-3 (`pendingAge`), TH-5 (`pushDiscarded`), TH-6 and
 // OI-3 (`syncThrottle`), TH-9 (`invoicePayment`), TH-10 (`purchase`,
@@ -395,6 +396,7 @@ struct SupportDiagnosticsTests {
         initialSyncSignal()
         discardedSignal()
         await coalescedPassDiscardSignal()
+        try reportFromBlockedScreens(root: root)
         sourceChecks(root: root)
         try await dryRun()
 
@@ -1187,6 +1189,126 @@ struct SupportDiagnosticsTests {
                     "coalesced: a later pass does not report the earlier discard again")
         let afterSecond = section((try? reportJSON(store))?.json ?? [:], "sync")
         expectEqual(afterSecond["discardedChangeCount"] as? Int, 1, "coalesced: …and the count stays 1")
+    }
+
+    // MARK: 15b. The support report from the blocked screens (review concern 6)
+
+    /// Every file under the fixture directory except the report, by content.
+    static func ownerFiles(_ f: Fixture) -> [String: Data] {
+        var files: [String: Data] = [:]
+        let base = f.directory.standardizedFileURL.path
+        guard let walker = FileManager.default.enumerator(at: f.directory, includingPropertiesForKeys: [.isRegularFileKey]) else {
+            return files
+        }
+        for case let url as URL in walker {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+                  url.lastPathComponent != "tradeready-support-report.json" else { continue }
+            let path = String(url.standardizedFileURL.path.dropFirst(base.count))
+            files[path] = (try? Data(contentsOf: url)) ?? Data()
+        }
+        return files
+    }
+
+    /// The owner of a blocked launch never reaches Settings, so both blocked
+    /// screens (`RootView`: migration paused, cleanup paused) carry the
+    /// Settings action itself (`NativeSupportReportAction`). The report reads
+    /// diagnostics only: it is created while owner writes are blocked, it is
+    /// the v3 report, and no other file changes.
+    @MainActor
+    static func reportFromBlockedScreens(root: URL) throws {
+        func check(_ name: String, _ store: AppStore, _ f: Fixture, blockReason: String, blocked: () -> Bool) throws {
+            expect(blocked(), "blocked report \(name): sanity: the launch is blocked")
+            f.clear()
+            let before = ownerFiles(f)
+            expect(!before.isEmpty, "blocked report \(name): sanity: the blocked launch left files to compare")
+            let report = try reportJSON(store)
+            expectEqual(report.json["reportSchemaVersion"] as? Int, 3, "blocked report \(name): the v3 report")
+            expectEqual(Set(report.json.keys), reportKeys["top"] ?? [], "blocked report \(name): the closed top-level schema")
+            expectEqual(section(report.json, "launchMigration")["persistenceBlockReason"] as? String, blockReason,
+                        "blocked report \(name): created while owner writes are blocked")
+            expect(report.bytes <= NativeSupportDiagnostics.maximumReportBytes, "blocked report \(name): within the cap")
+            expectEqual(ownerFiles(f), before, "blocked report \(name): no owner file is written, moved or removed")
+            expect(blocked(), "blocked report \(name): the launch stays blocked")
+            expectEqual(f.captures(), [], "blocked report \(name): preparing the report sends nothing")
+        }
+        do {
+            // "Data migration paused": the previous app's data did not move.
+            let f = Fixture("blocked-report-migration")
+            defer { f.cleanup() }
+            f.write(#"{"legacy":"previous-app bytes"}"#, to: "LegacyDocuments/fixture.json")
+            let store = f.launch(migrate: true, provider: { throw fixtureError })
+            try check("migration", store, f, blockReason: "legacy-migration") { store.isLegacyMigrationBlocked }
+        }
+        do {
+            // "Data migration paused": the journal says done, the snapshot is gone.
+            let f = Fixture("blocked-report-missing")
+            defer { f.cleanup() }
+            f.completeMigrationJournal()
+            let source = f.emptySource()
+            let store = f.launch(migrate: true, provider: { source })
+            try check("missing snapshot", store, f, blockReason: "missing-migrated-snapshot") { store.isLegacyMigrationBlocked }
+        }
+        do {
+            // "Sign-out cleanup paused", over an owner's saved data.
+            let f = Fixture("blocked-report-scrub")
+            defer { f.cleanup() }
+            _ = f.launch(seed: true)
+            expect(FileManager.default.fileExists(atPath: f.storeURL.path), "blocked report scrub: sanity: owner data is saved")
+            f.write(#"{"schemaVersion":1,"scope":"galaxy"}"#, to: "store.json.account-scrub-pending")
+            let store = f.launch()
+            try check("scrub", store, f, blockReason: "account-scrub") { store.isAccountScrubBlocked }
+        }
+        do {
+            // "Account deletion cleanup paused".
+            let f = Fixture("blocked-report-deletion")
+            defer { f.cleanup() }
+            _ = f.launch(seed: true)
+            try hostTestSecureSettingsStore().recordAccountDeletionScrub()
+            let store = f.launch(blockedScrubber: true)
+            expect(store.accountScrubBlockedScope == .all, "blocked report deletion: sanity: the deletion wording applies")
+            try check("deletion", store, f, blockReason: "account-scrub") { store.isAccountScrubBlocked }
+        }
+
+        // Source: both blocked branches and Settings show the one action, and
+        // only that action creates the report.
+        let rootView = read(root, "native/TradeReadyNative/RootView.swift")
+        let action = "NativeSupportReportAction()"
+        if let scrub = rootView.range(of: "if store.isAccountScrubBlocked {"),
+           let migration = rootView.range(of: "} else if store.isLegacyMigrationBlocked {", range: scrub.upperBound..<rootView.endIndex),
+           let gate = rootView.range(of: "authenticationGate", range: migration.upperBound..<rootView.endIndex) {
+            let scrubBranch = String(rootView[scrub.upperBound..<migration.lowerBound])
+            let migrationBranch = String(rootView[migration.upperBound..<gate.lowerBound])
+            expectEqual(scrubBranch.components(separatedBy: action).count - 1, 1,
+                        "source: the cleanup-paused screen offers the support report")
+            expectEqual(migrationBranch.components(separatedBy: action).count - 1, 1,
+                        "source: the migration-paused screen offers the support report")
+        } else {
+            expect(false, "source: RootView's two blocked branches were found")
+        }
+        let settings = read(root, "native/TradeReadyNative/SettingsView.swift")
+        if let start = settings.range(of: "struct ImportSettings: View {"),
+           let end = settings.range(of: "struct SyncSettings: View {", range: start.upperBound..<settings.endIndex) {
+            let importSettings = String(settings[start.upperBound..<end.lowerBound])
+            expect(importSettings.contains("Section(\"MIGRATION SUPPORT\") {\n            \(action)"),
+                   "source: Settings › Migration support shows the same action")
+        } else {
+            expect(false, "source: ImportSettings was found")
+        }
+        let actionFile = read(root, "native/TradeReadyNative/NativeSupportReportAction.swift")
+        expect(actionFile.contains("store.createPersistenceSupportReport()")
+               && actionFile.contains("\"Prepare support report\"") && actionFile.contains("ShareLink(item:"),
+               "source: the action prepares the report and shares its file")
+        expectEqual(actionFile.components(separatedBy: "store.").count - 1, 1,
+                    "source: the action calls nothing on the store but the report (no owner write, no retry)")
+        let n = root.appendingPathComponent("native/TradeReadyNative")
+        var creators: [String] = []
+        if let walker = FileManager.default.enumerator(at: n, includingPropertiesForKeys: nil) {
+            for case let url as URL in walker where url.pathExtension == "swift" && url.lastPathComponent != "AppStore.swift" {
+                let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+                if text.contains("createPersistenceSupportReport(") { creators.append(url.lastPathComponent) }
+            }
+        }
+        expectEqual(creators, ["NativeSupportReportAction.swift"], "source: one view creates the report (no copy of the logic)")
     }
 
     // MARK: 16. Dry run on synthetic fixtures (12.02 deliverable)

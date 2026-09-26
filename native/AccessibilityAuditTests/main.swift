@@ -818,6 +818,12 @@ let viewFileInventory: Set<String> = [
     // and primary body text, a regular-size prominent button, and a `.contain`
     // element so VoiceOver reaches the button on its own.
     "N/NativeAccountCleanupBanner.swift",
+    // Phase 12 (12.02), reviewed: the Settings support-report row, shared with
+    // RootView's two blocked screens. A text-titled Button and ShareLink (each
+    // a Label with its own title), caption text that wraps at every Dynamic
+    // Type size in `.secondary` on the system background, and the error in
+    // `tradeDangerText`. System controls keep their full touch targets.
+    "N/NativeSupportReportAction.swift",
     // Phase 12 (12.00b.1, D3), reviewed: text-titled Labels and bordered
     // Buttons with hints, text styles that wrap at every Dynamic Type size,
     // each entry's type, name and time combined into one VoiceOver element,

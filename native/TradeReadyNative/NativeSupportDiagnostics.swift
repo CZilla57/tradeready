@@ -4,8 +4,9 @@ import Foundation
 // monitoring behind the cutover charter's remote signals
 // (`docs/native-phase-12-monitoring.md`).
 //
-// The report is what Settings > Migration support > "Prepare support report"
-// writes (`AppStore.createPersistenceSupportReport`) and the owner shares
+// The report is what "Prepare support report" (`NativeSupportReportAction`,
+// in Settings > Migration support and on both blocked screens) writes
+// (`AppStore.createPersistenceSupportReport`) and the owner shares
 // explicitly. It is a closed schema of versions, booleans, bounded counts,
 // age buckets and bounded diagnostic codes. It never holds a record, a name,
 // an email, a phone number, a path, a URL, a token, a key, a session, an

@@ -24,6 +24,11 @@ struct RootView: View {
                     Link("Contact support", destination: URL(string: isDeletion
                         ? "mailto:support@gettradereadyapp.com?subject=TradeReady%20account%20deletion"
                         : "mailto:support@gettradereadyapp.com?subject=TradeReady%20sign-out")!)
+                    // Phase 12 (12.02): Settings is out of reach here, so
+                    // the Settings support report comes to the owner. It
+                    // writes no owner data.
+                    NativeSupportReportAction()
+                        .multilineTextAlignment(.center)
                 }
             } else if store.isLegacyMigrationBlocked {
                 ContentUnavailableView {
@@ -34,6 +39,8 @@ struct RootView: View {
                     Button("Try again") { store.retryLegacyMigration() }
                         .tradeReadyProminentButtonStyle()
                     Link("Contact support", destination: URL(string: "mailto:support@gettradereadyapp.com?subject=TradeReady%20migration")!)
+                    NativeSupportReportAction()
+                        .multilineTextAlignment(.center)
                 }
             } else {
                 authenticationGate
