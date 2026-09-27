@@ -300,7 +300,11 @@ when that pull fails, it waits (review fix round 1). It is applied only when a f
 after a Create or Rotate, the local link's token after an Enable or Disable. Otherwise it
 is dropped without a write. It never sends a mutation. A reschedule proof is kept only
 while its resolve can still succeed (contract §7); recovery never resolves. Host evidence:
-`native/run-schedule-booking-recovery-tests.sh`.
+`native/run-schedule-booking-recovery-tests.sh`. Phase 12 final review (M1, M5, 2026-09-27): that
+pull must also have started under the current account generation and after the scene last entered
+the background, and a pull taken before or while a gate waits for the owner does not count, as for
+intake below; a failed recovery save is reported with the sync status code `recovery/local-commit`,
+never in `migrationMessage`.
 
 **Note (2026-09-27, Phase 12 task 12.00b.2-K, defect `P12-016`):** "Apply intake after verified
 pull" had no production caller: `runBookingIntakeAfterVerifiedPull` ran only in host tests, so a
@@ -317,8 +321,11 @@ A failed intake save is reported with the sync status code `intake/local-commit`
 `migrationMessage`. Review fixes (same date): a pull taken before or while a gate waits for the owner
 (onboarding, the starting point, the paywall) does not count, so a gate that opens after a wait leaves
 conversion to the next activation; and the recheck links a request to a `jbk_` job already on the
-device and carries a repeat customer's blank-field fill, as RN does (contract §8 note). Host evidence:
-`native/run-schedule-booking-recovery-tests.sh` section K.
+device and carries a repeat customer's blank-field fill, as RN does (contract §8 note). Phase 12 final
+review (M1, M3, 2026-09-27): the scene entering the background clears the mark, and a pull still in
+flight then does not set it; a cold launch's request stamp is guarded with the initial sync's own
+watermark (contract §8 note). Host evidence: `native/run-schedule-booking-recovery-tests.sh` section K
+and section Z.
 
 ### 8.09 — Calendar UI
 

@@ -459,7 +459,7 @@ whole-row upserts (RN pushes whole rows too, `utils/storage/bookingConversion.ts
 now runs by itself at every activation, so a customer's cancel or reschedule request, or another
 device's edit of the customer, that reached the server between the pull and the push was overwritten.
 Both are now guarded upserts (`N/NativeMutationQueue.swift`, `ifUnchangedSince`): a PATCH of the
-row's `data` filtered on `updated_at=lte.<the table's delta-pull watermark>` with `select=id`, which
+row's `data` filtered on `updated_at=lte.<the table's pull watermark>` with `select=id`, which
 the committed PostgREST API supports with no backend change (`N/NativeSupabasePush.swift`). A row
 written since the pull is left as it is: the change is dropped, the watermark goes back to it, and the
 next pull brings the server's row. The next activation stamps a still-convertible request again. The
@@ -468,8 +468,15 @@ dropped (a cancelled one is never stamped again) keeps its lead job: Today shows
 state on that job, found by its deterministic id `jbk_<requestId>`
 (`N/Domain/NativeBookingAttention.swift` `linkedJobID`; review fix round 1, I1). Residuals, all S3:
 - A fill dropped this way is not redone.
-- A cold launch's conversion before the first delta pull (the initial sync keeps no watermark) pushes
-  whole rows, as RN does.
+- (Closed by the Phase 12 final review, M3, 2026-09-27.) The initial sync saves no delta cursor, so a
+  cold launch's intake guarded with the previous session's watermark. A booking that arrived while the
+  app was closed is newer than that watermark, so its stamp matched no row and was dropped, and the
+  next activation stamped it again. Before the first delta pull ever, there was no watermark at all,
+  and the stamp was pushed whole. Intake now guards with the later of the saved cursor's watermark and
+  the initial sync's own, the latest `updated_at` it read (`N/AppStore.swift`
+  `intakeGuardWatermarks`, `N/NativeInitialSync.swift` `pullWithWatermarks`). So a cold launch's
+  stamp lands on the row it pulled. A table with no row pulled yet still pushes whole, as RN does
+  (host test K1d, `native/ScheduleBookingRecoveryTests/main.swift`).
 - A record whose change the server refused keeps its local copy in the pull, so a guard does not catch
   a server change to it (the refusal's Retry and Discard rules apply, as for any newer change to a
   refused record).
@@ -481,7 +488,8 @@ state on that job, found by its deterministic id `jbk_<requestId>`
   5-minute overlap still refetches the row when it changed within that window.
 - The Worker reads the request and writes it back whole (`backend-workers/lib/booking/respond.js:48-75`,
   `backend-workers/lib/booking/manage.js:74-108`), so a stamp that lands between its read and its write
-  is overwritten; the next pull takes the server's row and the next activation stamps it again.
+  is overwritten; the next pull takes the server's row, and the next activation stamps it again if
+  the request is still convertible (a cancelled or declined one is not).
 - The delta pull pages by offset (`order=updated_at.asc,id.asc`, 500 rows a page,
   `N/NativeInitialSync.swift` `fetchAllRows`), so in a delta of more than 500 rows a concurrent write
   that reorders the rows can make a page skip one, and that row's newer write can then match a guard.

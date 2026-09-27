@@ -218,7 +218,7 @@ source:
 - **App** (`N/PrivacyInfo.xcprivacy`): declares `NSPrivacyAccessedAPICategoryUserDefaults`
   (`CA92.1` standard, `1C8F.1` App Group) and
   `NSPrivacyAccessedAPICategoryFileTimestamp` (`C617.1`). Re-grepped: the only
-  `.contentModificationDateKey` reads are in `N/NativeWidgetActionReplay.swift:1247,1382`
+  `.contentModificationDateKey` reads are in `N/NativeWidgetActionReplay.swift:1252,1387`
   (widget-action claim files in the App Group container); no new boot-time or
   disk-space API appears in `N/`. **Matches current source.**
 - **Widget** (`native/TradeReadyWidgets/PrivacyInfo.xcprivacy`): declares UserDefaults
@@ -387,7 +387,7 @@ numbered here in the same order as its 8 `PASS`/`FAIL` lines:
    (the AsyncStorage reader, `N/LegacyDataImporter.swift:488`), referenced by signature
    only, never called; same compile-failure-as-test-failure rule as check 1.
 3. **`AppStore`'s init still gates an automatic legacy migration attempt on launch**,
-   read as source text: its initializer (`N/AppStore.swift:615` `init`) still guards an
+   read as source text: its initializer (`N/AppStore.swift:640` `init`) still guards an
    automatic migration attempt with
    `if automaticallyMigrateLegacyData && accountScrubRecoveryError == nil {` (`:748`).
 4. **The gated block constructs a `LegacyMigrationCoordinator(`** (`:768`), scoped to
@@ -410,7 +410,7 @@ numbered here in the same order as its 8 `PASS`/`FAIL` lines:
    real launch while checks 1-5 kept passing.
 
 **RED (original mutation, before the fix round).** Renamed the launch-path call site's
-constructor to `LegacyMigrationCoordinatorSC4REDTEST(` at `N/AppStore.swift:768` only
+constructor to `LegacyMigrationCoordinatorSC4REDTEST(` at `N/AppStore.swift:793` only
 (leaving the two other, non-launch-path call sites at `:4496` and `:4550` untouched),
 reran the runner: `FAIL: the launch path constructs a LegacyMigrationCoordinator`,
 exit 1. Evidence: `evidence-task13/sc4-red-mutation.txt`. Restored `N/AppStore.swift`
@@ -565,3 +565,18 @@ unless noted; evidence under
 - **L169.a did not reproduce at either commit** in this environment — worth the charter
   owner's decision on whether to close it as environment-specific rather than leaving it
   "Open (unverified)" indefinitely.
+- **Owner follow-up: a decimal comma in the income-tax rate is cut off, on both clients**
+  (ruling R36, 2026-09-26; recorded here by the final review, M11, 2026-09-27). The Money
+  tab's tax set-aside settings read the rate with JavaScript's `parseFloat` (RN
+  `components/money/TaxSettingsModal.tsx:69`). Native reads it with the same rule to keep
+  RN parity (`NativeTaxSettings.jsParseFloat`, `N/Domain/NativeTaxSettings.swift:145`).
+  `parseFloat` stops at the first character that is not part of a number, so "12,5" is
+  stored as 12, silently. Both fields use the decimal-pad keyboard
+  (`components/money/TaxSettingsModal.tsx:105`, `N/NativeTaxSettingsView.swift:33`),
+  which shows a comma, not a point, in decimal-comma regions. The set-aside estimate then
+  uses the lower rate. It is not a native regression, and a fix on one client alone would
+  make the two disagree. **The owner decides** whether to accept it, or to change both
+  clients (for example accept a comma as the decimal separator, or refuse the value with
+  the existing "Check the rate" alert). The host tests pin today's shared behaviour
+  ("12,5" reads as 12, `native/TaxSettingsTests/main.swift:210`); no device row covers a
+  decimal-comma region.

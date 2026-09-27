@@ -462,7 +462,11 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   sync-push 4xx wedge (I2) is a cutover-blocking defect owned by Phase 12.00 (see
   Phase 12 below). I2 is fixed on native/phase-12 by 12.00b.1 (host evidence only);
   its device rows P12-B1-1 and P12-B1-2 are still needed.
-- Phases 8–9 and 12: **Not started** (tracking note: Phase 8's contract
+- Phase 12 (2026-09-27, native/phase-12): **host build complete** (host evidence only);
+  defect `P12-012` (S1) open pending the owner's R43 ruling; Stages A, the rehearsal, B
+  and C owner-gated. See [native-phase-12-stage-runbook.md](native-phase-12-stage-runbook.md)
+  and the charter's defect list.
+- Phases 8–9: **Not started** (tracking note: Phase 8's contract
   decisions and Phase 9's implementation plan/device runsheet already exist as
   in-flight artifacts from earlier work on this branch; their roadmap status
   lines were not reconciled by this Phase 10 closeout task and remain as

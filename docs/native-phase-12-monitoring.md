@@ -54,7 +54,7 @@ context" filters on that context's fixed message (§3).
 
 ## 3. New remote signals (12.02)
 
-All go through `AppStore.reportError` (`N/AppStore.swift:12193`), so each is the Phase 11
+All go through `AppStore.reportError` (`N/AppStore.swift:12328`), so each is the Phase 11
 `reportError` path: the §10.1 redactor, the allow-listed extras, a bounded `rawError`
 `{code, message}` and the fingerprint `["{{ default }}", <context>]`, one Sentry issue per
 context (contract §10.3, §10.4). Every code is built from table names, operation names
@@ -91,8 +91,8 @@ carries the same facts as counts.
 
 "Prepare support report" (`N/NativeSupportReportAction.swift`), in Settings › Migration
 support and on both blocked screens (`N/RootView.swift`; Reach below), calls
-`AppStore.createPersistenceSupportReport` (`N/AppStore.swift:952`), which now
-writes the version 4 report built by `AppStore.supportReport` (`N/AppStore.swift:964`)
+`AppStore.createPersistenceSupportReport` (`N/AppStore.swift:977`), which now
+writes the version 4 report built by `AppStore.supportReport` (`N/AppStore.swift:989`)
 from the types in `N/NativeSupportDiagnostics.swift`. The user shares
 `tradeready-support-report.json` from the share sheet, usually into the Contact support
 email. The v2 persistence report (Phase 2) is kept whole under `persistence`, so nothing
@@ -143,8 +143,8 @@ own record counts, which TH-1 compares exactly, and carry no content:
   them (2026-09-26, 12.00b.2-I, defect `P12-013`), so a count that stays is a mirror
   waiting for a committed pull and a successful status read (for example offline), or
   a reschedule proof waiting for the owner's resolve. Each recovery pass that finds
-  items prints one counts-only console line,
-  `TradeReadyScheduleBookingRecovery stage=pass` (playbook §5.1).
+  items logs one counts-only line, `TradeReadyScheduleBookingRecovery stage=pass`
+  (playbook §5.1), to the unified log ("On-device log lines" below).
 
 **Code rule.** A code keeps only `A–Z a–z 0–9 . _ / -`, at most 96 bytes, with no run of
 6 or more digits, no run of 12 or more hex characters containing a digit, and nothing
@@ -183,6 +183,28 @@ P12-001/P12-006 the blocked device's report is therefore a source alongside the 
 signals in §3. No device row reaches these screens on demand: each needs an injected
 failure.
 
+**On-device log lines** (final review M6, 2026-09-27). The `stage=` diagnostic lines that
+Phase 12 added go to the unified log, subsystem `com.tradeready.native`, category
+`diagnostics`, through `Logger` (`N/AppStore.swift` `stageLogger`; one file-private logger
+each in `N/Domain/SnapshotRepository.swift`, `N/NativeAppGroupInbox.swift`,
+`N/NativeSupabasePush.swift`, `N/NativeWidgetActionReplay.swift` and
+`N/Widgets/Shared/WidgetActionQueue.swift`). A TestFlight or App Store build keeps them.
+Before, they used `print`, which reaches only an attached debugger's console.
+- **Where to read them.** Console.app with the iPhone attached, filtered on the
+  subsystem, or a sysdiagnose from the device. They are not in the support report: its
+  counts (above) carry the same facts.
+- **Levels.** A pass, check or contention line logs at `notice`: `TradeReadyBookingIntake
+  stage=pass`, `TradeReadyScheduleBookingRecovery stage=pass`, `TradeReadyRollbackReadiness
+  stage=checked`, `TradeReadyRejectedChanges stage=filed`, `TradeReadyMutationPush
+  stage=superseded` and `TradeReadyWidgetLock stage=busy`. A failure logs at `error`: the
+  run marker, account-boundary steps, an unreadable claim, the rejected-change overflow
+  and boundary scrub, a failed Retry enqueue, the scrub-cleared record and the
+  legacy-backup enumerator.
+- **Privacy.** Every value in a line is an integer, a Bool or a fixed code (a stage,
+  step, table or reason name), marked public so a Release build shows it instead of
+  `<private>`. No record, name, token, key, binding or path.
+- **Unchanged.** `stage=` lines from before Phase 12 still use `print`.
+
 ## 5. OI-3: 429 bursts (TH-6)
 
 **R19 (2026-09-25).** 12.00b.1 relaxed the pull guard toward RN: a push pass that reaches
@@ -192,7 +214,7 @@ the pull. So one throttled pass from one device sends:
 
 - N push requests, one per queued change (N = the queue length), and
 - the pull's reads: at least 12 (the 10 collections, `settings` and `customer_notes`,
-  `N/NativeInitialSync.swift:72`), plus one per extra 500-row page.
+  `N/NativeInitialSync.swift:106`), plus one per extra 500-row page.
 
 A pass that ends partial or failed backs off: 5 s doubling to a 300 s cap
 (`N/NativeSyncCoordinator.swift:185`, `:516`). A sustained burst therefore allows about 17
