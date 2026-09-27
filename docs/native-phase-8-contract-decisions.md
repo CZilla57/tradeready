@@ -251,6 +251,19 @@ current membership check, moved in-txn).
   native (field-scoped current-ID mutations, 8.08) and by convention in RN:
   never whole-blob replay a stale request as a decision — refresh-then-act,
   with 409 `invalid_state`/`stale_revision` as the backstop, not the plan.
+- *Note (2026-09-27, Phase 12 task 12.00b.2-L, defect `P12-017`):* the owner's
+  decline broke that rule on the wire. The merge on the device took only the
+  server's status, but the change was queued as an upsert of the whole request,
+  so the next push replaced the history the server had just written (the
+  owner's entry, `backend-workers/lib/booking/respond.js:64-75`) with the
+  device's copy. Native now pushes nothing after an owner response the server
+  accepted, as RN pushes nothing (`screens/TodayScreen.tsx:559-563`): the
+  decline, the accept (`acceptBookingReschedule`, since `P12-015`) and the
+  test-only legacy resolve save the returned status on the device only, and the
+  next pull brings the server's row with its history. Before sending, the
+  decline and the accept push what is queued, and send nothing while a change
+  to the request is still queued or refused and waiting in Settings › Cloud
+  Sync: a later push or Retry of that older copy would land after the response.
 
 ## 3. Booking token legacy handoff (G3)
 
@@ -439,6 +452,22 @@ already on the device is linked to that job, which is never touched (D-B3-2; RN
 appeared meanwhile, or the job it linked is gone. A repeat customer's blank email, phone or address is
 filled from the booking on the current record and never replaces a value (RN
 `utils/storage/customers.ts:69-86`); before, the recheck dropped that fill.
+
+**Note (2026-09-27, Phase 12 task 12.00b.2-L, Task 12d review M6, defect `P12-017`):** D-B3-4 held
+on the device but not on the wire. The request stamp and the repeat customer's fill were queued as
+whole-row upserts (RN pushes whole rows too, `utils/storage/bookingConversion.ts:147`), and intake
+now runs by itself at every activation, so a customer's cancel or reschedule request, or another
+device's edit of the customer, that reached the server between the pull and the push was overwritten.
+Both are now guarded upserts (`N/NativeMutationQueue.swift`, `ifUnchangedSince`): a PATCH of the
+row's `data` filtered on `updated_at=lte.<the table's delta-pull watermark>` with `select=id`, which
+the committed PostgREST API supports with no backend change (`N/NativeSupabasePush.swift`). A row
+written since the pull is left as it is: the change is dropped, the watermark goes back to it, and the
+next pull brings the server's row. The next activation stamps a still-convertible request again. The
+lead job and a created customer are new rows and stay plain upserts. Residuals: a fill dropped this
+way is not redone; a cold launch's conversion before the first delta pull (the initial sync keeps no
+watermark) pushes whole rows, as RN does; a record whose change the server refused keeps its local
+copy in the pull, so a guard does not catch a server change to it (the refusal's Retry and Discard
+rules apply, as for any newer change to a refused record).
 
 ## 9. Rescheduled manage / ICS; archived semantics
 

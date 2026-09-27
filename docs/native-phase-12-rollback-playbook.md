@@ -234,9 +234,9 @@ here as a requirement for the Expo release branch. It is not implemented here.
 the section after Sync now). The support script (§7.2) asks for it before any rollback
 advice.
 
-**What it does** (`AppStore.prepareRollbackReadiness`, `N/AppStore.swift:8133`):
+**What it does** (`AppStore.prepareRollbackReadiness`, `N/AppStore.swift:8273`):
 
-1. It reads the device's local state (`AppStore.rollbackReadiness`, `N/AppStore.swift:8033`).
+1. It reads the device's local state (`AppStore.rollbackReadiness`, `N/AppStore.swift:8149`).
 2. If none of the fail-closed conditions below holds, it applies any widget or Siri
    actions waiting in the App Group.
 3. It runs one full manual sync (push, then pull).
@@ -296,9 +296,9 @@ no native-only business data, so "Ready" does not depend on it:
 
 The check counts this account's items only and never removes one. Launch and every
 activation recover them (2026-09-26, 12.00b.2-I, defect `P12-013`):
-`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10630`) runs for the
+`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10824`) runs for the
 verified owner after the initial sync, from the signed-in gate and from
-`performForegroundRefresh` after its sync (`N/AppStore.swift:7919`).
+`performForegroundRefresh` after its sync (`N/AppStore.swift:7987`).
 
 - A mirror waits for a pull (review fix round 1, 2026-09-26). It is read and merged only
   after a pull has committed the settings and customer rows since the identity was
@@ -318,7 +318,7 @@ verified owner after the initial sync, from the signed-in gate and from
   reschedule and the job still has the proven schedule. Recovery never resolves; the
   owner does, by tapping "I've rescheduled it" again (`AppStore.acceptBookingReschedule`,
   defect `P12-015`, fixed). An accept that could not finish shows why on the screen the
-  owner used, and keeps its proof (`N/AppStore.swift:10083-10088` removes it only after
+  owner used, and keeps its proof (`N/AppStore.swift:10272-10277` removes it only after
   the server confirms) until the owner taps again or the request moves on.
   Proofs are checked in every pass, before or after the pull: the check reads local
   state only, writes no record and queues nothing, so it cannot push a pre-pull copy.
