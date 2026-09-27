@@ -49,6 +49,10 @@ import FoundationNetworking
 // into a lead job and a customer, and a later reschedule accept answered
 // `notLinkedToJob`. RN converts at launch after the initial sync and after
 // every foreground sync (`App.tsx:396`, `context/AuthContext.tsx:118-120`).
+// Fix round 1: K1 runs the real initial sync; a gate that waited for the owner
+// converts nothing from an older pull (K1b); a repeat customer's blank fields
+// are filled (K10); a request whose `jbk_` job is already on the device is
+// linked to it, as RN links it (K5, K10b).
 //
 // Everything here is production code except the network: the real AppStore,
 // queue, sync coordinator, push transport and delta pull in front of the
@@ -404,6 +408,10 @@ final class Device {
     let links: LinkServer
     let reach = SwitchReachability()
     let widgetQueue = MemoryWidgetActionQueue()
+    /// This device's own Keychain (12.00b.2-K fix round 1), for a launch that
+    /// runs the real initial sync, which reads the Supabase session from it.
+    /// Nil: the process-wide host Keychain every other case uses.
+    var keychain: HostInMemoryKeychain?
     private(set) var coordinator: NativeSyncCoordinator?
 
     var storeURL: URL { dir.appendingPathComponent("store.json") }
@@ -470,7 +478,8 @@ final class Device {
             initialSyncService: NativeSupabaseInitialSyncService(
                 supabaseURL: Self.supabaseURL, publishableKey: "publishable-key", loader: pullLoader
             ),
-            secureSettingsStore: hostTestSecureSettingsStore()
+            secureSettingsStore: keychain.map { NativeKeychainSecureSettingsStore(backend: $0) }
+                ?? hostTestSecureSettingsStore()
         )
     }
 
@@ -646,10 +655,13 @@ struct ScheduleBookingRecoveryTests {
         await s1GuardTheResolveNeverMovesTheJobBack()
         acceptNoticesOnBothScreens()
         await coldLaunchConvertsAfterTheInitialSync()
+        await gateThatWaitsForTheOwnerConvertsAfterItsNextPull()
         await warmActivationConvertsAfterItsPull()
         await failedOrPartialPullConvertsNothing()
         await intakeIsIdempotent()
         await anExistingLeadJobIsNeverOverwritten()
+        await aRepeatCustomersBlankFieldsAreFilled()
+        recheckRules()
         await accountChangeDuringTheIntakePull()
         await nothingBeforeTheInitialSync()
         await nothingWhileReadOnly()
@@ -2089,12 +2101,54 @@ struct ScheduleBookingRecoveryTests {
         _ = await d.coordinator?.waitUntilIdle()
     }
 
-    /// K1: a cold launch. The initial sync's pull brings the booking, then the
-    /// signed-in gate opens: the booking becomes a lead job and a customer
-    /// there, before any scene activation (RN converts once bootstrapping ends,
-    /// `App.tsx:396`). The device goes offline right after the pull, so the
-    /// drafts stay queued; the next push brings the job, the customer and the
-    /// linked request to the cloud.
+    /// The launch identity a live verification produces for this device's
+    /// owner, as `activateMigratedAuthenticatedIdentity` applies it.
+    static func liveOutcome(_ d: Device) -> NativeAuthenticatedIdentityActivationOutcome {
+        NativeAuthenticatedIdentityActivationOutcome(
+            accountState: .noAccountState, newlyStagedCount: 0, alreadyStagedCount: 0,
+            typedAccountState: nil, localOwnerVerified: true, accountBinding: d.binding,
+            verifiedAccountBinding: d.binding, verifiedUserSubject: d.subject, verifiedEmail: nil,
+            verificationSource: .live
+        )
+    }
+
+    /// A cold launch that runs the real initial sync (fix round 1, review
+    /// item 7): a fresh AppStore on the device's files, with the owner's
+    /// session in this device's Keychain, applies the live launch identity.
+    /// No sync has completed in this process, so the identity outcome begins
+    /// the initial-sync gate: the real full pull (`beginInitialSyncGate`,
+    /// through the injected service in front of the data server), its
+    /// commit, then the onboarding and subscription gates. The coordinator is
+    /// offline, so the pushes that follow keep what they would send queued;
+    /// the initial sync itself reads the data server directly.
+    @MainActor
+    static func coldLaunch(_ d: Device, onboarding stage: NativeOnboardingDocument.Stage) -> AppStore {
+        d.keychain = HostInMemoryKeychain()
+        let store = d.launch()
+        d.prepareOwner(store)
+        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+            accountBinding: d.binding, stage: stage,
+            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
+        ))
+        do {
+            try NativeKeychainSecureSettingsStore(backend: d.keychain!).publishSupabaseSession(Device.session)
+        } catch {
+            expect(false, "fixture: the session is in the device's Keychain (\(error))")
+        }
+        d.reach.online = false
+        d.connect(store, subject: d.subject)
+        store.testApplyLaunchIdentityOutcome(liveOutcome(d))
+        return store
+    }
+
+    /// K1: a cold launch through the real initial sync (fix round 1, review
+    /// item 7; at badabed modelled with a delta pull and the starting point).
+    /// The initial sync's full pull brings the booking, and the subscription
+    /// gate then opens the signed-in gate: the booking becomes a lead job and
+    /// a customer there, before any scene activation (RN converts once
+    /// bootstrapping ends, `App.tsx:396`). The three drafts stay queued while
+    /// offline; the next push brings the job, the customer and the linked
+    /// request to the cloud.
     /// Characterized at 9a4d845: nothing converts.
     @MainActor
     static func coldLaunchConvertsAfterTheInitialSync() async {
@@ -2105,25 +2159,13 @@ struct ScheduleBookingRecoveryTests {
         await d.signIn(first)
         await syncAndWait(d)
         await customerBooks(d)
-        let relaunched = d.launch()
-        await d.signIn(relaunched)
-        // The initial sync's committed pull. This host binary cannot run the
-        // full pull (`beginInitialSyncGate` needs a configured build), so the
-        // real delta pull and commit stand in for it (as in L).
-        _ = await relaunched.testPullDeltaIfPossible()
-        expect(bookingRequest(d) != nil && bookingRequest(d)?.convertedJobId == nil,
-               "\(id): sanity: the pull brought the booking, unconverted")
-        expect(leadJob(d) == nil, "\(id): sanity: the pull alone converts nothing")
-        d.reach.online = false
-        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
-            accountBinding: d.binding, stage: .personalized,
-            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
-        ))
-        do { try relaunched.completeStartingPoint(.fresh) } catch {
-            expect(false, "\(id): sanity: the starting point completes (\(error))")
-        }
-        await waitUntil { leadJob(d) != nil }
-        observed(id, intakeState(d))
+        let relaunched = coldLaunch(d, onboarding: .done)
+        let atStart = relaunched.authenticationGateState
+        await waitUntil { isSignedIn(relaunched) && leadJob(d) != nil }
+        observed(id, "gate at start=\(atStart) signedIn=\(isSignedIn(relaunched)) \(intakeState(d))")
+        expectEqual(atStart, .initialSyncLoading, "\(id): sanity: the launch runs the real initial sync")
+        expect(isSignedIn(relaunched), "\(id): sanity: the subscription gate opened the signed-in gate")
+        expect(bookingRequest(d) != nil, "\(id): sanity: the initial sync's pull brought the booking")
         expectConverted(d, id)
         expectEqual(d.queued("jobs"), 1, "\(id) [P12-016]: the lead job is queued for the push")
         expectEqual(d.queued("customers"), 1, "\(id) [P12-016]: …and the customer")
@@ -2137,6 +2179,52 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1,
                     "\(id) [P12-016]: …and the customer")
         expectEqual(d.queue.load().count, 0, "\(id): everything reached the server")
+    }
+
+    /// K1b (review M3): the same cold launch, but the gate waits for the owner
+    /// after the initial sync (here the starting point; onboarding and the
+    /// paywall wait the same way), for as long as the owner takes. Nothing
+    /// converts from a pull taken before the gate opened: not the initial
+    /// sync's, and not one that commits during the wait (the sync the gate
+    /// change starts, or a background pass). Otherwise the push after a late
+    /// conversion could replace another device's newer edit of the same
+    /// `jbk_` job. The first activation after the gate opens pulls and
+    /// converts.
+    /// Characterized at badabed (with the initial-sync seam): the starting
+    /// point's exit converted from the older pull.
+    @MainActor
+    static func gateThatWaitsForTheOwnerConvertsAfterItsNextPull() async {
+        let id = "K1b gate waits for the owner"
+        let d = Device("k1b")
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await syncAndWait(d)
+        await customerBooks(d)
+        let relaunched = coldLaunch(d, onboarding: .personalized)
+        await waitUntil {
+            if case .startingPoint = relaunched.authenticationGateState { return true }
+            return false
+        }
+        let waiting: Bool
+        if case .startingPoint = relaunched.authenticationGateState { waiting = true } else { waiting = false }
+        let pulledBeforeWait = bookingRequest(d) != nil
+        // A pull that commits while the gate waits.
+        _ = await relaunched.testPullDeltaIfPossible()
+        do { try relaunched.completeStartingPoint(.fresh) } catch {
+            expect(false, "\(id): sanity: the starting point completes (\(error))")
+        }
+        await settle()
+        let atTheGate = intakeState(d)
+        let convertedAtTheGate = leadJob(d) != nil || !bookedCustomers(d).isEmpty
+        d.reach.online = true
+        await relaunched.performForegroundRefresh()
+        observed(id, "at the gate: \(atTheGate); after the next activation: \(intakeState(d))")
+        expect(waiting, "\(id): sanity: the gate waits at the starting point")
+        expect(pulledBeforeWait, "\(id): sanity: the initial sync's pull brought the booking")
+        expect(isSignedIn(relaunched), "\(id): sanity: the starting point opened the signed-in gate")
+        expect(!convertedAtTheGate, "\(id) [M3]: nothing converts from a pull taken before the gate opened")
+        expectConverted(d, "\(id): the next activation")
     }
 
     /// K2: a warm activation. The activation's identity tail runs the gate
@@ -2280,15 +2368,16 @@ struct ScheduleBookingRecoveryTests {
 
     /// K5: the Expo build on the owner's other device converted the booking
     /// first. Its lead job `jbk_req-1` (since scheduled and priced there) and
-    /// its customer reached the cloud; its request stamp has not yet. The
-    /// activation's intake never replaces that job and writes nothing: the
-    /// job's presence means another device converted the booking, and plan
-    /// 8.08's recheck leaves the request to that device's stamp (contract §8;
-    /// `NativeScheduleBookingPolicy.recheckedIntakePlan`). No job, customer or
-    /// request is queued and no second customer is made. Once the other
-    /// device's stamp arrives, both clients link the booking to the same job
-    /// ID (D-B3-2), native converts nothing more, and the cloud job is still
-    /// the other device's.
+    /// its customer reached the cloud; its request stamp has not (a stamp
+    /// still in flight, or a conversion that stopped between saving the job
+    /// and the request). As RN does (`utils/storage/bookingConversion.ts:66-111`;
+    /// the "crash recovery" oracles, `__tests__/bookingConversion.test.ts:147-152`,
+    /// `:218-224`), native links the request to that job and that customer
+    /// and never touches the job: nothing is queued for it, and after the
+    /// push the cloud job is still the other device's. Both clients use the
+    /// same deterministic job ID (D-B3-2).
+    /// Characterized at 9a4d845: the request is never linked. At badabed the
+    /// recheck still dropped this conversion (review M1).
     @MainActor
     static func anExistingLeadJobIsNeverOverwritten() async {
         let id = "K5 existing lead job"
@@ -2299,8 +2388,8 @@ struct ScheduleBookingRecoveryTests {
             "address": "9 Oak Ave", "notes": "", "createdAt": "2026-09-10T00:00:05.000Z",
         ])
         await d.links.upsert(table: "jobs", id: leadJobID, record: otherDevicesLeadJob())
-        // Offline once the refresh's pull has committed, so anything intake
-        // queued would stay in the queue to be read.
+        // Offline once the refresh's pull has committed, so what intake
+        // queues stays in the queue to be read.
         var pulled = false
         store.notificationSynchronizeHook = { _ in
             guard !pulled else { return }
@@ -2309,33 +2398,131 @@ struct ScheduleBookingRecoveryTests {
         }
         await store.performForegroundRefresh()
         let job = leadJob(d)
-        observed(id, "after the refresh: \(intakeState(d))")
+        observed(id, intakeState(d) + " customer=\(bookingRequest(d)?.convertedCustomerId ?? "none")")
         expect(pulled, "\(id): sanity: the refresh's pull committed")
         expectEqual(job?.status, "scheduled", "\(id) [D-B3-2]: the other device's job is kept")
         expectEqual(job?.notes, "Priced on the other device", "\(id) [D-B3-2]: …with its notes")
         expectEqual(job?.estimateTotal, Decimal(350), "\(id) [D-B3-2]: …and its price")
-        expectEqual(bookedCustomers(d).count, 1, "\(id): no second customer is made")
-        expectEqual(d.queued("jobs") + d.queued("customers") + d.queued("bookingRequests"), 0,
-                    "\(id) [D-B3-2]: nothing is queued, so the job is never replaced")
-        expectEqual(bookingRequest(d)?.convertedJobId, nil, "\(id): the request is left to the device that made the job")
-        // The other device's request stamp reaches the cloud.
-        if var row = d.links.requestRow("req-1") {
-            row["convertedJobId"] = leadJobID
-            row["convertedCustomerId"] = "c-other-1"
-            await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
-        }
+        expectEqual(bookingRequest(d)?.convertedJobId, leadJobID, "\(id) [M1]: the request links that job")
+        expectEqual(bookingRequest(d)?.convertedCustomerId, "c-other-1",
+                    "\(id) [M1]: …and its customer (found by name: no duplicate)")
+        expectEqual(bookedCustomers(d).count, 1, "\(id): one customer on the device")
+        expectEqual(d.queued("jobs"), 0, "\(id) [D-B3-2]: nothing is queued for the job")
+        expectEqual(d.queued("customers"), 0, "\(id): …or the customer")
+        expectEqual(d.queued("bookingRequests"), 1, "\(id) [M1]: the linked request is queued")
         d.reach.online = true
-        await store.performForegroundRefresh()
         await syncAndWait(d)
-        observed(id, "after the other device's stamp: \(intakeState(d))")
-        expectEqual(bookingRequest(d)?.convertedJobId, leadJobID, "\(id) [D-B3-2]: both clients link the booking to the same job")
-        expectEqual(bookingRequest(d)?.convertedCustomerId, "c-other-1", "\(id) [D-B3-2]: …and the same customer")
-        expectEqual(leadJob(d)?.status, "scheduled", "\(id) [D-B3-2]: the job is still the other device's")
-        expectEqual(bookedCustomers(d).count, 1, "\(id): one customer")
         expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "scheduled",
-                    "\(id) [D-B3-2]: the cloud job is still the other device's")
-        expectEqual(d.data.liveRowCount(table: "jobs", userID: d.subject), 1, "\(id): …and the only job")
+                    "\(id) [D-B3-2]: after the push the cloud job is still the other device's")
+        expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
+                    "\(id) [M1]: …and the cloud request links it")
+        expectEqual(d.data.liveRowCount(table: "jobs", userID: d.subject), 1, "\(id): …the only job")
         expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id): …with one customer")
+    }
+
+    /// A customer already on the device for the person who books: same name,
+    /// a phone number but no email or address.
+    static func repeatCustomer() -> Canonical.Customer {
+        decodeRecord(Canonical.Customer.self, #"{"id":"cust-sam","name":"Sam Ortiz","email":"","phone":"555-0100","address":"","notes":"repeat"}"#)
+    }
+
+    /// K10 (review I1): a repeat customer books. The booking matches the
+    /// customer by name, and its email and address fill that customer's blank
+    /// fields; the phone the customer already has is kept (a fill never
+    /// replaces a value). RN saves this (`upsertCustomerInList`,
+    /// `utils/storage/customers.ts:69-86`; `bookingConversion.ts:140`; oracle
+    /// `__tests__/bookingConversion.test.ts:201-206`). The filled customer is
+    /// saved with the conversion and queued; no second customer is made.
+    /// Characterized at badabed: the fill was planned, then dropped by the
+    /// recheck, and never redone once the request was stamped.
+    @MainActor
+    static func aRepeatCustomersBlankFieldsAreFilled() async {
+        let id = "K10 repeat customer"
+        let d = Device("k10", customers: [repeatCustomer()])
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await syncAndWait(d)
+        await customerBooks(d)
+        var pulled = false
+        first.notificationSynchronizeHook = { _ in
+            guard !pulled else { return }
+            pulled = true
+            d.reach.online = false
+        }
+        await first.performForegroundRefresh()
+        let customers = bookedCustomers(d)
+        observed(id, intakeState(d) + " email=\(customers.first?.email.isEmpty == false ? "set" : "blank") "
+                 + "address=\(customers.first?.address.isEmpty == false ? "set" : "blank")")
+        expect(pulled, "\(id): sanity: the refresh's pull committed")
+        expectEqual(customers.count, 1, "\(id): no second customer is made")
+        expectEqual(customers.first?.id, "cust-sam", "\(id): the booking is linked to the repeat customer")
+        expectEqual(bookingRequest(d)?.convertedCustomerId, "cust-sam", "\(id): …as the request says")
+        expectEqual(leadJob(d)?.customerId, "cust-sam", "\(id): …and the job")
+        expectEqual(customers.first?.email, "sam@example.test", "\(id) [I1]: the blank email is filled from the booking")
+        expectEqual(customers.first?.address, "9 Oak Ave", "\(id) [I1]: …and the blank address")
+        expectEqual(customers.first?.phone, "555-0100", "\(id) [I1]: the phone the customer had is kept")
+        expectEqual(customers.first?.notes, "repeat", "\(id): …and every other field")
+        expectEqual(d.queued("customers"), 1, "\(id) [I1]: the filled customer is queued")
+        expectEqual(d.queued("jobs") + d.queued("bookingRequests"), 2, "\(id): …with the job and the linked request")
+        d.reach.online = true
+        await syncAndWait(d)
+        let cloud = d.links.row("customers", "cust-sam")
+        expectEqual(cloud?["email"] as? String, "sam@example.test", "\(id) [I1]: the cloud customer has the email")
+        expectEqual(cloud?["phone"] as? String, "555-0100", "\(id) [I1]: …and keeps its phone")
+        expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id): one customer in the cloud")
+    }
+
+    /// K10b (review I1, M1): the recheck on its own, with records that changed
+    /// between the plan and the commit (AppStore's intake plans and commits
+    /// with no suspension, so there it always sees the plan's own records).
+    @MainActor
+    static func recheckRules() {
+        let id = "K10b recheck"
+        let settings = fixtureSettings(bookingLink: nil)
+        guard let bookingData = try? JSONSerialization.data(withJSONObject: workerBooking()),
+              let request = try? JSONDecoder().decode(Canonical.BookingRequest.self, from: bookingData),
+              let jobData = try? JSONSerialization.data(withJSONObject: otherDevicesLeadJob()),
+              let otherJob = try? JSONDecoder().decode(Canonical.Job.self, from: jobData)
+        else {
+            expect(false, "\(id): fixture: the booking and the other device's job decode")
+            return
+        }
+        let known = repeatCustomer()
+        func plan(jobs: [Canonical.Job]) -> NativeBookingIntake.Plan {
+            NativeBookingIntake.plan(requests: [request], jobs: jobs, customers: [known], settings: settings,
+                                     makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        }
+        func recheck(_ plan: NativeBookingIntake.Plan, jobs: [Canonical.Job],
+                     customers: [Canonical.Customer]) -> NativeBookingIntake.Plan? {
+            NativeScheduleBookingPolicy.recheckedIntakePlan(plan, currentRequests: [request],
+                                                            currentJobs: jobs, currentCustomers: customers)
+        }
+        func customer(_ plan: NativeBookingIntake.Plan?) -> Canonical.Customer? {
+            plan?.customers.first { $0.id == "cust-sam" }
+        }
+        let fresh = plan(jobs: [])
+        let same = recheck(fresh, jobs: [], customers: [known])
+        expectEqual(customer(same)?.email, "sam@example.test", "\(id) [I1]: nothing changed: the fill is carried")
+        expectEqual(customer(same)?.phone, "555-0100", "\(id) [I1]: …the customer's phone is kept")
+        expect(same?.drafts.contains { $0.table == "customers" && $0.recordId == "cust-sam" } == true,
+               "\(id) [I1]: …and the filled customer has a draft")
+        var filledMeanwhile = known
+        filledMeanwhile.email = "sam.work@example.test"
+        let raced = recheck(fresh, jobs: [], customers: [filledMeanwhile])
+        expectEqual(customer(raced)?.email, "sam.work@example.test",
+                    "\(id) [I1]: an email set after the plan is never replaced")
+        expectEqual(customer(raced)?.address, "9 Oak Ave", "\(id) [I1]: …a field still blank is filled")
+        let linkedPlan = plan(jobs: [otherJob])
+        let linked = recheck(linkedPlan, jobs: [otherJob], customers: [known])
+        expectEqual(linked?.requests.first?.convertedJobId, leadJobID,
+                    "\(id) [M1]: a job already on the device when planned: the request is linked")
+        expectEqual(linked?.jobs.first?.status, "scheduled", "\(id) [M1]: …the job is untouched")
+        expect(linked?.drafts.contains { $0.table == "jobs" } == false, "\(id) [M1]: …and not queued")
+        expect(recheck(linkedPlan, jobs: [], customers: [known]) == nil,
+               "\(id) [M1]: that job deleted before the commit: nothing is converted")
+        expect(recheck(fresh, jobs: [otherJob], customers: [known]) == nil,
+               "\(id): the plan's lead appeared meanwhile (another device won): nothing is converted")
     }
 
     /// K6: the account changes while the foreground refresh's pull is in its
@@ -2404,9 +2591,10 @@ struct ScheduleBookingRecoveryTests {
     }
 
     /// K7: before the initial sync has completed for the signed-in owner,
-    /// nothing converts: not the activation (its pull commits and brings the
-    /// booking) and not a gate site (the starting point opening the gate).
-    /// Once the initial sync has completed, the next activation converts.
+    /// nothing converts, even though the activation's pull commits and brings
+    /// the booking (the gate-open point is reached only after the initial
+    /// sync). Once the initial sync has completed, the next activation
+    /// converts.
     @MainActor
     static func nothingBeforeTheInitialSync() async {
         let id = "K7 before the initial sync"
@@ -2419,13 +2607,6 @@ struct ScheduleBookingRecoveryTests {
         d.connect(store, subject: d.subject)
         await store.performForegroundRefresh()
         let pulled = bookingRequest(d) != nil
-        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
-            accountBinding: d.binding, stage: .personalized,
-            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
-        ))
-        do { try store.completeStartingPoint(.fresh) } catch {
-            expect(false, "\(id): sanity: the starting point completes (\(error))")
-        }
         await settle()
         let before = intakeState(d)
         let convertedBefore = leadJob(d) != nil || !bookedCustomers(d).isEmpty
@@ -2573,27 +2754,62 @@ struct ScheduleBookingRecoveryTests {
             expect(false, "S-K: the foreground refresh clears the intake mark")
         }
         let outcome = body(store, from: "    private func applyAuthenticatedIdentityOutcome(") ?? ""
-        if let reset = outcome.range(of: resetMark), let consumers = outcome.range(of: start) {
-            expect(reset.upperBound < consumers.lowerBound,
-                   "S-K: applying the identity clears the intake mark before its consumer block starts intake")
+        if let reset = outcome.range(of: resetMark), let gate = outcome.range(of: "advancePastInitialSync(") {
+            expect(reset.upperBound < gate.lowerBound,
+                   "S-K: applying the identity clears the intake mark before it can open the gate")
         } else {
             expect(false, "S-K: applying the identity clears the intake mark")
         }
-        // Launch: the three points that open the signed-in gate after the
-        // initial sync, intake first, then recovery.
-        let gateSites = [
-            ("the subscription gate's signed-in exit", body(store, from: "    private func advancePastSubscriptionGate() {") ?? ""),
-            ("the starting point's exit", body(store, from: "    func completeStartingPoint(") ?? ""),
+        // Launch: the subscription gate's signed-in exit, the point a cold
+        // launch reaches right after the initial sync, starts intake, then
+        // recovery.
+        let subscription = body(store, from: "    private func advancePastSubscriptionGate() {") ?? ""
+        if let intake = subscription.range(of: start), let recovery = subscription.range(of: recover) {
+            expect(intake.upperBound < recovery.lowerBound,
+                   "S-K [P12-016]: the subscription gate's signed-in exit starts intake, then recovery")
+        } else {
+            expect(false, "S-K [P12-016]: the subscription gate's signed-in exit starts intake")
+        }
+        // Review M4 and M3: the other two gate-open points could never
+        // convert, so they start no intake. A returning launch's consumer
+        // block runs in the same synchronous call that cleared the mark, and
+        // the starting point's exit follows a gate that waited for the owner.
+        let neverConvert = [
             ("a returning launch's signed-in gate",
              body(store, from: "        if activateConsumers, case .signedIn = authenticationGateState {", to: "\n        }\n") ?? ""),
+            ("the starting point's exit", body(store, from: "    func completeStartingPoint(") ?? ""),
         ]
-        for (site, text) in gateSites {
-            if let intake = text.range(of: start), let recovery = text.range(of: recover) {
-                expect(intake.upperBound < recovery.lowerBound, "S-K [P12-016]: \(site) starts intake, then recovery")
-            } else {
-                expect(false, "S-K [P12-016]: \(site) starts intake")
+        for (site, text) in neverConvert {
+            expect(!text.isEmpty && text.contains(recover) && !text.contains(start),
+                   "S-K [M4]: \(site) starts recovery but no intake")
+        }
+        // Review M3: a gate that waits for the owner clears the mark, and no
+        // pull marks while it waits.
+        let gateState = body(store, from: "    @Published private(set) var authenticationGateState") ?? ""
+        expect(gateState.contains("if Self.gateWaitsForOwner(authenticationGateState) { bookingIntakePullMark = nil }"),
+               "S-K [M3]: entering a gate that waits for the owner clears the intake mark")
+        let waits = body(store, from: "    private static func gateWaitsForOwner(") ?? ""
+        expect([".onboarding", ".startingPoint", ".paywall"].allSatisfy(waits.contains),
+               "S-K [M3]: onboarding, the starting point and the paywall wait for the owner")
+        let mark = body(store, from: "    private func markBookingIntakePullCommitted(") ?? ""
+        expect(mark.contains("guard !Self.gateWaitsForOwner(authenticationGateState) else { return }"),
+               "S-K [M3]: no pull marks while the gate waits for the owner")
+        // Review M5: the own-pull entry is a host-test entry only.
+        let sourceRoot = root.appendingPathComponent("native", isDirectory: true)
+        var productionCalls: [String] = []
+        for folder in ["TradeReadyNative", "TradeReadyWidgets"] {
+            let enumerator = FileManager.default.enumerator(at: sourceRoot.appendingPathComponent(folder),
+                                                            includingPropertiesForKeys: nil)
+            while let url = enumerator?.nextObject() as? URL {
+                guard url.pathExtension == "swift",
+                      let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                for line in text.components(separatedBy: "\n")
+                where line.contains("runBookingIntakeAfterVerifiedPull(") && !line.contains("func runBookingIntakeAfterVerifiedPull(") {
+                    productionCalls.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+                }
             }
         }
+        expectEqual(productionCalls, [], "S-K [M5]: nothing in the app calls runBookingIntakeAfterVerifiedPull")
         // The mark: set by the initial sync's commit, and by a delta pull
         // that committed every table.
         let setMark = "markBookingIntakePullCommitted("
