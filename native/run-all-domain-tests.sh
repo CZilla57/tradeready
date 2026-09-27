@@ -36,6 +36,8 @@ sh "$ROOT_DIR/native/run-canonical-tests.sh"
 "$ROOT_DIR/native/run-phase9-qualification-tests.sh"
 "$ROOT_DIR/native/run-legacy-import-tests.sh"
 "$ROOT_DIR/native/run-migration-coordinator-tests.sh"
+# Phase 12 (task 13, 12.01, SC4): the legacy migration path is never removed or unwired.
+sh "$ROOT_DIR/native/run-legacy-migration-retention-tests.sh"
 "$ROOT_DIR/native/run-auxiliary-activation-tests.sh"
 "$ROOT_DIR/native/run-authenticated-identity-tests.sh"
 "$ROOT_DIR/native/run-build-environment-tests.sh"
