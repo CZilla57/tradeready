@@ -28,10 +28,20 @@
 #   - a defect-list row's Status must start with "Fixed" or "Closed" to
 #     count as closed (a substring match like "*Fixed*" would also match
 #     "Open — not yet Fixed", so every status compare is anchored);
+#   - a defect-list row's severity is the MOST severe S1/S2/S3 token in its
+#     Sev cell, so an annotated cell ("S2 (was S3)", "S3 (was S2)") never
+#     reads as less severe than it might be;
 #   - an open S1/S2 defect only stops blocking when the charter's decision
-#     log (CH §9) has a row naming both the defect ID and a
-#     "ruled: R<n>" marker for the exact ruling token that row's own text
-#     cites — a bare mention of the ruling number elsewhere is not enough;
+#     log (CH §9) has a row whose Decider cell is exactly "owner" and whose
+#     Decision cell is exactly "<id> ruled: R<n>" for the ruling that
+#     defect row cites (strict: any other wording is not a ruling). A later
+#     §9 row that names the defect and says "revoked", in any wording and
+#     from any Decider, re-blocks it (lenient: a near-miss revocation still
+#     revokes);
+#   - a previous stage's run record counts as unfilled while it still holds
+#     any placeholder token of that stage's evidence template in the stage
+#     runbook (read from the template itself, so a real "<"/">" comparison
+#     in a record is not mistaken for one);
 #   - a production-match comparison is by origin (scheme, host, port,
 #     case-insensitive, trailing slash ignored), not exact string equality.
 set -u
@@ -93,6 +103,7 @@ MONITORING="$DOCS_DIR/native-phase-12-monitoring.md"
 PLAYBOOK="$DOCS_DIR/native-phase-12-rollback-playbook.md"
 READINESS="$DOCS_DIR/native-phase-12-release-readiness.md"
 EXIT_REPORT="$DOCS_DIR/native-phase-12-exit-report.md"
+RUNBOOK="$DOCS_DIR/native-phase-12-stage-runbook.md"
 
 TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tradeready-phase12-preflight.XXXXXX")
 trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
@@ -115,6 +126,25 @@ owner() {
 trim() {
   printf '%s' "$1" | sed 's/^[ \t]*//;s/[ \t]*$//'
 }
+
+# An awk function, prepended to the awk programs that need it: names(s, t) is
+# 1 if s contains t, case-insensitively, with no letter or digit touching
+# either end -- so "P12-012" is not named by "P12-0120", nor "R59" by "R590".
+AWK_NAMES='
+  function names(s, t,    ls, lt, off, pos, before, after) {
+    ls = tolower(s)
+    lt = tolower(t)
+    off = 0
+    while ((pos = index(substr(ls, off + 1), lt)) > 0) {
+      pos += off
+      before = (pos > 1) ? substr(ls, pos - 1, 1) : ""
+      after = substr(ls, pos + length(lt), 1)
+      if (before !~ /[a-z0-9]/ && after !~ /[a-z0-9]/) return 1
+      off = pos
+    }
+    return 0
+  }
+'
 
 # ---------------------------------------------------------------------------
 # 1. Staging / production-match config. Reuses the phase-3/4 preflight's
@@ -308,37 +338,48 @@ fi
 #    covers the whole defect list, not just named sections), excluding the
 #    Pointers subsection (routed to 12.03, a different 5-column schema with
 #    no Status column). An open S1/S2 blocks unless the charter's decision
-#    log (§9) has a row naming both the defect ID and a "ruled: R<n>" marker
-#    for the exact ruling token that row's own text cites.
+#    log (§9) holds an exact owner ruling for the ruling that row cites, and
+#    no later §9 row revokes it (see ruling_is_recorded below).
 # ---------------------------------------------------------------------------
 
 ruling_is_recorded() {
-  # Strict grammar (ruling R65: stop chasing phrasings). A §9 row counts as an
-  # owner ruling for defect $1 only when ALL of: it is a real table row (9
-  # fields after the "|" split, starting with "|"); its Decider cell, trimmed
-  # and lower-cased, is exactly "owner"; and its Decision cell, trimmed, is
-  # EXACTLY "<id> ruled: R<n>" -- nothing before or after (the rationale goes
-  # in another cell). No word-list of negations, qualifiers or synonyms is
-  # matched or maintained: anything that is not this exact string is not a
-  # ruling. A later row whose Decision cell is exactly "<id> revoked: R<n>"
-  # re-blocks the defect; rows are read in file order (the log is append-only,
-  # newest last), so the LAST matching ruled/revoked row for this id+ruling
-  # wins.
+  # Rulings are strict (ruling R65: stop chasing phrasings). A §9 row counts
+  # as an owner ruling for defect $1 only when ALL of: it is a real table row
+  # (9 fields after the "|" split, starting with "|"); its Decider cell,
+  # trimmed and lower-cased, is exactly "owner"; and its Decision cell,
+  # trimmed, is EXACTLY "<id> ruled: R<n>" -- nothing before or after (the
+  # rationale goes in another cell). No word-list of negations, qualifiers or
+  # synonyms is matched or maintained: anything that is not this exact string
+  # is not a ruling.
+  #
+  # Revocation is lenient and fails closed (ruling R67). Any other §9 table
+  # line (any line holding a "|", whatever its column count or Decider) that
+  # names the defect ID (case-insensitive, not as part of a longer ID) and
+  # contains "revoked" in any letter case re-blocks the defect, whatever else
+  # it says and whichever ruling it mentions -- so "revoked: R43 (draft)", a
+  # revoke with its reason inline, "Revoked:" and a non-owner's revoke all
+  # count. Rows are read in file order (the log is append-only, newest last),
+  # so the LAST ruling-or-revoking row wins: a later exact owner ruling after
+  # a revoke clears the defect again, even if its Evidence cell mentions the
+  # revocation.
   id=$1
   ruling=$2
   [ -n "$ruling" ] || return 1
   [ -r "$CHARTER" ] || return 1
   awk '/^## 9\. Decision log/{grab=1;next} grab && /^## /{exit} grab{print}' "$CHARTER" \
-    | awk -F'|' -v id="$id" -v ruling="$ruling" '
-        NF != 9 || $0 !~ /^\|/ { next }
+    | awk -F'|' -v id="$id" -v ruling="$ruling" "$AWK_NAMES"'
+        $0 !~ /\|/ { next }
         {
-          decider = $(NF - 2)
-          gsub(/^[ \t]+|[ \t]+$/, "", decider)
-          if (tolower(decider) != "owner") next
-          decision = $5
-          gsub(/^[ \t]+|[ \t]+$/, "", decision)
-          if (decision == id " ruled: " ruling) verdict = "ruled"
-          else if (decision == id " revoked: " ruling) verdict = "revoked"
+          exact = 0
+          if (NF == 9 && $0 ~ /^\|/) {
+            decider = $(NF - 2)
+            gsub(/^[ \t]+|[ \t]+$/, "", decider)
+            decision = $5
+            gsub(/^[ \t]+|[ \t]+$/, "", decision)
+            if (tolower(decider) == "owner" && decision == id " ruled: " ruling) exact = 1
+          }
+          if (exact) verdict = "ruled"
+          else if (index(tolower($0), "revoked") && names($0, id)) verdict = "revoked"
         }
         END { if (verdict == "ruled") print "MATCH" }
       ' \
@@ -378,16 +419,20 @@ else
     printf '%s\n' "$scan_body" | awk -F'|' '$0 ~ /\|/ && NF != 8 {print}' \
       | grep -iE '\bS[12]\b' >"$malformed_file" || :
 
-    # Effective severity of a raw cell: the LAST whole-word S1/S2/S3 token in
-    # it, case-insensitive (fix round 3, Minor 6 continuation) -- so
-    # "~~S1~~ S2", "S3 -> S2", "(was S3) S2" and lower-case "s1" all resolve
-    # to their plainly-intended current severity instead of being skipped or
-    # flagged as unparseable. A cell with no such token at all is not S1/S2
-    # (skip, as for a plain "S3" or an empty cell) unless the row's raw text
-    # otherwise mentions S1 or S2, in which case it cannot be safely
-    # dismissed either and is flagged as ambiguous.
+    # Effective severity of a raw cell: the MOST severe whole-word S1/S2/S3
+    # token in it, case-insensitive (fix round 4, ruling R67). An annotation
+    # can run either way -- "S2 (was S3)" and "(was S3) S2" both mean S2 now,
+    # "S3 (was S2)" may mean a downgrade -- and a scanner cannot tell which
+    # token is current, so it takes the most severe one and fails closed:
+    # "S2 (was S3)" is S2, "S3 (was S2)" is S2 (over-blocks safely),
+    # "~~S1~~ S2" is S1, "S3 -> S2" is S2, lower-case "s1" is S1. Round 3's
+    # last-token rule read "S2 (was S3)" as S3 and silently passed it. A cell
+    # with no such token at all is not S1/S2 (skip, as for a plain "S3" or an
+    # empty cell) unless the row's raw text otherwise mentions S1 or S2, in
+    # which case it cannot be safely dismissed either and is flagged as
+    # ambiguous.
     effective_severity() {
-      printf '%s' "$1" | grep -oiE '\bS[123]\b' | tail -n1 | tr '[:lower:]' '[:upper:]'
+      printf '%s' "$1" | grep -oiE '\bS[123]\b' | tr '[:lower:]' '[:upper:]' | sort | head -n1
     }
 
     row_count=0
@@ -470,29 +515,71 @@ fi
 #    line ending "...: pending" must still fail) and not the runbook's own
 #    unfilled template line (fix round 3: strict grammar, ruling R65). The
 #    line must read exactly "Production configuration decision: <non-empty
-#    text with no "<...>" placeholder> ruled: R<n>", with "ruled: R<n>" the
-#    literal end of the line -- nothing after it. Never add or edit a build
-#    configuration here.
+#    text> ruled: R<n>", with "ruled: R<n>" the literal end of the line --
+#    nothing after it.
+#    - Placeholders: any such line that still holds a "<...>" placeholder
+#      fails (the runbook's template is "<what was decided>"; a partial
+#      "upload <build>" fails too). A placeholder has no space just inside
+#      its brackets, so a spaced comparison ("p95 < 800 ms > baseline") in a
+#      real decision is not mistaken for one (fix round 4).
+#    - Revocation, as for a §9 ruling (fix round 4, ruling R67): lines are
+#      read in file order and the last decision-or-revoking line wins. A
+#      line that contains "revoked" (any case) and names the decision
+#      ("Production configuration decision", any case), R59, or the ruling
+#      the decision line cites, re-blocks the decision in any wording; a
+#      later exact decision line clears it again.
+#    Never add or edit a build configuration here.
 # ---------------------------------------------------------------------------
 
 case "$STAGE" in
   A|C)
-    r59_line=""
+    r59_state=none
     if [ -r "$READINESS" ]; then
-      r59_line=$(grep -E '^Production configuration decision: .+ ruled: R[0-9]+$' "$READINESS" | head -n1)
+      r59_state=$(awk "$AWK_NAMES"'
+        /^Production configuration decision: .+ ruled: R[0-9]+$/ {
+          if ($0 ~ /<[^<>[:space:]]([^<>]*[^<>[:space:]])?>/) placeholder = 1
+          cited = $0
+          sub(/.* ruled: /, "", cited)
+          state = "ruled"
+          next
+        }
+        # A revoking line only matters once a decision line has been seen:
+        # with no decision at all, the plain "owner must rule" FAIL applies.
+        state != "" {
+          line = tolower($0)
+          if (index(line, "revoked") && (index(line, "production configuration decision") || names($0, "R59") || names($0, cited)))
+            state = "revoked"
+        }
+        END {
+          if (placeholder) print "placeholder"
+          else if (state == "") print "none"
+          else print state
+        }
+      ' "$READINESS")
     fi
-    if [ -n "$r59_line" ] && ! printf '%s' "$r59_line" | grep -Eq '<[^<>]+>'; then
-      pass "production build configuration decision is recorded (R59)"
-    else
-      fail "production build configuration decision is recorded (R59) — owner must rule on a Production configuration or re-pointing Release; see docs/native-phase-12-release-readiness.md"
-    fi
+    case "$r59_state" in
+      ruled)
+        pass "production build configuration decision is recorded (R59)"
+        ;;
+      placeholder)
+        fail "production build configuration decision is recorded (R59) — the decision line still holds a <...> placeholder from the stage runbook's R59 template (runbook §2.2 step 11); write the real decision"
+        ;;
+      revoked)
+        fail "production build configuration decision is recorded (R59) — a later line in the release-readiness doc revokes it; record a new decision line after it"
+        ;;
+      *)
+        fail "production build configuration decision is recorded (R59) — owner must rule on a Production configuration or re-pointing Release; see docs/native-phase-12-release-readiness.md"
+        ;;
+    esac
     ;;
 esac
 
 # ---------------------------------------------------------------------------
 # 6. Evidence index: the previous stage has a recorded run (rehearsal, B, C,
-#    exit), and Stage B additionally needs the 12.06 rehearsal itself
-#    recorded (CH §4.4 bullet 3), not only Stage A's run.
+#    exit) -- not "No run recorded yet." and not still holding a placeholder
+#    of that stage's evidence template in the stage runbook -- and Stage B
+#    additionally needs the 12.06 rehearsal itself recorded (CH §4.4
+#    bullet 3), not only Stage A's run.
 # ---------------------------------------------------------------------------
 
 previous_stage_heading=
@@ -503,6 +590,24 @@ case "$STAGE" in
   exit) previous_stage_heading="Stage C (12.07)" ;;
 esac
 
+# The placeholder tokens of the stage runbook's evidence template for the
+# EI §24 section named $1 (the template under the runbook's "### ... Evidence
+# template ... "### <section>"" heading): every "<...>" token in the
+# template's fenced block, plus the opening part of a token the template
+# wraps onto a second line. Read from the template itself (fix round 4), so
+# only the template's own placeholders mark an unfilled record, never a real
+# "<"/">" comparison. Prints nothing if the template cannot be found.
+template_placeholders() {
+  [ -r "$RUNBOOK" ] || return 0
+  awk -v h="\"### $1\"" '
+    !found && /^### / && index($0, "Evidence template") && index($0, h) { found = 1; next }
+    found && !fenced && /^#/ { exit }
+    found && !fenced && /^```/ { fenced = 1; next }
+    fenced && /^```/ { exit }
+    fenced { print }
+  ' "$RUNBOOK" | grep -oE '<[^<>]+>|<[^<>]+$' | sort -u
+}
+
 if [ -n "$previous_stage_heading" ]; then
   if [ -r "$EVIDENCE" ]; then
     body=$(awk -v h="### $previous_stage_heading" '
@@ -510,15 +615,29 @@ if [ -n "$previous_stage_heading" ]; then
       grab && /^### / { exit }
       grab { print }
     ' "$EVIDENCE" | sed '/^[[:space:]]*$/d')
+    placeholders=$(template_placeholders "$previous_stage_heading")
+    leftover=
+    if [ -n "$placeholders" ]; then
+      leftover=$(printf '%s\n' "$placeholders" | while IFS= read -r token; do
+        if printf '%s\n' "$body" | grep -qF -- "$token"; then
+          printf '%s' "$token"
+          break
+        fi
+      done)
+    fi
     if [ -z "$body" ]; then
       fail "evidence index: $previous_stage_heading has a recorded run (section not found)"
     elif printf '%s\n' "$body" | grep -qF "No run recorded yet."; then
       fail "evidence index: $previous_stage_heading has a recorded run (still says \"No run recorded yet.\")"
-    elif printf '%s\n' "$body" | grep -Eq '<[^<>]+>'; then
-      # The evidence template's own placeholders (Run <N>, Build:
-      # <NATIVE_VERSION>, ...) are still present verbatim: this is an unfilled
-      # template, not a real run record (fix round 2).
-      fail "evidence index: $previous_stage_heading has a recorded run (still the unfilled evidence template, not real values)"
+    elif [ -z "$placeholders" ]; then
+      # Fail closed: without the template, its placeholders cannot be ruled
+      # out, so an unfilled template could pass as a record.
+      fail "evidence index: $previous_stage_heading has a recorded run (cannot read the stage runbook's \"### $previous_stage_heading\" evidence template, so its placeholders cannot be ruled out)"
+    elif [ -n "$leftover" ]; then
+      # The template's own placeholders (Run <N>, Build: <NATIVE_VERSION>, ...)
+      # are still present verbatim: an unfilled or half-filled template, not a
+      # real run record (fix rounds 2 and 4).
+      fail "evidence index: $previous_stage_heading has a recorded run (still holds a placeholder from the stage runbook's \"### $previous_stage_heading\" evidence template: $leftover)"
     else
       pass "evidence index: $previous_stage_heading has a recorded run"
     fi

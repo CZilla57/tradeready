@@ -196,6 +196,28 @@ expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no r
 #   - The correct owner row PASSes (OWNER line, not FAIL): already proved by
 #     the docs-good assertions immediately above (P12-903 / R900).
 
+# 4d-2. Fix round 4 (ruling R67): rulings stay strict, but revocation is
+#       lenient and fails closed. After the exact owner ruling, ANY later §9
+#       row that names P12-903 and says "revoked" (any case, any wording, any
+#       Decider) re-blocks it: a draft revoke, a revoke with its reason inline,
+#       a capitalized "Revoked:" and an exact revoke by a non-owner.
+for variant in \
+  charter-marker-revoked-draft.md \
+  charter-marker-revoked-reason.md \
+  charter-marker-revoked-capitalized.md \
+  charter-marker-revoked-non-owner.md \
+; do
+  DOCS_VARIANT=$(make_docs_dir "stage-a-${variant%.md}" "$variant" "native-phase-12-cutover-charter.md")
+  expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+    --stage A --docs-dir "$DOCS_VARIANT" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+done
+
+#   - A later exact owner re-rule after a revoke passes again (the last row
+#     wins), even though its Evidence cell mentions the revoked row.
+DOCS_RERULED=$(make_docs_dir "stage-a-revoked-then-reruled" "charter-marker-revoked-then-reruled.md" "native-phase-12-cutover-charter.md")
+expect_status 0 "OWNER defect list: P12-903 (open S1, ruling R900 recorded — owner still authorizes stage entry)" \
+  --stage A --docs-dir "$DOCS_RERULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
 # 4e. Minor 6 continuation (fix rounds 2-3): a defect row this scanner cannot
 #     parse cleanly must FAIL with a named line when it looks like it could
 #     be S1/S2, not be silently skipped -- an odd ID, an extra "|" in a cell,
@@ -213,23 +235,44 @@ DOCS_AMBIGUOUS_SEV=$(make_docs_dir "stage-a-ambiguous-severity" "charter-severit
 expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [P12-992: ambiguous severity cell 'Sev-one']" \
   --stage A --docs-dir "$DOCS_AMBIGUOUS_SEV" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
-# 4f. Fix round 3, Minor 6 continuation: a severity cell that is not exactly
-#     S1/S2/S3 but carries a clean trailing S-token still resolves to its
-#     EFFECTIVE severity (the last whole-word S1/S2/S3 token, case-
-#     insensitive) instead of being silently skipped or flagged unparseable.
-#     Each of the following fixtures' added row is Open with no ruling on
-#     file, so a correct resolution to S1/S2 must block it by name.
-for variant_id in \
-  "charter-severity-strikethrough.md:P12-996" \
-  "charter-severity-arrow.md:P12-995" \
-  "charter-severity-was-annotation.md:P12-994" \
-  "charter-severity-lowercase.md:P12-993" \
+# 4f. Fix rounds 3-4, Minor 6 continuation: a severity cell that is not
+#     exactly S1/S2/S3 resolves to its EFFECTIVE severity, which is the MOST
+#     severe whole-word S1/S2/S3 token in the cell, case-insensitive (fix
+#     round 4, ruling R67). The most severe token fails closed whichever way
+#     an annotation runs: "S2 (was S3)" is S2, "S3 (was S2)" is S2 (over-blocks
+#     safely), "~~S1~~ S2" is S1. Round 3's last-token rule read "S2 (was S3)"
+#     as S3 and silently passed it; round 2's fixture for that suffix
+#     notation, charter-unparseable-annotated-severity.md (P12-998), is
+#     restored here under its round-2 name.
+#     Each added row is Open and cites its own ruling, so:
+#       (a) with no ruling on file, a correct resolution to S1/S2 blocks it by
+#           name;
+#       (b) with an exact owner ruling appended to §9, the OWNER line names the
+#           resolved severity, which proves the most-severe rule directly.
+for variant_case in \
+  "charter-unparseable-annotated-severity.md:P12-998:R998:S2" \
+  "charter-severity-suffix-s1-was-s3.md:P12-989:R989:S1" \
+  "charter-severity-suffix-s3-was-s2.md:P12-988:R988:S2" \
+  "charter-severity-strikethrough.md:P12-996:R996:S1" \
+  "charter-severity-arrow.md:P12-995:R995:S2" \
+  "charter-severity-was-annotation.md:P12-994:R994:S2" \
+  "charter-severity-lowercase.md:P12-993:R993:S1" \
 ; do
-  variant=${variant_id%%:*}
-  expected_id=${variant_id##*:}
+  variant=${variant_case%%:*}
+  rest=${variant_case#*:}
+  expected_id=${rest%%:*}
+  rest=${rest#*:}
+  expected_ruling=${rest%%:*}
+  expected_sev=${rest#*:}
   DOCS_SEV=$(make_docs_dir "stage-a-${variant%.md}" "$variant" "native-phase-12-cutover-charter.md")
-  expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: $expected_id" \
+  expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: $expected_id)" \
     --stage A --docs-dir "$DOCS_SEV" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+  DOCS_SEV_RULED=$(make_docs_dir "stage-a-${variant%.md}-ruled" "$variant" "native-phase-12-cutover-charter.md")
+  awk -v r="| 3 | 2026-09-02 | pre-A | $expected_id ruled: $expected_ruling | fixture accepts the risk | owner | n/a |" \
+    '{ print } /^\| 2 \| 2026-09-01 \| pre-A \| P12-903 ruled: R900 \|/ { print r }' \
+    "$VARIANTS/$variant" >"$DOCS_SEV_RULED/native-phase-12-cutover-charter.md"
+  expect_status 0 "OWNER defect list: $expected_id (open $expected_sev, ruling $expected_ruling recorded" \
+    --stage A --docs-dir "$DOCS_SEV_RULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 done
 
 # 5. A missing required doc fails.
@@ -264,8 +307,32 @@ expect_status 1 "FAIL: production build configuration decision is recorded (R59)
 #     ("Production configuration decision: <what was decided> ruled: R59"),
 #     must FAIL -- the "<...>" placeholder is never a filled-in decision.
 DOCS_R59_TEMPLATE=$(make_docs_dir "stage-a-r59-unfilled-template" "readiness-r59-unfilled-template.md" "native-phase-12-release-readiness.md")
-expect_status 1 "FAIL: production build configuration decision is recorded (R59)" \
+expect_status 1 "FAIL: production build configuration decision is recorded (R59) — the decision line still holds a <...> placeholder from the stage runbook's R59 template" \
   --stage A --docs-dir "$DOCS_R59_TEMPLATE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 6d. Fix round 4 (finding 3): the R59 decision gets the same lenient,
+#     fail-closed revocation as a §9 ruling. After the decision line, any
+#     later line that says "revoked" (any case) and names the decision or R59
+#     re-blocks it; a later exact decision line passes again (last line wins).
+for variant in \
+  readiness-r59-revoked.md \
+  readiness-r59-revoked-reason.md \
+; do
+  DOCS_VARIANT=$(make_docs_dir "stage-a-${variant%.md}" "$variant" "native-phase-12-release-readiness.md")
+  expect_status 1 "FAIL: production build configuration decision is recorded (R59) — a later line in the release-readiness doc revokes it" \
+    --stage A --docs-dir "$DOCS_VARIANT" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+done
+DOCS_R59_RERULED=$(make_docs_dir "stage-a-r59-revoked-then-reruled" "readiness-r59-revoked-then-reruled.md" "native-phase-12-release-readiness.md")
+expect_status 0 "PASS: production build configuration decision is recorded (R59)" \
+  --stage A --docs-dir "$DOCS_R59_RERULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 6e. Fix round 4 (finding 4): a spaced comparison in the decision text
+#     ("p95 sync < 800 ms > baseline") is not a placeholder and passes; a
+#     placeholder has no space just inside its brackets (<build>, <what was
+#     decided>), and still fails (6c above).
+DOCS_R59_COMPARISON=$(make_docs_dir "stage-a-r59-comparison" "readiness-r59-comparison.md" "native-phase-12-release-readiness.md")
+expect_status 0 "PASS: production build configuration decision is recorded (R59)" \
+  --stage A --docs-dir "$DOCS_R59_COMPARISON" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 # 7. A stage whose predecessor has no run record fails, for every stage that
 #    checks one: rehearsal (needs Stage A), B (needs Stage A), C (needs Stage
@@ -304,8 +371,56 @@ expect_status 1 'FAIL: evidence index: Stage A (12.04) has a recorded run (still
 #     section holding only the unfilled evidence template (its own literal
 #     placeholders, e.g. "Run <N>, <DATE>") is not a real run record. FAIL.
 DOCS_TEMPLATE_ONLY=$(make_docs_dir "stage-a-template-only" "evidence-index-template-only.md" "native-phase-12-evidence-index.md")
-expect_status 1 "FAIL: evidence index: Stage A (12.04) has a recorded run (still the unfilled evidence template, not real values)" \
+expect_status 1 "FAIL: evidence index: Stage A (12.04) has a recorded run (still holds a placeholder from the stage runbook's \"### Stage A (12.04)\" evidence template: <" \
   --stage B --docs-dir "$DOCS_TEMPLATE_ONLY" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 7c. Fix round 4 (finding 4): only the runbook template's OWN placeholder
+#     tokens (read from the template text) mark an unfilled record. A real
+#     record that compares values with "<" and ">" ("latency < 200 ms >
+#     baseline") passes.
+DOCS_COMPARISON=$(make_docs_dir "stage-b-comparison-record" "evidence-index-comparison-record.md" "native-phase-12-evidence-index.md")
+expect_status 0 "PASS: evidence index: Stage A (12.04) has a recorded run" \
+  --stage B --docs-dir "$DOCS_COMPARISON" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 7d. The template's placeholders cannot be ruled out without the template:
+#     a missing stage runbook fails the predecessor check closed.
+DOCS_NO_RUNBOOK=$(make_docs_dir "stage-b-no-runbook")
+rm -f "$DOCS_NO_RUNBOOK/native-phase-12-stage-runbook.md"
+expect_status 1 "FAIL: evidence index: Stage A (12.04) has a recorded run (cannot read the stage runbook's \"### Stage A (12.04)\" evidence template" \
+  --stage B --docs-dir "$DOCS_NO_RUNBOOK" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 7e. The same two cases against the REAL committed runbook's templates, so a
+#     change to a real template cannot silently stop matching: its Stage A,
+#     B and C templates pasted verbatim as the record FAIL; the comparison
+#     record PASSes.
+for real_case in "Stage A (12.04):B" "Stage B (12.05):C" "Stage C (12.07):exit"; do
+  real_heading=${real_case%:*}
+  real_stage=${real_case##*:}
+  DOCS_REAL_TEMPLATE=$(make_docs_dir "stage-${real_stage}-real-runbook-template")
+  cp "$ROOT_DIR/docs/native-phase-12-stage-runbook.md" "$DOCS_REAL_TEMPLATE/native-phase-12-stage-runbook.md"
+  python3 - "$DOCS_REAL_TEMPLATE" "$real_heading" <<'EOF'
+import sys
+d, heading = sys.argv[1], sys.argv[2]
+runbook = open(d + "/native-phase-12-stage-runbook.md").read().split("\n")
+start = next(i for i, l in enumerate(runbook)
+             if l.startswith("### ") and "Evidence template" in l and '"### ' + heading + '"' in l)
+fence = next(i for i in range(start + 1, len(runbook)) if runbook[i].startswith("```"))
+end = next(i for i in range(fence + 1, len(runbook)) if runbook[i].startswith("```"))
+template = "\n".join(runbook[fence + 1:end])
+p = d + "/native-phase-12-evidence-index.md"
+lines = open(p).read().split("\n")
+h = lines.index("### " + heading)
+nxt = next((i for i in range(h + 1, len(lines)) if lines[i].startswith("### ")), len(lines))
+lines[h + 1:nxt] = ["", template, ""]
+open(p, "w").write("\n".join(lines))
+EOF
+  expect_status 1 "FAIL: evidence index: $real_heading has a recorded run (still holds a placeholder from the stage runbook's \"### $real_heading\" evidence template: <" \
+    --stage "$real_stage" --docs-dir "$DOCS_REAL_TEMPLATE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+done
+DOCS_REAL_COMPARISON=$(make_docs_dir "stage-b-real-runbook-comparison" "evidence-index-comparison-record.md" "native-phase-12-evidence-index.md")
+cp "$ROOT_DIR/docs/native-phase-12-stage-runbook.md" "$DOCS_REAL_COMPARISON/native-phase-12-stage-runbook.md"
+expect_status 0 "PASS: evidence index: Stage A (12.04) has a recorded run" \
+  --stage B --docs-dir "$DOCS_REAL_COMPARISON" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 # 8. Minor 3: --stage B checks the 12.06 rehearsal record itself, not only
 #    Stage A's run; --stage rehearsal checks Stage A's run (already proved above).
