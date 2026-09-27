@@ -514,11 +514,20 @@ ruling, and the gate fails closed:
    parenthetical or trailing punctuation belongs in this cell; put the reason in the
    Evidence cell instead.
 
-A later row whose Decision cell is **exactly** `<D> revoked: R<n>` re-blocks the defect
-(the log is append-only, newest last, so the last matching ruled/revoked row for that
-defect and ruling decides). Any other wording — a qualifier before or after the marker,
-"unruled:"/"overruled:" instead of "ruled:"/"revoked:", a different Decider, or a ruling
-bound to a different defect ID in the same row — is not a ruling, whatever it says.
+Any other wording — a qualifier before or after the marker, "unruled:"/"overruled:"
+instead of "ruled:", a different Decider, or a ruling bound to a different defect ID in
+the same row — is not a ruling, whatever it says.
+
+**Revoking a ruling is lenient (ruling R67, 2026-09-27).** Rulings are strict so that a
+near-miss never unblocks a defect; revocations are lenient so that a near-miss never
+leaves one unblocked. Any later row in this section that names the defect ID and
+contains the word "revoked" in any letter case re-blocks the defect, whoever the
+Decider is and whatever else the row says (`<D> revoked: R<n>` is the recommended form;
+`<D> revoked: R<n> (draft)`, `<D> Revoked: R<n>` or a revoke with its reason inline all
+count). The log is append-only, newest last, so the last ruling-or-revoking row for the
+defect decides: after a revoke, only a later row in the exact ruling form above clears
+the defect again. Only the word "revoked" revokes; write it rather than "withdrawn" or
+"unruled".
 
 Worked example (fictional IDs; this is not a real ruling on anything in §10):
 
@@ -528,10 +537,14 @@ Worked example (fictional IDs; this is not a real ruling on anything in §10):
 
 A real row ruling on `P12-012`'s stale-queue risk would have a Decision cell reading
 exactly `P12-012 ruled: R43`, with the reason in the Evidence cell and `owner` in the
-Decider cell, exactly like the worked example above. The same `ruled: R<n>` /
-`revoked: R<n>` grammar, without a defect ID, records the production-configuration
-decision (R59): see `docs/native-phase-12-release-readiness.md`'s own decision line,
-which must end with `ruled: R<n>` and nothing after it.
+Decider cell, exactly like the worked example above.
+
+The production-configuration decision (R59) is not a row here: it is one line in
+`docs/native-phase-12-release-readiness.md` reading exactly `Production configuration
+decision: <the decision> ruled: R<n>`, ending at `R<n>`, with no `<...>` placeholder left
+in it. It is revoked the same lenient way: any later line in that doc that contains
+"revoked" (any case) and names the decision ("Production configuration decision"), R59,
+or the ruling the decision line cites re-blocks it, until a later exact decision line.
 
 ## 10. Defect list
 

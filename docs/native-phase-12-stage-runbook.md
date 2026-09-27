@@ -94,8 +94,9 @@ the offline preflight's backend-placeholder check fails closed for every stage,
 `A` included, while `https://staging.invalid` stays), `AGG-1`, G6 approval (row 7).
 
 Real-repo preflight tail (`sh native/run-phase-12-stage-preflight.sh --stage A`,
-2026-09-27, re-run after this fix round; full output in
-`evidence-task14/fix3-preflight-real-repo-stage-A.txt`):
+2026-09-27, re-run after task 14's fourth review round). This block is the record:
+it shows every `FAIL` and `OWNER` line the run printed, with the `PASS` lines above
+them left out. Re-run the command from the repository root for the full output.
 
 ```
 FAIL: backend URL is not the placeholder (staging.invalid/local host)
@@ -129,8 +130,8 @@ NOT READY for stage A: 6 local check failure(s).
    ```sh
    sh native/run-phase-12-stage-preflight.sh --stage A
    ```
-   Today's real-repo run is non-zero — the tail is pasted in §1 above
-   (`evidence-task14/fix3-preflight-real-repo-stage-A.txt` has the full output).
+   Today's real-repo run is non-zero — its `FAIL` and `OWNER` lines are pasted in
+   §2.1 above, under the readiness line.
    Do not proceed past a `FAIL` line by weakening the check; fix the underlying
    blocker.
 3. **Host regression** (`PL12` §4):
@@ -176,10 +177,17 @@ NOT READY for stage A: 6 local check failure(s).
     one line in `RR` reading exactly `Production configuration decision: <what
     was decided> ruled: R59`, with a real decision filled in where `<what was
     decided>` is shown and nothing at all after `R59` on that line — the
-    preflight requires the line to end there — and log the matching `CH §9` row
-    (Decision cell exactly `<a §10 row's ID, if any> ruled: R<n>` — R59 itself
-    has no defect-list row, so this specific decision is recorded in `RR` only,
-    per the grammar `CH §9` documents).
+    preflight requires the line to end there. The preflight reads this decision
+    from `RR` only: R59 has no defect-list row, so there is no `CH §9` ruling row
+    in the `<D> ruled: R<n>` form for it. Log it in `CH §9` as an ordinary
+    decision row as well (`CH §1`: the decision-log row comes before acting);
+    the preflight does not read that row. The preflight fails while the `RR` line
+    still holds any `<...>` placeholder (a `<` or `>` with a space just inside
+    it, as in a comparison like `p95 < 800 ms`, is not one). To withdraw the
+    decision, add a later line to `RR` that contains "revoked" and names the
+    decision or R59 — for example `Production configuration decision: revoked:
+    R59` — which re-blocks Stage A/C until a new decision line follows it
+    (`CH §9`).
 12. **Owner action — SUPA-URL.** Fold this into the R59/D4 ruling above (the
     Release Supabase URL and key move with staging once D4 exists), or record a
     dated severity/ruling decision in `CH §9` if the current configuration ships
@@ -230,6 +238,12 @@ Defects raised: <P12-... or none>
 Rows moved to Stage B (charter §4.3, owner's log entry): <IDs, or none>
 Timing: <upload to processed>, <SA2 upgrade duration>
 ```
+
+The stage preflight reads this template, and the Stage B and Stage C templates in §4.3
+and §5.3, to learn each one's `<...>` placeholder tokens: a run record in `EI §24` that
+still holds any of them counts as unfilled, and fails the next stage's preflight. Keep
+each template heading's quoted `"### Stage …"` section name as it is; if the preflight
+cannot find a template, it fails that check closed.
 
 ### 2.4 Stop triggers (CH §4.8; who decides)
 
