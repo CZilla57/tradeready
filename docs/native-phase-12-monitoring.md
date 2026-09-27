@@ -54,7 +54,7 @@ context" filters on that context's fixed message (§3).
 
 ## 3. New remote signals (12.02)
 
-All go through `AppStore.reportError` (`N/AppStore.swift:11046`), so each is the Phase 11
+All go through `AppStore.reportError` (`N/AppStore.swift:12193`), so each is the Phase 11
 `reportError` path: the §10.1 redactor, the allow-listed extras, a bounded `rawError`
 `{code, message}` and the fingerprint `["{{ default }}", <context>]`, one Sentry issue per
 context (contract §10.3, §10.4). Every code is built from table names, operation names
@@ -91,8 +91,8 @@ carries the same facts as counts.
 
 "Prepare support report" (`N/NativeSupportReportAction.swift`), in Settings › Migration
 support and on both blocked screens (`N/RootView.swift`; Reach below), calls
-`AppStore.createPersistenceSupportReport` (`N/AppStore.swift:904`), which now
-writes the version 4 report built by `AppStore.supportReport` (`N/AppStore.swift:916`)
+`AppStore.createPersistenceSupportReport` (`N/AppStore.swift:952`), which now
+writes the version 4 report built by `AppStore.supportReport` (`N/AppStore.swift:964`)
 from the types in `N/NativeSupportDiagnostics.swift`. The user shares
 `tradeready-support-report.json` from the share sheet, usually into the Contact support
 email. The v2 persistence report (Phase 2) is kept whole under `persistence`, so nothing
@@ -353,7 +353,8 @@ Host fixtures only, a stub link on `dry-run.invalid`, no network
 4. **A thrown cancel shows as failed.** RevenueCat can report a cancel by throwing
    (`purchaseCancelledError`); native does not report it to Sentry (host-tested with
    `RevenueCat.ErrorCode` 1) but still shows the failed state, where RN shows nothing. An
-   S3 parity gap, charter §10 Backlog row 12.02-F4; no code change in 12.02.
+   S3 parity gap, charter §10 "New in Phase 12" row P12-009 (renumbered from `12.02-F4`
+   by task 14, R40); no code change in 12.02.
 5. **Two rejected counts.** `sync.rejectedChangeCount` counts refused changes on file;
    `persistence.rejectedChangeCount` counts the ones Cloud Sync shows. They differ while a
    newer change for a refused record is queued.
