@@ -29,6 +29,16 @@ import Foundation
 ///   above, handled portal changes) and unknown statuses produce no rows and
 ///   stay intact/inert.
 ///
+/// Phase 12 (12.00b.2-L fix round 1, Task 12e review I1): a booking-family
+/// request with no `convertedJobId` whose lead job `jbk_<requestId>` is on the
+/// device is treated as linked to that job (`linkedJobID`). Intake makes the
+/// lead job and stamps the request together, but the stamp is a guarded push
+/// that is dropped when the customer changed the request on the server first
+/// (defect `P12-017`), and a cancelled request is never stamped again. The
+/// cancel then shows as `cancelled` on the lead job while that job still holds
+/// the slot, a reschedule request opens that job, and a booking with a job is
+/// not `unconvertedActive`.
+///
 /// Unknown/preserved server fields are never read or rewritten here; rows
 /// hold references to the original request records.
 public enum NativeBookingAttention {
@@ -95,19 +105,20 @@ public enum NativeBookingAttention {
                 }
                 continue
             }
+            let linked = linkedJobID(request, jobsByID: jobsByID)
             if request.status == "reschedule_requested" {
                 if let stamped = request.convertedJobId, jobsByID[stamped] == nil {
                     rows.append(Row(kind: .missingJob, request: request, jobID: stamped,
                                     note: lastRescheduleNote(request)))
                 } else {
                     rows.append(Row(kind: .rescheduleRequested, request: request,
-                                    jobID: request.convertedJobId,
+                                    jobID: linked,
                                     note: lastRescheduleNote(request)))
                 }
                 continue
             }
             if request.status == "cancelled" || request.status == "declined" {
-                guard let stamped = request.convertedJobId else { continue }
+                guard let stamped = linked else { continue }
                 guard let job = jobsByID[stamped] else {
                     // The linked job is gone — surface for reconciliation
                     // instead of silently clearing the row.
@@ -121,7 +132,7 @@ public enum NativeBookingAttention {
                 }
                 continue
             }
-            if request.convertedJobId == nil
+            if linked == nil
                 && (request.status == "new"
                     || NativeBookingIntake.convertibleSlotStatuses.contains(request.status)) {
                 rows.append(Row(kind: .unconvertedActive, request: request,
@@ -164,6 +175,19 @@ public enum NativeBookingAttention {
 
     public static func isUnhandled(_ request: Canonical.BookingRequest) -> Bool {
         (request.handledAt ?? "").isEmpty
+    }
+
+    /// Fix round 1 (Task 12e review I1): the job a booking-family request is
+    /// linked to: its stamp, or, when the stamp never landed, the lead job
+    /// intake made for it, whose id is deterministic (`jbk_<requestId>`, RN
+    /// `utils/storage/bookingConversion.ts:66`). RN reads the stamp only
+    /// (`utils/bookingAttention.ts:33-35`, `:67-70`) and never reaches this
+    /// state: its whole-row stamp push overwrote the customer's change instead.
+    /// A stamp always wins; nil when neither is there.
+    static func linkedJobID(_ request: Canonical.BookingRequest, jobsByID: [String: Canonical.Job]) -> String? {
+        if let stamped = request.convertedJobId { return stamped }
+        let lead = "jbk_\(request.id)"
+        return jobsByID[lead] == nil ? nil : lead
     }
 
     // MARK: - Private

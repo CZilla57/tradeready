@@ -1130,7 +1130,7 @@ struct ScheduleBookingRecoveryTests {
             expectEqual(local, "reschedule_requested", "\(id): the request still asks for a reschedule")
             expectEqual(kept, 1, "\(id): the proof stays while a resolve can still succeed (the owner retries)")
         case .declineAfterAwaitingAck:
-            expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false)", "\(id): sanity: the decline")
+            expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false, savedLocally: true)", "\(id): sanity: the decline")
             expectEqual(server, "declined", "\(id): the server declined")
             expectEqual(local, "declined", "\(id): the local request is declined")
             expectEqual(kept, 0, "\(id) [P12-013]: no resolve can succeed: the proof is removed")
@@ -3000,7 +3000,7 @@ struct ScheduleBookingRecoveryTests {
         observed(id, "outcome=\(outcome) sent=\(d.links.log) queuedAfterDecline=\(queuedAfter) "
                  + "server=\(serverRequestStatus(d)) serverHistory=\(serverHistory(d)) "
                  + "local=\(d.localRequestStatus ?? "gone") localHistory=\(localHistory(d))")
-        expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false)", "\(id): sanity: the server declined")
+        expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false, savedLocally: true)", "\(id): sanity: the server declined")
         expectEqual(d.links.log, ["respond/decline"], "\(id): one decline is sent")
         expectEqual(queuedAfter, 0, "\(id) [P12-017]: nothing is queued for the request after the server's write")
         expectEqual(localAfter, "declined", "\(id) [P12-017]: the device shows declined straight away")
@@ -3058,7 +3058,7 @@ struct ScheduleBookingRecoveryTests {
                      + "queued=\(queuedAfter)")
             switch copyCase {
             case .online:
-                expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false)", "\(id): the server declined")
+                expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false, savedLocally: true)", "\(id): the server declined")
                 expectEqual(sent, ["respond/decline"], "\(id): one decline is sent")
                 expectEqual(d.links.requestRow("req-1")?["handledAt"] as? String, "2026-09-19T00:00:00.000Z",
                             "\(id) [P12-017]: the queued copy reached the server before the decline")
@@ -3089,7 +3089,7 @@ struct ScheduleBookingRecoveryTests {
                 let retried = String(describing: await store.declineBookingRequest(
                     requestID: "req-1", responseService: d.respondService))
                 await syncAndWait(d)
-                expectEqual(retried, "applied(status: \"declined\", alreadyApplied: false)",
+                expectEqual(retried, "applied(status: \"declined\", alreadyApplied: false, savedLocally: true)",
                             "\(id) [P12-017]: then the decline goes through")
                 expectEqual(serverHistory(d), customerHistory + ["owner/decline"],
                             "\(id) [P12-017]: …and the cloud row keeps the owner's decline entry")
@@ -3444,8 +3444,8 @@ struct ScheduleBookingRecoveryTests {
     /// D11 (fix round 1, review I1): the attention selector on its own. A
     /// booking whose stamp never landed is still shown through its lead job,
     /// whose id is deterministic (`jbk_<requestId>`, RN
-    /// `utils/storage/bookingConversion.ts:62`); a stamp wins over it, and a
-    /// row still self-dismisses as RN's does (`utils/bookingAttention.ts:31-43`).
+    /// `utils/storage/bookingConversion.ts:66`); a stamp wins over it, and a
+    /// row still self-dismisses as RN's does (`utils/bookingAttention.ts:33-43`).
     @MainActor
     static func attentionFindsTheLeadJobOfAnUnlinkedBooking() {
         let id = "D11 attention"

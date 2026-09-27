@@ -132,10 +132,19 @@ struct NativeRejectedChangeStore {
     /// whose newer change the server accepted. Returns how many of the oldest
     /// entries were dropped to stay within `capacity`. Throws before changing
     /// anything when there is no owner or the file cannot be read or written.
+    ///
+    /// Phase 12 (12.00b.2-L fix round 1, Task 12e review Minor 4):
+    /// `supersededChanges` are guarded changes the push found superseded (the
+    /// row moved on since their guard). Such a change can never succeed: a
+    /// Retry sends the same guard again. An entry holding the same change
+    /// (`isSameChange`) is cleared; the settle step's watermark lowering makes
+    /// the next pull bring the server's row, as Discard would. An entry for
+    /// the same record but another change stays.
     @discardableResult
     func settle(
         rejected: [NativeMutationRejection],
         clearedKeys: Set<String>,
+        supersededChanges: [Canonical.MutationItem] = [],
         binding: String?,
         now: Date
     ) throws -> Int {
@@ -143,6 +152,7 @@ struct NativeRejectedChangeStore {
         var entries = try document(binding: binding) ?? []
         let before = entries
         entries.removeAll { clearedKeys.contains($0.key) }
+        entries.removeAll { entry in supersededChanges.contains { Self.isSameChange($0, entry.item) } }
         for rejection in rejected {
             let entry = NativeRejectedChange(item: rejection.item, statusCode: rejection.statusCode, rejectedAt: now)
             entries.removeAll { $0.key == entry.key }
@@ -155,6 +165,13 @@ struct NativeRejectedChangeStore {
         guard entries != before else { return dropped }
         try save(entries, binding: binding)
         return dropped
+    }
+
+    /// The same change: every field but the queue timestamp `ts`, which a
+    /// Retry stamps anew when it queues the change again.
+    static func isSameChange(_ lhs: Canonical.MutationItem, _ rhs: Canonical.MutationItem) -> Bool {
+        lhs.table == rhs.table && lhs.op == rhs.op && lhs.recordId == rhs.recordId
+            && lhs.payload == rhs.payload && lhs.ifUnchangedSince == rhs.ifUnchangedSince
     }
 
     /// Removes one entry (Discard, or a Retry the server then accepted).

@@ -78,6 +78,9 @@ extension AppStore {
             case .awaitingAck(.refused):
                 return .init(title: failure, message: "The server refused a change to this booking or its job. "
                              + "Review it in Settings \u{203A} Cloud Sync, then \(tapAgain).")
+            case .awaitingAck(.unreadable):
+                return .init(title: failure, message: "This device couldn't check for changes waiting to sync. "
+                             + "Wait a moment, then \(tapAgain).")
             case .needsReview("confirmed"):
                 return .init(title: "Booking confirmed", message: "This booking is already confirmed.")
             case let .needsReview(currentStatus):
@@ -138,27 +141,38 @@ extension AppStore {
         /// The server refused it; it waits in Settings › Cloud Sync, where a
         /// Retry would push it.
         case refused
+        /// Fix round 1 (review Minor 5): the rejected-change store could not
+        /// be read (before the first unlock after a restart, or a file with no
+        /// verified owner), so a refusal cannot be ruled out. Fail closed.
+        case unreadable
     }
 }
 
 extension AppStore.OwnerResponseOutcome {
     /// The acting screen's alert after the owner's decline, or nil when the
-    /// server declined the booking. RN clears the row without an alert and
-    /// otherwise shows "Couldn't update booking" with a message
-    /// (`screens/TodayScreen.tsx:554-558`). `actionLabel` is the button the
-    /// owner tapped there.
+    /// server declined the booking and this device saved it. RN clears the
+    /// row without an alert and otherwise shows "Couldn't update booking"
+    /// with a message (`screens/TodayScreen.tsx:554-558`). `actionLabel` is
+    /// the button the owner tapped there.
     func declineNotice(actionLabel: String) -> AppStore.BookingRescheduleNotice? {
         let failure = "Couldn't update booking"
         let tapAgain = "tap \u{201C}\(actionLabel)\u{201D} again"
         switch self {
-        case .applied:
+        case .applied(_, _, true):
             return nil
+        case .applied(_, _, false):
+            // Fix round 1 (review Minor 2): the accept's sentence.
+            return .init(title: "Booking declined", message: "The booking is declined. "
+                         + "This device couldn't save the change yet. Pull down to refresh.")
         case .awaitingAck(.queued):
             return .init(title: failure, message: "Your latest changes haven't reached the server yet. "
                          + "Check your connection, then \(tapAgain).")
         case .awaitingAck(.refused):
             return .init(title: failure, message: "The server refused a change to this booking. "
                          + "Review it in Settings \u{203A} Cloud Sync, then \(tapAgain).")
+        case .awaitingAck(.unreadable):
+            return .init(title: failure, message: "This device couldn't check for changes waiting to sync. "
+                         + "Wait a moment, then \(tapAgain).")
         case let .needsReview(currentStatus):
             switch currentStatus {
             case "declined":

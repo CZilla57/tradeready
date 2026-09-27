@@ -8469,6 +8469,7 @@ final class AppStore: ObservableObject {
         let dropped = try rejectedChangeStore.settle(
             rejected: settlement.rejected,
             clearedKeys: Set(settlement.cleared.map(NativeRejectedChange.key)),
+            supersededChanges: settlement.superseded,
             binding: verifiedAccountBinding,
             now: Date()
         )
@@ -9382,7 +9383,9 @@ extension AppStore {
     }
 
     enum OwnerResponseOutcome: Equatable {
-        case applied(status: String, alreadyApplied: Bool)
+        /// `savedLocally` is false when the server declined but this device
+        /// could not save the status (fix round 1, review Minor 2).
+        case applied(status: String, alreadyApplied: Bool, savedLocally: Bool = true)
         /// Phase 12 (12.00b.2-L, P12-017): a change to the request has not
         /// reached the server. Nothing was sent.
         case awaitingAck(OwnerResponseWait)
@@ -9991,13 +9994,19 @@ extension AppStore {
             result = try await serviceWithRefresh.decline(requestId: requestID, sessionBytes: bytes)
         } catch let error as NativeBookingResponseError {
             guard stillCurrent() else { return .failed(reason: "owner-changed") }
-            return await mapBookingResponseError(error, requestID: requestID, capture: capture)
+            let outcome = await mapBookingResponseError(error, requestID: requestID, capture: capture)
+            // Fix round 1 (review Minor 1): the refusal paths pull; nothing
+            // they read counts once the account changed during that await.
+            guard stillCurrent() else { return .failed(reason: "owner-changed") }
+            return outcome
         } catch {
             return .failed(reason: "transport")
         }
         guard stillCurrent() else { return .failed(reason: "owner-changed") }
-        _ = saveServerBookingRequestStatus(requestID: requestID, status: result.status)
-        return .applied(status: result.status, alreadyApplied: result.alreadyApplied)
+        // Fix round 1 (review Minor 2): a failed save is said on the acting
+        // screen, as the accept says it; the next pull brings the server's row.
+        let saved = saveServerBookingRequestStatus(requestID: requestID, status: result.status)
+        return .applied(status: result.status, alreadyApplied: result.alreadyApplied, savedLocally: saved)
     }
 
     /// Reschedule step 1: durably saves the revised job schedule locally,
@@ -10116,14 +10125,21 @@ extension AppStore {
                 requestId: requestID, proof: proof, sessionBytes: bytes
             )
         } catch let error as NativeBookingResponseError {
+            // Fix round 1 (review Minor 1): the account generation and owner
+            // are re-checked after each refusal's pull, as the decline does.
+            let stillCurrent = { [unowned self] in
+                accountBoundaryGeneration == generation && scheduleBookingOwnerStillCurrent(capture)
+            }
             switch error {
             case let .invalidState(currentStatus), let .scheduleChanged(currentStatus):
                 _ = await pullDeltaIfPossible()
+                guard stillCurrent() else { return .failed(reason: "owner-changed") }
                 return .needsReview(currentStatus: currentStatus)
             case .unknownOutcome:
                 return .unknownOutcome
             case .notFound:
                 _ = await pullDeltaIfPossible()
+                guard stillCurrent() else { return .failed(reason: "owner-changed") }
                 return .missing
             default:
                 return .failed(reason: String(describing: error))
@@ -10357,10 +10373,11 @@ extension AppStore {
     /// after the response and put an older copy back (`.queued`); one the
     /// server refused waits in Settings › Cloud Sync, where a Retry would do
     /// the same (`.refused`). A rejected-change store that cannot be read
-    /// counts as waiting (fail closed).
+    /// counts as waiting (fail closed): `.unreadable` (fix round 1, review
+    /// Minor 5), whose notice does not blame the connection.
     private func ownerResponseWait(for keys: Set<String>) -> OwnerResponseWait? {
         guard pendingMutationKeys().isDisjoint(with: keys) else { return .queued }
-        guard let refused = try? rejectedChangeKeys() else { return .queued }
+        guard let refused = try? rejectedChangeKeys() else { return .unreadable }
         return refused.isDisjoint(with: keys) ? nil : .refused
     }
 
