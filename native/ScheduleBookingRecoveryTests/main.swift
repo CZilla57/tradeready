@@ -696,6 +696,11 @@ struct ScheduleBookingRecoveryTests {
         await aSupersededChangeRefetchesItsRow()
         intakeGuardsOnlyRecordsAlreadyOnTheServer()
         await legacyPrepareStopsOnAnAccountChange()
+        await aLongQueuedStampRefetchesItsRow()
+        attentionFindsTheLeadJobOfAnUnlinkedBooking()
+        await aRefusalsPullStopsOnAnAccountChange()
+        await aDeclineWhoseLocalSaveFailsSaysSo()
+        await anUnreadableRejectedStoreSaysWaitAMoment()
         sources(root)
         intakeSources(root)
         declineNoticesAndPins(root)
@@ -1928,6 +1933,14 @@ struct ScheduleBookingRecoveryTests {
                         ))
                         store.testSeedNativeSignedInOwner(subject: subjectB, binding: bindingB)
                         store.testMarkInitialSyncCompleted(subject: subjectB)
+                        // Fix round 1 (review Minor 7): B has its own request
+                        // with the same id, so an accept that went on after
+                        // the switch would write A's result into B's record.
+                        var requestB = fixtureRequest()
+                        requestB.name = "Bea B"
+                        try? d.repository().save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(
+                            settings: fixtureSettings(bookingLink: nil), bookingRequests: [requestB])))
+                        store.load()
                         snapshotAtSwitch = try? Data(contentsOf: d.storeURL)
                         queueAtSwitch = d.queue.load()
                     default:
@@ -1956,6 +1969,9 @@ struct ScheduleBookingRecoveryTests {
                     expect(snapshotAtSwitch != nil && (try? Data(contentsOf: d.storeURL)) == snapshotAtSwitch,
                            "\(id) [M6]: B's snapshot on disk is untouched by the accept")
                     expectEqual(d.queue.load(), queueAtSwitch, "\(id) [M6]: …and so is B's queue")
+                    expectEqual(store.bookingAttentionRows().first { $0.request.id == "req-1" }?.request.status,
+                                "reschedule_requested", "\(id) [Minor 7]: B's own request with that id is untouched")
+                    expectEqual(d.items.count, 1, "\(id) [Minor 7]: A's staged proof is kept (only a success removes it)")
                     expect(d.items.allSatisfy { $0.ownerBinding == d.binding },
                            "\(id) [M6]: the staged proof stays A's (nothing is staged for B)")
                 }
@@ -3172,6 +3188,19 @@ struct ScheduleBookingRecoveryTests {
             if change == "none" {
                 expectEqual(cloud?["convertedJobId"] as? String, leadJobID, "\(id) [P12-017]: the stamp lands on the cloud row")
             }
+            // Fix round 1 (review I1): the stamp was dropped, so the request
+            // is linked neither on the server nor on the device, while its
+            // lead job still holds the slot on the calendar and route. Today
+            // still shows the request's current state, on that job.
+            let row = store.bookingAttentionRows().first { $0.request.id == "req-1" }
+            if change == "cancel" {
+                expectEqual(row?.kind, .cancelled, "\(id) [I1]: Today shows the customer's cancel")
+                expectEqual(row?.jobID, leadJobID, "\(id) [I1]: …on the lead job that still holds the slot")
+            }
+            if change == "request_reschedule" {
+                expectEqual(row?.kind, .rescheduleRequested, "\(id) [I1]: Today shows the reschedule request")
+                expectEqual(row?.jobID, leadJobID, "\(id) [I1]: …with View job on the lead job")
+            }
             if change == "request_reschedule" {
                 // The next activation links the request to the job on the
                 // device again (`recheckedIntakePlan`, review M1), and with
@@ -3274,6 +3303,13 @@ struct ScheduleBookingRecoveryTests {
         _ = store.retryRejectedChange(id: "bookingRequests/req-1")
         expectEqual(d.queue.load().first { $0.recordId == "req-1" }?.ifUnchangedSince, earlier,
                     "\(id) [P12-017]: Retry sends the refused change with its guard")
+        // Fix round 1 (review Minor 4): the row moved on since that guard, so
+        // the Retry is superseded. It can never succeed, so its Cloud Sync
+        // entry goes too, and the pull brings the server's row.
+        await syncAndWait(d)
+        expectEqual(d.queue.load().count, 0, "\(id) [Minor 4]: the superseded Retry left the queue")
+        expectEqual(store.rejectedChanges.map(\.key), [], "\(id) [Minor 4]: …and its Cloud Sync entry is cleared")
+        expectEqual(localHistory(d), customerHistory, "\(id) [Minor 4]: the device keeps the server's row")
     }
 
     /// D7: which intake drafts are guarded. The request stamp and a repeat
@@ -3347,6 +3383,220 @@ struct ScheduleBookingRecoveryTests {
             observed(id, "outcome=\(prepared)")
             expect(changed, "\(id): sanity: the account changed during the prepare's pull")
             expectEqual(String(describing: prepared), "failed", "\(id) [M9]: the prepare stops")
+        }
+    }
+
+    /// D10 (fix round 1, review Minor 8): a guarded stamp stays queued (its
+    /// push keeps failing) while pulls go on, and those pulls move the
+    /// bookingRequests watermark more than the cursor's 5-minute overlap past
+    /// the stamp's guard. The customer's cancel landed just after the guard.
+    /// When the push finally runs, the stamp is superseded; lowering the
+    /// watermark to the guard, not the overlap, makes the next pull fetch the
+    /// cancelled row, so the device shows it.
+    @MainActor
+    static func aLongQueuedStampRefetchesItsRow() async {
+        let id = "D10 a stamp queued while the watermark moved on"
+        let (d, store) = await intakeDevice("d10")
+        defer { d.cleanup() }
+        var pulled = false
+        store.notificationSynchronizeHook = { _ in
+            guard !pulled else { return }
+            pulled = true
+            d.reach.online = false
+        }
+        await store.performForegroundRefresh()
+        _ = await d.coordinator?.waitUntilIdle()
+        let guardStamp = d.queue.load().first { $0.table == "bookingRequests" }?.ifUnchangedSince
+        expect(guardStamp != nil, "\(id): sanity: the stamp waits, guarded")
+        await customerActs(d, event: "cancel", status: "cancelled")
+        // Ten minutes later a second booking arrives, so the next pull moves
+        // the watermark far past the guard.
+        d.data.advanceClock(seconds: 600)
+        var second = workerBooking()
+        second["id"] = "req-2"
+        await d.links.upsert(table: "bookingRequests", id: "req-2", record: second)
+        // The stamp's push keeps failing while the pulls run.
+        d.data.failRequests = (method: "PATCH", table: "bookingRequests", status: 503)
+        d.reach.online = true
+        await syncAndWait(d)
+        let cursorStore = Canonical.NativeSyncCursorStore(fileURL: d.dir.appendingPathComponent("sync-cursor.json"))
+        let moved = cursorStore.load().tables["bookingRequests"]
+        var gap: TimeInterval = 0
+        if let movedDate = moved.flatMap(InMemorySupabase.parse),
+           let guardDate = guardStamp.flatMap(InMemorySupabase.parse) {
+            gap = movedDate.timeIntervalSince(guardDate)
+        }
+        expect(gap > 300, "\(id): sanity: the watermark moved more than 5 minutes past the guard (\(gap) s)")
+        expectEqual(d.queued("bookingRequests"), 1, "\(id): sanity: the stamp is still queued")
+        expectEqual(d.localRequestStatus, "booked", "\(id): sanity: while queued the device keeps its stamped copy")
+        d.data.failRequests = nil
+        await syncAndWait(d)
+        observed(id, "server=\(serverRequestStatus(d)) local=\(d.localRequestStatus ?? "gone") "
+                 + "watermarkGap=\(Int(gap))s " + intakeState(d))
+        expectEqual(serverRequestStatus(d), "cancelled", "\(id) [P12-017]: the cloud keeps the customer's cancel")
+        expectEqual(d.queued("bookingRequests"), 0, "\(id): the superseded stamp left the queue")
+        expectEqual(d.localRequestStatus, "cancelled",
+                    "\(id) [Minor 8]: the lowered watermark makes the next pull bring the cancelled row")
+        expectEqual(store.bookingAttentionRows().first { $0.request.id == "req-1" }?.kind, .cancelled,
+                    "\(id) [I1]: …and Today shows the cancel")
+    }
+
+    /// D11 (fix round 1, review I1): the attention selector on its own. A
+    /// booking whose stamp never landed is still shown through its lead job,
+    /// whose id is deterministic (`jbk_<requestId>`, RN
+    /// `utils/storage/bookingConversion.ts:62`); a stamp wins over it, and a
+    /// row still self-dismisses as RN's does (`utils/bookingAttention.ts:31-43`).
+    @MainActor
+    static func attentionFindsTheLeadJobOfAnUnlinkedBooking() {
+        let id = "D11 attention"
+        guard let leadData = try? JSONSerialization.data(withJSONObject: otherDevicesLeadJob()),
+              let lead = try? JSONDecoder().decode(Canonical.Job.self, from: leadData)
+        else {
+            expect(false, "\(id): fixture: the lead job decodes")
+            return
+        }
+        func request(_ status: String, stamp: String? = nil) -> Canonical.BookingRequest {
+            var fields = workerBooking()
+            fields["status"] = status
+            if let stamp { fields["convertedJobId"] = stamp }
+            let data = try! JSONSerialization.data(withJSONObject: fields)
+            return try! JSONDecoder().decode(Canonical.BookingRequest.self, from: data)
+        }
+        func rows(_ request: Canonical.BookingRequest, _ jobs: [Canonical.Job]) -> [String] {
+            NativeBookingAttention.select(requests: [request], jobs: jobs).map { "\($0.kind.rawValue) \($0.jobID ?? "-")" }
+        }
+        expectEqual(rows(request("cancelled"), [lead]), ["cancelled \(leadJobID)"],
+                    "\(id) [I1]: a cancelled booking with no stamp shows on its lead job")
+        expectEqual(rows(request("declined"), [lead]), ["cancelled \(leadJobID)"],
+                    "\(id) [I1]: …and so does a declined one")
+        expectEqual(rows(request("cancelled"), []), [], "\(id): with no lead job there is nothing to show (RN)")
+        var moved = lead
+        moved.scheduledDate = "2026-09-30"
+        expectEqual(rows(request("cancelled"), [moved]), [], "\(id): a lead job moved off the slot self-dismisses the row (RN)")
+        var stamped = lead
+        stamped.id = "job-9"
+        expectEqual(rows(request("cancelled", stamp: "job-9"), [stamped, lead]), ["cancelled job-9"],
+                    "\(id) [I1]: a stamp wins over the lead job's id")
+        expectEqual(rows(request("reschedule_requested"), [lead]), ["rescheduleRequested \(leadJobID)"],
+                    "\(id) [I1]: a reschedule request with no stamp opens its lead job")
+        expectEqual(rows(request("confirmed"), [lead]), [],
+                    "\(id) [I1]: a confirmed booking whose lead job exists is not waiting to be scheduled")
+        expectEqual(rows(request("confirmed"), []), ["unconvertedActive -"],
+                    "\(id): one with no job still is (D-B3-1)")
+    }
+
+    /// D12 (fix round 1, review Minor 1): the decline's and the legacy
+    /// resolve's error paths pull after a refusal. The account changes during
+    /// that pull: the outcome says so, not "changed on another device".
+    @MainActor
+    static func aRefusalsPullStopsOnAnAccountChange() async {
+        for flow in ["decline", "legacy resolve"] {
+            let id = "D12 \(flow): the account changes during the pull after a refusal"
+            let (d, store) = await declineDevice("d12-\(flow.count)")
+            defer { d.cleanup() }
+            var proof: NativeScheduleProof?
+            if flow == "legacy resolve" {
+                guard case let .proofReady(ready) = await store.prepareBookingReschedule(
+                    requestID: "req-1", scheduleDraft: rescheduleDraft, writeStamp: writeStamp) else {
+                    expect(false, "\(id): sanity: the proof is ready")
+                    continue
+                }
+                proof = ready
+            }
+            var changed = false
+            d.links.duringNextRespond = {
+                // The customer cancels first (the server answers 409)…
+                if var row = d.links.requestRow("req-1") {
+                    row["status"] = "cancelled"
+                    await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+                }
+                // …and an account boundary passes during the pull after it.
+                d.pullLoader.duringNextRead = ("bookingRequests", {
+                    changed = true
+                    store.testApplyCompletedSignOutState()
+                    store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+                    store.testMarkInitialSyncCompleted(subject: d.subject)
+                })
+            }
+            let outcome: String
+            if let proof {
+                outcome = String(describing: await store.resolveBookingReschedule(
+                    requestID: "req-1", proof: proof, responseService: d.respondService))
+            } else {
+                outcome = String(describing: await store.declineBookingRequest(
+                    requestID: "req-1", responseService: d.respondService))
+            }
+            observed(id, "outcome=\(outcome)")
+            expect(changed, "\(id): sanity: the account changed during the pull")
+            expectEqual(outcome, "failed(reason: \"owner-changed\")", "\(id) [Minor 1]: the outcome says the account changed")
+        }
+    }
+
+    /// D13 (fix round 1, review Minor 2): the server declined, but this
+    /// device could not save the status. The acting screen says so, as the
+    /// accept does; nothing is queued, and the next pull brings the row.
+    @MainActor
+    static func aDeclineWhoseLocalSaveFailsSaysSo() async {
+        let id = "D13 decline, the local save fails"
+        let (d, store) = await declineDevice("d13")
+        defer { d.cleanup() }
+        d.failSnapshotSaves(true)
+        let outcome = await store.declineBookingRequest(requestID: "req-1", responseService: d.respondService)
+        d.failSnapshotSaves(false)
+        let notice = outcome.declineNotice(actionLabel: "Decline booking")
+        observed(id, "outcome=\(outcome) shown=\(notice?.title ?? "-"): \(notice?.message ?? "nothing")")
+        expectEqual(serverRequestStatus(d), "declined", "\(id): sanity: the server declined")
+        expect(String(describing: outcome).contains("savedLocally: false"),
+               "\(id) [Minor 2]: the outcome says this device did not save it")
+        expect(notice?.message.contains("This device couldn't save the change yet. Pull down to refresh.") == true,
+               "\(id) [Minor 2]: the acting screen says so, as the accept does")
+        expectEqual(d.queued("bookingRequests"), 0, "\(id) [P12-017]: nothing is queued")
+        await syncAndWait(d)
+        expectEqual(d.localRequestStatus, "declined", "\(id): the next pull brings the declined row")
+    }
+
+    /// D14 (fix round 1, review Minor 5): the rejected-change store cannot be
+    /// read (before the first unlock after a restart, or no verified owner
+    /// for a file on disk). The response waits, fail closed, but the notice
+    /// does not send the owner to check the connection.
+    @MainActor
+    static func anUnreadableRejectedStoreSaysWaitAMoment() async {
+        for flow in ["decline", "accept"] {
+            let id = "D14 \(flow), the rejected-change store cannot be read"
+            let (d, store) = await declineDevice("d14-\(flow.count)")
+            defer { d.cleanup() }
+            if flow == "accept" {
+                expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
+                await syncAndWait(d)
+            }
+            let other = Canonical.MutationItem(table: "jobs", op: .upsert, recordId: "job-other",
+                                               payload: .object(["id": .string("job-other")]), ts: writeStamp)
+            do {
+                try store.testSettleRejectedChanges(.init(rejected: [NativeMutationRejection(item: other, statusCode: 422)],
+                                                          cleared: []))
+            } catch {
+                expect(false, "\(id): sanity: a refusal of another record is filed (\(error))")
+            }
+            let file = d.dir.appendingPathComponent("rejected-changes.json")
+            try? FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+            d.links.resetLog()
+            let outcome: String
+            let message: String
+            if flow == "accept" {
+                let tapped = await tap(.today, store, d)
+                outcome = tapped.outcome
+                message = tapped.message ?? ""
+            } else {
+                let result = await store.declineBookingRequest(requestID: "req-1", responseService: d.respondService)
+                outcome = String(describing: result)
+                message = result.declineNotice(actionLabel: "Decline booking")?.message ?? ""
+            }
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+            observed(id, "outcome=\(outcome) shown=\(message) sent=\(d.links.log)")
+            expectEqual(d.links.log, [], "\(id): nothing is sent (fail closed)")
+            expect(outcome.contains("unreadable"), "\(id) [Minor 5]: the wait says the store could not be read")
+            expect(message.contains("moment") && !message.contains("connection"),
+                   "\(id) [Minor 5]: the notice says to try again in a moment, not to check the connection")
         }
     }
 

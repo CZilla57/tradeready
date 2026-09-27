@@ -47,8 +47,18 @@ final class InMemorySupabase: NativeInitialSyncHTTPDataLoading, NativeMutationPu
     var revokedTokens: Set<String> = []
     /// When set, the next matching request returns this status once, then clears.
     var injectStatusOnce: (method: String, table: String, status: Int)?
+    /// Phase 12 (12.00b.2-L fix round 1): while set, every matching request
+    /// returns this status (a push that keeps failing while pulls go on).
+    var failRequests: (method: String, table: String, status: Int)?
 
     private let base = Date(timeIntervalSince1970: 1_757_000_000)
+
+    /// Phase 12 (12.00b.2-L fix round 1): moves the server clock forward, so
+    /// a later write lands more than the cursor's 5-minute overlap after an
+    /// earlier one.
+    func advanceClock(seconds: Int) {
+        clock += seconds
+    }
 
     private func nextStamp() -> String {
         defer { clock += 1 }
@@ -66,6 +76,9 @@ final class InMemorySupabase: NativeInitialSyncHTTPDataLoading, NativeMutationPu
         }
         if let fault = injectStatusOnce, fault.method == method, fault.table == table {
             injectStatusOnce = nil
+            return respond(fault.status, Data("{}".utf8), request)
+        }
+        if let fault = failRequests, fault.method == method, fault.table == table {
             return respond(fault.status, Data("{}".utf8), request)
         }
 
