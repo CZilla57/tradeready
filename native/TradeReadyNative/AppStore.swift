@@ -219,6 +219,12 @@ final class AppStore: ObservableObject {
             // Task 11.08 (§9.3–§9.5): onboarding steps, the paywall and the
             // root screens are gate moments.
             emitAnalyticsForGateChange(from: oldValue)
+            // Phase 12 (12.00b.2-K fix round 1, review M3): a gate that waits
+            // for the owner can hold for minutes. Bookings then convert only
+            // after a full pull taken once the gate has opened, never from an
+            // older one whose push could replace another device's newer edit
+            // of the same `jbk_` job.
+            if Self.gateWaitsForOwner(authenticationGateState) { bookingIntakePullMark = nil }
         }
     }
     @Published private(set) var migratedAccountState: NativeTypedAccountState?
@@ -542,7 +548,8 @@ final class AppStore: ObservableObject {
     /// converts from that pull instead of pulling again. A partial pull does
     /// not count: one that missed the jobs table could miss the job another
     /// device already made from a booking, and the push after a conversion
-    /// would replace it.
+    /// would replace it. Nor does a pull taken before, or while, the gate
+    /// waits for the owner (fix round 1, review M3; `gateWaitsForOwner`).
     private var bookingIntakePullMark: (generation: UInt64, subject: String)?
     /// Task 8.08 test seam: explicit session bytes for owner transports.
     /// Production passes nil and reads the Keychain; tests inject bytes so
@@ -5206,8 +5213,10 @@ final class AppStore: ObservableObject {
         authenticationGateState = .signedIn(email: authenticatedEmail)
         consumePendingDeepLinks()
         replayVerifiedWidgetActionsIfPossible()
-        // Phase 12 (12.00b.2-K, P12-016): pulled bookings become jobs.
-        startBookingIntakeIfPossible()
+        // Phase 12 (12.00b.2-K fix round 1, review M3/M4): no booking intake
+        // here. The starting point is a gate that waited for the owner, which
+        // cleared the pull mark and kept any pull from setting it, so a pass
+        // could never convert; the next activation's pull does.
         // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work.
         startScheduleBookingRecoveryIfPossible()
     }
@@ -6075,8 +6084,10 @@ final class AppStore: ObservableObject {
         if activateConsumers, case .signedIn = authenticationGateState {
             consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
-            // Phase 12 (12.00b.2-K, P12-016): pulled bookings become jobs.
-            startBookingIntakeIfPossible()
+            // Phase 12 (12.00b.2-K fix round 1, review M4): no booking intake
+            // here. This call cleared the pull mark above with nothing to set
+            // it since, so a pass could never convert; the activation's
+            // `performForegroundRefresh` does, after its pull.
             // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work.
             startScheduleBookingRecoveryIfPossible()
         }
@@ -6096,8 +6107,7 @@ final class AppStore: ObservableObject {
             reportInitialSyncUnavailable(code: "preflight/local-recovery/\(reason)\(detail)", operation: "preflight")
             return
         }
-        guard let supabaseURL = BuildEnvironment.supabaseURL,
-              let publishableKey = BuildEnvironment.supabasePublishableKey,
+        guard let service = initialSyncServiceIfConfigured(),
               let sessionBytes = try? secureSettingsStore.readSupabaseSession()
         else {
             authenticationGateState = .initialSyncUnavailable(
@@ -6107,10 +6117,6 @@ final class AppStore: ObservableObject {
             reportInitialSyncUnavailable(code: "preflight/configuration-or-session", operation: "preflight")
             return
         }
-        let service = initialSyncService ?? NativeSupabaseInitialSyncService(
-            supabaseURL: supabaseURL,
-            publishableKey: publishableKey
-        )
         initialSyncGateGeneration &+= 1
         let generation = initialSyncGateGeneration
         let subject = outcome.verifiedUserSubject
@@ -6218,6 +6224,18 @@ final class AppStore: ObservableObject {
         )
     }
 
+    /// The initial-sync service: the injected one (host tests), or one built
+    /// from BuildEnvironment, or nil for an unconfigured build. Phase 12
+    /// (12.00b.2-K fix round 1, review item 7): as `deltaSyncServiceIfConfigured`,
+    /// so a host test runs the real initial-sync gate. The app injects none.
+    private func initialSyncServiceIfConfigured() -> (any NativeInitialSyncServing)? {
+        if let initialSyncService { return initialSyncService }
+        guard let supabaseURL = BuildEnvironment.supabaseURL,
+              let publishableKey = BuildEnvironment.supabasePublishableKey
+        else { return nil }
+        return NativeSupabaseInitialSyncService(supabaseURL: supabaseURL, publishableKey: publishableKey)
+    }
+
     private func advancePastInitialSync(
         outcome: NativeAuthenticatedIdentityActivationOutcome,
         allowUnboundWorkspaceAdoption: Bool
@@ -6309,10 +6327,12 @@ final class AppStore: ObservableObject {
             consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
             // Phase 12 (12.00b.2-K, P12-016): pulled bookings become jobs. A
-            // cold launch lands here after the initial sync's commit, so they
-            // convert here (RN: once bootstrapping ends, `App.tsx:396`); a
-            // warm activation lands here before its pull, so they wait for
-            // `performForegroundRefresh`.
+            // cold launch lands here right after the initial sync's commit,
+            // so they convert here (RN: once bootstrapping ends,
+            // `App.tsx:396`); the only launch point that can. A warm
+            // activation lands here before its pull, and an exit from the
+            // paywall follows a wait (fix round 1, review M3), so those
+            // leave it to `performForegroundRefresh`.
             startBookingIntakeIfPossible()
             // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work,
             // once the initial sync has committed (a cold launch lands here).
@@ -9759,7 +9779,10 @@ extension AppStore {
     /// converts from the pull that just committed instead of pulling again.
     /// It stays as the entry the plan 8.08 and 10.09 host tests
     /// (`native/StoreIntegrationTests/main.swift`) drive a real committed pull
-    /// through; both entries run the same intake after their pull.
+    /// through; both entries run the same intake after their pull. Nothing in
+    /// the app may call it (fix round 1, review M5: pinned by
+    /// `native/ScheduleBookingRecoveryTests` section K): it lacks the gate and
+    /// the pull mark.
     func runBookingIntakeAfterVerifiedPull(
         makeCustomerID: (() -> String)? = nil,
         nowISO: (() -> String)? = nil
@@ -9797,12 +9820,13 @@ extension AppStore {
         return await applyBookingIntake(makeCustomerID: nil, nowISO: nil)
     }
 
-    /// Phase 12 (12.00b.2-K, P12-016): launch. Called where the signed-in gate
-    /// opens, before recovery; starts a pass only when a booking is waiting
-    /// to convert and the pull mark is current. On a cold launch the initial
-    /// sync's commit set the mark, so bookings convert here; on a warm
-    /// activation these points run before its pull (applying the identity
-    /// cleared the mark), so `performForegroundRefresh` converts them.
+    /// Phase 12 (12.00b.2-K, P12-016): launch. Called where the subscription
+    /// gate opens the signed-in gate, before recovery; starts a pass only when
+    /// a booking is waiting to convert and the pull mark is current. On a cold
+    /// launch the initial sync's commit set the mark, so bookings convert
+    /// here. On a warm activation this runs before its pull (applying the
+    /// identity cleared the mark), and after the paywall the mark was cleared
+    /// by the wait (review M3), so `performForegroundRefresh` converts them.
     private func startBookingIntakeIfPossible() {
         guard scheduleBookingRecoveryBinding != nil, bookingIntakePullCommitted,
               NativeBookingIntake.needsIntake(snapshot.payload.bookingRequests ?? [])
@@ -9814,9 +9838,21 @@ extension AppStore {
 
     /// Records that a pull for `subject`, started under account generation
     /// `generation`, committed every table (the initial sync, or a delta pull
-    /// with no failed table).
+    /// with no failed table), unless the gate waits for the owner.
     private func markBookingIntakePullCommitted(subject: String, generation: UInt64) {
+        guard !Self.gateWaitsForOwner(authenticationGateState) else { return }
         bookingIntakePullMark = (generation, subject)
+    }
+
+    /// Phase 12 (12.00b.2-K fix round 1, review M3): the gates that wait for
+    /// the owner, as long as the owner takes: onboarding, the starting point
+    /// and the paywall. Entering one clears the intake mark, and no pull sets
+    /// it while the gate is there.
+    private static func gateWaitsForOwner(_ state: NativeAuthenticationGateState) -> Bool {
+        switch state {
+        case .onboarding, .startingPoint, .paywall: return true
+        default: return false
+        }
     }
 
     /// Whether such a pull has committed for the current owner, under the
@@ -9877,9 +9913,11 @@ extension AppStore {
             makeCustomerID: makeCustomerID ?? Self.intakeCustomerID,
             nowISO: { stamp }
         )
-        // Contract §8: a request whose `jbk_` job is already on the device
-        // is left to the device that made the job (its request stamp follows
-        // the job); the recheck drops it, so a job is never replaced.
+        // Contract §8 D-B3-2 and RN parity (fix round 1, review I1 and M1): a
+        // request whose `jbk_` job is already on the device is linked to it
+        // and the job is never touched; a repeat customer's blank fields are
+        // filled, never replaced. With no suspension since the plan, the
+        // recheck keeps everything the plan made.
         guard let rechecked = NativeScheduleBookingPolicy.recheckedIntakePlan(
             plan,
             currentRequests: snapshot.payload.bookingRequests ?? [],
@@ -12762,6 +12800,14 @@ extension AppStore {
     func testPullDeltaIfPossible() async -> NativeSyncPullResult {
         await pullDeltaIfPossible()
     }
+
+    /// Test-only (Phase 12 12.00b.2-K fix round 1, review M3): whether the
+    /// booking-intake pull mark is current, so a pass could convert now. The
+    /// paywall's exit, the gate-open point the mark rule protects, needs a
+    /// RevenueCat key this host binary does not have, so the host tests walk
+    /// the gate through its states and read the mark. Production never calls
+    /// this.
+    var testBookingIntakePullCommitted: Bool { bookingIntakePullCommitted }
 
     /// Test-only (task 11.05): seeds a NATIVE-ONLY signed-in owner: no
     /// migrated RN owner proof (`isMigratedLocalOwnerVerified == false`,

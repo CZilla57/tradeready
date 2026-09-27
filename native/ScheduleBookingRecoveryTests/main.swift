@@ -656,6 +656,7 @@ struct ScheduleBookingRecoveryTests {
         acceptNoticesOnBothScreens()
         await coldLaunchConvertsAfterTheInitialSync()
         await gateThatWaitsForTheOwnerConvertsAfterItsNextPull()
+        await waitingGatesClearTheMark()
         await warmActivationConvertsAfterItsPull()
         await failedOrPartialPullConvertsNothing()
         await intakeIsIdempotent()
@@ -2118,11 +2119,12 @@ struct ScheduleBookingRecoveryTests {
     /// No sync has completed in this process, so the identity outcome begins
     /// the initial-sync gate: the real full pull (`beginInitialSyncGate`,
     /// through the injected service in front of the data server), its
-    /// commit, then the onboarding and subscription gates. The coordinator is
-    /// offline, so the pushes that follow keep what they would send queued;
-    /// the initial sync itself reads the data server directly.
+    /// commit, then the onboarding and subscription gates. Offline, the
+    /// coordinator's pushes keep what they would send queued; the initial
+    /// sync itself reads the data server directly.
     @MainActor
-    static func coldLaunch(_ d: Device, onboarding stage: NativeOnboardingDocument.Stage) -> AppStore {
+    static func coldLaunch(_ d: Device, onboarding stage: NativeOnboardingDocument.Stage,
+                           online: Bool) -> AppStore {
         d.keychain = HostInMemoryKeychain()
         let store = d.launch()
         d.prepareOwner(store)
@@ -2135,7 +2137,7 @@ struct ScheduleBookingRecoveryTests {
         } catch {
             expect(false, "fixture: the session is in the device's Keychain (\(error))")
         }
-        d.reach.online = false
+        d.reach.online = online
         d.connect(store, subject: d.subject)
         store.testApplyLaunchIdentityOutcome(liveOutcome(d))
         return store
@@ -2159,7 +2161,7 @@ struct ScheduleBookingRecoveryTests {
         await d.signIn(first)
         await syncAndWait(d)
         await customerBooks(d)
-        let relaunched = coldLaunch(d, onboarding: .done)
+        let relaunched = coldLaunch(d, onboarding: .done, online: false)
         let atStart = relaunched.authenticationGateState
         await waitUntil { isSignedIn(relaunched) && leadJob(d) != nil }
         observed(id, "gate at start=\(atStart) signedIn=\(isSignedIn(relaunched)) \(intakeState(d))")
@@ -2201,7 +2203,7 @@ struct ScheduleBookingRecoveryTests {
         await d.signIn(first)
         await syncAndWait(d)
         await customerBooks(d)
-        let relaunched = coldLaunch(d, onboarding: .personalized)
+        let relaunched = coldLaunch(d, onboarding: .personalized, online: true)
         await waitUntil {
             if case .startingPoint = relaunched.authenticationGateState { return true }
             return false
@@ -2209,7 +2211,8 @@ struct ScheduleBookingRecoveryTests {
         let waiting: Bool
         if case .startingPoint = relaunched.authenticationGateState { waiting = true } else { waiting = false }
         let pulledBeforeWait = bookingRequest(d) != nil
-        // A pull that commits while the gate waits.
+        // A pull that commits while the gate waits (as the syncs the gate
+        // changes start do, online).
         _ = await relaunched.testPullDeltaIfPossible()
         do { try relaunched.completeStartingPoint(.fresh) } catch {
             expect(false, "\(id): sanity: the starting point completes (\(error))")
@@ -2217,7 +2220,6 @@ struct ScheduleBookingRecoveryTests {
         await settle()
         let atTheGate = intakeState(d)
         let convertedAtTheGate = leadJob(d) != nil || !bookedCustomers(d).isEmpty
-        d.reach.online = true
         await relaunched.performForegroundRefresh()
         observed(id, "at the gate: \(atTheGate); after the next activation: \(intakeState(d))")
         expect(waiting, "\(id): sanity: the gate waits at the starting point")
@@ -2225,6 +2227,45 @@ struct ScheduleBookingRecoveryTests {
         expect(isSignedIn(relaunched), "\(id): sanity: the starting point opened the signed-in gate")
         expect(!convertedAtTheGate, "\(id) [M3]: nothing converts from a pull taken before the gate opened")
         expectConverted(d, "\(id): the next activation")
+    }
+
+    /// K1c (review M3): the mark rule on its own, for each gate that waits
+    /// for the owner. The paywall's exit is the gate-open point this protects
+    /// (a purchase or restore after minutes on the paywall), and it needs a
+    /// RevenueCat key this host binary does not have, so the gate is walked
+    /// through its states and the mark read. A full pull with the gate open
+    /// counts; entering the waiting state clears it; a pull while waiting
+    /// does not count, nor after the gate opens again; the next full pull
+    /// does.
+    @MainActor
+    static func waitingGatesClearTheMark() async {
+        let states: [(String, NativeAuthenticationGateState)] = [
+            ("paywall", .paywall(offering: nil, message: nil)),
+            ("starting point", .startingPoint(.electrical)),
+            ("onboarding", .onboarding(.init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1))),
+        ]
+        for (name, waiting) in states {
+            let id = "K1c \(name)"
+            let (d, store) = await intakeDevice("k1c-\(name.count)")
+            defer { d.cleanup() }
+            _ = await store.testPullDeltaIfPossible()
+            let gateOpen = store.testBookingIntakePullCommitted
+            store.testSetAuthenticationGateState(waiting)
+            let entered = store.testBookingIntakePullCommitted
+            _ = await store.testPullDeltaIfPossible()
+            let pulledWhileWaiting = store.testBookingIntakePullCommitted
+            store.testSetAuthenticationGateState(.signedIn(email: nil))
+            let reopened = store.testBookingIntakePullCommitted
+            _ = await store.testPullDeltaIfPossible()
+            let nextPull = store.testBookingIntakePullCommitted
+            observed(id, "open=\(gateOpen) entered=\(entered) whileWaiting=\(pulledWhileWaiting) "
+                     + "reopened=\(reopened) nextPull=\(nextPull)")
+            expect(gateOpen, "\(id): sanity: a full pull with the gate open counts")
+            expect(!entered, "\(id) [M3]: entering the waiting gate clears the mark")
+            expect(!pulledWhileWaiting, "\(id) [M3]: a pull while the gate waits does not count")
+            expect(!reopened, "\(id) [M3]: …nor once the gate has opened again")
+            expect(nextPull, "\(id) [M3]: the next full pull with the gate open counts")
+        }
     }
 
     /// K2: a warm activation. The activation's identity tail runs the gate
@@ -2509,9 +2550,11 @@ struct ScheduleBookingRecoveryTests {
                "\(id) [I1]: …and the filled customer has a draft")
         var filledMeanwhile = known
         filledMeanwhile.email = "sam.work@example.test"
+        filledMeanwhile.phone = "555-0199"
         let raced = recheck(fresh, jobs: [], customers: [filledMeanwhile])
         expectEqual(customer(raced)?.email, "sam.work@example.test",
                     "\(id) [I1]: an email set after the plan is never replaced")
+        expectEqual(customer(raced)?.phone, "555-0199", "\(id) [I1]: …nor a phone changed after the plan")
         expectEqual(customer(raced)?.address, "9 Oak Ave", "\(id) [I1]: …a field still blank is filled")
         let linkedPlan = plan(jobs: [otherJob])
         let linked = recheck(linkedPlan, jobs: [otherJob], customers: [known])

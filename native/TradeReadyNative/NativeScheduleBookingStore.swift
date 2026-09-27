@@ -239,20 +239,30 @@ enum NativeScheduleBookingPolicy {
     // MARK: - Intake recheck (B3, P3)
 
     /// Rechecks a task 8.02 plan against CURRENT records before the atomic
-    /// commit: drops conversions whose request vanished, changed status, or
-    /// already converted, and whose deterministic job appeared meanwhile (a
-    /// concurrent device won the race). Returns the filtered plan, or nil
-    /// when nothing remains (the caller must not write — a no-op enqueues
-    /// nothing).
+    /// commit. It drops a conversion whose request vanished, changed status or
+    /// already converted; whose lead job the plan made but whose deterministic
+    /// job appeared meanwhile (a concurrent device won the race); or whose
+    /// `jbk_` job the plan linked to (already on the device when planned) but
+    /// that is gone now. Returns the filtered plan, or nil when nothing remains
+    /// (the caller must not write — a no-op enqueues nothing).
     ///
     /// Conversion stamps (`convertedJobId`/`convertedCustomerId`,
     /// `new → converted`) are re-applied onto the CURRENT request rows, so
-    /// late-arriving server lifecycle/history survives (D-B3-4). Created
-    /// customers absent from the current set ride along; blank-field
-    /// backfills from the original plan are dropped on a race (the next
-    /// intake pass re-derives them) rather than clobbering newer contact
-    /// data. In the common path — plan built from these same arrays with no
-    /// suspension between — the recheck is the identity.
+    /// late-arriving server lifecycle/history survives (D-B3-4). A lead job is
+    /// added only where the plan made it; a request linked to a `jbk_` job
+    /// already on the device is stamped and the job is never touched (RN:
+    /// `utils/storage/bookingConversion.ts:66-111`). Created customers ride
+    /// along. The blank-field fill the plan made on an existing customer
+    /// (email, phone, address from the booking; RN `upsertCustomerInList`,
+    /// `utils/storage/customers.ts:69-86`) is carried onto the CURRENT
+    /// customer: only a field still blank there is filled, and a value is
+    /// never replaced. Both follow only a conversion that survives.
+    ///
+    /// Phase 12 (12.00b.2-K fix round 1, review I1 and M1): before, the fill
+    /// was always dropped (and never redone, since the request was stamped),
+    /// and a request whose `jbk_` job was already on the device was never
+    /// stamped. AppStore's intake plans and rechecks with no suspension in
+    /// between, so there the recheck keeps everything the plan made.
     static func recheckedIntakePlan(
         _ plan: NativeBookingIntake.Plan,
         currentRequests: [Canonical.BookingRequest],
@@ -264,6 +274,7 @@ enum NativeScheduleBookingPolicy {
         let planLeadsByID = Dictionary(
             uniqueKeysWithValues: plan.jobs.filter { $0.id.hasPrefix("jbk_") }.map { ($0.id, $0) }
         )
+        let planCreatedJobs = Set(plan.createdJobIDs)
         var surviving: [String] = []
         for requestID in plan.convertedRequestIDs {
             guard let current = currentByID[requestID],
@@ -271,13 +282,18 @@ enum NativeScheduleBookingPolicy {
                   current.convertedJobId == nil
             else { continue }
             let jobID = "jbk_\(requestID)"
-            guard !currentJobIDs.contains(jobID), planLeadsByID[jobID] != nil else { continue }
+            if planCreatedJobs.contains(jobID) {
+                guard !currentJobIDs.contains(jobID), planLeadsByID[jobID] != nil else { continue }
+            } else {
+                guard currentJobIDs.contains(jobID) else { continue }
+            }
             surviving.append(requestID)
         }
         guard !surviving.isEmpty else { return nil }
         let survivors = Set(surviving)
         var nextRequests = currentRequests
         var drafts: [Canonical.MutationDraft] = []
+        var linkedCustomerIDs: Set<String> = []
         for index in nextRequests.indices where survivors.contains(nextRequests[index].id) {
             guard let planned = plan.requests.first(where: { $0.id == nextRequests[index].id }) else { continue }
             var stamped = nextRequests[index]
@@ -285,13 +301,14 @@ enum NativeScheduleBookingPolicy {
             stamped.convertedJobId = planned.convertedJobId
             stamped.convertedCustomerId = planned.convertedCustomerId
             nextRequests[index] = stamped
+            if let customerID = planned.convertedCustomerId { linkedCustomerIDs.insert(customerID) }
             drafts.append(mutationDraft(table: "bookingRequests", id: stamped.id, record: stamped))
         }
         var nextJobs = currentJobs
         var createdJobs: [String] = []
         for requestID in plan.convertedRequestIDs where survivors.contains(requestID) {
             let jobID = "jbk_\(requestID)"
-            if let lead = planLeadsByID[jobID] {
+            if planCreatedJobs.contains(jobID), let lead = planLeadsByID[jobID] {
                 nextJobs.append(lead)
                 createdJobs.append(jobID)
                 drafts.append(mutationDraft(table: "jobs", id: jobID, record: lead))
@@ -300,11 +317,25 @@ enum NativeScheduleBookingPolicy {
         let currentCustomerIDs = Set(currentCustomers.map(\.id))
         var nextCustomers = currentCustomers
         var keptCreatedCustomers: [String] = []
-        for customer in plan.customers where plan.createdCustomerIDs.contains(customer.id) {
-            guard !currentCustomerIDs.contains(customer.id) else { continue }
-            nextCustomers.append(customer)
-            keptCreatedCustomers.append(customer.id)
-            drafts.append(mutationDraft(table: "customers", id: customer.id, record: customer))
+        var filledCustomers: [String] = []
+        for customer in plan.customers where linkedCustomerIDs.contains(customer.id) {
+            if plan.createdCustomerIDs.contains(customer.id) {
+                guard !currentCustomerIDs.contains(customer.id) else { continue }
+                nextCustomers.append(customer)
+                keptCreatedCustomers.append(customer.id)
+                drafts.append(mutationDraft(table: "customers", id: customer.id, record: customer))
+                continue
+            }
+            guard let index = nextCustomers.firstIndex(where: { $0.id == customer.id }) else { continue }
+            var merged = nextCustomers[index]
+            var filled = false
+            if isBlank(merged.email), !isBlank(customer.email) { merged.email = customer.email; filled = true }
+            if isBlank(merged.phone), !isBlank(customer.phone) { merged.phone = customer.phone; filled = true }
+            if isBlank(merged.address), !isBlank(customer.address) { merged.address = customer.address; filled = true }
+            guard filled else { continue }
+            nextCustomers[index] = merged
+            filledCustomers.append(customer.id)
+            drafts.append(mutationDraft(table: "customers", id: customer.id, record: merged))
         }
         return NativeBookingIntake.Plan(
             requests: nextRequests,
@@ -312,7 +343,7 @@ enum NativeScheduleBookingPolicy {
             customers: nextCustomers,
             requestsChanged: true,
             jobsChanged: !createdJobs.isEmpty,
-            customersChanged: !keptCreatedCustomers.isEmpty,
+            customersChanged: !keptCreatedCustomers.isEmpty || !filledCustomers.isEmpty,
             convertedRequestIDs: surviving,
             createdJobIDs: createdJobs,
             createdCustomerIDs: keptCreatedCustomers,
@@ -320,6 +351,10 @@ enum NativeScheduleBookingPolicy {
                 + plan.convertedRequestIDs.filter { !survivors.contains($0) },
             drafts: drafts
         )
+    }
+
+    private static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Reschedule proof (B4, contract §7)
