@@ -54,6 +54,14 @@ import FoundationNetworking
 // are filled (K10); a request whose `jbk_` job is already on the device is
 // linked to it, as RN links it (K5, K10b).
 //
+// Section D (12.00b.2-L, P12-017): the owner's decline (and the test-only
+// legacy resolve) queued a whole copy of the request after the server wrote
+// its status and history, and the next push replaced the server's history
+// with the device's. Booking intake's request stamp and repeat-customer fill
+// (Task 12d review M6) pushed whole rows over a customer's or another
+// device's change that reached the server after the pull. RN pushes nothing
+// after a response (`screens/TodayScreen.tsx:559-563`).
+//
 // Everything here is production code except the network: the real AppStore,
 // queue, sync coordinator, push transport and delta pull in front of the
 // shared `InMemorySupabase`, and the real booking-admin, portal-manage and
@@ -269,6 +277,11 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
             return (409, ["error": "schedule_changed", "status": current])
         }
         row["status"] = transition.to
+        // The Worker appends the owner's entry to the server's history
+        // (`backend-workers/lib/booking/respond.js:64-75`).
+        var history = row["history"] as? [[String: Any]] ?? []
+        history.append(["at": "2026-09-27T12:00:00.000Z", "actor": "owner", "event": action])
+        row["history"] = history
         await upsert(table: "bookingRequests", id: requestId, record: row)
         if respondMode == .lostAfterCommit { return (500, ["error": "Database error"]) }
         return (200, ["ok": true, "status": transition.to])
@@ -668,6 +681,11 @@ struct ScheduleBookingRecoveryTests {
         await nothingWhileReadOnly()
         await aFailedIntakeSaveLeavesNoMessage()
         await acceptAfterIntakeIsLinkedToTheJob()
+        await declineKeepsTheServersHistory()
+        await aQueuedCopyNeverOverwritesTheDecline()
+        await legacyResolveKeepsTheServersHistory()
+        await intakeStampNeverOverwritesTheServer()
+        await intakeFillNeverOverwritesTheServer()
         sources(root)
         intakeSources(root)
 
@@ -2760,6 +2778,363 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(tapped.message,
                     "The job wasn't moved, so the booking is confirmed for its original time, \(requestSlotWhen).",
                     "\(id) [P12-016]: …for the booked time")
+    }
+
+    // MARK: D. The owner's responses keep the server's booking history (P12-017)
+
+    /// The customer's history on the server row before the owner responds:
+    /// booked, then asked to reschedule (`backend-workers/lib/booking/manage.js:83-101`).
+    static let customerHistory = ["customer/booked", "customer/request_reschedule"]
+
+    /// The request's history in the cloud row, as "actor/event".
+    @MainActor
+    static func serverHistory(_ d: Device) -> [String] {
+        (d.links.requestRow("req-1")?["history"] as? [[String: Any]] ?? []).map {
+            "\($0["actor"] as? String ?? "?")/\($0["event"] as? String ?? "?")"
+        }
+    }
+
+    /// …and on the device.
+    @MainActor
+    static func localHistory(_ d: Device) -> [String] {
+        (bookingRequest(d)?.history ?? []).map { "\($0.actor)/\($0.event)" }
+    }
+
+    @MainActor
+    static func serverRequestStatus(_ d: Device) -> String {
+        d.links.requestRow("req-1")?["status"] as? String ?? "gone"
+    }
+
+    /// The customer acts on the manage page, as the Worker writes it
+    /// (`backend-workers/lib/booking/manage.js:83-101`): the new status and a
+    /// customer entry appended to the history of the cloud row.
+    @MainActor
+    static func customerActs(_ d: Device, event: String, status: String) async {
+        guard var row = d.links.requestRow("req-1") else {
+            expect(false, "fixture: the request is in the cloud")
+            return
+        }
+        var history = row["history"] as? [[String: Any]] ?? []
+        history.append(["at": "2026-09-20T00:00:00.000Z", "actor": "customer", "event": event])
+        row["history"] = history
+        row["status"] = status
+        await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+    }
+
+    /// A reschedule-request device (`rescheduleDevice`) whose cloud request
+    /// carries the customer's history, as the Worker wrote it, and which has
+    /// pulled that row.
+    @MainActor
+    static func declineDevice(_ tag: String) async -> (Device, AppStore) {
+        let (d, store) = await rescheduleDevice(tag)
+        if var row = d.links.requestRow("req-1") {
+            row["history"] = [
+                ["at": "2026-09-10T00:00:00.000Z", "actor": "customer", "event": "booked"],
+                ["at": "2026-09-18T00:00:00.000Z", "actor": "customer", "event": "request_reschedule"],
+            ]
+            await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+        }
+        await syncAndWait(d)
+        expectEqual(localHistory(d), customerHistory, "\(tag): sanity: the device has the customer's history")
+        return (d, store)
+    }
+
+    /// Queues a copy of the device's request as it was before the owner's
+    /// response, as Today's "Done" does (`stampBookingRequestHandled` queues
+    /// the whole row with `handledAt` set). Nothing pushes it here.
+    @MainActor
+    static func enqueueRequestCopy(_ d: Device) {
+        guard let request = bookingRequest(d),
+              let bytes = try? JSONEncoder().encode(request),
+              case var .object(fields)? = try? JSONDecoder().decode(Canonical.JSONValue.self, from: bytes)
+        else {
+            expect(false, "fixture: the request copy encodes")
+            return
+        }
+        fields["handledAt"] = .string("2026-09-19T00:00:00.000Z")
+        do {
+            try d.queue.enqueue(table: "bookingRequests", op: .upsert, recordId: "req-1", payload: .object(fields))
+        } catch {
+            expect(false, "fixture: the request copy is queued (\(error))")
+        }
+    }
+
+    /// Back online after an offline stretch: waits out a pass a local commit
+    /// started while offline (it ends offline and would defer a rerun), then
+    /// runs a pull to refresh (a forced push, then a pull).
+    @MainActor
+    static func backOnline(_ d: Device) async {
+        _ = await d.coordinator?.waitUntilIdle()
+        d.reach.online = true
+        await syncAndWait(d)
+    }
+
+    /// D1: "Decline booking" (`N/TodayView.swift` → `declineBookingRequest`).
+    /// The Worker writes the status and appends the owner's decline entry
+    /// (`backend-workers/lib/booking/respond.js:64-75`). RN then updates the
+    /// request in memory only and pushes nothing: "the server already wrote
+    /// status + history … Saving here would push a whole-blob copy"
+    /// (`screens/TodayScreen.tsx:559-563`); the next pull brings the server's
+    /// row. Characterized at 1dd697b: native queued a whole copy of the
+    /// request after the server's write, and the next push replaced the
+    /// server's history with the device's, dropping the owner's entry.
+    @MainActor
+    static func declineKeepsTheServersHistory() async {
+        let id = "D1 decline"
+        let (d, store) = await declineDevice("d1")
+        defer { d.cleanup() }
+        d.links.resetLog()
+        let outcome = String(describing: await store.declineBookingRequest(
+            requestID: "req-1", responseService: d.respondService))
+        let queuedAfter = d.queued("bookingRequests")
+        let localAfter = d.localRequestStatus
+        await syncAndWait(d)
+        observed(id, "outcome=\(outcome) sent=\(d.links.log) queuedAfterDecline=\(queuedAfter) "
+                 + "server=\(serverRequestStatus(d)) serverHistory=\(serverHistory(d)) "
+                 + "local=\(d.localRequestStatus ?? "gone") localHistory=\(localHistory(d))")
+        expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false)", "\(id): sanity: the server declined")
+        expectEqual(d.links.log, ["respond/decline"], "\(id): one decline is sent")
+        expectEqual(queuedAfter, 0, "\(id) [P12-017]: nothing is queued for the request after the server's write")
+        expectEqual(localAfter, "declined", "\(id) [P12-017]: the device shows declined straight away")
+        expectEqual(serverRequestStatus(d), "declined", "\(id): the cloud row stays declined")
+        expectEqual(serverHistory(d), customerHistory + ["owner/decline"],
+                    "\(id) [P12-017]: after the next push the cloud row keeps the owner's decline entry")
+        expectEqual(d.localRequestStatus, "declined", "\(id) [P12-017]: after the next pull the device shows declined")
+        expectEqual(localHistory(d), customerHistory + ["owner/decline"],
+                    "\(id) [P12-017]: …with the server's history")
+        expectEqual(d.queue.load().count, 0, "\(id): nothing is left queued")
+    }
+
+    enum QueuedCopyCase: String, CaseIterable {
+        case online = "D2a a copy of the request is queued, online"
+        case cannotReachTheServer = "D2b a queued copy of the request cannot reach the server"
+        case refused = "D2c the server refused a change to the request (Cloud Sync)"
+    }
+
+    /// D2: a copy of the request from before the decline is still queued.
+    /// Pushed after the server's decline, it would put the old status and
+    /// history back on the cloud row. The rule (P12-017): the decline pushes
+    /// what is queued first, so the server appends its entry to that copy;
+    /// while a change to the request is still queued, or refused and waiting
+    /// in Settings › Cloud Sync (a Retry would push it later), the decline
+    /// sends nothing and says why. Characterized at 1dd697b: the decline was
+    /// sent at once, the queued copy was replaced by a declined copy of the
+    /// device's record, and that was pushed over the server's row.
+    @MainActor
+    static func aQueuedCopyNeverOverwritesTheDecline() async {
+        for copyCase in QueuedCopyCase.allCases {
+            let id = copyCase.rawValue
+            let (d, store) = await declineDevice("d2-\(QueuedCopyCase.allCases.firstIndex(of: copyCase) ?? 0)")
+            defer { d.cleanup() }
+            enqueueRequestCopy(d)
+            switch copyCase {
+            case .online:
+                break
+            case .cannotReachTheServer:
+                d.reach.online = false
+            case .refused:
+                d.data.injectStatusOnce = (method: "POST", table: "bookingRequests", status: 422)
+                await syncAndWait(d)
+                expectEqual(d.queued("bookingRequests"), 0, "\(id): sanity: the refused copy left the queue")
+                expectEqual(store.rejectedChanges.map(\.key), ["bookingRequests/req-1"],
+                            "\(id): sanity: it waits in Cloud Sync")
+            }
+            d.links.resetLog()
+            let outcome = String(describing: await store.declineBookingRequest(
+                requestID: "req-1", responseService: d.respondService))
+            let sent = d.links.log
+            let serverAfter = serverRequestStatus(d)
+            let historyAfter = serverHistory(d)
+            let queuedAfter = d.queued("bookingRequests")
+            observed(id, "outcome=\(outcome) sent=\(sent) server=\(serverAfter) serverHistory=\(historyAfter) "
+                     + "queued=\(queuedAfter)")
+            switch copyCase {
+            case .online:
+                expectEqual(outcome, "applied(status: \"declined\", alreadyApplied: false)", "\(id): the server declined")
+                expectEqual(sent, ["respond/decline"], "\(id): one decline is sent")
+                expectEqual(d.links.requestRow("req-1")?["handledAt"] as? String, "2026-09-19T00:00:00.000Z",
+                            "\(id) [P12-017]: the queued copy reached the server before the decline")
+                expectEqual(queuedAfter, 0, "\(id) [P12-017]: nothing is queued after the decline")
+                await syncAndWait(d)
+                expectEqual(serverRequestStatus(d), "declined", "\(id) [P12-017]: after the next push the cloud row stays declined")
+                expectEqual(serverHistory(d), customerHistory + ["owner/decline"],
+                            "\(id) [P12-017]: …and keeps the owner's decline entry")
+                expectEqual(localHistory(d), customerHistory + ["owner/decline"],
+                            "\(id) [P12-017]: after the next pull the device has the server's history")
+            case .cannotReachTheServer, .refused:
+                expect(outcome.contains("awaitingAck"),
+                       "\(id) [P12-017]: the decline waits for the change to the request (\(outcome))")
+                expectEqual(sent, [], "\(id) [P12-017]: …and sends nothing")
+                expectEqual(serverAfter, "reschedule_requested", "\(id) [P12-017]: the server still has the request")
+                expectEqual(d.localRequestStatus, "reschedule_requested", "\(id): the device still shows it")
+                expectEqual(queuedAfter, copyCase == .cannotReachTheServer ? 1 : 0,
+                            "\(id): the waiting change is kept where it was")
+                // The owner clears what waits (back online; or Discard in
+                // Cloud Sync), then declines again.
+                if copyCase == .cannotReachTheServer {
+                    d.reach.online = true
+                } else if let entry = store.rejectedChanges.first {
+                    let discarded = await store.discardRejectedChange(id: entry.id)
+                    expectEqual(discarded, nil, "\(id): sanity: Discard shows the server's version")
+                }
+                d.links.resetLog()
+                let retried = String(describing: await store.declineBookingRequest(
+                    requestID: "req-1", responseService: d.respondService))
+                await syncAndWait(d)
+                expectEqual(retried, "applied(status: \"declined\", alreadyApplied: false)",
+                            "\(id) [P12-017]: then the decline goes through")
+                expectEqual(serverHistory(d), customerHistory + ["owner/decline"],
+                            "\(id) [P12-017]: …and the cloud row keeps the owner's decline entry")
+                expectEqual(d.queue.load().count, 0, "\(id): nothing is left queued")
+            }
+        }
+    }
+
+    /// D3: the legacy two-step accept (`prepareBookingReschedule`, then
+    /// `resolveBookingReschedule`; test-only since P12-015, the entry Task
+    /// 12b's R cases stage proofs through) keeps the server's history the
+    /// same way, and refuses while a copy of the request is still queued.
+    /// Characterized at 1dd697b: the resolve queued a whole copy of the
+    /// request after the server's write.
+    @MainActor
+    static func legacyResolveKeepsTheServersHistory() async {
+        for queuedCopy in [false, true] {
+            let id = queuedCopy ? "D3b legacy resolve, a copy of the request still queued" : "D3a legacy resolve"
+            let (d, store) = await declineDevice(queuedCopy ? "d3b" : "d3a")
+            defer { d.cleanup() }
+            let prepared = await store.prepareBookingReschedule(requestID: "req-1", scheduleDraft: rescheduleDraft,
+                                                                writeStamp: writeStamp)
+            guard case let .proofReady(proof) = prepared else {
+                expect(false, "\(id): sanity: the proof is ready (\(prepared))")
+                continue
+            }
+            if queuedCopy {
+                d.reach.online = false
+                enqueueRequestCopy(d)
+            }
+            d.links.resetLog()
+            let outcome = String(describing: await store.resolveBookingReschedule(
+                requestID: "req-1", proof: proof, responseService: d.respondService))
+            let sent = d.links.log
+            let queuedAfter = d.queued("bookingRequests")
+            await backOnline(d)
+            observed(id, "outcome=\(outcome) sent=\(sent) queuedAfter=\(queuedAfter) server=\(serverRequestStatus(d)) "
+                     + "serverHistory=\(serverHistory(d)) localHistory=\(localHistory(d))")
+            if queuedCopy {
+                expect(outcome.contains("awaitingAck"), "\(id) [P12-017]: the resolve waits for the copy (\(outcome))")
+                expectEqual(sent, [], "\(id) [P12-017]: …and sends nothing")
+                expectEqual(serverRequestStatus(d), "reschedule_requested", "\(id): the request still asks for a reschedule")
+            } else {
+                expectEqual(outcome, "resolved(status: \"confirmed\", alreadyApplied: false)", "\(id): sanity: the server confirmed")
+                expectEqual(queuedAfter, 0, "\(id) [P12-017]: nothing is queued for the request after the server's write")
+                expectEqual(serverHistory(d), customerHistory + ["owner/resolve_reschedule"],
+                            "\(id) [P12-017]: after the next push the cloud row keeps the owner's entry")
+                expectEqual(localHistory(d), customerHistory + ["owner/resolve_reschedule"],
+                            "\(id) [P12-017]: after the next pull the device has the server's history")
+                expectEqual(d.localRequestStatus, "confirmed", "\(id): the device shows confirmed")
+            }
+        }
+    }
+
+    /// D4 (Task 12d review M6, ruling R56): intake stamps the request with its
+    /// lead job after a pull, and the stamp is pushed later. A customer's
+    /// cancel or reschedule request that reaches the server in between must
+    /// survive. RN pushes a whole copy there (`saveBookingRequests`,
+    /// `utils/storage/bookingConversion.ts:147`), which would put `booked`
+    /// back and drop the customer's entry, and on native intake runs by
+    /// itself at every activation. With nothing in between, the stamp lands.
+    /// Characterized at 1dd697b: the stamp's whole-row push overwrote the
+    /// customer's change.
+    @MainActor
+    static func intakeStampNeverOverwritesTheServer() async {
+        for change in ["cancel", "request_reschedule", "none"] {
+            let id = change == "none" ? "D4c intake stamp, nothing changed on the server"
+                : "D4\(change == "cancel" ? "a" : "b") intake stamp, the customer's \(change) arrives before its push"
+            let (d, store) = await intakeDevice("d4-\(change)")
+            defer { d.cleanup() }
+            var pulled = false
+            store.notificationSynchronizeHook = { _ in
+                guard !pulled else { return }
+                pulled = true
+                d.reach.online = false
+            }
+            await store.performForegroundRefresh()
+            expect(pulled, "\(id): sanity: the refresh's pull committed")
+            expectEqual(bookingRequest(d)?.convertedJobId, leadJobID, "\(id): sanity: intake stamped the request")
+            expectEqual(d.queued("bookingRequests"), 1, "\(id): sanity: the stamp waits to be pushed")
+            let target = change == "cancel" ? "cancelled" : change == "request_reschedule" ? "reschedule_requested" : "booked"
+            _ = await d.coordinator?.waitUntilIdle()
+            if change != "none" { await customerActs(d, event: change, status: target) }
+            await backOnline(d)
+            let cloud = d.links.requestRow("req-1")
+            observed(id, "server=\(serverRequestStatus(d)) serverHistory=\(serverHistory(d)) "
+                     + "serverLinked=\(cloud?["convertedJobId"] as? String ?? "no") local=\(d.localRequestStatus ?? "gone") "
+                     + intakeState(d))
+            expectEqual(serverRequestStatus(d), target,
+                        "\(id) [P12-017]: the cloud row keeps the customer's status")
+            expectEqual(serverHistory(d), ["customer/booked"] + (change == "none" ? [] : ["customer/\(change)"]),
+                        "\(id) [P12-017]: …and the customer's history")
+            expectEqual(d.localRequestStatus, target, "\(id) [P12-017]: after the sync the device shows the server's status")
+            expectEqual(d.queued("bookingRequests"), 0, "\(id): nothing is left queued for the request")
+            expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead", "\(id): the lead job reached the cloud")
+            if change == "none" {
+                expectEqual(cloud?["convertedJobId"] as? String, leadJobID, "\(id) [P12-017]: the stamp lands on the cloud row")
+            }
+            if change == "request_reschedule" {
+                // The next activation links the request to the job on the
+                // device again (`recheckedIntakePlan`, review M1), and with
+                // nothing in between that stamp lands.
+                await store.performForegroundRefresh()
+                await syncAndWait(d)
+                expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
+                            "\(id) [P12-017]: the next activation's stamp lands")
+                expectEqual(serverRequestStatus(d), "reschedule_requested", "\(id) [P12-017]: …keeping the customer's status")
+                expectEqual(serverHistory(d), ["customer/booked", "customer/request_reschedule"],
+                            "\(id) [P12-017]: …and history")
+            }
+        }
+    }
+
+    /// D5 (Task 12d review M6): the same for the repeat customer's blank-field
+    /// fill (Task 12d fix round 1): another device's edit of that customer
+    /// that reaches the server between the pull and the push survives.
+    /// Characterized at 1dd697b: the fill's whole-row push put this device's
+    /// older copy of the customer back.
+    @MainActor
+    static func intakeFillNeverOverwritesTheServer() async {
+        let id = "D5 repeat customer edited on another device"
+        let d = Device("d5", customers: [repeatCustomer()])
+        defer { d.cleanup() }
+        let store = d.launch()
+        await d.signIn(store)
+        await syncAndWait(d)
+        await customerBooks(d)
+        var pulled = false
+        store.notificationSynchronizeHook = { _ in
+            guard !pulled else { return }
+            pulled = true
+            d.reach.online = false
+        }
+        await store.performForegroundRefresh()
+        expect(pulled, "\(id): sanity: the refresh's pull committed")
+        expectEqual(bookedCustomers(d).first?.email, "sam@example.test", "\(id): sanity: the fill is on the device")
+        expectEqual(d.queued("customers"), 1, "\(id): sanity: the filled customer waits to be pushed")
+        _ = await d.coordinator?.waitUntilIdle()
+        if var row = d.links.row("customers", "cust-sam") {
+            row["phone"] = "555-0142"
+            row["notes"] = "gate code 4411"
+            await d.links.upsert(table: "customers", id: "cust-sam", record: row)
+        }
+        await backOnline(d)
+        let cloud = d.links.row("customers", "cust-sam")
+        let local = bookedCustomers(d).first
+        observed(id, "cloud phone=\(cloud?["phone"] as? String ?? "?") notes=\(cloud?["notes"] as? String ?? "?") "
+                 + "email=\((cloud?["email"] as? String ?? "").isEmpty ? "blank" : "set") local notes=\(local?.notes ?? "?")")
+        expectEqual(cloud?["phone"] as? String, "555-0142", "\(id) [P12-017]: the other device's phone survives")
+        expectEqual(cloud?["notes"] as? String, "gate code 4411", "\(id) [P12-017]: …and its notes")
+        expectEqual(local?.notes, "gate code 4411", "\(id) [P12-017]: after the sync the device shows the other device's edit")
+        expectEqual(d.queued("customers"), 0, "\(id): nothing is left queued for the customer")
+        expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id): one customer in the cloud")
     }
 
     // MARK: K pins: where intake runs, and where it does not (P12-016)
