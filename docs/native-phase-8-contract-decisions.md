@@ -376,7 +376,26 @@ preconditions frozen here):
    proof is kept only while step 2 can still succeed. It is kept while the
    request is still `reschedule_requested` and the job still carries the proven
    `(date, start)`. Launch and activation remove any other proof. Native never
-   resends a resolve on its own; the owner retries.
+   resends a resolve on its own; the owner retries from the request row, which
+   works since defect `P12-015` was fixed (note 6).
+6. *Note (2026-09-26, Phase 12 task 12.00b.2-J, defect `P12-015`):* native
+   follows RN's order. The owner moves the job first (its editor saves the move
+   and queues its sync); "I've rescheduled it" then only confirms it
+   (`screens/TodayScreen.tsx:607-616`; `AppStore.acceptBookingReschedule`). The
+   accept makes no job write of its own, and `request.slot` is never its target.
+   Step 1 becomes: sync and pull, then require that no change to the job, or to
+   the request, is still queued. The proof carries the job's current
+   `(date, start)` after that pull. Its `updatedAt` is the request's
+   `createdAt`: with no write of its own the accept has no local write stamp,
+   and `Canonical.Job` holds no server `updated_at`. Every converted job was
+   written after its request existed, so `updated_at ≥ proof.updatedAt` holds
+   and the `(date, start)` check is the one that refuses a superseded schedule.
+   A job still at `request.slot` is resolved too, as RN resolves it: the Worker
+   at this commit reads no `scheduleProof`
+   (`backend-workers/src/routes/booking/respond.js:35-40`), and step 2 checks
+   only the job's own `(date, start)`, so no move is required. A stricter
+   `updated_at` bound in step 2 would need native to track each job's server
+   `updated_at`, which it does not.
 
 Manage/ICS slot presentation (frozen): `GET manage` and `?format=ics`
 return the ORIGINAL booked `request.slot` forever — `request.slot` is

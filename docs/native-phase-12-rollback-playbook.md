@@ -289,12 +289,14 @@ no native-only business data, so "Ready" does not depend on it:
 
 - A mirror item records a booking-link or portal-link change that the server already
   made. Only the display copy on this device did not update.
-- A reschedule proof guards a server resolve call. Its job change is in the ordinary
-  queue, which `pending-changes` counts.
+- A reschedule proof records the owner's accept of a customer's reschedule request
+  ("I've rescheduled it" on Today; 2026-09-26, 12.00b.2-J, defect `P12-015`): the job's
+  schedule the resolve confirms. The accept writes nothing to the job. The job change is
+  the owner's earlier move, in the ordinary queue, which `pending-changes` counts.
 
 The check counts this account's items only and never removes one. Launch and every
 activation recover them (2026-09-26, 12.00b.2-I, defect `P12-013`):
-`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10367`) runs for the
+`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10630`) runs for the
 verified owner after the initial sync, from the signed-in gate and from
 `performForegroundRefresh` after its sync (`N/AppStore.swift:7919`).
 
@@ -314,8 +316,10 @@ verified owner after the initial sync, from the signed-in gate and from
   never sends a change to the server.
 - A proof stays only while its resolve can still succeed: the request still asks for a
   reschedule and the job still has the proven schedule. Recovery never resolves; the
-  owner does. A failed or unknown resolve keeps its proof (`N/AppStore.swift:9852-9857`
-  removes it only after success) until the owner resolves again or the request moves on.
+  owner does, by tapping "I've rescheduled it" again (`AppStore.acceptBookingReschedule`,
+  defect `P12-015`, fixed). An accept that could not finish shows why on the screen the
+  owner used, and keeps its proof (`N/AppStore.swift:10083-10088` removes it only after
+  the server confirms) until the owner taps again or the request moves on.
   Proofs are checked in every pass, before or after the pull: the check reads local
   state only, writes no record and queues nothing, so it cannot push a pre-pull copy.
 
@@ -1024,7 +1028,7 @@ What support does with the answer. The first line is the result. A second line s
 | "N changes waiting to upload" or "N photos waiting to upload" | "Please stay connected, open the app for a minute, and tap Check everything is saved again." Repeat until Ready. If it stays, ask for the support report (below) |
 | "N changes the cloud refused need Retry or Discard above" | Explain Retry and Discard (charter §5.3): Retry sends the change again; Discard replaces it with the cloud's version. Ask the user to choose for each, then check again. Never choose for them |
 | "N widget or Siri actions not applied yet" | The check already tried to apply them. Ask the user to check again once; if the line stays, ask for the support report and escalate |
-| The note "Also: … booking or portal link updates …" (under either result) | Act on the result line only. The work it names holds no changes that need uploading (§5.1). If the user says a booking link, portal link or reschedule looks unfinished, ask them to open the app while connected and check again: opening the app finishes link updates (defect `P12-013`, fixed). A reschedule waits for the user to confirm it again |
+| The note "Also: … booking or portal link updates …" (under either result) | Act on the result line only. The work it names holds no changes that need uploading (§5.1). If the user says a booking link, portal link or reschedule looks unfinished, ask them to open the app while connected and check again: opening the app finishes link updates (defect `P12-013`, fixed). An accepted reschedule that did not finish waits for the user to tap "I've rescheduled it" again while connected; the app said why when they tapped it (defect `P12-015`, fixed). If the booking was declined, cancelled or confirmed elsewhere, the note clears the next time the app opens while connected |
 | "sign in to your account", "the first sync hasn't finished", "saving is paused on this device", "an account change is still finishing", "moving data from the previous app hasn't finished", "… can't be read" or "… can't be checked" | Do not advise the update. Ask for the support report and escalate as S1 or S2 (charter §2) |
 | "the account changed during the check, so run it again" | Ask the user to run it again while signed in to their own account |
 
