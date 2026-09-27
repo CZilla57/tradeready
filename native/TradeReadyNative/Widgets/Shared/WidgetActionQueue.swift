@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Task 11.04 (A1–A3): the pure App Group write policy behind every App Intent.
 //
@@ -6,6 +7,8 @@ import Foundation
 // the TradeReadyWidgets extension (11.01 §7 file-placement rule). Keep this
 // file Foundation-only — no AppIntents, WidgetKit, SwiftUI or app types — so
 // host tests (native/run-app-intent-queue-tests.sh) compile it with swiftc.
+// (`os` is the one other import, for the busy-lock line's `Logger`; Phase 12
+// final review M6.)
 // The intents themselves (`WidgetIntents.swift`, `N/Intents/`) are thin shells
 // over `WidgetIntentEngine`.
 //
@@ -29,6 +32,10 @@ import Foundation
 //   lock in the same hold as the `nextJob`/`ownerTag` read.
 // Nothing here writes canonical data: the app replays the queue through its
 // normal save paths (`N/NativeWidgetActionReplay.swift`, contract §4.6).
+
+/// Phase 12 final review (M6): the busy-lock line goes to the unified log,
+/// which a TestFlight or App Store build keeps (`print` never reaches it).
+private let widgetIntentLog = Logger(subsystem: "com.tradeready.native", category: "diagnostics")
 
 // MARK: - Store
 
@@ -62,7 +69,7 @@ struct WidgetIntentEnvironment {
             now: { Date() },
             makeActionID: { UUID().uuidString },
             timeZone: .current,
-            onLockBusy: { print("TradeReadyWidgetLock stage=busy site=intent") }
+            onLockBusy: { widgetIntentLog.notice("TradeReadyWidgetLock stage=busy site=intent") }
         )
     }
 }

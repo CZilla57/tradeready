@@ -416,8 +416,10 @@ final class AppStore: ObservableObject {
             canonicalWriteRevision &+= 1
             // Task 11.01 (contract §3.1 trigger 1): every canonical write
             // (jobs, time sessions, invoices, payments — and replayed widget
-            // actions) lands here via `apply`/in-place edits. Coalesced to
-            // one write per main-actor turn, after the save has run.
+            // actions) lands here, through `apply` or `commitSettings` (since
+            // Phase 12, P12-008, nothing edits the live snapshot in place).
+            // Coalesced to one write per main-actor turn, after the save has
+            // run.
             scheduleWidgetMirrorRefresh()
         }
     }
@@ -865,7 +867,7 @@ final class AppStore: ObservableObject {
         do {
             try NativeRunMarkerStore(directory: fileURL.deletingLastPathComponent()).recordRun()
         } catch {
-            print("TradeReadyNativeRunMarker stage=record failed=true")
+            Self.stageLogger.error("TradeReadyNativeRunMarker stage=record failed=true")
         }
     }
 
@@ -5476,7 +5478,7 @@ final class AppStore: ObservableObject {
 
     private func countAccountDeletionRecordFailure(stage: String) {
         boundaryStepRecordFailureCount = min(Self.boundaryStepFailureCap, boundaryStepRecordFailureCount + 1)
-        print("TradeReadyAccountBoundary stage=\(stage) step=account-deletion-scrub")
+        Self.stageLogger.error("TradeReadyAccountBoundary stage=\(stage, privacy: .public) step=account-deletion-scrub")
     }
 
     /// Phase 12 (12.00b.2-G, Task 9b review M3): the blocked cleanup screen,
@@ -5633,7 +5635,7 @@ final class AppStore: ObservableObject {
             return
         } catch {
             boundaryStepMarkerWriteFailureCount = min(Self.boundaryStepFailureCap, boundaryStepMarkerWriteFailureCount + 1)
-            print("TradeReadyAccountBoundary stage=marker-write step=\(step.rawValue)")
+            Self.stageLogger.error("TradeReadyAccountBoundary stage=marker-write step=\(step.rawValue, privacy: .public)")
         }
         boundaryStepsPendingInMemory.insert(step)
         do { try secureSettingsStore.recordBoundaryStep(step) } catch {
@@ -5675,7 +5677,9 @@ final class AppStore: ObservableObject {
 
     private func countBoundaryStepRecordFailure(stage: String, _ step: Canonical.SnapshotRepository.BoundaryStep) {
         boundaryStepRecordFailureCount = min(Self.boundaryStepFailureCap, boundaryStepRecordFailureCount + 1)
-        print("TradeReadyAccountBoundary stage=\(stage) step=\(step.rawValue)")
+        Self.stageLogger.error(
+            "TradeReadyAccountBoundary stage=\(stage, privacy: .public) step=\(step.rawValue, privacy: .public)"
+        )
     }
 
     private func isBoundaryStepPending(_ step: Canonical.SnapshotRepository.BoundaryStep) -> Bool {
@@ -5939,6 +5943,12 @@ final class AppStore: ObservableObject {
     /// mirrors the two owner-bound stores this task added; no other AppStore
     /// diagnostic sink existed to reuse (fix round 1, I6).
     private static let diagnosticsLogger = Logger(subsystem: "com.tradeready.native", category: "today-owner-state")
+    /// Phase 12 final review (M6): the Phase 12 `stage=` diagnostics. `print`
+    /// never reaches the unified log in a TestFlight or App Store build; this
+    /// does (Console, a sysdiagnose). Every interpolated value is an integer,
+    /// a Bool or a fixed code (a stage, step, table or reason name), marked
+    /// public so a Release build shows it instead of `<private>`.
+    private static let stageLogger = Logger(subsystem: "com.tradeready.native", category: "diagnostics")
 
     /// One bounded, non-PII diagnostic per session per code (brief step 5,
     /// fix round 1 I6) — never the record contents, never the account
@@ -6808,7 +6818,7 @@ final class AppStore: ObservableObject {
                 // Fix round 1 (I2b): payload-free, once per pass (the throw
                 // ends the pass). The claim stays until it can be read.
                 widgetActionReplayDiagnostics.recordUnreadableClaim()
-                print("TradeReadyWidgetReplay stage=unreadable-claim")
+                Self.stageLogger.error("TradeReadyWidgetReplay stage=unreadable-claim")
             }
             // A post-commit acknowledgement failure may leave memory one step
             // behind disk. Reload the verified canonical result before retry.
@@ -7047,12 +7057,14 @@ final class AppStore: ObservableObject {
         catch { throw SnapshotProjectionError(family: family, underlying: error) }
     }
 
-    /// Phase 12 (12.00b.2-H, P12-008): the one way a change to the live
-    /// snapshot is committed. `next` is projected (so a snapshot the screens
-    /// cannot show is never saved), saved, and only then kept; when the
-    /// projection or the save throws, the previous snapshot, the screens and
-    /// the pending estimate follow-up are restored before the error is
-    /// rethrown. Callers build `next` on a copy (`var next = snapshot`) and
+    /// Phase 12 (12.00b.2-H, P12-008): the commit for a change to the live
+    /// snapshot. The other ways in are `commitSettings` (Settings alone), the
+    /// copy sites that save and then `apply` what they saved, and the
+    /// allowlisted applies of a snapshot saved elsewhere. `next` is projected
+    /// (so a snapshot the screens cannot show is never saved), saved, and
+    /// only then kept; when the projection or the save throws, the previous
+    /// snapshot, the screens and the pending estimate follow-up are restored
+    /// before the error is rethrown. Callers build `next` on a copy (`var next = snapshot`) and
     /// queue, emit and prompt only after this returns, so a change that was
     /// not saved is never queued, tracked, shown or mirrored to the widget,
     /// and the next unrelated save cannot persist it without queueing it.
@@ -7570,7 +7582,7 @@ final class AppStore: ObservableObject {
         case .busy:
             isWidgetMirrorDirty = true
             widgetMirrorLockBusyCount = min(Self.widgetMirrorLockBusyCap, widgetMirrorLockBusyCount + 1)
-            print("TradeReadyWidgetLock stage=busy site=mirror count=\(widgetMirrorLockBusyCount)")
+            Self.stageLogger.notice("TradeReadyWidgetLock stage=busy site=mirror count=\(self.widgetMirrorLockBusyCount, privacy: .public)")
             reportError(
                 ["code": "widget-lock/busy", "message": "App Group lock busy"],
                 context: ["context": "widgetLock", "operation": "mirror"]
@@ -7650,7 +7662,7 @@ final class AppStore: ObservableObject {
     }
 
     /// Coalesces trigger-1 writes to one per main-actor turn, so a burst of
-    /// in-place edits mirrors once, after the save that follows them.
+    /// committed writes mirrors once, after the saves that preceded them.
     private func scheduleWidgetMirrorRefresh() {
         guard widgetMirror != nil, !widgetMirrorRefreshScheduled else { return }
         widgetMirrorRefreshScheduled = true
@@ -8354,7 +8366,9 @@ final class AppStore: ObservableObject {
             readiness: readiness, drainOutcome: drainOutcome, checkedAt: Date(), accountGeneration: generation
         )
         rollbackReadinessCheck = check
-        print("TradeReadyRollbackReadiness stage=checked ready=\(readiness.isReady) blockers=\(readiness.blockers.count)")
+        Self.stageLogger.notice(
+            "TradeReadyRollbackReadiness stage=checked ready=\(readiness.isReady, privacy: .public) blockers=\(readiness.blockers.count, privacy: .public)"
+        )
         return check
     }
 
@@ -8571,7 +8585,9 @@ final class AppStore: ObservableObject {
     private func reportRejectedChanges(_ rejected: [NativeMutationRejection], dropped: Int) {
         if let first = rejected.first {
             let code = "rejected/\(first.item.table)/\(first.statusCode)"
-            print("TradeReadyRejectedChanges stage=filed table=\(first.item.table) status=\(first.statusCode) count=\(rejected.count)")
+            Self.stageLogger.notice(
+                "TradeReadyRejectedChanges stage=filed table=\(first.item.table, privacy: .public) status=\(first.statusCode, privacy: .public) count=\(rejected.count, privacy: .public)"
+            )
             reportError(
                 ["code": code, "message": "Sync push refused changes"],
                 context: ["context": "pushRejected", "collection": first.item.table,
@@ -8580,7 +8596,7 @@ final class AppStore: ObservableObject {
         }
         guard dropped > 0 else { return }
         rejectedChangeOverflowCount = min(Self.rejectedChangeCounterCap, rejectedChangeOverflowCount + dropped)
-        print("TradeReadyRejectedChanges stage=overflow count=\(dropped)")
+        Self.stageLogger.error("TradeReadyRejectedChanges stage=overflow count=\(dropped, privacy: .public)")
         reportError(
             ["code": "rejected-store/overflow", "message": "Refused changes over the limit were dropped"],
             context: ["context": "pushRejected", "count": dropped]
@@ -8651,7 +8667,7 @@ final class AppStore: ObservableObject {
                 ifUnchangedSince: entry.item.ifUnchangedSince
             )
         } catch {
-            print("TradeReadyMutationQueue stage=enqueue-retry table=\(entry.item.table)")
+            Self.stageLogger.error("TradeReadyMutationQueue stage=enqueue-retry table=\(entry.item.table, privacy: .public)")
             recordLocalSyncFailure("queue/enqueue-retry")
             return false
         }
@@ -8768,7 +8784,7 @@ final class AppStore: ObservableObject {
             }
         } catch {
             rejectedChangeScrubFailureCount = min(Self.rejectedChangeCounterCap, rejectedChangeScrubFailureCount + 1)
-            print("TradeReadyRejectedChanges stage=boundary-scrub")
+            Self.stageLogger.error("TradeReadyRejectedChanges stage=boundary-scrub")
         }
         if !rejectedChanges.isEmpty { rejectedChanges = [] }
     }
@@ -9910,7 +9926,9 @@ extension AppStore {
         var customers = 0
         var reason = "none"
         defer {
-            print("TradeReadyBookingIntake stage=pass converted=\(converted) jobs=\(jobs) customers=\(customers) skipped=\(reason)")
+            Self.stageLogger.notice(
+                "TradeReadyBookingIntake stage=pass converted=\(converted, privacy: .public) jobs=\(jobs, privacy: .public) customers=\(customers, privacy: .public) skipped=\(reason, privacy: .public)"
+            )
         }
         guard !persistenceWritesBlocked else {
             reason = "read-only"
@@ -10962,7 +10980,9 @@ extension AppStore {
                 let applied = recovery.reappliedMirrors
                 let dropped = recovery.droppedMirrors + recovery.proofsSuperseded.count + recovery.proofsClosed.count
                 let kept = recovery.retained + recovery.proofsReady.count
-                print("TradeReadyScheduleBookingRecovery stage=pass applied=\(applied) dropped=\(dropped) kept=\(kept) stopped=\(unfinished)")
+                Self.stageLogger.notice(
+                    "TradeReadyScheduleBookingRecovery stage=pass applied=\(applied, privacy: .public) dropped=\(dropped, privacy: .public) kept=\(kept, privacy: .public) stopped=\(unfinished, privacy: .public)"
+                )
             }
         }
         for (index, item) in owned.enumerated() {
@@ -11116,9 +11136,13 @@ extension AppStore {
             ? .applied : .retained
     }
 
-    /// A reschedule proof, from local state only (the activation's sync has
-    /// just pulled). The server resolves only from `reschedule_requested`
-    /// (`backend-workers/lib/booking/respond.js` TRANSITIONS) and only while
+    /// A reschedule proof, from local state only. At the foreground refresh
+    /// the pull has just committed; at a gate site (identity apply, the
+    /// subscription or starting-point exit) the pass runs before that
+    /// activation's pull, which is safe because a proof check writes no
+    /// record and queues nothing (playbook §5.1). The server resolves only
+    /// from `reschedule_requested` (`backend-workers/lib/booking/respond.js`
+    /// TRANSITIONS) and only while
     /// the job has the proven schedule, so any other state is terminal:
     /// `.missing`, `needsReview` after another device declined or confirmed,
     /// a committed unknown outcome once the pull shows `confirmed`, and a

@@ -1,5 +1,10 @@
 import CryptoKit
 import Foundation
+import os
+
+/// Phase 12 final review (M6): the busy-lock line goes to the unified log,
+/// which a TestFlight or App Store build keeps (`print` never reaches it).
+private let widgetReplayLog = Logger(subsystem: "com.tradeready.native", category: "diagnostics")
 
 enum NativeWidgetActionBatchError: Error, Equatable {
     case invalidAccountBinding
@@ -1355,7 +1360,7 @@ struct NativeWidgetActionClaimTransport {
         do {
             return try WidgetAppGroupLock.withExclusiveLock(at: lockFile, body)
         } catch WidgetAppGroupLockError.busy {
-            print("TradeReadyWidgetLock stage=busy site=replay")
+            widgetReplayLog.notice("TradeReadyWidgetLock stage=busy site=replay")
             throw NativeWidgetActionClaimError.lockFailed
         } catch is WidgetAppGroupLockError {
             throw NativeWidgetActionClaimError.lockFailed

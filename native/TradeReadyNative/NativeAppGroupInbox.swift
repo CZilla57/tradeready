@@ -4,6 +4,14 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
+#if canImport(os)
+import os
+
+/// Phase 12 final review (M6): the busy-lock lines go to the unified log,
+/// which a TestFlight or App Store build keeps (`print` never reaches it).
+/// Fixed text only.
+private let appGroupInboxLog = Logger(subsystem: "com.tradeready.native", category: "diagnostics")
+#endif
 
 /// The App Group key/value surface the app reads cross-process handoffs from.
 /// UserDefaults cannot compare-and-delete across processes on its own, so
@@ -88,7 +96,9 @@ struct NativeAppGroupAccountScrubber {
         } catch WidgetAppGroupLockError.busy {
             // Phase 12 review fix M3: one payload-free line per busy event;
             // still `lockFailed`, so the durable widget step stays pending.
-            print("TradeReadyWidgetLock stage=busy site=scrub")
+            #if canImport(os)
+            appGroupInboxLog.notice("TradeReadyWidgetLock stage=busy site=scrub")
+            #endif
             throw NativeAppGroupAccountScrubError.lockFailed
         } catch {
             throw NativeAppGroupAccountScrubError.lockFailed
@@ -146,7 +156,9 @@ struct NativePendingOpenURLConsumer {
         } catch WidgetAppGroupLockError.busy {
             // Phase 12 review fix M3: one payload-free line per busy event;
             // nothing was read or removed, so the stash keeps its 300 s window.
-            print("TradeReadyWidgetLock stage=busy site=stash")
+            #if canImport(os)
+            appGroupInboxLog.notice("TradeReadyWidgetLock stage=busy site=stash")
+            #endif
             return .unavailable
         } catch {
             return .unavailable
@@ -175,7 +187,9 @@ struct NativePendingOpenURLConsumer {
             }
         } catch WidgetAppGroupLockError.busy {
             // Phase 12 review fix M3: as in `take`; the stash is left for it.
-            print("TradeReadyWidgetLock stage=busy site=stash")
+            #if canImport(os)
+            appGroupInboxLog.notice("TradeReadyWidgetLock stage=busy site=stash")
+            #endif
             return (false, nil)
         } catch {
             return (false, nil)

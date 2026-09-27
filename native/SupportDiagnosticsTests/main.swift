@@ -293,7 +293,12 @@ final class DryRunLink: NativeMutationPushHTTPLoading, NativeSyncReachability, @
     func isReachable() async -> Bool { true }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        lock.lock(); count += 1; let hook = count == 1 ? duringFirstRequest : nil; lock.unlock()
+        // Final review M10: scoped locking (NSLock's lock/unlock are
+        // unavailable from async contexts, an error in Swift 6 mode).
+        let hook = lock.withLock { () -> (@MainActor @Sendable () async -> Void)? in
+            count += 1
+            return count == 1 ? duringFirstRequest : nil
+        }
         if let hook { await hook() }
         let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
         let response = HTTPURLResponse(

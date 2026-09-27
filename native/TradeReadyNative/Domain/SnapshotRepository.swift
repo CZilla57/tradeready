@@ -1,4 +1,10 @@
 import Foundation
+import os
+
+/// Phase 12 final review (M6): the Phase 12 lines below go to the unified
+/// log, which a TestFlight or App Store build keeps (`print` never reaches
+/// it). Fixed text only.
+private let snapshotRepositoryLog = Logger(subsystem: "com.tradeready.native", category: "diagnostics")
 
 extension Canonical {
     /// Synchronous, file-backed storage for the canonical snapshot.
@@ -362,7 +368,7 @@ extension Canonical {
             // the next save retries.
             if fileManager.fileExists(atPath: accountScrubClearedMarkerURL.path) {
                 do { try fileManager.removeItem(at: accountScrubClearedMarkerURL) }
-                catch { print("TradeReadySnapshotRepository stage=scrub-cleared-record") }
+                catch { snapshotRepositoryLog.error("TradeReadySnapshotRepository stage=scrub-cleared-record") }
             }
         }
 
@@ -526,7 +532,7 @@ extension Canonical {
         @discardableResult
         private func protectCopiedLegacyFiles(in directory: URL) -> LegacyFileProtectionOutcome {
             guard let files = legacyFileEnumerator(directory) else {
-                print("TradeReadyLegacyBackup stage=file-protection")
+                snapshotRepositoryLog.error("TradeReadyLegacyBackup stage=file-protection")
                 legacyFileProtectionTally.record(.enumeratorUnavailable)
                 return .enumeratorUnavailable
             }

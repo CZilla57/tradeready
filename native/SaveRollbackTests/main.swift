@@ -311,6 +311,7 @@ struct SaveRollbackTests {
         await pullCommit()
         failureNoticeSources(root: root)
         pinScopes()
+        pinSaveFirstProbe()
         sourcePin(root: root)
 
         print("save-rollback tests: \(checks - failures)/\(checks) checks passed")
@@ -1117,7 +1118,11 @@ struct SaveRollbackTests {
     ///    `repository.save(X)` (only whitespace, `;` and `try` between), so a
     ///    copy site shows only what it saved: `try apply(next); try
     ///    repository.save(next)` and a bare `try apply(next)` both fail, and
-    ///    `apply` is never referenced without being called.
+    ///    `apply` is never referenced without being called. Since the final
+    ///    review (M8) that save must also open its statement, with nothing
+    ///    but whitespace and a plain `try` before it: `try? repository.save(X)`,
+    ///    `try! …` and `_ = try? …` swallow or trap on the failure and fail
+    ///    the pin (`pinSaveFirstProbe`).
     ///
     /// What a lexical pin cannot close (none of these occurs today):
     /// - a mutating method the pin does not know: one declared outside
@@ -1171,23 +1176,7 @@ struct SaveRollbackTests {
         expectEqual(resavers, [:], "pin: AppStore never commits through its own save()")
 
         // Rule 4: save first, then apply what was saved.
-        var saveFirst = 0
-        var allowlisted: [String: Int] = [:]
-        var unsaved: [String] = []
-        for call in matches(#"(?<!func )(?<![\w.])(?:self[?!]?\.)?apply\s*\("#) {
-            let scope = source.scope(at: call.range.location)
-            if applyAllowlist[scope] != nil { allowlisted[scope, default: 0] += 1; continue }
-            let argument = source.balancedArgument(openingAt: call.range.location + call.range.length - 1)
-            let words = argument.split(whereSeparator: \.isWhitespace).map { NSRegularExpression.escapedPattern(for: String($0)) }
-            let before = code.substring(to: call.range.location)
-            let saved = words.isEmpty ? nil : try! NSRegularExpression(
-                pattern: #"(?<![\w.])(?:self[?!]?\.)?repository\.save\(\s*"# + words.joined(separator: #"\s+"#)
-                    + #"\s*\)\s*;?\s*(?:try[?!]?\s+)?$"#
-            ).firstMatch(in: before, range: NSRange(location: 0, length: (before as NSString).length))
-            if saved != nil { saveFirst += 1 } else {
-                unsaved.append("\(scope) (line \(source.line(at: call.range.location))): apply(\(argument))")
-            }
-        }
+        let (saveFirst, allowlisted, unsaved) = saveFirstApplies(source, allowlist: applyAllowlist)
         observed("pin", "\(saveFirst) apply(X) call(s) follow repository.save(X); allowlisted: \(allowlisted.sorted { $0.key < $1.key })")
         expectEqual(unsaved, [], "pin: every apply(X) outside the allowlist directly follows repository.save(X)")
         expectEqual(Set(allowlisted.keys), Set(applyAllowlist.keys),
@@ -1196,6 +1185,67 @@ struct SaveRollbackTests {
         let references = matches(#"(?<!func )(?<![\w.])(?:self[?!]?\.)?apply\b(?!\s*\()"#)
             .map { "\(source.scope(at: $0.range.location)) (line \(source.line(at: $0.range.location)))" }
         expectEqual(references, [], "pin: apply is only ever called, never passed or stored")
+    }
+
+    /// Rule 4 of `sourcePin`, on any sanitized source: every `apply(X)`
+    /// outside `allowlist` must directly follow `repository.save(X)`. Returns
+    /// the count that do, the allowlisted calls per scope, and each call
+    /// that does not.
+    static func saveFirstApplies(
+        _ source: ScopedSource, allowlist: [String: String]
+    ) -> (saveFirst: Int, allowlisted: [String: Int], unsaved: [String]) {
+        let code = source.code
+        var saveFirst = 0
+        var allowlisted: [String: Int] = [:]
+        var unsaved: [String] = []
+        let calls = (try! NSRegularExpression(pattern: #"(?<!func )(?<![\w.])(?:self[?!]?\.)?apply\s*\("#))
+            .matches(in: code as String, range: NSRange(location: 0, length: code.length))
+        for call in calls {
+            let scope = source.scope(at: call.range.location)
+            if allowlist[scope] != nil { allowlisted[scope, default: 0] += 1; continue }
+            let argument = source.balancedArgument(openingAt: call.range.location + call.range.length - 1)
+            let words = argument.split(whereSeparator: \.isWhitespace).map { NSRegularExpression.escapedPattern(for: String($0)) }
+            let before = code.substring(to: call.range.location)
+            // Final review M8: the save opens its statement (only spaces and
+            // a plain `try` since the last line break, `;` or `{`), so a
+            // `try?` or `try!` save, or one inside an expression, fails.
+            let saved = words.isEmpty ? nil : try! NSRegularExpression(
+                pattern: #"(?:\A|[\n;{])[ \t]*(?:try[ \t]+)?(?:self[?!]?\.)?repository\.save\(\s*"#
+                    + words.joined(separator: #"\s+"#)
+                    + #"\s*\)\s*;?\s*(?:try[?!]?\s+)?$"#
+            ).firstMatch(in: before, range: NSRange(location: 0, length: (before as NSString).length))
+            if saved != nil { saveFirst += 1 } else {
+                unsaved.append("\(scope) (line \(source.line(at: call.range.location))): apply(\(argument))")
+            }
+        }
+        return (saveFirst, allowlisted, unsaved)
+    }
+
+    /// Final review M8 (§C 11b.1): rule 4 on a fixed probe. The save must be
+    /// a plain `try repository.save(X)`: a `try?` or `try!` save swallows (or
+    /// traps on) the failure, so the `apply(X)` after it could keep an
+    /// unsaved snapshot in memory, which is what the P12-008 rule forbids.
+    static func pinSaveFirstProbe() {
+        func unsaved(_ body: String) -> [String] {
+            let probe = "final class Probe {\n    func copy() throws {\n" + body + "\n    }\n}\n"
+            return saveFirstApplies(ScopedSource(sanitizedSwift(Array(probe.utf8))), allowlist: [:]).unsaved
+        }
+        expectEqual(unsaved("        try repository.save(next); try apply(next)"), [],
+                    "pin probe: a plain `try repository.save(X)` then `try apply(X)` passes")
+        expectEqual(unsaved("        try self.repository.save(next)\n        try self.apply(next)"), [],
+                    "pin probe: …also through self and on two lines")
+        expectEqual(unsaved("        saveSnapshot: { try self.repository.save(next); try self.apply(next) }").count, 0,
+                    "pin probe: …and inside a closure's braces")
+        for rejected in [
+            "        try? repository.save(next); try apply(next)",
+            "        try! repository.save(next); try apply(next)",
+            "        try? self.repository.save(next)\n        try self.apply(next)",
+            "        _ = try? repository.save(next); try apply(next)",
+            "        let saved = (try? repository.save(next)) != nil; try apply(next)",
+        ] {
+            expectEqual(unsaved(rejected).count, 1,
+                        "pin probe [M8]: the pin rejects `\(rejected.trimmingCharacters(in: .whitespaces))`")
+        }
     }
 
     /// The pin's scope attribution on a fixed probe: a nested function does

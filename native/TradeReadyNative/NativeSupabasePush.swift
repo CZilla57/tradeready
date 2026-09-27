@@ -2,6 +2,14 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(os)
+import os
+
+/// Phase 12 final review (M6): the superseded-change line goes to the unified
+/// log, which a TestFlight or App Store build keeps (`print` never reaches
+/// it). It carries the table name, a fixed code, and nothing else.
+private let mutationPushLog = Logger(subsystem: "com.tradeready.native", category: "diagnostics")
+#endif
 
 enum NativeMutationPushError: LocalizedError, Equatable {
     case invalidConfiguration
@@ -200,7 +208,9 @@ struct NativeSupabaseMutationPushService {
                     // The row was written after this device's pull (or is
                     // gone): nothing was applied. Drop the change; the next
                     // pull fetches the row.
-                    print("TradeReadyMutationPush stage=superseded table=\(item.table)")
+                    #if canImport(os)
+                    mutationPushLog.notice("TradeReadyMutationPush stage=superseded table=\(item.table, privacy: .public)")
+                    #endif
                     superseded.append(item)
                     continue
                 default:
