@@ -22,7 +22,10 @@ is **Open, awaiting the owner's ruling (R43)** — this task does not rule on it
 names it. P12-013, P12-015, P12-016 and P12-017 (all S2) are **Fixed**; P12-018 (S3) is
 **Open, backlog** (post-cutover) and does not block Stage A. This task does not edit the
 charter's defect rows; see `docs/native-phase-12-cutover-charter.md` §10 for the table
-itself.
+itself. **Ruling R59:** the missing production build configuration (§3.1) is also an
+owner-ruling blocker for Stage A/C upload — the owner must decide between adding a new
+Production configuration or re-pointing Release once staging exists, and who supplies
+the production values; no agent adds or edits a build configuration.
 
 ## 1. SIGN-1 — signed Release build (blocked)
 
@@ -53,8 +56,8 @@ confirmation are needed here (see §7 below for the waiver's read-only condition
   (`native/TradeReadyNative.xcodeproj/project.pbxproj:389` Debug, `:426` Release) and the
   `TradeReadyWidgets` target (`:501` Debug, `:532` Release). All four agree with each
   other.
-- RN `app.json` `expo.version` = `1.2.1` (`app.json:5`), `expo.ios.buildNumber` = `1`
-  (`app.json:14`).
+- RN `app.json` `expo.version` = `1.2.1` (`app.json:6`), `expo.ios.buildNumber` = `1`
+  (`app.json:19`).
 - Native's marketing version (1.0) is **below** the RN version (1.2.1). The owner has not
   yet confirmed the live App Store version in App Store Connect (VER-1's first
   requirement); this task cannot substitute a guess.
@@ -114,7 +117,7 @@ repointing Release once staging has its own place) under a dated ruling — not 
   (`backend-workers/wrangler.toml:26`, `[vars]`, explicitly documented as "public
   (shipped in the app bundle)") is **the same host**: `ncbqswfdvckmdocbawaa.supabase.co`.
   **Matches.**
-- RN's production backend origin (`app.json` `expo.extra.backendUrl`, `app.json:60`) is
+- RN's production backend origin (`app.json` `expo.extra.backendUrl`, `app.json:89`) is
   `https://tradeready-backend.tradeready.workers.dev`, the exact host
   `BuildEnvironment.endpoint` checks by name for the production-write guard
   (`N/BuildEnvironment.swift:178`). **Matches** (the native guard targets the same Worker
@@ -140,7 +143,7 @@ repointing Release once staging has its own place) under a dated ruling — not 
 ### 3.4 RevenueCat keys
 
 - `TRADEREADY_REVENUECAT_API_KEY` (Apple, `project.pbxproj:407,444`) and RN's
-  `expo.extra.rcAppleApiKey` (`app.json:66`): **present in both, matches** (direct string
+  `expo.extra.rcAppleApiKey` (`app.json:95`): **present in both, matches** (direct string
   comparison run locally; value not reproduced here — RevenueCat Apple SDK keys are
   public client identifiers per `N/BuildEnvironment.swift:62-65`, but this task still
   does not copy key values into docs).
@@ -148,16 +151,20 @@ repointing Release once staging has its own place) under a dated ruling — not 
   matching the charter's TH-10 wording and `docs/native-phase-3-device-matrix.md`'s
   `TradeReady Pro` references.
 
-### 3.5 Google Sign-In client identifiers (non-secret)
+### 3.5 Google Sign-In client identifiers (non-secret, named by key only)
 
 - `TRADEREADY_GOOGLE_IOS_CLIENT_ID` / `TRADEREADY_GOOGLE_SERVER_CLIENT_ID`
-  (`project.pbxproj:402-403,439-440`) match `app.json`'s `googleIosClientId` /
-  `googleWebClientId` (`app.json:64-65`) exactly. `native/Info.plist`'s `GIDClientID` /
-  `GIDServerClientID` keys resolve from the same build settings
-  (`native/Info.plist:19-20`). The Google Sign-In URL scheme
-  (`com.googleusercontent.apps.246232122952-b2trko1uog7593a3sg8n25tklifc85nn`) is
-  registered in `native/Info.plist`'s `CFBundleURLTypes` and matches the resolved iOS
-  client id's prefix — the same check `run-phase-3-device-preflight.sh` already runs.
+  (`project.pbxproj:402-403,439-440`) match `app.json`'s `googleIosClientId`
+  (`app.json:98`) and `googleWebClientId` (`app.json:97`) exactly — direct string
+  comparison run locally; values not reproduced here. `native/Info.plist`'s
+  `GIDClientID` / `GIDServerClientID` keys (`native/Info.plist:28-29`) resolve from the
+  same build settings. The Google Sign-In URL scheme registered in `native/Info.plist`'s
+  `CFBundleURLTypes` (`native/Info.plist:37`) matches the resolved iOS client id's
+  prefix — the same check `run-phase-3-device-preflight.sh` already runs. (Fix round 1:
+  this section previously reproduced the client-id/URL-scheme value directly; it is
+  named by key only now, consistent with how §3.4 treats the RevenueCat key — the value
+  is inherently public, shipped in the binary's `CFBundleURLTypes` for the OAuth
+  redirect, but this doc does not copy identifier values regardless.)
 
 ### 3.6 Entitlement-adjacent URLs
 
@@ -193,8 +200,8 @@ KEYS in the evidence index). The RN keys (`app.json` `extra.posthogApiKey`,
   (`group.com.gettradereadyapp.tradeready`). No associated domains.
 - Widget extension (`native/TradeReadyWidgets/TradeReadyWidgets.entitlements`): the same
   App Group only. No associated domains.
-- RN `app.json`'s `ios.entitlements` (`app.json:22-26`) declares only the same App Group;
-  `usesAppleSignIn: true` (`app.json:17`) is the Expo-plugin equivalent of the native
+- RN `app.json`'s `ios.entitlements` (`app.json:21-25`) declares only the same App Group;
+  `usesAppleSignIn: true` (`app.json:20`) is the Expo-plugin equivalent of the native
   entitlement. **Matches** — today's build needs exactly App Group + Sign in with Apple,
   and neither the native entitlements nor RN's `app.json` declare associated domains, so
   there is nothing to add for that.
@@ -233,7 +240,7 @@ source:
 ### 4.3 `ITSAppUsesNonExemptEncryption`
 
 **Gap found.** RN's `app.json` sets `ios.infoPlist.ITSAppUsesNonExemptEncryption = false`
-(`app.json:23-25`). `native/Info.plist` has **no `ITSAppUsesNonExemptEncryption` key at
+(`app.json:27`). `native/Info.plist` has **no `ITSAppUsesNonExemptEncryption` key at
 all**. The app uses only standard HTTPS/TLS (URLSession, Supabase, RevenueCat, Sentry,
 PostHog SDKs) and no proprietary/non-exempt cryptography, so `false` is the accurate
 value — same as RN. Without the key, every App Store Connect upload will prompt for the
@@ -245,7 +252,7 @@ to `native/Info.plist`, matching RN. **Owner approval needed** for the `Info.pli
 ### 4.4 Permission strings
 
 - `NSCameraUsageDescription` = "TradeReady uses the camera to add job photos."
-  (`native/Info.plist:26`). The only in-app photo-capture path is
+  (`native/Info.plist:30`). The only in-app photo-capture path is
   `UIImagePickerController` with `sourceType = .camera`
   (`N/NativeJobPhotosView.swift:226`), which requires this string. **Present and
   accurate.** Wording differs slightly from RN's camera permission copy
@@ -294,7 +301,7 @@ The app's legal-disclosure URLs are wired consistently: `TRADEREADY_PASSWORD_RES
 `TRADEREADY_EMAIL_CONFIRMATION_URL` build settings and RN's `app.json` `privacyPolicyUrl`
 (`https://gettradereadyapp.com/privacy.html`) and `termsUrl`
 (`https://gettradereadyapp.com/terms.html`) all point at the same `gettradereadyapp.com`
-site (source: `app.json:58-59`). This task cannot verify the *content* of those hosted
+site (source: `app.json:91-92`). This task cannot verify the *content* of those hosted
 pages (privacy policy accuracy, subscription auto-renewal/price/duration disclosure
 wording) from the repository — that is a live-site content review.
 
@@ -337,9 +344,8 @@ is an owner action requiring real credentials, which this task never handles.
 ## 8. Step 3b — subscription and identity continuity checks (evidence rows appended)
 
 Two new evidence-index rows record these checks (not already present — `P3-S3`,
-`P3-S4`/`P3-S5` and the SIWA rows in `docs/native-phase-12-evidence-index.md` are
-non-upgrade Phase 3 rows, not scoped to the Expo-to-native SA2 upgrade run this step
-asks for):
+`P3-S5` and the SIWA rows in `docs/native-phase-12-evidence-index.md` are non-upgrade
+Phase 3 rows, not scoped to the Expo-to-native SA2 upgrade run this step asks for):
 
 - **`P12-3B-1`** (`docs/native-phase-12-evidence-index.md` §23): a RevenueCat entitlement
   bought on the Expo build is honored after the native upgrade, Restore Purchases works,
@@ -375,8 +381,8 @@ Keychain or writes a legacy backup, and passes with the console locked — rulin
    runs, and the runner treats that the same as a failing test.
 2. **Launch-path wiring**, read as source text and scoped to the automatic-migration
    block of `AppStore`'s initializer (`N/AppStore.swift:615` `init`, the block guarded by
-   `if automaticallyMigrateLegacyData && accountScrubRecoveryError == nil {` at `:747`
-   through `let completedWithoutSnapshot =` at `:797`) — the app's actual launch path,
+   `if automaticallyMigrateLegacyData && accountScrubRecoveryError == nil {` at `:748`
+   through `let completedWithoutSnapshot =` at `:803`) — the app's actual launch path,
    not a manual "Try again" retry path elsewhere in the file. Asserts that this block
    still constructs a `LegacyMigrationCoordinator(` (`:768`) and still routes it through
    `try self.migrateLegacySource(with: coordinator)` (`:776`).
