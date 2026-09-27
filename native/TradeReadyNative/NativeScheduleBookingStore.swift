@@ -271,7 +271,7 @@ enum NativeScheduleBookingPolicy {
     /// push writes them only onto the row this device pulled, so a customer's
     /// cancel or reschedule request, or another device's edit of the
     /// customer, that reached the server after the pull is never overwritten.
-    /// RN pushes whole rows here (`utils/storage/bookingConversion.ts:147`).
+    /// RN pushes whole rows here (`utils/storage/bookingConversion.ts:140-142`).
     /// The lead job and a created customer are new rows and stay plain
     /// upserts. A table with no watermark yet (only before the first delta
     /// pull: the initial sync saves none, so a cold launch's conversion at

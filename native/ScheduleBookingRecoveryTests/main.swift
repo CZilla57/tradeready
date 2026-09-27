@@ -2875,7 +2875,7 @@ struct ScheduleBookingRecoveryTests {
     // MARK: D. The owner's responses keep the server's booking history (P12-017)
 
     /// The customer's history on the server row before the owner responds:
-    /// booked, then asked to reschedule (`backend-workers/lib/booking/manage.js:83-101`).
+    /// booked, then asked to reschedule (`backend-workers/lib/booking/manage.js:83-108`).
     static let customerHistory = ["customer/booked", "customer/request_reschedule"]
 
     /// The request's history in the cloud row, as "actor/event".
@@ -2898,7 +2898,7 @@ struct ScheduleBookingRecoveryTests {
     }
 
     /// The customer acts on the manage page, as the Worker writes it
-    /// (`backend-workers/lib/booking/manage.js:83-101`): the new status and a
+    /// (`backend-workers/lib/booking/manage.js:83-108`): the new status and a
     /// customer entry appended to the history of the cloud row.
     @MainActor
     static func customerActs(_ d: Device, event: String, status: String) async {
@@ -3132,7 +3132,7 @@ struct ScheduleBookingRecoveryTests {
     /// lead job after a pull, and the stamp is pushed later. A customer's
     /// cancel or reschedule request that reaches the server in between must
     /// survive. RN pushes a whole copy there (`saveBookingRequests`,
-    /// `utils/storage/bookingConversion.ts:147`), which would put `booked`
+    /// `utils/storage/bookingConversion.ts:140-142`), which would put `booked`
     /// back and drop the customer's entry, and on native intake runs by
     /// itself at every activation. With nothing in between, the stamp lands.
     /// Characterized at 1dd697b: the stamp's whole-row push overwrote the

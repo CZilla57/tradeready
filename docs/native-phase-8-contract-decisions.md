@@ -455,7 +455,7 @@ filled from the booking on the current record and never replaces a value (RN
 
 **Note (2026-09-27, Phase 12 task 12.00b.2-L, Task 12d review M6, defect `P12-017`):** D-B3-4 held
 on the device but not on the wire. The request stamp and the repeat customer's fill were queued as
-whole-row upserts (RN pushes whole rows too, `utils/storage/bookingConversion.ts:147`), and intake
+whole-row upserts (RN pushes whole rows too, `utils/storage/bookingConversion.ts:140-142`), and intake
 now runs by itself at every activation, so a customer's cancel or reschedule request, or another
 device's edit of the customer, that reached the server between the pull and the push was overwritten.
 Both are now guarded upserts (`N/NativeMutationQueue.swift`, `ifUnchangedSince`): a PATCH of the
