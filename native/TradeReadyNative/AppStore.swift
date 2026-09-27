@@ -527,6 +527,14 @@ final class AppStore: ObservableObject {
     /// Phase 12 (12.00b.2-I, P12-013): one pending-work recovery pass at a
     /// time (launch and activation can both start one).
     private var scheduleBookingRecoveryInFlight = false
+    /// Phase 12 (12.00b.2-I fix round 1, review I1): the owner and account
+    /// generation of a pull that committed the settings and customer tables
+    /// since the identity was last applied or the foreground refresh last
+    /// began, or nil. A booking or portal mirror merges into this device's
+    /// copy of the settings or customer record and queues the whole record,
+    /// and the push runs before the pull, so a mirror is read and merged
+    /// only while this mark is current.
+    private var scheduleBookingRecoveryPullMark: (generation: UInt64, subject: String)?
     /// Task 8.08 test seam: explicit session bytes for owner transports.
     /// Production passes nil and reads the Keychain; tests inject bytes so
     /// owner rechecks and service calls exercise without a live session.
@@ -5944,6 +5952,11 @@ final class AppStore: ObservableObject {
         activateConsumers: Bool = true,
         allowUnboundWorkspaceAdoption: Bool = false
     ) {
+        // Phase 12 (12.00b.2-I fix round 1, review I1): an activation or
+        // sign-in begins here. The consumer block below and the subscription
+        // gate's exit start recovery passes before this period's pull lands,
+        // so no mirror is merged until a pull commits again.
+        scheduleBookingRecoveryPullMark = nil
         // Invalidates any same-account entitlement request that was suspended
         // while a stronger auth/recovery/onboarding state transition completed.
         subscriptionGateGeneration &+= 1
@@ -6107,6 +6120,7 @@ final class AppStore: ObservableObject {
 
                 try self.commitSnapshot(candidate)
                 NativePerformanceMetrics.shared.end(initialSync, count: self.performanceRecordCount())
+                self.markScheduleBookingRecoveryPullCommitted(subject: subject)
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
                     outcome: outcome,
@@ -6276,6 +6290,8 @@ final class AppStore: ObservableObject {
             replayVerifiedWidgetActionsIfPossible()
             // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work,
             // once the initial sync has committed (a cold launch lands here).
+            // A warm activation lands here too, before its pull: that pass
+            // leaves mirrors to `performForegroundRefresh` (fix round 1).
             startScheduleBookingRecoveryIfPossible()
         }
     }
@@ -7761,6 +7777,12 @@ final class AppStore: ObservableObject {
         catch { return .failed("pull/local-commit") }
         do { try syncCursorStore.save(committedCursor) }
         catch { return .failed("pull/cursor-commit") }
+        // Phase 12 (12.00b.2-I fix round 1, review I1): pending booking and
+        // portal mirrors may merge once a pull has brought the settings and
+        // customer rows. A partial pull that missed either does not count.
+        if outcome.failedTables.allSatisfy({ !Self.scheduleBookingMirrorTables.contains($0) }) {
+            markScheduleBookingRecoveryPullCommitted(subject: subject)
+        }
         // Sync completion is the generation trigger (mirrors RN app-open /
         // foreground): pulled rules and jobs are in the snapshot, so due
         // occurrences materialize before any recurrence-manager refresh reads
@@ -7875,6 +7897,9 @@ final class AppStore: ObservableObject {
         // seam already wrote any pulled change, and the 1-hour dedupe still
         // rewrites a mirror that is an hour old, so a stale one is refreshed.
         defer { refreshWidgetMirror(force: false) }
+        // Phase 12 (12.00b.2-I fix round 1, review I1): only this refresh's
+        // own pull (or a later one) lets the recovery below merge a mirror.
+        scheduleBookingRecoveryPullMark = nil
         let synced = await syncNowAndWait(trigger: .foreground) != nil
         // Mirrors RN's foreground `checkAndGenerateRecurringJobs`: runs after
         // the sync when it succeeds, and on the local snapshot when offline —
@@ -7887,7 +7912,10 @@ final class AppStore: ObservableObject {
         // Phase 12 (12.00b.2-I, P12-013): finish unfinished booking/portal
         // link work and clear reschedule proofs that can no longer resolve,
         // after the sync so the pulled request and job states are current.
-        // Offline, a mirror's status read fails and the item waits.
+        // This owns a warm activation's mirrors (fix round 1): the passes
+        // the activation's gate sites started could not merge one. If this
+        // refresh's pull did not commit (offline, or a failed settings or
+        // customers table), mirrors are not read and wait for a later pass.
         await recoverScheduleBookingPendingWorkIfPossible()
         guard synced else { return }
         let photos = await performJobPhotoTransfer()
@@ -10263,10 +10291,32 @@ extension AppStore {
         return binding
     }
 
+    /// Phase 12 (12.00b.2-I fix round 1, review I1): the tables a booking or
+    /// portal mirror merges into.
+    private static let scheduleBookingMirrorTables: Set<String> = ["settings", "customers"]
+
+    /// Phase 12 (12.00b.2-I fix round 1, review I1): records that a pull for
+    /// `subject` committed the settings and customer tables (the initial
+    /// sync, or a delta pull), so pending mirrors may be read and merged.
+    private func markScheduleBookingRecoveryPullCommitted(subject: String) {
+        scheduleBookingRecoveryPullMark = (accountBoundaryGeneration, subject)
+    }
+
+    /// Whether such a pull has committed for the current owner and account
+    /// generation since the identity was applied or the foreground refresh
+    /// began.
+    private var scheduleBookingRecoveryPullCommitted: Bool {
+        guard let mark = scheduleBookingRecoveryPullMark else { return false }
+        return mark.generation == accountBoundaryGeneration && mark.subject == authenticatedUserSubject
+    }
+
     /// Phase 12 (12.00b.2-I, P12-013): launch. Called where the signed-in
     /// gate opens after the initial sync (the points that also replay
     /// widget actions). Starts a pass only when the owner has items, so a
-    /// launch with nothing staged does no work.
+    /// launch with nothing staged does no work. On a cold launch the initial
+    /// sync's pull has committed, so the pass may merge mirrors; on a warm
+    /// activation these points fire before the foreground pull, so the pass
+    /// handles proofs and leaves mirrors to `performForegroundRefresh`.
     private func startScheduleBookingRecoveryIfPossible() {
         guard let binding = scheduleBookingRecoveryBinding,
               pendingScheduleBookingWorkStore().load().contains(where: { $0.ownerBinding == binding })
@@ -10294,12 +10344,18 @@ extension AppStore {
     /// - It runs only for the gated owner (`scheduleBookingRecoveryBinding`)
     ///   and re-checks the account generation, the owner and the gate after
     ///   every `await`; on any change it stops and keeps what is left.
-    /// - A mirror is applied only after a fresh `status` read (contract §6):
-    ///   a staged token must read `tokenValid`, and the flag written is the
-    ///   server's current one. A mirror the server no longer backs, or with
-    ///   nothing to merge into, is removed without a write. It never sends a
-    ///   mutation: an operation ID replays for 30 days only (§1.3), and the
-    ///   server already holds the change.
+    /// - A mirror is read and merged only after a pull has committed since
+    ///   the identity was applied or the foreground refresh began (fix round
+    ///   1, review I1): the merge queues the whole settings or customer
+    ///   record, and the push runs before the pull. Until then it waits.
+    /// - A mirror is applied only after a fresh `status` read (contract §6)
+    ///   says the token it would write is current: the staged token (mint,
+    ///   rotate), or for a flag-only item (enable, disable) the local link's
+    ///   token, which the merge writes back with the flag. The flag written
+    ///   is the server's current one. A mirror the server no longer backs,
+    ///   or with nothing to merge into, is removed without a write. It never
+    ///   sends a mutation: an operation ID replays for 30 days only (§1.3),
+    ///   and the server already holds the change.
     /// - A proof is kept only while a resolve can still succeed: its request
     ///   still asks for a reschedule and the job still has the proven
     ///   schedule. Recovery never resolves; the owner does (RN resolves only
@@ -10307,6 +10363,7 @@ extension AppStore {
     /// - Writes follow the commit rule: save a copy, then apply, then queue.
     /// - One pass at a time; an item is removed by value, so an item staged
     ///   again meanwhile stays.
+    /// - A pass with items logs one counts-only line (review M6).
     func recoverScheduleBookingPendingWork(ownerBinding: String) async -> PendingWorkRecovery {
         var recovery = PendingWorkRecovery()
         guard !scheduleBookingRecoveryInFlight,
@@ -10321,11 +10378,22 @@ extension AppStore {
                 && scheduleBookingOwnerStillCurrent(capture)
                 && scheduleBookingRecoveryBinding == ownerBinding
         }
+        let pullCommitted = { [unowned self] in scheduleBookingRecoveryPullCommitted }
         let store = pendingScheduleBookingWorkStore()
         let owned = store.load().filter { $0.ownerBinding == ownerBinding }
-        for item in owned {
+        var unfinished = 0
+        defer {
+            if !owned.isEmpty {
+                let applied = recovery.reappliedMirrors
+                let dropped = recovery.droppedMirrors + recovery.proofsSuperseded.count + recovery.proofsClosed.count
+                let kept = recovery.retained + recovery.proofsReady.count
+                print("TradeReadyScheduleBookingRecovery stage=pass applied=\(applied) dropped=\(dropped) kept=\(kept) stopped=\(unfinished)")
+            }
+        }
+        for (index, item) in owned.enumerated() {
             guard stillCurrent() else {
                 recovery.stoppedForAccountChange = true
+                unfinished = owned.count - index
                 return recovery
             }
             // Removed meanwhile (an admin action finished it): nothing to do.
@@ -10333,9 +10401,11 @@ extension AppStore {
             let step: PendingWorkStep
             switch item.kind {
             case let .bookingMirror(token, _, _, _):
-                step = await recoverBookingMirror(token: token, stillCurrent: stillCurrent)
+                step = await recoverBookingMirror(token: token, stillCurrent: stillCurrent, pullCommitted: pullCommitted)
             case let .portalMirror(customerID, token, _, _):
-                step = await recoverPortalMirror(customerID: customerID, token: token, stillCurrent: stillCurrent)
+                step = await recoverPortalMirror(
+                    customerID: customerID, token: token, stillCurrent: stillCurrent, pullCommitted: pullCommitted
+                )
             case let .rescheduleProof(requestID, proof, _):
                 step = recoverRescheduleProof(requestID: requestID, proof: proof)
             }
@@ -10354,6 +10424,7 @@ extension AppStore {
                 recovery.retained += 1
             case .stopped:
                 recovery.stoppedForAccountChange = true
+                unfinished = owned.count - index
                 return recovery
             }
             if step.removesItem {
@@ -10378,14 +10449,20 @@ extension AppStore {
     /// A booking-link mirror. A staged token (mint or rotate) is applied only
     /// if the server still reads it as current; a flag-only item (enable or
     /// disable) takes the server's current flag and needs an existing link
-    /// (recovery never invents a token).
+    /// (recovery never invents a token) that the server reads as current,
+    /// because the merge writes that token back with the flag (fix round 1,
+    /// review I1). Nothing is read or merged until a pull has committed.
     private func recoverBookingMirror(
         token: String?,
-        stillCurrent: () -> Bool
+        stillCurrent: () -> Bool,
+        pullCommitted: () -> Bool
     ) async -> PendingWorkStep {
         guard !bookingAdminInFlight else { return .retained }
         if let token, !NativeBookingAdministrationService.isValidCapabilityToken(token) { return .dropped }
-        if token == nil, snapshot.payload.settings?.bookingLink == nil { return .dropped }
+        guard let readToken = token ?? snapshot.payload.settings?.bookingLink?.token,
+              NativeBookingAdministrationService.isValidDisplayToken(readToken)
+        else { return .dropped }
+        guard pullCommitted() else { return .retained }
         guard let bytes = scheduleBookingSessionBytes(explicit: nil),
               let service = scheduleBookingRecoveryAdminService
                 ?? (try? NativeBookingAdministrationService(endpoint: NativeBookingAdministrationService.resolvedEndpoint()))
@@ -10399,13 +10476,21 @@ extension AppStore {
         defer { bookingAdminInFlight = false }
         let status: NativeBookingLinkStatus
         do {
-            status = try await wired.status(token: token, sessionBytes: bytes)
+            status = try await wired.status(token: readToken, sessionBytes: bytes)
         } catch {
             return stillCurrent() ? .retained : .stopped
         }
         guard stillCurrent() else { return .stopped }
-        if token != nil, !status.tokenValid { return .dropped }
-        if token == nil, snapshot.payload.settings?.bookingLink == nil { return .dropped }
+        guard pullCommitted() else { return .retained }
+        // Not current: a later change replaced it. Nothing is written; the
+        // pull brings the current link once that change's own save lands.
+        guard status.tokenValid else { return .dropped }
+        if token == nil {
+            // The flag-only merge writes back the local token: it must still
+            // be the one just confirmed. Replaced meanwhile: the next pass.
+            guard let local = snapshot.payload.settings?.bookingLink?.token else { return .dropped }
+            guard local == readToken else { return .retained }
+        }
         return mergeBookingDisplayMirrorForRecovery(token: token, enabled: status.enabled) ? .applied : .retained
     }
 
@@ -10414,12 +10499,16 @@ extension AppStore {
     private func recoverPortalMirror(
         customerID: String,
         token: String?,
-        stillCurrent: () -> Bool
+        stillCurrent: () -> Bool,
+        pullCommitted: () -> Bool
     ) async -> PendingWorkStep {
         guard !portalAdminInFlight.contains(customerID) else { return .retained }
         if let token, !NativePortalAdministrationService.isValidCapabilityToken(token) { return .dropped }
         guard let customer = snapshot.payload.customers?.first(where: { $0.id == customerID }) else { return .dropped }
-        if token == nil, customer.portal == nil { return .dropped }
+        guard let readToken = token ?? customer.portal?.token,
+              NativePortalAdministrationService.isValidDisplayToken(readToken)
+        else { return .dropped }
+        guard pullCommitted() else { return .retained }
         guard let bytes = scheduleBookingSessionBytes(explicit: nil),
               let service = scheduleBookingRecoveryPortalService
                 ?? (try? NativePortalAdministrationService(endpoint: NativePortalAdministrationService.resolvedEndpoint()))
@@ -10433,17 +10522,21 @@ extension AppStore {
         defer { portalAdminInFlight.remove(customerID) }
         let status: NativePortalLinkStatus
         do {
-            status = try await wired.status(customerId: customerID, token: token, sessionBytes: bytes)
+            status = try await wired.status(customerId: customerID, token: readToken, sessionBytes: bytes)
         } catch NativePortalAdminError.notFound {
             return stillCurrent() ? .dropped : .stopped
         } catch {
             return stillCurrent() ? .retained : .stopped
         }
         guard stillCurrent() else { return .stopped }
-        if token != nil, !status.tokenValid { return .dropped }
-        guard let current = snapshot.payload.customers?.first(where: { $0.id == customerID }),
-              token != nil || current.portal != nil
+        guard pullCommitted() else { return .retained }
+        guard status.tokenValid,
+              let current = snapshot.payload.customers?.first(where: { $0.id == customerID })
         else { return .dropped }
+        if token == nil {
+            guard let local = current.portal?.token else { return .dropped }
+            guard local == readToken else { return .retained }
+        }
         return mergePortalDisplayFields(customerID: customerID, token: token, enabled: status.enabled)
             ? .applied : .retained
     }
