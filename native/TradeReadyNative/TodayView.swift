@@ -26,6 +26,8 @@ struct TodayView: View {
     @State private var showingSettings = false
     @State private var bookingAlertRow: NativeBookingAttention.Row?
     @State private var busyBookingRequestIDs: Set<String> = []
+    /// Phase 12 (12.00b.2-J, P12-015): the outcome of "I've rescheduled it".
+    @State private var bookingNotice: AppStore.BookingRescheduleNotice?
     /// Task 10.12: the setup-checklist card's one-shot deep-link
     /// (`store.pendingSettingsDestination`) mirrored into local sheet state.
     @State private var settingsDestination: SettingsDestination?
@@ -120,6 +122,15 @@ struct TodayView: View {
             } message: { row in
                 Text(NativeTodayBriefing.bookingRowPresentation(row).body)
             }
+            .alert(
+                bookingNotice?.title ?? "",
+                isPresented: bookingNoticePresented,
+                presenting: bookingNotice
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { notice in
+                Text(notice.message)
+            }
             // On the stack's root content, not the stack, so a pop back re-sends it.
             .nativeAnalyticsScreen(.today)
         }
@@ -127,6 +138,10 @@ struct TodayView: View {
 
     private var bookingAlertPresented: Binding<Bool> {
         Binding(get: { bookingAlertRow != nil }, set: { if !$0 { bookingAlertRow = nil } })
+    }
+
+    private var bookingNoticePresented: Binding<Bool> {
+        Binding(get: { bookingNotice != nil }, set: { if !$0 { bookingNotice = nil } })
     }
 
     // MARK: - Header
@@ -336,29 +351,21 @@ struct TodayView: View {
         }
     }
 
-    /// Mirrors `NativeBookingRequestsView.resolveReschedule`: stages a
-    /// proof against the request's own slot, then resolves it. A job-less
-    /// row (no `convertedJobId`) has nothing to reschedule against and is a
-    /// no-op, matching that screen's existing guard.
+    /// RN's "I've rescheduled it" (`screens/TodayScreen.tsx:613-616` →
+    /// `handleBookingRespond`, `:554-566`). The owner has moved the job
+    /// ("View job"); this confirms the booking for the job's current schedule
+    /// and shows the outcome here, as RN's alert does on failure (`:557`).
+    /// Phase 12 (12.00b.2-J, P12-015): `AppStore.acceptBookingReschedule`
+    /// owns the policy, the same entry point as the Requests row.
     private func resolveBookingReschedule(_ row: NativeBookingAttention.Row) {
-        guard !busyBookingRequestIDs.contains(row.request.id), let jobID = row.jobID else { return }
+        guard !busyBookingRequestIDs.contains(row.request.id) else { return }
         busyBookingRequestIDs.insert(row.request.id)
         Task {
-            let prepareOutcome = await store.prepareBookingReschedule(
-                requestID: row.request.id,
-                scheduleDraft: .init(
-                    jobID: jobID,
-                    baselineDate: nil, baselineStart: nil, baselineEnd: nil,
-                    baselineStatus: row.request.status,
-                    date: row.request.slot?.date,
-                    start: row.request.slot?.start,
-                    end: row.request.slot?.end
-                )
-            )
-            if case .proofReady(let proof) = prepareOutcome {
-                _ = await store.resolveBookingReschedule(requestID: row.request.id, proof: proof)
+            let outcome = await store.acceptBookingReschedule(requestID: row.request.id)
+            await MainActor.run {
+                bookingNotice = outcome.ownerNotice(actionLabel: "I've rescheduled it")
+                _ = busyBookingRequestIDs.remove(row.request.id)
             }
-            await MainActor.run { _ = busyBookingRequestIDs.remove(row.request.id) }
         }
     }
 }

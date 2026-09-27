@@ -5,7 +5,7 @@ import MessageUI
 ///
 /// Thin view over the 8.02 attention selector (`bookingAttentionRows`) and
 /// the 8.08/8.07 response entry points (`declineBookingRequest`,
-/// `prepareBookingReschedule`, `resolveBookingReschedule`,
+/// `acceptBookingReschedule` (Phase 12, P12-015),
 /// `stampBookingRequestHandled`). No business policy lives here: every
 /// mutation goes through the typed store entry points with fresh operation
 /// identity; the view only maps row kinds to actions and surfaces the
@@ -20,6 +20,8 @@ struct NativeBookingRequestsView: View {
     @State private var showingJobID: IdentifiableString?
     @State private var showingComposer: NativeMessageComposerView?
     @State private var didLoad = false
+    /// Phase 12 (12.00b.2-J, P12-015): the outcome of "Resolve".
+    @State private var notice: AppStore.BookingRescheduleNotice?
 
     var body: some View {
         Group {
@@ -48,6 +50,15 @@ struct NativeBookingRequestsView: View {
         }
         .sheet(item: $showingComposer) { composer in
             composer.view
+        }
+        .alert(
+            notice?.title ?? "",
+            isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } }),
+            presenting: notice
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { notice in
+            Text(notice.message)
         }
     }
 
@@ -92,43 +103,19 @@ struct NativeBookingRequestsView: View {
 
     // MARK: - Actions
 
+    /// Phase 12 (12.00b.2-J, P12-015): the owner has moved the job; this
+    /// confirms the booking for the job's current schedule through the same
+    /// entry point as Today's "I've rescheduled it", and shows every outcome
+    /// on this screen.
     private func resolveReschedule(_ row: NativeBookingAttention.Row) async {
-        guard !busyRequestIDs.contains(row.request.id),
-              let jobID = row.jobID
-        else { return }
-
-        let prepareOutcome = await store.prepareBookingReschedule(
-            requestID: row.request.id,
-            scheduleDraft: .init(
-                jobID: jobID,
-                baselineDate: nil, baselineStart: nil, baselineEnd: nil,
-                baselineStatus: row.request.status,
-                date: row.request.slot?.date,
-                start: row.request.slot?.start,
-                end: row.request.slot?.end
-            )
-        )
-
-        guard case .proofReady(let proof) = prepareOutcome else { return }
-
+        guard !busyRequestIDs.contains(row.request.id) else { return }
         busyRequestIDs.insert(row.request.id)
         defer { busyRequestIDs.remove(row.request.id) }
 
-        let outcome = await store.resolveBookingReschedule(
-            requestID: row.request.id,
-            proof: proof
-        )
+        let outcome = await store.acceptBookingReschedule(requestID: row.request.id)
         await MainActor.run {
-            switch outcome {
-            case .resolved:
-                refreshRows()
-            case .needsReview:
-                refreshRows()
-            case .superseded:
-                refreshRows()
-            case .unknownOutcome, .missing, .failed:
-                break
-            }
+            notice = outcome.ownerNotice(actionLabel: "Resolve")
+            refreshRows()
         }
     }
 

@@ -328,7 +328,8 @@ enum NativeScheduleBookingPolicy {
     /// record. `writeStamp` is the local schedule-commit instant (ISO-8601):
     /// `Canonical.Job` carries no `updatedAt`, so the stamp the server
     /// compares (`updated_at ≥ proof.updatedAt`) is the durable local write
-    /// recorded in pending work. Never invent server state here.
+    /// recorded in pending work (`acceptProof` passes a lower bound instead,
+    /// because the accept makes no write). Never invent server state here.
     static func rescheduleProof(
         job: Canonical.Job,
         writeStamp: String
@@ -338,6 +339,29 @@ enum NativeScheduleBookingPolicy {
               !writeStamp.isEmpty
         else { return nil }
         return NativeScheduleProof(jobId: job.id, updatedAt: writeStamp, date: date, start: start)
+    }
+
+    /// Phase 12 (12.00b.2-J, P12-015): the proof for the owner's accept of a
+    /// customer's reschedule request, from the job's CURRENT schedule. The
+    /// owner moved the job first (RN's order) and the accept writes nothing,
+    /// so there is no local write to stamp, and `Canonical.Job` carries no
+    /// server `updated_at`. `updatedAt` is the request's `createdAt`: every
+    /// converted job was created from the request after it existed, so its
+    /// server `updated_at` meets that bound, and contract §7's
+    /// in-transaction `(date, start)` check stays the one that refuses a
+    /// superseded schedule. A `createdAt` that is not an ISO-8601 instant
+    /// falls back to the epoch. Nil when the job has no date and start time
+    /// (native never sends a proof-less resolve, §7 step 4).
+    static func acceptProof(job: Canonical.Job, request: Canonical.BookingRequest) -> NativeScheduleProof? {
+        let stamp = isISOInstant(request.createdAt) ? request.createdAt : "1970-01-01T00:00:00.000Z"
+        return rescheduleProof(job: job, writeStamp: stamp)
+    }
+
+    private static func isISOInstant(_ value: String) -> Bool {
+        guard !value.isEmpty, value.count <= 40 else { return false }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) != nil || ISO8601DateFormatter().date(from: value) != nil
     }
 
     /// Refuses when a superseding schedule edit landed after proof

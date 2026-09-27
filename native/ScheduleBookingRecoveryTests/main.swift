@@ -37,7 +37,10 @@ import FoundationNetworking
 // (the test commit before it): both rows built a schedule draft from the
 // request's original slot with the request's status as the job's baseline,
 // which always conflicted, so nothing was sent, nothing was shown and the
-// conflict text was left in `migrationMessage`.
+// conflict text was left in `migrationMessage`. Since the fix, both rows call
+// `acceptBookingReschedule`: it writes nothing to the job, resolves with a
+// proof of the job's current schedule once the owner's move has reached the
+// server, and every outcome is shown on the screen the owner acted on.
 //
 // Everything here is production code except the network: the real AppStore,
 // queue, sync coordinator, push transport and delta pull in front of the
@@ -606,6 +609,7 @@ struct ScheduleBookingRecoveryTests {
         await acceptOutcomesOnTheActingScreen()
         await accountChangeDuringTheResolve()
         await s1GuardTheResolveNeverMovesTheJobBack()
+        acceptNoticesOnBothScreens()
         sources(root)
 
         if failures == 0 {
@@ -1509,38 +1513,28 @@ struct ScheduleBookingRecoveryTests {
         var message: String? = nil
     }
 
-    /// The owner's tap on a reschedule row, running the code that screen runs.
-    ///
-    /// Characterization (the test commit, before the fix): the code
+    /// The owner's tap on a reschedule row, running the code that screen runs:
     /// `TodayView.resolveBookingReschedule` and
-    /// `NativeBookingRequestsView.resolveReschedule` ran at 52ba5ac. Both
-    /// return silently without a job; otherwise both build a schedule draft
-    /// with nil baselines, the REQUEST's status as the job's baseline and
-    /// `request.slot` (the original booked slot) as the target, resolve only
-    /// on `.proofReady`, and show nothing for any outcome (Today ignores the
-    /// rest; Requests returns silently or ignores unknownOutcome, missing and
-    /// failed). The one difference is the injected respond client.
+    /// `NativeBookingRequestsView.resolveReschedule` both call
+    /// `acceptBookingReschedule(requestID:)` and show its `ownerNotice` for
+    /// their own button (the S pins hold them to it). The one difference is
+    /// the injected respond client.
+    ///
+    /// Characterization (the test commit before the fix) ran the code those
+    /// actions had at 52ba5ac instead: without a job both returned silently;
+    /// otherwise both built a schedule draft with nil baselines, the
+    /// REQUEST's status as the job's baseline and `request.slot` (the
+    /// original booked slot) as the target, resolved only on `.proofReady`,
+    /// and showed nothing for any outcome.
     @MainActor
     static func tap(_ row: RescheduleRow, _ store: AppStore, _ d: Device) async -> RowTap {
         guard let attention = store.bookingAttentionRows().first(where: { $0.request.id == "req-1" }) else {
             return RowTap(outcome: "no row")
         }
-        guard let jobID = attention.jobID else { return RowTap(outcome: "no job: the row returns silently") }
-        let prepared = await store.prepareBookingReschedule(
-            requestID: attention.request.id,
-            scheduleDraft: .init(
-                jobID: jobID,
-                baselineDate: nil, baselineStart: nil, baselineEnd: nil,
-                baselineStatus: attention.request.status,
-                date: attention.request.slot?.date,
-                start: attention.request.slot?.start,
-                end: attention.request.slot?.end
-            )
-        )
-        guard case let .proofReady(proof) = prepared else { return RowTap(outcome: "prepare \(prepared)") }
-        let resolved = await store.resolveBookingReschedule(
-            requestID: attention.request.id, proof: proof, responseService: d.respondService)
-        return RowTap(outcome: "resolve \(resolved)")
+        let outcome = await store.acceptBookingReschedule(requestID: attention.request.id,
+                                                          responseService: d.respondService)
+        let notice = outcome.ownerNotice(actionLabel: row.actionLabel)
+        return RowTap(outcome: String(describing: outcome), title: notice.title, message: notice.message)
     }
 
     /// `fixtureRequest`'s slot (the original booked slot) and the time the
@@ -1677,6 +1671,7 @@ struct ScheduleBookingRecoveryTests {
         case lostBeforeCommit = "F3j unknown outcome (the server did not commit)"
         case unreachable = "F3k the resolve cannot reach the server"
         case rateLimited = "F3l rate limited"
+        case requestCopyQueued = "F3m a copy of the request has not reached the server"
     }
 
     /// F3: each non-success outcome is shown on the acting screen in plain
@@ -1714,6 +1709,14 @@ struct ScheduleBookingRecoveryTests {
         let movedSchedule = acceptCase == .unscheduledJob ? "2026-09-25 - -"
             : acceptCase == .noJob ? "2026-09-22 09:00 10:00" : "2026-09-25 13:00 14:00"
         switch acceptCase {
+        case .requestCopyQueued:
+            // The move has reached the server; an older copy of the request
+            // has not (pushed after the resolve, it would put the old status
+            // back on the server row).
+            await d.sync()
+            d.reach.online = false
+            _ = try? d.queue.enqueue(table: "bookingRequests", op: .upsert, recordId: "req-1",
+                                     payload: .object(["id": .string("req-1")]))
         case .declinedBeforeTheTap:
             if var row = d.links.requestRow("req-1") {
                 row["status"] = "declined"
@@ -1747,8 +1750,8 @@ struct ScheduleBookingRecoveryTests {
         let expected: (sent: Bool, message: String, proofKept: Bool) = switch acceptCase {
         case .unscheduledJob: (false, "Give the job a date and start time first, then tap “\(label)” again.", false)
         case .noJob: (false, "This booking isn't linked to a job on this device yet. Pull down to refresh, then try again.", false)
-        case .notAcknowledged:
-            (false, "The job's new time hasn't reached the server yet. Check your connection, then tap “\(label)” again.", true)
+        case .notAcknowledged, .requestCopyQueued:
+            (false, "Your latest changes haven't reached the server yet. Check your connection, then tap “\(label)” again.", true)
         case .declinedBeforeTheTap: (false, "This booking was already declined.", false)
         case .declinedDuringTheResolve: (true, "This booking was already declined.", true)
         case .scheduleChanged:
@@ -1769,7 +1772,8 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(jobSchedule(d).local, movedSchedule, "\(id): the tap never changes the job's schedule")
         expectEqual(d.items.count, expected.proofKept ? 1 : 0,
                     "\(id): \(expected.proofKept ? "the staged proof stays for Task 12b's rules" : "no proof is staged")")
-        expectEqual(d.queued("bookingRequests"), 0, "\(id): no copy of the request is queued")
+        expectEqual(d.queued("bookingRequests"), acceptCase == .requestCopyQueued ? 1 : 0,
+                    "\(id): the tap queues no copy of the request")
         switch acceptCase {
         case .notAcknowledged:
             expectEqual(store.rollbackReadiness().bookingWorkCount, 1, "\(id): the rollback check counts the staged proof")
@@ -1874,6 +1878,64 @@ struct ScheduleBookingRecoveryTests {
             await d.sync()
             check("after a relaunch and activation")
         }
+    }
+
+    /// F6: every accept outcome has a plain notice for both screens, and
+    /// where the owner should try again it names that screen's button. The
+    /// cases the F flows do not reach (read-only data, a signed-out session,
+    /// a missing build configuration, another device's confirm, the
+    /// customer's cancel, a local save that fails after the server confirmed)
+    /// are checked on the mapping itself.
+    @MainActor
+    static func acceptNoticesOnBothScreens() {
+        let saved = AppStore.BookingRescheduleConfirmation(
+            status: "confirmed", alreadyApplied: false, date: "2026-09-25", start: "13:00", end: "14:00",
+            keptOriginalTime: false, savedLocally: true)
+        var notSaved = saved
+        notSaved.savedLocally = false
+        let outcomes: [AppStore.BookingRescheduleAcceptOutcome] = [
+            .confirmed(saved), .confirmed(notSaved), .notLinkedToJob, .jobUnscheduled, .awaitingAck,
+            .needsReview(currentStatus: "declined"), .needsReview(currentStatus: "cancelled"),
+            .needsReview(currentStatus: "confirmed"), .needsReview(currentStatus: "reschedule_requested"),
+            .needsReview(currentStatus: "unknown"), .unknownOutcome, .missing, .accountChanged, .readOnly,
+            .failed(.rejectedSession), .failed(.malformedSession), .failed(.invalidConfiguration),
+            .failed(.invalidRequest), .failed(.rateLimited), .failed(.unavailable), .failed(.invalidResponse),
+        ]
+        let tapAgain: [AppStore.BookingRescheduleAcceptOutcome] = [
+            .jobUnscheduled, .awaitingAck, .needsReview(currentStatus: "reschedule_requested"),
+        ]
+        for row in RescheduleRow.allCases {
+            for outcome in outcomes {
+                let id = "F6 \(row.rawValue) \(outcome)"
+                let notice = outcome.ownerNotice(actionLabel: row.actionLabel)
+                expect(!notice.message.isEmpty, "\(id) [P12-015]: a message")
+                if case .confirmed = outcome {
+                    expectEqual(notice.title, "Booking updated", "\(id) [P12-015]: the success title")
+                } else {
+                    expectEqual(notice.title, failureTitle, "\(id) [P12-015]: RN's failure title")
+                }
+            }
+            for outcome in tapAgain {
+                expect(outcome.ownerNotice(actionLabel: row.actionLabel).message.contains("tap \u{201C}\(row.actionLabel)\u{201D} again"),
+                       "F6 \(row.rawValue) \(outcome) [P12-015]: names this screen's button")
+            }
+        }
+        func message(_ outcome: AppStore.BookingRescheduleAcceptOutcome) -> String {
+            outcome.ownerNotice(actionLabel: "Resolve").message
+        }
+        expectEqual(message(.confirmed(notSaved)),
+                    "The booking is confirmed for the job's new time, \(movedWhen). "
+                        + "This device couldn't save the change yet. Pull down to refresh.",
+                    "F6 [P12-015]: a local save failure after the server confirmed")
+        expectEqual(message(.readOnly), "This device can't save changes right now. Nothing changed on this device.",
+                    "F6 [P12-015]: read-only data")
+        expectEqual(message(.failed(.rejectedSession)),
+                    "Your session has expired. Sign in again before responding to bookings.",
+                    "F6 [P12-015]: a signed-out session")
+        expectEqual(message(.needsReview(currentStatus: "cancelled")), "The customer cancelled this booking.",
+                    "F6 [P12-015]: the customer's cancel")
+        expectEqual(message(.needsReview(currentStatus: "confirmed")), "This booking is already confirmed.",
+                    "F6 [P12-015]: another device's confirm")
     }
 
     // MARK: S. Source pins: where recovery runs, and where it does not
