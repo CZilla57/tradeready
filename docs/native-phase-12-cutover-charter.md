@@ -500,6 +500,26 @@ The next row is the owner's approval (or amendment) of this draft. A go/no-go ro
 the checklist (§4.x) and links the evidence-index rows; "Rollback trigger considered"
 names each §4.8 trigger checked and its state.
 
+**Recording a defect-list ruling (the `ruled:` marker).** When an open S1/S2 defect-list
+row (§10) cites a ruling in parentheses (the pattern is "until the owner records a
+ruling (R<n>)"), `native/run-phase-12-stage-preflight.sh` only treats that ruling as
+recorded when a row here (a) names the defect's ID, (b) contains the literal marker
+`ruled:` immediately followed by that exact ruling token, with only whitespace between
+them, and (c) has exactly `owner` in the Decider column. A row that rules on something
+else in the same sentence does not also cover this defect: bind each ruling to its own
+`ruled: R<n>`, and a qualifier such as "not yet" or "still pending" anywhere before that
+marker voids the match. Worked example (fictional IDs, not a real ruling on anything in
+§10):
+
+```
+| 7 | 2026-10-01 | pre-A | P12-0NN ruled: R00 — the owner accepts <the specific risk> for Stage A because <reason> | <evidence link> | owner | n/a |
+```
+
+For example, a real row ruling on `P12-012`'s stale-queue risk (R43) would read
+`P12-012 ruled: R43 — <reason>`, in a row whose Decider cell is `owner`. The same
+`ruled: R<n>` form (without a defect ID) records the production-configuration decision
+(R59) in `docs/native-phase-12-release-readiness.md`'s own decision line.
+
 ## 10. Defect list
 
 Source: plan §7 (the Phase 11 parked-minor triage, verified against `6d573a7`). An ID is
@@ -531,7 +551,7 @@ A. **record** — no action: closed (kept for audit) or accepted behavior.
 
 | ID | Item | Sev | State @`6d573a7` | Handling | Status |
 |---|---|---|---|---|---|
-| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable). **Residuals, rated S3 (2026-09-25):** past the 100-entry cap the oldest refused change is dropped and counted, and a later pull can then overwrite its record; the password-recovery exits scrub the store but keep the records, with the same effect; so does "Use another account", which scrubs the store and keeps the workspace; and a newer change to a refused record that the push drops as unsendable (`record-contract`) counts as cleared, so its entry leaves the list. The server would never accept those edits anyway | Fixed — 12.00b.1 (host) (`fix(native): phase 12.00b.1 - I2 rejected changes leave the queue and sync keeps pulling`; `feat(native): phase 12.00b.1 - Cloud Sync lists changes that couldn't be saved (D3)`; `fix(native): phase 12.00b.1 - review fixes (no-binding fail-closed, per-item 403, tests, copy)`) |
+| L238 | I2: a non-auth 4xx is retried forever, and every pull is skipped while it is queued | S2 | Open | **12.00b.1** (unwaivable). **Residuals, rated S3 (2026-09-25):** past the 100-entry cap the oldest refused change is dropped and counted, and a later pull can then overwrite its record; the password-recovery exits scrub the store but keep the records, with the same effect; so does "Use another account", which scrubs the store and keeps the workspace; and a newer change to a refused record that the push drops as unsendable (`record-contract`) counts as cleared, so its entry leaves the list. The server would never accept those edits anyway | Fixed — 12.00b.1 (host) (`fix(native): phase 12.00b.1 - I2 rejected changes leave the queue and sync keeps pulling`; `feat(native): phase 12.00b.1 - Cloud Sync lists changes that couldn't be saved (D3)`; `fix(native): phase 12.00b.1 - review fixes (no-binding fail-closed, per-item 403, tests, copy)`; `fix(native): phase 12.00b.1 - rejected store uses after-first-unlock protection; docs reconcile Discard (review prep)`) |
 
 ### 12.00b.2 — S1/S2 code fixes (block Stage A entry) (10)
 

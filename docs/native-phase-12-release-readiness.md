@@ -372,39 +372,42 @@ unwired. Enforced by a new host test, `native/run-legacy-migration-retention-tes
 
 It is a pure source/structure check, not a behavioral one (so it never touches the
 Keychain or writes a legacy backup, and passes with the console locked — ruling R53).
-*(Revised by that task's own review fix round 1, Important 2: checks 1-5 alone stayed
-green even if the app's real launch path stopped requesting automatic migration at all,
-because they only checked the gated block's contents, never that the gate is actually
-reached from the app's real entry point. Checks 6-8 close that gap.)* The runner
-(`native/LegacyMigrationRetentionTests/main.swift`) now makes 8 assertions:
+*(Revised by that task's own review fix round 1, Important 2: checks 1-5 below alone
+stayed green even if the app's real launch path stopped requesting automatic migration
+at all, because they only checked the gated block's contents, never that the gate is
+actually reached from the app's real entry point. Checks 6-8 below close that gap.)*
+The runner (`native/LegacyMigrationRetentionTests/main.swift`) makes 8 assertions,
+numbered here in the same order as its 8 `PASS`/`FAIL` lines:
 
-1. **Compiled-symbol presence.** `LegacyMigrationCoordinator`
-   (`N/LegacyMigrationCoordinator.swift:793`, `struct`) and
-   `LegacyDataImporter.readAsyncStorageValues(from:)` (the AsyncStorage reader,
-   `N/LegacyDataImporter.swift:488`) are referenced by type/signature only (never
-   called). If either is removed or renamed, `swiftc` fails before the test binary ever
-   runs, and the runner treats that the same as a failing test.
-2. **Launch-path gate present**, read as source text: `AppStore`'s initializer
-   (`N/AppStore.swift:615` `init`) still guards an automatic migration attempt with
+1. **`LegacyMigrationCoordinator` compiles into the host target**
+   (`N/LegacyMigrationCoordinator.swift:793`, `struct`), referenced by type only, never
+   called. If it is removed or renamed, `swiftc` fails before the test binary ever runs,
+   and the runner treats that the same as a failing test.
+2. **`LegacyDataImporter.readAsyncStorageValues(from:)` compiles into the host target**
+   (the AsyncStorage reader, `N/LegacyDataImporter.swift:488`), referenced by signature
+   only, never called; same compile-failure-as-test-failure rule as check 1.
+3. **`AppStore`'s init still gates an automatic legacy migration attempt on launch**,
+   read as source text: its initializer (`N/AppStore.swift:615` `init`) still guards an
+   automatic migration attempt with
    `if automaticallyMigrateLegacyData && accountScrubRecoveryError == nil {` (`:748`).
-3. **The gated block constructs a `LegacyMigrationCoordinator(`** (`:768`), scoped to
+4. **The gated block constructs a `LegacyMigrationCoordinator(`** (`:768`), scoped to
    the launch-path block only (`:748` through `let completedWithoutSnapshot =` at
    `:803`) — not a manual "Try again" retry path elsewhere in the file.
-4. **The gated block routes it through `try self.migrateLegacySource(with: coordinator)`**
+5. **The gated block routes it through `try self.migrateLegacySource(with: coordinator)`**
    (`:776`).
-5. **The real entry point uses the convenience init.**
+6. **The real entry point uses the convenience init.**
    `native/TradeReadyNative/TradeReadyNativeApp.swift`'s `@main` entry point constructs
    `AppStore` through `AppStore(analytics:` (the convenience init with
    `analytics:`/`crashReporting:` parameters), not the designated
    `init(fileURL:...)`, whose `automaticallyMigrateLegacyData` parameter defaults to
    `false`.
-6. **`AppStore` still declares that convenience init** (`convenience init(` in
-   `N/AppStore.swift`, read as source text alongside check 5).
-7. **The convenience init passes `automaticallyMigrateLegacyData: true`** to the
+7. **`AppStore` still declares that convenience init** (`convenience init(` in
+   `N/AppStore.swift`, read as source text alongside check 6).
+8. **The convenience init passes `automaticallyMigrateLegacyData: true`** to the
    designated initializer — the assertion that actually closes the fix-round-1 gap:
    flipping this to `false`, or deleting the argument (falling back to the designated
    init's own `= false` default), would silently disable legacy migration at every
-   real launch while the original checks 1-4 kept passing.
+   real launch while checks 1-5 kept passing.
 
 **RED (original mutation, before the fix round).** Renamed the launch-path call site's
 constructor to `LegacyMigrationCoordinatorSC4REDTEST(` at `N/AppStore.swift:768` only
@@ -421,8 +424,9 @@ restored before the next: (a) flipped the convenience init's
 entirely, falling back to the designated init's `false` default — evidence
 `evidence-task13/fix1-sc4-red-mutation-delete-line.txt`. Both mutations produce the
 identical tail `FAIL: the convenience init passes automaticallyMigrateLegacyData: true
-to the designated init`, exit 1, with checks 1-6 still passing (proving the gap: before
-this fix round, no check would have caught either mutation).
+to the designated init` (check 8), exit 1, with checks 1-7 still passing (proving the
+gap: before this fix round, no check would have caught either mutation, since it added
+checks 6 and 7 as well as the failing check 8).
 
 **GREEN (before and after each mutation, current 8-check design).** Evidence:
 `evidence-task13/fix1-sc4-green-baseline.txt` and
