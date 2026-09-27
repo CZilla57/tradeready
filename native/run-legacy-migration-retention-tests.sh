@@ -6,10 +6,12 @@ OUTPUT_PATH="${TMPDIR:-/tmp}/tradeready-legacy-migration-retention-tests"
 MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-legacy-migration-retention-module-cache"
 
 # Phase 12, task 13 (12.01), requirement SC4: fails if the legacy migration
-# path (LegacyMigrationCoordinator, the AsyncStorage reader, or the AppStore
-# launch-path wiring) is removed or unwired. This never runs the migration
-# itself (no Keychain or legacy-backup I/O), so it passes with the console
-# locked (ruling R53).
+# path (LegacyMigrationCoordinator, the AsyncStorage reader, the AppStore
+# launch-path wiring, or the real @main entry point's
+# automaticallyMigrateLegacyData: true argument -- fix round 1, review
+# Important 2) is removed or unwired. This never runs the migration itself
+# (no Keychain or legacy-backup I/O), so it passes with the console locked
+# (ruling R53).
 swiftc \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
