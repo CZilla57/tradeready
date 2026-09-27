@@ -218,7 +218,7 @@ Sources without runsheet rows are placed statement by statement:
 | PL12 §7 items routed to 12.03 (L898, L904, L916) and the fixed row L901 | 4 | Linked onto A11-TT-1, IPAD-MT-3, A11B-FR1-1 and A11B-FR1-2, IPAD-KB-1; no new row |
 | CH L283 (G1 waiver condition) | 1 | P12-G1-1 |
 | Commit `1e47f26` (rating prompt) | 1 | P12-RATE-1 |
-| PL12 12.00b.1 (L329–351) and CH §5.3 (L294–301), after the host fix | 2 (the poison change against STG; the D3 surface with VoiceOver and Dynamic Type) | P12-B1-1, P12-B1-2 (§23) |
+| PL12 12.00b.1 (L329–351) and CH §5.3 (L299–310), after the host fix | 2 (the poison change against STG; the D3 surface with VoiceOver and Dynamic Type) | P12-B1-1, P12-B1-2 (§23) |
 | PL12 L846 and L852 (CH §10 rows L74 and L96), after the 12.00b.2-B host fix | 1 (widget, Siri and On My Way while the app publishes) | P12-B2B-1 (§23) |
 | PL12 L926 (CH §10 row L286.1), after the 12.00b.2-D host fix | 1 (a native widget clock-in, then a React Native edit of that session: no `__native` key in the Supabase row) | P12-B2D-1 (§23) |
 | CH §5.4 item 5 (G6-Q1) and CH §10 row P12-001, after the 12.00b.2-F host fix | 1 (an RN-era account upgraded, deleted and relaunched, then another account signs in: none of the deleted account's data comes back) | P12-B2F-1 (§23) |

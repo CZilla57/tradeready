@@ -454,7 +454,8 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   [native-phase-11-device-runsheet.md](native-phase-11-device-runsheet.md). Two
   cutover-blocking parity gaps are owned by Phase 12.00 (see Phase 12 below): no
   native remote push notifications (G1) and no native tax-settings screen (G2).
-  Carried to Phase 12 as owned items: the RN AsyncStorage source-file retention policy
+  G2 is built in Phase 12 12.00b.3 (`763eeec`), host evidence only; device rows
+  P12-B3-1/2. Carried to Phase 12 as owned items: the RN AsyncStorage source-file retention policy
   (G6, 12.00), the first-party data in the privacy labels (12.01), the Sentry
   `tradeready-ios` project (12.01/12.02) and the 429 push policy (12.00/12.02). Of the
   five known code issues sent to the final review (runsheet OI-4), four are fixed; the
@@ -1126,7 +1127,8 @@ given a dated waiver by Phase 12.00; neither may be silently dropped.
 - **Tax settings screen (G2).** Native has the tax-settings domain and
   `AppStore.commitTaxSettings`, but no screen calls it, so the income-tax rate and
   vehicle method cannot be set and `tax_settings_saved` is never emitted. Build the
-  editor (RN `TaxSettingsModal`) or record a dated waiver.
+  editor (RN `TaxSettingsModal`) or record a dated waiver. **Built in Phase 12
+  12.00b.3 (`763eeec`), host evidence only; device rows P12-B3-1/2.**
 
 ### Cutover-blocking defect (owned by Phase 12.00)
 

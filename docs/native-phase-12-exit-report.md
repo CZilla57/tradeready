@@ -23,9 +23,9 @@ recorded (CH §4.7).
 | Date this report was completed | `<DATE>` |
 | Completed by | `<owner, or agent instructed by the owner>` |
 | Charter version / decision-log row approving exit | `<CH §9 row #>` |
-| Stage C outcome | `<phased release reached 100% | Release to All Users | rollback executed (RB §6)>` |
+| Stage C outcome | `<phased release reached 100% / Release to All Users / rollback executed (RB §6)>` |
 | Native release version(s) covered | `<N, and N.1/N.2 hotfixes if any — CH §4.1/RB §3.2 numbering>` |
-| Report supersedes | `<none | prior draft dated ...>` |
+| Report supersedes | `<none / prior draft dated ...>` |
 
 ## 1. E1 — zero open S1/S2 (charter §2, §4.7)
 
@@ -97,7 +97,7 @@ never move it to `Verified` on partial evidence (CH §4.7; global constraints).
 
 | Parity matrix row (PM line) | XCTest / UI-test name | RN oracle (file:line) | Device / OS | Screenshot or output comparison | Backend contract version / migration note | Verified? |
 |---|---|---|---|---|---|---|
-| `<e.g. L28 Auth>` | `<test name>` | `<RN file:line>` | `<device, OS>` | `<link, or "n/a — no visual output">` | `<contract doc §, or "n/a">` | `<yes — move to Verified in this commit | no — evidence incomplete: name the gap>` |
+| `<e.g. L28 Auth>` | `<test name>` | `<RN file:line>` | `<device, OS>` | `<link, or "n/a — no visual output">` | `<contract doc §, or "n/a">` | `<yes — move to Verified in this commit / no — evidence incomplete: name the gap>` |
 
 Add one row per candidate. For every row **not** listed here, the parity matrix keeps
 its current status; do not infer `Verified` from an evidence-index checkbox alone.

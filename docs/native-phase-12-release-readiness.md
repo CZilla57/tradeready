@@ -371,7 +371,12 @@ unwired. Enforced by a new host test, `native/run-legacy-migration-retention-tes
 `native/run-all-domain-tests.sh` immediately after `run-migration-coordinator-tests.sh`.
 
 It is a pure source/structure check, not a behavioral one (so it never touches the
-Keychain or writes a legacy backup, and passes with the console locked — ruling R53):
+Keychain or writes a legacy backup, and passes with the console locked — ruling R53).
+*(Revised by that task's own review fix round 1, Important 2: checks 1-5 alone stayed
+green even if the app's real launch path stopped requesting automatic migration at all,
+because they only checked the gated block's contents, never that the gate is actually
+reached from the app's real entry point. Checks 6-8 close that gap.)* The runner
+(`native/LegacyMigrationRetentionTests/main.swift`) now makes 8 assertions:
 
 1. **Compiled-symbol presence.** `LegacyMigrationCoordinator`
    (`N/LegacyMigrationCoordinator.swift:793`, `struct`) and
@@ -379,36 +384,51 @@ Keychain or writes a legacy backup, and passes with the console locked — rulin
    `N/LegacyDataImporter.swift:488`) are referenced by type/signature only (never
    called). If either is removed or renamed, `swiftc` fails before the test binary ever
    runs, and the runner treats that the same as a failing test.
-2. **Launch-path wiring**, read as source text and scoped to the automatic-migration
-   block of `AppStore`'s initializer (`N/AppStore.swift:615` `init`, the block guarded by
-   `if automaticallyMigrateLegacyData && accountScrubRecoveryError == nil {` at `:748`
-   through `let completedWithoutSnapshot =` at `:803`) — the app's actual launch path,
-   not a manual "Try again" retry path elsewhere in the file. Asserts that this block
-   still constructs a `LegacyMigrationCoordinator(` (`:768`) and still routes it through
-   `try self.migrateLegacySource(with: coordinator)` (`:776`).
+2. **Launch-path gate present**, read as source text: `AppStore`'s initializer
+   (`N/AppStore.swift:615` `init`) still guards an automatic migration attempt with
+   `if automaticallyMigrateLegacyData && accountScrubRecoveryError == nil {` (`:748`).
+3. **The gated block constructs a `LegacyMigrationCoordinator(`** (`:768`), scoped to
+   the launch-path block only (`:748` through `let completedWithoutSnapshot =` at
+   `:803`) — not a manual "Try again" retry path elsewhere in the file.
+4. **The gated block routes it through `try self.migrateLegacySource(with: coordinator)`**
+   (`:776`).
+5. **The real entry point uses the convenience init.**
+   `native/TradeReadyNative/TradeReadyNativeApp.swift`'s `@main` entry point constructs
+   `AppStore` through `AppStore(analytics:` (the convenience init with
+   `analytics:`/`crashReporting:` parameters), not the designated
+   `init(fileURL:...)`, whose `automaticallyMigrateLegacyData` parameter defaults to
+   `false`.
+6. **`AppStore` still declares that convenience init** (`convenience init(` in
+   `N/AppStore.swift`, read as source text alongside check 5).
+7. **The convenience init passes `automaticallyMigrateLegacyData: true`** to the
+   designated initializer — the assertion that actually closes the fix-round-1 gap:
+   flipping this to `false`, or deleting the argument (falling back to the designated
+   init's own `= false` default), would silently disable legacy migration at every
+   real launch while the original checks 1-4 kept passing.
 
-**RED (mutation).** Renamed the launch-path call site's constructor to
-`LegacyMigrationCoordinatorSC4REDTEST(` at `N/AppStore.swift:768` only (leaving the two
-other, non-launch-path call sites at `:4496` and `:4550` untouched), reran the runner:
+**RED (original mutation, before the fix round).** Renamed the launch-path call site's
+constructor to `LegacyMigrationCoordinatorSC4REDTEST(` at `N/AppStore.swift:768` only
+(leaving the two other, non-launch-path call sites at `:4496` and `:4550` untouched),
+reran the runner: `FAIL: the launch path constructs a LegacyMigrationCoordinator`,
+exit 1. Evidence: `evidence-task13/sc4-red-mutation.txt`. Restored `N/AppStore.swift`
+exactly via `git checkout -- native/TradeReadyNative/AppStore.swift`; confirmed with
+`git diff --stat` (no output — clean).
 
-```
-PASS: LegacyMigrationCoordinator compiles into the host target
-PASS: LegacyDataImporter.readAsyncStorageValues (the AsyncStorage reader) compiles into the host target
-PASS: AppStore's init still gates an automatic legacy migration attempt on launch
-FAIL: the launch path constructs a LegacyMigrationCoordinator
-PASS: the launch path routes the constructed coordinator through migrateLegacySource
+**RED (fix round 1, the gap checks 6-8 were added to close).** Two mutations, each
+restored before the next: (a) flipped the convenience init's
+`automaticallyMigrateLegacyData: true` to `false` — evidence
+`evidence-task13/fix1-sc4-red-mutation-flip-false.txt`; (b) deleted that argument line
+entirely, falling back to the designated init's `false` default — evidence
+`evidence-task13/fix1-sc4-red-mutation-delete-line.txt`. Both mutations produce the
+identical tail `FAIL: the convenience init passes automaticallyMigrateLegacyData: true
+to the designated init`, exit 1, with checks 1-6 still passing (proving the gap: before
+this fix round, no check would have caught either mutation).
 
-RETENTION CHECK FAILED: 1 assertion(s) failed.
-```
-Exit 1. Evidence:
-`/private/tmp/claude-502/-Users-chadrector-dev-tradeready/d06509aa-4db0-4f7b-9b04-823eea14ef87/scratchpad/evidence-task13/sc4-red-mutation.txt`.
-Restored `N/AppStore.swift` exactly via `git checkout -- native/TradeReadyNative/AppStore.swift`;
-confirmed with `git diff --stat` (no output — clean).
-
-**GREEN (before and after the mutation).** Both runs pass all five checks, exit 0.
-Evidence:
-`.../evidence-task13/sc4-green-baseline.txt` (before the mutation) and
-`.../evidence-task13/sc4-green-after-restore.txt` (after restoring `AppStore.swift`).
+**GREEN (before and after each mutation, current 8-check design).** Evidence:
+`evidence-task13/fix1-sc4-green-baseline.txt` and
+`evidence-task13/fix1-sc4-green-after-restore.txt`, both all-PASS, exit 0. The original
+5-check GREEN evidence (`evidence-task13/sc4-green-baseline.txt`,
+`sc4-green-after-restore.txt`) predates the fix round and is superseded by these.
 
 ## 10. G1 waiver dependency — production Resend email binding (read-only)
 

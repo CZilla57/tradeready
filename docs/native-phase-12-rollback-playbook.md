@@ -298,7 +298,7 @@ The check counts this account's items only and never removes one. Launch and eve
 activation recover them (2026-09-26, 12.00b.2-I, defect `P12-013`):
 `AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10841`) runs for the
 verified owner after the initial sync, from the signed-in gate and from
-`performForegroundRefresh` after its sync (`N/AppStore.swift:7981`).
+`performForegroundRefresh` after its sync (`N/AppStore.swift:7987`).
 
 - A mirror waits for a pull (review fix round 1, 2026-09-26). It is read and merged only
   after a pull has committed the settings and customer rows since the identity was

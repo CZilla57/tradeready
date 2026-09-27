@@ -58,15 +58,16 @@ recorded once here and cited by ID.
 | ID | What is open | Blocks | Who clears it | Source |
 |---|---|---|---|---|
 | CH-DRAFT | The charter's Status line reads "DRAFT — not owner-approved" | Every stage: "no stage gate cites an unapproved threshold" (CH, top) | Owner approves the charter and logs it in CH §9 | `CH` line 3 |
-| SIGN-1 | No signed-in Xcode account; the wildcard profile lacks the `TradeReadyWidgets` App Group | Stage A entry (every signed, device, TestFlight and archive row) | Owner signs in at Xcode › Settings › Accounts (team `96J48TJWX3`); re-run the signed Release build | `CH §4.1`; `RR §1` |
+| SIGN-1 | No signed-in Xcode account; the wildcard profile lacks the `TradeReadyWidgets` App Group | Stage A entry (every signed, device, TestFlight and archive row) | Owner signs in at Xcode › Settings › Accounts with the owner's Apple team; re-run the signed Release build | `CH §4.1`; `RR §1` |
 | VER-1 | Native `MARKETING_VERSION` (`1.0`) is below the live Expo version (`app.json` says `1.2.1`, unconfirmed live) | Stage A upload; 12.06 version numbering | Owner confirms the live App Store version; a `project.pbxproj` edit under a dated ruling sets the scheme | `CH §4.1`; `RR §2` |
-| OI-1 | Privacy-label decision is recorded (`RR §5`) but the labels are not entered in App Store Connect | The decision: cleared (12.01/task 13). The labels entered: Stage C entry | Owner enters the labels in App Store Connect before Stage C | `CH §4.1`; `RR §5` |
+| OI-1 | A privacy-label **proposal** exists (`RR §5`), but the owner has not approved it and the labels are not entered in App Store Connect | Stage A entry — the *decision* itself, per `CH §4.1` (not only "labels entered," which is Stage C entry) | Owner approves the `RR §5` proposal (or amends it) and the matching `PrivacyInfo.xcprivacy` edit before Stage A; enters the labels in App Store Connect before Stage C | `CH §4.1`; `RR §5` |
+| RESEND | The G1 waiver's email-only alert path depends on the production Worker's `RESEND_API_KEY` secret being set; this repo can only confirm the code path fails silently closed without it, never whether the secret is actually set | G1 waiver condition (`CH §5.1`); Stage A entry (the waiver's conditions are checked at 12.01) | Owner runs `wrangler secret list` against the production Worker and confirms `RESEND_API_KEY` is present (name only) | `CH §5.1`; `RR §10` |
 | OI-2 | Sentry project `tradeready-ios` (org `tradeready-3r`) does not exist | Stage A entry (TH-8's source; rows CR-1 to CR-9; `P12-M-2`) | Owner creates it | `CH §4.1`; `MON §1` |
 | D4 (STG) | No trusted isolated staging; `https://staging.invalid` stays | Every STG row; SA3; Stage A exit | Owner provisions staging | `CH §4.1` |
 | AGG-1 | The aggregate's final `backend-workers` `npm test` step has no committed test script | The aggregate's exit code; SA3's full regression, so Stage A exit; 12.08 | Owner or the backend agent (Phase 12 does not edit `backend-workers/`) | `CH §4.1` |
 | R59 | No committed production build configuration exists (Debug=development, Release=staging) | Stage A/C upload (a production-configured build must exist to archive against, or the owner must rule that Stage A uploads the staging-configured Release build) | Owner rules between adding a Production configuration or re-pointing Release once staging exists, and who supplies the production values; no agent adds or edits a build configuration | `RR §3.1`, `RR` front matter |
 | P12-012 (R43) | Open **S1**: the existing Expo build's rollback rehearsal pushes a stale pre-upgrade `__syncQueue` before its pull, which can overwrite newer native rows after a rollback under last-writer-wins | Stage A entry (CH §2 rule 2: an open S1 blocks unless the owner records a severity change or ruling); gates `EXPO-RB`, `P12-RB-1…3/7`, playbook §2.2 condition 4 | Owner ruling (R43) on Stage A entry, then the playbook §5.3 build on the Expo release branch | `CH §10` row `P12-012`; `RB` §0 "Open" table |
-| SUPA-URL | **New finding (this task, 2026-09-27).** The committed Release build's `TRADEREADY_SUPABASE_URL` (the runtime value the "staging" build actually talks to) equals `TRADEREADY_PRODUCTION_SUPABASE_URL` (the production guard) — `ncbqswfdvckmdocbawaa.supabase.co` — while `TRADEREADY_ENVIRONMENT=staging` and `TRADEREADY_BACKEND_URL` is still the placeholder. `TRADEREADY_ALLOW_PRODUCTION_WRITES=NO` keeps writes fail-closed (`RR §3.1`), but a build in this state could still **read** production Supabase data if D4/STG were resolved only on the backend-URL side and not the Supabase side | Stage A entry (a real, previously undocumented staging-config risk; see `run-phase-12-stage-preflight.sh --stage A` FAIL line) | Owner/12.01: point `TRADEREADY_SUPABASE_URL` at the isolated staging Supabase project once D4 is resolved; never at production while `TRADEREADY_ENVIRONMENT != production` | This runbook, evidence `evidence-task14/preflight-real-repo-stage-A.txt`; `native/TradeReadyNative.xcodeproj/project.pbxproj` (Release config) |
+| SUPA-URL | **Pre-existing (since `2bb8dd5`), verified S2, already recorded** — not a new finding. The committed Release build's `TRADEREADY_SUPABASE_URL` and `TRADEREADY_SUPABASE_PUBLISHABLE_KEY` match the production project (`RR §3.2`, `RR §3.3`) while `TRADEREADY_ENVIRONMENT=staging`; already flagged in `docs/native-phase-4-device-runsheet.md:47-52,58-60` and BLOCKed today by `native/run-phase-4-device-preflight.sh:285-292` (it will FAIL once a distinct staging Supabase project exists). Today a Release build's auth (sign-in, sign-up, password change) and Data API reads go to **production** (unguarded by design, `N/BuildEnvironment.swift:114-116`); Data API writes are blocked (`N/NativeSupabasePush.swift` `productionWriteBlocked`) and Worker calls resolve to the placeholder host. S2, not S1: no Data API or Worker write reaches production and there is no cross-account exposure | Stage A entry (`CH §2` rule 2: an open S2 blocks unless the owner records a severity change or ruling) — an R59 ruling to upload the staging-configured Release would otherwise ship this state to TestFlight | Owner: fold this into the R59/D4 ruling (the Release Supabase URL and key move with staging, D4), or record a dated severity/ruling decision in `CH §9` if uploading the current configuration anyway | `docs/native-phase-4-device-runsheet.md:47-60`; `native/run-phase-4-device-preflight.sh:285-300`; `RR §3.2, §3.3`; `run-phase-12-stage-preflight.sh --stage A` FAIL lines |
 | EXPO-RB | The Expo rollback candidate does not exist; the §5.3 Expo-side change (drain/clear the stale queue before any pull) is not built | 12.06 rehearsal; Stage B entry (CH §4.4) | Owner assigns who builds the §5.3 change on the Expo release branch, then builds/uploads R | `RB` §0, §4, §5.3 |
 | REHEARSAL | The 12.06 rehearsal has not run; `EI` §24 "Stage A" and "Stage B" both read "No run recorded yet." | Stage B entry (CH §4.4); Stage C entry transitively | Owner runs the rehearsal (§3 below) after Stage A produces a TestFlight build | `RB` §8; `EI` §24 |
 
@@ -79,7 +80,7 @@ recorded once here and cited by ID.
 | 1 | Charter is owner-approved (decision-log row), thresholds provisional | `CH §4.2` bullet 1 | **Not met** — Status line reads DRAFT | `CH` line 3 | owner | Approve the charter; log the approval in `CH §9` |
 | 2 | 12.00b done: I2 (12.00b.1), the ten 12.00b.2 items and the G2 editor (12.00b.3) fixed with host evidence and a clean review; no open S1/S2 unless a logged severity change | `CH §4.2` bullet 2 | **Met** for the named items — every `12.00b.1`/`12.00b.2` defect-list row is `Fixed`, confirmed by `run-phase-12-stage-preflight.sh`'s defect-list checks; `P11-G2` records the tax-settings editor built (12.00b.3) | `CH §10` sections `12.00b.1`, `12.00b.2`; `EI` row `P11-G2` | — | None on this criterion. (Separately, `P12-012`, a "New in Phase 12" S1, is still open — see row 2a) |
 | 2a | No open S1/S2 anywhere on the defect list unless the owner logged a severity change (`CH §2` rule 2) | `CH §2` rule 2; `CH §10` | **Not met** — `P12-012` (S1) is open; no severity change or ruling is logged in `CH §9` | `CH §10` row `P12-012` | owner | Rule on R43 and log it in `CH §9`, or fix the Expo-side §5.3 change before Stage A |
-| 3 | 12.01 done: SIGN-1 and VER-1 cleared, OI-1 decision recorded, production configuration verified against the live Expo build, SC4 retention assertion recorded | `CH §4.2` bullet 3 | **Partly met** — OI-1 decision recorded and SC4 retention assertion recorded (`run-legacy-migration-retention-tests.sh`); SIGN-1 and VER-1 are open; no production build configuration exists (R59); the Supabase-URL production match above is a new finding | `RR §1, §2, §3.1, §9, §14` | owner | Sign in to Xcode (SIGN-1); confirm the live version and set the scheme (VER-1); rule on R59; repoint the Supabase URL off production once D4 exists |
+| 3 | 12.01 done: SIGN-1 and VER-1 cleared, OI-1 decision recorded, production configuration verified against the live Expo build, SC4 retention assertion recorded | `CH §4.2` bullet 3 | **Not met** — SC4 retention assertion recorded (`run-legacy-migration-retention-tests.sh`); SIGN-1 and VER-1 are open; OI-1 is only a proposal, not owner-approved (`RR §5`); no production build configuration exists (R59); SUPA-URL (pre-existing, S2) is unresolved | `RR §1, §2, §3.1, §5, §9, §14` | owner | Sign in to Xcode (SIGN-1); confirm the live version and set the scheme (VER-1); approve the OI-1 proposal; rule on R59; fold SUPA-URL into the R59/D4 ruling or record a severity decision |
 | 4 | 12.02 done: every TH row has a live-or-runnable source and an alert route; OI-2 cleared and the stage build carries its Sentry DSN; the support export is privacy-safe; the dry run produced the expected signals | `CH §4.2` bullet 4 | **Partly met** — every TH row has a runnable source and the dry run produced the expected signals (`MON §10`); OI-2 (the Sentry project) does not exist, so no stage build can yet carry a live DSN | `MON §1, §2, §10`; `CH §4.1` row OI-2 | owner | Create the Sentry project `tradeready-ios` (org `tradeready-3r`); supply `TRADEREADY_SENTRY_DSN` at build time for the stage build (`REL+KEYS`) |
 | 5 | 12.03 done: the evidence index exists, Stage A rows are tagged, D4 is recorded | `CH §4.2` bullet 5 | **Met** — `EI` exists with every row tagged A/A-B/B/C/X; D4 is recorded as a hard blocker | `EI §1–§7` | — | None |
 | 6 | Host regression: every native runner passes under `TZ=America/Phoenix`; the unsigned and the signed Release builds succeed; the AGG-1 state is recorded | `CH §4.2` bullet 6 | **Partly met** — prior tasks' focused runners and unsigned compiles pass; the aggregate's committed state stops at the `backend-workers` step (AGG-1, expected); the signed build fails on SIGN-1 | Prior task reports; `CH §4.1` row AGG-1 | owner (AGG-1); owner (SIGN-1) | Resolve AGG-1 (backend `npm test` script) or accept it as recorded; clear SIGN-1 for the signed build |
@@ -87,71 +88,122 @@ recorded once here and cited by ID.
 | 8 | Team accounts and synthetic data only (SA1); no real customer data prepared | `CH §4.2` bullet 8 | **N/A until the stage runs** — no accounts are prepared yet | — | owner | Prepare team accounts and synthetic data before running |
 
 **Readiness line: Entry criteria met: no.** Blocking IDs: `CH-DRAFT`, `P12-012`
-(R43), `SIGN-1`, `VER-1`, `R59`, `SUPA-URL`, `OI-2`, `AGG-1`, G6 approval (row 7).
+(R43), `SIGN-1`, `VER-1`, `OI-1`, `RESEND`, `R59`, `SUPA-URL`, `OI-2`, `D4`, `AGG-1`,
+G6 approval (row 7).
+
+Real-repo preflight tail (`sh native/run-phase-12-stage-preflight.sh --stage A`,
+2026-09-27, re-run after this fix round; full output in
+`evidence-task14/fix1-preflight-real-repo-stage-A.txt`):
+
+```
+FAIL: backend URL is not the placeholder (staging.invalid/local host)
+FAIL: Supabase URL matches the production project outside a production build
+FAIL: Supabase publishable key matches the production key outside a production build
+FAIL: charter is owner-approved (Status line reads: **Status: DRAFT — not owner-approved.** Written 2026-09-25 on branch native/ph)
+FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-012)
+FAIL: production build configuration decision is recorded (R59) — owner must rule on a Production configuration or re-pointing Release; see docs/native-phase-12-release-readiness.md
+OWNER SIGN-1: Xcode account signed in and the signed Release build carries the App Group — not checkable offline
+OWNER VER-1: the live App Store version is confirmed and the native scheme is set above it — not checkable offline
+OWNER OI-2: the Sentry project tradeready-ios (org tradeready-3r) exists — not checkable offline
+OWNER TF-INT: the internal TestFlight build is uploaded and processed — not checkable offline
+OWNER OI-1: the App Store privacy-label edit is approved (decision recorded; labels entered at Stage C) — not checkable offline
+OWNER RESEND: the production Worker's RESEND_API_KEY secret is confirmed present (wrangler secret list; G1 waiver condition) — not checkable offline
+
+NOT READY for stage A: 6 local check failure(s).
+```
 
 ### 2.2 Exact commands, in run order
 
-1. **Offline stage preflight** (run first; repeat after any fix):
+1. **Environment/staging preflights** (`PL12` §4; must fail closed on
+   placeholders/production match — run before the stage preflight, since the
+   stage preflight's own staging checks build on the same facts):
+   ```sh
+   sh native/run-phase-3-device-preflight.sh
+   sh native/run-phase-4-device-preflight.sh
+   ```
+   Today `run-phase-4-device-preflight.sh` BLOCKs on SUPA-URL (see §1); it FAILs
+   instead once a distinct staging Supabase project exists (D4).
+2. **Offline stage preflight** (repeat after any fix):
    ```sh
    sh native/run-phase-12-stage-preflight.sh --stage A
    ```
-   Today's real-repo run is non-zero — see §1 above and
-   `evidence-task14/preflight-real-repo-stage-A.txt`. Do not proceed past a `FAIL`
-   line by weakening the check; fix the underlying blocker.
-2. **Host regression** (`PL12` §4):
+   Today's real-repo run is non-zero — the tail is pasted in §1 above
+   (`evidence-task14/fix1-preflight-real-repo-stage-A.txt` has the full output).
+   Do not proceed past a `FAIL` line by weakening the check; fix the underlying
+   blocker.
+3. **Host regression** (`PL12` §4):
    ```sh
    TZ=America/Phoenix sh native/run-all-domain-tests.sh
    ```
-3. **Owner action — SIGN-1.** Xcode › Settings › Accounts, sign in with team
-   `96J48TJWX3`. Then:
+4. **Unsigned compile sanity** (`PL12` §4; does not substitute for the signed
+   build in step 5):
+   ```sh
+   xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative \
+     -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+   ```
+5. **Owner action — SIGN-1.** Xcode › Settings › Accounts, sign in with the
+   owner's Apple team. Then:
    ```sh
    xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative \
      -configuration Release -destination 'generic/platform=iOS' -allowProvisioningUpdates build
    ```
    Confirm `TradeReadyWidgets.appex` is embedded and both targets' profiles carry
    `group.com.gettradereadyapp.tradeready`.
-4. **Owner action — VER-1.** App Store Connect › the app record › App Store tab:
+6. **Owner action — VER-1.** App Store Connect › the app record › App Store tab:
    read the live version number. Then, under a dated ruling, edit
    `native/TradeReadyNative.xcodeproj/project.pbxproj` to set `MARKETING_VERSION`
    and `CURRENT_PROJECT_VERSION` above it on both targets (`RR §2`'s proposed
    scheme: N = `2.0.0`).
-5. **Owner action — OI-2.** sentry.io › org `tradeready-3r` › Create Project ›
+7. **Owner action — OI-1.** Review and approve (or amend) the `RR §5` privacy-label
+   proposal, and approve the matching `PrivacyInfo.xcprivacy` edit. Entering the
+   labels themselves in App Store Connect is a Stage C action.
+8. **Owner action — RESEND.** Confirm the production Worker's secret (name only):
+   ```sh
+   wrangler secret list
+   ```
+   Never paste the value anywhere; the owner records only that it is present.
+9. **Owner action — OI-2.** sentry.io › org `tradeready-3r` › Create Project ›
    platform iOS, name `tradeready-ios`. Record the DSN in the owner's own secret
    store, never in this repository.
-6. **Owner action — R59 ruling.** Decide: add a new Production build
-   configuration, or re-point Release once staging exists. Record the ruling in
-   `RR` (a line matching `Production configuration decision:` for the preflight
-   to recognize it) and in `CH §9`.
-7. **Owner/12.01 action — SUPA-URL.** Once D4 (isolated staging) is provisioned,
-   point the Release configuration's `TRADEREADY_SUPABASE_URL` at the staging
-   project, not production.
-8. **Dry-run the upload helper** (repeat until every earlier step is done; this
-   step never uploads on its own):
-   ```sh
-   sh native/phase-12-testflight-upload.sh --version 2.0.0 --build <NEXT_BUILD_NUMBER>
-   ```
-   Read the printed archive/export commands; they are not run by this call.
-9. **Owner action — archive and upload (Stage A build).** Only once SIGN-1, VER-1
-   and the production/staging configuration are settled, and only as the owner:
-   ```sh
-   sh native/phase-12-testflight-upload.sh --version 2.0.0 --build <NEXT_BUILD_NUMBER> \
-     --execute --i-am-the-owner
-   ```
-   with `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_PATH` read from the owner's own
-   secret store into the environment immediately before this one command — never
-   written to a file in this repository or left set afterward.
-10. **Owner action — App Store Connect › TestFlight › Internal Testing.** Wait
+10. **Owner action — D4.** Provision the trusted isolated staging backend
+    (Supabase project/branch, staging R2 buckets, deployed staging Worker).
+11. **Owner action — R59 ruling.** Decide: add a new Production build
+    configuration, or re-point Release once staging exists. Record the ruling in
+    `RR` as a line reading `Production configuration decision: <what was
+    decided> ruled: R59` (the preflight looks for the literal `ruled: R<n>`
+    marker) and log the same ruling in `CH §9`.
+12. **Owner action — SUPA-URL.** Fold this into the R59/D4 ruling above (the
+    Release Supabase URL and key move with staging once D4 exists), or record a
+    dated severity/ruling decision in `CH §9` if the current configuration ships
+    anyway. Never edit the build setting directly to "fix" the match; the fix is
+    provisioning D4 and repointing it there.
+13. **Dry-run the upload helper** (repeat until every earlier step is done; this
+    step never uploads on its own):
+    ```sh
+    sh native/phase-12-testflight-upload.sh --version 2.0.0 --build <NEXT_BUILD_NUMBER>
+    ```
+    Read the printed archive/export commands; they are not run by this call.
+14. **Owner action — archive and upload (Stage A build).** Only once SIGN-1, VER-1
+    and the production/staging configuration are settled, and only as the owner:
+    ```sh
+    sh native/phase-12-testflight-upload.sh --version 2.0.0 --build <NEXT_BUILD_NUMBER> \
+      --execute --i-am-the-owner
+    ```
+    with `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_PATH` read from the owner's own
+    secret store into the environment immediately before this one command — never
+    written to a file in this repository or left set afterward.
+15. **Owner action — App Store Connect › TestFlight › Internal Testing.** Wait
     until the build shows "Processed"; add the internal team group; record the
     exact build number and profile in the evidence template below.
-11. **Owner action — SA2 upgrade run.** Physical device: install the current App
+16. **Owner action — SA2 upgrade run.** Physical device: install the current App
     Store Expo build, then install the Stage A build over it with no delete.
     Verify every canonical collection, owner binding, photo adoption, App Group
     state and the migration journal; verify pending Expo local notifications are
     reconciled, not duplicated; run the `P12-3B-1`/`P12-3B-2` subscription and
     Sign in with Apple continuity checks (`EI §23`).
-12. **Owner action — run every Stage-A-eligible `EI` row** and record actual
+17. **Owner action — run every Stage-A-eligible `EI` row** and record actual
     results in `EI §23`/§24 (below).
-13. **Owner action — capture native baselines** (PERF-1, 2, 5, 6, 7, 8; crash-free
+18. **Owner action — capture native baselines** (PERF-1, 2, 5, 6, 7, 8; crash-free
     sessions) from the runs above, for the Stage B re-ratification.
 
 ### 2.3 Evidence template (append to `EI §24`, "### Stage A (12.04)")
@@ -229,11 +281,13 @@ proceed to Stage B until resolved.
 
 ### 3.2 Exact commands, in run order
 
-1. **Offline stage preflight:**
+1. **Environment/staging preflights and offline stage preflight** (`PL12` §4):
    ```sh
+   sh native/run-phase-3-device-preflight.sh
+   sh native/run-phase-4-device-preflight.sh
    sh native/run-phase-12-stage-preflight.sh --stage rehearsal
    ```
-2. Complete 12.04 through step 10 (a processed native TestFlight build N).
+2. Complete 12.04 through step 15 (a processed native TestFlight build N).
 3. **Owner action — build the Expo release branch's §5.3 change** (drain/clear the
    stale queue before any pull; `RB §5.3`), then:
    ```sh
@@ -241,9 +295,11 @@ proceed to Stage B until resolved.
    git switch <EXPO_RELEASE_BRANCH>
    # Set expo.version in app.json to <R_VERSION> (above N; RB §3.2) and commit it.
    ```
-4. **Dry-run the upload helper for the rehearsal's second native build (N2)**
-   (repeat before actually building N2):
+4. **Unsigned compile sanity, then dry-run the upload helper, for the
+   rehearsal's second native build (N2)** (repeat before actually building N2):
    ```sh
+   xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative \
+     -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
    sh native/phase-12-testflight-upload.sh --version <N2_VERSION> --build <N2_BUILD>
    ```
 5. **Owner action — build and upload the Expo rollback candidate R** (`RB §10.2`,
@@ -352,14 +408,18 @@ triggers do not apply directly. The rehearsal's own stop condition (`RB` rules):
    ```sh
    sh native/run-phase-12-stage-preflight.sh --stage B
    ```
-2. **Owner action — App Store Connect › TestFlight › External Testing.** Create
-   the external group; add build; answer Beta App Review's compliance questions
-   with `RR §7`'s App Review notes; submit.
-3. **Dry-run the upload helper for the Stage B build** if it is a new build (else
-   reuse the Stage A build once it has passed Beta App Review):
+2. **If Stage B needs a new build** (not a reuse of the Stage A build): environment
+   preflights, unsigned compile, then dry-run the upload helper (`PL12` §4):
    ```sh
+   sh native/run-phase-3-device-preflight.sh
+   sh native/run-phase-4-device-preflight.sh
+   xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative \
+     -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
    sh native/phase-12-testflight-upload.sh --version <VERSION> --build <BUILD>
    ```
+3. **Owner action — App Store Connect › TestFlight › External Testing.** Create
+   the external group; add build; answer Beta App Review's compliance questions
+   with `RR §7`'s App Review notes; submit.
 4. **Owner action — invite the cohort** (App Store Connect › TestFlight ›
    External Testing › add testers by email or public link, per `CH §4.4` bullet
    6's segments).
@@ -443,8 +503,10 @@ above, plus `R59` and the live-execution parts of criterion 3.
 
 ### 5.2 Exact commands, in run order
 
-1. **Offline stage preflight:**
+1. **Environment preflights and offline stage preflight** (`PL12` §4):
    ```sh
+   sh native/run-phase-3-device-preflight.sh
+   sh native/run-phase-4-device-preflight.sh
    sh native/run-phase-12-stage-preflight.sh --stage C
    ```
 2. **Owner action — announce the Expo feature freeze** (SC1).
@@ -452,8 +514,11 @@ above, plus `R59` and the live-execution parts of criterion 3.
    restore; re-confirm backend compatibility; finalize App Store metadata,
    entitlements, privacy manifests and legal disclosures; enter the OI-1 privacy
    labels in App Store Connect (`RR §5`).
-4. **Dry-run the upload helper for the production candidate:**
+4. **Unsigned compile sanity, then dry-run the upload helper, for the production
+   candidate:**
    ```sh
+   xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative \
+     -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
    sh native/phase-12-testflight-upload.sh --version <VERSION> --build <BUILD>
    ```
 5. **Owner action — App Store Connect › App Store tab › + Version.** Attach the
