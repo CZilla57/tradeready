@@ -164,4 +164,8 @@ sh "$ROOT_DIR/native/run-trade-template-tests.sh"
 sh "$ROOT_DIR/native/run-zip-archive-tests.sh"
 "$ROOT_DIR/native/run-phase-3-device-preflight-tests.sh"
 "$ROOT_DIR/native/run-phase-4-device-preflight-tests.sh"
+# Phase 12 (task 14, stage prep): offline stage preflight and the dry-run
+# TestFlight upload helper.
+sh "$ROOT_DIR/native/run-phase-12-stage-preflight-tests.sh"
+sh "$ROOT_DIR/native/run-phase-12-testflight-upload-tests.sh"
 (cd "$ROOT_DIR/backend-workers" && npm test)

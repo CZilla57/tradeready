@@ -1,0 +1,4 @@
+    TRADEREADY_ALLOW_PRODUCTION_WRITES = NO
+    TRADEREADY_BACKEND_URL = https://staging.gettradereadyapp.com
+    TRADEREADY_ENVIRONMENT = staging
+    TRADEREADY_SUPABASE_URL = https://ncbqswfdvckmdocbawaa.supabase.co
