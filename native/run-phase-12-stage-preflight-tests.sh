@@ -145,16 +145,14 @@ DOCS_NO_HEADING=$(make_docs_dir "stage-a-no-defect-heading" "charter-no-defect-h
 expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (§10 Defect list heading not found)" \
   --stage A --docs-dir "$DOCS_NO_HEADING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
-# 4c. The P12-012-style ruling gate, both directions (Important 1(e), the
-#     coverage gap the review named explicitly).
+# 4c. The P12-012-style ruling gate, both directions.
 #   - An open S1 with NO recorded ruling at all: FAIL, naming the ID.
 DOCS_NO_RULING=$(make_docs_dir "stage-a-no-ruling" "charter-open-s1-no-ruling.md" "native-phase-12-cutover-charter.md")
 expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
   --stage A --docs-dir "$DOCS_NO_RULING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 #   - A decision-log row that names the ID and mentions the ruling number, but
-#     never says "ruled:" (e.g. "ruling requested, still pending"): FAIL. This
-#     is the exact review reproduction of issue (a).
+#     never says "ruled:" (e.g. "ruling requested, still pending"): FAIL.
 DOCS_UNRELATED=$(make_docs_dir "stage-a-unrelated-ruling" "charter-unrelated-ruling.md" "native-phase-12-cutover-charter.md")
 expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
   --stage A --docs-dir "$DOCS_UNRELATED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
@@ -167,40 +165,72 @@ expect_no_match 0 "FAIL:" \
 expect_status 0 "OWNER defect list: P12-903 (open S1, ruling R900 recorded — owner still authorizes stage entry)" \
   --stage A --docs-dir "$DOCS_A" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
-# 4d. Fix round 2, Important 1(a) (still open after round 1): the ruling token
-#     must be bound to its own "ruled:" marker, not merely present anywhere
-#     after some "ruled:" in the row, and the Decider cell must read "owner".
-#   - A row that rules a DIFFERENT ruling and, in the same row, separately
-#     notes this defect's ruling number as "still pending": FAIL. This is the
-#     re-review's exact fail-open reproduction.
-DOCS_COMBINED_ROW=$(make_docs_dir "stage-a-combined-ruling-row" "charter-marker-combined-row.md" "native-phase-12-cutover-charter.md")
+# 4d. Fix round 3 (ruling R65): a strict grammar replaces the word-list
+#     negation logic. A §9 row counts as a ruling only when its Decision cell,
+#     trimmed, is EXACTLY "<id> ruled: R<n>" and its Decider cell, trimmed and
+#     case-insensitive, is exactly "owner". Every one of the following fixture
+#     rows deviates from that exact form in one way and must FAIL, naming
+#     P12-903 as still blocking:
+for variant in \
+  charter-marker-combined-row.md \
+  charter-marker-negated.md \
+  charter-marker-non-owner-decider.md \
+  charter-marker-different-defect.md \
+  charter-marker-qualifier-after.md \
+  charter-marker-unruled.md \
+  charter-marker-overruled.md \
+  charter-marker-to-be-ruled.md \
+; do
+  DOCS_VARIANT=$(make_docs_dir "stage-a-${variant%.md}" "$variant" "native-phase-12-cutover-charter.md")
+  expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+    --stage A --docs-dir "$DOCS_VARIANT" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+done
+
+#   - The exact form, followed by a LATER row whose Decision cell is exactly
+#     "P12-903 revoked: R900": re-blocks the defect (the log is append-only,
+#     newest last, so the later row wins).
+DOCS_REVOKED=$(make_docs_dir "stage-a-revoked-ruling" "charter-marker-revoked.md" "native-phase-12-cutover-charter.md")
 expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
-  --stage A --docs-dir "$DOCS_COMBINED_ROW" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
-#   - A negated marker ("not yet ruled: R900"): FAIL even though the exact
-#     token immediately follows "ruled:".
-DOCS_NEGATED=$(make_docs_dir "stage-a-negated-ruling" "charter-marker-negated.md" "native-phase-12-cutover-charter.md")
-expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
-  --stage A --docs-dir "$DOCS_NEGATED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
-#   - The exact right marker text, but the Decider cell is not "owner": FAIL.
-DOCS_NON_OWNER=$(make_docs_dir "stage-a-non-owner-decider" "charter-marker-non-owner-decider.md" "native-phase-12-cutover-charter.md")
-expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
-  --stage A --docs-dir "$DOCS_NON_OWNER" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+  --stage A --docs-dir "$DOCS_REVOKED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
 #   - The correct owner row PASSes (OWNER line, not FAIL): already proved by
 #     the docs-good assertions immediately above (P12-903 / R900).
 
-# 4e. Fix round 2, Minor 6: a defect row this scanner cannot parse cleanly
-#     (an odd ID, an annotated severity cell, or an extra "|" in a cell) must
-#     FAIL with a named line when it looks like it could be S1/S2, not be
-#     silently skipped.
+# 4e. Minor 6 continuation (fix rounds 2-3): a defect row this scanner cannot
+#     parse cleanly must FAIL with a named line when it looks like it could
+#     be S1/S2, not be silently skipped -- an odd ID, an extra "|" in a cell,
+#     a missing leading "|", or a severity cell with no clean S-token at all.
 DOCS_ODD_ID=$(make_docs_dir "stage-a-unparseable-odd-id" "charter-unparseable-odd-id.md" "native-phase-12-cutover-charter.md")
 expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [unparseable id: P12-999" \
   --stage A --docs-dir "$DOCS_ODD_ID" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
-DOCS_ANNOTATED_SEV=$(make_docs_dir "stage-a-unparseable-severity" "charter-unparseable-annotated-severity.md" "native-phase-12-cutover-charter.md")
-expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [P12-998: unparseable severity" \
-  --stage A --docs-dir "$DOCS_ANNOTATED_SEV" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 DOCS_EXTRA_PIPE=$(make_docs_dir "stage-a-unparseable-extra-pipe" "charter-unparseable-extra-pipe.md" "native-phase-12-cutover-charter.md")
-expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [unparseable row, extra '|', starts 'P12-997']" \
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [unparseable row (wrong column count): | P12-997" \
   --stage A --docs-dir "$DOCS_EXTRA_PIPE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+DOCS_NO_LEADING_PIPE=$(make_docs_dir "stage-a-no-leading-pipe" "charter-no-leading-pipe.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [unparseable row (wrong column count): P12-991" \
+  --stage A --docs-dir "$DOCS_NO_LEADING_PIPE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+DOCS_AMBIGUOUS_SEV=$(make_docs_dir "stage-a-ambiguous-severity" "charter-severity-ambiguous.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [P12-992: ambiguous severity cell 'Sev-one']" \
+  --stage A --docs-dir "$DOCS_AMBIGUOUS_SEV" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 4f. Fix round 3, Minor 6 continuation: a severity cell that is not exactly
+#     S1/S2/S3 but carries a clean trailing S-token still resolves to its
+#     EFFECTIVE severity (the last whole-word S1/S2/S3 token, case-
+#     insensitive) instead of being silently skipped or flagged unparseable.
+#     Each of the following fixtures' added row is Open with no ruling on
+#     file, so a correct resolution to S1/S2 must block it by name.
+for variant_id in \
+  "charter-severity-strikethrough.md:P12-996" \
+  "charter-severity-arrow.md:P12-995" \
+  "charter-severity-was-annotation.md:P12-994" \
+  "charter-severity-lowercase.md:P12-993" \
+; do
+  variant=${variant_id%%:*}
+  expected_id=${variant_id##*:}
+  DOCS_SEV=$(make_docs_dir "stage-a-${variant%.md}" "$variant" "native-phase-12-cutover-charter.md")
+  expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: $expected_id" \
+    --stage A --docs-dir "$DOCS_SEV" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+done
 
 # 5. A missing required doc fails.
 DOCS_MISSING=$(make_docs_dir "stage-a-missing-doc")
@@ -228,6 +258,14 @@ expect_status 1 "FAIL: production build configuration decision is recorded (R59)
 
 # 6b. R59: a real "ruled: R59" marker passes (paired with the all-good stage-C
 #     assertion below, which already carries this marker via docs-good).
+
+# 6c. Fix round 3, item 2: the same strictness applies to the R59 line. The
+#     runbook's own unfilled template line, reproduced verbatim
+#     ("Production configuration decision: <what was decided> ruled: R59"),
+#     must FAIL -- the "<...>" placeholder is never a filled-in decision.
+DOCS_R59_TEMPLATE=$(make_docs_dir "stage-a-r59-unfilled-template" "readiness-r59-unfilled-template.md" "native-phase-12-release-readiness.md")
+expect_status 1 "FAIL: production build configuration decision is recorded (R59)" \
+  --stage A --docs-dir "$DOCS_R59_TEMPLATE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 # 7. A stage whose predecessor has no run record fails, for every stage that
 #    checks one: rehearsal (needs Stage A), B (needs Stage A), C (needs Stage

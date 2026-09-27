@@ -313,54 +313,34 @@ fi
 # ---------------------------------------------------------------------------
 
 ruling_is_recorded() {
+  # Strict grammar (ruling R65: stop chasing phrasings). A §9 row counts as an
+  # owner ruling for defect $1 only when ALL of: it is a real table row (9
+  # fields after the "|" split, starting with "|"); its Decider cell, trimmed
+  # and lower-cased, is exactly "owner"; and its Decision cell, trimmed, is
+  # EXACTLY "<id> ruled: R<n>" -- nothing before or after (the rationale goes
+  # in another cell). No word-list of negations, qualifiers or synonyms is
+  # matched or maintained: anything that is not this exact string is not a
+  # ruling. A later row whose Decision cell is exactly "<id> revoked: R<n>"
+  # re-blocks the defect; rows are read in file order (the log is append-only,
+  # newest last), so the LAST matching ruled/revoked row for this id+ruling
+  # wins.
   id=$1
   ruling=$2
   [ -n "$ruling" ] || return 1
   [ -r "$CHARTER" ] || return 1
-  # A row only counts when: (1) its Decider cell (column 6 of the 7-column §9
-  # table; index NF-2 after the "|" split) reads exactly "owner"; (2) the
-  # token immediately after some "ruled:" in the row -- optional whitespace,
-  # no other text in between -- is this exact ruling, word-bounded (so
-  # "ruled: R4" never matches ruling "R43", and a *different* ruling's
-  # "ruled:" earlier in the same row never lets a bare, unruled mention of
-  # this ruling later in the row count); and (3) that "ruled:" is not
-  # preceded by a "not" / "not yet" qualifier (rejects "not yet ruled: R43").
   awk '/^## 9\. Decision log/{grab=1;next} grab && /^## /{exit} grab{print}' "$CHARTER" \
-    | grep -F -- "$id" \
-    | awk -F'|' -v ruling="$ruling" '
-        # Only a real 7-column decision-log table row (9 fields after the
-        # "|" split, including the leading/trailing empty ones) is
-        # considered. This also protects the check against ordinary prose
-        # in this section -- for example the marker-format explanation,
-        # which mentions a defect ID in a sentence, not a table row --
-        # being misread as a decision-log row (fix round 2).
+    | awk -F'|' -v id="$id" -v ruling="$ruling" '
         NF != 9 || $0 !~ /^\|/ { next }
         {
           decider = $(NF - 2)
           gsub(/^[ \t]+|[ \t]+$/, "", decider)
-          if (decider != "owner") next
-          line = $0
-          searchfrom = 1
-          while (1) {
-            idx = index(substr(line, searchfrom), "ruled:")
-            if (idx == 0) break
-            abspos = searchfrom + idx - 1
-            rest = substr(line, abspos + 6)
-            if (match(rest, /^[ \t]*R[0-9]+/)) {
-              token = substr(rest, RSTART, RLENGTH)
-              gsub(/^[ \t]+/, "", token)
-              nextchar = substr(rest, RLENGTH + 1, 1)
-              if (nextchar !~ /[0-9]/ && token == ruling) {
-                prefix = substr(line, 1, abspos - 1)
-                if (prefix !~ /[Nn]ot[ \t]+(yet[ \t]+)?$/) {
-                  print "MATCH"
-                  exit
-                }
-              }
-            }
-            searchfrom = abspos + 6
-          }
+          if (tolower(decider) != "owner") next
+          decision = $5
+          gsub(/^[ \t]+|[ \t]+$/, "", decision)
+          if (decision == id " ruled: " ruling) verdict = "ruled"
+          else if (decision == id " revoked: " ruling) verdict = "revoked"
         }
+        END { if (verdict == "ruled") print "MATCH" }
       ' \
     | grep -q MATCH
 }
@@ -387,12 +367,28 @@ else
     ruled_file="$TEMP_DIR/defect-ruled.txt"
     : >"$ruled_file"
     printf '%s\n' "$scan_body" | awk -F'|' 'NF==8{print}' >"$rows_file"
-    # A table-row-shaped line (starts "|") with NF!=8 -- typically an extra
-    # literal "|" inside a cell -- is otherwise silently dropped by the
-    # NF==8 filter above. A fail-closed scanner cannot assume that is safe:
-    # if the line names S1 or S2 anywhere, it is flagged instead of skipped
-    # (Minor 6, fix round 2).
-    printf '%s\n' "$scan_body" | awk -F'|' '/^\|/ && NF != 8 && ($0 ~ /S1/ || $0 ~ /S2/) {print}' >"$malformed_file"
+    # A line that contains a "|" (so it looks like it belongs to a table) but
+    # does not split into the expected 8 fields -- an extra "|" inside a
+    # cell, a missing leading "|", or any other malformed column count -- is
+    # otherwise silently dropped by the NF==8 filter above. A fail-closed
+    # scanner cannot assume that is safe: if the line names S1 or S2 anywhere
+    # (case-insensitive, whole word), it is flagged instead of skipped
+    # (Minor 6, fix rounds 2-3). Unlike round 2, this no longer requires the
+    # line to start with "|", so a row missing its leading pipe is caught too.
+    printf '%s\n' "$scan_body" | awk -F'|' '$0 ~ /\|/ && NF != 8 {print}' \
+      | grep -iE '\bS[12]\b' >"$malformed_file" || :
+
+    # Effective severity of a raw cell: the LAST whole-word S1/S2/S3 token in
+    # it, case-insensitive (fix round 3, Minor 6 continuation) -- so
+    # "~~S1~~ S2", "S3 -> S2", "(was S3) S2" and lower-case "s1" all resolve
+    # to their plainly-intended current severity instead of being skipped or
+    # flagged as unparseable. A cell with no such token at all is not S1/S2
+    # (skip, as for a plain "S3" or an empty cell) unless the row's raw text
+    # otherwise mentions S1 or S2, in which case it cannot be safely
+    # dismissed either and is flagged as ambiguous.
+    effective_severity() {
+      printf '%s' "$1" | grep -oiE '\bS[123]\b' | tail -n1 | tr '[:lower:]' '[:upper:]'
+    }
 
     row_count=0
     blocking=""
@@ -407,27 +403,31 @@ else
       esac
       # A row whose ID cannot be parsed cleanly (e.g. "P12-009 (= `12.02-F4`)")
       # is skipped -- unless its raw text names S1 or S2, in which case it is
-      # flagged rather than silently dropped (Minor 6, fix round 2): this
+      # flagged rather than silently dropped (Minor 6, fix rounds 2-3): this
       # scanner never assumes an unparseable row is safe.
       case "$id" in
         *[!A-Za-z0-9._-]*)
-          case "$row" in
-            *S1*|*S2*) blocking="$blocking [unparseable id: $id]" ;;
-          esac
+          if printf '%s' "$row" | grep -qiE '\bS[12]\b'; then
+            blocking="$blocking [unparseable id: $id]"
+          fi
           continue
           ;;
       esac
       row_count=$((row_count + 1))
-      sev=$(printf '%s' "$row" | awk -F'|' '{print $4}' | tr -d ' \t*')
+      raw_sev=$(printf '%s' "$row" | awk -F'|' '{print $4}')
+      sev=$(effective_severity "$raw_sev")
       status=$(trim "$(printf '%s' "$row" | awk -F'|' '{print $(NF-1)}')")
+      if [ -z "$sev" ]; then
+        # No clean S1/S2/S3 token anywhere in the cell. Not S1/S2-flavored
+        # (skip) unless the row's raw text otherwise mentions S1 or S2, in
+        # which case this cannot be safely dismissed either.
+        if printf '%s' "$row" | grep -qiE '\bS[12]\b'; then
+          blocking="$blocking [$id: ambiguous severity cell '$(trim "$raw_sev")']"
+        fi
+        continue
+      fi
       case "$sev" in
         S1|S2) ;;
-        S1*|S2*)
-          # An annotated severity cell (e.g. "S1 (was S2)") cannot be safely
-          # read as a clean S1/S2 -- or safely dismissed either (Minor 6).
-          blocking="$blocking [$id: unparseable severity '$sev']"
-          continue
-          ;;
         *) continue ;;
       esac
       case "$status" in
@@ -443,8 +443,8 @@ else
 
     if [ -s "$malformed_file" ]; then
       while IFS= read -r bad_row; do
-        bad_id=$(trim "$(printf '%s' "$bad_row" | awk -F'|' '{print $2}')")
-        blocking="$blocking [unparseable row, extra '|', starts '$bad_id']"
+        snippet=$(printf '%s' "$bad_row" | cut -c1-72)
+        blocking="$blocking [unparseable row (wrong column count): $snippet]"
       done <"$malformed_file"
     fi
 
@@ -466,14 +466,22 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Production build configuration decision (R59): Stage A and Stage C
 #    uploads need this recorded in the release-readiness doc, as an actual
-#    ruling ("ruled: R<n>"), not merely a line that mentions the topic (a
-#    line ending "...: pending" must still fail). Never add or edit a build
+#    filled-in ruling line, not merely a line that mentions the topic (a
+#    line ending "...: pending" must still fail) and not the runbook's own
+#    unfilled template line (fix round 3: strict grammar, ruling R65). The
+#    line must read exactly "Production configuration decision: <non-empty
+#    text with no "<...>" placeholder> ruled: R<n>", with "ruled: R<n>" the
+#    literal end of the line -- nothing after it. Never add or edit a build
 #    configuration here.
 # ---------------------------------------------------------------------------
 
 case "$STAGE" in
   A|C)
-    if [ -r "$READINESS" ] && grep -Eq '^Production configuration decision:.*ruled:[[:space:]]*R[0-9]+\b' "$READINESS"; then
+    r59_line=""
+    if [ -r "$READINESS" ]; then
+      r59_line=$(grep -E '^Production configuration decision: .+ ruled: R[0-9]+$' "$READINESS" | head -n1)
+    fi
+    if [ -n "$r59_line" ] && ! printf '%s' "$r59_line" | grep -Eq '<[^<>]+>'; then
       pass "production build configuration decision is recorded (R59)"
     else
       fail "production build configuration decision is recorded (R59) — owner must rule on a Production configuration or re-pointing Release; see docs/native-phase-12-release-readiness.md"
@@ -506,7 +514,7 @@ if [ -n "$previous_stage_heading" ]; then
       fail "evidence index: $previous_stage_heading has a recorded run (section not found)"
     elif printf '%s\n' "$body" | grep -qF "No run recorded yet."; then
       fail "evidence index: $previous_stage_heading has a recorded run (still says \"No run recorded yet.\")"
-    elif printf '%s\n' "$body" | grep -Eq '<[A-Za-z_]+>'; then
+    elif printf '%s\n' "$body" | grep -Eq '<[^<>]+>'; then
       # The evidence template's own placeholders (Run <N>, Build:
       # <NATIVE_VERSION>, ...) are still present verbatim: this is an unfilled
       # template, not a real run record (fix round 2).

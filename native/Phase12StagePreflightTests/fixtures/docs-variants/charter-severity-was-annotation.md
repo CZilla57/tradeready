@@ -9,6 +9,7 @@ exercise the preflight's parsing.
 | # | Date | Stage | Decision | Evidence | Decider | Rollback trigger considered |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-01 | pre-A | Fixture approval row | n/a | owner | n/a |
+| 2 | 2026-09-01 | pre-A | P12-903 ruled: R900 | fixture accepts the risk for Stage A | owner | n/a |
 
 ## 10. Defect list
 
@@ -31,10 +32,11 @@ exercise the preflight's parsing.
 |---|---|---|---|---|---|
 | L999 | Fixture backlog item | S3 | Open | backlog | Open |
 
-### New in Phase 12 (3)
+### New in Phase 12 (4)
 
 | ID | Item | Sev | Found (date, source) | Handling | Status |
 |---|---|---|---|---|---|
 | P12-901 | Fixture closed S1 item | **S1** | 2026-09-01, fixture | fixture | Fixed — fixture (`fix(fixture): closes P12-901`) |
 | P12-902 | Fixture backlog S3 item, still open | S3 | 2026-09-01, fixture | backlog | Open (backlog) |
 | P12-903 | Fixture open S1 item with an owner ruling on file | **S1** | 2026-09-01, fixture | owner ruling (R900) | Open. Blocks unless the owner records a ruling (R900) |
+| P12-994 | Fixture severity cell notes the prior severity first | (was S3) S2 | 2026-09-27, fixture | fixture | Open |

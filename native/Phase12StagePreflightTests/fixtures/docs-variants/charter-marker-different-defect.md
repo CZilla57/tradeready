@@ -9,6 +9,7 @@ exercise the preflight's parsing.
 | # | Date | Stage | Decision | Evidence | Decider | Rollback trigger considered |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-01 | pre-A | Fixture approval row | n/a | owner | n/a |
+| 2 | 2026-09-01 | pre-A | P12-099 ruled: R900 | fixture accepts a different defect | owner | n/a |
 
 ## 10. Defect list
 

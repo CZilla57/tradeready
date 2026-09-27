@@ -9,7 +9,7 @@ exercise the preflight's parsing.
 | # | Date | Stage | Decision | Evidence | Decider | Rollback trigger considered |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-01 | pre-A | Fixture approval row | n/a | owner | n/a |
-| 2 | 2026-09-01 | pre-A | P12-903 ruled: R900 — fixture accepts the risk for Stage A | n/a | task 14 (agent) | n/a |
+| 2 | 2026-09-01 | pre-A | P12-903 ruled: R900 | fixture accepts the risk for Stage A | task 14 (agent) | n/a |
 
 ## 10. Defect list
 
