@@ -167,6 +167,41 @@ expect_no_match 0 "FAIL:" \
 expect_status 0 "OWNER defect list: P12-903 (open S1, ruling R900 recorded — owner still authorizes stage entry)" \
   --stage A --docs-dir "$DOCS_A" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
+# 4d. Fix round 2, Important 1(a) (still open after round 1): the ruling token
+#     must be bound to its own "ruled:" marker, not merely present anywhere
+#     after some "ruled:" in the row, and the Decider cell must read "owner".
+#   - A row that rules a DIFFERENT ruling and, in the same row, separately
+#     notes this defect's ruling number as "still pending": FAIL. This is the
+#     re-review's exact fail-open reproduction.
+DOCS_COMBINED_ROW=$(make_docs_dir "stage-a-combined-ruling-row" "charter-marker-combined-row.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+  --stage A --docs-dir "$DOCS_COMBINED_ROW" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+#   - A negated marker ("not yet ruled: R900"): FAIL even though the exact
+#     token immediately follows "ruled:".
+DOCS_NEGATED=$(make_docs_dir "stage-a-negated-ruling" "charter-marker-negated.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+  --stage A --docs-dir "$DOCS_NEGATED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+#   - The exact right marker text, but the Decider cell is not "owner": FAIL.
+DOCS_NON_OWNER=$(make_docs_dir "stage-a-non-owner-decider" "charter-marker-non-owner-decider.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+  --stage A --docs-dir "$DOCS_NON_OWNER" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+#   - The correct owner row PASSes (OWNER line, not FAIL): already proved by
+#     the docs-good assertions immediately above (P12-903 / R900).
+
+# 4e. Fix round 2, Minor 6: a defect row this scanner cannot parse cleanly
+#     (an odd ID, an annotated severity cell, or an extra "|" in a cell) must
+#     FAIL with a named line when it looks like it could be S1/S2, not be
+#     silently skipped.
+DOCS_ODD_ID=$(make_docs_dir "stage-a-unparseable-odd-id" "charter-unparseable-odd-id.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [unparseable id: P12-999" \
+  --stage A --docs-dir "$DOCS_ODD_ID" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+DOCS_ANNOTATED_SEV=$(make_docs_dir "stage-a-unparseable-severity" "charter-unparseable-annotated-severity.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [P12-998: unparseable severity" \
+  --stage A --docs-dir "$DOCS_ANNOTATED_SEV" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+DOCS_EXTRA_PIPE=$(make_docs_dir "stage-a-unparseable-extra-pipe" "charter-unparseable-extra-pipe.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: [unparseable row, extra '|', starts 'P12-997']" \
+  --stage A --docs-dir "$DOCS_EXTRA_PIPE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
 # 5. A missing required doc fails.
 DOCS_MISSING=$(make_docs_dir "stage-a-missing-doc")
 rm -f "$DOCS_MISSING/native-phase-12-monitoring.md"
@@ -226,6 +261,13 @@ open(p, "w").write(t)
 EOF
 expect_status 1 'FAIL: evidence index: Stage A (12.04) has a recorded run (still says "No run recorded yet.")' \
   --stage B --docs-dir "$DOCS_NO_RUN_PLUS_NOTE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 7b. Fix round 2, item 3 (predecessor check, now in scope): a predecessor
+#     section holding only the unfilled evidence template (its own literal
+#     placeholders, e.g. "Run <N>, <DATE>") is not a real run record. FAIL.
+DOCS_TEMPLATE_ONLY=$(make_docs_dir "stage-a-template-only" "evidence-index-template-only.md" "native-phase-12-evidence-index.md")
+expect_status 1 "FAIL: evidence index: Stage A (12.04) has a recorded run (still the unfilled evidence template, not real values)" \
+  --stage B --docs-dir "$DOCS_TEMPLATE_ONLY" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 # 8. Minor 3: --stage B checks the 12.06 rehearsal record itself, not only
 #    Stage A's run; --stage rehearsal checks Stage A's run (already proved above).

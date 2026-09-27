@@ -317,9 +317,52 @@ ruling_is_recorded() {
   ruling=$2
   [ -n "$ruling" ] || return 1
   [ -r "$CHARTER" ] || return 1
+  # A row only counts when: (1) its Decider cell (column 6 of the 7-column §9
+  # table; index NF-2 after the "|" split) reads exactly "owner"; (2) the
+  # token immediately after some "ruled:" in the row -- optional whitespace,
+  # no other text in between -- is this exact ruling, word-bounded (so
+  # "ruled: R4" never matches ruling "R43", and a *different* ruling's
+  # "ruled:" earlier in the same row never lets a bare, unruled mention of
+  # this ruling later in the row count); and (3) that "ruled:" is not
+  # preceded by a "not" / "not yet" qualifier (rejects "not yet ruled: R43").
   awk '/^## 9\. Decision log/{grab=1;next} grab && /^## /{exit} grab{print}' "$CHARTER" \
     | grep -F -- "$id" \
-    | grep -Eq "ruled:.*\\b${ruling}\\b"
+    | awk -F'|' -v ruling="$ruling" '
+        # Only a real 7-column decision-log table row (9 fields after the
+        # "|" split, including the leading/trailing empty ones) is
+        # considered. This also protects the check against ordinary prose
+        # in this section -- for example the marker-format explanation,
+        # which mentions a defect ID in a sentence, not a table row --
+        # being misread as a decision-log row (fix round 2).
+        NF != 9 || $0 !~ /^\|/ { next }
+        {
+          decider = $(NF - 2)
+          gsub(/^[ \t]+|[ \t]+$/, "", decider)
+          if (decider != "owner") next
+          line = $0
+          searchfrom = 1
+          while (1) {
+            idx = index(substr(line, searchfrom), "ruled:")
+            if (idx == 0) break
+            abspos = searchfrom + idx - 1
+            rest = substr(line, abspos + 6)
+            if (match(rest, /^[ \t]*R[0-9]+/)) {
+              token = substr(rest, RSTART, RLENGTH)
+              gsub(/^[ \t]+/, "", token)
+              nextchar = substr(rest, RLENGTH + 1, 1)
+              if (nextchar !~ /[0-9]/ && token == ruling) {
+                prefix = substr(line, 1, abspos - 1)
+                if (prefix !~ /[Nn]ot[ \t]+(yet[ \t]+)?$/) {
+                  print "MATCH"
+                  exit
+                }
+              }
+            }
+            searchfrom = abspos + 6
+          }
+        }
+      ' \
+    | grep -q MATCH
 }
 
 if [ ! -r "$CHARTER" ]; then
@@ -340,9 +383,16 @@ else
       !skip { print }
     ')
     rows_file="$TEMP_DIR/defect-rows.txt"
+    malformed_file="$TEMP_DIR/defect-malformed.txt"
     ruled_file="$TEMP_DIR/defect-ruled.txt"
     : >"$ruled_file"
     printf '%s\n' "$scan_body" | awk -F'|' 'NF==8{print}' >"$rows_file"
+    # A table-row-shaped line (starts "|") with NF!=8 -- typically an extra
+    # literal "|" inside a cell -- is otherwise silently dropped by the
+    # NF==8 filter above. A fail-closed scanner cannot assume that is safe:
+    # if the line names S1 or S2 anywhere, it is flagged instead of skipped
+    # (Minor 6, fix round 2).
+    printf '%s\n' "$scan_body" | awk -F'|' '/^\|/ && NF != 8 && ($0 ~ /S1/ || $0 ~ /S2/) {print}' >"$malformed_file"
 
     row_count=0
     blocking=""
@@ -355,14 +405,29 @@ else
       case "$id" in
         -*) continue ;;
       esac
+      # A row whose ID cannot be parsed cleanly (e.g. "P12-009 (= `12.02-F4`)")
+      # is skipped -- unless its raw text names S1 or S2, in which case it is
+      # flagged rather than silently dropped (Minor 6, fix round 2): this
+      # scanner never assumes an unparseable row is safe.
       case "$id" in
-        *[!A-Za-z0-9._-]*) continue ;;
+        *[!A-Za-z0-9._-]*)
+          case "$row" in
+            *S1*|*S2*) blocking="$blocking [unparseable id: $id]" ;;
+          esac
+          continue
+          ;;
       esac
       row_count=$((row_count + 1))
       sev=$(printf '%s' "$row" | awk -F'|' '{print $4}' | tr -d ' \t*')
       status=$(trim "$(printf '%s' "$row" | awk -F'|' '{print $(NF-1)}')")
       case "$sev" in
         S1|S2) ;;
+        S1*|S2*)
+          # An annotated severity cell (e.g. "S1 (was S2)") cannot be safely
+          # read as a clean S1/S2 -- or safely dismissed either (Minor 6).
+          blocking="$blocking [$id: unparseable severity '$sev']"
+          continue
+          ;;
         *) continue ;;
       esac
       case "$status" in
@@ -376,7 +441,14 @@ else
       fi
     done <"$rows_file"
 
-    if [ "$row_count" -eq 0 ]; then
+    if [ -s "$malformed_file" ]; then
+      while IFS= read -r bad_row; do
+        bad_id=$(trim "$(printf '%s' "$bad_row" | awk -F'|' '{print $2}')")
+        blocking="$blocking [unparseable row, extra '|', starts '$bad_id']"
+      done <"$malformed_file"
+    fi
+
+    if [ "$row_count" -eq 0 ] && [ -z "$blocking" ]; then
       fail "defect list: no open S1/S2 blocks stage entry (no data rows parsed under §10 — check the charter's table format)"
     elif [ -n "$blocking" ]; then
       fail "defect list: no open S1/S2 blocks stage entry (open, no recorded ruling:$blocking)"
@@ -434,6 +506,11 @@ if [ -n "$previous_stage_heading" ]; then
       fail "evidence index: $previous_stage_heading has a recorded run (section not found)"
     elif printf '%s\n' "$body" | grep -qF "No run recorded yet."; then
       fail "evidence index: $previous_stage_heading has a recorded run (still says \"No run recorded yet.\")"
+    elif printf '%s\n' "$body" | grep -Eq '<[A-Za-z_]+>'; then
+      # The evidence template's own placeholders (Run <N>, Build:
+      # <NATIVE_VERSION>, ...) are still present verbatim: this is an unfilled
+      # template, not a real run record (fix round 2).
+      fail "evidence index: $previous_stage_heading has a recorded run (still the unfilled evidence template, not real values)"
     else
       pass "evidence index: $previous_stage_heading has a recorded run"
     fi
