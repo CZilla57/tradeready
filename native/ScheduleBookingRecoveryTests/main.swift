@@ -126,6 +126,10 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
     var portals: [String: (token: String, enabled: Bool)] = [:]
     var knownCustomers: Set<String> = []
     var respondMode = RespondMode.normal
+    /// Task 12c review M2: answer an illegal transition as the committed
+    /// Worker does, 409 `invalid_state` with no status
+    /// (`backend-workers/lib/booking/respond.js:61`).
+    var statuslessConflicts = false
     var unreachable = false
     /// Every request as "family/action", for example "booking/status".
     private(set) var log: [String] = []
@@ -272,7 +276,9 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
         case .lostBeforeCommit: return (500, ["error": "Database error"])
         default: break
         }
-        guard transition.from.contains(current) else { return (409, ["error": "invalid_state", "status": current]) }
+        guard transition.from.contains(current) else {
+            return (409, statuslessConflicts ? ["error": "invalid_state"] : ["error": "invalid_state", "status": current])
+        }
         if action == "resolve_reschedule", respondMode == .scheduleChanged {
             return (409, ["error": "schedule_changed", "status": current])
         }
@@ -665,6 +671,7 @@ struct ScheduleBookingRecoveryTests {
         await acceptBeforeTheOwnerMovedTheJob()
         await acceptOutcomesOnTheActingScreen()
         await accountChangeDuringTheResolve()
+        await statuslessConflictUsesThePulledStatus()
         await s1GuardTheResolveNeverMovesTheJobBack()
         acceptNoticesOnBothScreens()
         await coldLaunchConvertsAfterTheInitialSync()
@@ -688,6 +695,7 @@ struct ScheduleBookingRecoveryTests {
         await intakeFillNeverOverwritesTheServer()
         await aSupersededChangeRefetchesItsRow()
         intakeGuardsOnlyRecordsAlreadyOnTheServer()
+        await legacyPrepareStopsOnAnAccountChange()
         sources(root)
         intakeSources(root)
         declineNoticesAndPins(root)
@@ -1752,6 +1760,7 @@ struct ScheduleBookingRecoveryTests {
         case unreachable = "F3k the resolve cannot reach the server"
         case rateLimited = "F3l rate limited"
         case requestCopyQueued = "F3m a copy of the request has not reached the server"
+        case moveRefused = "F3n the server refused the move (Cloud Sync)"
     }
 
     /// F3: each non-success outcome is shown on the acting screen in plain
@@ -1783,6 +1792,8 @@ struct ScheduleBookingRecoveryTests {
         let (d, store) = await rescheduleDevice(tag, job: job, converted: acceptCase != .noJob)
         defer { d.cleanup() }
         if acceptCase == .notAcknowledged { d.reach.online = false }
+        // Review M1: the server refuses the move; it waits in Cloud Sync.
+        if acceptCase == .moveRefused { d.data.injectStatusOnce = (method: "POST", table: "jobs", status: 422) }
         if acceptCase != .unscheduledJob, acceptCase != .noJob {
             expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
         }
@@ -1818,7 +1829,7 @@ struct ScheduleBookingRecoveryTests {
         case .lostBeforeCommit: d.links.respondMode = .lostBeforeCommit
         case .rateLimited: d.links.respondMode = .rateLimited
         case .unreachable: d.links.unreachable = true
-        case .unscheduledJob, .noJob, .notAcknowledged: break
+        case .unscheduledJob, .noJob, .notAcknowledged, .moveRefused: break
         }
         d.links.resetLog()
         let tapped = await tap(row, store, d)
@@ -1829,9 +1840,15 @@ struct ScheduleBookingRecoveryTests {
             + "Check your connection, then pull down to refresh before trying again."
         let expected: (sent: Bool, message: String, proofKept: Bool) = switch acceptCase {
         case .unscheduledJob: (false, "Give the job a date and start time first, then tap “\(label)” again.", false)
-        case .noJob: (false, "This booking isn't linked to a job on this device yet. Pull down to refresh, then try again.", false)
+        case .noJob:
+            (false, "This booking doesn't have a job on this device yet. New bookings become jobs the next time "
+                + "you open the app and it syncs, so try again then. If you deleted its job, decline the booking "
+                + "or contact the customer instead.", false)
         case .notAcknowledged, .requestCopyQueued:
             (false, "Your latest changes haven't reached the server yet. Check your connection, then tap “\(label)” again.", true)
+        case .moveRefused:
+            (false, "The server refused a change to this booking or its job. Review it in Settings \u{203A} Cloud Sync, "
+                + "then tap “\(label)” again.", true)
         case .declinedBeforeTheTap: (false, "This booking was already declined.", false)
         case .declinedDuringTheResolve: (true, "This booking was already declined.", true)
         case .scheduleChanged:
@@ -1887,16 +1904,33 @@ struct ScheduleBookingRecoveryTests {
     /// to the device, and the acting screen says why.
     @MainActor
     static func accountChangeDuringTheResolve() async {
-        for boundary in ["sign-out", "boundary then the same owner"] {
+        let subjectB = "99999999-8888-7777-6666-555555555555"
+        let bindingB = String(repeating: "c", count: 64)
+        for boundary in ["sign-out", "boundary then the same owner", "account B"] {
             for row in RescheduleRow.allCases {
                 let id = "F4 \(row.rawValue): \(boundary) during the resolve"
                 let (d, store) = await rescheduleDevice("f4-\(boundary.count)-\(row.rawValue)")
                 defer { d.cleanup() }
                 expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
+                // What B has the moment B is signed in (review M6).
+                var snapshotAtSwitch: Data?
+                var queueAtSwitch: [Canonical.MutationItem] = []
                 d.links.duringNextRespond = {
-                    if boundary == "sign-out" {
+                    switch boundary {
+                    case "sign-out":
                         store.scheduleBookingTestClearOwner()
-                    } else {
+                    case "account B":
+                        // Task 12c review M6: a different account signs in.
+                        store.testApplyCompletedSignOutState()
+                        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+                            accountBinding: bindingB, stage: .done,
+                            draft: .init(businessName: "Biz B", contactName: "Owner B", trade: .electrical, step: 1)
+                        ))
+                        store.testSeedNativeSignedInOwner(subject: subjectB, binding: bindingB)
+                        store.testMarkInitialSyncCompleted(subject: subjectB)
+                        snapshotAtSwitch = try? Data(contentsOf: d.storeURL)
+                        queueAtSwitch = d.queue.load()
+                    default:
                         store.testApplyCompletedSignOutState()
                         store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
                         store.testMarkInitialSyncCompleted(subject: d.subject)
@@ -1917,7 +1951,54 @@ struct ScheduleBookingRecoveryTests {
                 expectEqual(tapped.message, "The signed-in account changed, so nothing was saved on this device.",
                             "\(id) [P12-015]: …in plain words")
                 expectEqual(store.migrationMessage, nil, "\(id) [P12-015]: nothing goes to migrationMessage")
+                if boundary == "account B" {
+                    expect(isSignedIn(store), "\(id): sanity: B is signed in with the gate open")
+                    expect(snapshotAtSwitch != nil && (try? Data(contentsOf: d.storeURL)) == snapshotAtSwitch,
+                           "\(id) [M6]: B's snapshot on disk is untouched by the accept")
+                    expectEqual(d.queue.load(), queueAtSwitch, "\(id) [M6]: …and so is B's queue")
+                    expect(d.items.allSatisfy { $0.ownerBinding == d.binding },
+                           "\(id) [M6]: the staged proof stays A's (nothing is staged for B)")
+                }
             }
+        }
+    }
+
+    /// F7 (Task 12c review M2): the committed Worker answers an illegal
+    /// transition with 409 `invalid_state` and no status
+    /// (`backend-workers/lib/booking/respond.js:61`), which the respond client
+    /// reads as `unknown`. Another device confirms or declines while the
+    /// resolve is out; the pull after the 409 knows, and the notice says so.
+    /// When the pull cannot tell (it fails), the notice stays generic.
+    /// Characterized at 5f30dd2: the generic "changed on another device"
+    /// notice every time.
+    @MainActor
+    static func statuslessConflictUsesThePulledStatus() async {
+        let cases: [(change: String, server: String, title: String, message: String)] = [
+            ("confirmed", "confirmed", "Booking confirmed", "This booking is already confirmed."),
+            ("declined", "declined", failureTitle, "This booking was already declined."),
+            ("confirmed, the pull fails", "confirmed", failureTitle,
+             "This booking changed on another device. Pull down to refresh and check it."),
+        ]
+        for (index, entry) in cases.enumerated() {
+            let id = "F7 status-less 409, \(entry.change) on another device during the resolve"
+            let (d, store) = await rescheduleDevice("f7-\(index)")
+            defer { d.cleanup() }
+            expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
+            d.links.statuslessConflicts = true
+            d.links.duringNextRespond = {
+                if var row = d.links.requestRow("req-1") {
+                    row["status"] = entry.server
+                    await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+                }
+                if index == 2 { d.pullLoader.readsFail = true }
+            }
+            d.links.resetLog()
+            let tapped = await tap(.today, store, d)
+            d.pullLoader.readsFail = false
+            observed(id, "outcome=\(tapped.outcome) shown=\(tapped.title ?? "-"): \(tapped.message ?? "nothing")")
+            expectEqual(d.links.log, ["respond/resolve_reschedule"], "\(id): sanity: the resolve was sent")
+            expectEqual(tapped.title, entry.title, "\(id) [M2]: the notice's title")
+            expectEqual(tapped.message, entry.message, "\(id) [M2]: …and message")
         }
     }
 
@@ -1974,7 +2055,8 @@ struct ScheduleBookingRecoveryTests {
         var notSaved = saved
         notSaved.savedLocally = false
         let outcomes: [AppStore.BookingRescheduleAcceptOutcome] = [
-            .confirmed(saved), .confirmed(notSaved), .notLinkedToJob, .jobUnscheduled, .awaitingAck,
+            .confirmed(saved), .confirmed(notSaved), .notLinkedToJob, .jobUnscheduled, .awaitingAck(.queued),
+            .awaitingAck(.refused),
             .needsReview(currentStatus: "declined"), .needsReview(currentStatus: "cancelled"),
             .needsReview(currentStatus: "confirmed"), .needsReview(currentStatus: "reschedule_requested"),
             .needsReview(currentStatus: "unknown"), .unknownOutcome, .missing, .accountChanged, .readOnly,
@@ -1982,7 +2064,8 @@ struct ScheduleBookingRecoveryTests {
             .failed(.invalidRequest), .failed(.rateLimited), .failed(.unavailable), .failed(.invalidResponse),
         ]
         let tapAgain: [AppStore.BookingRescheduleAcceptOutcome] = [
-            .jobUnscheduled, .awaitingAck, .needsReview(currentStatus: "reschedule_requested"),
+            .jobUnscheduled, .awaitingAck(.queued), .awaitingAck(.refused),
+            .needsReview(currentStatus: "reschedule_requested"),
         ]
         for row in RescheduleRow.allCases {
             for outcome in outcomes {
@@ -1991,6 +2074,8 @@ struct ScheduleBookingRecoveryTests {
                 expect(!notice.message.isEmpty, "\(id) [P12-015]: a message")
                 if case .confirmed = outcome {
                     expectEqual(notice.title, "Booking updated", "\(id) [P12-015]: the success title")
+                } else if case .needsReview("confirmed") = outcome {
+                    expectEqual(notice.title, "Booking confirmed", "\(id) [M4]: already confirmed is not a failure")
                 } else {
                     expectEqual(notice.title, failureTitle, "\(id) [P12-015]: RN's failure title")
                 }
@@ -2016,6 +2101,10 @@ struct ScheduleBookingRecoveryTests {
                     "F6 [P12-015]: the customer's cancel")
         expectEqual(message(.needsReview(currentStatus: "confirmed")), "This booking is already confirmed.",
                     "F6 [P12-015]: another device's confirm")
+        expect(message(.awaitingAck(.refused)).contains("Settings \u{203A} Cloud Sync"),
+               "F6 [M1]: a refused change points to Cloud Sync")
+        expect(!message(.notLinkedToJob).contains("Pull down to refresh"),
+               "F6 [M5]: no booking is sent round a pull to refresh that never links it")
     }
 
     // MARK: K. Customer bookings become jobs (P12-016)
@@ -3222,6 +3311,43 @@ struct ScheduleBookingRecoveryTests {
                     "\(id) [P12-017]: a created customer is not guarded")
         let noWatermark = drafts(customers: [repeatCustomer()], guardSince: [:])
         expectEqual(Set(noWatermark.values), ["plain"], "\(id): a table with no watermark yet is a plain upsert")
+    }
+
+    /// D9 (Task 12c review M9): the test-only legacy prepare compares the
+    /// owner and the account generation it started under after its awaits.
+    /// An account change during its pull stops it. Characterized at 5f30dd2:
+    /// it compared a fresh capture with itself and went on (`superseded`
+    /// against the other snapshot).
+    @MainActor
+    static func legacyPrepareStopsOnAnAccountChange() async {
+        let subjectB = "99999999-8888-7777-6666-555555555555"
+        let bindingB = String(repeating: "c", count: 64)
+        for boundary in ["account B", "boundary then the same owner"] {
+            let id = "D9 legacy prepare, \(boundary) during its pull"
+            let (d, store) = await rescheduleDevice("d9-\(boundary.count)")
+            defer { d.cleanup() }
+            var changed = false
+            d.pullLoader.duringNextRead = ("bookingRequests", {
+                changed = true
+                store.testApplyCompletedSignOutState()
+                if boundary == "account B" {
+                    try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+                        accountBinding: bindingB, stage: .done,
+                        draft: .init(businessName: "Biz B", contactName: "Owner B", trade: .electrical, step: 1)
+                    ))
+                    store.testSeedNativeSignedInOwner(subject: subjectB, binding: bindingB)
+                    store.testMarkInitialSyncCompleted(subject: subjectB)
+                } else {
+                    store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+                    store.testMarkInitialSyncCompleted(subject: d.subject)
+                }
+            })
+            let prepared = await store.prepareBookingReschedule(requestID: "req-1", scheduleDraft: rescheduleDraft,
+                                                                writeStamp: writeStamp)
+            observed(id, "outcome=\(prepared)")
+            expect(changed, "\(id): sanity: the account changed during the prepare's pull")
+            expectEqual(String(describing: prepared), "failed", "\(id) [M9]: the prepare stops")
+        }
     }
 
     /// D8: every decline outcome but a decline has a plain notice for both

@@ -9412,113 +9412,6 @@ extension AppStore {
         case failed(reason: String)
     }
 
-    /// Phase 12 (12.00b.2-J, P12-015): the owner's accept of a customer's
-    /// reschedule request from a request row (`acceptBookingReschedule`).
-    /// Every case has a notice for the acting screen (`ownerNotice`). The
-    /// accept makes no schedule write and sends nothing before the job's
-    /// current schedule is known, so it has no `scheduleConflict` or
-    /// `superseded` case; the server's `schedule_changed` is `needsReview`.
-    enum BookingRescheduleAcceptOutcome: Equatable {
-        /// The server confirmed the booking for the job's current schedule.
-        case confirmed(BookingRescheduleConfirmation)
-        /// The request has no job on this device: no proof, nothing sent.
-        case notLinkedToJob
-        /// The job has no date and start time, so there is no proof to send
-        /// (contract §7 step 4: native never sends a proof-less resolve).
-        case jobUnscheduled
-        /// A change to the job (contract §7 step 1) or to the request has not
-        /// reached the server yet. Nothing was sent; the staged proof stays.
-        case awaitingAck
-        /// The request no longer asks for a reschedule (the pull, or a 409
-        /// `invalid_state`), or the server's job schedule differs (409
-        /// `schedule_changed`, status still `reschedule_requested`).
-        case needsReview(currentStatus: String)
-        /// The resolve may have committed. Never resent automatically.
-        case unknownOutcome
-        /// The request is gone (the pull, or a 404).
-        case missing
-        /// The account changed during an await: nothing was applied.
-        case accountChanged
-        /// Local data is read-only: nothing was applied.
-        case readOnly
-        /// Any other refusal from the respond client.
-        case failed(NativeBookingResponseError)
-
-        /// The acting screen's alert. `actionLabel` is the button the owner
-        /// tapped there. Failures use RN's alert title ("Couldn't update
-        /// booking", `screens/TodayScreen.tsx:557`). RN shows nothing on
-        /// success; native names the time the booking is now confirmed for,
-        /// so a tap before moving the job is never silent.
-        func ownerNotice(actionLabel: String) -> BookingRescheduleNotice {
-            let failure = "Couldn't update booking"
-            let tapAgain = "tap \u{201C}\(actionLabel)\u{201D} again"
-            switch self {
-            case let .confirmed(confirmation):
-                let when = NativeTodayBriefing.formatDisplayDate(confirmation.date) + ", "
-                    + NativeTodayBriefing.formatTimeRange(confirmation.start, confirmation.end)
-                var message = confirmation.keptOriginalTime
-                    ? "The job wasn't moved, so the booking is confirmed for its original time, \(when)."
-                    : "The booking is confirmed for the job's new time, \(when)."
-                if !confirmation.savedLocally {
-                    message += " This device couldn't save the change yet. Pull down to refresh."
-                }
-                return .init(title: "Booking updated", message: message)
-            case .notLinkedToJob:
-                return .init(title: failure, message: "This booking isn't linked to a job on this device yet. "
-                             + "Pull down to refresh, then try again.")
-            case .jobUnscheduled:
-                return .init(title: failure, message: "Give the job a date and start time first, then \(tapAgain).")
-            case .awaitingAck:
-                return .init(title: failure, message: "Your latest changes haven't reached the server yet. "
-                             + "Check your connection, then \(tapAgain).")
-            case let .needsReview(currentStatus):
-                let message = switch currentStatus {
-                case "declined": "This booking was already declined."
-                case "cancelled": "The customer cancelled this booking."
-                case "confirmed": "This booking is already confirmed."
-                case "reschedule_requested":
-                    "The job's time on the server doesn't match this device. "
-                        + "Pull down to refresh, check the job, then \(tapAgain)."
-                default: "This booking changed on another device. Pull down to refresh and check it."
-                }
-                return .init(title: failure, message: message)
-            case .unknownOutcome:
-                return .init(title: failure, message: "We couldn't tell whether the booking was updated. "
-                             + "Check your connection, then pull down to refresh before trying again.")
-            case .missing:
-                return .init(title: failure, message: "This booking request wasn't found. "
-                             + "It may have been removed on another device.")
-            case .accountChanged:
-                return .init(title: failure, message: "The signed-in account changed, so nothing was saved on this device.")
-            case .readOnly:
-                return .init(title: failure, message: "This device can't save changes right now. Nothing changed on this device.")
-            case let .failed(error):
-                // RN's fallback (`utils/bookingRespond.ts:40`).
-                return .init(title: failure, message: error.errorDescription ?? "Please try again.")
-            }
-        }
-    }
-
-    struct BookingRescheduleConfirmation: Equatable {
-        var status: String
-        var alreadyApplied: Bool
-        /// The job's schedule the proof carried.
-        var date: String
-        var start: String
-        var end: String?
-        /// The job was still at the request's original slot.
-        var keptOriginalTime: Bool
-        /// False when the local copy could not be saved; the next pull
-        /// brings the server's row.
-        var savedLocally: Bool
-    }
-
-    /// What the acting screen shows after the owner's accept.
-    struct BookingRescheduleNotice: Equatable {
-        var title: String
-        var message: String
-    }
-
     enum BookingLinkAdminOutcome: Equatable {
         case applied(revision: Int, sharesURL: Bool)
         case stale(currentEnabled: Bool)
@@ -10112,12 +10005,26 @@ extension AppStore {
     /// work, and waits for the EXACT job-mutation acknowledgment (no pending
     /// queue item for the job + a fresh pull still showing the proven
     /// schedule). A superseding edit refuses instead of resolving wrong.
+    ///
+    /// TEST-ONLY since P12-015 (Phase 12 12.00b.2-L, Task 12c review M9): no
+    /// screen may call this or `resolveBookingReschedule`. Both reschedule
+    /// row actions call `acceptBookingReschedule`, which writes nothing to
+    /// the job. A draft built from `request.slot` (the original booked slot)
+    /// would move the job back and prove it (the P12-015 S1 warning). They
+    /// stay because Task 12b's R cases and store-integration 8.08 stage
+    /// proofs through them; backlog P12-018 removes them or moves those
+    /// tests onto `acceptBookingReschedule`.
     func prepareBookingReschedule(
         requestID: String,
         scheduleDraft: NativeScheduleBookingPolicy.ScheduleOnlyDraft,
         writeStamp: String? = nil
     ) async -> ReschedulePrepareOutcome {
         guard scheduleDraft.jobID.isEmpty == false else { return .missing }
+        // Review M9: the owner and account generation before the awaits,
+        // compared after them (the check compared a fresh capture with
+        // itself before).
+        let generation = accountBoundaryGeneration
+        let capture = scheduleBookingOwnerCapture()
         let stamp = writeStamp ?? isoNow()
         switch commitScheduleOnly(scheduleDraft) {
         case .saved:
@@ -10139,8 +10046,11 @@ extension AppStore {
             )
         }
         _ = await syncNowAndWait(trigger: .localChange)
+        guard accountBoundaryGeneration == generation, scheduleBookingOwnerStillCurrent(capture) else {
+            return .failed
+        }
         _ = await pullDeltaIfPossible()
-        guard scheduleBookingOwnerStillCurrent(scheduleBookingOwnerCapture()) else {
+        guard accountBoundaryGeneration == generation, scheduleBookingOwnerStillCurrent(capture) else {
             return .failed
         }
         let pendingAck = mutationQueue.load().contains {
@@ -10165,12 +10075,17 @@ extension AppStore {
     /// current job after the suspension, then resolves with the exact proof.
     /// `schedule_changed` refreshes and refuses; unknown outcome keeps the
     /// staged proof for an explicit later retry — never an automatic resend.
+    ///
+    /// TEST-ONLY since P12-015 (Task 12c review M9): see
+    /// `prepareBookingReschedule`. Phase 12 (12.00b.2-L): it re-checks the
+    /// account generation with the owner after its await, as the decline does.
     func resolveBookingReschedule(
         requestID: String,
         proof: NativeScheduleProof,
         responseService: NativeBookingResponseService? = nil,
         sessionBytes: Data? = nil
     ) async -> RescheduleResolveOutcome {
+        let generation = accountBoundaryGeneration
         let capture = scheduleBookingOwnerCapture()
         guard snapshot.payload.bookingRequests?.contains(where: { $0.id == requestID }) == true else {
             return .missing
@@ -10216,7 +10131,9 @@ extension AppStore {
         } catch {
             return .failed(reason: "transport")
         }
-        guard scheduleBookingOwnerStillCurrent(capture) else { return .failed(reason: "owner-changed") }
+        guard accountBoundaryGeneration == generation, scheduleBookingOwnerStillCurrent(capture) else {
+            return .failed(reason: "owner-changed")
+        }
         // Phase 12 (12.00b.2-L, P12-017): saved, not queued, as the decline.
         _ = saveServerBookingRequestStatus(requestID: requestID, status: result.status)
         if let binding = capture.binding {
@@ -10239,8 +10156,9 @@ extension AppStore {
     /// - It writes nothing to the job. `request.slot` is the original booked
     ///   slot, immutable history (contract §7), and never a target.
     /// - Contract §7 step 1: it syncs and pulls, then requires that no
-    ///   change to the job, or to the request, is still queued
-    ///   (`.awaitingAck` otherwise).
+    ///   change to the job, or to the request, is still queued or refused
+    ///   and waiting in Settings › Cloud Sync (`.awaitingAck` otherwise;
+    ///   12.00b.2-L, review M1).
     /// - The proof is the job's CURRENT `(date, start)` after that pull
     ///   (`NativeScheduleBookingPolicy.acceptProof`), staged as owner-bound
     ///   pending work before the ack check, as `prepareBookingReschedule`
@@ -10312,11 +10230,13 @@ extension AppStore {
             )
         }
         // The request too: a queued copy pushed after the server's resolve
-        // would put the old status back on the server row.
-        guard !mutationQueue.load().contains(where: {
-            ($0.table == "jobs" && $0.recordId == jobID) || ($0.table == "bookingRequests" && $0.recordId == requestID)
-        }) else {
-            return .awaitingAck
+        // would put the old status back on the server row. A change the
+        // server refused waits in Cloud Sync and has not reached it either
+        // (12.00b.2-L, review M1: §7 step 1 wants the exact job change
+        // acknowledged; a Retry of a refused request copy would push it
+        // after the resolve).
+        if let wait = ownerResponseWait(for: ["jobs/\(jobID)", "bookingRequests/\(requestID)"]) {
+            return .awaitingAck(wait)
         }
         let result: NativeBookingResponseResult
         do {
@@ -10326,9 +10246,15 @@ extension AppStore {
         } catch let error as NativeBookingResponseError {
             guard stillCurrent() else { return stopped() }
             switch error {
-            case let .invalidState(currentStatus), let .scheduleChanged(currentStatus):
+            case let .invalidState(echoed):
                 _ = await pullDeltaIfPossible()
-                return stillCurrent() ? .needsReview(currentStatus: currentStatus) : stopped()
+                guard stillCurrent() else { return stopped() }
+                return .needsReview(currentStatus: statusAfterRefusal(
+                    echoed, requestID: requestID, from: ["reschedule_requested"]))
+            case let .scheduleChanged(echoed):
+                _ = await pullDeltaIfPossible()
+                guard stillCurrent() else { return stopped() }
+                return .needsReview(currentStatus: statusAfterRefusal(echoed, requestID: requestID, from: []))
             case .notFound:
                 _ = await pullDeltaIfPossible()
                 return stillCurrent() ? .missing : stopped()
@@ -10391,9 +10317,10 @@ extension AppStore {
         capture: (subject: String?, binding: String?)
     ) async -> OwnerResponseOutcome {
         switch error {
-        case let .invalidState(currentStatus), let .scheduleChanged(currentStatus):
+        case let .invalidState(echoed), let .scheduleChanged(echoed):
             _ = await pullDeltaIfPossible()
-            return .needsReview(currentStatus: currentStatus)
+            return .needsReview(currentStatus: statusAfterRefusal(
+                echoed, requestID: requestID, from: ["booked", "confirmed", "reschedule_requested"]))
         case .unknownOutcome:
             return .unknownOutcome
         case .notFound:
@@ -10408,6 +10335,20 @@ extension AppStore {
         case .rateLimited, .unavailable, .invalidResponse:
             return .failed(reason: "transient")
         }
+    }
+
+    /// Phase 12 (12.00b.2-L, Task 12c review M2): the committed Worker's 409
+    /// `invalid_state` carries no status (`backend-workers/lib/booking/respond.js:61`),
+    /// which the respond client reads as `unknown`. The pull the caller has
+    /// just run knows the request's status: that is the answer, unless it is
+    /// still one the action starts from (`sourceStatuses`), which means the
+    /// pull did not bring the change and tells nothing.
+    private func statusAfterRefusal(_ echoed: String, requestID: String, from sourceStatuses: Set<String>) -> String {
+        guard echoed == "unknown",
+              let local = snapshot.payload.bookingRequests?.first(where: { $0.id == requestID })?.status,
+              !sourceStatuses.contains(local)
+        else { return echoed }
+        return local
     }
 
     /// Phase 12 (12.00b.2-L, P12-017): why an owner response to a booking
