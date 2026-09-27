@@ -43,8 +43,23 @@
 #     runbook (read from the template itself, so a real "<"/">" comparison
 #     in a record is not mistaken for one);
 #   - a production-match comparison is by origin (scheme, host, port,
-#     case-insensitive, trailing slash ignored), not exact string equality.
+#     case-insensitive, trailing slash ignored), not exact string equality;
+#   - every awk, cut, grep, sed and tr here reads doc text in the C locale
+#     (final review items 28 and 30), so the result and the output are the
+#     same in an owner's UTF-8 Terminal and in the stage runbook's pasted
+#     C-locale run.
 set -u
+
+# Byte-wise text tools (final review items 28 and 30; Task 14 re-review 4,
+# Minor 1 and out-of-scope 2). In a UTF-8 locale macOS awk decodes a regex
+# match to wide characters and exits on a partial byte: `names()` below tests
+# the one byte next to an ID, so "P12-012’s … revoked" stopped the §9 scan
+# (every later row unread) and "R59’s … revoked" the R59 scan. And `cut -c`
+# counts characters under UTF-8 but bytes under C, so the Status excerpt
+# differed by locale. Every token this script compares is ASCII, so reading
+# bytes changes no result.
+LC_ALL=C
+export LC_ALL
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DOCS_DIR="$ROOT_DIR/docs"

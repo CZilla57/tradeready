@@ -83,6 +83,36 @@ expect_no_match() {
   fi
 }
 
+# Like expect_status, but under a UTF-8 locale (an owner's Terminal default),
+# and also asserting that no awk error reached the output (final review items
+# 28 and 30; Task 14 re-review 4, Minor 1 and out-of-scope 2).
+expect_status_utf8() {
+  expected_status=$1
+  expected_text=$2
+  shift 2
+
+  set +e
+  env LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 "$PREFLIGHT" "$@" >"$OUTPUT_PATH" 2>&1
+  actual_status=$?
+  set -e
+
+  if [ "$actual_status" -ne "$expected_status" ]; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "Expected status $expected_status under UTF-8, got $actual_status (args: $*)" >&2
+    exit 1
+  fi
+  if ! grep -F -q "$expected_text" "$OUTPUT_PATH"; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "Missing expected result under UTF-8: $expected_text (args: $*)" >&2
+    exit 1
+  fi
+  if grep -q 'awk:' "$OUTPUT_PATH"; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "awk failed under UTF-8 (args: $*)" >&2
+    exit 1
+  fi
+}
+
 DOCS_A=$(make_docs_dir "stage-a-good")
 
 # ---------------------------------------------------------------------------
@@ -126,6 +156,29 @@ expect_status 1 "FAIL: charter is owner-approved" \
 DOCS_PROPOSED=$(make_docs_dir "stage-a-proposed" "charter-status-proposed.md" "native-phase-12-cutover-charter.md")
 expect_status 1 "FAIL: charter is owner-approved (Status line does not say owner-approved" \
   --stage A --docs-dir "$DOCS_PROPOSED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 3b. Final review item 30 (Task 14 re-review 4, out-of-scope 2): the Status
+#     line's excerpt is cut at 80 bytes whatever the locale. `cut -c` counts
+#     characters under UTF-8 and bytes under C, so a long Status line with an
+#     em dash used to print two more characters under UTF-8 than the C-locale
+#     run the stage runbook pastes. The FAIL line must be identical.
+DOCS_LONG_STATUS=$(make_docs_dir "stage-a-long-status" "charter-draft-long-status.md" "native-phase-12-cutover-charter.md")
+set +e
+env LC_ALL=C "$PREFLIGHT" --stage A --docs-dir "$DOCS_LONG_STATUS" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON" 2>&1 \
+  | grep '^FAIL: charter is owner-approved' >"$TEMP_ROOT/status-c.txt"
+env LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 "$PREFLIGHT" --stage A --docs-dir "$DOCS_LONG_STATUS" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON" 2>&1 \
+  | grep '^FAIL: charter is owner-approved' >"$TEMP_ROOT/status-utf8.txt"
+set -e
+if [ ! -s "$TEMP_ROOT/status-c.txt" ] || ! cmp -s "$TEMP_ROOT/status-c.txt" "$TEMP_ROOT/status-utf8.txt"; then
+  cat "$TEMP_ROOT/status-c.txt" "$TEMP_ROOT/status-utf8.txt" >&2
+  echo "The Status-line FAIL differs between the C and UTF-8 locales" >&2
+  exit 1
+fi
+if ! grep -F -q "(Status line reads: **Status: DRAFT — not owner-approved.** Written 2026-09-25 on branch native/ph)" "$TEMP_ROOT/status-c.txt"; then
+  cat "$TEMP_ROOT/status-c.txt" >&2
+  echo "The Status-line excerpt is not the first 80 bytes" >&2
+  exit 1
+fi
 
 # 4. An open blocking defect (12.00b.2) fails, by name.
 DOCS_OPEN=$(make_docs_dir "stage-a-open-blocker" "charter-open-blocker.md" "native-phase-12-cutover-charter.md")
@@ -217,6 +270,24 @@ done
 DOCS_RERULED=$(make_docs_dir "stage-a-revoked-then-reruled" "charter-marker-revoked-then-reruled.md" "native-phase-12-cutover-charter.md")
 expect_status 0 "OWNER defect list: P12-903 (open S1, ruling R900 recorded — owner still authorizes stage entry)" \
   --stage A --docs-dir "$DOCS_RERULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 4d-3. Final review item 28 (Task 14 re-review 4, Minor 1): a multibyte
+#       character touching the ID ("P12-903’s", a smart apostrophe) in a
+#       revoking row, under a UTF-8 locale. macOS awk decodes a regex match
+#       to wide characters and used to exit on the partial byte `names()`
+#       takes next to the ID, so every later row went unread. The row must
+#       re-block the defect with no awk error, and a later exact owner
+#       re-rule must still be read and clear it. Both also in the C locale.
+DOCS_MB_REVOKED=$(make_docs_dir "stage-a-revoked-multibyte" "charter-marker-revoked-multibyte.md" "native-phase-12-cutover-charter.md")
+expect_status_utf8 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+  --stage A --docs-dir "$DOCS_MB_REVOKED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+  --stage A --docs-dir "$DOCS_MB_REVOKED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+DOCS_MB_RERULED=$(make_docs_dir "stage-a-revoked-multibyte-then-reruled" "charter-marker-revoked-multibyte-then-reruled.md" "native-phase-12-cutover-charter.md")
+expect_status_utf8 0 "OWNER defect list: P12-903 (open S1, ruling R900 recorded — owner still authorizes stage entry)" \
+  --stage A --docs-dir "$DOCS_MB_RERULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+expect_status 0 "OWNER defect list: P12-903 (open S1, ruling R900 recorded — owner still authorizes stage entry)" \
+  --stage A --docs-dir "$DOCS_MB_RERULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 # 4e. Minor 6 continuation (fix rounds 2-3): a defect row this scanner cannot
 #     parse cleanly must FAIL with a named line when it looks like it could
@@ -325,6 +396,17 @@ done
 DOCS_R59_RERULED=$(make_docs_dir "stage-a-r59-revoked-then-reruled" "readiness-r59-revoked-then-reruled.md" "native-phase-12-release-readiness.md")
 expect_status 0 "PASS: production build configuration decision is recorded (R59)" \
   --stage A --docs-dir "$DOCS_R59_RERULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 6d-2. Final review item 28: the same multibyte case for the R59 line
+#       ("R59’s decision is revoked"), under UTF-8: the revoking line gets the
+#       "revokes it" FAIL (it used to get the generic "owner must rule" FAIL
+#       after awk exited), and a later exact decision line still passes.
+DOCS_R59_MB=$(make_docs_dir "stage-a-r59-revoked-multibyte" "readiness-r59-revoked-multibyte.md" "native-phase-12-release-readiness.md")
+expect_status_utf8 1 "FAIL: production build configuration decision is recorded (R59) — a later line in the release-readiness doc revokes it" \
+  --stage A --docs-dir "$DOCS_R59_MB" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+DOCS_R59_MB_RERULED=$(make_docs_dir "stage-a-r59-revoked-multibyte-then-reruled" "readiness-r59-revoked-multibyte-then-reruled.md" "native-phase-12-release-readiness.md")
+expect_status_utf8 0 "PASS: production build configuration decision is recorded (R59)" \
+  --stage A --docs-dir "$DOCS_R59_MB_RERULED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 # 6e. Fix round 4 (finding 4): a spaced comparison in the decision text
 #     ("p95 sync < 800 ms > baseline") is not a placeholder and passes; a
