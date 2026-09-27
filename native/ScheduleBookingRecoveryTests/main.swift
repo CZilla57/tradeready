@@ -26,6 +26,11 @@ import FoundationNetworking
 // (the gate-open points) and on every activation: a mirror is re-applied
 // only after a fresh `status` read proves it current (never a server
 // mutation), and a proof is kept only while a resolve can still succeed.
+// Fix round 1 (review I1): a mirror is read and merged only after a pull
+// has committed since the identity was applied or the foreground refresh
+// began, and a flag-only mirror's read carries the local token (W1, W2, X,
+// L2): a merge queues the whole settings or customer record, and the push
+// runs before the pull.
 //
 // Everything here is production code except the network: the real AppStore,
 // queue, sync coordinator, push transport and delta pull in front of the
@@ -69,6 +74,8 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
     var unreachable = false
     /// Every request as "family/action", for example "booking/status".
     private(set) var log: [String] = []
+    /// The token each status read carried (nil when it sent none).
+    private(set) var statusTokens: [String?] = []
     /// Runs on the main actor inside the next status read, before it replies.
     var duringNextStatus: (@MainActor () async -> Void)?
     private var minted = 0
@@ -81,7 +88,10 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
     var statusReads: Int { log.filter { $0.hasSuffix("/status") }.count }
     var mutations: [String] { log.filter { !$0.hasSuffix("/status") } }
 
-    func resetLog() { log = [] }
+    func resetLog() {
+        log = []
+        statusTokens = []
+    }
 
     /// A new 48-hex capability, never equal to a seeded fixture token.
     func freshToken() -> String {
@@ -98,6 +108,7 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
             : path.hasSuffix("/portal-manage") ? "portal"
             : path.hasSuffix("/booking/respond") ? "respond" : "unknown"
         log.append("\(family)/\(action)")
+        if action == "status" { statusTokens.append(body["token"] as? String) }
         if unreachable { throw URLError(.notConnectedToInternet) }
         if action == "status", let hook = duringNextStatus {
             duringNextStatus = nil
@@ -292,6 +303,27 @@ let rescheduleDraft = NativeScheduleBookingPolicy.ScheduleOnlyDraft(
     baselineStatus: "scheduled", date: "2026-09-23", start: "09:00", end: "10:00"
 )
 
+/// A proof whose request is not on the device: any pass removes it (T1),
+/// after the items staged before it. A test stages it last and waits for it
+/// to go, to know that a pass started at a gate site has finished.
+let passMarkerProof = NativeScheduleBookingPendingWork.Kind.rescheduleProof(
+    requestId: "req-pass-marker",
+    proof: NativeScheduleProof(jobId: "job-pass-marker", updatedAt: writeStamp, date: "2026-09-23", start: "09:00"),
+    writeStamp: writeStamp
+)
+
+func isPassMarker(_ item: NativeScheduleBookingPendingWork) -> Bool {
+    if case let .rescheduleProof(requestId, _, _) = item.kind { return requestId == "req-pass-marker" }
+    return false
+}
+
+func isMirror(_ item: NativeScheduleBookingPendingWork) -> Bool {
+    switch item.kind {
+    case .bookingMirror, .portalMirror: return true
+    case .rescheduleProof: return false
+    }
+}
+
 /// One device: the app's files in a temporary directory, the data server and
 /// the link server. `launch()` again is a relaunch on the same files.
 @MainActor
@@ -383,18 +415,26 @@ final class Device {
     func signIn(_ store: AppStore, subject: String? = nil, binding: String? = nil) async {
         let subject = subject ?? self.subject
         let binding = binding ?? self.binding
+        prepareOwner(store, subject: subject, binding: binding)
+        store.testSeedNativeSignedInOwner(subject: subject, binding: binding)
+        store.testMarkInitialSyncCompleted(subject: subject)
+        for _ in 0..<20 { await Task.yield() }
+        connect(store, subject: subject)
+    }
+
+    /// The owner's completed workspace document, session and link clients on
+    /// a launched AppStore. The gate stays where the launch left it.
+    func prepareOwner(_ store: AppStore, subject: String? = nil, binding: String? = nil) {
+        let subject = subject ?? self.subject
+        let binding = binding ?? self.binding
         try? NativeOnboardingStore(snapshotURL: storeURL).save(NativeOnboardingDocument(
             accountBinding: binding, stage: .done,
             draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
         ))
-        store.testSeedNativeSignedInOwner(subject: subject, binding: binding)
         store.scheduleBookingTestCredentials = NativeSyncCredentials(subject: subject, sessionBytes: Self.session)
         store.scheduleBookingSessionOverride = Self.session
         store.scheduleBookingRecoveryAdminService = bookingService
         store.scheduleBookingRecoveryPortalService = portalService
-        store.testMarkInitialSyncCompleted(subject: subject)
-        for _ in 0..<20 { await Task.yield() }
-        connect(store, subject: subject)
     }
 
     func connect(_ store: AppStore, subject: String) {
@@ -435,6 +475,8 @@ final class Device {
 
     /// The pending-work items on the device, every owner's.
     var items: [NativeScheduleBookingPendingWork] { workStore.load() }
+
+    var hasPassMarker: Bool { items.contains(where: isPassMarker) }
 
     func stage(_ kind: NativeScheduleBookingPendingWork.Kind, binding: String? = nil) {
         do { try workStore.stage(.init(kind: kind, ownerBinding: binding ?? self.binding)) }
@@ -528,6 +570,10 @@ struct ScheduleBookingRecoveryTests {
         await closedGateDoesNothing()
         await recoveryIsIdempotent()
         await launchGateOpenRecovers()
+        await returningLaunchGateRecovers()
+        await warmActivationBookingMirror()
+        await warmActivationPortalMirror()
+        await flagOnlyMirrorWithADeadLocalLink()
         await rescheduleDraftFromTheRequestRows()
         sources(root)
 
@@ -1153,7 +1199,8 @@ struct ScheduleBookingRecoveryTests {
 
     /// The first sign-in's starting point opens the signed-in gate (as the
     /// subscription gate and a returning launch do): recovery runs there,
-    /// without waiting for a scene activation.
+    /// without waiting for a scene activation. The initial sync's pull has
+    /// committed by then (fix round 1: a mirror needs a committed pull).
     @MainActor
     static func launchGateOpenRecovers() async {
         let id = "L launch gate open"
@@ -1168,6 +1215,10 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(d.items.count, 1, "\(id): sanity: one item is staged")
         let relaunched = d.launch()
         await d.signIn(relaunched)
+        // The initial sync's committed pull. This host binary cannot run the
+        // full pull (`beginInitialSyncGate` needs a configured build), so the
+        // real delta pull and commit stand in for it.
+        _ = await relaunched.testPullDeltaIfPossible()
         try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
             accountBinding: d.binding, stage: .personalized,
             draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
@@ -1180,6 +1231,231 @@ struct ScheduleBookingRecoveryTests {
         }
         expectEqual(d.items.count, 0, "\(id) [P12-013]: the gate-open recovery removes the item")
         expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id) [P12-013]: …with the server's token")
+    }
+
+    @MainActor
+    static func isSignedIn(_ store: AppStore) -> Bool {
+        if case .signedIn = store.authenticationGateState { return true }
+        return false
+    }
+
+    /// Waits (bounded) until a pass started at a gate site has finished: the
+    /// pass-marker proof, staged last, is gone.
+    @MainActor
+    static func waitForGateSitePass(_ d: Device) async {
+        for _ in 0..<200 where d.hasPassMarker {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    /// L2 (review M5): a returning launch. The owner's sync completed on an
+    /// earlier launch (the offline-fallback cold launch, or a warm process
+    /// verified again), so no initial sync runs: the identity is applied
+    /// (`applyAuthenticatedIdentityOutcome`'s returning-user branch, through
+    /// `testActivateReturningUserSession`) and the subscription gate's exit
+    /// opens the signed-in gate. The pass runs there, before any activation:
+    /// the proof that can no longer resolve is removed. The mirror waits,
+    /// unread and unmerged, because no pull has committed since the identity
+    /// was applied; the activation's pull, then its pass, applies it.
+    /// Characterized at b974125: that pass read and merged the mirror into
+    /// the pre-pull snapshot.
+    @MainActor
+    static func returningLaunchGateRecovers() async {
+        let id = "L2 returning launch"
+        let d = bookingDevice("l2", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.failSnapshotSaves(true)
+        _ = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+        d.failSnapshotSaves(false)
+        d.stage(passMarkerProof)
+        expectEqual(d.items.count, 2, "\(id): sanity: a mirror and a proof are staged")
+        d.links.resetLog()
+        let relaunched = d.launch()
+        d.prepareOwner(relaunched)
+        expect(!isSignedIn(relaunched), "\(id): sanity: the launch starts with the signed-in gate closed")
+        relaunched.testActivateReturningUserSession(subject: d.subject, binding: d.binding)
+        await waitForGateSitePass(d)
+        let reads = d.links.log
+        observed(id, "gate=\(isSignedIn(relaunched) ? "signedIn" : "closed") proofRemoved=\(!d.hasPassMarker) "
+                 + "reads=\(reads) items=\(d.items.count)")
+        expect(isSignedIn(relaunched), "\(id): sanity: the subscription gate's exit opened the signed-in gate")
+        expect(!d.hasPassMarker, "\(id) [P12-013]: the gate-open pass removes the proof that can no longer resolve")
+        expectEqual(reads, [], "\(id) [I1]: …and reads no mirror status before a pull")
+        expectEqual(d.items.filter(isMirror).count, 1, "\(id) [I1]: the mirror waits")
+        expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id) [I1]: nothing is merged")
+        expectEqual(d.queued("settings"), 0, "\(id) [I1]: nothing is queued")
+        d.connect(relaunched, subject: d.subject)
+        await relaunched.performForegroundRefresh()
+        expectEqual(d.links.statusReads, 1, "\(id): the activation's pass reads the status once")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the activation's pull, then its pass, applies the mirror")
+        expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id) [P12-013]: …with the server's token")
+    }
+
+    // MARK: W. A warm activation: a mirror merges only after the pull (review I1)
+
+    /// The first half of a warm activation. `TradeReadyNativeApp`'s `.active`
+    /// task verifies the identity again (`activateMigratedAuthenticatedIdentity`,
+    /// which stops at its `BuildEnvironment` guard in this host binary) and
+    /// applies it through `applyAuthenticatedIdentityOutcome`'s returning-user
+    /// branch while the gate is already signed in: its consumer block, and
+    /// the subscription gate it resolves again, both start a pass before the
+    /// foreground refresh runs. Waits for that pass to finish.
+    @MainActor
+    static func applyIdentityAgain(_ store: AppStore, _ d: Device) async {
+        expect(isSignedIn(store), "sanity: a warm activation starts with the signed-in gate open")
+        store.testActivateReturningUserSession(subject: d.subject, binding: d.binding)
+        await waitForGateSitePass(d)
+        expect(!d.hasPassMarker, "sanity: the warm activation's gate-site pass ran")
+    }
+
+    /// W1: a flag-only booking mirror (a Disable whose local save failed) is
+    /// on the device, and another device has since rotated the link and
+    /// saved its settings with another field changed. The warm activation's
+    /// gate-site pass starts before the foreground pull, so it reads and
+    /// merges nothing: a merge queues the whole settings record, and the push
+    /// runs before the pull. The foreground refresh pulls, then its pass reads
+    /// the status with the pulled local token and merges the server's flag.
+    /// The other device's field and token survive in the cloud row.
+    /// Characterized at b974125: the gate-site pass merged into the pre-pull
+    /// settings, and the push wrote the old token and name over the row.
+    @MainActor
+    static func warmActivationBookingMirror() async {
+        let id = "W1 warm activation, booking"
+        let d = bookingDevice("w1", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        var later = ""
+        var readsBeforeRefresh = -1
+        var queuedBeforeRefresh = -1
+        var keptBeforeRefresh = -1
+        _ = await stageThenRelaunch(d, id, beforeActivation: { store in
+            later = d.links.freshToken()
+            d.links.bookingToken = later
+            d.links.bookingEnabled = true
+            d.links.bookingRevision += 1
+            if var row = await d.links.settingsRow() {
+                row["businessName"] = "Ada Electric & Sons"
+                row["bookingLink"] = ["token": later, "enabled": true]
+                await d.links.upsertSettings(row)
+            }
+            d.stage(passMarkerProof)
+            await applyIdentityAgain(store, d)
+            readsBeforeRefresh = d.links.statusReads
+            queuedBeforeRefresh = d.queued("settings")
+            keptBeforeRefresh = d.items.filter(isMirror).count
+        }) { store in
+            String(describing: await store.administerBookingLink(action: .setEnabled, enabled: false,
+                                                                 adminService: d.bookingService))
+        }
+        let row = await d.links.settingsRow()
+        let cloud = await d.cloudBookingLink()
+        observed(id, "before the refresh: reads=\(readsBeforeRefresh) queued=\(queuedBeforeRefresh) "
+                 + "mirrors=\(keptBeforeRefresh); cloud name=\(row?["businessName"] as? String ?? "nil") "
+                 + "token=\(cloud.token == later ? "other device's" : "other") items=\(d.items.count)")
+        expectEqual(readsBeforeRefresh, 0, "\(id) [I1]: the gate-site pass reads nothing before the pull")
+        expectEqual(queuedBeforeRefresh, 0, "\(id) [I1]: …and queues no settings record")
+        expectEqual(keptBeforeRefresh, 1, "\(id) [I1]: …and keeps the mirror for a pass after the pull")
+        expectEqual(row?["businessName"] as? String, "Ada Electric & Sons",
+                    "\(id) [I1]: the other device's field survives in the cloud row")
+        expectEqual(cloud.token, later, "\(id) [I1]: …and so does its token")
+        expectEqual(cloud.enabled, true, "\(id): the cloud row has the server's flag")
+        expectEqual(d.links.statusTokens, [later], "\(id) [I1]: the one status read carries the pulled local token")
+        expectEqual(d.localBookingLink?.token, later, "\(id): the display copy has the current token")
+        expectEqual(d.disk?.payload.settings?.businessName, "Ada Electric & Sons",
+                    "\(id): …and the other device's field")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the mirror is applied after the pull and removed")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+    }
+
+    /// W2: the same for a portal: a flag-only portal mirror, and another
+    /// device has since rotated the portal and saved the customer with its
+    /// notes changed. A portal merge queues the whole customer record.
+    /// Characterized at b974125: the push wrote the old token and notes over
+    /// the cloud customer row.
+    @MainActor
+    static func warmActivationPortalMirror() async {
+        let id = "W2 warm activation, portal"
+        let d = portalDevice("w2", portal: (portalTokenC, true))
+        defer { d.cleanup() }
+        var later = ""
+        var readsBeforeRefresh = -1
+        var queuedBeforeRefresh = -1
+        var keptBeforeRefresh = -1
+        _ = await stageThenRelaunch(d, id, beforeActivation: { store in
+            later = d.links.freshToken()
+            d.links.portals["cust-1"] = (later, true)
+            if var row = d.links.row("customers", "cust-1") {
+                row["notes"] = "Gate code 4411"
+                row["portal"] = ["token": later, "enabled": true]
+                await d.links.upsert(table: "customers", id: "cust-1", record: row)
+            }
+            d.stage(passMarkerProof)
+            await applyIdentityAgain(store, d)
+            readsBeforeRefresh = d.links.statusReads
+            queuedBeforeRefresh = d.queued("customers")
+            keptBeforeRefresh = d.items.filter(isMirror).count
+        }) { store in
+            String(describing: await store.administerPortalLink(customerID: "cust-1", action: .setEnabled, enabled: false,
+                                                                portalService: d.portalService))
+        }
+        let row = d.links.row("customers", "cust-1")
+        let cloud = d.cloudPortal()
+        observed(id, "before the refresh: reads=\(readsBeforeRefresh) queued=\(queuedBeforeRefresh) "
+                 + "mirrors=\(keptBeforeRefresh); cloud notes=\(row?["notes"] as? String ?? "nil") "
+                 + "token=\(cloud.token == later ? "other device's" : "other") items=\(d.items.count)")
+        expectEqual(readsBeforeRefresh, 0, "\(id) [I1]: the gate-site pass reads nothing before the pull")
+        expectEqual(queuedBeforeRefresh, 0, "\(id) [I1]: …and queues no customer record")
+        expectEqual(keptBeforeRefresh, 1, "\(id) [I1]: …and keeps the mirror for a pass after the pull")
+        expectEqual(row?["notes"] as? String, "Gate code 4411",
+                    "\(id) [I1]: the other device's field survives in the cloud customer row")
+        expectEqual(cloud.token, later, "\(id) [I1]: …and so does its portal token")
+        expectEqual(cloud.enabled, true, "\(id): the cloud row has the server's flag")
+        expectEqual(d.links.statusTokens, [later], "\(id) [I1]: the one status read carries the pulled local token")
+        expectEqual(d.localPortal?.token, later, "\(id): the display copy has the current token")
+        expectEqual(d.disk?.payload.customers?.first?.notes, "Gate code 4411", "\(id): …and the other device's notes")
+        expectEqual(d.items.count, 0, "\(id) [P12-013]: the mirror is applied after the pull and removed")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+    }
+
+    /// X: a flag-only booking mirror whose local link the server no longer
+    /// has. Another device rotated the link and then disabled it, and neither
+    /// of its settings saves reached the cloud, so the pull brings nothing.
+    /// The status read carries the local token and the server says it is not
+    /// current, so recovery applies nothing and drops the item: it never
+    /// writes back a token the server did not confirm. The screen shows the
+    /// local link as needing recovery; the other device's own save brings
+    /// the current one.
+    /// Characterized at b974125: the read sent no token, the server's flag
+    /// was merged into the dead link and the push wrote it to the cloud row.
+    @MainActor
+    static func flagOnlyMirrorWithADeadLocalLink() async {
+        let id = "X flag-only mirror, dead local link"
+        let d = bookingDevice("x", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let store = await stageThenRelaunch(d, id, beforeActivation: { _ in
+            d.links.bookingToken = d.links.freshToken()
+            d.links.bookingEnabled = false
+            d.links.bookingRevision += 2
+        }) { store in
+            String(describing: await store.administerBookingLink(action: .setEnabled, enabled: false,
+                                                                 adminService: d.bookingService))
+        }
+        let recoveryReads = d.links.statusTokens
+        let cloud = await d.cloudBookingLink()
+        let title = await bookingScreen(store, d)
+        observed(id, "read token=\(recoveryReads.map { $0 == bookingTokenA ? "local" : ($0 == nil ? "none" : "other") }) "
+                 + "local.enabled=\(d.localBookingLink?.enabled.description ?? "nil") "
+                 + "cloud.enabled=\(cloud.enabled?.description ?? "nil") items=\(d.items.count) screen=\(title)")
+        expectEqual(recoveryReads, [bookingTokenA], "\(id) [I1]: the one status read carries the local token")
+        expectEqual(d.items.count, 0, "\(id): the server does not confirm it: the item is dropped")
+        expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id): the display copy keeps its token (none is invented)")
+        expectEqual(d.localBookingLink?.enabled, true, "\(id) [I1]: …and nothing is merged into the dead link")
+        expectEqual(cloud.token, bookingTokenA, "\(id): the cloud row keeps its token")
+        expectEqual(cloud.enabled, true, "\(id) [I1]: …and recovery writes nothing back to it")
+        expectEqual(d.links.mutations, [], "\(id): recovery never changes the server")
+        expectEqual(title, "Needs recovery", "\(id): the owner's screen never offers the dead link")
     }
 
     // MARK: F. Separate finding (not P12-013)
@@ -1234,9 +1510,44 @@ struct ScheduleBookingRecoveryTests {
         let foreground = body(store, from: "    func performForegroundRefresh() async {") ?? ""
         expect(foreground.contains("await recoverScheduleBookingPendingWorkIfPossible()"),
                "S [P12-013]: the foreground refresh recovers pending booking and portal work")
+        // Fix round 1 (review I1): the textual order below is not what keeps
+        // a mirror out of a pre-pull snapshot (the gate sites also start
+        // passes, before this refresh runs). A mirror is read and merged only
+        // after a pull commits since the identity was applied or this refresh
+        // began: W1, W2 and L2 prove it behaviourally; the pins below only
+        // locate the mark's reset and set points.
         if let sync = foreground.range(of: "await syncNowAndWait(trigger: .foreground)"),
            let recover = foreground.range(of: "await recoverScheduleBookingPendingWorkIfPossible()") {
-            expect(sync.lowerBound < recover.lowerBound, "S: …after its sync, so the pulled request states are current")
+            expect(sync.lowerBound < recover.lowerBound, "S: the foreground refresh's own pass follows its sync (textual)")
+        }
+        let resetMark = "scheduleBookingRecoveryPullMark = nil"
+        let setMark = "markScheduleBookingRecoveryPullCommitted(subject: subject)"
+        if let reset = foreground.range(of: resetMark),
+           let sync = foreground.range(of: "await syncNowAndWait(trigger: .foreground)") {
+            expect(reset.upperBound < sync.lowerBound, "S [I1]: the foreground refresh clears the pull mark before its sync")
+        } else {
+            expect(false, "S [I1]: the foreground refresh clears the pull mark")
+        }
+        let outcome = body(store, from: "    private func applyAuthenticatedIdentityOutcome(") ?? ""
+        if let reset = outcome.range(of: resetMark), let consumers = outcome.range(of: launch) {
+            expect(reset.upperBound < consumers.lowerBound,
+                   "S [I1]: applying the identity clears the pull mark before its consumer block starts a pass")
+        } else {
+            expect(false, "S [I1]: applying the identity clears the pull mark")
+        }
+        let initialSync = body(store, from: "    private func beginInitialSyncGate(") ?? ""
+        if let commit = initialSync.range(of: "try self.commitSnapshot(candidate)"),
+           let mark = initialSync.range(of: "self." + setMark) {
+            expect(commit.upperBound < mark.lowerBound, "S [I1]: the initial sync marks its committed pull")
+        } else {
+            expect(false, "S [I1]: the initial sync marks its committed pull")
+        }
+        let deltaPull = body(store, from: "    private func pullDeltaAndCommit() async -> NativeSyncPullResult {") ?? ""
+        if let commit = deltaPull.range(of: "do { try syncCursorStore.save(committedCursor) }"),
+           let mark = deltaPull.range(of: setMark) {
+            expect(commit.upperBound < mark.lowerBound, "S [I1]: a delta pull marks its commit")
+        } else {
+            expect(false, "S [I1]: a delta pull marks its commit")
         }
         // Launch: every point that opens the signed-in gate after the
         // initial sync (the same points that replay widget actions).
@@ -1255,5 +1566,11 @@ struct ScheduleBookingRecoveryTests {
         // The pass re-checks the account boundary after its awaits.
         let recovery = body(store, from: "    func recoverScheduleBookingPendingWork(") ?? ""
         expect(recovery.contains("accountBoundaryGeneration"), "S: recovery compares the account generation")
+        // Review M6: one bounded, counts-only line per pass.
+        let lines = recovery.components(separatedBy: "\n").filter { $0.contains("TradeReadyScheduleBookingRecovery stage=pass") }
+        expectEqual(lines.count, 1, "S [M6]: a pass logs one diagnostic line")
+        let line = lines.first?.lowercased() ?? ""
+        expect(!line.isEmpty && !["token", "customer", "request", "binding", "subject", "item"].contains(where: line.contains),
+               "S [M6]: …with counts only (no token, customer, request or owner)")
     }
 }
