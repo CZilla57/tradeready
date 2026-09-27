@@ -305,16 +305,20 @@ while its resolve can still succeed (contract §7); recovery never resolves. Hos
 **Note (2026-09-27, Phase 12 task 12.00b.2-K, defect `P12-016`):** "Apply intake after verified
 pull" had no production caller: `runBookingIntakeAfterVerifiedPull` ran only in host tests, so a
 pulled booking never became a job on a native-only account. Intake now runs where RN converts
-(`App.tsx:396`, `context/AuthContext.tsx:118-120`): at the signed-in gate-open points (a cold
-launch, after the initial sync's commit) and in `performForegroundRefresh` after its sync, before
-pending-work recovery. It runs only for the verified owner after the initial sync, and only after a
+(`App.tsx:396`, `context/AuthContext.tsx:118-120`): where the subscription gate opens the signed-in
+gate straight after the initial sync's commit (a cold launch), and in `performForegroundRefresh`
+after its sync, before pending-work recovery. It runs only for the verified owner after the initial sync, and only after a
 pull that committed every table in that launch or activation and started under the current account
 generation; it converts from that pull (`runBookingIntakeIfPossible`) instead of pulling again. A
 failed or partial pull converts nothing: a pull that missed the jobs table could miss the job another
 device made from the booking, and the push after a conversion would replace it.
 `runBookingIntakeAfterVerifiedPull` keeps its own pull for the host tests; both run the same intake.
 A failed intake save is reported with the sync status code `intake/local-commit`, not in
-`migrationMessage`. Host evidence: `native/run-schedule-booking-recovery-tests.sh` section K.
+`migrationMessage`. Review fixes (same date): a pull taken before or while a gate waits for the owner
+(onboarding, the starting point, the paywall) does not count, so a gate that opens after a wait leaves
+conversion to the next activation; and the recheck links a request to a `jbk_` job already on the
+device and carries a repeat customer's blank-field fill, as RN does (contract §8 note). Host evidence:
+`native/run-schedule-booking-recovery-tests.sh` section K.
 
 ### 8.09 — Calendar UI
 
