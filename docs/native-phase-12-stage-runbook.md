@@ -313,7 +313,9 @@ proceed to Stage B until resolved.
    ```
 2. Complete 12.04 through step 15 (a processed native TestFlight build N).
 3. **Owner action — build the Expo release branch's §5.3 change** (drain/clear the
-   stale queue before any pull; `RB §5.3`), then:
+   stale queue before any pull; `RB §5.3`). Start it only after accepting `RB §5.3` as
+   final, which comes after the Phase 12 final-review fix wave's re-review (`RB §5.3`,
+   "When the build may start"). Then:
    ```sh
    # In a separate clone or worktree, on the Expo release branch (RB §4).
    git switch <EXPO_RELEASE_BRANCH>
@@ -341,7 +343,8 @@ proceed to Stage B until resolved.
 6. **Owner action — rehearse** per `RB §8.2` steps 1–18 (T0: Expo L → native N; T1:
    native N → Expo R; T2: Expo R → native N2), then `RB §8.2`'s `P12-RB-5` (SC4
    clean-install check) and the signed-out variant, then `P12-RB-7` (`RB §8.2`
-   D1–D6). Use the exact archive/export commands from `RB §10.1` for N2 via:
+   D1–D6), then the L→R check (`RB §8.2` U1–U3). Use the exact archive/export commands
+   from `RB §10.1` for N2 via:
    ```sh
    sh native/phase-12-testflight-upload.sh --version <N2_VERSION> --build <N2_BUILD> \
      --execute --i-am-the-owner
@@ -362,7 +365,7 @@ Versions (L < N < R < N2)
 | R  | <R_VERSION>  | <R_BUILD>  | TestFlight | <TIME> |
 | N2 | <N2_VERSION> | <N2_BUILD> | TestFlight | <TIME> |
 
-Steps 1-18, S1-S5, D1-D6: time, expected (RB §8.2), observed, pass/fail, sign-in asked?,
+Steps 1-18, S1-S5, D1-D6, U1-U3: time, expected (RB §8.2), observed, pass/fail, sign-in asked?,
   support-report codes (see RB §8.3 for the full per-step table — reproduced there, not
   duplicated here).
 Readiness check results (steps 5, 6, 17; S2; D2, D6).

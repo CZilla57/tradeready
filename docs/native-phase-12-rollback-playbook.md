@@ -60,7 +60,7 @@ staging exists (D4).
 |---|---|---|
 | The rehearsal (plan 12.06 step 5) | owner | §8 and evidence index rows P12-RB-2 to P12-RB-5 and P12-RB-7 |
 | Staffing (step 6) | owner | §8.4 and row P12-RB-6 |
-| The Expo-side rule (1) of the rollback data decision: E-1 detects at app start, clears (recommended) or holds, and pulls; E-2 to E-4 (R48). Until the pull, E-1 also holds the widget and Siri replay and invoice creation (R49) | the owner decides who builds it on the Expo release branch. The branch owner records E-1's keys, the clear-or-hold choice, the marker path under `expo-file-system` and the owner's acceptance of residual 5 | §5.3; §5.6 item 5 |
+| The Expo-side rule (1) of the rollback data decision: E-1 detects at app start, clears (recommended) or holds, and pulls; E-2 to E-4 (R48). Until the pull, E-1 also holds the widget and Siri replay and invoice creation (R49) | the owner decides who builds it on the Expo release branch, and starts the build only after accepting §5.3 as final (after the final-review fix wave's re-review). The branch owner records E-1's keys, the clear-or-hold choice, the marker path under `expo-file-system`, the fingerprint, and the owner's acceptance of residuals 5 and 6 | §5.3; §5.6 items 5 and 6 |
 | Defect `P12-012` (S1): the Expo build pushes its stale pre-upgrade queue before it pulls | owner: a ruling on Stage A entry (R43), then the §5.3 build | charter §10; §5.3 |
 | Version numbers (VER-1) | owner; 12.01 sets the scheme | §3 |
 | The Expo release branch itself | owner | §4 |
@@ -234,9 +234,9 @@ here as a requirement for the Expo release branch. It is not implemented here.
 the section after Sync now). The support script (§7.2) asks for it before any rollback
 advice.
 
-**What it does** (`AppStore.prepareRollbackReadiness`, `N/AppStore.swift:8273`):
+**What it does** (`AppStore.prepareRollbackReadiness`, `N/AppStore.swift:8343`):
 
-1. It reads the device's local state (`AppStore.rollbackReadiness`, `N/AppStore.swift:8149`).
+1. It reads the device's local state (`AppStore.rollbackReadiness`, `N/AppStore.swift:8219`).
 2. If none of the fail-closed conditions below holds, it applies any widget or Siri
    actions waiting in the App Group.
 3. It runs one full manual sync (push, then pull).
@@ -248,7 +248,7 @@ an ordinary sync writes.
 
 **What it shows.** Either "Ready: everything on this device is saved to the cloud." or
 "Not ready yet: …" followed by each reason
-(`NativeRollbackReadinessCopy`, `N/NativeSupportDiagnostics.swift:411`). A neutral note
+(`NativeRollbackReadinessCopy`, `N/NativeSupportDiagnostics.swift:413`). A neutral note
 line, starting "Also:", may follow either one. It reports booking and portal link work
 (below) and never changes the result. The support report (schema version 4) carries the
 last check under `rollbackReadiness`:
@@ -296,9 +296,9 @@ no native-only business data, so "Ready" does not depend on it:
 
 The check counts this account's items only and never removes one. Launch and every
 activation recover them (2026-09-26, 12.00b.2-I, defect `P12-013`):
-`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10841`) runs for the
+`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10960`) runs for the
 verified owner after the initial sync, from the signed-in gate and from
-`performForegroundRefresh` after its sync (`N/AppStore.swift:7987`).
+`performForegroundRefresh` after its sync (`N/AppStore.swift:8057`).
 
 - A mirror waits for a pull (review fix round 1, 2026-09-26). It is read and merged only
   after a pull has committed the settings and customer rows since the identity was
@@ -308,6 +308,20 @@ verified owner after the initial sync, from the signed-in gate and from
   sites fire before the pull, so their pass leaves mirrors to the pass that follows
   `performForegroundRefresh`'s own pull. If that pull fails, mirrors wait for a later
   activation.
+- The pull must also be current (final review M1, 2026-09-27; defect `P12-013`'s
+  review residual R54 N1). A pull does not count in three cases:
+  - it began before an account boundary, even if the same owner is back by the time it
+    commits;
+  - it began before the scene last entered the background: going to the background
+    clears the mark, and a pull still in flight then cannot set it again;
+  - it was taken before or while the gate waited for the owner (onboarding, the
+    starting point, the paywall).
+
+  So a waiting gate's exit leaves mirrors to the next activation's pull, as booking
+  intake already did (defect `P12-016`). If a recovery merge's local save fails, the
+  item stays for the next pass. The pass records the bounded code
+  `recovery/local-commit` in the sync status and writes no message to the screen
+  (final review M5).
 - What the status read proves. A Create or Rotate mirror is applied only if the read of
   its staged token says `tokenValid`. An Enable or Disable mirror carries no token: its
   read carries the local link's token, because the merge writes that token back with the
@@ -318,7 +332,7 @@ verified owner after the initial sync, from the signed-in gate and from
   reschedule and the job still has the proven schedule. Recovery never resolves; the
   owner does, by tapping "I've rescheduled it" again (`AppStore.acceptBookingReschedule`,
   defect `P12-015`, fixed). An accept that could not finish shows why on the screen the
-  owner used, and keeps its proof (`N/AppStore.swift:10289-10292` removes it only after
+  owner used, and keeps its proof (`N/AppStore.swift:10391-10394` removes it only after
   the server confirms) until the owner taps again or the request moves on.
   Proofs are checked in every pass, before or after the pull: the check reads local
   state only, writes no record and queues nothing, so it cannot push a pre-pull copy.
@@ -326,9 +340,11 @@ verified owner after the initial sync, from the signed-in gate and from
 An item also leaves when the flow that staged it succeeds on a later try, or at the
 account's sign-out scrub. A count that stays is a mirror waiting for a committed pull
 and a successful status read (for example offline), or a proof waiting for the owner.
-Each pass that finds items prints one counts-only console line,
+Each pass that finds items logs one counts-only line,
 `TradeReadyScheduleBookingRecovery stage=pass applied=… dropped=… kept=… stopped=…`
-(`stopped` counts items left because the account changed during the pass).
+(`stopped` counts items left because the account changed during the pass). It goes to
+the unified log, subsystem `com.tradeready.native`, category `diagnostics`, so a
+TestFlight or App Store build keeps it (final review M6; monitoring doc §4).
 
 **Not ready, fail-closed: nothing was sent.** The drain outcome is `skipped`.
 
@@ -484,12 +500,12 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     `Application Support/TradeReadyNative/native-run-marker.json` holds
     `{"run":<n>,"schemaVersion":1}` (`N/NativeRunMarker.swift`).
     - Every native launch adds one to `run` after its launch work
-      (`N/AppStore.swift:843`), including a signed-out or blocked launch.
+      (`N/AppStore.swift:868`), including a signed-out or blocked launch.
     - A missing or unreadable marker restarts at a random run in 1…2,147,483,647, not
       at a fixed value (review fix round 3). The chance that a restart repeats the run
       R recorded is about one in two billion.
     - No account boundary removes it. The sign-out's `.live` scrub deletes `store.json`
-      and its backup (`N/Domain/SnapshotRepository.swift:252-253`) but not this file. A
+      and its backup (`N/Domain/SnapshotRepository.swift:258-259`) but not this file. A
       deletion (`.all`) keeps it too.
     - Deleting the app removes it, together with R's AsyncStorage.
     - It holds no account data.
@@ -501,31 +517,53 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     `native/run-rollback-readiness-tests.sh`, section M.
   - **R's record.** R keeps one small AsyncStorage key, for example `__nativeRun` (the
     branch owner names it), holding `{"run":<n>,"state":"pending"|"seen"}`, plus a
-    fingerprint in the one case below. The record is device state, so the Expo sign-out
-    (E-4) keeps it.
-  - **A new native run** is a marker whose `run` differs from the record's.
-    - **No record yet.** The native directory `Application Support/TradeReadyNative/`,
-      or any file in it, also counts, even with no marker. The directory is permanent
-      (every native launch creates it, `N/AppStore.swift:599-601`), so it cannot tell
-      one run from the next. When it fires with no marker (a native build that never
-      reached `N/AppStore.swift:843`, or whose marker writes all failed), R records the
-      sentinel run `0`. No marker can hold 0 (`run` is at least 1,
-      `N/NativeRunMarker.swift:44`), so the fallback fires once, and any later marker
-      still counts as new.
-    - **A marker R cannot use counts as a new native run** (review fix round 4). That
-      is a file R cannot open or parse, or one whose `schemaVersion` is not 1 or whose
-      `run` is not a whole number of at least 1: the tests the native build applies to
-      the same file (`N/NativeRunMarker.swift:40-46`). This is the fail-safe choice.
-      Missing a native run lets R push a stale queue (the `P12-012` class), while a
-      detection too many costs only a pull and whatever R had not yet synced.
-
-      R then records the sentinel run `0` with a short fingerprint of the file's
-      contents, or of "unreadable" when it cannot open the file. The branch owner picks
-      the fingerprint, for example a 32-bit hash, so the record stays small. A later
-      launch counts the marker as new only when it becomes usable or its fingerprint
-      differs from the recorded one; a record without a fingerprint, such as the
-      directory fallback's, differs from every fingerprint. So an unusable marker fires
-      once for each change to the file, not at every launch.
+    fingerprint in the one case below. `run` is the **last usable run** R detected: the
+    `run` of the last usable marker, or the sentinel `0` from the directory fallback. An
+    unusable marker never changes it (final review I1, 2026-09-27). The record is device
+    state, so the Expo sign-out (E-4) keeps it.
+  - **Three states of the marker file.** R reads the file at app start and puts it in
+    exactly one state. The native build's own `NativeRunMarker.load()` returns nil for
+    both a missing and an unusable file (`N/NativeRunMarker.swift:40-46`). R must not copy
+    that, because the two states lead to opposite actions.
+    - **Missing:** there is no file at the marker path.
+    - **Usable:** the file opens and parses, its `schemaVersion` is 1, and its `run` is
+      a whole number of at least 1. These are the tests the native build applies to the
+      same file (`N/NativeRunMarker.swift:40-46`).
+    - **Unusable:** the file exists but is not usable. R cannot open it, cannot parse
+      it, or its `schemaVersion` or `run` fails the tests.
+  - **A new native run** is decided by these rules, in order. Anything else is "no new
+    native run", and E-1 does nothing.
+    1. **Usable marker:** a new native run exactly when its `run` differs from the
+       record's last usable run, or when there is no record yet. R then records that
+       `run` and clears any fingerprint. A usable marker whose `run` equals the last
+       usable run changes nothing, not even the fingerprint. So a marker that becomes
+       readable again after a launch that found it unusable is **not** a new native
+       run: a transient read failure never fires a second detection, and a later
+       transient failure that reads the same way ("unreadable") does not fire again.
+    2. **Unusable marker** (review fix round 4): a new native run exactly when its
+       fingerprint differs from the recorded one. A record with no fingerprint (no
+       record at all, or one left by a new usable run or the directory fallback)
+       differs from every fingerprint. R records the fingerprint and **keeps the last
+       usable run unchanged**. The fingerprint is a short hash of the file's contents, or of
+       "unreadable" when R cannot open the file. The branch owner picks it, for example a
+       32-bit hash, so the record stays small. So an unusable marker fires once for each
+       change to the file, not at every launch. This is the fail-safe choice: missing a
+       native run lets R push a stale queue (the `P12-012` class), while a detection too
+       many costs a pull and whatever R had not yet synced.
+    3. **Missing marker, no record yet, and the native directory
+       `Application Support/TradeReadyNative/` exists** (the directory fallback). The
+       directory or any file in it counts, even with no marker. It is permanent (every
+       native launch creates it, `N/AppStore.swift:624-626`), so it cannot tell one run
+       from the next. It fires with no marker when a native build never reached
+       `N/AppStore.swift:868`, or when all its marker writes failed. R records the sentinel
+       run `0`. No marker can hold 0 (`run` is at least 1, `N/NativeRunMarker.swift:44`),
+       so the fallback fires once, and any later usable marker still counts as new.
+    4. **Missing marker and no native directory: no native run.** The device never ran
+       the native build, for example the App Store Expo build L updated straight to R.
+       E-1 detects nothing, clears nothing and drops nothing. R's queue, including edits
+       L left unsynced, is pushed as usual. This is §8.2's L→R check (steps U1–U3). A
+       missing marker with a record already present is also not a new run: E-1 needs a
+       usable or unusable marker to fire again.
     - `store.json` alone is never a signal. A signed-out native device has none, yet its
       stale queue survives (item 2).
   - **On a new native run, one write.** Before anything else runs, R makes one
@@ -571,14 +609,30 @@ Citations are at `9e84478`; they are React Native files, read-only here.
 
       The push-token save and the Square-token scrub can change settings at any launch
       (`utils/pushToken.ts:26`, `utils/storage/settings.ts:96-103`). While the run is
-      pending, `enqueue` (`utils/sync.ts:99-106`) does not queue `settings`
-      (`utils/storage/settings.ts:79`). R records each changed leaf path in its own key
-      instead, for example `__nativeRunHeldSettings`. At each save it compares the new
-      settings with the stored ones and keeps every value that was added, changed or
-      removed, under its full path. A nested object is held by its leaves, such as
-      `providerKeys.square` (which the scrub removes) or `pushToken.token`, so applying
-      the hold never carries stale sibling values over the pulled object. A list or a
-      plain value is a leaf.
+      pending, `saveSettings` does not queue `settings` (its `enqueue` call,
+      `utils/storage/settings.ts:79`, is skipped). R records each changed leaf path in its
+      own key instead, for example `__nativeRunHeldSettings`.
+      - **Where the comparison runs (final review I2, 2026-09-27).** Inside
+        `saveSettings`, **before** its AsyncStorage write
+        (`utils/storage/settings.ts:75-78`). It compares the public settings being saved
+        (`publicSettings`, with the secure fields removed, `:71-74`) with the stored
+        public settings (`AsyncStorage.getItem(KEYS.settings)` read at that moment). It
+        adds every value that was added, changed or removed, under its full path, to the
+        paths already held.
+      - **Why not in `enqueue` (`utils/sync.ts:99-106`).** `saveSettings` has already
+        written the new value when it calls `enqueue`, so the stored settings there equal
+        the new ones. The diff would always be empty, and the pull would silently drop
+        R's pending settings edits (`utils/sync.ts:293-295`).
+      - **Why not a baseline taken at the detection** (the alternative). It would be a
+        copy of the whole settings object, which can exceed the 1,024-character limit
+        that keeps the detection's one write atomic (below), and it would have to survive
+        until the pull.
+      - **How paths are held.** A nested object is held by its leaves, such as
+        `providerKeys.square` (which the scrub removes) or `pushToken.token`, so applying
+        the hold never carries stale sibling values over the pulled object. A list or a
+        plain value is a leaf.
+      - **The check.** §8.2 step 9's ` r0` check fails if the comparison ran after the
+        write.
     - **Widget and Siri actions wait.** R does not run its widget and Siri replay
       (`replayWidgetActions`) while the run is pending: not at session start
       (`context/AuthContext.tsx:108`), not after a foreground sync (`:129`) and not in
@@ -630,7 +684,12 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     success, in this order:
     1. apply the held leaf paths over the pulled settings, save the result and queue
        that settings record. This one save bypasses the hold: it runs while the run is
-       still pending, and it queues the record instead of recording leaf paths;
+       still pending, and it queues the record instead of recording leaf paths. It goes
+       through `saveSettings`, even when no path is held, so its notification sweep
+       (`syncNotifications`, `utils/storage/settings.ts:81`) runs over the pulled
+       records. That sweep re-arms the local reminders that every sweep while pending
+       cancelled (§5.6 item 5; final review, R50 concern 4). The pull alone writes raw
+       and runs no sweep (`utils/sync.ts:287`, `:294`, `:305`);
     2. then record the run as seen and remove the held paths. From here invoices can be
        created again: by hand, by auto-invoice, by the recurring generator or by an
        import;
@@ -647,19 +706,50 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     deleted or never reached the cloud (§5.6 item 4), is skipped and removed, as the
     replay does today on any build (`utils/widgetActions.ts:104-105`, `:112-115`,
     `:249-251`). E-1 keeps that rule. The replay is R's existing one in every other way
-    too: like today, it does not check which account queued an action, and the Expo
-    sign-out's App Group wipe (E-4) is what keeps one account's actions from another.
+    too: like today, it does not check which account queued an action (a queued action
+    carries no owner, `utils/widgetActions.ts:37-52`). The Expo sign-out's App Group
+    wipe (E-4) separates accounts only when the account change goes through the Expo
+    sign-out. It does not cover an account change made in the native build before R
+    runs. That case is §5.6 item 6, which needs the owner's acceptance.
 
     Held paths that belong to another account are discarded, never applied: the
     other-owner path and the Expo sign-out (E-4) remove them.
   - **Invariants.**
     - **R never drops an edit it made after a detection.** Only a later detection drops
-      it: a later native run (below), or a change to a marker R cannot use (above).
-    - **R never drops a widget or Siri action because of E-1.** While the run is pending
-      it leaves the App Group queue alone, and it replays the queue once the run is
-      seen, after the pull has brought the jobs back. The replay's existing rules still
-      drop an action it cannot apply, such as a timer action whose job is missing
+      it: a later native run (below), or a change to a marker R cannot use (above). A
+      missing marker on a device with no native directory, and a marker that becomes
+      readable again with the run R last recorded as usable, are never detections (the
+      rules above, final review I1). So an L→R update never drops R's unsynced queue.
+      A transient read failure drops it at most once: at the launch that could not read
+      the marker (the fail-safe of rule 2), never again when the marker reads back
+      unchanged.
+    - **R never drops a queued widget or Siri action because of E-1.** This covers the
+      App Group `widgetActions` queue: timer start and stop, trips and expenses. While
+      the run is pending R leaves that queue alone, and it replays the queue once the
+      run is seen, after the pull has brought the jobs back. The replay's existing rules
+      still drop an action it cannot apply, such as a timer action whose job is missing
       (above), and the Expo sign-out's App Group wipe (E-4) still removes the queue.
+
+      Two kinds of handoff are **not** held (final review, R50 NB5). R still consumes
+      them while pending:
+      - the On My Way stash `pendingOpenUrl` (`App.tsx:541-545`);
+      - a widget deep link to a job.
+
+      Either can name a job R has cleared, and then it does nothing
+      (`screens/JobDetailScreen.tsx:832`). The link is gone, but no data is lost: the
+      user opens the job again after the pull.
+    - **The replay can land after in-app timer changes** (final review, R50 NB3). An
+      action waits until the pull, so it can apply after an in-app clock-in or clock-out
+      the user made on the same job while pending. That job is one R lists then, so one
+      R created in the window. Two outcomes:
+      - A queued Start opens a session back-dated to the tap, after the in-app session
+        closed. `applyClockIn` refuses only while a session is running
+        (`utils/timeTracking.ts:107`).
+      - A queued Stop closes the newer in-app session at zero length, because the end is
+        clamped to its start (`utils/timeTracking.ts:128`).
+
+      That job's billed hours can then be wrong until the user corrects the session
+      (§5.6 item 5).
     - **R never numbers an invoice against the cleared list.** Invoice creation waits
       until the run is seen.
     - **The pull never silently reverts an edit R made.** Apart from settings, nothing R
@@ -706,10 +796,15 @@ Citations are at `9e84478`; they are React Native files, read-only here.
   - **The branch owner records** the record key, the clear or hold choice, the marker
     path, the fingerprint and the pending-state wording. The rehearsal checks:
     - R's first action offline, with a widget tap waiting from before R opened and the
-      invoice block (§8.2 steps 4, 8 and 9);
+      invoice block (§8.2 steps 4, 8 and 9). Step 9's ` r0` check also shows that the
+      settings hold compares before `saveSettings` writes;
     - the relaunch case (§8.2 step 12);
     - the signed-out native case (§8.2 steps S1–S5);
-    - R starting signed out (§8.2 step D3).
+    - R starting signed out (§8.2 step D3);
+    - a device that never ran the native build, the App Store Expo build L updated
+      straight to R (§8.2 steps U1–U3; final review I1). E-1 must detect nothing, and
+      L's unsynced edit must reach the cloud. This is the check that catches a missing
+      marker treated as unusable.
 - **E-2.** Show an unsynced-changes warning when the Expo build cannot confirm that the
   native build's changes were drained. For example: "Changes made in the newer version
   that hadn't finished uploading may be missing. Open the newer version again to upload
@@ -741,6 +836,14 @@ owner assigns to the Expo release branch outside Phase 12's lanes. Until it is b
 - the rehearsal (§8) cannot pass for a device upgraded from the Expo build;
 - §2.2 condition 4 is not met;
 - defect `P12-012` stays open (charter §10).
+
+**When the build may start** (final review Recommendation 6, 2026-09-27). The Expo
+release branch build of E-1 to E-4 starts only after the owner accepts this §5.3 as
+final. That acceptance comes after the Phase 12 final-review fix wave's re-review, and
+the owner records it in the decision log (charter §9). The fix wave corrected two
+Important defects in this text (I1: the unusable-marker rule; I2: where the settings
+hold compares). An Expo build begun from an earlier draft could carry them, and both
+lose R's unsynced edits.
 
 ### 5.4 Backend compatibility in both directions (plan 12.06 step 3)
 
@@ -795,6 +898,16 @@ The rehearsal (P12-RB-2, P12-RB-3) checks both directions on a device.
    wins: the Expo-window edit to that one record is overwritten. The mitigation is the
    drain before any advisory (§5.1, §7.2 part A).
 
+   Two more effects of the same queued change (final review, R50 NB4):
+   - **A job still in the native queue.** R's pull does not bring it back, so R's
+     post-pull replay skips and removes a widget or Siri timer action for that job
+     (`utils/widgetActions.ts:104-105`, `:112-115`, `:249-251`). The tap is lost, and
+     the job returns only when N2 pushes it at the re-upgrade.
+   - **An invoice still in the native queue.** R numbers its invoices from the ones it
+     pulled (`utils/invoiceNumber.ts:30-51`), so an invoice R creates after the pull can
+     take the number of that native invoice. N2 pushes the native invoice later, and
+     the two share a number.
+
    The rehearsal records the observed winner (§8.2 step 16, row P12-RB-3). A lost edit there
    matches this residual. It is a new defect only if the owner rules so in the decision
    log.
@@ -829,14 +942,50 @@ The rehearsal (P12-RB-2, P12-RB-3) checks both directions on a device.
      already sent to customers. So a duplicate from this window is never an invoice.
    - **Widget and Siri actions wait** in the App Group and are applied after the pull. A
      timer action whose job is not in the cloud is skipped then, as on any build.
+     Because they wait, an action can land after an in-app timer change the user made
+     in the window, on a job R created then: a back-dated session, or a zero-length
+     stop. That job's billed hours can be wrong until the user corrects the session
+     (§5.3 E-1 invariants; final review, R50 NB3).
    - **Settings are the pre-native copy**, and the pending notice says they may be out
      of date. A new job starts with the pre-native labor rate. A settings change made in
      the window is applied after the pull.
+   - **Local reminders are off until the pull** (final review, R50 concern 4). Every
+     notification sweep while pending cancels all scheduled local notifications
+     (`utils/notifications.ts:109`), then rebuilds them from the cleared collections
+     (`:92-105`), so none is scheduled. The sweeps run at session start and on
+     foreground (`context/AuthContext.tsx:51`, `:131`) and on every collection or
+     settings save (`utils/storage/collections.ts:32`, `:53`, `:74`,
+     `utils/storage/settings.ts:81`). This covers invoice follow-ups, appointments,
+     recurring-invoice, estimate and review nudges. Completion step 1 runs one sweep over
+     the pulled records (§5.3 E-1), which re-arms the reminders still in the future. A
+     reminder whose time fell inside the window is skipped, because a sweep schedules
+     only future times (`utils/notifications.ts:139`, `:268`). The Worker's server-side
+     sweeps are unaffected.
 
    This is not data loss. It needs the owner's acceptance with the §5.3 build. If the
    owner rules for the hold instead, this residual is replaced by the hold's replay rule
    (§5.3 E-1). The invoice block stays either way, because a hold's invoices lack those
    numbered in the native window.
+6. **R's replay applies an action queued under another account** (final review, R50
+   concern 2). An action in the App Group `widgetActions` queue carries no owner
+   (`utils/widgetActions.ts:37-52`), and R's replay does not check one. Timer actions
+   need their job id in R's data, so another account's timer actions are skipped. Trip
+   and expense actions need no job, so they are applied to whichever account R is
+   signed in as (`utils/widgetActions.ts:136-224`). The Expo sign-out's wipe (E-4)
+   separates accounts only when the account change goes through it.
+
+   The case it misses:
+   - R's AsyncStorage still holds account X's older Expo session.
+   - In the native window the user switched to account A in the native build. The
+     native switch wipes the App Group, and A then queued trips or expenses from the
+     widget or Siri.
+   - R starts signed in as X, and after its pull replays A's trips and expenses into
+     X's data.
+
+   That is a cross-account write, S1 in kind, but narrow and pre-existing: any Expo
+   build replays this way. It needs the owner's acceptance in the decision log (charter
+   §2 rule 4), or a branch change that holds the replay until the owner of the queue is
+   known.
 
 ## 6. The rollback, step by step
 
@@ -1053,13 +1202,22 @@ What support does in part B (§5.3 E-1, §5.6 item 5):
   customer or job they created in the meantime is kept. If it repeats one from the
   cloud, they can delete the extra copy once nothing they added is only on it. This
   never applies to invoices: R creates none before the pull, so two invoices are two
-  different invoices, and support never tells the user to delete one. Two invoices with
-  the same number mean R was built without the invoice block: escalate as S2 (charter
-  §2).
+  different invoices, and support never tells the user to delete one.
+- **Two invoices with the same number.** There are three possible causes (final review,
+  R50 NB4):
+  - the user typed that number by hand (`screens/AddInvoiceScreen.tsx:88`);
+  - a native invoice was still queued when R was installed, so R's numbering after
+    the pull could not see it (§5.6 item 2);
+  - R was built without the invoice block.
+
+  Ask which invoice the user created by hand, and never tell them to delete either
+  one. Escalate as S2 (charter §2) when neither of the first two causes explains it.
 - **A timer tap, trip or expense from the widget or Siri does not show.** R applies
-  waiting widget and Siri actions only after its first pull. Ask the user to connect and sign in, and to look
-  again once the records appear. A tap for a job that is no longer in the cloud is
-  skipped, as in every version.
+  waiting widget and Siri actions only after its first pull. Ask the user to connect
+  and sign in, and to look again once the records appear. A tap for a job that is not
+  in the cloud is skipped: a job that was deleted (as in every version), or one still
+  in the native build's queue (§5.6 item 2). That second case needs re-entering the
+  time once the newer version is installed again.
 
 If R carries the §5.3 warning and the user saw it, ask whether they had been offline
 before the update. Their changes may still be in the newer version's storage, and they
@@ -1108,7 +1266,7 @@ The rows are in evidence index §23:
 | Row | What it covers |
 |---|---|
 | P12-RB-1 | The candidate and the numbering |
-| P12-RB-2 | Native → Expo, and its signed-out variant (E-1) |
+| P12-RB-2 | Native → Expo, its signed-out variant and the L→R check (E-1) |
 | P12-RB-3 | Expo → native |
 | P12-RB-4 | The check on a device |
 | P12-RB-5 | SC4 after the round trip |
@@ -1185,7 +1343,9 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
    If R opens offline asking for a sign-in, it cannot sign in there. Record that this
    case, and the invoice check, were not exercised (§8.2 step D3 covers a signed-out
    start). Then go online, sign in as A, make the same two edits and pull to refresh.
-   The step 9 checks still apply, the widget tap included.
+   The step 9 checks still apply, the widget tap included. The first sign-in's pull
+   completes the run before the edits, so record the settings hold as not exercised
+   too: the ` r0` edit is then an ordinary settings save.
 
 **Expo window, then T2: Expo R → native N2**
 
@@ -1195,6 +1355,9 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
    - `RB-C4` does **not** show ` n3` (never uploaded). R showed the §5.3 E-2 warning at
      step 8.
    - `RB-C9` is still listed, and your name shows ` r0`: the pull reverted neither.
+     ` r0` is a settings edit made while the run was pending, so it survives only if
+     the settings hold compared before `saveSettings` wrote (§5.3 E-1, final review I2).
+     If ` r0` is gone, the hold compared after the write: record a failed step.
    - The business name shows ` n1`: R pushed no stale settings.
    - `RB-J1` is listed with a running timer that started at the step 8 widget tap. R
      left the tap in the App Group while pending and applied it after the pull (§5.3
@@ -1248,7 +1411,7 @@ Record the time of each numbered step. Each "offline" step means airplane mode o
 **P12-RB-5 (SC4)** runs after this sequence on a clean install:
 
 1. In N2, sign out (Settings › Account › Sign out), then delete the app (§8.1). This is
-   the rehearsal's first deletion, of up to three. It is safe because the round trip is
+   the rehearsal's first deletion, of up to four. It is safe because the round trip is
    already recorded.
 2. Install L from the App Store. If L opens signed in, sign out first: another build's
    session survives the deletion (§8.1). Then sign in to a second team account.
@@ -1283,8 +1446,8 @@ E-1):
   row now holds the stale value (a §10.4 query can confirm it). Record it as a failed
   step.
 
-**P12-RB-7 (P12-011 on a device)** runs last. It checks the case that `P12-011` fixed: a
-native-only install, signed out, then the Expo window, then N2:
+**P12-RB-7 (P12-011 on a device)** runs after the signed-out variant. It checks the case
+that `P12-011` fixed: a native-only install, signed out, then the Expo window, then N2:
 
 - D1. Start with no TradeReady on the device (§8.1). A second iPhone is preferred. This
   step assumes the signed-out variant ran on the same iPhone: sign out of R (signed in
@@ -1329,6 +1492,26 @@ native-only install, signed out, then the Expo window, then N2:
   Keychain and showed the migrated notice (charter §10, `P12-011`).
 - D6. Run Check everything is saved. Expect "Ready".
 
+**L→R check (E-1 on a device that never ran native; recorded on P12-RB-2; final review
+I1, 2026-09-27)** runs after P12-RB-7. It checks that E-1 does nothing when the native
+build never ran on the device: no marker and no native directory mean no native run
+(§5.3 E-1 rule 4). So R keeps and pushes the queue L left, instead of clearing it.
+
+- U1. Start with no TradeReady on the device (§8.1): a second iPhone that has never had
+  the app (preferred), or on the same iPhone sign out of N2, which P12-RB-7 left signed
+  in as A, and then delete the app. Install L from the App Store. If L opens signed in,
+  sign out first. Sign in as A and pull to refresh. Offline, edit `RB-C7` (suffix
+  ` u0`) and force-quit L. The Expo queue now holds that edit, and no native build has
+  run on this install.
+- U2. Online, install R from TestFlight over L, with no delete (N is never installed).
+  Before opening R, turn airplane mode on. Open R offline. Expect no E-2 warning and no
+  pending notice. A's records are listed as L left them, and `RB-C7` shows ` u0`.
+  Force-quit and open R again offline: still no warning or notice.
+- U3. Go online and pull to refresh. The "changes pending" banner clears, and `RB-C7`
+  still shows ` u0`: the queue L left was pushed, not dropped. If R showed the warning
+  or the notice, or `RB-C7` lost ` u0`, E-1 treated a missing marker as a native run.
+  Record a failed step: R dropped the user's unsynced edit.
+
 ### 8.3 Evidence template
 
 Copy this into the owner's private rehearsal record. In the repository, only its summary
@@ -1349,7 +1532,7 @@ Steps
 | 1  | | | | | | |
 | …  | | | | | | |
 | 18 | | | | | | |
-| S1 … S5, D1 … D6 | | | | | | |
+| S1 … S5, D1 … D6, U1 … U3 | | | | | | |
 
 Readiness check (steps 5, 6, 17; S2; D2, D6): lastCheck / drainOutcome / blockers / notes / counts
 Transition timings: T0 <MIN>, T1 <MIN>, T2 <MIN>; manual steps: <LIST>
@@ -1362,6 +1545,7 @@ R relaunch (step 12): banner after relaunch <1 pending | cleared>; E-2 warning a
 RB-C3 in N2 (residual 1): <n2 | e3>
 RB-C4 winner (residual 2): <n3 | e1>
 Signed-out variant: RB-C8 in R <s1 | s0>; E-2 warning <yes/no>
+L→R check (U1–U3): E-2 warning <no | yes>; pending notice <no | yes>; RB-C7 offline in R <u0 | other>; after the pull <u0 | other>
 P12-RB-7: R at D3 started signed out <yes/no>; E-2 before sign-in <yes/no>; A's records listed when RB-C7 was created <yes (expected) | no>;
   N2 before sign-in <signed-out start | other: describe>; launchMigration <outcome>;
   RB-C7 and RB-C5 e7 after sign-in <present | missing>
