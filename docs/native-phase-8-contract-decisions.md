@@ -429,6 +429,14 @@ slot as the current appointment once a reschedule has published.
   (`convertedJobId`, `convertedCustomerId`, status `new→converted`) and
   preserves `history`/server status — 8.08 implements, 8.14 qualifies.
 
+**Note (2026-09-27, Phase 12 task 12.00b.2-K, defect `P12-016`):** until this date intake had no
+production caller. It now runs at launch after the initial sync and after each foreground refresh
+whose pull committed every table (`N/AppStore.swift` `runBookingIntakeIfPossible`; plan 8.08 note).
+D-B3-1 to D-B3-4 are unchanged. The recheck (`NativeScheduleBookingPolicy.recheckedIntakePlan`)
+still leaves a request whose `jbk_` job is already on the device to the device that made the job:
+native writes nothing for it and takes that device's request stamp when the stamp arrives. RN stamps
+such a request itself (`utils/storage/bookingConversion.ts:66-111`); both end on the same job ID.
+
 ## 9. Rescheduled manage / ICS; archived semantics
 
 - Manage view + ICS present the original booked slot (§7, pinned G2-08).
