@@ -223,8 +223,13 @@ final class AppStore: ObservableObject {
             // for the owner can hold for minutes. Bookings then convert only
             // after a full pull taken once the gate has opened, never from an
             // older one whose push could replace another device's newer edit
-            // of the same `jbk_` job.
-            if Self.gateWaitsForOwner(authenticationGateState) { bookingIntakePullMark = nil }
+            // of the same `jbk_` job. Since the final review (M1) a booking or
+            // portal mirror waits the same way: its merge queues the whole
+            // settings or customer record.
+            if Self.gateWaitsForOwner(authenticationGateState) {
+                bookingIntakePullMark = nil
+                scheduleBookingRecoveryPullMark = nil
+            }
         }
     }
     @Published private(set) var migratedAccountState: NativeTypedAccountState?
@@ -539,7 +544,11 @@ final class AppStore: ObservableObject {
     /// began, or nil. A booking or portal mirror merges into this device's
     /// copy of the settings or customer record and queues the whole record,
     /// and the push runs before the pull, so a mirror is read and merged
-    /// only while this mark is current.
+    /// only while this mark is current. Since the final review (M1) it
+    /// follows the intake mark's rules below: the generation is the one the
+    /// pull started under, a pull taken before or while the gate waits for
+    /// the owner does not count, and the scene entering the background
+    /// clears it (`sceneDidEnterBackground`).
     private var scheduleBookingRecoveryPullMark: (generation: UInt64, subject: String)?
     /// Phase 12 (12.00b.2-K, P12-016): the owner and account generation of a
     /// pull that committed every table, started under that generation, since
@@ -551,6 +560,20 @@ final class AppStore: ObservableObject {
     /// would replace it. Nor does a pull taken before, or while, the gate
     /// waits for the owner (fix round 1, review M3; `gateWaitsForOwner`).
     private var bookingIntakePullMark: (generation: UInt64, subject: String)?
+    /// Phase 12 final review (M1, R54 N1): advanced each time the scene
+    /// enters the background. A pull captures it when it starts and sets a
+    /// pull mark only if it has not moved, so a pull still in flight when
+    /// the scene left (it can resume after the next activation has begun,
+    /// before that activation's own pull) never marks.
+    private var pullMarkPeriod: UInt64 = 0
+    /// Phase 12 final review (M3): the per-table watermarks (the latest server
+    /// `updated_at` read) of the initial sync committed in this process, with
+    /// the account generation and owner it was pulled for. The initial sync
+    /// saves no delta cursor, so without these a cold launch's intake guarded
+    /// its stamp with the previous session's watermark and every booking
+    /// that arrived while the app was closed had its stamp dropped
+    /// (`intakeGuardWatermarks`).
+    private var initialSyncWatermarks: (generation: UInt64, subject: String, tables: [String: String])?
     /// Task 8.08 test seam: explicit session bytes for owner transports.
     /// Production passes nil and reads the Keychain; tests inject bytes so
     /// owner rechecks and service calls exercise without a live session.
@@ -4825,6 +4848,11 @@ final class AppStore: ObservableObject {
         // Phase 12 (12.00b.2-G fix round 1, R31): a suspended identity check
         // of the session being cleared drops its result.
         accountBoundaryGeneration &+= 1
+        // Phase 12 final review (M4): as a completed sign-out does, so a push
+        // still on the wire drops its result instead of settling this
+        // owner's refusals into the store after the next owner signs in.
+        // The durable queue stays (the workspace is retained).
+        syncCoordinator?.reset()
         // Task 11.06 (11.05 handoff d): an account switch is an account
         // boundary for every held route. Cleared before the first await, so
         // nothing parked or deep-linked in the previous session can surface
@@ -4873,6 +4901,8 @@ final class AppStore: ObservableObject {
             // landed during `clearSession`/`logOut` belonged to the old owner.
             wipeAIProviderKeysForAccountBoundary()
             scrubRejectedChangesForAccountBoundary()
+            // Final review (M4): and a pass started during those awaits.
+            syncCoordinator?.reset()
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
         reviewRequestRecords = []
@@ -6122,8 +6152,10 @@ final class AppStore: ObservableObject {
         let subject = outcome.verifiedUserSubject
         let localSnapshot = snapshot
         // Phase 12 (12.00b.2-K, P12-016): the account generation the pull
-        // starts under, for the intake mark below.
+        // starts under, for the pull marks below (the recovery mark too since
+        // the final review, M1), and the period (`pullMarkPeriod`).
         let boundaryGeneration = accountBoundaryGeneration
+        let markPeriod = pullMarkPeriod
         authenticationGateState = .initialSyncLoading
         // Task 11.12: an InitialSync signpost from the gate to the commit.
         // Ending is idempotent: the explicit ends below win, and the deferred
@@ -6133,20 +6165,27 @@ final class AppStore: ObservableObject {
         Task { [weak self] in
             defer { NativePerformanceMetrics.shared.end(initialSync, outcome: .skipped) }
             do {
-                let candidate = try await service.pull(
+                let pulled = try await service.pullWithWatermarks(
                     sessionBytes: sessionBytes,
                     expectedUserSubject: subject,
                     localSnapshot: localSnapshot
                 )
+                let candidate = pulled.snapshot
                 guard let self,
                       subject == self.authenticatedUserSubject,
                       generation == self.initialSyncGateGeneration
                 else { return }
 
                 try self.commitSnapshot(candidate)
+                // Phase 12 final review (M3): this commit saves no delta
+                // cursor, so booking intake guards with these watermarks
+                // until a delta pull has moved past them.
+                self.initialSyncWatermarks = (boundaryGeneration, subject, pulled.watermarks)
                 NativePerformanceMetrics.shared.end(initialSync, count: self.performanceRecordCount())
-                self.markScheduleBookingRecoveryPullCommitted(subject: subject)
-                self.markBookingIntakePullCommitted(subject: subject, generation: boundaryGeneration)
+                self.markScheduleBookingRecoveryPullCommitted(
+                    subject: subject, generation: boundaryGeneration, period: markPeriod
+                )
+                self.markBookingIntakePullCommitted(subject: subject, generation: boundaryGeneration, period: markPeriod)
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
                     outcome: outcome,
@@ -6628,6 +6667,9 @@ final class AppStore: ObservableObject {
         // Phase 12 (12.00b.2-G fix round 2, R31): as `applyCompletedSignOutState`,
         // a completed recovery exit is never overwritten by a suspended check.
         accountBoundaryGeneration &+= 1
+        // Phase 12 final review (M4): and, as there, a push still on the wire
+        // settles nothing under the next owner.
+        syncCoordinator?.reset()
         migratedAccountState = nil
         dismissedCustomerDuplicatePairKeys = []
         pendingCustomerMergeUndo = nil
@@ -7729,8 +7771,11 @@ final class AppStore: ObservableObject {
         let subject = credentials.subject
         // Phase 12 (12.00b.2-K, P12-016): the account generation this pull
         // starts under. A pull that spans an account boundary never lets
-        // booking intake convert, even when the same owner is back.
+        // booking intake convert, even when the same owner is back, nor
+        // (final review M1) a mirror merge; nor one that spans the scene
+        // entering the background (`pullMarkPeriod`).
         let boundaryGeneration = accountBoundaryGeneration
+        let markPeriod = pullMarkPeriod
         let cursor = syncCursorStore.load()
         let localSnapshot = snapshot
         // The snapshot the pulled candidate was merged into (11.12 Finding D):
@@ -7831,12 +7876,12 @@ final class AppStore: ObservableObject {
         // portal mirrors may merge once a pull has brought the settings and
         // customer rows. A partial pull that missed either does not count.
         if outcome.failedTables.allSatisfy({ !Self.scheduleBookingMirrorTables.contains($0) }) {
-            markScheduleBookingRecoveryPullCommitted(subject: subject)
+            markScheduleBookingRecoveryPullCommitted(subject: subject, generation: boundaryGeneration, period: markPeriod)
         }
         // Phase 12 (12.00b.2-K, P12-016): booking intake may convert from
         // this pull only when every table committed.
         if outcome.failedTables.isEmpty {
-            markBookingIntakePullCommitted(subject: subject, generation: boundaryGeneration)
+            markBookingIntakePullCommitted(subject: subject, generation: boundaryGeneration, period: markPeriod)
         }
         // Sync completion is the generation trigger (mirrors RN app-open /
         // foreground): pulled rules and jobs are in the snapshot, so due
@@ -7939,6 +7984,19 @@ final class AppStore: ObservableObject {
             emitAnalytics(.pullToRefresh(screen))
         }
         return outcome
+    }
+
+    /// Phase 12 final review (M1, R54 N1): the scene entered the background.
+    /// Clears both pull marks, and advances the period so a pull in flight
+    /// cannot set them when it commits. The next activation's gate sites
+    /// (its identity apply, a subscription gate still resolving from this
+    /// period) start passes before that activation's pull, so they must not
+    /// see this period's mark. Called by `TradeReadyNativeApp` on
+    /// `.background`.
+    func sceneDidEnterBackground() {
+        pullMarkPeriod &+= 1
+        scheduleBookingRecoveryPullMark = nil
+        bookingIntakePullMark = nil
     }
 
     /// Foreground ordering matches the React Native oracle: metadata sync first,
@@ -9769,17 +9827,42 @@ extension AppStore {
     }
 
     /// Records that a pull for `subject`, started under account generation
-    /// `generation`, committed every table (the initial sync, or a delta pull
-    /// with no failed table), unless the gate waits for the owner.
-    private func markBookingIntakePullCommitted(subject: String, generation: UInt64) {
-        guard !Self.gateWaitsForOwner(authenticationGateState) else { return }
+    /// `generation` and mark period `period`, committed every table (the
+    /// initial sync, or a delta pull with no failed table), unless the gate
+    /// waits for the owner or the scene has entered the background since the
+    /// pull began (final review M1).
+    private func markBookingIntakePullCommitted(subject: String, generation: UInt64, period: UInt64) {
+        guard period == pullMarkPeriod, !Self.gateWaitsForOwner(authenticationGateState) else { return }
         bookingIntakePullMark = (generation, subject)
+    }
+
+    /// Phase 12 final review (M3): the watermark per table that booking
+    /// intake guards the request stamp and a repeat customer's fill with
+    /// (`NativeScheduleBookingPolicy.recheckedIntakePlan`): the later of the
+    /// saved delta cursor's and the watermark of this owner's initial sync in
+    /// this process. The initial sync saves no cursor, so on a cold launch
+    /// the saved one is the previous session's: a booking that arrived while
+    /// the app was closed is newer than it, and a stamp guarded with it
+    /// matched no row and was dropped (drop and redo). The initial sync read
+    /// that booking, so its watermark covers it. Taking the later of the two
+    /// never guards a row with a watermark older than a pull this device
+    /// committed; a row written after both still makes the guard refuse.
+    private func intakeGuardWatermarks() -> [String: String] {
+        var tables = syncCursorStore.load().tables
+        if let initial = initialSyncWatermarks,
+           initial.generation == accountBoundaryGeneration, initial.subject == authenticatedUserSubject {
+            for (table, watermark) in initial.tables {
+                tables[table] = Canonical.NativeSyncCursor.later(tables[table], watermark)
+            }
+        }
+        return tables
     }
 
     /// Phase 12 (12.00b.2-K fix round 1, review M3): the gates that wait for
     /// the owner, as long as the owner takes: onboarding, the starting point
-    /// and the paywall. Entering one clears the intake mark, and no pull sets
-    /// it while the gate is there.
+    /// and the paywall. Entering one clears the intake mark (and, since the
+    /// final review M1, the recovery mark), and no pull sets either while the
+    /// gate is there.
     private static func gateWaitsForOwner(_ state: NativeAuthenticationGateState) -> Bool {
         switch state {
         case .onboarding, .startingPoint, .paywall: return true
@@ -9788,8 +9871,9 @@ extension AppStore {
     }
 
     /// Whether such a pull has committed for the current owner, under the
-    /// current account generation, since the identity was applied or the
-    /// foreground refresh began.
+    /// current account generation, since the identity was applied, the
+    /// foreground refresh began, the scene entered the background or the
+    /// gate waited for the owner.
     private var bookingIntakePullCommitted: Bool {
         guard let mark = bookingIntakePullMark else { return false }
         return mark.generation == accountBoundaryGeneration && mark.subject == authenticatedUserSubject
@@ -9861,7 +9945,7 @@ extension AppStore {
             currentRequests: snapshot.payload.bookingRequests ?? [],
             currentJobs: snapshot.payload.jobs ?? [],
             currentCustomers: snapshot.payload.customers ?? [],
-            guardSince: syncCursorStore.load().tables
+            guardSince: intakeGuardWatermarks()
         ) else {
             reason = "no-change"
             return .noChange
@@ -10677,8 +10761,14 @@ extension AppStore {
     /// array). A nil token keeps the existing display token (server
     /// `set_enabled` shape); a provided token replaces it after capability
     /// validation. Unknown/preserved customer fields survive by struct copy.
+    /// `automatic` (the recovery pass, final review M5): nothing runs on a
+    /// screen the owner is using, so a failed save records the bounded code
+    /// `recovery/local-commit` in the sync status instead of writing
+    /// `migrationMessage`, which would surface later on an unrelated screen.
     @discardableResult
-    private func mergePortalDisplayFields(customerID: String, token: String?, enabled: Bool?) -> Bool {
+    private func mergePortalDisplayFields(
+        customerID: String, token: String?, enabled: Bool?, automatic: Bool = false
+    ) -> Bool {
         guard ensurePersistenceWritable(),
               var records = snapshot.payload.customers,
               let index = records.firstIndex(where: { $0.id == customerID })
@@ -10705,7 +10795,11 @@ extension AppStore {
             try repository.save(updated)
             try apply(updated)
         } catch {
-            migrationMessage = "The portal link was updated on the server but the local copy could not be saved."
+            if automatic {
+                recordLocalSyncFailure(Self.recoveryLocalCommitCode)
+            } else {
+                migrationMessage = "The portal link was updated on the server but the local copy could not be saved."
+            }
             return false
         }
         enqueueUpsert(table: "customers", recordId: customerID, record: merged)
@@ -10772,13 +10866,20 @@ extension AppStore {
     /// Phase 12 (12.00b.2-I fix round 1, review I1): records that a pull for
     /// `subject` committed the settings and customer tables (the initial
     /// sync, or a delta pull), so pending mirrors may be read and merged.
-    private func markScheduleBookingRecoveryPullCommitted(subject: String) {
-        scheduleBookingRecoveryPullMark = (accountBoundaryGeneration, subject)
+    /// Final review (M1): the mark carries the account generation the pull
+    /// started under (as intake's does), so a pull that began before an
+    /// account boundary never counts; and, as for intake, no pull marks while
+    /// the gate waits for the owner or once the scene has entered the
+    /// background since the pull began.
+    private func markScheduleBookingRecoveryPullCommitted(subject: String, generation: UInt64, period: UInt64) {
+        guard period == pullMarkPeriod, !Self.gateWaitsForOwner(authenticationGateState) else { return }
+        scheduleBookingRecoveryPullMark = (generation, subject)
     }
 
     /// Whether such a pull has committed for the current owner and account
-    /// generation since the identity was applied or the foreground refresh
-    /// began.
+    /// generation since the identity was applied, the foreground refresh
+    /// began, the scene entered the background or the gate waited for the
+    /// owner.
     private var scheduleBookingRecoveryPullCommitted: Bool {
         guard let mark = scheduleBookingRecoveryPullMark else { return false }
         return mark.generation == accountBoundaryGeneration && mark.subject == authenticatedUserSubject
@@ -11011,7 +11112,7 @@ extension AppStore {
             guard let local = current.portal?.token else { return .dropped }
             guard local == readToken else { return .retained }
         }
-        return mergePortalDisplayFields(customerID: customerID, token: token, enabled: status.enabled)
+        return mergePortalDisplayFields(customerID: customerID, token: token, enabled: status.enabled, automatic: true)
             ? .applied : .retained
     }
 
@@ -11037,24 +11138,34 @@ extension AppStore {
         return acked ? .proofReady(requestID) : .retained
     }
 
+    /// The bounded code a recovery pass records when its local save fails
+    /// (final review M5); the item stays for the next pass.
+    private static let recoveryLocalCommitCode = "recovery/local-commit"
+
     private func mergeBookingDisplayMirrorForRecovery(token: String?, enabled: Bool) -> Bool {
         guard ensurePersistenceWritable(),
               var settings = snapshot.payload.settings
         else { return false }
+        // Recovery never invents a token: a nil-token mirror with no
+        // existing link fails closed (the recovery pass drops that item
+        // before it reads status).
         do {
-            // Recovery never invents a token: a nil-token mirror with no
-            // existing link fails closed (the recovery pass drops that item
-            // before it reads status).
             settings = try NativeBookingAdminMirror.apply(to: settings, token: token, enabled: enabled)
-            var updated = snapshot
-            updated.payload.settings = settings
-            try repository.save(updated)
-            try apply(updated)
-            enqueueSettingsUpsert(settings)
-            return true
         } catch {
             return false
         }
+        var updated = snapshot
+        updated.payload.settings = settings
+        do {
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            // Final review M5: as the portal merge, a bounded code only.
+            recordLocalSyncFailure(Self.recoveryLocalCommitCode)
+            return false
+        }
+        enqueueSettingsUpsert(settings)
+        return true
     }
 
     /// Scrubs exactly one binding's pending capability work. Called on the
@@ -12830,6 +12941,11 @@ extension AppStore {
     /// the gate through its states and read the mark. Production never calls
     /// this.
     var testBookingIntakePullCommitted: Bool { bookingIntakePullCommitted }
+
+    /// Test-only (Phase 12 final review M1/M2): whether the recovery pull
+    /// mark is current, so a pass could merge a booking or portal mirror now.
+    /// Production never calls this.
+    var testScheduleBookingRecoveryPullCommitted: Bool { scheduleBookingRecoveryPullCommitted }
 
     /// Test-only (task 11.05): seeds a NATIVE-ONLY signed-in owner: no
     /// migrated RN owner proof (`isMigratedLocalOwnerVerified == false`,

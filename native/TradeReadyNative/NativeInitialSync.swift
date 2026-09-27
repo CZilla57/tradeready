@@ -38,6 +38,40 @@ protocol NativeInitialSyncServing {
         expectedUserSubject: String,
         localSnapshot: Canonical.Snapshot
     ) async throws -> Canonical.Snapshot
+
+    /// Phase 12 final review (M3): the same full pull, plus the latest server
+    /// `updated_at` it read per collection table. The initial sync saves no
+    /// delta cursor, so these are the only record of how far the device has
+    /// seen each table right after it; booking intake guards its stamp with
+    /// them (`AppStore.intakeGuardWatermarks`). A table with no row has none.
+    func pullWithWatermarks(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        localSnapshot: Canonical.Snapshot
+    ) async throws -> NativeInitialSyncPull
+}
+
+/// One full pull and its per-table watermarks (server `updated_at` strings).
+struct NativeInitialSyncPull {
+    var snapshot: Canonical.Snapshot
+    var watermarks: [String: String]
+}
+
+extension NativeInitialSyncServing {
+    /// A service that reports no watermarks (the host fakes): intake then
+    /// falls back to the saved delta cursor alone.
+    func pullWithWatermarks(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        localSnapshot: Canonical.Snapshot
+    ) async throws -> NativeInitialSyncPull {
+        NativeInitialSyncPull(
+            snapshot: try await pull(
+                sessionBytes: sessionBytes, expectedUserSubject: expectedUserSubject, localSnapshot: localSnapshot
+            ),
+            watermarks: [:]
+        )
+    }
 }
 
 /// The outcome of one incremental delta pull: a validated candidate to commit,
@@ -154,6 +188,16 @@ struct NativeSupabaseInitialSyncService: NativeInitialSyncServing, NativeDeltaSy
         expectedUserSubject: String,
         localSnapshot: Canonical.Snapshot
     ) async throws -> Canonical.Snapshot {
+        try await pullWithWatermarks(
+            sessionBytes: sessionBytes, expectedUserSubject: expectedUserSubject, localSnapshot: localSnapshot
+        ).snapshot
+    }
+
+    func pullWithWatermarks(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        localSnapshot: Canonical.Snapshot
+    ) async throws -> NativeInitialSyncPull {
         Self.clearDiagnostic()
         guard supabaseURL.scheme?.lowercased() == "https", supabaseURL.host != nil,
               !publishableKey.isEmpty, !expectedUserSubject.isEmpty
@@ -207,7 +251,11 @@ struct NativeSupabaseInitialSyncService: NativeInitialSyncServing, NativeDeltaSy
         }
 
         var candidate = localSnapshot
+        var watermarks = Canonical.NativeSyncCursor.empty()
         for collection in Collection.allCases {
+            for row in remoteCollections[collection] ?? [] {
+                watermarks = watermarks.advancing(collection.rawValue, to: row.updatedAt)
+            }
             do {
                 try apply(
                     remoteCollections[collection] ?? [],
@@ -241,7 +289,10 @@ struct NativeSupabaseInitialSyncService: NativeInitialSyncServing, NativeDeltaSy
         // scrubbed bytes again so provider credentials never remain in the
         // in-memory candidate returned to the app store either.
         do {
-            return try Canonical.SnapshotCodec.decode(Canonical.SnapshotCodec.encode(candidate))
+            return NativeInitialSyncPull(
+                snapshot: try Canonical.SnapshotCodec.decode(Canonical.SnapshotCodec.encode(candidate)),
+                watermarks: watermarks.tables
+            )
         } catch {
             Self.reportDiagnostic(stage: "snapshot-validation")
             throw NativeInitialSyncError.invalidResponse

@@ -265,7 +265,7 @@ enum NativeScheduleBookingPolicy {
     /// between, so there the recheck keeps everything the plan made.
     ///
     /// Phase 12 (12.00b.2-L, P12-017; Task 12d review M6): `guardSince` is
-    /// the delta-pull watermark per table. When given, the drafts for records
+    /// the pull watermark per table. When given, the drafts for records
     /// already on the server (the request stamp and a repeat customer's fill)
     /// are guarded upserts (`Canonical.MutationItem.ifUnchangedSince`): the
     /// push writes them only onto the row this device pulled, so a customer's
@@ -273,11 +273,13 @@ enum NativeScheduleBookingPolicy {
     /// customer, that reached the server after the pull is never overwritten.
     /// RN pushes whole rows here (`utils/storage/bookingConversion.ts:140-142`).
     /// The lead job and a created customer are new rows and stay plain
-    /// upserts. A table with no watermark yet (only before the first delta
-    /// pull: the initial sync saves none, so a cold launch's conversion at
-    /// the subscription gate) also stays a plain upsert, as RN pushes it;
-    /// guarding it would drop every such stamp and leave the booking unlinked
-    /// until the next activation.
+    /// upserts. AppStore passes the later of the saved delta cursor and the
+    /// initial sync's own watermarks (final review M3,
+    /// `AppStore.intakeGuardWatermarks`): the initial sync saves no cursor,
+    /// so on a cold launch the saved cursor alone is the previous session's,
+    /// older than a booking that arrived while the app was closed, and a
+    /// stamp guarded with it was dropped. A table with no watermark at all
+    /// (no row of it pulled yet) stays a plain upsert, as RN pushes it.
     static func recheckedIntakePlan(
         _ plan: NativeBookingIntake.Plan,
         currentRequests: [Canonical.BookingRequest],

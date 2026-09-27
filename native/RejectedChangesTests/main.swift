@@ -685,6 +685,82 @@ func testSwitchInFlightSettle() async {
     expectEqual(filedMidSwitch, false, "switch in flight: nothing is filed under the old owner mid-switch")
 }
 
+/// A push whose network call runs a hook (an account change while the
+/// request is on the wire), then answers every change with a refusal (422).
+@MainActor
+final class SuspendingRefusalPush: NativeMutationPushing {
+    var duringPush: () async -> Void = {}
+    private(set) var calls = 0
+    func push(sessionBytes: Data, expectedUserSubject: String, items: [Canonical.MutationItem]) async throws -> NativeMutationPushOutcome {
+        calls += 1
+        await duringPush()
+        duringPush = {}
+        return NativeMutationPushOutcome(
+            remaining: [], pushedCount: 0, failedTables: [], authRejected: false, lastDiagnosticCode: nil,
+            rejected: items.map { NativeMutationRejection(item: $0, statusCode: 422) }
+        )
+    }
+}
+
+struct AlwaysReachable: NativeSyncReachability {
+    func isReachable() async -> Bool { true }
+}
+
+/// Final review M4: a push that is still on the wire when the account
+/// changes ("Use another account", or a password-recovery exit) and B then
+/// signs in settles nothing under B's tag. The switch and the recovery exit
+/// now reset the sync coordinator, as a completed sign-out does, so the
+/// coordinator drops the old pass's result (`SyncInvalidation.accountChanged`)
+/// before its settle step. A's change stays queued, with A's retained
+/// workspace (Phase 11 design); B's Cloud Sync lists none of A's refusals.
+/// Characterized at 7890ee5: A's refusal was filed under B's tag and listed
+/// in B's Cloud Sync.
+@MainActor
+func testInFlightPushAcrossAnAccountChange() async {
+    for exit in ["switch", "recovery"] {
+        let id = "in-flight push, \(exit)"
+        let group = TempAppGroup("in-flight-\(exit)")
+        defer { group.cleanUp() }
+        let dir = tempDirectory("in-flight-\(exit)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = makeAppStore(dir, group: group, files: FlakyFiles())
+        store.scheduleBookingTestSeedSignedInOwner(subject: "user-a", binding: bindingA)
+        store.scheduleBookingTestSeedIdentityActivator()
+        let queue = Canonical.NativeMutationQueue(fileURL: dir.appendingPathComponent("mutation-queue.json"))
+        do { try queue.save([item("jobs", "J9")]) } catch { expect(false, "\(id): fixture: A's change is queued (\(error))") }
+        let push = SuspendingRefusalPush()
+        var changed = false
+        push.duringPush = {
+            changed = true
+            if exit == "switch" {
+                await store.useAnotherAccount(clearGoogleCredential: {})
+            } else {
+                await store.cancelPasswordRecovery()
+            }
+            // B signs in while A's push is still on the wire.
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-b", binding: bindingB)
+        }
+        let coordinator = NativeSyncCoordinator(
+            push: push,
+            queue: queue,
+            reachability: AlwaysReachable(),
+            credentialsProvider: { NativeSyncCredentials(subject: "user-a", sessionBytes: Data()) },
+            settleRejected: { try store.testSettleRejectedChanges($0) }
+        )
+        store.testUseSyncCoordinator(coordinator)
+        _ = await coordinator.sync(trigger: .manual)
+        store.refreshRejectedChanges()
+        let filed = (try? String(contentsOf: storeFile(dir), encoding: .utf8)) ?? ""
+        print("OBSERVED \(id): listed=\(store.rejectedChanges.map(\.id)) filedForB=\(filed.contains(NativeRejectedChangeStore.ownerTag(binding: bindingB))) queued=\(queue.load().map(\.recordId))")
+        expect(changed, "\(id): sanity: the account changed while the push was on the wire")
+        expectEqual(push.calls, 1, "\(id): sanity: one push was sent")
+        expectEqual(store.rejectedChanges.map(\.id), [], "\(id) [M4]: B's Cloud Sync lists none of A's refusals")
+        expect(!filed.contains(NativeRejectedChangeStore.ownerTag(binding: bindingB)),
+               "\(id) [M4]: nothing is filed under B's tag")
+        expectEqual(queue.load().map(\.recordId), ["J9"], "\(id) [M4]: A's change stays queued, unsettled")
+    }
+}
+
 /// Review fix round 1 (M6): deleting a refused record on this device queues
 /// a delete, which hides the entry (it supersedes the refusal), and the
 /// pass that pushes the delete clears the entry.
@@ -927,6 +1003,7 @@ struct RejectedChangesTests {
         await testNoBindingFailsClosed()
         await testBoundaryScrubs()
         await testSwitchInFlightSettle()
+        await testInFlightPushAcrossAnAccountChange()
         testLocalDeleteOfRefusedRecord()
         await testFailedScrubFailsClosedAndRetries()
         do { try testServerRecordApply() } catch {

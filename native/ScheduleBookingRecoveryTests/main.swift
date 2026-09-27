@@ -667,6 +667,14 @@ struct ScheduleBookingRecoveryTests {
         await warmActivationBookingMirror()
         await warmActivationPortalMirror()
         await flagOnlyMirrorWithADeadLocalLink()
+        await backgroundClearsThePullMarks(root)
+        await aPullAcrossABoundaryLeavesMirrorsUnread()
+        await waitingGatesClearTheRecoveryMark()
+        await aWaitingGatesExitLeavesMirrorsForTheNextPull()
+        await applyingTheIdentityClearsTheRecoveryMark()
+        await aFailedForegroundPullKeepsTheMirror()
+        await aPartialPullKeepsTheMirror()
+        await aFailedRecoverySaveLeavesNoMessage()
         await acceptAfterTheOwnerMovedTheJob()
         await acceptBeforeTheOwnerMovedTheJob()
         await acceptOutcomesOnTheActingScreen()
@@ -675,6 +683,7 @@ struct ScheduleBookingRecoveryTests {
         await s1GuardTheResolveNeverMovesTheJobBack()
         acceptNoticesOnBothScreens()
         await coldLaunchConvertsAfterTheInitialSync()
+        await coldLaunchWithBookingHistoryStampsOnce()
         await gateThatWaitsForTheOwnerConvertsAfterItsNextPull()
         await waitingGatesClearTheMark()
         await warmActivationConvertsAfterItsPull()
@@ -1586,6 +1595,322 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(title, "Needs recovery", "\(id): the owner's screen never offers the dead link")
     }
 
+    // MARK: Z. The pull mark's windows, and a failed recovery save (final review M1, M2, M5)
+
+    /// A booking Rotate whose local save failed (a staged mirror), then a
+    /// relaunch with the owner signed in and the sync coordinator connected,
+    /// before any pull or activation on the new AppStore.
+    @MainActor
+    static func mirrorOnRelaunch(_ tag: String) async -> (Device, AppStore) {
+        let d = bookingDevice(tag, link: (bookingTokenA, true))
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.failSnapshotSaves(true)
+        _ = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+        d.failSnapshotSaves(false)
+        expectEqual(d.items.filter(isMirror).count, 1, "\(tag): sanity: one mirror is staged")
+        d.links.resetLog()
+        let relaunched = d.launch()
+        await d.signIn(relaunched)
+        return (d, relaunched)
+    }
+
+    /// Both pull marks at once: (recovery, intake).
+    @MainActor
+    static func marks(_ store: AppStore) -> String {
+        "recovery=\(store.testScheduleBookingRecoveryPullCommitted) intake=\(store.testBookingIntakePullCommitted)"
+    }
+
+    /// Z1 (review M1, R54 N1): the scene goes to the background. Both marks
+    /// are cleared, so no pass of the next activation (its gate sites run
+    /// before its pull) can merge a mirror or convert a booking from this
+    /// period's pull. A pull still in flight when the scene left (it can
+    /// resume after the next activation began) does not set them when it
+    /// commits. The next pull does.
+    /// Characterized at 7890ee5: the marks survived the background, and the
+    /// pull in flight set them again.
+    @MainActor
+    static func backgroundClearsThePullMarks(_ root: URL) async {
+        let id = "Z1 background"
+        let (d, store) = await intakeDevice("z1")
+        defer { d.cleanup() }
+        _ = await store.testPullDeltaIfPossible()
+        let beforeBackground = marks(store)
+        store.sceneDidEnterBackground()
+        let afterBackground = marks(store)
+        var left = false
+        d.pullLoader.duringNextRead = ("bookingRequests", {
+            left = true
+            store.sceneDidEnterBackground()
+        })
+        _ = await store.testPullDeltaIfPossible()
+        let afterPullInFlight = marks(store)
+        _ = await store.testPullDeltaIfPossible()
+        let afterNextPull = marks(store)
+        observed(id, "before=\(beforeBackground) background=\(afterBackground) "
+                 + "inFlight=\(afterPullInFlight) next=\(afterNextPull)")
+        expect(left, "\(id): sanity: the scene left during the pull")
+        expectEqual(beforeBackground, "recovery=true intake=true", "\(id): sanity: a committed pull sets both marks")
+        expectEqual(afterBackground, "recovery=false intake=false", "\(id) [M1]: the background clears both marks")
+        expectEqual(afterPullInFlight, "recovery=false intake=false",
+                    "\(id) [M1]: a pull in flight when the scene left does not set them")
+        expectEqual(afterNextPull, "recovery=true intake=true", "\(id) [M1]: the next pull sets them again")
+        let app = (try? String(contentsOf: root.appendingPathComponent("native/TradeReadyNative/TradeReadyNativeApp.swift"),
+                                   encoding: .utf8)) ?? ""
+        let background = app.components(separatedBy: "case .background:").dropFirst().first?
+            .components(separatedBy: "case .inactive:").first ?? ""
+        expect(background.contains("store.sceneDidEnterBackground()"),
+               "\(id) [M1]: the app tells the store when the scene enters the background")
+    }
+
+    /// Z2 (review M1): a pull that began before an account boundary never
+    /// lets a mirror merge, even when the same owner is back by the time it
+    /// commits (the recovery mark now carries the account generation the
+    /// pull started under, as the intake mark already did, K6). The mirror
+    /// waits, unread; the owner's next activation applies it.
+    /// Characterized at 7890ee5: the mark took the generation at the commit,
+    /// so the refresh's pass read the mirror's status.
+    @MainActor
+    static func aPullAcrossABoundaryLeavesMirrorsUnread() async {
+        let id = "Z2 boundary then the same owner during the pull"
+        let (d, store) = await mirrorOnRelaunch("z2")
+        defer { d.cleanup() }
+        var changed = false
+        d.pullLoader.duringNextRead = ("bookingRequests", {
+            changed = true
+            store.testApplyCompletedSignOutState()
+            store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+            store.testMarkInitialSyncCompleted(subject: d.subject)
+            // The sync re-seeding starts is coalesced into a rerun of the
+            // pass in flight; offline, the pull in flight is the only one.
+            d.reach.online = false
+        })
+        await store.performForegroundRefresh()
+        let reads = d.links.statusReads
+        observed(id, "\(marks(store)) reads=\(reads) mirrors=\(d.items.filter(isMirror).count)")
+        expect(changed, "\(id): sanity: the account changed during the pull")
+        expect(isSignedIn(store), "\(id): sanity: the same owner is signed in with the gate open")
+        expect(!store.testScheduleBookingRecoveryPullCommitted,
+               "\(id) [M1]: a pull that began before the boundary does not set the recovery mark")
+        expectEqual(reads, 0, "\(id) [M1]: the refresh's pass reads no mirror status")
+        expectEqual(d.items.filter(isMirror).count, 1, "\(id) [M1]: the mirror waits")
+        d.reach.online = true
+        let next = d.launch()
+        await d.signIn(next)
+        await next.performForegroundRefresh()
+        expectEqual(d.items.filter(isMirror).count, 0, "\(id): the owner's next activation applies the mirror")
+        expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id): …with the server's token")
+    }
+
+    /// Z3 (review M1, R54 N1 (c)): the recovery mark follows the intake
+    /// mark's waiting-gate rule (K1c). A pull with the gate open counts;
+    /// entering a gate that waits for the owner (the paywall, the starting
+    /// point, onboarding) clears it; a pull while the gate waits does not
+    /// count, nor once the gate has opened again; the next pull does. So the
+    /// pass the gate's exit starts cannot merge a mirror into a pull taken
+    /// minutes earlier.
+    /// Characterized at 7890ee5: only the intake mark was cleared.
+    @MainActor
+    static func waitingGatesClearTheRecoveryMark() async {
+        let states: [(String, NativeAuthenticationGateState)] = [
+            ("paywall", .paywall(offering: nil, message: nil)),
+            ("starting point", .startingPoint(.electrical)),
+            ("onboarding", .onboarding(.init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1))),
+        ]
+        for (name, waiting) in states {
+            let id = "Z3 \(name)"
+            let (d, store) = await intakeDevice("z3-\(name.count)")
+            defer { d.cleanup() }
+            _ = await store.testPullDeltaIfPossible()
+            let gateOpen = store.testScheduleBookingRecoveryPullCommitted
+            store.testSetAuthenticationGateState(waiting)
+            let entered = store.testScheduleBookingRecoveryPullCommitted
+            _ = await store.testPullDeltaIfPossible()
+            let pulledWhileWaiting = store.testScheduleBookingRecoveryPullCommitted
+            store.testSetAuthenticationGateState(.signedIn(email: nil))
+            let reopened = store.testScheduleBookingRecoveryPullCommitted
+            _ = await store.testPullDeltaIfPossible()
+            let nextPull = store.testScheduleBookingRecoveryPullCommitted
+            observed(id, "open=\(gateOpen) entered=\(entered) whileWaiting=\(pulledWhileWaiting) "
+                     + "reopened=\(reopened) nextPull=\(nextPull)")
+            expect(gateOpen, "\(id): sanity: a pull with the gate open counts")
+            expect(!entered, "\(id) [M1]: entering the waiting gate clears the recovery mark")
+            expect(!pulledWhileWaiting, "\(id) [M1]: a pull while the gate waits does not count")
+            expect(!reopened, "\(id) [M1]: …nor once the gate has opened again")
+            expect(nextPull, "\(id) [M1]: the next pull with the gate open counts")
+        }
+    }
+
+    /// Z4 (review M1 (c), behavioural): the starting point waits for the
+    /// owner, and its exit starts a recovery pass. That pass removes the
+    /// proof that cannot resolve but reads no mirror status: neither the pull
+    /// before the wait nor one during it counts. The next activation's pull,
+    /// then its pass, applies the mirror.
+    /// Characterized at 7890ee5: the exit's pass read the status and merged
+    /// the mirror into the pull taken before the wait.
+    @MainActor
+    static func aWaitingGatesExitLeavesMirrorsForTheNextPull() async {
+        let id = "Z4 starting point exit"
+        let (d, store) = await mirrorOnRelaunch("z4")
+        defer { d.cleanup() }
+        _ = await store.testPullDeltaIfPossible()
+        store.testSetAuthenticationGateState(.startingPoint(.electrical))
+        _ = await store.testPullDeltaIfPossible()
+        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+            accountBinding: d.binding, stage: .personalized,
+            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
+        ))
+        d.stage(passMarkerProof)
+        do { try store.completeStartingPoint(.fresh) } catch {
+            expect(false, "\(id): sanity: the starting point completes (\(error))")
+        }
+        await waitForGateSitePass(d)
+        let readsAtTheExit = d.links.statusReads
+        let mirrorsAtTheExit = d.items.filter(isMirror).count
+        await store.performForegroundRefresh()
+        observed(id, "at the exit: reads=\(readsAtTheExit) mirrors=\(mirrorsAtTheExit); "
+                 + "after the next activation: reads=\(d.links.statusReads) items=\(d.items.count)")
+        expect(isSignedIn(store), "\(id): sanity: the exit opened the signed-in gate")
+        expect(!d.hasPassMarker, "\(id): sanity: the exit's pass ran")
+        expectEqual(readsAtTheExit, 0, "\(id) [M1]: the exit's pass reads no mirror status")
+        expectEqual(mirrorsAtTheExit, 1, "\(id) [M1]: …and the mirror waits")
+        expectEqual(d.items.count, 0, "\(id): the next activation applies the mirror")
+        expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id): …with the server's token")
+    }
+
+    /// Z5 (review M2, R54 N2): the reset at identity apply, on one AppStore.
+    /// A pull commits (the mark is set); the identity is then applied again
+    /// (a warm activation). Its gate-site pass reads no mirror status: the
+    /// earlier pull no longer counts. W1, W2 and L2 start from a fresh
+    /// AppStore with no mark, so they could not catch a lost reset.
+    @MainActor
+    static func applyingTheIdentityClearsTheRecoveryMark() async {
+        let id = "Z5 pull, then the identity applied again"
+        let (d, store) = await mirrorOnRelaunch("z5")
+        defer { d.cleanup() }
+        _ = await store.testPullDeltaIfPossible()
+        let marked = store.testScheduleBookingRecoveryPullCommitted
+        d.stage(passMarkerProof)
+        await applyIdentityAgain(store, d)
+        observed(id, "marked=\(marked) reads=\(d.links.statusReads) mirrors=\(d.items.filter(isMirror).count)")
+        expect(marked, "\(id): sanity: the pull set the mark")
+        expectEqual(d.links.statusReads, 0, "\(id) [M2]: the activation's gate-site pass reads no mirror status")
+        expectEqual(d.items.filter(isMirror).count, 1, "\(id) [M2]: the mirror waits")
+        expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id) [M2]: nothing is merged")
+        expectEqual(d.queued("settings"), 0, "\(id) [M2]: nothing is queued")
+    }
+
+    /// Z6 (review M2, R52 invariant): the reset at the foreground refresh's
+    /// start, on one AppStore. A pull commits, then the device goes offline
+    /// and the refresh's own pull cannot run: the mirror is kept and unread.
+    /// Online again, the next activation applies it.
+    @MainActor
+    static func aFailedForegroundPullKeepsTheMirror() async {
+        let id = "Z6 pull, then an offline refresh"
+        let (d, store) = await mirrorOnRelaunch("z6")
+        defer { d.cleanup() }
+        _ = await store.testPullDeltaIfPossible()
+        let marked = store.testScheduleBookingRecoveryPullCommitted
+        d.reach.online = false
+        await store.performForegroundRefresh()
+        let readsOffline = d.links.statusReads
+        let mirrorsOffline = d.items.filter(isMirror).count
+        let queuedOffline = d.queued("settings")
+        d.reach.online = true
+        await syncAndWait(d)
+        await store.performForegroundRefresh()
+        observed(id, "marked=\(marked) offline: reads=\(readsOffline) mirrors=\(mirrorsOffline); "
+                 + "online: reads=\(d.links.statusReads) items=\(d.items.count)")
+        expect(marked, "\(id): sanity: the pull set the mark")
+        expectEqual(readsOffline, 0, "\(id) [M2]: the offline refresh's pass reads no mirror status")
+        expectEqual(mirrorsOffline, 1, "\(id) [M2]: …and keeps the mirror")
+        expectEqual(queuedOffline, 0, "\(id) [M2]: …and queues nothing")
+        expectEqual(d.items.count, 0, "\(id): online, the next activation applies the mirror")
+        expectEqual(d.localBookingLink?.token, d.links.bookingToken, "\(id): …with the server's token")
+    }
+
+    /// Z7 (review M2): a partial pull. A booking mirror merges into the
+    /// settings record (a portal mirror into the customer record), so a
+    /// refresh whose pull missed the settings or the customers table leaves
+    /// the mirror unread. A pull that missed another table (jobs) still
+    /// counts.
+    @MainActor
+    static func aPartialPullKeepsTheMirror() async {
+        for table in ["settings", "customers", "jobs"] {
+            let counts = table != "jobs"
+            let id = "Z7 partial pull, \(table) failed"
+            let (d, store) = await mirrorOnRelaunch("z7-\(table)")
+            defer { d.cleanup() }
+            d.data.injectStatusOnce = (method: "GET", table: table, status: 500)
+            await store.performForegroundRefresh()
+            observed(id, "reads=\(d.links.statusReads) mirrors=\(d.items.filter(isMirror).count)")
+            expect(d.data.injectStatusOnce == nil, "\(id): sanity: the pull read the \(table) table and it failed")
+            if counts {
+                expectEqual(d.links.statusReads, 0, "\(id) [M2]: the refresh's pass reads no mirror status")
+                expectEqual(d.items.filter(isMirror).count, 1, "\(id) [M2]: …and keeps the mirror")
+                expectEqual(d.localBookingLink?.token, bookingTokenA, "\(id) [M2]: nothing is merged")
+            } else {
+                expectEqual(d.links.statusReads, 1, "\(id): a pull that missed only the jobs table counts")
+                expectEqual(d.items.filter(isMirror).count, 0, "\(id): …and the mirror is applied")
+            }
+        }
+    }
+
+    /// Z8 (review M5): a recovery pass whose local save fails. The pass runs
+    /// automatically, so it says nothing on a screen (`migrationMessage`
+    /// would surface later on an unrelated one): it keeps the item, records a
+    /// bounded code in the sync status, and the next pass applies it. The
+    /// portal merge wrote `migrationMessage`; the booking merge now records
+    /// the same code.
+    /// Characterized at 7890ee5: the portal pass left "The portal link was
+    /// updated on the server but the local copy could not be saved." there.
+    @MainActor
+    static func aFailedRecoverySaveLeavesNoMessage() async {
+        for kind in ["portal", "booking"] {
+            let id = "Z8 \(kind) recovery save fails"
+            let d = kind == "portal" ? portalDevice("z8-p", portal: (portalTokenC, true))
+                : bookingDevice("z8-b", link: (bookingTokenA, true))
+            defer { d.cleanup() }
+            let first = d.launch()
+            await d.signIn(first)
+            await d.sync()
+            d.failSnapshotSaves(true)
+            if kind == "portal" {
+                _ = await first.administerPortalLink(customerID: "cust-1", action: .rotate, portalService: d.portalService)
+            } else {
+                _ = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+            }
+            d.failSnapshotSaves(false)
+            expectEqual(d.items.filter(isMirror).count, 1, "\(id): sanity: one mirror is staged")
+            let store = d.launch()
+            await d.signIn(store)
+            var armed = true
+            store.notificationSynchronizeHook = { _ in
+                guard armed else { return }
+                armed = false
+                d.failSnapshotSaves(true)
+            }
+            await store.performForegroundRefresh()
+            d.failSnapshotSaves(false)
+            let message = store.migrationMessage
+            let code = store.syncStatus.diagnosticCode
+            let kept = d.items.filter(isMirror).count
+            store.notificationSynchronizeHook = nil
+            await store.performForegroundRefresh()
+            let local = kind == "portal" ? d.localPortal?.token : d.localBookingLink?.token
+            let server = kind == "portal" ? d.links.portals["cust-1"]?.token : d.links.bookingToken
+            observed(id, "migrationMessage=\(message ?? "nil") code=\(code ?? "nil") kept=\(kept) "
+                     + "after the next pass: items=\(d.items.count)")
+            expect(!armed, "\(id): sanity: the refresh's pull committed before saves failed")
+            expectEqual(message, nil, "\(id) [M5]: nothing is left in migrationMessage")
+            expectEqual(code, "recovery/local-commit", "\(id) [M5]: the sync status carries the bounded code")
+            expectEqual(kept, 1, "\(id) [M5]: the item is kept")
+            expectEqual(d.items.count, 0, "\(id): the next pass applies it")
+            expectEqual(local, server, "\(id): …with the server's token")
+        }
+    }
+
     // MARK: F. Accepting a customer's reschedule from the request rows (P12-015)
 
     /// The two screens with a reschedule row action.
@@ -2306,6 +2631,50 @@ struct ScheduleBookingRecoveryTests {
                     "\(id) [P12-016]: …and the linked request")
         expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1,
                     "\(id) [P12-016]: …and the customer")
+        expectEqual(d.queue.load().count, 0, "\(id): everything reached the server")
+    }
+
+    /// K1d (final review M3): K1 on a device with booking history. An
+    /// earlier session's delta pull saved a `bookingRequests` watermark (a
+    /// booking the owner handled before), and the new booking arrives while
+    /// the app is closed, after that watermark. The initial sync saves no
+    /// cursor, so the stamp used to be guarded with the old watermark: its
+    /// PATCH matched no row and was dropped, the next pull reverted the
+    /// stamp, and the booking stayed unlinked until the next activation. The
+    /// guard is now the initial sync's own watermark for the table (the
+    /// latest `updated_at` it read), so the first push's stamp lands.
+    /// Characterized at 7890ee5: the stamp was guarded with the earlier
+    /// session's watermark and dropped (`superseded`).
+    @MainActor
+    static func coldLaunchWithBookingHistoryStampsOnce() async {
+        let id = "K1d cold launch with booking history"
+        let d = Device("k1d")
+        defer { d.cleanup() }
+        var handled = workerBooking()
+        handled["id"] = "req-0"
+        handled["status"] = "cancelled"
+        await d.links.upsert(table: "bookingRequests", id: "req-0", record: handled)
+        let first = d.launch()
+        await d.signIn(first)
+        await syncAndWait(d)
+        let cursorFile = Canonical.NativeSyncCursorStore(fileURL: d.dir.appendingPathComponent("sync-cursor.json"))
+        let earlierWatermark = cursorFile.load().tables["bookingRequests"]
+        await customerBooks(d)
+        let serverStamp = d.data.storedRow(table: "bookingRequests", id: "req-1", userID: d.subject)?.updatedAt
+        let relaunched = coldLaunch(d, onboarding: .done, online: false)
+        await waitUntil { isSignedIn(relaunched) && leadJob(d) != nil }
+        let guardSince = d.queue.load().first { $0.table == "bookingRequests" && $0.recordId == "req-1" }?.ifUnchangedSince
+        d.reach.online = true
+        await syncAndWait(d)
+        let cloudLinked = d.links.requestRow("req-1")?["convertedJobId"] as? String
+        observed(id, "earlier watermark=\(earlierWatermark != nil) guard=\(guardSince == serverStamp ? "the initial sync's" : guardSince == earlierWatermark ? "the earlier session's" : "other") "
+                 + "cloudLinked=\(cloudLinked ?? "no") localLinked=\(bookingRequest(d)?.convertedJobId ?? "no")")
+        expect(earlierWatermark != nil, "\(id): sanity: an earlier pull saved a bookingRequests watermark")
+        expect(serverStamp != nil && serverStamp != earlierWatermark, "\(id): sanity: the booking arrived after it")
+        expectEqual(guardSince, serverStamp, "\(id) [M3]: the stamp is guarded with the initial sync's watermark")
+        expectEqual(cloudLinked, leadJobID, "\(id) [M3]: the first push's stamp lands on the cloud row")
+        expectEqual(bookingRequest(d)?.convertedJobId, leadJobID, "\(id) [M3]: …and the pull after it keeps it on the device")
+        expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead", "\(id): the cloud has the lead job")
         expectEqual(d.queue.load().count, 0, "\(id): everything reached the server")
     }
 
@@ -3723,14 +4092,21 @@ struct ScheduleBookingRecoveryTests {
         // Review M3: a gate that waits for the owner clears the mark, and no
         // pull marks while it waits.
         let gateState = body(store, from: "    @Published private(set) var authenticationGateState") ?? ""
-        expect(gateState.contains("if Self.gateWaitsForOwner(authenticationGateState) { bookingIntakePullMark = nil }"),
+        let waitingClear = gateState.components(separatedBy: "if Self.gateWaitsForOwner(authenticationGateState) {")
+            .dropFirst().first?.components(separatedBy: "}").first ?? ""
+        expect(waitingClear.contains("bookingIntakePullMark = nil"),
                "S-K [M3]: entering a gate that waits for the owner clears the intake mark")
+        expect(waitingClear.contains("scheduleBookingRecoveryPullMark = nil"),
+               "S-K [final review M1]: …and the recovery mark")
         let waits = body(store, from: "    private static func gateWaitsForOwner(") ?? ""
         expect([".onboarding", ".startingPoint", ".paywall"].allSatisfy(waits.contains),
                "S-K [M3]: onboarding, the starting point and the paywall wait for the owner")
-        let mark = body(store, from: "    private func markBookingIntakePullCommitted(") ?? ""
-        expect(mark.contains("guard !Self.gateWaitsForOwner(authenticationGateState) else { return }"),
-               "S-K [M3]: no pull marks while the gate waits for the owner")
+        let waitingGuard = "guard period == pullMarkPeriod, !Self.gateWaitsForOwner(authenticationGateState) else { return }"
+        for function in ["markBookingIntakePullCommitted(", "markScheduleBookingRecoveryPullCommitted("] {
+            let mark = body(store, from: "    private func " + function) ?? ""
+            expect(mark.contains(waitingGuard),
+                   "S-K [M3, final review M1]: \(function)) marks nothing while the gate waits or after the background")
+        }
         // Review M5: the own-pull entry is a host-test entry only.
         let sourceRoot = root.appendingPathComponent("native", isDirectory: true)
         var productionCalls: [String] = []
@@ -3823,7 +4199,7 @@ struct ScheduleBookingRecoveryTests {
             expect(sync.lowerBound < recover.lowerBound, "S: the foreground refresh's own pass follows its sync (textual)")
         }
         let resetMark = "scheduleBookingRecoveryPullMark = nil"
-        let setMark = "markScheduleBookingRecoveryPullCommitted(subject: subject)"
+        let setMark = "markScheduleBookingRecoveryPullCommitted("
         if let reset = foreground.range(of: resetMark),
            let sync = foreground.range(of: "await syncNowAndWait(trigger: .foreground)") {
             expect(reset.upperBound < sync.lowerBound, "S [I1]: the foreground refresh clears the pull mark before its sync")
@@ -3850,6 +4226,16 @@ struct ScheduleBookingRecoveryTests {
             expect(commit.upperBound < mark.lowerBound, "S [I1]: a delta pull marks its commit")
         } else {
             expect(false, "S [I1]: a delta pull marks its commit")
+        }
+        // Final review M1: both pulls hand the recovery mark the account
+        // generation and the period they started under (Z1 and Z2 prove the
+        // delta pull's behaviourally; the initial sync is pinned here).
+        let startedUnder = "subject: subject, generation: boundaryGeneration, period: markPeriod"
+        for (name, text) in [("the initial sync", initialSync), ("a delta pull", deltaPull)] {
+            expect(text.contains("let boundaryGeneration = accountBoundaryGeneration")
+                   && text.contains("let markPeriod = pullMarkPeriod")
+                   && text.components(separatedBy: startedUnder).count - 1 == 2,
+                   "S [final review M1]: \(name) marks with the generation and period it started under")
         }
         // Launch: every point that opens the signed-in gate after the
         // initial sync (the same points that replay widget actions).

@@ -178,6 +178,10 @@ struct TradeReadyNativeApp: App {
                         // Task 11.06 (§6.2 step 4): a route parked before the
                         // gate opened does not survive backgrounding.
                         store.discardParkedDeepLink()
+                        // Phase 12 final review (M1): the next activation's
+                        // passes start before its pull, so no pull mark from
+                        // this period may reach them.
+                        store.sceneDidEnterBackground()
                         backgroundRefreshScheduler.schedule()
                     case .inactive:
                         break
