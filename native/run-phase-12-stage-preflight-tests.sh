@@ -7,10 +7,18 @@ FIXTURES="$ROOT_DIR/native/Phase12StagePreflightTests/fixtures"
 GOOD_DOCS="$FIXTURES/docs-good"
 VARIANTS="$FIXTURES/docs-variants"
 GOOD_SETTINGS="$FIXTURES/good-build-settings.txt"
-OUTPUT_PATH="${TMPDIR:-/tmp}/tradeready-phase12-preflight-test-output"
+GOOD_APP_JSON="$FIXTURES/fixture-app.json"
 
 TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/tradeready-phase12-preflight-tests.XXXXXX")
 trap 'rm -rf "$TEMP_ROOT"' EXIT HUP INT TERM
+
+OUTPUT_PATH="$TEMP_ROOT/output"
+
+# One cached real-repo build-settings capture, reused by every real-repo
+# assertion below instead of re-invoking xcodebuild per call (Minor 11).
+REAL_BUILD_SETTINGS="$TEMP_ROOT/real-build-settings.txt"
+xcodebuild -project "$ROOT_DIR/native/TradeReadyNative.xcodeproj" -scheme TradeReadyNative \
+  -configuration Release -sdk iphoneos -showBuildSettings >"$REAL_BUILD_SETTINGS" 2>/dev/null || true
 
 # Builds a fresh docs directory from the good fixture set, optionally
 # replacing one file with a named variant. Prints the directory path.
@@ -51,86 +59,248 @@ expect_status() {
   fi
 }
 
-# 1. Placeholder staging backend fails.
-DOCS_A=$(make_docs_dir "stage-a-good")
-expect_status 1 "FAIL: backend URL is not the placeholder" \
-  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/placeholder-build-settings.txt"
+expect_no_match() {
+  # Like expect_status, but also asserts a pattern is ABSENT from the output
+  # (grep -F, so a literal substring, not a regex).
+  expected_status=$1
+  absent_text=$2
+  shift 2
 
-# 2. Production-matched Supabase value fails.
-expect_status 1 "FAIL: Supabase URL does not match the production project" \
-  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/production-matched-build-settings.txt"
+  set +e
+  "$PREFLIGHT" "$@" >"$OUTPUT_PATH" 2>&1
+  actual_status=$?
+  set -e
+
+  if [ "$actual_status" -ne "$expected_status" ]; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "Expected status $expected_status, got $actual_status (args: $*)" >&2
+    exit 1
+  fi
+  if grep -F -q "$absent_text" "$OUTPUT_PATH"; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "Did not expect to find: $absent_text (args: $*)" >&2
+    exit 1
+  fi
+}
+
+DOCS_A=$(make_docs_dir "stage-a-good")
+
+# ---------------------------------------------------------------------------
+# Important 1 / Minor 1-3: fail-closed defect list, status, R59, predecessor.
+# ---------------------------------------------------------------------------
+
+# 1. Placeholder staging backend fails.
+expect_status 1 "FAIL: backend URL is not the placeholder" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/placeholder-build-settings.txt" --rn-app-json "$GOOD_APP_JSON"
+
+# 2. Production-matched Supabase URL fails (origin-based, not exact-string).
+expect_status 1 "FAIL: Supabase URL matches the production project outside a production build" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/production-matched-build-settings.txt" --rn-app-json "$GOOD_APP_JSON"
+
+# 2a. Production-matched Supabase URL still catches an origin that differs only
+#     by case, an explicit default port and a trailing slash (Minor 1, Important 7).
+expect_status 1 "FAIL: Supabase URL matches the production project outside a production build" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/production-matched-origin-variant-build-settings.txt" --rn-app-json "$GOOD_APP_JSON"
+
+# 2b. Production-matched Supabase publishable key fails even when the URL differs
+#     (Minor 1: "the publishable-key match is not checked at all").
+expect_status 1 "FAIL: Supabase publishable key matches the production key outside a production build" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/production-matched-key-only-build-settings.txt" --rn-app-json "$GOOD_APP_JSON"
+
+# 2c. Production-matched backend URL fails (read from the RN app config at run
+#     time, never a hardcoded host in this script -- Important 7).
+expect_status 1 "FAIL: backend URL matches the production project (app.json) outside a production build" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/production-matched-backend-build-settings.txt" --rn-app-json "$GOOD_APP_JSON"
+
+# 2d. Supabase placeholder fails (Minor 2 gap).
+expect_status 1 "FAIL: Supabase URL is not the placeholder" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$FIXTURES/supabase-placeholder-build-settings.txt" --rn-app-json "$GOOD_APP_JSON"
 
 # 3. DRAFT charter fails.
 DOCS_DRAFT=$(make_docs_dir "stage-a-draft" "charter-draft.md" "native-phase-12-cutover-charter.md")
 expect_status 1 "FAIL: charter is owner-approved" \
-  --stage A --docs-dir "$DOCS_DRAFT" --build-settings "$GOOD_SETTINGS"
+  --stage A --docs-dir "$DOCS_DRAFT" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
-# 4. An open blocking defect (12.00b.2) fails.
+# 3a. A Status line that is merely "proposed" (no DRAFT, no owner-approved) also
+#     fails -- Minor 3: absence of DRAFT is not enough.
+DOCS_PROPOSED=$(make_docs_dir "stage-a-proposed" "charter-status-proposed.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: charter is owner-approved (Status line does not say owner-approved" \
+  --stage A --docs-dir "$DOCS_PROPOSED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 4. An open blocking defect (12.00b.2) fails, by name.
 DOCS_OPEN=$(make_docs_dir "stage-a-open-blocker" "charter-open-blocker.md" "native-phase-12-cutover-charter.md")
-expect_status 1 "FAIL: defect list: 12.00b.2 (S1/S2 code fixes) rows are Fixed (open: L130)" \
-  --stage A --docs-dir "$DOCS_OPEN" --build-settings "$GOOD_SETTINGS"
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: L130)" \
+  --stage A --docs-dir "$DOCS_OPEN" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 4a. Important 1(b): renaming the enclosing "### 12.00b.2" heading does not let
+#     an open S1/S2 row inside it slip through -- the scan covers the whole §10
+#     body, not named subsections.
+DOCS_RENAMED=$(make_docs_dir "stage-a-renamed-heading" "charter-renamed-heading.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: L130)" \
+  --stage A --docs-dir "$DOCS_RENAMED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 4b. Important 1: the "## 10. Defect list" heading itself missing/renamed fails
+#     closed (a heading rename must never look like "zero open rows").
+DOCS_NO_HEADING=$(make_docs_dir "stage-a-no-defect-heading" "charter-no-defect-heading.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (§10 Defect list heading not found)" \
+  --stage A --docs-dir "$DOCS_NO_HEADING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 4c. The P12-012-style ruling gate, both directions (Important 1(e), the
+#     coverage gap the review named explicitly).
+#   - An open S1 with NO recorded ruling at all: FAIL, naming the ID.
+DOCS_NO_RULING=$(make_docs_dir "stage-a-no-ruling" "charter-open-s1-no-ruling.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+  --stage A --docs-dir "$DOCS_NO_RULING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+#   - A decision-log row that names the ID and mentions the ruling number, but
+#     never says "ruled:" (e.g. "ruling requested, still pending"): FAIL. This
+#     is the exact review reproduction of issue (a).
+DOCS_UNRELATED=$(make_docs_dir "stage-a-unrelated-ruling" "charter-unrelated-ruling.md" "native-phase-12-cutover-charter.md")
+expect_status 1 "FAIL: defect list: no open S1/S2 blocks stage entry (open, no recorded ruling: P12-903)" \
+  --stage A --docs-dir "$DOCS_UNRELATED" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+#   - A real "ruled: R<n>" row naming the ID: the row becomes an OWNER line,
+#     never a FAIL, and never a silent PASS either (docs-good already has this
+#     case built in as P12-903 / R900; see the all-good assertions below).
+expect_no_match 0 "FAIL:" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+expect_status 0 "OWNER defect list: P12-903 (open S1, ruling R900 recorded — owner still authorizes stage entry)" \
+  --stage A --docs-dir "$DOCS_A" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
 # 5. A missing required doc fails.
 DOCS_MISSING=$(make_docs_dir "stage-a-missing-doc")
 rm -f "$DOCS_MISSING/native-phase-12-monitoring.md"
 expect_status 1 "FAIL: required doc present: monitoring doc" \
-  --stage A --docs-dir "$DOCS_MISSING" --build-settings "$GOOD_SETTINGS"
+  --stage A --docs-dir "$DOCS_MISSING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
-# 6. A stage whose predecessor has no run record fails (Stage B needs Stage A recorded).
-DOCS_NO_RUN=$(make_docs_dir "stage-b-no-run" "evidence-index-no-run.md" "native-phase-12-evidence-index.md")
-expect_status 1 'FAIL: evidence index: Stage A (12.04) has a recorded run (still "No run recorded yet.")' \
-  --stage B --docs-dir "$DOCS_NO_RUN" --build-settings "$GOOD_SETTINGS"
+# 5a. A missing charter fails multiple checks, closed (Minor 2 gap).
+DOCS_NO_CHARTER=$(make_docs_dir "stage-a-no-charter")
+rm -f "$DOCS_NO_CHARTER/native-phase-12-cutover-charter.md"
+expect_status 1 "FAIL: required doc present: cutover charter" \
+  --stage A --docs-dir "$DOCS_NO_CHARTER" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+expect_status 1 "FAIL: charter is owner-approved (charter doc missing)" \
+  --stage A --docs-dir "$DOCS_NO_CHARTER" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
-# 7. An all-good fixture passes with only OWNER lines beyond PASS (stage A: every
-#    local check can pass, since P12-012 does not exist in this fixture charter).
-set +e
-"$PREFLIGHT" --stage A --docs-dir "$DOCS_A" --build-settings "$GOOD_SETTINGS" >"$OUTPUT_PATH" 2>&1
-status=$?
-set -e
-if [ "$status" -ne 0 ]; then
-  sed -n '1,200p' "$OUTPUT_PATH" >&2
-  echo "Expected the all-good fixture to pass (status 0), got $status" >&2
-  exit 1
-fi
-if grep -q '^FAIL:' "$OUTPUT_PATH"; then
-  sed -n '1,200p' "$OUTPUT_PATH" >&2
-  echo "The all-good fixture produced a FAIL line" >&2
-  exit 1
-fi
-if ! grep -q '^OWNER ' "$OUTPUT_PATH"; then
-  echo "Expected at least one OWNER line even on the all-good fixture" >&2
-  exit 1
-fi
-if ! grep -q '^READY' "$OUTPUT_PATH"; then
-  sed -n '1,200p' "$OUTPUT_PATH" >&2
-  echo "Expected a READY summary line" >&2
-  exit 1
-fi
+# 6. R59: a marker that only says "pending" (no "ruled:") still fails (Minor 1/2).
+DOCS_R59_PENDING=$(make_docs_dir "stage-a-r59-pending" "readiness-r59-pending.md" "native-phase-12-release-readiness.md")
+expect_status 1 "FAIL: production build configuration decision is recorded (R59)" \
+  --stage A --docs-dir "$DOCS_R59_PENDING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
 
-# 8. An all-good fixture also passes for stage B (predecessor recorded) and exit
-#    (predecessor recorded, exit-report doc present), confirming the stage-specific
-#    branches do not accidentally fail on good input.
+# 6a. R59: no marker line at all also fails (Minor 2 gap).
+DOCS_R59_MISSING=$(make_docs_dir "stage-a-r59-missing" "readiness-no-marker.md" "native-phase-12-release-readiness.md")
+expect_status 1 "FAIL: production build configuration decision is recorded (R59)" \
+  --stage A --docs-dir "$DOCS_R59_MISSING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 6b. R59: a real "ruled: R59" marker passes (paired with the all-good stage-C
+#     assertion below, which already carries this marker via docs-good).
+
+# 7. A stage whose predecessor has no run record fails, for every stage that
+#    checks one: rehearsal (needs Stage A), B (needs Stage A), C (needs Stage
+#    B) and exit (needs Stage C) -- Minor 2's "C and exit predecessor cases" gap.
+DOCS_NO_RUN=$(make_docs_dir "stage-no-run" "evidence-index-no-run.md" "native-phase-12-evidence-index.md")
+expect_status 1 'FAIL: evidence index: Stage A (12.04) has a recorded run (still says "No run recorded yet.")' \
+  --stage rehearsal --docs-dir "$DOCS_NO_RUN" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+expect_status 1 'FAIL: evidence index: Stage A (12.04) has a recorded run (still says "No run recorded yet.")' \
+  --stage B --docs-dir "$DOCS_NO_RUN" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+expect_status 1 'FAIL: evidence index: Stage B (12.05) has a recorded run (still says "No run recorded yet.")' \
+  --stage C --docs-dir "$DOCS_NO_RUN" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+expect_status 1 'FAIL: evidence index: Stage C (12.07) has a recorded run (still says "No run recorded yet.")' \
+  --stage exit --docs-dir "$DOCS_NO_RUN" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 7a. A predecessor section holding "No run recorded yet." plus extra text
+#     still fails (substring match, not exact-equality -- Important 1(d)).
+DOCS_NO_RUN_PLUS_NOTE="$TEMP_ROOT/stage-b-no-run-plus-note"
+rm -rf "$DOCS_NO_RUN_PLUS_NOTE"
+mkdir -p "$DOCS_NO_RUN_PLUS_NOTE"
+cp "$GOOD_DOCS"/*.md "$DOCS_NO_RUN_PLUS_NOTE"/
+python3 - "$DOCS_NO_RUN_PLUS_NOTE/native-phase-12-evidence-index.md" <<'EOF'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+t = t.replace(
+"""Run 1, 2026-09-10, build 100 (200), team accounts alpha/beta, REL/STG. Every
+Stage-A-eligible row ran; no defect raised.""",
+"No run recorded yet. A dry run is scheduled for next week."
+)
+open(p, "w").write(t)
+EOF
+expect_status 1 'FAIL: evidence index: Stage A (12.04) has a recorded run (still says "No run recorded yet.")' \
+  --stage B --docs-dir "$DOCS_NO_RUN_PLUS_NOTE" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# 8. Minor 3: --stage B checks the 12.06 rehearsal record itself, not only
+#    Stage A's run; --stage rehearsal checks Stage A's run (already proved above).
+DOCS_REHEARSAL_MISSING=$(make_docs_dir "stage-b-rehearsal-not-recorded" "evidence-index-rehearsal-not-recorded.md" "native-phase-12-evidence-index.md")
+expect_status 1 "FAIL: evidence index: the 12.06 rehearsal is recorded" \
+  --stage B --docs-dir "$DOCS_REHEARSAL_MISSING" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON"
+
+# ---------------------------------------------------------------------------
+# All-good fixtures pass with only OWNER lines beyond PASS (and, on the
+# P12-903 case, a specific ruling-recorded OWNER line -- never silently
+# dropped, never a FAIL).
+# ---------------------------------------------------------------------------
+
+assert_all_good() {
+  stage=$1
+  docs_dir=$2
+  set +e
+  "$PREFLIGHT" --stage "$stage" --docs-dir "$docs_dir" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON" \
+    >"$OUTPUT_PATH" 2>&1
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "Expected the all-good fixture to pass for stage $stage (status 0), got $status" >&2
+    exit 1
+  fi
+  if grep -q '^FAIL:' "$OUTPUT_PATH"; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "The all-good fixture produced a FAIL line for stage $stage" >&2
+    exit 1
+  fi
+  if ! grep -q '^OWNER ' "$OUTPUT_PATH"; then
+    echo "Expected at least one OWNER line even on the all-good fixture (stage $stage)" >&2
+    exit 1
+  fi
+  if ! grep -q '^READY' "$OUTPUT_PATH"; then
+    sed -n '1,200p' "$OUTPUT_PATH" >&2
+    echo "Expected a READY summary line for stage $stage" >&2
+    exit 1
+  fi
+}
+
+assert_all_good A "$DOCS_A"
 DOCS_B_GOOD=$(make_docs_dir "stage-b-good")
-expect_status 0 "READY" --stage B --docs-dir "$DOCS_B_GOOD" --build-settings "$GOOD_SETTINGS"
-DOCS_EXIT_GOOD=$(make_docs_dir "stage-exit-good")
-expect_status 0 "READY" --stage exit --docs-dir "$DOCS_EXIT_GOOD" --build-settings "$GOOD_SETTINGS"
+assert_all_good B "$DOCS_B_GOOD"
 DOCS_C_GOOD=$(make_docs_dir "stage-c-good")
-expect_status 0 "READY" --stage C --docs-dir "$DOCS_C_GOOD" --build-settings "$GOOD_SETTINGS"
+assert_all_good C "$DOCS_C_GOOD"
+DOCS_EXIT_GOOD=$(make_docs_dir "stage-exit-good")
+assert_all_good exit "$DOCS_EXIT_GOOD"
 DOCS_REHEARSAL_GOOD=$(make_docs_dir "stage-rehearsal-good")
-expect_status 0 "READY" --stage rehearsal --docs-dir "$DOCS_REHEARSAL_GOOD" --build-settings "$GOOD_SETTINGS"
+assert_all_good rehearsal "$DOCS_REHEARSAL_GOOD"
 
-# 9. No output line contains a URL, across every fixture run above plus a run
-#    against the real committed docs (which do carry real content, but the
-#    preflight itself must never print one).
+# ---------------------------------------------------------------------------
+# Identifiers (Important 7 / R61): no output line contains a URL, a real
+# production host, or the owner's team ID, across every fixture run above
+# plus a run against the real committed docs.
+# ---------------------------------------------------------------------------
+
 ALL_OUTPUT="$TEMP_ROOT/all-output.txt"
 : >"$ALL_OUTPUT"
 for stage in A rehearsal B C exit; do
-  "$PREFLIGHT" --stage "$stage" --docs-dir "$DOCS_A" --build-settings "$GOOD_SETTINGS" >>"$ALL_OUTPUT" 2>&1 || true
-  "$PREFLIGHT" --stage "$stage" >>"$ALL_OUTPUT" 2>&1 || true
+  "$PREFLIGHT" --stage "$stage" --docs-dir "$DOCS_A" --build-settings "$GOOD_SETTINGS" --rn-app-json "$GOOD_APP_JSON" >>"$ALL_OUTPUT" 2>&1 || true
+  "$PREFLIGHT" --stage "$stage" --build-settings "$REAL_BUILD_SETTINGS" >>"$ALL_OUTPUT" 2>&1 || true
 done
+# URL/host check is case-insensitive; the team-ID shape check below is
+# deliberately case-SENSITIVE (an Apple team ID is upper-case alphanumeric)
+# so it does not also match an ordinary 10-letter lower-case English word.
 if grep -Eiq 'https?://|[a-z0-9.-]+\.supabase\.co|[a-z0-9.-]+\.workers\.dev' "$ALL_OUTPUT"; then
   grep -Ein 'https?://|[a-z0-9.-]+\.supabase\.co|[a-z0-9.-]+\.workers\.dev' "$ALL_OUTPUT" >&2
   echo "A preflight output line contains a URL or bare host" >&2
+  exit 1
+fi
+if grep -Eoq '\b[A-Z0-9]{10}\b' "$ALL_OUTPUT"; then
+  grep -Eon '\b[A-Z0-9]{10}\b' "$ALL_OUTPUT" >&2
+  echo "A preflight output line contains a 10-character upper-case alphanumeric token (an Apple team ID is shaped like this)" >&2
   exit 1
 fi
 

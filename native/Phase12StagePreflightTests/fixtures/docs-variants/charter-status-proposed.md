@@ -1,6 +1,6 @@
 # Fixture cutover charter
 
-**Status: Owner-approved 2026-09-01.** Fixture charter for
+**Status: Proposed.** Fixture charter for
 run-phase-12-stage-preflight-tests.sh. Not the real charter; used only to
 exercise the preflight's parsing.
 
@@ -24,7 +24,7 @@ exercise the preflight's parsing.
 | ID | Item | Sev | State @`6d573a3` | Handling | Status |
 |---|---|---|---|---|---|
 | L74 | Fixture item one | S2 | Open | 12.00b.2 | Fixed — 12.00b.2 (fixture) |
-| L130 | Fixture item two | S1 | Open | 12.00b.2 | Open |
+| L130 | Fixture item two | S1 | Open | 12.00b.2 | Fixed — 12.00b.2 (fixture) |
 
 ### Backlog — post-cutover S3 work (does not block Stage A) (1)
 

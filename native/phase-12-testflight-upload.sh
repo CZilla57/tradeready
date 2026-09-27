@@ -87,9 +87,16 @@ if [ -z "$VERSION" ] || [ -z "$BUILD" ]; then
   exit 64
 fi
 
+ARCHIVE_DIR_EXPLICIT=$ARCHIVE_DIR
+
 TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tradeready-phase12-upload.XXXXXX")
 trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
 
+# The dry-run preview path lives under $TEMP_DIR (nothing is actually written
+# there in dry-run mode beyond the preview plist, so its cleanup is fine). The
+# --execute path below overrides this to a directory the EXIT trap does not
+# delete, because the real .xcarchive and its dSYMs must survive after this
+# script exits, for the Sentry dSYM upload (Minor 4).
 [ -n "$ARCHIVE_DIR" ] || ARCHIVE_DIR="$TEMP_DIR/archive"
 [ -n "$EXPORT_DIR" ] || EXPORT_DIR="$TEMP_DIR/export"
 
@@ -125,13 +132,27 @@ if [ "$EXECUTE" -eq 1 ]; then
   # OWNER-GATED real path. Only reached with every credential env var set and
   # --i-am-the-owner passed. An agent must never reach this line: it is not
   # exercised by the test suite (task 14 brief: "never test the path that
-  # would run for real").
+  # would run for real"). Every step below checks its own exit status and
+  # stops on the first failure (Minor 4: the previous version fell through to
+  # `exit 0` even after a failed archive or export).
   echo "OWNER-GATED: proceeding with a real archive, export and upload." >&2
+
+  if [ -z "$ARCHIVE_DIR_EXPLICIT" ]; then
+    # Not inside $TEMP_DIR: the archive and its dSYMs must still be on disk
+    # after this script exits, for the Sentry dSYM upload. Only the operator's
+    # own --archive-dir (if given) is used as-is instead.
+    ARCHIVE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tradeready-phase12-archive.XXXXXX")
+    ARCHIVE_PATH="$ARCHIVE_DIR/TradeReadyNative-$VERSION-$BUILD.xcarchive"
+  fi
   mkdir -p "$ARCHIVE_DIR" "$EXPORT_DIR"
 
   DEVELOPMENT_TEAM=$(xcodebuild -project "$PROJECT_PATH" -scheme TradeReadyNative \
     -configuration Release -showBuildSettings 2>/dev/null \
     | sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM = //p' | tail -n 1)
+  if [ -z "$DEVELOPMENT_TEAM" ]; then
+    echo "Refusing: DEVELOPMENT_TEAM resolved empty from build settings. SIGN-1 must be cleared (an Xcode account signed in) before this can archive." >&2
+    exit 1
+  fi
 
   cat >"$EXPORT_OPTIONS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -148,19 +169,26 @@ if [ "$EXECUTE" -eq 1 ]; then
 </plist>
 PLIST
 
-  xcodebuild -project "$PROJECT_PATH" -scheme TradeReadyNative \
+  if ! xcodebuild -project "$PROJECT_PATH" -scheme TradeReadyNative \
     -configuration Release -destination 'generic/platform=iOS' \
     -archivePath "$ARCHIVE_PATH" \
     MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
-    DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" -allowProvisioningUpdates archive
+    DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" -allowProvisioningUpdates archive; then
+    echo "Archive failed. Nothing was exported or uploaded. Archive dir (if partially written): $ARCHIVE_DIR" >&2
+    exit 1
+  fi
 
-  xcodebuild -exportArchive \
+  if ! xcodebuild -exportArchive \
     -archivePath "$ARCHIVE_PATH" \
     -exportPath "$EXPORT_DIR" -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" \
     -allowProvisioningUpdates \
     -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" \
-    -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+    -authenticationKeyIssuerID "$ASC_ISSUER_ID"; then
+    echo "Export/upload failed. The archive was still produced: $ARCHIVE_PATH" >&2
+    exit 1
+  fi
 
+  echo "Uploaded. Archive (for the Sentry dSYM upload): $ARCHIVE_PATH" >&2
   exit 0
 fi
 

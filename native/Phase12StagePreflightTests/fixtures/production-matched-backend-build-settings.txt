@@ -1,5 +1,5 @@
     TRADEREADY_ALLOW_PRODUCTION_WRITES = NO
-    TRADEREADY_BACKEND_URL = https://staging.invalid
+    TRADEREADY_BACKEND_URL = https://fixture-prod-backend.example.test
     TRADEREADY_ENVIRONMENT = staging
     TRADEREADY_SUPABASE_URL = https://fixture-staging.supabase.co
     TRADEREADY_SUPABASE_PUBLISHABLE_KEY = fixture-staging-publishable-key

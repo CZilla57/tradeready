@@ -9,7 +9,7 @@ exercise the preflight's parsing.
 | # | Date | Stage | Decision | Evidence | Decider | Rollback trigger considered |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-01 | pre-A | Fixture approval row | n/a | owner | n/a |
-| 2 | 2026-09-01 | pre-A | P12-903 ruled: R900 — fixture accepts the risk for Stage A | n/a | owner | n/a |
+| 2 | 2026-09-01 | pre-A | P12-903: R900 ruling requested, still pending | n/a | owner | n/a |
 
 ## 10. Defect list
 
@@ -24,7 +24,7 @@ exercise the preflight's parsing.
 | ID | Item | Sev | State @`6d573a3` | Handling | Status |
 |---|---|---|---|---|---|
 | L74 | Fixture item one | S2 | Open | 12.00b.2 | Fixed — 12.00b.2 (fixture) |
-| L130 | Fixture item two | S1 | Open | 12.00b.2 | Open |
+| L130 | Fixture item two | S1 | Open | 12.00b.2 | Fixed — 12.00b.2 (fixture) |
 
 ### Backlog — post-cutover S3 work (does not block Stage A) (1)
 

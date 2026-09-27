@@ -6,8 +6,8 @@ Fixture for run-phase-12-stage-preflight-tests.sh. Not the real evidence index.
 
 | ID | Requirement | Steps | Expected result | Env / build | Stage | Prereqs | Source | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| P12-RB-2 | Fixture rehearsal row (native to Expo) | n/a | n/a | REL | A | n/a | fixture | [x] fixture recorded 2026-09-15 |
-| P12-RB-3 | Fixture rehearsal row (Expo to native) | n/a | n/a | REL | A | n/a | fixture | [x] fixture recorded 2026-09-15 |
+| P12-RB-2 | Fixture rehearsal row (native to Expo) | n/a | n/a | REL | A | n/a | fixture | [ ] |
+| P12-RB-3 | Fixture rehearsal row (Expo to native) | n/a | n/a | REL | A | n/a | fixture | [ ] |
 
 ## 24. Stage run records
 

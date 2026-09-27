@@ -1,4 +1,7 @@
     TRADEREADY_ALLOW_PRODUCTION_WRITES = NO
     TRADEREADY_BACKEND_URL = https://staging.gettradereadyapp.com
     TRADEREADY_ENVIRONMENT = staging
-    TRADEREADY_SUPABASE_URL = https://ncbqswfdvckmdocbawaa.supabase.co
+    TRADEREADY_SUPABASE_URL = https://fixture-prod.supabase.test
+    TRADEREADY_SUPABASE_PUBLISHABLE_KEY = fixture-prod-publishable-key
+    TRADEREADY_PRODUCTION_SUPABASE_URL = https://fixture-prod.supabase.test
+    TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY = fixture-prod-publishable-key

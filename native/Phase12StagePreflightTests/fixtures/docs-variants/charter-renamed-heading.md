@@ -19,7 +19,7 @@ exercise the preflight's parsing.
 |---|---|---|---|---|---|
 | L238 | Fixture I2 item | S2 | Open | 12.00b.1 | Fixed — 12.00b.1 (fixture) |
 
-### 12.00b.2 — S1/S2 code fixes (block Stage A entry) (2)
+### 12.00b2 — S1/S2 code fixes RENAMED (2)
 
 | ID | Item | Sev | State @`6d573a3` | Handling | Status |
 |---|---|---|---|---|---|
