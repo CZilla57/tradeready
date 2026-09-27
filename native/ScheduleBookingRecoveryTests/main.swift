@@ -32,6 +32,13 @@ import FoundationNetworking
 // L2): a merge queues the whole settings or customer record, and the push
 // runs before the pull.
 //
+// Section F (12.00b.2-J, P12-015): the owner accepts a customer's reschedule
+// request from the Today and Requests rows. Characterized before its fix
+// (the test commit before it): both rows built a schedule draft from the
+// request's original slot with the request's status as the job's baseline,
+// which always conflicted, so nothing was sent, nothing was shown and the
+// conflict text was left in `migrationMessage`.
+//
 // Everything here is production code except the network: the real AppStore,
 // queue, sync coordinator, push transport and delta pull in front of the
 // shared `InMemorySupabase`, and the real booking-admin, portal-manage and
@@ -78,6 +85,13 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
     private(set) var statusTokens: [String?] = []
     /// Runs on the main actor inside the next status read, before it replies.
     var duringNextStatus: (@MainActor () async -> Void)?
+    /// Runs on the main actor inside the next respond call, before the
+    /// server reads the request (P12-015: an account change or another
+    /// device's decision during the resolve's await).
+    var duringNextRespond: (@MainActor () async -> Void)?
+    /// The `scheduleProof` each `resolve_reschedule` carried, as
+    /// "jobId date start updatedAt" ("none" when it sent none).
+    private(set) var respondProofs: [String] = []
     private var minted = 0
 
     init(data: InMemorySupabase, userID: String) {
@@ -91,6 +105,7 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
     func resetLog() {
         log = []
         statusTokens = []
+        respondProofs = []
     }
 
     /// A new 48-hex capability, never equal to a seeded fixture token.
@@ -112,6 +127,18 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
         if unreachable { throw URLError(.notConnectedToInternet) }
         if action == "status", let hook = duringNextStatus {
             duringNextStatus = nil
+            await hook()
+        }
+        if family == "respond", action == "resolve_reschedule" {
+            if let proof = body["scheduleProof"] as? [String: Any] {
+                respondProofs.append(["jobId", "date", "start", "updatedAt"]
+                    .map { proof[$0] as? String ?? "?" }.joined(separator: " "))
+            } else {
+                respondProofs.append("none")
+            }
+        }
+        if family == "respond", let hook = duringNextRespond {
+            duringNextRespond = nil
             await hook()
         }
         let reply: (Int, [String: Any])
@@ -286,11 +313,11 @@ func fixtureJob() -> Canonical.Job {
     """)
 }
 
-func fixtureRequest(status: String = "reschedule_requested") -> Canonical.BookingRequest {
+func fixtureRequest(status: String = "reschedule_requested", converted: Bool = true) -> Canonical.BookingRequest {
     decodeRecord(Canonical.BookingRequest.self, """
     {"id":"req-1","status":"\(status)","kind":"booked","name":"Sam Ortiz","phone":"555-0177",
      "email":"sam@example.test","address":"9 Oak Ave","details":"Panel inspection","preferredTiming":"",
-     "createdAt":"2026-09-10T00:00:00.000Z","convertedJobId":"job-1",
+     "createdAt":"2026-09-10T00:00:00.000Z"\(converted ? #","convertedJobId":"job-1""# : ""),
      "slot":{"date":"2026-09-23","start":"09:00","end":"10:00","timeZone":"America/Phoenix",
              "startUtc":"2026-09-23T16:00:00.000Z","endUtc":"2026-09-23T17:00:00.000Z"}}
     """)
@@ -574,7 +601,11 @@ struct ScheduleBookingRecoveryTests {
         await warmActivationBookingMirror()
         await warmActivationPortalMirror()
         await flagOnlyMirrorWithADeadLocalLink()
-        await rescheduleDraftFromTheRequestRows()
+        await acceptAfterTheOwnerMovedTheJob()
+        await acceptBeforeTheOwnerMovedTheJob()
+        await acceptOutcomesOnTheActingScreen()
+        await accountChangeDuringTheResolve()
+        await s1GuardTheResolveNeverMovesTheJobBack()
         sources(root)
 
         if failures == 0 {
@@ -1458,32 +1489,391 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(title, "Needs recovery", "\(id): the owner's screen never offers the dead link")
     }
 
-    // MARK: F. Separate finding (not P12-013)
+    // MARK: F. Accepting a customer's reschedule from the request rows (P12-015)
 
-    /// Pinned and labelled as a separate finding: the Today and Requests
-    /// rows (`TodayView.resolveBookingReschedule`,
-    /// `NativeBookingRequestsView.resolveReschedule`) open the draft with
-    /// nil baselines and the REQUEST's status as the job baseline, so a
-    /// scheduled job refuses it as a baseline conflict and no proof is ever
-    /// staged from those rows.
+    /// The two screens with a reschedule row action.
+    enum RescheduleRow: String, CaseIterable {
+        case today = "Today"
+        case requests = "Requests"
+
+        /// The button the owner taps: Today's alert action (RN
+        /// `screens/TodayScreen.tsx:613`) or the Requests row's button.
+        var actionLabel: String { self == .today ? "I've rescheduled it" : "Resolve" }
+    }
+
+    /// What the owner's tap did, as the acting screen shows it.
+    struct RowTap {
+        var outcome: String
+        /// The acting screen's alert, or nil when it shows nothing.
+        var title: String? = nil
+        var message: String? = nil
+    }
+
+    /// The owner's tap on a reschedule row, running the code that screen runs.
+    ///
+    /// Characterization (the test commit, before the fix): the code
+    /// `TodayView.resolveBookingReschedule` and
+    /// `NativeBookingRequestsView.resolveReschedule` ran at 52ba5ac. Both
+    /// return silently without a job; otherwise both build a schedule draft
+    /// with nil baselines, the REQUEST's status as the job's baseline and
+    /// `request.slot` (the original booked slot) as the target, resolve only
+    /// on `.proofReady`, and show nothing for any outcome (Today ignores the
+    /// rest; Requests returns silently or ignores unknownOutcome, missing and
+    /// failed). The one difference is the injected respond client.
     @MainActor
-    static func rescheduleDraftFromTheRequestRows() async {
-        let id = "F request-row draft"
-        let d = Device("f", customers: [fixtureCustomer(portal: nil)], jobs: [fixtureJob()], requests: [fixtureRequest()])
-        defer { d.cleanup() }
+    static func tap(_ row: RescheduleRow, _ store: AppStore, _ d: Device) async -> RowTap {
+        guard let attention = store.bookingAttentionRows().first(where: { $0.request.id == "req-1" }) else {
+            return RowTap(outcome: "no row")
+        }
+        guard let jobID = attention.jobID else { return RowTap(outcome: "no job: the row returns silently") }
+        let prepared = await store.prepareBookingReschedule(
+            requestID: attention.request.id,
+            scheduleDraft: .init(
+                jobID: jobID,
+                baselineDate: nil, baselineStart: nil, baselineEnd: nil,
+                baselineStatus: attention.request.status,
+                date: attention.request.slot?.date,
+                start: attention.request.slot?.start,
+                end: attention.request.slot?.end
+            )
+        )
+        guard case let .proofReady(proof) = prepared else { return RowTap(outcome: "prepare \(prepared)") }
+        let resolved = await store.resolveBookingReschedule(
+            requestID: attention.request.id, proof: proof, responseService: d.respondService)
+        return RowTap(outcome: "resolve \(resolved)")
+    }
+
+    /// `fixtureRequest`'s slot (the original booked slot) and the time the
+    /// owner moves the job to, as the acting screen writes them.
+    static let requestSlotWhen = "Wednesday, September 23, 9:00 AM – 10:00 AM"
+    static let movedWhen = "Friday, September 25, 1:00 PM – 2:00 PM"
+    static let failureTitle = "Couldn't update booking"
+
+    /// A device with job-1 and a reschedule request for it, signed in, with
+    /// the workspace pushed.
+    @MainActor
+    static func rescheduleDevice(
+        _ tag: String, job: Canonical.Job = fixtureJob(), converted: Bool = true
+    ) async -> (Device, AppStore) {
+        let d = Device(tag, customers: [fixtureCustomer(portal: nil)], jobs: [job],
+                       requests: [fixtureRequest(converted: converted)])
         let store = d.launch()
         await d.signIn(store)
         await d.sync()
-        let request = fixtureRequest()
-        let rowDraft = NativeScheduleBookingPolicy.ScheduleOnlyDraft(
-            jobID: "job-1", baselineDate: nil, baselineStart: nil, baselineEnd: nil,
-            baselineStatus: request.status,
-            date: request.slot?.date, start: request.slot?.start, end: request.slot?.end
+        return (d, store)
+    }
+
+    /// The owner moves job-1 in the schedule editor: `NativeScheduleEditorView`
+    /// saves `commitScheduleOnly` with a draft pinned to the current record.
+    @MainActor
+    static func ownerMovesTheJob(_ store: AppStore) -> Bool {
+        guard var draft = store.scheduleOnlyDraft(jobID: "job-1") else { return false }
+        draft.date = "2026-09-25"
+        draft.start = "13:00"
+        draft.end = "14:00"
+        return store.commitScheduleOnly(draft) == .saved(conflictingJobIDs: [])
+    }
+
+    /// job-1's "date start end" on the device and in the cloud row.
+    @MainActor
+    static func jobSchedule(_ d: Device) -> (local: String, cloud: String) {
+        let local = d.disk?.payload.jobs?.first { $0.id == "job-1" }
+        let cloud = d.links.row("jobs", "job-1")
+        return (
+            [local?.scheduledDate, local?.scheduledStartTime, local?.scheduledEndTime].map { $0 ?? "-" }.joined(separator: " "),
+            ["scheduledDate", "scheduledStartTime", "scheduledEndTime"].map { cloud?[$0] as? String ?? "-" }.joined(separator: " ")
         )
-        let prepared = await store.prepareBookingReschedule(requestID: "req-1", scheduleDraft: rowDraft)
-        observed(id, "prepare from the row's draft -> \(prepared); proofs staged=\(d.items.count)")
-        expectEqual(prepared, .scheduleConflict, "\(id) [separate finding]: the row's draft is a baseline conflict")
-        expectEqual(d.items.count, 0, "\(id) [separate finding]: no proof is staged")
+    }
+
+    /// F1: the owner has moved the job, in RN's order ("View job", move it,
+    /// then "I've rescheduled it", `screens/TodayScreen.tsx:607-616`). The
+    /// tap resolves with a proof of the job's CURRENT schedule, writes
+    /// nothing to the job and says what it did on the acting screen.
+    /// Characterized: `.scheduleConflict` from the row's draft, nothing
+    /// sent, nothing shown, and the conflict text left in `migrationMessage`.
+    @MainActor
+    static func acceptAfterTheOwnerMovedTheJob() async {
+        for row in RescheduleRow.allCases {
+            let id = "F1 \(row.rawValue): the owner moved the job"
+            let (d, store) = await rescheduleDevice("f1-\(row.rawValue)")
+            defer { d.cleanup() }
+            expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
+            expectEqual(store.migrationMessage, nil, "\(id): sanity: no message before the tap")
+            d.links.resetLog()
+            let tapped = await tap(row, store, d)
+            let schedule = jobSchedule(d)
+            observed(id, "outcome=\(tapped.outcome) shown=\(tapped.message ?? "nothing") "
+                     + "migrationMessage=\(store.migrationMessage ?? "nil") sent=\(d.links.log) "
+                     + "server=\(d.links.requestRow("req-1")?["status"] as? String ?? "?") job=\(schedule.local)")
+            expectEqual(d.links.log, ["respond/resolve_reschedule"], "\(id) [P12-015]: one resolve is sent")
+            expectEqual(d.links.respondProofs, ["job-1 2026-09-25 13:00 2026-09-10T00:00:00.000Z"],
+                        "\(id) [P12-015]: its proof is the job's current schedule, stamped with the request's createdAt")
+            expectEqual(d.links.requestRow("req-1")?["status"] as? String, "confirmed",
+                        "\(id) [P12-015]: the server confirms the booking")
+            expectEqual(tapped.title, "Booking updated", "\(id) [P12-015]: the acting screen says so")
+            expectEqual(tapped.message, "The booking is confirmed for the job's new time, \(movedWhen).",
+                        "\(id) [P12-015]: …with the job's new time")
+            expectEqual(store.migrationMessage, nil, "\(id) [P12-015]: nothing goes to migrationMessage")
+            expectEqual(schedule.local, "2026-09-25 13:00 14:00", "\(id) [P12-015]: the job keeps the owner's time")
+            expectEqual(schedule.cloud, "2026-09-25 13:00 14:00", "\(id) [P12-015]: …in the cloud row too")
+            expectEqual(d.queued("jobs"), 0, "\(id) [P12-015]: the move reached the server and the resolve queues no job write")
+            expectEqual(d.queued("bookingRequests"), 0, "\(id) [P12-015]: …nor a copy of the request (the server wrote it)")
+            expect(!store.bookingAttentionRows().contains { $0.request.id == "req-1" }, "\(id) [P12-015]: the row clears")
+            expectEqual(d.items.count, 0, "\(id) [P12-015]: the proof is removed once the server confirms")
+            expectEqual(store.rollbackReadiness().bookingWorkCount, 0, "\(id): the rollback check counts no booking work")
+            await d.sync()
+            expectEqual(d.localRequestStatus, "confirmed",
+                        "\(id) [P12-015]: after the pull the request no longer asks for a reschedule")
+            expectEqual(jobSchedule(d).local, "2026-09-25 13:00 14:00", "\(id) [P12-015]: …and the job keeps the owner's time")
+        }
+    }
+
+    /// F2: the owner taps before moving the job, which is still at the
+    /// request's original slot. RN sends the resolve regardless
+    /// (`screens/TodayScreen.tsx:613-616`); the Worker reads no proof
+    /// (`backend-workers/src/routes/booking/respond.js:35-40`) and contract
+    /// §7's check is the job's own `(date, start)`, so a move is not
+    /// required: native sends it too and says plainly that the time did not
+    /// change.
+    @MainActor
+    static func acceptBeforeTheOwnerMovedTheJob() async {
+        for row in RescheduleRow.allCases {
+            let id = "F2 \(row.rawValue): the job is still at the original slot"
+            var job = fixtureJob()
+            job.scheduledDate = "2026-09-23"
+            let (d, store) = await rescheduleDevice("f2-\(row.rawValue)", job: job)
+            defer { d.cleanup() }
+            d.links.resetLog()
+            let tapped = await tap(row, store, d)
+            let schedule = jobSchedule(d)
+            observed(id, "outcome=\(tapped.outcome) shown=\(tapped.message ?? "nothing") "
+                     + "migrationMessage=\(store.migrationMessage ?? "nil") sent=\(d.links.log)")
+            expectEqual(d.links.log, ["respond/resolve_reschedule"], "\(id) [P12-015]: the resolve is sent, as RN sends it")
+            expectEqual(d.links.respondProofs, ["job-1 2026-09-23 09:00 2026-09-10T00:00:00.000Z"],
+                        "\(id) [P12-015]: its proof is the job's current schedule")
+            expectEqual(d.links.requestRow("req-1")?["status"] as? String, "confirmed", "\(id) [P12-015]: the server confirms")
+            expectEqual(tapped.title, "Booking updated", "\(id) [P12-015]: the acting screen says so")
+            expectEqual(tapped.message,
+                        "The job wasn't moved, so the booking is confirmed for its original time, \(requestSlotWhen).",
+                        "\(id) [P12-015]: …and that the time did not change")
+            expectEqual(store.migrationMessage, nil, "\(id) [P12-015]: nothing goes to migrationMessage")
+            expectEqual(schedule.local, "2026-09-23 09:00 10:00", "\(id): the job's schedule is unchanged")
+            expectEqual(schedule.cloud, "2026-09-23 09:00 10:00", "\(id): …in the cloud row too")
+            expectEqual(d.queued("jobs") + d.queued("bookingRequests"), 0, "\(id): nothing is queued")
+        }
+    }
+
+    /// Every outcome other than a confirmation, from each acting screen.
+    enum AcceptCase: String, CaseIterable {
+        case unscheduledJob = "F3a the job has no start time"
+        case noJob = "F3b the request has no job"
+        case notAcknowledged = "F3c the move has not reached the server"
+        case declinedBeforeTheTap = "F3d declined on another device before the tap"
+        case declinedDuringTheResolve = "F3e declined on another device during the resolve"
+        case scheduleChanged = "F3f the server says the schedule changed"
+        case deletedBeforeTheTap = "F3g the request was deleted before the tap"
+        case deletedDuringTheResolve = "F3h the request was deleted during the resolve"
+        case lostAfterCommit = "F3i unknown outcome (the server committed)"
+        case lostBeforeCommit = "F3j unknown outcome (the server did not commit)"
+        case unreachable = "F3k the resolve cannot reach the server"
+        case rateLimited = "F3l rate limited"
+    }
+
+    /// F3: each non-success outcome is shown on the acting screen in plain
+    /// words (title as RN's failure alert, `screens/TodayScreen.tsx:557`),
+    /// nothing goes to `migrationMessage`, and the job's schedule is never
+    /// changed by the tap. A proof is staged just before the resolve is sent
+    /// and kept or removed only by the rules that were already there (the
+    /// success path, and Task 12b's recovery). Characterized: nothing shown
+    /// in every case.
+    @MainActor
+    static func acceptOutcomesOnTheActingScreen() async {
+        for acceptCase in AcceptCase.allCases {
+            for row in RescheduleRow.allCases {
+                await acceptOutcome(acceptCase, row)
+            }
+        }
+    }
+
+    @MainActor
+    static func acceptOutcome(_ acceptCase: AcceptCase, _ row: RescheduleRow) async {
+        let id = "\(acceptCase.rawValue) (\(row.rawValue))"
+        let tag = "f3-\(AcceptCase.allCases.firstIndex(of: acceptCase) ?? 0)-\(row.rawValue)"
+        var job = fixtureJob()
+        if acceptCase == .unscheduledJob {
+            job.scheduledDate = "2026-09-25"
+            job.scheduledStartTime = nil
+            job.scheduledEndTime = nil
+        }
+        let (d, store) = await rescheduleDevice(tag, job: job, converted: acceptCase != .noJob)
+        defer { d.cleanup() }
+        if acceptCase == .notAcknowledged { d.reach.online = false }
+        if acceptCase != .unscheduledJob, acceptCase != .noJob {
+            expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
+        }
+        let movedSchedule = acceptCase == .unscheduledJob ? "2026-09-25 - -"
+            : acceptCase == .noJob ? "2026-09-22 09:00 10:00" : "2026-09-25 13:00 14:00"
+        switch acceptCase {
+        case .declinedBeforeTheTap:
+            if var row = d.links.requestRow("req-1") {
+                row["status"] = "declined"
+                await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+            }
+        case .declinedDuringTheResolve:
+            d.links.duringNextRespond = {
+                if var row = d.links.requestRow("req-1") {
+                    row["status"] = "declined"
+                    await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+                }
+            }
+        case .deletedBeforeTheTap:
+            await d.links.delete(table: "bookingRequests", id: "req-1")
+        case .deletedDuringTheResolve:
+            d.links.duringNextRespond = { await d.links.delete(table: "bookingRequests", id: "req-1") }
+        case .scheduleChanged: d.links.respondMode = .scheduleChanged
+        case .lostAfterCommit: d.links.respondMode = .lostAfterCommit
+        case .lostBeforeCommit: d.links.respondMode = .lostBeforeCommit
+        case .rateLimited: d.links.respondMode = .rateLimited
+        case .unreachable: d.links.unreachable = true
+        case .unscheduledJob, .noJob, .notAcknowledged: break
+        }
+        d.links.resetLog()
+        let tapped = await tap(row, store, d)
+        d.links.respondMode = .normal
+        d.links.unreachable = false
+        let label = row.actionLabel
+        let unknown = "We couldn't tell whether the booking was updated. "
+            + "Check your connection, then pull down to refresh before trying again."
+        let expected: (sent: Bool, message: String, proofKept: Bool) = switch acceptCase {
+        case .unscheduledJob: (false, "Give the job a date and start time first, then tap “\(label)” again.", false)
+        case .noJob: (false, "This booking isn't linked to a job on this device yet. Pull down to refresh, then try again.", false)
+        case .notAcknowledged:
+            (false, "The job's new time hasn't reached the server yet. Check your connection, then tap “\(label)” again.", true)
+        case .declinedBeforeTheTap: (false, "This booking was already declined.", false)
+        case .declinedDuringTheResolve: (true, "This booking was already declined.", true)
+        case .scheduleChanged:
+            (true, "The job's time on the server doesn't match this device. "
+                + "Pull down to refresh, check the job, then tap “\(label)” again.", true)
+        case .deletedBeforeTheTap: (false, "This booking request wasn't found. It may have been removed on another device.", false)
+        case .deletedDuringTheResolve: (true, "This booking request wasn't found. It may have been removed on another device.", true)
+        case .lostAfterCommit, .lostBeforeCommit, .unreachable: (true, unknown, true)
+        case .rateLimited: (true, "Too many booking responses. Wait a moment and try again.", true)
+        }
+        observed(id, "outcome=\(tapped.outcome) shown=\(tapped.message ?? "nothing") "
+                 + "migrationMessage=\(store.migrationMessage ?? "nil") sent=\(d.links.log) proofs=\(d.items.count)")
+        expectEqual(d.links.log, expected.sent ? ["respond/resolve_reschedule"] : [],
+                    "\(id) [P12-015]: \(expected.sent ? "one resolve is sent" : "nothing is sent")")
+        expectEqual(tapped.title, failureTitle, "\(id) [P12-015]: the acting screen shows the failure")
+        expectEqual(tapped.message, expected.message, "\(id) [P12-015]: …in plain words")
+        expectEqual(store.migrationMessage, nil, "\(id) [P12-015]: nothing goes to migrationMessage")
+        expectEqual(jobSchedule(d).local, movedSchedule, "\(id): the tap never changes the job's schedule")
+        expectEqual(d.items.count, expected.proofKept ? 1 : 0,
+                    "\(id): \(expected.proofKept ? "the staged proof stays for Task 12b's rules" : "no proof is staged")")
+        expectEqual(d.queued("bookingRequests"), 0, "\(id): no copy of the request is queued")
+        switch acceptCase {
+        case .notAcknowledged:
+            expectEqual(store.rollbackReadiness().bookingWorkCount, 1, "\(id): the rollback check counts the staged proof")
+            // Back online, the owner taps again: the move is pushed first,
+            // then the resolve succeeds and the proof goes.
+            d.reach.online = true
+            d.links.resetLog()
+            let retried = await tap(row, store, d)
+            expectEqual(retried.title, "Booking updated", "\(id) [P12-015]: the owner's retry confirms the booking")
+            expectEqual(d.links.requestRow("req-1")?["status"] as? String, "confirmed", "\(id) [P12-015]: …on the server")
+            expectEqual(jobSchedule(d).cloud, "2026-09-25 13:00 14:00", "\(id) [P12-015]: …after the move reached it")
+            expectEqual(d.items.count, 0, "\(id): …and the proof goes")
+        case .declinedDuringTheResolve:
+            expectEqual(d.localRequestStatus, "declined", "\(id): the refresh brings the declined request")
+            // Task 12b: the next activation removes a proof whose request is closed.
+            await store.performForegroundRefresh()
+            expectEqual(d.items.count, 0, "\(id): the next activation removes the proof (Task 12b)")
+        case .lostAfterCommit:
+            expectEqual(d.links.requestRow("req-1")?["status"] as? String, "confirmed", "\(id): the server confirmed")
+        case .lostBeforeCommit, .unreachable, .rateLimited:
+            expectEqual(d.links.requestRow("req-1")?["status"] as? String, "reschedule_requested",
+                        "\(id): the server still has the request")
+        default:
+            break
+        }
+    }
+
+    /// F4: the account changes while the resolve's request is out (a
+    /// sign-out, or an account boundary that brings the same owner back,
+    /// which only the account generation tells apart). Nothing is applied
+    /// to the device, and the acting screen says why.
+    @MainActor
+    static func accountChangeDuringTheResolve() async {
+        for boundary in ["sign-out", "boundary then the same owner"] {
+            for row in RescheduleRow.allCases {
+                let id = "F4 \(row.rawValue): \(boundary) during the resolve"
+                let (d, store) = await rescheduleDevice("f4-\(boundary.count)-\(row.rawValue)")
+                defer { d.cleanup() }
+                expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
+                d.links.duringNextRespond = {
+                    if boundary == "sign-out" {
+                        store.scheduleBookingTestClearOwner()
+                    } else {
+                        store.testApplyCompletedSignOutState()
+                        store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+                        store.testMarkInitialSyncCompleted(subject: d.subject)
+                    }
+                }
+                d.links.resetLog()
+                let tapped = await tap(row, store, d)
+                observed(id, "outcome=\(tapped.outcome) shown=\(tapped.message ?? "nothing") sent=\(d.links.log) "
+                         + "local=\(d.localRequestStatus ?? "gone")")
+                expectEqual(d.links.log, ["respond/resolve_reschedule"], "\(id): sanity: the resolve was out")
+                expect(d.localRequestStatus != "confirmed", "\(id) [P12-015]: nothing is applied to the device")
+                if boundary == "sign-out" {
+                    expect(store.bookingAttentionRows().contains { $0.request.id == "req-1" },
+                           "\(id) [P12-015]: …nor to the live snapshot (the row is still there)")
+                }
+                expectEqual(d.queued("bookingRequests"), 0, "\(id) [P12-015]: nothing is queued")
+                expectEqual(tapped.title, failureTitle, "\(id) [P12-015]: the acting screen says so")
+                expectEqual(tapped.message, "The signed-in account changed, so nothing was saved on this device.",
+                            "\(id) [P12-015]: …in plain words")
+                expectEqual(store.migrationMessage, nil, "\(id) [P12-015]: nothing goes to migrationMessage")
+            }
+        }
+    }
+
+    /// F5 [S1 guard]: `request.slot` is the ORIGINAL booked slot, immutable
+    /// history (contract §7; `request_reschedule` changes only status and
+    /// history, `backend-workers/lib/booking/manage.js:24`). After the
+    /// owner's move and the resolve, the job's date and start are the
+    /// owner's moved values and never `request.slot`: on the device, in the
+    /// cloud row, after the pull, and after a relaunch and activation. A fix
+    /// that took `request.slot` as the target would move the job back to the
+    /// original slot and prove it.
+    @MainActor
+    static func s1GuardTheResolveNeverMovesTheJobBack() async {
+        for row in RescheduleRow.allCases {
+            let id = "F5 [S1 guard] \(row.rawValue)"
+            let (d, store) = await rescheduleDevice("f5-\(row.rawValue)")
+            defer { d.cleanup() }
+            let slot = fixtureRequest().slot
+            expect(ownerMovesTheJob(store), "\(id): sanity: the schedule editor saves the move")
+            _ = await tap(row, store, d)
+            expectEqual(d.links.requestRow("req-1")?["status"] as? String, "confirmed", "\(id): sanity: the resolve succeeded")
+            func check(_ stage: String) {
+                let schedule = jobSchedule(d)
+                expectEqual(schedule.local, "2026-09-25 13:00 14:00", "\(id) \(stage): the device's job has the owner's moved time")
+                expectEqual(schedule.cloud, "2026-09-25 13:00 14:00", "\(id) \(stage): the cloud job has the owner's moved time")
+                let local = d.disk?.payload.jobs?.first { $0.id == "job-1" }
+                expect(!(local?.scheduledDate == slot?.date && local?.scheduledStartTime == slot?.start),
+                       "\(id) \(stage): the job is never at request.slot")
+                expectEqual(d.disk?.payload.bookingRequests?.first?.slot?.date, "2026-09-23",
+                            "\(id) \(stage): request.slot is untouched history")
+            }
+            check("after the resolve")
+            await d.sync()
+            check("after the pull")
+            let relaunched = d.launch()
+            await d.signIn(relaunched)
+            await relaunched.performForegroundRefresh()
+            await d.sync()
+            check("after a relaunch and activation")
+        }
     }
 
     // MARK: S. Source pins: where recovery runs, and where it does not
@@ -1572,5 +1962,31 @@ struct ScheduleBookingRecoveryTests {
         let line = lines.first?.lowercased() ?? ""
         expect(!line.isEmpty && !["token", "customer", "request", "binding", "subject", "item"].contains(where: line.contains),
                "S [M6]: …with counts only (no token, customer, request or owner)")
+
+        // P12-015: both reschedule row actions call the one entry point the
+        // F tests drive and show its notice on their own screen. The entry
+        // point writes nothing to the job, sends nothing through
+        // migrationMessage and compares the account generation.
+        let today = read("native/TradeReadyNative/TodayView.swift")
+        let requests = read("native/TradeReadyNative/NativeBookingRequestsView.swift")
+        let rowActions = [
+            ("Today", body(today, from: "    private func resolveBookingReschedule(") ?? "", "I've rescheduled it"),
+            ("Requests", body(requests, from: "    private func resolveReschedule(") ?? "", "Resolve"),
+        ]
+        for (screen, action, label) in rowActions {
+            expect(action.contains("store.acceptBookingReschedule(requestID: row.request.id)"),
+                   "S [P12-015]: the \(screen) row action calls acceptBookingReschedule")
+            expect(action.contains("ownerNotice(actionLabel: \"\(label)\")"),
+                   "S [P12-015]: …and shows its notice on that screen")
+            expect(!action.isEmpty && !action.contains("prepareBookingReschedule") && !action.contains("slot"),
+                   "S [P12-015]: …and never builds a schedule draft from request.slot")
+        }
+        let accept = body(store, from: "    func acceptBookingReschedule(") ?? ""
+        expect(!accept.isEmpty, "S [P12-015]: the accept entry point exists")
+        expect(accept.contains("accountBoundaryGeneration"), "S [P12-015]: it compares the account generation")
+        for forbidden in ["commitScheduleOnly", "migrationMessage", "enqueueUpsert", "payload.jobs =",
+                          "scheduledDate =", "scheduledStartTime ="] {
+            expect(!accept.contains(forbidden), "S [P12-015]: it never uses `\(forbidden)`")
+        }
     }
 }
