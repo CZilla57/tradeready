@@ -42,6 +42,14 @@ import FoundationNetworking
 // proof of the job's current schedule once the owner's move has reached the
 // server, and every outcome is shown on the screen the owner acted on.
 //
+// Section K (12.00b.2-K, P12-016): a customer's booking arrives through a pull
+// (as the Worker writes the request row) on a native-only account. Plan 8.08's
+// atomic intake (`runBookingIntakeAfterVerifiedPull`) had no production
+// caller, so neither a cold launch nor a warm activation turned the booking
+// into a lead job and a customer, and a later reschedule accept answered
+// `notLinkedToJob`. RN converts at launch after the initial sync and after
+// every foreground sync (`App.tsx:396`, `context/AuthContext.tsx:118-120`).
+//
 // Everything here is production code except the network: the real AppStore,
 // queue, sync coordinator, push transport and delta pull in front of the
 // shared `InMemorySupabase`, and the real booking-admin, portal-manage and
@@ -55,6 +63,31 @@ import FoundationNetworking
 final class SwitchReachability: NativeSyncReachability, @unchecked Sendable {
     var online = true
     func isReachable() async -> Bool { online }
+}
+
+/// The data server as the delta pull reads it (12.00b.2-K). It can run a hook
+/// inside the next read of one table (an account change during the pull's
+/// network await) and can stop answering reads (a pull started after that
+/// point fails). The push writes to the data server directly.
+final class PullLoader: NativeInitialSyncHTTPDataLoading, @unchecked Sendable {
+    let data: InMemorySupabase
+    var duringNextRead: (table: String, hook: @MainActor () async -> Void)?
+    var readsFail = false
+
+    init(data: InMemorySupabase) {
+        self.data = data
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if request.httpMethod == "GET" {
+            if readsFail { throw URLError(.notConnectedToInternet) }
+            if let pending = duringNextRead, pending.table == request.url?.lastPathComponent {
+                duringNextRead = nil
+                await pending.hook()
+            }
+        }
+        return try await data.data(for: request)
+    }
 }
 
 /// The App Group widget/Siri action queue in memory (the extension's writer side).
@@ -367,6 +400,7 @@ final class Device {
     let backupDir: URL
     let suite: String
     let data = InMemorySupabase()
+    let pullLoader: PullLoader
     let links: LinkServer
     let reach = SwitchReachability()
     let widgetQueue = MemoryWidgetActionQueue()
@@ -403,6 +437,7 @@ final class Device {
         try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
         suite = "com.tradeready.schedule-booking-recovery.tests.\(UUID().uuidString)"
         links = LinkServer(data: data, userID: subject)
+        pullLoader = PullLoader(data: data)
         let snapshot = Canonical.Snapshot(payload: Canonical.SnapshotPayload(
             jobs: jobs, customers: customers, settings: settings, bookingRequests: requests))
         do { try repository().save(snapshot) } catch { print("FAIL: fixture: the snapshot is written (\(error))") }
@@ -433,7 +468,7 @@ final class Device {
                 lockFile: lock
             ),
             initialSyncService: NativeSupabaseInitialSyncService(
-                supabaseURL: Self.supabaseURL, publishableKey: "publishable-key", loader: data
+                supabaseURL: Self.supabaseURL, publishableKey: "publishable-key", loader: pullLoader
             ),
             secureSettingsStore: hostTestSecureSettingsStore()
         )
@@ -610,7 +645,18 @@ struct ScheduleBookingRecoveryTests {
         await accountChangeDuringTheResolve()
         await s1GuardTheResolveNeverMovesTheJobBack()
         acceptNoticesOnBothScreens()
+        await coldLaunchConvertsAfterTheInitialSync()
+        await warmActivationConvertsAfterItsPull()
+        await failedOrPartialPullConvertsNothing()
+        await intakeIsIdempotent()
+        await anExistingLeadJobIsNeverOverwritten()
+        await accountChangeDuringTheIntakePull()
+        await nothingBeforeTheInitialSync()
+        await nothingWhileReadOnly()
+        await aFailedIntakeSaveLeavesNoMessage()
+        await acceptAfterIntakeIsLinkedToTheJob()
         sources(root)
+        intakeSources(root)
 
         if failures == 0 {
             print("PASS: schedule booking recovery tests (\(checks) checks)")
@@ -1936,6 +1982,628 @@ struct ScheduleBookingRecoveryTests {
                     "F6 [P12-015]: the customer's cancel")
         expectEqual(message(.needsReview(currentStatus: "confirmed")), "This booking is already confirmed.",
                     "F6 [P12-015]: another device's confirm")
+    }
+
+    // MARK: K. Customer bookings become jobs (P12-016)
+
+    static let leadJobID = "jbk_req-1"
+
+    /// The request row the Worker's reserve route writes for a booking
+    /// (`backend-workers/lib/booking/reserve.js:123-139`): kind and status
+    /// "booked", the slot the customer chose and no `convertedJobId`. The
+    /// manage token is a fixture string.
+    static func workerBooking() -> [String: Any] {
+        [
+            "id": "req-1", "status": "booked", "kind": "booked",
+            "name": "Sam Ortiz", "phone": "555-0177", "email": "sam@example.test",
+            "address": "9 Oak Ave", "details": "Panel inspection", "preferredTiming": "",
+            "slot": ["date": "2026-09-23", "start": "09:00", "end": "10:00", "timeZone": "America/Phoenix",
+                     "startUtc": "2026-09-23T16:00:00.000Z", "endUtc": "2026-09-23T17:00:00.000Z"],
+            "manageToken": String(repeating: "d", count: 48),
+            "history": [["at": "2026-09-10T00:00:00.000Z", "actor": "customer", "event": "booked"]],
+            "createdAt": "2026-09-10T00:00:00.000Z",
+        ]
+    }
+
+    /// The customer books: the Worker writes the request row.
+    @MainActor
+    static func customerBooks(_ d: Device) async {
+        await d.links.upsert(table: "bookingRequests", id: "req-1", record: workerBooking())
+    }
+
+    /// A native-only account signed in after its initial sync, with its
+    /// workspace pushed; then the customer books while the app is in the
+    /// background.
+    @MainActor
+    static func intakeDevice(_ tag: String) async -> (Device, AppStore) {
+        let d = Device(tag)
+        let store = d.launch()
+        await d.signIn(store)
+        await d.sync()
+        await customerBooks(d)
+        return (d, store)
+    }
+
+    @MainActor
+    static func leadJob(_ d: Device) -> Canonical.Job? {
+        d.disk?.payload.jobs?.first { $0.id == leadJobID }
+    }
+
+    @MainActor
+    static func bookedCustomers(_ d: Device) -> [Canonical.Customer] {
+        (d.disk?.payload.customers ?? []).filter { $0.name == "Sam Ortiz" }
+    }
+
+    @MainActor
+    static func bookingRequest(_ d: Device) -> Canonical.BookingRequest? {
+        d.disk?.payload.bookingRequests?.first { $0.id == "req-1" }
+    }
+
+    @MainActor
+    static func intakeState(_ d: Device) -> String {
+        "job=\(leadJob(d).map { $0.status } ?? "none") customers=\(bookedCustomers(d).count) "
+            + "linked=\(bookingRequest(d)?.convertedJobId ?? "no") queued=jobs:\(d.queued("jobs")),"
+            + "customers:\(d.queued("customers")),requests:\(d.queued("bookingRequests"))"
+    }
+
+    /// The booking became the lead job `jbk_req-1` on its slot and one
+    /// customer, and the request links both, keeping its status (D-B3-1).
+    @MainActor
+    static func expectConverted(_ d: Device, _ id: String) {
+        let job = leadJob(d)
+        let request = bookingRequest(d)
+        let customers = bookedCustomers(d)
+        expect(job != nil, "\(id) [P12-016]: the booking is the lead job \(leadJobID)")
+        expectEqual(job?.status, "lead", "\(id) [P12-016]: …in the lead stage")
+        expectEqual(job?.title, "Booked appointment", "\(id) [P12-016]: …titled as RN titles a booking")
+        expectEqual([job?.scheduledDate, job?.scheduledStartTime, job?.scheduledEndTime].map { $0 ?? "-" }
+                        .joined(separator: " "), "2026-09-23 09:00 10:00",
+                    "\(id) [P12-016]: …on the booked slot (calendar and route)")
+        expectEqual(customers.count, 1, "\(id) [P12-016]: one customer is created for the booking")
+        expectEqual(request?.convertedJobId, leadJobID, "\(id) [P12-016]: the request links the job")
+        expect(request?.convertedCustomerId != nil && request?.convertedCustomerId == customers.first?.id
+               && job?.customerId == customers.first?.id, "\(id) [P12-016]: …and the customer, as the job does")
+        expectEqual(request?.status, "booked", "\(id) [P12-016]: the request keeps its status (D-B3-1)")
+    }
+
+    /// Waits (bounded) for a pass a gate site started.
+    @MainActor
+    static func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<200 where !condition() {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    /// Gives a pass a gate site might have started time to run.
+    @MainActor
+    static func settle() async {
+        for _ in 0..<20 { try? await Task.sleep(nanoseconds: 5_000_000) }
+    }
+
+    /// K1: a cold launch. The initial sync's pull brings the booking, then the
+    /// signed-in gate opens: the booking becomes a lead job and a customer
+    /// there, before any scene activation (RN converts once bootstrapping ends,
+    /// `App.tsx:396`). The device goes offline right after the pull, so the
+    /// drafts stay queued; the next push brings the job, the customer and the
+    /// linked request to the cloud.
+    /// Characterized at 9a4d845: nothing converts.
+    @MainActor
+    static func coldLaunchConvertsAfterTheInitialSync() async {
+        let id = "K1 cold launch"
+        let d = Device("k1")
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        await customerBooks(d)
+        let relaunched = d.launch()
+        await d.signIn(relaunched)
+        // The initial sync's committed pull. This host binary cannot run the
+        // full pull (`beginInitialSyncGate` needs a configured build), so the
+        // real delta pull and commit stand in for it (as in L).
+        _ = await relaunched.testPullDeltaIfPossible()
+        expect(bookingRequest(d) != nil && bookingRequest(d)?.convertedJobId == nil,
+               "\(id): sanity: the pull brought the booking, unconverted")
+        expect(leadJob(d) == nil, "\(id): sanity: the pull alone converts nothing")
+        d.reach.online = false
+        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+            accountBinding: d.binding, stage: .personalized,
+            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
+        ))
+        do { try relaunched.completeStartingPoint(.fresh) } catch {
+            expect(false, "\(id): sanity: the starting point completes (\(error))")
+        }
+        await waitUntil { leadJob(d) != nil }
+        observed(id, intakeState(d))
+        expectConverted(d, id)
+        expectEqual(d.queued("jobs"), 1, "\(id) [P12-016]: the lead job is queued for the push")
+        expectEqual(d.queued("customers"), 1, "\(id) [P12-016]: …and the customer")
+        expectEqual(d.queued("bookingRequests"), 1, "\(id) [P12-016]: …and the linked request")
+        d.reach.online = true
+        await d.sync()
+        expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead",
+                    "\(id) [P12-016]: the cloud has the lead job")
+        expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
+                    "\(id) [P12-016]: …and the linked request")
+        expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1,
+                    "\(id) [P12-016]: …and the customer")
+        expectEqual(d.queue.load().count, 0, "\(id): everything reached the server")
+    }
+
+    /// K2: a warm activation. The activation's identity tail runs the gate
+    /// sites first, before any pull, and they convert nothing, even with an
+    /// unconverted booking already on the device (K2b: a pull-to-refresh
+    /// brought it; RN converts only at launch and after a foreground sync).
+    /// The foreground refresh's own pull then commits, and the booking becomes
+    /// a lead job and a customer in the same activation (RN: sync, then
+    /// convert, `context/AuthContext.tsx:118-120`). K2a: the booking arrives
+    /// in that pull, and once it has committed the data server stops
+    /// answering reads, so intake converts from that pull, not from a pull
+    /// of its own.
+    /// Characterized at 9a4d845: nothing converts.
+    @MainActor
+    static func warmActivationConvertsAfterItsPull() async {
+        for localBeforeActivation in [false, true] {
+            let id = localBeforeActivation ? "K2b warm activation, booking already on the device"
+                : "K2a warm activation, booking in the refresh's pull"
+            let (d, store) = await intakeDevice(localBeforeActivation ? "k2b" : "k2a")
+            defer { d.cleanup() }
+            if localBeforeActivation {
+                await d.sync()
+                expect(bookingRequest(d) != nil && leadJob(d) == nil,
+                       "\(id): sanity: a pull-to-refresh brought the booking and converted nothing")
+            }
+            d.stage(passMarkerProof)
+            await applyIdentityAgain(store, d)
+            let atGateSites = intakeState(d)
+            let convertedAtGateSites = leadJob(d) != nil || !bookedCustomers(d).isEmpty
+            var readsStopped = false
+            if !localBeforeActivation {
+                store.notificationSynchronizeHook = { _ in
+                    guard !readsStopped else { return }
+                    readsStopped = true
+                    d.pullLoader.readsFail = true
+                }
+            }
+            await store.performForegroundRefresh()
+            observed(id, "at the gate sites: \(atGateSites); after the refresh: \(intakeState(d))")
+            expect(!convertedAtGateSites, "\(id) [P12-016]: the gate sites, before this activation's pull, convert nothing")
+            if !localBeforeActivation {
+                expect(readsStopped, "\(id): sanity: the refresh's pull committed, then reads stopped")
+            }
+            expectConverted(d, id)
+            d.pullLoader.readsFail = false
+            await d.sync()
+            expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead",
+                        "\(id) [P12-016]: after the push the cloud has the lead job")
+        }
+    }
+
+    /// K3: a foreground refresh whose pull failed (offline) or was partial
+    /// (the jobs table failed) converts nothing, even with the unconverted
+    /// booking on the device. A partial pull can miss the job another device
+    /// already made from the booking, and the push after a conversion would
+    /// overwrite it. Once sync works again (the owner's pull to refresh, which
+    /// converts nothing itself, clears the backoff), the next activation
+    /// converts the booking.
+    @MainActor
+    static func failedOrPartialPullConvertsNothing() async {
+        for partial in [false, true] {
+            let id = partial ? "K3b partial pull" : "K3a failed pull"
+            let (d, store) = await intakeDevice(partial ? "k3b" : "k3a")
+            defer { d.cleanup() }
+            if partial {
+                d.data.injectStatusOnce = (method: "GET", table: "jobs", status: 500)
+            } else {
+                await d.sync()
+                expect(bookingRequest(d) != nil, "\(id): sanity: the booking is on the device")
+                d.reach.online = false
+            }
+            await store.performForegroundRefresh()
+            let afterFailedRefresh = intakeState(d)
+            let arrived = bookingRequest(d) != nil
+            let convertedAfterFailedRefresh = leadJob(d) != nil || !bookedCustomers(d).isEmpty
+                || bookingRequest(d)?.convertedJobId != nil
+            d.reach.online = true
+            await d.sync()
+            let convertedByPullToRefresh = leadJob(d) != nil
+            await store.performForegroundRefresh()
+            observed(id, "after the refresh: \(afterFailedRefresh); after the next activation: \(intakeState(d))")
+            expect(arrived, "\(id): sanity: the booking is on the device, unconverted")
+            expect(!convertedAfterFailedRefresh, "\(id) [P12-016]: the refresh converts nothing")
+            expect(!convertedByPullToRefresh, "\(id): a pull to refresh converts nothing (RN parity)")
+            expectConverted(d, "\(id): the next activation")
+        }
+    }
+
+    /// K4: idempotence. After the conversion, another activation, and a
+    /// relaunch with its activation, create nothing new and queue nothing.
+    /// Two overlapping activations convert a new booking once.
+    @MainActor
+    static func intakeIsIdempotent() async {
+        let id = "K4 idempotence"
+        let (d, store) = await intakeDevice("k4")
+        defer { d.cleanup() }
+        await store.performForegroundRefresh()
+        await d.sync()
+        expectConverted(d, id)
+        let jobs = d.disk?.payload.jobs?.count
+        let customers = (d.disk?.payload.customers ?? []).map(\.id)
+        await store.performForegroundRefresh()
+        expectEqual(d.disk?.payload.jobs?.count, jobs, "\(id): a second activation creates no job")
+        expectEqual((d.disk?.payload.customers ?? []).map(\.id), customers, "\(id): …and no customer")
+        expectEqual(d.queue.load().count, 0, "\(id): …and queues nothing")
+        let relaunched = d.launch()
+        await d.signIn(relaunched)
+        await relaunched.performForegroundRefresh()
+        observed(id, "after a second activation and a relaunch: \(intakeState(d))")
+        expectEqual(d.disk?.payload.jobs?.count, jobs, "\(id): the relaunch's activation creates no job")
+        expectEqual((d.disk?.payload.customers ?? []).map(\.id), customers, "\(id): …and no customer")
+        expectEqual(d.queue.load().count, 0, "\(id): …and queues nothing")
+        expectConverted(d, "\(id): after the relaunch")
+
+        let overlapID = "K4 overlapping activations"
+        let (d2, store2) = await intakeDevice("k4-overlap")
+        defer { d2.cleanup() }
+        async let firstRefresh: Void = store2.performForegroundRefresh()
+        async let secondRefresh: Void = store2.performForegroundRefresh()
+        _ = await (firstRefresh, secondRefresh)
+        await d2.sync()
+        observed(overlapID, intakeState(d2))
+        expectConverted(d2, overlapID)
+        expectEqual(d2.data.liveRowCount(table: "customers", userID: d2.subject), 1,
+                    "\(overlapID) [P12-016]: one customer reaches the cloud")
+        expectEqual(d2.data.liveRowCount(table: "jobs", userID: d2.subject), 1,
+                    "\(overlapID) [P12-016]: …and one job")
+    }
+
+    /// The lead job the Expo build made from the booking on the owner's other
+    /// device, since scheduled and priced there.
+    static func otherDevicesLeadJob() -> [String: Any] {
+        [
+            "id": leadJobID, "customerId": "c-other-1", "customerName": "Sam Ortiz", "title": "Booked appointment",
+            "description": "Panel inspection", "status": "scheduled", "address": "9 Oak Ave", "estimateTotal": 350,
+            "laborHours": 2, "laborRate": 95, "materials": [], "materialMarkup": 25, "overhead": 10, "margin": 30,
+            "notes": "Priced on the other device", "createdAt": "2026-09-10",
+            "scheduledDate": "2026-09-23", "scheduledStartTime": "09:00", "scheduledEndTime": "10:00",
+        ]
+    }
+
+    /// K5: the Expo build on the owner's other device converted the booking
+    /// first. Its lead job `jbk_req-1` (since scheduled and priced there) and
+    /// its customer reached the cloud; its request stamp has not. Native
+    /// links the request to that job and customer and never replaces the job:
+    /// nothing is queued for it, and after the push the cloud job is still
+    /// the other device's. Both clients use the same deterministic job ID
+    /// (D-B3-2).
+    /// Characterized at 9a4d845: the request is never linked.
+    @MainActor
+    static func anExistingLeadJobIsNeverOverwritten() async {
+        let id = "K5 existing lead job"
+        let (d, store) = await intakeDevice("k5")
+        defer { d.cleanup() }
+        await d.links.upsert(table: "customers", id: "c-other-1", record: [
+            "id": "c-other-1", "name": "Sam Ortiz", "email": "sam@example.test", "phone": "555-0177",
+            "address": "9 Oak Ave", "notes": "", "createdAt": "2026-09-10T00:00:05.000Z",
+        ])
+        await d.links.upsert(table: "jobs", id: leadJobID, record: otherDevicesLeadJob())
+        // Offline once the refresh's pull has committed, so what intake
+        // queues stays in the queue to be read.
+        var pulled = false
+        store.notificationSynchronizeHook = { _ in
+            guard !pulled else { return }
+            pulled = true
+            d.reach.online = false
+        }
+        await store.performForegroundRefresh()
+        let job = leadJob(d)
+        observed(id, intakeState(d) + " customer=\(bookingRequest(d)?.convertedCustomerId ?? "none")")
+        expectEqual(job?.status, "scheduled", "\(id) [D-B3-2]: the other device's job is kept")
+        expectEqual(job?.notes, "Priced on the other device", "\(id) [D-B3-2]: …with its notes")
+        expectEqual(job?.estimateTotal, Decimal(350), "\(id) [D-B3-2]: …and its price")
+        expectEqual(bookingRequest(d)?.convertedJobId, leadJobID, "\(id) [P12-016]: the request links that job")
+        expectEqual(bookingRequest(d)?.convertedCustomerId, "c-other-1",
+                    "\(id) [P12-016]: …and its customer (found by name: no duplicate)")
+        expectEqual(bookedCustomers(d).count, 1, "\(id): one customer on the device")
+        expectEqual(d.queued("jobs"), 0, "\(id) [D-B3-2]: nothing is queued for the job")
+        expectEqual(d.queued("customers"), 0, "\(id): …or the customer")
+        expectEqual(d.queued("bookingRequests"), 1, "\(id) [P12-016]: the linked request is queued")
+        d.reach.online = true
+        await d.sync()
+        expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "scheduled",
+                    "\(id) [D-B3-2]: after the push the cloud job is still the other device's")
+        expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
+                    "\(id) [P12-016]: …and the cloud request links it")
+    }
+
+    /// K6: the account changes while the foreground refresh's pull is in its
+    /// network await (reading the booking table): a sign-out; a switch to
+    /// account B with B's gate open (workspace, sign-in, initial sync); or an
+    /// account boundary after which the same owner is signed in again (only
+    /// the account generation tells them apart). Nothing is converted into
+    /// either account's snapshot or queue. In the last case the pull still
+    /// commits (the subject is the same) but began before the boundary, so
+    /// it does not count; the owner's next launch and activation convert the
+    /// booking.
+    @MainActor
+    static func accountChangeDuringTheIntakePull() async {
+        let subjectB = "99999999-8888-7777-6666-555555555555"
+        let bindingB = String(repeating: "c", count: 64)
+        for boundary in ["sign-out", "account B", "boundary then the same owner"] {
+            let id = "K6 \(boundary) during the pull"
+            let (d, store) = await intakeDevice("k6-\(boundary.count)")
+            defer { d.cleanup() }
+            var changed = false
+            d.pullLoader.duringNextRead = ("bookingRequests", {
+                changed = true
+                switch boundary {
+                case "sign-out":
+                    store.scheduleBookingTestClearOwner()
+                case "account B":
+                    store.testApplyCompletedSignOutState()
+                    try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+                        accountBinding: bindingB, stage: .done,
+                        draft: .init(businessName: "Biz B", contactName: "Owner B", trade: .electrical, step: 1)
+                    ))
+                    store.testSeedNativeSignedInOwner(subject: subjectB, binding: bindingB)
+                    store.testMarkInitialSyncCompleted(subject: subjectB)
+                default:
+                    store.testApplyCompletedSignOutState()
+                    store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+                    store.testMarkInitialSyncCompleted(subject: d.subject)
+                }
+            })
+            await store.performForegroundRefresh()
+            observed(id, intakeState(d))
+            expect(changed, "\(id): sanity: the account changed during the pull")
+            if boundary == "account B" {
+                expect(isSignedIn(store), "\(id): sanity: B is signed in with the gate open")
+            }
+            expect(leadJob(d) == nil, "\(id) [P12-016]: no lead job in the snapshot")
+            expect(bookedCustomers(d).isEmpty, "\(id) [P12-016]: …no customer")
+            expect(bookingRequest(d)?.convertedJobId == nil, "\(id) [P12-016]: …the request is not linked")
+            expectEqual(d.queued("jobs") + d.queued("customers") + d.queued("bookingRequests"), 0,
+                        "\(id) [P12-016]: …and nothing is queued")
+            if boundary == "boundary then the same owner" {
+                expect(bookingRequest(d) != nil, "\(id): sanity: the same owner's pull committed the booking")
+                let next = d.launch()
+                await d.signIn(next)
+                await next.performForegroundRefresh()
+                expectConverted(d, "\(id): the owner's next activation")
+            }
+        }
+    }
+
+    /// K7: before the initial sync has completed for the signed-in owner,
+    /// nothing converts: not the activation (its pull commits and brings the
+    /// booking) and not a gate site (the starting point opening the gate).
+    /// Once the initial sync has completed, the next activation converts.
+    @MainActor
+    static func nothingBeforeTheInitialSync() async {
+        let id = "K7 before the initial sync"
+        let d = Device("k7")
+        defer { d.cleanup() }
+        await customerBooks(d)
+        let store = d.launch()
+        d.prepareOwner(store)
+        store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
+        d.connect(store, subject: d.subject)
+        await store.performForegroundRefresh()
+        let pulled = bookingRequest(d) != nil
+        try? NativeOnboardingStore(snapshotURL: d.storeURL).save(NativeOnboardingDocument(
+            accountBinding: d.binding, stage: .personalized,
+            draft: .init(businessName: "Biz", contactName: "Owner", trade: .electrical, step: 1)
+        ))
+        do { try store.completeStartingPoint(.fresh) } catch {
+            expect(false, "\(id): sanity: the starting point completes (\(error))")
+        }
+        await settle()
+        let before = intakeState(d)
+        let convertedBefore = leadJob(d) != nil || !bookedCustomers(d).isEmpty
+        store.testMarkInitialSyncCompleted(subject: d.subject)
+        await store.performForegroundRefresh()
+        observed(id, "before the initial sync: \(before); after: \(intakeState(d))")
+        expect(pulled, "\(id): sanity: the activation's pull brought the booking")
+        expect(!convertedBefore, "\(id) [P12-016]: nothing converts before the initial sync")
+        expectConverted(d, "\(id): after the initial sync, the next activation")
+    }
+
+    /// K7b: read-only. The launch found a snapshot written by a newer app
+    /// version, so it keeps it and blocks writes. With an unconverted booking
+    /// in it, neither an activation nor a gate site converts, and nothing is
+    /// written or queued for a job or customer.
+    @MainActor
+    static func nothingWhileReadOnly() async {
+        let id = "K7b read-only"
+        let d = Device("k7b")
+        defer { d.cleanup() }
+        let future = Canonical.Snapshot(
+            schemaVersion: Canonical.Snapshot.currentSchemaVersion + 1,
+            payload: Canonical.SnapshotPayload(settings: fixtureSettings(bookingLink: nil),
+                                               bookingRequests: [fixtureRequest(status: "booked", converted: false)])
+        )
+        do { try Canonical.SnapshotCodec.encode(future).write(to: d.storeURL, options: .atomic) } catch {
+            expect(false, "\(id): fixture: the newer snapshot is written (\(error))")
+        }
+        let bytes = try? Data(contentsOf: d.storeURL)
+        let store = d.launch()
+        expect(store.rollbackReadiness().blockers.contains(.writesBlocked), "\(id): sanity: the launch blocked writes")
+        await d.signIn(store)
+        await customerBooks(d)
+        await store.performForegroundRefresh()
+        store.testActivateReturningUserSession(subject: d.subject, binding: d.binding)
+        await settle()
+        observed(id, "queued=jobs:\(d.queued("jobs")),customers:\(d.queued("customers")) "
+                 + "unchanged=\((try? Data(contentsOf: d.storeURL)) == bytes)")
+        expect((try? Data(contentsOf: d.storeURL)) == bytes, "\(id) [P12-016]: nothing is written")
+        expectEqual(d.queued("jobs") + d.queued("customers"), 0, "\(id) [P12-016]: no job or customer is queued")
+        let linkedRequestQueued = d.queue.load().contains { item in
+            item.table == "bookingRequests"
+                && String(decoding: (try? JSONEncoder().encode(item.payload)) ?? Data(), as: UTF8.self).contains(leadJobID)
+        }
+        expect(!linkedRequestQueued, "\(id) [P12-016]: no linked request is queued")
+    }
+
+    /// K8: the intake's local save fails after the refresh's pull committed.
+    /// Nothing is converted or queued; nothing is left in `migrationMessage`
+    /// to show later on an unrelated screen (the P12-015 lesson); the sync
+    /// status carries the bounded code `intake/local-commit`. The next
+    /// activation converts the booking.
+    @MainActor
+    static func aFailedIntakeSaveLeavesNoMessage() async {
+        let id = "K8 intake save fails"
+        let (d, store) = await intakeDevice("k8")
+        defer { d.cleanup() }
+        var armed = true
+        store.notificationSynchronizeHook = { _ in
+            guard armed else { return }
+            armed = false
+            d.failSnapshotSaves(true)
+        }
+        await store.performForegroundRefresh()
+        d.failSnapshotSaves(false)
+        let code = store.syncStatus.diagnosticCode
+        observed(id, intakeState(d) + " migrationMessage=\(store.migrationMessage ?? "nil") code=\(code ?? "nil")")
+        expect(!armed, "\(id): sanity: the refresh's pull committed before saves failed")
+        expect(bookingRequest(d) != nil, "\(id): sanity: the pull brought the booking")
+        expect(leadJob(d) == nil && bookedCustomers(d).isEmpty && bookingRequest(d)?.convertedJobId == nil,
+               "\(id): nothing is converted")
+        expectEqual(d.queued("jobs") + d.queued("customers") + d.queued("bookingRequests"), 0,
+                    "\(id): nothing is queued")
+        expectEqual(store.migrationMessage, nil, "\(id) [P12-016]: nothing is left in migrationMessage")
+        expectEqual(code, "intake/local-commit", "\(id) [P12-016]: the sync status carries the bounded code")
+        await store.performForegroundRefresh()
+        expectConverted(d, "\(id): the next activation")
+    }
+
+    /// K9 (with P12-015): after intake, the customer asks to reschedule, and
+    /// the owner accepts from Today without moving the job. The request is
+    /// linked to the lead job, so the accept resolves with a proof of the
+    /// job's schedule instead of answering `notLinkedToJob` ("Pull down to
+    /// refresh, then try again", which never helped).
+    /// Characterized at 9a4d845: `notLinkedToJob`.
+    @MainActor
+    static func acceptAfterIntakeIsLinkedToTheJob() async {
+        let id = "K9 accept after intake"
+        let (d, store) = await intakeDevice("k9")
+        defer { d.cleanup() }
+        await store.performForegroundRefresh()
+        await d.sync()
+        if var row = d.links.requestRow("req-1") {
+            row["status"] = "reschedule_requested"
+            await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+        }
+        await store.performForegroundRefresh()
+        d.links.resetLog()
+        let tapped = await tap(.today, store, d)
+        observed(id, "outcome=\(tapped.outcome) shown=\(tapped.message ?? "nothing") sent=\(d.links.log)")
+        expect(!tapped.outcome.contains("notLinkedToJob") && tapped.outcome != "no row",
+               "\(id) [P12-016]: the accept no longer answers notLinkedToJob (\(tapped.outcome))")
+        expectEqual(d.links.respondProofs, ["\(leadJobID) 2026-09-23 09:00 2026-09-10T00:00:00.000Z"],
+                    "\(id) [P12-016]: it resolves with a proof of the lead job's schedule")
+        expectEqual(d.links.requestRow("req-1")?["status"] as? String, "confirmed",
+                    "\(id) [P12-016]: the server confirms the booking")
+        expectEqual(tapped.title, "Booking updated", "\(id) [P12-016]: Today says so")
+        expectEqual(tapped.message,
+                    "The job wasn't moved, so the booking is confirmed for its original time, \(requestSlotWhen).",
+                    "\(id) [P12-016]: …for the booked time")
+    }
+
+    // MARK: K pins: where intake runs, and where it does not (P12-016)
+
+    @MainActor
+    static func intakeSources(_ root: URL) {
+        func read(_ path: String) -> String {
+            (try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)) ?? ""
+        }
+        func body(_ source: String, from start: String, to end: String = "\n    }\n") -> String? {
+            guard let lower = source.range(of: start),
+                  let upper = source.range(of: end, range: lower.upperBound..<source.endIndex)
+            else { return nil }
+            return String(source[lower.lowerBound..<upper.upperBound])
+        }
+        let store = read("native/TradeReadyNative/AppStore.swift")
+        expect(!store.isEmpty, "S-K: sources found")
+        let start = "startBookingIntakeIfPossible()"
+        let recover = "startScheduleBookingRecoveryIfPossible()"
+        let sync = "await syncNowAndWait(trigger: .foreground)"
+        // Activation: after the refresh's own sync, before recovery.
+        let foreground = body(store, from: "    func performForegroundRefresh() async {") ?? ""
+        if let synced = foreground.range(of: sync),
+           let intake = foreground.range(of: "await runBookingIntakeIfPossible()"),
+           let recovery = foreground.range(of: "await recoverScheduleBookingPendingWorkIfPossible()") {
+            expect(synced.upperBound < intake.lowerBound && intake.upperBound < recovery.lowerBound,
+                   "S-K [P12-016]: the foreground refresh converts after its sync, before recovery")
+        } else {
+            expect(false, "S-K [P12-016]: the foreground refresh converts bookings")
+        }
+        let resetMark = "bookingIntakePullMark = nil"
+        if let reset = foreground.range(of: resetMark), let synced = foreground.range(of: sync) {
+            expect(reset.upperBound < synced.lowerBound, "S-K: the foreground refresh clears the intake mark before its sync")
+        } else {
+            expect(false, "S-K: the foreground refresh clears the intake mark")
+        }
+        let outcome = body(store, from: "    private func applyAuthenticatedIdentityOutcome(") ?? ""
+        if let reset = outcome.range(of: resetMark), let consumers = outcome.range(of: start) {
+            expect(reset.upperBound < consumers.lowerBound,
+                   "S-K: applying the identity clears the intake mark before its consumer block starts intake")
+        } else {
+            expect(false, "S-K: applying the identity clears the intake mark")
+        }
+        // Launch: the three points that open the signed-in gate after the
+        // initial sync, intake first, then recovery.
+        let gateSites = [
+            ("the subscription gate's signed-in exit", body(store, from: "    private func advancePastSubscriptionGate() {") ?? ""),
+            ("the starting point's exit", body(store, from: "    func completeStartingPoint(") ?? ""),
+            ("a returning launch's signed-in gate",
+             body(store, from: "        if activateConsumers, case .signedIn = authenticationGateState {", to: "\n        }\n") ?? ""),
+        ]
+        for (site, text) in gateSites {
+            if let intake = text.range(of: start), let recovery = text.range(of: recover) {
+                expect(intake.upperBound < recovery.lowerBound, "S-K [P12-016]: \(site) starts intake, then recovery")
+            } else {
+                expect(false, "S-K [P12-016]: \(site) starts intake")
+            }
+        }
+        // The mark: set by the initial sync's commit, and by a delta pull
+        // that committed every table.
+        let setMark = "markBookingIntakePullCommitted("
+        let initialSync = body(store, from: "    private func beginInitialSyncGate(") ?? ""
+        if let commit = initialSync.range(of: "try self.commitSnapshot(candidate)"),
+           let mark = initialSync.range(of: "self." + setMark) {
+            expect(commit.upperBound < mark.lowerBound, "S-K: the initial sync marks its committed pull for intake")
+        } else {
+            expect(false, "S-K: the initial sync marks its committed pull for intake")
+        }
+        let deltaPull = body(store, from: "    private func pullDeltaAndCommit() async -> NativeSyncPullResult {") ?? ""
+        if let commit = deltaPull.range(of: "do { try syncCursorStore.save(committedCursor) }"),
+           let mark = deltaPull.range(of: setMark) {
+            expect(commit.upperBound < mark.lowerBound, "S-K: a delta pull marks its commit for intake")
+            expect(deltaPull[commit.upperBound..<mark.lowerBound].contains("outcome.failedTables.isEmpty"),
+                   "S-K [P12-016]: …only when every table committed")
+        } else {
+            expect(false, "S-K: a delta pull marks its commit for intake")
+        }
+        // The wired entry reuses the committed pull, for the gated owner only.
+        let entry = body(store, from: "    private func runBookingIntakeIfPossible(") ?? ""
+        expect(!entry.isEmpty, "S-K: the wired intake entry exists")
+        expect(!entry.isEmpty && !entry.contains("pullDeltaIfPossible"),
+               "S-K [P12-016]: it reuses the committed pull (no second pull)")
+        expect(entry.contains("scheduleBookingRecoveryBinding") && entry.contains("bookingIntakePullCommitted"),
+               "S-K: it runs only for the gated owner after a committed pull")
+        // The shared apply: nothing to migrationMessage; one counts-only line.
+        let apply = body(store, from: "    private func applyBookingIntake(") ?? ""
+        expect(!apply.isEmpty, "S-K: the shared intake apply exists")
+        expect(!apply.isEmpty && !apply.contains("migrationMessage") && !apply.contains("ensurePersistenceWritable()"),
+               "S-K [P12-016]: an intake pass never writes migrationMessage")
+        let lines = apply.components(separatedBy: "\n").filter { $0.contains("TradeReadyBookingIntake stage=pass") }
+        expectEqual(lines.count, 1, "S-K [P12-016]: an intake pass that found work logs one diagnostic line")
+        let line = lines.first?.lowercased() ?? ""
+        expect(!line.isEmpty && !["name", "email", "phone", "token", "request", "subject", "binding"].contains(where: line.contains),
+               "S-K: …with counts and a fixed reason only")
+        // Never from the rollback-readiness check.
+        let readiness = body(store, from: "    private func prepareRollbackReadiness(\n") ?? ""
+        expect(!readiness.isEmpty && !readiness.contains("BookingIntake"), "S-K: the rollback-readiness check never converts")
     }
 
     // MARK: S. Source pins: where recovery runs, and where it does not

@@ -9,6 +9,9 @@ set -eu
 # AppStore, sync coordinator, push transport and delta pull run in front of
 # the shared in-memory server; the real booking-admin, portal-manage and
 # booking-respond clients run in front of a stateful stand-in. No network.
+# Section K (12.00b.2-K, P12-016): a customer's booking that arrives through a
+# pull becomes a lead job and a customer at launch and after each foreground
+# refresh whose pull committed.
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT_DIR/native/run-appstore-sources-common.sh"
 OUTPUT_PATH="${TMPDIR:-/tmp}/tradeready-schedule-booking-recovery-tests"
