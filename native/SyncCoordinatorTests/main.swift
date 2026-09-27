@@ -205,6 +205,52 @@ private func rejectedChanges(
     expect(queue.load() == [slow], "12.00b.1: the refused change left the queue; the transient one stays")
     expect(pulls == 1, "12.00b.1: the pull still runs with a transient change queued")
 
+    // Phase 12 (12.00b.2-L, P12-017): a guarded change whose row moved on
+    // leaves the queue and is handed to the settle step as superseded, never
+    // as cleared (it reached nothing, so it clears no refused change of that
+    // record). The pass completes and the pull runs.
+    let supersedeQueue = makeQueue("guard-superseded")
+    try seed(supersedeQueue, ["kept", "moved-on"])
+    let keptItem = supersedeQueue.load()[0], movedOn = supersedeQueue.load()[1]
+    var guardSettled: [NativeMutationPushSettlement] = []
+    var guardPulls = 0
+    let guardCoordinator = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, _ in
+            var result = outcome(pushed: 1)
+            result.superseded = [movedOn]
+            return result
+        },
+        queue: supersedeQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { guardSettled.append($0) },
+        pull: { guardPulls += 1; return .completed }
+    )
+    expect(await guardCoordinator.sync(trigger: .foreground) == .completed(pushed: 1, authRefreshed: false),
+           "P12-017: a superseded guarded change is not a failure")
+    expect(guardSettled.count == 1 && guardSettled.first?.superseded == [movedOn]
+           && guardSettled.first?.cleared == [keptItem] && guardSettled.first?.rejected == [],
+           "P12-017: the settle step gets it as superseded, not cleared")
+    expect(supersedeQueue.load().isEmpty && guardPulls == 1, "P12-017: it left the queue and the pull ran")
+    // A settle step that cannot take it keeps the whole attempt queued.
+    let supersedeFailQueue = makeQueue("guard-superseded-fail")
+    try seed(supersedeFailQueue, ["moved-on-2"])
+    let movedOnFail = supersedeFailQueue.load()[0]
+    let guardFail = NativeSyncCoordinator(
+        push: ScriptedPushService { _, _, _ in
+            var result = outcome(pushed: 0)
+            result.superseded = [movedOnFail]
+            return result
+        },
+        queue: supersedeFailQueue,
+        reachability: FakeReachability(reachable: true),
+        credentialsProvider: { credentials },
+        settleRejected: { _ in throw SettleFailed() }
+    )
+    _ = await guardFail.sync(trigger: .foreground)
+    expect(supersedeFailQueue.load() == [movedOnFail],
+           "P12-017: a failed settle keeps the superseded change queued (it is sent again)")
+
     // Only refusals: the pass completes, with no failure or backoff.
     let onlyQueue = makeQueue("rejected-only")
     try seed(onlyQueue, ["poison-2"])

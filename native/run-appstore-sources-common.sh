@@ -13,6 +13,9 @@
 # Keychain (`HostTestSupport/HostInMemoryKeychain.swift`); every host-test
 # `AppStore` is built on `hostTestSecureSettingsStore()` unless it injects a
 # fake, so no runner reads or writes the real login Keychain.
+#
+# Phase 12 (12.00b.2-L): `NativeBookingOwnerResponses.swift` extends AppStore
+# (the owner-response outcomes and their notices), so it follows AppStore.swift.
 APPSTORE_TEST_SOURCES="
 $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
@@ -140,4 +143,5 @@ $ROOT_DIR/native/TradeReadyNative/NativePerformanceMetrics.swift
 $ROOT_DIR/native/TradeReadyNative/NativeSupportDiagnostics.swift
 $ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
+$ROOT_DIR/native/TradeReadyNative/NativeBookingOwnerResponses.swift
 "

@@ -20,7 +20,8 @@ struct NativeBookingRequestsView: View {
     @State private var showingJobID: IdentifiableString?
     @State private var showingComposer: NativeMessageComposerView?
     @State private var didLoad = false
-    /// Phase 12 (12.00b.2-J, P12-015): the outcome of "Resolve".
+    /// Phase 12 (12.00b.2-J, P12-015): the outcome of "Resolve" (and, since
+    /// 12.00b.2-L, of "Decline").
     @State private var notice: AppStore.BookingRescheduleNotice?
 
     var body: some View {
@@ -126,12 +127,15 @@ struct NativeBookingRequestsView: View {
 
         let outcome = await store.declineBookingRequest(requestID: row.request.id)
         await MainActor.run {
+            // Phase 12 (12.00b.2-L, P12-017): every outcome but a decline is
+            // shown here, as on Today.
+            notice = outcome.declineNotice(actionLabel: "Decline")
             switch outcome {
             case .applied:
                 refreshRows()
             case .needsReview:
                 refreshRows()
-            case .unknownOutcome, .missing, .failed:
+            case .awaitingAck, .unknownOutcome, .missing, .failed:
                 break
             }
         }

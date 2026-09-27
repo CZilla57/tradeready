@@ -8456,6 +8456,7 @@ final class AppStore: ObservableObject {
     /// it throws too: the entry its accepted change clears cannot be found,
     /// and skipping it would leave a Retry that sends the older change.
     private func settleRejectedChanges(_ settlement: NativeMutationPushSettlement) throws {
+        try refetchRowsOfSupersededChanges(settlement.superseded)
         let ownerChanging = accountSwitchInFlight || isBoundaryStepPending(.rejectedChangesScrub)
         if settlement.rejected.isEmpty {
             guard !ownerChanging else { return }
@@ -8473,6 +8474,35 @@ final class AppStore: ObservableObject {
         )
         reportRejectedChanges(settlement.rejected, dropped: dropped)
         refreshRejectedChanges()
+    }
+
+    /// Phase 12 (12.00b.2-L, P12-017): a guarded change the server did not
+    /// apply (its row was written after this device's pull) has left the
+    /// queue. The pull that follows must fetch that row again, although a
+    /// pull while the change was queued may have moved the table's watermark
+    /// past it (a record with a queued change keeps its local version and
+    /// does not hold the watermark, `pullDeltaAndCommit`). So the table's
+    /// watermark goes back to the change's guard, the watermark it was made
+    /// from: the row's later write is at or after it. Nothing is queued for
+    /// the record any more, so that pull's rebase takes the server's row.
+    /// Throwing keeps the attempt queued (the coordinator sends it again).
+    private func refetchRowsOfSupersededChanges(_ superseded: [Canonical.MutationItem]) throws {
+        guard !superseded.isEmpty else { return }
+        var cursor = syncCursorStore.load()
+        var lowered = false
+        for item in superseded {
+            guard let since = item.ifUnchangedSince, let current = cursor.tables[item.table] else { continue }
+            guard let sinceDate = Canonical.NativeSyncCursor.parse(since) else {
+                // Unreadable: fetch the whole table again.
+                cursor.tables[item.table] = nil
+                lowered = true
+                continue
+            }
+            if let currentDate = Canonical.NativeSyncCursor.parse(current), currentDate <= sinceDate { continue }
+            cursor.tables[item.table] = since
+            lowered = true
+        }
+        if lowered { try syncCursorStore.save(cursor) }
     }
 
     /// One bounded report per settle with a refusal, through the Phase 11
@@ -8558,7 +8588,8 @@ final class AppStore: ObservableObject {
                 table: entry.item.table,
                 op: entry.item.op,
                 recordId: entry.item.recordId,
-                payload: entry.item.payload
+                payload: entry.item.payload,
+                ifUnchangedSince: entry.item.ifUnchangedSince
             )
         } catch {
             print("TradeReadyMutationQueue stage=enqueue-retry table=\(entry.item.table)")
@@ -9352,6 +9383,9 @@ extension AppStore {
 
     enum OwnerResponseOutcome: Equatable {
         case applied(status: String, alreadyApplied: Bool)
+        /// Phase 12 (12.00b.2-L, P12-017): a change to the request has not
+        /// reached the server. Nothing was sent.
+        case awaitingAck(OwnerResponseWait)
         case needsReview(currentStatus: String)
         case unknownOutcome
         case missing
@@ -9369,6 +9403,8 @@ extension AppStore {
 
     enum RescheduleResolveOutcome: Equatable {
         case resolved(status: String, alreadyApplied: Bool)
+        /// Phase 12 (12.00b.2-L, P12-017): as `OwnerResponseOutcome.awaitingAck`.
+        case awaitingAck(OwnerResponseWait)
         case needsReview(currentStatus: String)
         case superseded
         case unknownOutcome
@@ -9918,11 +9954,18 @@ extension AppStore {
         // and the job is never touched; a repeat customer's blank fields are
         // filled, never replaced. With no suspension since the plan, the
         // recheck keeps everything the plan made.
+        //
+        // Phase 12 (12.00b.2-L, P12-017; Task 12d review M6): the request
+        // stamp and a repeat customer's fill are guarded upserts with the
+        // tables' watermarks from the pull that just committed, so a
+        // customer's cancel or another device's edit that reaches the server
+        // before they are pushed is never overwritten.
         guard let rechecked = NativeScheduleBookingPolicy.recheckedIntakePlan(
             plan,
             currentRequests: snapshot.payload.bookingRequests ?? [],
             currentJobs: snapshot.payload.jobs ?? [],
-            currentCustomers: snapshot.payload.customers ?? []
+            currentCustomers: snapshot.payload.customers ?? [],
+            guardSince: syncCursorStore.load().tables
         ) else {
             reason = "no-change"
             return .noChange
@@ -9994,21 +10037,40 @@ extension AppStore {
 
     // MARK: Owner responses (B4)
 
-    /// Explicit owner decline: rechecks the owner and record after the
-    /// suspension, sends exactly one POST, and merges ONLY the returned
-    /// status into the local request. A 409 refreshes authoritative state
-    /// instead of forcing the captured status; an unknown outcome never
+    /// Explicit owner decline: sends exactly one POST and takes ONLY the
+    /// returned status into the local request. A 409 refreshes authoritative
+    /// state instead of forcing the captured status; an unknown outcome never
     /// resends automatically (a decline may email the customer).
+    ///
+    /// Phase 12 (12.00b.2-L, P12-017): the server writes the status and
+    /// appends the owner's entry to the request's history
+    /// (`backend-workers/lib/booking/respond.js:64-75`). RN then updates the
+    /// request in memory only and pushes nothing
+    /// (`screens/TodayScreen.tsx:559-563`). So does this: the status is saved
+    /// on the device and the request is not queued
+    /// (`saveServerBookingRequestStatus`). With nothing queued for it, the
+    /// next pull's rebase takes the server's row, history included
+    /// (`rebasePulledDelta`). Before the POST it pushes what is queued, so a
+    /// queued copy of the request reaches the server first and the server
+    /// appends to it. While a change to the request is still queued, or
+    /// refused and waiting in Settings › Cloud Sync, it sends nothing
+    /// (`.awaitingAck`): pushed after the decline, that copy would put the
+    /// old status and history back. It re-checks the account generation and
+    /// the owner after every await, and applies nothing once either changed.
     func declineBookingRequest(
         requestID: String,
         responseService: NativeBookingResponseService? = nil,
         sessionBytes: Data? = nil
     ) async -> OwnerResponseOutcome {
-        let capture = scheduleBookingOwnerCapture()
-        guard let current = snapshot.payload.bookingRequests?.first(where: { $0.id == requestID }) else {
+        guard snapshot.payload.bookingRequests?.contains(where: { $0.id == requestID }) == true else {
             return .missing
         }
-        _ = current
+        guard !persistenceWritesBlocked else { return .failed(reason: "read-only") }
+        let generation = accountBoundaryGeneration
+        let capture = scheduleBookingOwnerCapture()
+        let stillCurrent = { [unowned self] in
+            accountBoundaryGeneration == generation && scheduleBookingOwnerStillCurrent(capture)
+        }
         guard let bytes = scheduleBookingSessionBytes(explicit: sessionBytes) else {
             return .failed(reason: "session")
         }
@@ -10023,16 +10085,25 @@ extension AppStore {
             loader: service.loader,
             refreshSession: { [weak self] in await self?.scheduleBookingRefreshedSession(excluding: bytes) }
         )
+        // The owner's tap is explicit: `.manual` runs past a backoff, as the
+        // accept's does.
+        _ = await syncNowAndWait(trigger: .manual)
+        guard stillCurrent() else { return .failed(reason: "owner-changed") }
+        guard snapshot.payload.bookingRequests?.contains(where: { $0.id == requestID }) == true else {
+            return .missing
+        }
+        if let wait = ownerResponseWait(for: ["bookingRequests/\(requestID)"]) { return .awaitingAck(wait) }
         let result: NativeBookingResponseResult
         do {
             result = try await serviceWithRefresh.decline(requestId: requestID, sessionBytes: bytes)
         } catch let error as NativeBookingResponseError {
+            guard stillCurrent() else { return .failed(reason: "owner-changed") }
             return await mapBookingResponseError(error, requestID: requestID, capture: capture)
         } catch {
             return .failed(reason: "transport")
         }
-        guard scheduleBookingOwnerStillCurrent(capture) else { return .failed(reason: "owner-changed") }
-        mergeBookingRequestStatus(requestID: requestID, status: result.status)
+        guard stillCurrent() else { return .failed(reason: "owner-changed") }
+        _ = saveServerBookingRequestStatus(requestID: requestID, status: result.status)
         return .applied(status: result.status, alreadyApplied: result.alreadyApplied)
     }
 
@@ -10122,6 +10193,8 @@ extension AppStore {
         guard let currentJob = snapshot.payload.jobs?.first(where: { $0.id == proof.jobId }),
               NativeScheduleBookingPolicy.proofMatchesCurrentJob(proof, job: currentJob)
         else { return .superseded }
+        // Phase 12 (12.00b.2-L, P12-017): as the decline.
+        if let wait = ownerResponseWait(for: ["bookingRequests/\(requestID)"]) { return .awaitingAck(wait) }
         let result: NativeBookingResponseResult
         do {
             result = try await serviceWithRefresh.resolveReschedule(
@@ -10144,7 +10217,8 @@ extension AppStore {
             return .failed(reason: "transport")
         }
         guard scheduleBookingOwnerStillCurrent(capture) else { return .failed(reason: "owner-changed") }
-        mergeBookingRequestStatus(requestID: requestID, status: result.status)
+        // Phase 12 (12.00b.2-L, P12-017): saved, not queued, as the decline.
+        _ = saveServerBookingRequestStatus(requestID: requestID, status: result.status)
         if let binding = capture.binding {
             try? pendingScheduleBookingWorkStore().remove {
                 if case let .rescheduleProof(req, _, _) = $0.kind { return req == requestID && $0.ownerBinding == binding }
@@ -10179,7 +10253,7 @@ extension AppStore {
     /// - It re-checks the account generation and the owner after every
     ///   await, and applies nothing once either changed.
     /// - The local request takes only the server's status, saved without
-    ///   queueing the request (`saveResolvedBookingRequestStatus`).
+    ///   queueing the request (`saveServerBookingRequestStatus`).
     /// - The outcome is for the acting screen (`ownerNotice`), never
     ///   `migrationMessage`.
     func acceptBookingReschedule(
@@ -10268,7 +10342,7 @@ extension AppStore {
             return .failed(.invalidRequest)
         }
         guard stillCurrent() else { return stopped() }
-        let saved = saveResolvedBookingRequestStatus(requestID: requestID, status: result.status)
+        let saved = saveServerBookingRequestStatus(requestID: requestID, status: result.status)
         if let binding = capture.binding {
             try? pendingScheduleBookingWorkStore().remove {
                 if case let .rescheduleProof(req, _, _) = $0.kind { return req == requestID && $0.ownerBinding == binding }
@@ -10286,14 +10360,15 @@ extension AppStore {
         ))
     }
 
-    /// Phase 12 (12.00b.2-J, P12-015): takes the server's status into the
-    /// local request after an accepted reschedule. Saved first, then shown,
+    /// Phase 12 (12.00b.2-J, P12-015; 12.00b.2-L, P12-017 for the decline and
+    /// the legacy resolve): takes the server's status into the local request
+    /// after an owner response the server accepted. Saved first, then shown,
     /// and not queued: the server already wrote the request's status and
     /// history, and pushing this copy would replace them with this device's
     /// older history (contract §2.6: never replay a whole stale request). RN
     /// clears it in memory the same way (`screens/TodayScreen.tsx:559-563`);
     /// the next pull brings the server's row. False when nothing was saved.
-    private func saveResolvedBookingRequestStatus(requestID: String, status: String) -> Bool {
+    private func saveServerBookingRequestStatus(requestID: String, status: String) -> Bool {
         guard !persistenceWritesBlocked,
               var records = snapshot.payload.bookingRequests,
               let index = records.firstIndex(where: { $0.id == requestID })
@@ -10335,28 +10410,17 @@ extension AppStore {
         }
     }
 
-    /// Field-scoped lifecycle merge for owner responses: ONLY the server
-    /// status is adopted. History, slot, provenance and unknown fields ride
-    /// along on the struct copy so a late-arriving server history survives;
-    /// the next pull reconciles the rest. Never a whole-stale-blob replay.
-    private func mergeBookingRequestStatus(requestID: String, status: String) {
-        guard ensurePersistenceWritable(),
-              var records = snapshot.payload.bookingRequests,
-              let index = records.firstIndex(where: { $0.id == requestID })
-        else { return }
-        var merged = records[index]
-        merged.status = status
-        records[index] = merged
-        var updated = snapshot
-        updated.payload.bookingRequests = records
-        do {
-            try repository.save(updated)
-            try apply(updated)
-        } catch {
-            migrationMessage = "The response was accepted but the local copy could not be saved."
-            return
-        }
-        enqueueUpsert(table: "bookingRequests", recordId: requestID, record: merged)
+    /// Phase 12 (12.00b.2-L, P12-017): why an owner response to a booking
+    /// request must wait, or nil. A change to one of these records
+    /// (`<table>/<recordId>`) that is still queued would reach the server
+    /// after the response and put an older copy back (`.queued`); one the
+    /// server refused waits in Settings › Cloud Sync, where a Retry would do
+    /// the same (`.refused`). A rejected-change store that cannot be read
+    /// counts as waiting (fail closed).
+    private func ownerResponseWait(for keys: Set<String>) -> OwnerResponseWait? {
+        guard pendingMutationKeys().isDisjoint(with: keys) else { return .queued }
+        guard let refused = try? rejectedChangeKeys() else { return .queued }
+        return refused.isDisjoint(with: keys) ? nil : .refused
     }
 
     // MARK: Booking-link administration (B2)

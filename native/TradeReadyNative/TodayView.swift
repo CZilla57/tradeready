@@ -26,7 +26,8 @@ struct TodayView: View {
     @State private var showingSettings = false
     @State private var bookingAlertRow: NativeBookingAttention.Row?
     @State private var busyBookingRequestIDs: Set<String> = []
-    /// Phase 12 (12.00b.2-J, P12-015): the outcome of "I've rescheduled it".
+    /// Phase 12 (12.00b.2-J, P12-015): the outcome of "I've rescheduled it"
+    /// (and, since 12.00b.2-L, of "Decline booking").
     @State private var bookingNotice: AppStore.BookingRescheduleNotice?
     /// Task 10.12: the setup-checklist card's one-shot deep-link
     /// (`store.pendingSettingsDestination`) mirrored into local sheet state.
@@ -342,12 +343,20 @@ struct TodayView: View {
         _ = store.stampBookingRequestHandled(requestID: row.request.id)
     }
 
+    /// RN's "Decline booking" (`screens/TodayScreen.tsx:618-620` →
+    /// `handleBookingRespond`, `:554-566`): nothing on success (the row
+    /// clears), RN's failure alert otherwise (`:557`). Phase 12 (12.00b.2-L,
+    /// P12-017): the decline can also wait for a change to the request, and
+    /// says so here.
     private func declineBooking(_ row: NativeBookingAttention.Row) {
         guard !busyBookingRequestIDs.contains(row.request.id) else { return }
         busyBookingRequestIDs.insert(row.request.id)
         Task {
-            _ = await store.declineBookingRequest(requestID: row.request.id)
-            await MainActor.run { _ = busyBookingRequestIDs.remove(row.request.id) }
+            let outcome = await store.declineBookingRequest(requestID: row.request.id)
+            await MainActor.run {
+                bookingNotice = outcome.declineNotice(actionLabel: "Decline booking")
+                _ = busyBookingRequestIDs.remove(row.request.id)
+            }
         }
     }
 

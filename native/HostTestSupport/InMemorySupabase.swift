@@ -72,7 +72,13 @@ final class InMemorySupabase: NativeInitialSyncHTTPDataLoading, NativeMutationPu
         switch method {
         case "GET": return try handleGet(request, table: table)
         case "POST": return try handleUpsert(request, table: table)
-        case "PATCH": return try handleDelete(request, table: table)
+        case "PATCH":
+            if let body = request.httpBody,
+               case let .object(fields)? = try? JSONDecoder().decode(Canonical.JSONValue.self, from: body),
+               fields["data"] != nil {
+                return try handleGuardedUpdate(request, table: table)
+            }
+            return try handleDelete(request, table: table)
         default: return respond(405, Data("{}".utf8), request)
         }
     }
@@ -153,6 +159,32 @@ final class InMemorySupabase: NativeInitialSyncHTTPDataLoading, NativeMutationPu
             )
         }
         return respond(201, Data("{}".utf8), request)
+    }
+
+    /// Phase 12 (12.00b.2-L, P12-017): the push's guarded upsert, a PATCH of
+    /// `data` filtered on `user_id`, `id` and `updated_at=lte.<timestamp>`
+    /// with `select=id` and `return=representation`: the row is written (and
+    /// stamped) only when it has not been written since that timestamp, and
+    /// the reply lists the rows written, as PostgREST does.
+    private func handleGuardedUpdate(_ request: URLRequest, table: String) throws -> (Data, URLResponse) {
+        let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+        let items = components?.queryItems ?? []
+        func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+        guard let body = request.httpBody,
+              case let .object(fields)? = try? JSONDecoder().decode(Canonical.JSONValue.self, from: body),
+              let data = fields["data"],
+              let since = value("updated_at").map({ $0.replacingOccurrences(of: "lte.", with: "") }),
+              let sinceDate = Self.parse(since)
+        else { return respond(400, Data("{}".utf8), request) }
+        let userID = value("user_id")?.replacingOccurrences(of: "eq.", with: "") ?? ""
+        let id = value("id")?.replacingOccurrences(of: "eq.", with: "") ?? ""
+        guard var row = collections[table]?[id], row.userID == userID,
+              let rowDate = Self.parse(row.updatedAt), rowDate <= sinceDate
+        else { return respond(200, try Self.encode([]), request) }
+        row.data = data
+        row.updatedAt = nextStamp()
+        collections[table]![id] = row
+        return respond(200, try Self.encode([.object(["id": .string(id)])]), request)
     }
 
     private func handleDelete(_ request: URLRequest, table: String) throws -> (Data, URLResponse) {

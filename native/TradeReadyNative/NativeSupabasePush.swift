@@ -49,6 +49,13 @@ struct NativeMutationPushOutcome: Equatable {
     /// `rejected`; the coordinator counts them for the pass, so the drop is
     /// reported even when the pass otherwise completes.
     var discarded: [Canonical.MutationItem] = []
+    /// Phase 12 (12.00b.2-L, P12-017): guarded changes
+    /// (``Canonical/MutationItem/ifUnchangedSince``) the server did not
+    /// apply because the row had been written since this device's pull.
+    /// They are in neither `remaining` nor `rejected`: the change is dropped,
+    /// and the coordinator hands them to its settle step so the next pull
+    /// fetches the row again (`AppStore.settleRejectedChanges`).
+    var superseded: [Canonical.MutationItem] = []
 }
 
 /// Phase 4 write path for the existing JSON-blob sync contract.
@@ -60,6 +67,16 @@ struct NativeMutationPushOutcome: Equatable {
 /// are soft `deleted = true` updates — so a crash between a server success and
 /// the local queue commit safely replays. `updated_at` is never sent; the
 /// database stamps it authoritatively.
+///
+/// Phase 12 (12.00b.2-L, P12-017): a guarded upsert
+/// (``Canonical/MutationItem/ifUnchangedSince``) is a PATCH of the row's `data`
+/// filtered on `updated_at=lte.<that timestamp>`, the committed PostgREST API
+/// with no backend change (the Worker frees a slot the same way, a PATCH
+/// filtered on `status=eq.booked`, `backend-workers/lib/booking/store.js:156-169`).
+/// It replaces the blob only on the row this device last pulled; the rows it
+/// returns (`select=id`) tell a write from a row that has moved on. A replay
+/// after a lost acknowledgement finds the row moved on (its own write stamped
+/// it) and is dropped, and the pull brings the row back.
 struct NativeSupabaseMutationPushService {
     private static let diagnosticDefaultsKey = "TradeReadyMutationPushDiagnosticCode"
 
@@ -151,6 +168,7 @@ struct NativeSupabaseMutationPushService {
         var rejected: [NativeMutationRejection] = []
         var forbiddenKeys: Set<String> = []
         var discarded: [Canonical.MutationItem] = []
+        var superseded: [Canonical.MutationItem] = []
 
         for item in items {
             let request: URLRequest
@@ -172,7 +190,25 @@ struct NativeSupabaseMutationPushService {
             }
 
             let key = NativeMutationPushClassification.recordKey(item)
-            let (result, response) = await send(request, forbiddenBeforeRefresh: forbiddenBeforeRefresh.contains(key))
+            let (sentResult, response, body) = await send(request, forbiddenBeforeRefresh: forbiddenBeforeRefresh.contains(key))
+            var result = sentResult
+            if result == .accepted, Self.isGuarded(item) {
+                switch Self.guardedRowsWritten(body) {
+                case 1?:
+                    break
+                case 0?:
+                    // The row was written after this device's pull (or is
+                    // gone): nothing was applied. Drop the change; the next
+                    // pull fetches the row.
+                    print("TradeReadyMutationPush stage=superseded table=\(item.table)")
+                    superseded.append(item)
+                    continue
+                default:
+                    // A 2xx whose body does not say: keep it queued. A
+                    // replay is safe (see the type's comment).
+                    result = .transient
+                }
+            }
             switch result {
             case .accepted:
                 pushed += 1
@@ -211,17 +247,20 @@ struct NativeSupabaseMutationPushService {
             lastDiagnosticCode: Self.lastDiagnosticCode,
             rejected: rejected,
             forbiddenKeys: forbiddenKeys,
-            discarded: discarded
+            discarded: discarded,
+            superseded: superseded
         )
     }
 
     private func send(
         _ request: URLRequest,
         forbiddenBeforeRefresh: Bool
-    ) async -> (NativeMutationPushResponseClass, NativeMutationPushResponse) {
+    ) async -> (NativeMutationPushResponseClass, NativeMutationPushResponse, Data) {
         let response: NativeMutationPushResponse
+        var body = Data()
         do {
-            let (_, urlResponse) = try await loader.data(for: request)
+            let (data, urlResponse) = try await loader.data(for: request)
+            body = data
             if let http = urlResponse as? HTTPURLResponse {
                 response = .http(statusCode: http.statusCode)
             } else {
@@ -230,7 +269,23 @@ struct NativeSupabaseMutationPushService {
         } catch {
             response = .transportError
         }
-        return (NativeMutationPushClassification.classify(response, forbiddenBeforeRefresh: forbiddenBeforeRefresh), response)
+        return (NativeMutationPushClassification.classify(response, forbiddenBeforeRefresh: forbiddenBeforeRefresh), response, body)
+    }
+
+    private static func isGuarded(_ item: Canonical.MutationItem) -> Bool {
+        item.op == .upsert && item.ifUnchangedSince != nil
+    }
+
+    /// How many rows a guarded PATCH wrote: the length of the
+    /// `return=representation` array (`[{"id":…}]` or `[]`), or nil when the
+    /// body is not such an array. The filter is on the primary key, so it is
+    /// 0 or 1.
+    private static func guardedRowsWritten(_ body: Data) -> Int? {
+        guard body.count <= 64 * 1024,
+              case let .array(rows)? = try? JSONDecoder().decode(Canonical.JSONValue.self, from: body),
+              rows.count <= 1
+        else { return nil }
+        return rows.count
     }
 
     /// The bounded diagnostic for a failed (auth or transient) response.
@@ -248,6 +303,8 @@ struct NativeSupabaseMutationPushService {
         accessToken: String
     ) throws -> URLRequest {
         switch item.op {
+        case .upsert where Self.isGuarded(item):
+            return try guardedUpdateRequest(for: item, subject: subject, accessToken: accessToken)
         case .upsert:
             return try upsertRequest(for: item, subject: subject, accessToken: accessToken)
         case .delete:
@@ -309,6 +366,53 @@ struct NativeSupabaseMutationPushService {
         request.httpBody = try Self.encoder.encode(body)
         return request
     }
+
+    /// Phase 12 (12.00b.2-L, P12-017): the guarded upsert. Collection
+    /// tables only; the blob passes the same native-private strip and id
+    /// check as an upsert. The `updated_at` value is a raw server timestamp
+    /// (`+00:00`), percent-encoded here because `URLQueryItem` leaves `+`
+    /// as is, which a server reads as a space.
+    private func guardedUpdateRequest(
+        for item: Canonical.MutationItem,
+        subject: String,
+        accessToken: String
+    ) throws -> URLRequest {
+        guard let payload = item.payload?.removingNativePrivateFields(),
+              let since = item.ifUnchangedSince, !since.isEmpty,
+              let encodedSince = since.addingPercentEncoding(withAllowedCharacters: Self.queryValueAllowed),
+              Self.collectionTables.contains(item.table),
+              Self.recordID(in: payload) == item.recordId,
+              var components = URLComponents(
+                  url: supabaseURL.appending(path: "rest/v1/\(item.table)"),
+                  resolvingAgainstBaseURL: false
+              )
+        else { throw NativeMutationPushError.invalidConfiguration }
+        components.queryItems = [
+            URLQueryItem(name: "user_id", value: "eq.\(subject)"),
+            URLQueryItem(name: "id", value: "eq.\(item.recordId)"),
+            URLQueryItem(name: "select", value: "id")
+        ]
+        components.percentEncodedQuery = (components.percentEncodedQuery ?? "") + "&updated_at=lte.\(encodedSince)"
+        guard let url = components.url else { throw NativeMutationPushError.invalidConfiguration }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue(publishableKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("return=representation", forHTTPHeaderField: "Prefer")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try Self.encoder.encode(Canonical.JSONValue.object(["data": payload]))
+        return request
+    }
+
+    /// Query-value characters left as they are: `urlQueryAllowed` without
+    /// the ones a query string gives a meaning to.
+    private static let queryValueAllowed: CharacterSet = {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=#")
+        return allowed
+    }()
 
     private func deleteRequest(
         for item: Canonical.MutationItem,

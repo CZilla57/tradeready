@@ -21,19 +21,30 @@ public extension Canonical {
         public var recordId: String
         public var payload: JSONValue?
         public var ts: String
+        /// Phase 12 (12.00b.2-L, P12-017): a guarded upsert. Set, the push
+        /// writes the record's `data` only onto a server row whose
+        /// `updated_at` is still at or before this server timestamp (the
+        /// table's delta-pull watermark when the change was made, so a row no
+        /// one has written since this device's pull), and drops the change
+        /// when the row has moved on (`NativeSupabaseMutationPushService`).
+        /// Nil for every other change: an upsert of the whole record, as RN
+        /// pushes it. Absent from queue files written before it (decodes nil).
+        public var ifUnchangedSince: String?
 
         public init(
             table: String,
             op: MutationOp,
             recordId: String,
             payload: JSONValue?,
-            ts: String
+            ts: String,
+            ifUnchangedSince: String? = nil
         ) {
             self.table = table
             self.op = op
             self.recordId = recordId
             self.payload = payload
             self.ts = ts
+            self.ifUnchangedSince = ifUnchangedSince
         }
     }
 
@@ -45,17 +56,21 @@ public extension Canonical {
         public var op: MutationOp
         public var recordId: String
         public var payload: JSONValue?
+        /// See ``MutationItem/ifUnchangedSince``.
+        public var ifUnchangedSince: String?
 
         public init(
             table: String,
             op: MutationOp,
             recordId: String,
-            payload: JSONValue?
+            payload: JSONValue?,
+            ifUnchangedSince: String? = nil
         ) {
             self.table = table
             self.op = op
             self.recordId = recordId
             self.payload = payload
+            self.ifUnchangedSince = ifUnchangedSince
         }
     }
 }
@@ -135,10 +150,12 @@ extension Canonical {
             table: String,
             op: MutationOp,
             recordId: String,
-            payload: JSONValue?
+            payload: JSONValue?,
+            ifUnchangedSince: String? = nil
         ) throws -> [MutationItem] {
             try enqueueBatch([
-                MutationDraft(table: table, op: op, recordId: recordId, payload: payload)
+                MutationDraft(table: table, op: op, recordId: recordId, payload: payload,
+                              ifUnchangedSince: ifUnchangedSince)
             ])
         }
 
@@ -151,6 +168,7 @@ extension Canonical {
             var items = load()
             let timestamp = Self.iso8601.string(from: now())
             for draft in drafts {
+                let pending = items.first { $0.table == draft.table && $0.recordId == draft.recordId }
                 items.removeAll {
                     $0.table == draft.table && $0.recordId == draft.recordId
                 }
@@ -160,12 +178,35 @@ extension Canonical {
                         op: draft.op,
                         recordId: draft.recordId,
                         payload: draft.op == .delete ? nil : draft.payload,
-                        ts: timestamp
+                        ts: timestamp,
+                        ifUnchangedSince: Self.guardAfterReplacing(pending, with: draft)
                     )
                 )
             }
             try save(items)
             return items
+        }
+
+        /// Phase 12 (12.00b.2-L, P12-017): the guard of a change that replaces
+        /// `pending` (last writer wins). The replacement carries `pending`'s
+        /// change too, so it stays guarded only when both are: a pending
+        /// whole-record write (an owner's edit, or a delete) keeps the
+        /// replacement a whole-record write, as it was, so a guard can never
+        /// drop the owner's change. Two guards keep the earlier timestamp:
+        /// the older change was made from the older pull.
+        static func guardAfterReplacing(_ pending: MutationItem?, with draft: MutationDraft) -> String? {
+            guard draft.op == .upsert, let since = draft.ifUnchangedSince else { return nil }
+            guard let pending else { return since }
+            guard pending.op == .upsert, let older = pending.ifUnchangedSince else { return nil }
+            guard let olderDate = parseServerTimestamp(older), let sinceDate = parseServerTimestamp(since) else {
+                return older
+            }
+            return sinceDate < olderDate ? since : older
+        }
+
+        /// A server `updated_at` (`2026-09-27T10:00:00.123456+00:00` or with `Z`).
+        private static func parseServerTimestamp(_ value: String) -> Date? {
+            iso8601.date(from: value) ?? iso8601WithoutFraction.date(from: value)
         }
 
         /// Commits one push acknowledgement without discarding mutations that
@@ -263,6 +304,12 @@ extension Canonical {
         private static let iso8601: ISO8601DateFormatter = {
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter
+        }()
+
+        private static let iso8601WithoutFraction: ISO8601DateFormatter = {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
             return formatter
         }()
 

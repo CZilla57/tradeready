@@ -22,6 +22,27 @@ private final class PushLoader: NativeMutationPushHTTPLoading {
     }
 }
 
+/// Phase 12 (12.00b.2-L, P12-017): a loader that also answers a body, for
+/// the guarded upsert's `return=representation` reply.
+private final class BodyLoader: NativeMutationPushHTTPLoading {
+    var requests: [URLRequest] = []
+    var respond: (URLRequest) -> (Int, String)
+
+    init(respond: @escaping (URLRequest) -> (Int, String)) {
+        self.respond = respond
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        requests.append(request)
+        let (status, body) = respond(request)
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: status, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        return (Data(body.utf8), response)
+    }
+}
+
 @main
 struct MutationPushTests {
     static func main() async throws {
@@ -441,6 +462,75 @@ struct MutationPushTests {
         expect(stripOutcome.pushedCount == 4
                && stripOutcome.rejected == [NativeMutationRejection(item: markedInvoice, statusCode: 422)],
                "L286.1: a refused change is returned exactly as queued (the rejected store is local and Retry pushes through this builder)")
+
+        // Phase 12 (12.00b.2-L, P12-017): a guarded upsert is a PATCH of the
+        // row's data onto the row this device pulled, and the reply's rows
+        // tell a write from a row that has moved on.
+        let since = "2026-09-27T10:00:00.123456+00:00"
+        func guarded(_ table: String, _ id: String, _ payload: Canonical.JSONValue) -> Canonical.MutationItem {
+            Canonical.MutationItem(table: table, op: .upsert, recordId: id, payload: payload,
+                                   ts: "2026-09-27T10:01:00.000Z", ifUnchangedSince: since)
+        }
+        let stamp: Canonical.JSONValue = .object([
+            "id": .string("r1"), "status": .string("booked"), "convertedJobId": .string("jbk_r1"),
+            "__nativeFlag": .bool(true),
+        ])
+        let stamped = guarded("bookingRequests", "r1", stamp)
+        let written = BodyLoader { _ in (200, #"[{"id":"r1"}]"#) }
+        let writtenOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: written
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [stamped])
+        let guardedRequest = written.requests[0]
+        expect(guardedRequest.httpMethod == "PATCH" && table(guardedRequest) == "bookingRequests",
+               "P12-017: a guarded upsert PATCHes the collection table")
+        expect(queryValue(guardedRequest, "user_id") == "eq.\(subject)" && queryValue(guardedRequest, "id") == "eq.r1"
+               && queryValue(guardedRequest, "select") == "id",
+               "P12-017: …the owner's row by id, returning its id")
+        expect(queryValue(guardedRequest, "updated_at") == "lte.\(since)",
+               "P12-017: …only while the row's updated_at is at or before the guard")
+        expect(guardedRequest.url?.absoluteString.contains("updated_at=lte.2026-09-27T10:00:00.123456%2B00:00") == true,
+               "P12-017: …with the offset's + percent-encoded (a bare + reads as a space)")
+        expect(guardedRequest.value(forHTTPHeaderField: "Prefer") == "return=representation"
+               && guardedRequest.value(forHTTPHeaderField: "apikey") == "publishable-key"
+               && guardedRequest.value(forHTTPHeaderField: "Authorization") == "Bearer private-access-token",
+               "P12-017: …authenticated, asking for the rows it wrote")
+        expect(fields(body(guardedRequest)) == ["data": .object([
+            "id": .string("r1"), "status": .string("booked"), "convertedJobId": .string("jbk_r1"),
+        ])], "P12-017: the body is the record's data only, without native-private keys (no updated_at, no deleted)")
+        expect(writtenOutcome.pushedCount == 1 && writtenOutcome.remaining.isEmpty && writtenOutcome.superseded.isEmpty,
+               "P12-017: a row written is pushed")
+
+        let movedOn = BodyLoader { _ in (200, "[]") }
+        let movedOnOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: movedOn
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [stamped])
+        expect(movedOnOutcome.superseded == [stamped] && movedOnOutcome.pushedCount == 0
+               && movedOnOutcome.remaining.isEmpty && movedOnOutcome.rejected.isEmpty && movedOnOutcome.discarded.isEmpty
+               && movedOnOutcome.failedTables.isEmpty,
+               "P12-017: no row written (the row moved on) supersedes the change: dropped, not retried or refused")
+
+        let unreadable = BodyLoader { _ in (204, "") }
+        let unreadableOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: unreadable
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [stamped])
+        expect(unreadableOutcome.remaining == [stamped] && unreadableOutcome.superseded.isEmpty,
+               "P12-017: a 2xx that does not say what it wrote keeps the change queued")
+
+        let refusedGuard = BodyLoader { _ in (400, #"{"message":"bad filter"}"#) }
+        let refusedGuardOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: refusedGuard
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [stamped])
+        expect(refusedGuardOutcome.rejected == [NativeMutationRejection(item: stamped, statusCode: 400)],
+               "P12-017: a refused guarded upsert is refused as queued (Retry keeps the guard)")
+
+        let notesGuard = BodyLoader { _ in (200, "[]") }
+        let notesGuardOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: notesGuard
+        ).push(sessionBytes: session, expectedUserSubject: subject,
+               items: [guarded("settings", "settings", .object(["businessName": .string("Ada")])),
+                       guarded("jobs", "j1", jobBlob("j2"))])
+        expect(notesGuard.requests.isEmpty && notesGuardOutcome.discarded.count == 2,
+               "P12-017: a guard outside the collection tables, or on a blob whose id disagrees, is never sent")
 
         if failures == 0 { print("PASS: native mutation push tests") }
         else { exit(1) }

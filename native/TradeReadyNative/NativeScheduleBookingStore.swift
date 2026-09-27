@@ -263,12 +263,34 @@ enum NativeScheduleBookingPolicy {
     /// and a request whose `jbk_` job was already on the device was never
     /// stamped. AppStore's intake plans and rechecks with no suspension in
     /// between, so there the recheck keeps everything the plan made.
+    ///
+    /// Phase 12 (12.00b.2-L, P12-017; Task 12d review M6): `guardSince` is
+    /// the delta-pull watermark per table. When given, the drafts for records
+    /// already on the server (the request stamp and a repeat customer's fill)
+    /// are guarded upserts (`Canonical.MutationItem.ifUnchangedSince`): the
+    /// push writes them only onto the row this device pulled, so a customer's
+    /// cancel or reschedule request, or another device's edit of the
+    /// customer, that reached the server after the pull is never overwritten.
+    /// RN pushes whole rows here (`utils/storage/bookingConversion.ts:147`).
+    /// The lead job and a created customer are new rows and stay plain
+    /// upserts. A table with no watermark yet (only before the first delta
+    /// pull: the initial sync saves none, so a cold launch's conversion at
+    /// the subscription gate) also stays a plain upsert, as RN pushes it;
+    /// guarding it would drop every such stamp and leave the booking unlinked
+    /// until the next activation.
     static func recheckedIntakePlan(
         _ plan: NativeBookingIntake.Plan,
         currentRequests: [Canonical.BookingRequest],
         currentJobs: [Canonical.Job],
-        currentCustomers: [Canonical.Customer]
+        currentCustomers: [Canonical.Customer],
+        guardSince: [String: String]? = nil
     ) -> NativeBookingIntake.Plan? {
+        func guarded(_ draft: Canonical.MutationDraft) -> Canonical.MutationDraft {
+            guard let since = guardSince?[draft.table], !since.isEmpty else { return draft }
+            var next = draft
+            next.ifUnchangedSince = since
+            return next
+        }
         let currentByID = Dictionary(uniqueKeysWithValues: currentRequests.map { ($0.id, $0) })
         let currentJobIDs = Set(currentJobs.map(\.id))
         let planLeadsByID = Dictionary(
@@ -302,7 +324,7 @@ enum NativeScheduleBookingPolicy {
             stamped.convertedCustomerId = planned.convertedCustomerId
             nextRequests[index] = stamped
             if let customerID = planned.convertedCustomerId { linkedCustomerIDs.insert(customerID) }
-            drafts.append(mutationDraft(table: "bookingRequests", id: stamped.id, record: stamped))
+            drafts.append(guarded(mutationDraft(table: "bookingRequests", id: stamped.id, record: stamped)))
         }
         var nextJobs = currentJobs
         var createdJobs: [String] = []
@@ -335,7 +357,7 @@ enum NativeScheduleBookingPolicy {
             guard filled else { continue }
             nextCustomers[index] = merged
             filledCustomers.append(customer.id)
-            drafts.append(mutationDraft(table: "customers", id: customer.id, record: merged))
+            drafts.append(guarded(mutationDraft(table: "customers", id: customer.id, record: merged)))
         }
         return NativeBookingIntake.Plan(
             requests: nextRequests,

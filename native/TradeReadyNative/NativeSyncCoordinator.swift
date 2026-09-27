@@ -119,6 +119,12 @@ struct NativeMutationPushSettlement: Equatable {
     /// dropped as unsendable). A set-aside change for the same record is
     /// superseded by it.
     var cleared: [Canonical.MutationItem]
+    /// Phase 12 (12.00b.2-L, P12-017): guarded changes the server did not
+    /// apply because the row had moved on since this device's pull. They
+    /// leave the queue too, but supersede no set-aside change (nothing
+    /// reached the server); the settle step makes the next pull fetch
+    /// their rows again.
+    var superseded: [Canonical.MutationItem] = []
 }
 
 /// Connectivity gate. The coordinator never pushes while unreachable, so an
@@ -471,15 +477,19 @@ final class NativeSyncCoordinator {
         let refusedItems = outcome.rejected.map(\.item)
         let current = queue.load()
         let rejected = outcome.rejected.filter { current.contains($0.item) }
-        let cleared = startedItems.filter { !outcome.remaining.contains($0) && !refusedItems.contains($0) }
+        let cleared = startedItems.filter {
+            !outcome.remaining.contains($0) && !refusedItems.contains($0) && !outcome.superseded.contains($0)
+        }
         result.rejected = rejected
-        guard !rejected.isEmpty || !cleared.isEmpty else { return result }
+        guard !rejected.isEmpty || !cleared.isEmpty || !outcome.superseded.isEmpty else { return result }
         guard let settleRejected else {
             if !rejected.isEmpty { keepQueued(rejected.map(\.item), in: &result, startedItems: startedItems) }
             return result
         }
         do {
-            try settleRejected(NativeMutationPushSettlement(rejected: rejected, cleared: cleared))
+            try settleRejected(NativeMutationPushSettlement(
+                rejected: rejected, cleared: cleared, superseded: outcome.superseded
+            ))
         } catch {
             keepQueued(startedItems, in: &result, startedItems: startedItems)
             result.lastDiagnosticCode = "rejected-store/unavailable"
@@ -506,6 +516,7 @@ final class NativeSyncCoordinator {
         outcome.rejected.removeAll { items.contains($0.item) }
         // 12.02 (TH-5): a change kept queued was not discarded.
         outcome.discarded.removeAll { kept.contains($0) }
+        outcome.superseded.removeAll { kept.contains($0) }
         outcome.failedTables = kept.reduce(into: [String]()) { tables, item in
             if !tables.contains(item.table) { tables.append(item.table) }
         }

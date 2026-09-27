@@ -686,8 +686,11 @@ struct ScheduleBookingRecoveryTests {
         await legacyResolveKeepsTheServersHistory()
         await intakeStampNeverOverwritesTheServer()
         await intakeFillNeverOverwritesTheServer()
+        await aSupersededChangeRefetchesItsRow()
+        intakeGuardsOnlyRecordsAlreadyOnTheServer()
         sources(root)
         intakeSources(root)
+        declineNoticesAndPins(root)
 
         if failures == 0 {
             print("PASS: schedule booking recovery tests (\(checks) checks)")
@@ -3135,6 +3138,146 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(local?.notes, "gate code 4411", "\(id) [P12-017]: after the sync the device shows the other device's edit")
         expectEqual(d.queued("customers"), 0, "\(id): nothing is left queued for the customer")
         expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id): one customer in the cloud")
+    }
+
+    /// D6: a guarded change the server did not apply sends the table's
+    /// watermark back to its guard, so the next pull fetches the row again
+    /// although a pull while it was queued may have passed it; a later guard
+    /// never moves the watermark forward. A refused guarded change keeps its
+    /// guard through Settings › Cloud Sync's Retry.
+    @MainActor
+    static func aSupersededChangeRefetchesItsRow() async {
+        let id = "D6 superseded change"
+        let (d, store) = await declineDevice("d6")
+        defer { d.cleanup() }
+        let cursorStore = Canonical.NativeSyncCursorStore(fileURL: d.dir.appendingPathComponent("sync-cursor.json"))
+        let watermark = cursorStore.load().tables["bookingRequests"]
+        expect(watermark != nil, "\(id): sanity: the pulls left a watermark")
+        let earlier = "2025-09-01T00:00:00.000Z"  // before the data server's first stamp
+        func item(_ since: String) -> Canonical.MutationItem {
+            Canonical.MutationItem(table: "bookingRequests", op: .upsert, recordId: "req-1",
+                                   payload: .object(["id": .string("req-1")]), ts: writeStamp, ifUnchangedSince: since)
+        }
+        do {
+            try store.testSettleRejectedChanges(.init(rejected: [], cleared: [], superseded: [item(earlier)]))
+        } catch {
+            expect(false, "\(id): the settle step takes it (\(error))")
+        }
+        expectEqual(cursorStore.load().tables["bookingRequests"], earlier,
+                    "\(id) [P12-017]: the watermark goes back to the change's guard")
+        do {
+            try store.testSettleRejectedChanges(.init(rejected: [], cleared: [], superseded: [item("2099-01-01T00:00:00.000Z")]))
+        } catch {
+            expect(false, "\(id): the settle step takes a later guard (\(error))")
+        }
+        expectEqual(cursorStore.load().tables["bookingRequests"], earlier,
+                    "\(id) [P12-017]: a later guard never moves the watermark forward")
+        await syncAndWait(d)
+        expectEqual(localHistory(d), customerHistory, "\(id): the pull from the earlier watermark changes nothing it had")
+
+        let refused = item(earlier)
+        do {
+            try store.testSettleRejectedChanges(.init(rejected: [NativeMutationRejection(item: refused, statusCode: 400)],
+                                                      cleared: [], superseded: []))
+        } catch {
+            expect(false, "\(id): sanity: the refusal is filed (\(error))")
+        }
+        _ = store.retryRejectedChange(id: "bookingRequests/req-1")
+        expectEqual(d.queue.load().first { $0.recordId == "req-1" }?.ifUnchangedSince, earlier,
+                    "\(id) [P12-017]: Retry sends the refused change with its guard")
+    }
+
+    /// D7: which intake drafts are guarded. The request stamp and a repeat
+    /// customer's fill (records already on the server) carry the watermark of
+    /// their table; the lead job and a created customer (new rows) do not; a
+    /// table with no watermark yet (a cold launch's conversion, before the
+    /// first delta pull) is a plain upsert, as RN pushes it.
+    @MainActor
+    static func intakeGuardsOnlyRecordsAlreadyOnTheServer() {
+        let id = "D7 intake guards"
+        let settings = fixtureSettings(bookingLink: nil)
+        guard let bookingData = try? JSONSerialization.data(withJSONObject: workerBooking()),
+              let request = try? JSONDecoder().decode(Canonical.BookingRequest.self, from: bookingData)
+        else {
+            expect(false, "\(id): fixture: the booking decodes")
+            return
+        }
+        let marks = ["bookingRequests": "2026-09-27T10:00:00.123456+00:00", "customers": "2026-09-27T09:00:00.000Z"]
+        func drafts(customers: [Canonical.Customer], guardSince: [String: String]?) -> [String: String] {
+            let plan = NativeBookingIntake.plan(requests: [request], jobs: [], customers: customers, settings: settings,
+                                                makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+            let rechecked = NativeScheduleBookingPolicy.recheckedIntakePlan(
+                plan, currentRequests: [request], currentJobs: [], currentCustomers: customers, guardSince: guardSince)
+            return Dictionary(uniqueKeysWithValues: (rechecked?.drafts ?? []).map {
+                ("\($0.table)/\($0.recordId)", $0.ifUnchangedSince ?? "plain")
+            })
+        }
+        let repeatCase = drafts(customers: [repeatCustomer()], guardSince: marks)
+        expectEqual(repeatCase, ["bookingRequests/req-1": marks["bookingRequests"]!, "jobs/\(leadJobID)": "plain",
+                                 "customers/cust-sam": marks["customers"]!],
+                    "\(id) [P12-017]: the stamp and the fill are guarded; the lead job is not")
+        let newCustomer = drafts(customers: [], guardSince: marks)
+        expectEqual(newCustomer, ["bookingRequests/req-1": marks["bookingRequests"]!, "jobs/\(leadJobID)": "plain",
+                                  "customers/c-new": "plain"],
+                    "\(id) [P12-017]: a created customer is not guarded")
+        let noWatermark = drafts(customers: [repeatCustomer()], guardSince: [:])
+        expectEqual(Set(noWatermark.values), ["plain"], "\(id): a table with no watermark yet is a plain upsert")
+    }
+
+    /// D8: every decline outcome but a decline has a plain notice for both
+    /// screens (RN's failure alert, `screens/TodayScreen.tsx:557`); the
+    /// screens show it; neither the decline nor the legacy resolve queues
+    /// the request.
+    @MainActor
+    static func declineNoticesAndPins(_ root: URL) {
+        let id = "D8 decline notices"
+        let labels = ["Decline booking", "Decline"]
+        let outcomes: [AppStore.OwnerResponseOutcome] = [
+            .awaitingAck(.queued), .awaitingAck(.refused), .needsReview(currentStatus: "declined"),
+            .needsReview(currentStatus: "cancelled"), .needsReview(currentStatus: "unknown"), .unknownOutcome, .missing,
+            .failed(reason: "session"), .failed(reason: "configuration"), .failed(reason: "owner-changed"),
+            .failed(reason: "read-only"), .failed(reason: "invalid-request"), .failed(reason: "transient"),
+            .failed(reason: "transport"),
+        ]
+        for label in labels {
+            expect(AppStore.OwnerResponseOutcome.applied(status: "declined", alreadyApplied: false)
+                    .declineNotice(actionLabel: label) == nil, "\(id) \(label) [P12-017]: a decline shows nothing (RN)")
+            for outcome in outcomes {
+                let notice = outcome.declineNotice(actionLabel: label)
+                expect(notice?.message.isEmpty == false, "\(id) \(label) \(outcome) [P12-017]: a message")
+                if case .needsReview("declined") = outcome {
+                    expectEqual(notice?.title, "Booking declined", "\(id) \(label): already declined is not a failure")
+                } else {
+                    expectEqual(notice?.title, failureTitle, "\(id) \(label) \(outcome) [P12-017]: RN's failure title")
+                }
+            }
+            expect(AppStore.OwnerResponseOutcome.awaitingAck(.queued).declineNotice(actionLabel: label)?.message
+                    .contains("tap \u{201C}\(label)\u{201D} again") == true, "\(id) \(label) [P12-017]: names this screen's button")
+            expect(AppStore.OwnerResponseOutcome.awaitingAck(.refused).declineNotice(actionLabel: label)?.message
+                    .contains("Cloud Sync") == true, "\(id) \(label) [P12-017]: a refused change points to Cloud Sync")
+        }
+        func read(_ path: String) -> String {
+            (try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)) ?? ""
+        }
+        func body(_ source: String, from start: String) -> String {
+            guard let lower = source.range(of: start),
+                  let upper = source.range(of: "\n    }\n", range: lower.upperBound..<source.endIndex)
+            else { return "" }
+            return String(source[lower.lowerBound..<upper.upperBound])
+        }
+        let today = body(read("native/TradeReadyNative/TodayView.swift"), from: "    private func declineBooking(")
+        let requests = body(read("native/TradeReadyNative/NativeBookingRequestsView.swift"), from: "    private func decline(")
+        expect(today.contains("declineNotice(actionLabel: \"Decline booking\")"), "S-D [P12-017]: Today shows the decline's notice")
+        expect(requests.contains("declineNotice(actionLabel: \"Decline\")"), "S-D [P12-017]: Requests shows the decline's notice")
+        let store = read("native/TradeReadyNative/AppStore.swift")
+        for (name, start) in [("the decline", "    func declineBookingRequest("),
+                              ("the legacy resolve", "    func resolveBookingReschedule(")] {
+            let text = body(store, from: start)
+            expect(!text.isEmpty && !text.contains("enqueue") && !text.contains("mergeBookingRequestStatus"),
+                   "S-D [P12-017]: \(name) queues nothing for the request")
+            expect(text.contains("saveServerBookingRequestStatus(") && text.contains("ownerResponseWait(for:"),
+                   "S-D [P12-017]: \(name) saves the server's status locally and waits for a change to the request")
+        }
     }
 
     // MARK: K pins: where intake runs, and where it does not (P12-016)

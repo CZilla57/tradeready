@@ -159,6 +159,39 @@ struct MutationQueueTests {
         expect(removed == 1 && q6.load().map(\.recordId) == ["real_1"],
                "pruneRecords drops only the named record ids")
 
+        // Phase 12 (12.00b.2-L, P12-017): a guarded upsert keeps its guard
+        // through the file; a replacement stays guarded only while every
+        // change it carries is, with the earlier guard.
+        let older = "2026-09-27T10:00:00.123456+00:00"
+        let newer = "2026-09-27T10:05:00.5+00:00"
+        let q7 = makeQueue("guard")
+        try q7.enqueue(table: "bookingRequests", op: .upsert, recordId: "r1", payload: job("r1", title: "stamp"),
+                       ifUnchangedSince: older)
+        expect(q7.load().first?.ifUnchangedSince == older, "a guarded upsert keeps its guard in the queue file")
+        try q7.enqueue(table: "bookingRequests", op: .upsert, recordId: "r1", payload: job("r1", title: "stamp 2"),
+                       ifUnchangedSince: newer)
+        expect(q7.load().first?.ifUnchangedSince == older,
+               "a guarded change replacing a guarded one keeps the earlier guard")
+        try q7.enqueue(table: "customers", op: .upsert, recordId: "c1", payload: job("c1", title: "owner edit"))
+        try q7.enqueue(table: "customers", op: .upsert, recordId: "c1", payload: job("c1", title: "edit + fill"),
+                       ifUnchangedSince: newer)
+        expect(q7.load().first { $0.recordId == "c1" }?.ifUnchangedSince == nil,
+               "a guarded change replacing a whole-record write stays a whole-record write")
+        try q7.enqueue(table: "bookingRequests", op: .upsert, recordId: "r1", payload: job("r1", title: "owner edit"))
+        expect(q7.load().first { $0.recordId == "r1" }?.ifUnchangedSince == nil,
+               "a whole-record write replacing a guarded change is a whole-record write")
+        try q7.enqueue(table: "jobs", op: .delete, recordId: "j9", payload: nil)
+        try q7.enqueue(table: "jobs", op: .upsert, recordId: "j9", payload: job("j9", title: "undo"),
+                       ifUnchangedSince: older)
+        expect(q7.load().first { $0.recordId == "j9" }?.ifUnchangedSince == nil,
+               "a guarded change replacing a delete is a whole-record write")
+        let legacyURL = root.appendingPathComponent("legacy.json")
+        try Data(#"{"schemaVersion":1,"items":[{"table":"jobs","op":"upsert","recordId":"j1","payload":{"id":"j1"},"ts":"2026-09-27T10:00:00.000Z"}]}"#.utf8)
+            .write(to: legacyURL)
+        let legacy = Canonical.NativeMutationQueue(fileURL: legacyURL).load()
+        expect(legacy.count == 1 && legacy.first?.ifUnchangedSince == nil,
+               "a queue file written before the guard reads as whole-record writes")
+
         // removeAll clears the queue and its backup.
         try q5.removeAll()
         expect(!fileManager.fileExists(atPath: q5.fileURL.path)
