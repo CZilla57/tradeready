@@ -451,9 +451,11 @@ email binding set:
   confirm from the repository whether the secret is actually set in the production
   Worker.**
 
-**Owner action:** run `wrangler secret list` against the production Worker and confirm
-`RESEND_API_KEY` is present (name only — never paste its value anywhere). Without it, an
-owner gets no booking alert at all under the G1 waiver (push is also waived).
+**Owner action:** from `backend-workers/` (where `wrangler.toml` lives — from the
+repository root `wrangler` finds no config), run `wrangler secret list` against the
+production Worker and confirm `RESEND_API_KEY` is present (name only — never paste its
+value anywhere). Without it, an owner gets no booking alert at all under the G1 waiver
+(push is also waived).
 
 **Native push-token retention (unrelated to Resend, same waiver's condition row):**
 native keeps the Expo-era `settings.pushToken` field, untouched, through the migration

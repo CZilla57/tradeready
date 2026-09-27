@@ -500,25 +500,38 @@ The next row is the owner's approval (or amendment) of this draft. A go/no-go ro
 the checklist (§4.x) and links the evidence-index rows; "Rollback trigger considered"
 names each §4.8 trigger checked and its state.
 
-**Recording a defect-list ruling (the `ruled:` marker).** When an open S1/S2 defect-list
-row (§10) cites a ruling in parentheses (the pattern is "until the owner records a
-ruling (R<n>)"), `native/run-phase-12-stage-preflight.sh` only treats that ruling as
-recorded when a row here (a) names the defect's ID, (b) contains the literal marker
-`ruled:` immediately followed by that exact ruling token, with only whitespace between
-them, and (c) has exactly `owner` in the Decider column. A row that rules on something
-else in the same sentence does not also cover this defect: bind each ruling to its own
-`ruled: R<n>`, and a qualifier such as "not yet" or "still pending" anywhere before that
-marker voids the match. Worked example (fictional IDs, not a real ruling on anything in
-§10):
+**Recording a defect-list ruling (a strict grammar, ruling R65).** When an open S1/S2
+defect-list row (§10) cites a ruling in parentheses (the pattern is "until the owner
+records a ruling (R<n>)"), `native/run-phase-12-stage-preflight.sh` treats that ruling as
+recorded only when a row here satisfies **all** of the following. There is no word list
+of accepted or rejected phrasings — anything that is not this exact shape is not a
+ruling, and the gate fails closed:
 
-```
-| 7 | 2026-10-01 | pre-A | P12-0NN ruled: R00 — the owner accepts <the specific risk> for Stage A because <reason> | <evidence link> | owner | n/a |
-```
+1. It is a real table row.
+2. Its **Decider** cell, trimmed and read case-insensitively, is exactly `owner`.
+3. Its **Decision** cell, trimmed, is **exactly** `<D> ruled: R<n>` — the defect ID, one
+   space, `ruled:`, one space, the ruling token, and nothing else. No rationale, dash,
+   parenthetical or trailing punctuation belongs in this cell; put the reason in the
+   Evidence cell instead.
 
-For example, a real row ruling on `P12-012`'s stale-queue risk (R43) would read
-`P12-012 ruled: R43 — <reason>`, in a row whose Decider cell is `owner`. The same
-`ruled: R<n>` form (without a defect ID) records the production-configuration decision
-(R59) in `docs/native-phase-12-release-readiness.md`'s own decision line.
+A later row whose Decision cell is **exactly** `<D> revoked: R<n>` re-blocks the defect
+(the log is append-only, newest last, so the last matching ruled/revoked row for that
+defect and ruling decides). Any other wording — a qualifier before or after the marker,
+"unruled:"/"overruled:" instead of "ruled:"/"revoked:", a different Decider, or a ruling
+bound to a different defect ID in the same row — is not a ruling, whatever it says.
+
+Worked example (fictional IDs; this is not a real ruling on anything in §10):
+
+| # | Date | Stage | Decision | Evidence | Decider | Rollback trigger considered |
+|---|---|---|---|---|---|---|
+| 7 | 2026-10-01 | pre-A | P12-0NN ruled: R00 | The owner accepts \<the specific risk\> for Stage A because \<reason\>; see \<evidence link\>. | owner | n/a |
+
+A real row ruling on `P12-012`'s stale-queue risk would have a Decision cell reading
+exactly `P12-012 ruled: R43`, with the reason in the Evidence cell and `owner` in the
+Decider cell, exactly like the worked example above. The same `ruled: R<n>` /
+`revoked: R<n>` grammar, without a defect ID, records the production-configuration
+decision (R59): see `docs/native-phase-12-release-readiness.md`'s own decision line,
+which must end with `ruled: R<n>` and nothing after it.
 
 ## 10. Defect list
 
