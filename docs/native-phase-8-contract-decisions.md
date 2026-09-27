@@ -463,11 +463,28 @@ row's `data` filtered on `updated_at=lte.<the table's delta-pull watermark>` wit
 the committed PostgREST API supports with no backend change (`N/NativeSupabasePush.swift`). A row
 written since the pull is left as it is: the change is dropped, the watermark goes back to it, and the
 next pull brings the server's row. The next activation stamps a still-convertible request again. The
-lead job and a created customer are new rows and stay plain upserts. Residuals: a fill dropped this
-way is not redone; a cold launch's conversion before the first delta pull (the initial sync keeps no
-watermark) pushes whole rows, as RN does; a record whose change the server refused keeps its local
-copy in the pull, so a guard does not catch a server change to it (the refusal's Retry and Discard
-rules apply, as for any newer change to a refused record).
+lead job and a created customer are new rows and stay plain upserts, so a request whose stamp was
+dropped (a cancelled one is never stamped again) keeps its lead job: Today shows the request's current
+state on that job, found by its deterministic id `jbk_<requestId>`
+(`N/Domain/NativeBookingAttention.swift` `linkedJobID`; review fix round 1, I1). Residuals, all S3:
+- A fill dropped this way is not redone.
+- A cold launch's conversion before the first delta pull (the initial sync keeps no watermark) pushes
+  whole rows, as RN does.
+- A record whose change the server refused keeps its local copy in the pull, so a guard does not catch
+  a server change to it (the refusal's Retry and Discard rules apply, as for any newer change to a
+  refused record).
+- A server write whose transaction began at or before the watermark but committed after the pull's
+  read can still match `lte`: milliseconds, bounded by a transaction open across the pull's read
+  (`now()` is the transaction's start).
+- A direct pull that overlaps a coordinator pass can save its cursor over the watermark the settle step
+  just lowered (`N/AppStore.swift` `pullDeltaAndCommit`, the `committedCursor` save); the cursor's
+  5-minute overlap still refetches the row when it changed within that window.
+- The Worker reads the request and writes it back whole (`backend-workers/lib/booking/respond.js:48-75`,
+  `backend-workers/lib/booking/manage.js:74-108`), so a stamp that lands between its read and its write
+  is overwritten; the next pull takes the server's row and the next activation stamps it again.
+- The delta pull pages by offset (`order=updated_at.asc,id.asc`, 500 rows a page,
+  `N/NativeInitialSync.swift` `fetchAllRows`), so in a delta of more than 500 rows a concurrent write
+  that reorders the rows can make a page skip one, and that row's newer write can then match a guard.
 
 ## 9. Rescheduled manage / ICS; archived semantics
 

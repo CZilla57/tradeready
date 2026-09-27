@@ -296,7 +296,7 @@ no native-only business data, so "Ready" does not depend on it:
 
 The check counts this account's items only and never removes one. Launch and every
 activation recover them (2026-09-26, 12.00b.2-I, defect `P12-013`):
-`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10824`) runs for the
+`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10841`) runs for the
 verified owner after the initial sync, from the signed-in gate and from
 `performForegroundRefresh` after its sync (`N/AppStore.swift:7987`).
 
@@ -318,7 +318,7 @@ verified owner after the initial sync, from the signed-in gate and from
   reschedule and the job still has the proven schedule. Recovery never resolves; the
   owner does, by tapping "I've rescheduled it" again (`AppStore.acceptBookingReschedule`,
   defect `P12-015`, fixed). An accept that could not finish shows why on the screen the
-  owner used, and keeps its proof (`N/AppStore.swift:10272-10277` removes it only after
+  owner used, and keeps its proof (`N/AppStore.swift:10288-10293` removes it only after
   the server confirms) until the owner taps again or the request moves on.
   Proofs are checked in every pass, before or after the pull: the check reads local
   state only, writes no record and queues nothing, so it cannot push a pre-pull copy.
@@ -484,7 +484,7 @@ Citations are at `9e84478`; they are React Native files, read-only here.
     `Application Support/TradeReadyNative/native-run-marker.json` holds
     `{"run":<n>,"schemaVersion":1}` (`N/NativeRunMarker.swift`).
     - Every native launch adds one to `run` after its launch work
-      (`N/AppStore.swift:804`), including a signed-out or blocked launch.
+      (`N/AppStore.swift:843`), including a signed-out or blocked launch.
     - A missing or unreadable marker restarts at a random run in 1…2,147,483,647, not
       at a fixed value (review fix round 3). The chance that a restart repeats the run
       R recorded is about one in two billion.
@@ -506,9 +506,9 @@ Citations are at `9e84478`; they are React Native files, read-only here.
   - **A new native run** is a marker whose `run` differs from the record's.
     - **No record yet.** The native directory `Application Support/TradeReadyNative/`,
       or any file in it, also counts, even with no marker. The directory is permanent
-      (every native launch creates it, `N/AppStore.swift:567-569`), so it cannot tell
+      (every native launch creates it, `N/AppStore.swift:599-601`), so it cannot tell
       one run from the next. When it fires with no marker (a native build that never
-      reached `N/AppStore.swift:804`, or whose marker writes all failed), R records the
+      reached `N/AppStore.swift:843`, or whose marker writes all failed), R records the
       sentinel run `0`. No marker can hold 0 (`run` is at least 1,
       `N/NativeRunMarker.swift:44`), so the fallback fires once, and any later marker
       still counts as new.
