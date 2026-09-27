@@ -535,6 +535,15 @@ final class AppStore: ObservableObject {
     /// and the push runs before the pull, so a mirror is read and merged
     /// only while this mark is current.
     private var scheduleBookingRecoveryPullMark: (generation: UInt64, subject: String)?
+    /// Phase 12 (12.00b.2-K, P12-016): the owner and account generation of a
+    /// pull that committed every table, started under that generation, since
+    /// the identity was last applied or the foreground refresh last began, or
+    /// nil. Booking intake converts only while this mark is current, and it
+    /// converts from that pull instead of pulling again. A partial pull does
+    /// not count: one that missed the jobs table could miss the job another
+    /// device already made from a booking, and the push after a conversion
+    /// would replace it.
+    private var bookingIntakePullMark: (generation: UInt64, subject: String)?
     /// Task 8.08 test seam: explicit session bytes for owner transports.
     /// Production passes nil and reads the Keychain; tests inject bytes so
     /// owner rechecks and service calls exercise without a live session.
@@ -5197,6 +5206,8 @@ final class AppStore: ObservableObject {
         authenticationGateState = .signedIn(email: authenticatedEmail)
         consumePendingDeepLinks()
         replayVerifiedWidgetActionsIfPossible()
+        // Phase 12 (12.00b.2-K, P12-016): pulled bookings become jobs.
+        startBookingIntakeIfPossible()
         // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work.
         startScheduleBookingRecoveryIfPossible()
     }
@@ -5957,6 +5968,9 @@ final class AppStore: ObservableObject {
         // gate's exit start recovery passes before this period's pull lands,
         // so no mirror is merged until a pull commits again.
         scheduleBookingRecoveryPullMark = nil
+        // Phase 12 (12.00b.2-K, P12-016): likewise, no booking converts until
+        // this period's pull has committed.
+        bookingIntakePullMark = nil
         // Invalidates any same-account entitlement request that was suspended
         // while a stronger auth/recovery/onboarding state transition completed.
         subscriptionGateGeneration &+= 1
@@ -6061,6 +6075,8 @@ final class AppStore: ObservableObject {
         if activateConsumers, case .signedIn = authenticationGateState {
             consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
+            // Phase 12 (12.00b.2-K, P12-016): pulled bookings become jobs.
+            startBookingIntakeIfPossible()
             // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work.
             startScheduleBookingRecoveryIfPossible()
         }
@@ -6099,6 +6115,9 @@ final class AppStore: ObservableObject {
         let generation = initialSyncGateGeneration
         let subject = outcome.verifiedUserSubject
         let localSnapshot = snapshot
+        // Phase 12 (12.00b.2-K, P12-016): the account generation the pull
+        // starts under, for the intake mark below.
+        let boundaryGeneration = accountBoundaryGeneration
         authenticationGateState = .initialSyncLoading
         // Task 11.12: an InitialSync signpost from the gate to the commit.
         // Ending is idempotent: the explicit ends below win, and the deferred
@@ -6121,6 +6140,7 @@ final class AppStore: ObservableObject {
                 try self.commitSnapshot(candidate)
                 NativePerformanceMetrics.shared.end(initialSync, count: self.performanceRecordCount())
                 self.markScheduleBookingRecoveryPullCommitted(subject: subject)
+                self.markBookingIntakePullCommitted(subject: subject, generation: boundaryGeneration)
                 self.markInitialSyncCompleted(subject: subject)
                 self.advancePastInitialSync(
                     outcome: outcome,
@@ -6288,6 +6308,12 @@ final class AppStore: ObservableObject {
             authenticationGateState = .signedIn(email: authenticatedEmail)
             consumePendingDeepLinks()
             replayVerifiedWidgetActionsIfPossible()
+            // Phase 12 (12.00b.2-K, P12-016): pulled bookings become jobs. A
+            // cold launch lands here after the initial sync's commit, so they
+            // convert here (RN: once bootstrapping ends, `App.tsx:396`); a
+            // warm activation lands here before its pull, so they wait for
+            // `performForegroundRefresh`.
+            startBookingIntakeIfPossible()
             // Phase 12 (12.00b.2-I, P12-013): unfinished booking/portal work,
             // once the initial sync has committed (a cold launch lands here).
             // A warm activation lands here too, before its pull: that pass
@@ -7681,6 +7707,10 @@ final class AppStore: ObservableObject {
         guard let service = deltaSyncServiceIfConfigured() else { return .skipped }
         guard let credentials = currentSyncCredentials() else { return .failed("pull/session") }
         let subject = credentials.subject
+        // Phase 12 (12.00b.2-K, P12-016): the account generation this pull
+        // starts under. A pull that spans an account boundary never lets
+        // booking intake convert, even when the same owner is back.
+        let boundaryGeneration = accountBoundaryGeneration
         let cursor = syncCursorStore.load()
         let localSnapshot = snapshot
         // The snapshot the pulled candidate was merged into (11.12 Finding D):
@@ -7782,6 +7812,11 @@ final class AppStore: ObservableObject {
         // customer rows. A partial pull that missed either does not count.
         if outcome.failedTables.allSatisfy({ !Self.scheduleBookingMirrorTables.contains($0) }) {
             markScheduleBookingRecoveryPullCommitted(subject: subject)
+        }
+        // Phase 12 (12.00b.2-K, P12-016): booking intake may convert from
+        // this pull only when every table committed.
+        if outcome.failedTables.isEmpty {
+            markBookingIntakePullCommitted(subject: subject, generation: boundaryGeneration)
         }
         // Sync completion is the generation trigger (mirrors RN app-open /
         // foreground): pulled rules and jobs are in the snapshot, so due
@@ -7900,6 +7935,8 @@ final class AppStore: ObservableObject {
         // Phase 12 (12.00b.2-I fix round 1, review I1): only this refresh's
         // own pull (or a later one) lets the recovery below merge a mirror.
         scheduleBookingRecoveryPullMark = nil
+        // Phase 12 (12.00b.2-K, P12-016): and lets the intake below convert.
+        bookingIntakePullMark = nil
         let synced = await syncNowAndWait(trigger: .foreground) != nil
         // Mirrors RN's foreground `checkAndGenerateRecurringJobs`: runs after
         // the sync when it succeeds, and on the local snapshot when offline —
@@ -7909,6 +7946,17 @@ final class AppStore: ObservableObject {
         refreshRecurringJobs()
         refreshRecurringInvoices()
         rescheduleInvoiceDeliveries()
+        // Phase 12 (12.00b.2-K, P12-016): customer bookings the pull brought
+        // become lead jobs and customers (RN: `syncIfOnline`, then
+        // `applyBookingRequests`, `context/AuthContext.tsx:118-120`). Only
+        // when this refresh's pull (or a later one) committed every table,
+        // and from that pull: no second pull. Before recovery: intake makes
+        // no network call and commits without waiting, so the new jobs do not
+        // wait on recovery's status reads, and it converts from the pull that
+        // just committed before those reads give another activation (which
+        // clears the mark) time to begin. Each builds its write from the live
+        // snapshot at its own commit, so neither drops the other's change.
+        await runBookingIntakeIfPossible()
         // Phase 12 (12.00b.2-I, P12-013): finish unfinished booking/portal
         // link work and clear reschedule proofs that can no longer resolve,
         // after the sync so the pulled request and job states are current.
@@ -9702,14 +9750,18 @@ extension AppStore {
         )
     }
 
-    /// Atomic intake after a verified pull: serializes overlapping refreshes,
-    /// rechecks the owner across the suspension, plans against the fresh
-    /// snapshot, revalidates the plan, and commits customers/jobs/requests
-    /// in one snapshot transaction. Reminder scheduling flows through the
-    /// existing notification infrastructure (the schedule key recomputes
-    /// from the committed snapshot) — no second sender is introduced.
+    /// Atomic intake after a verified pull, with a pull of its own:
+    /// serializes overlapping refreshes, pulls, rechecks the owner across the
+    /// suspension, then runs the shared intake (`applyBookingIntake`).
+    ///
+    /// Phase 12 (12.00b.2-K, P12-016): production does not call this. The
+    /// launch and activation points call `runBookingIntakeIfPossible`, which
+    /// converts from the pull that just committed instead of pulling again.
+    /// It stays as the entry the plan 8.08 and 10.09 host tests
+    /// (`native/StoreIntegrationTests/main.swift`) drive a real committed pull
+    /// through; both entries run the same intake after their pull.
     func runBookingIntakeAfterVerifiedPull(
-        makeCustomerID: @escaping () -> String = { "c\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(6))" },
+        makeCustomerID: (() -> String)? = nil,
         nowISO: (() -> String)? = nil
     ) async -> BookingIntakeOutcome {
         guard !bookingIntakeInFlight else { return .alreadyRunning }
@@ -9721,27 +9773,122 @@ extension AppStore {
         guard pull.state == .completed else {
             return .skipped(reason: pull.diagnosticCode ?? "pull/failed")
         }
-        guard scheduleBookingOwnerStillCurrent(capture),
-              let settings = snapshot.payload.settings
-        else { return .skipped(reason: "owner-changed") }
-        let stamp = nowISO?() ?? isoNow()
+        guard scheduleBookingOwnerStillCurrent(capture) else { return .skipped(reason: "owner-changed") }
+        return await applyBookingIntake(makeCustomerID: makeCustomerID, nowISO: nowISO)
+    }
+
+    /// Phase 12 (12.00b.2-K, P12-016): booking intake at launch and on every
+    /// activation (RN: once bootstrapping ends, `App.tsx:396`, and after each
+    /// foreground sync, `context/AuthContext.tsx:118-120`). It runs only for
+    /// the gated owner (the recovery gate: the exact signed-in workspace, the
+    /// `.signedIn` gate, no account boundary open, the initial sync committed
+    /// for this subject, writable persistence) and only while a pull that
+    /// committed every table in this launch or activation is current
+    /// (`bookingIntakePullMark`). It converts from that pull and never pulls
+    /// itself. Nothing awaits between these checks and the commit, so no
+    /// owner change can land in between.
+    @discardableResult
+    private func runBookingIntakeIfPossible() async -> BookingIntakeOutcome {
+        guard !bookingIntakeInFlight else { return .alreadyRunning }
+        guard scheduleBookingRecoveryBinding != nil else { return .skipped(reason: "gate") }
+        guard bookingIntakePullCommitted else { return .skipped(reason: "no-committed-pull") }
+        bookingIntakeInFlight = true
+        defer { bookingIntakeInFlight = false }
+        return await applyBookingIntake(makeCustomerID: nil, nowISO: nil)
+    }
+
+    /// Phase 12 (12.00b.2-K, P12-016): launch. Called where the signed-in gate
+    /// opens, before recovery; starts a pass only when a booking is waiting
+    /// to convert and the pull mark is current. On a cold launch the initial
+    /// sync's commit set the mark, so bookings convert here; on a warm
+    /// activation these points run before its pull (applying the identity
+    /// cleared the mark), so `performForegroundRefresh` converts them.
+    private func startBookingIntakeIfPossible() {
+        guard scheduleBookingRecoveryBinding != nil, bookingIntakePullCommitted,
+              NativeBookingIntake.needsIntake(snapshot.payload.bookingRequests ?? [])
+        else { return }
+        Task { [weak self] in
+            await self?.runBookingIntakeIfPossible()
+        }
+    }
+
+    /// Records that a pull for `subject`, started under account generation
+    /// `generation`, committed every table (the initial sync, or a delta pull
+    /// with no failed table).
+    private func markBookingIntakePullCommitted(subject: String, generation: UInt64) {
+        bookingIntakePullMark = (generation, subject)
+    }
+
+    /// Whether such a pull has committed for the current owner, under the
+    /// current account generation, since the identity was applied or the
+    /// foreground refresh began.
+    private var bookingIntakePullCommitted: Bool {
+        guard let mark = bookingIntakePullMark else { return false }
+        return mark.generation == accountBoundaryGeneration && mark.subject == authenticatedUserSubject
+    }
+
+    /// RN's customer id shape, `c<Date.now()>_…` (limitation L3: time-based).
+    private static func intakeCustomerID() -> String {
+        "c\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(6))"
+    }
+
+    /// The intake both entries run once their pull has committed and the
+    /// owner is checked, holding `bookingIntakeInFlight`: plans against the
+    /// live snapshot, revalidates the plan, and commits customers, jobs and
+    /// requests in one snapshot transaction, then queues the drafts (the
+    /// P12-008 commit rule: save, apply, queue). Nothing awaits between the
+    /// plan and the commit. Reminder scheduling flows through the existing
+    /// notification infrastructure (the publish below; the schedule key
+    /// recomputes from the committed snapshot); no second sender.
+    ///
+    /// Phase 12 (12.00b.2-K, P12-016): it runs with no screen of the owner's
+    /// behind it, so a failed save is reported with the sync status's
+    /// bounded code (`intake/local-commit`), never in `migrationMessage`,
+    /// which an unrelated screen would show later. Nothing was written, and
+    /// the next pass tries again. A pass that found a booking to convert
+    /// prints one line of counts and a fixed reason.
+    private func applyBookingIntake(
+        makeCustomerID: (() -> String)?,
+        nowISO: (() -> String)?
+    ) async -> BookingIntakeOutcome {
         let requests = snapshot.payload.bookingRequests ?? []
         guard NativeBookingIntake.needsIntake(requests) else { return .noChange }
+        var converted = 0
+        var jobs = 0
+        var customers = 0
+        var reason = "none"
+        defer {
+            print("TradeReadyBookingIntake stage=pass converted=\(converted) jobs=\(jobs) customers=\(customers) skipped=\(reason)")
+        }
+        guard !persistenceWritesBlocked else {
+            reason = "read-only"
+            return .skipped(reason: reason)
+        }
+        guard let settings = snapshot.payload.settings else {
+            reason = "no-settings"
+            return .skipped(reason: reason)
+        }
+        let stamp = nowISO?() ?? isoNow()
         let plan = NativeBookingIntake.plan(
             requests: requests,
             jobs: snapshot.payload.jobs ?? [],
             customers: snapshot.payload.customers ?? [],
             settings: settings,
-            makeCustomerID: makeCustomerID,
+            makeCustomerID: makeCustomerID ?? Self.intakeCustomerID,
             nowISO: { stamp }
         )
+        // Contract §8: a request whose `jbk_` job is already on the device
+        // is left to the device that made the job (its request stamp follows
+        // the job); the recheck drops it, so a job is never replaced.
         guard let rechecked = NativeScheduleBookingPolicy.recheckedIntakePlan(
             plan,
             currentRequests: snapshot.payload.bookingRequests ?? [],
             currentJobs: snapshot.payload.jobs ?? [],
             currentCustomers: snapshot.payload.customers ?? []
-        ) else { return .noChange }
-        guard ensurePersistenceWritable() else { return .skipped(reason: "read-only") }
+        ) else {
+            reason = "no-change"
+            return .noChange
+        }
         var updated = snapshot
         updated.payload.bookingRequests = rechecked.requests
         updated.payload.jobs = rechecked.jobs
@@ -9756,17 +9903,21 @@ extension AppStore {
             queueStage: "enqueue-booking-intake"
         )
         guard committed else {
-            migrationMessage = "Could not save converted requests locally."
-            return .skipped(reason: "local-commit")
+            reason = "local-commit"
+            recordLocalSyncFailure("intake/local-commit")
+            return .skipped(reason: reason)
         }
+        converted = rechecked.convertedRequestIDs.count
+        jobs = rechecked.createdJobIDs.count
+        customers = rechecked.createdCustomerIDs.count
         // Task 10.09 (B1): the booking-intake local commit above is itself a
         // committed canonical sync commit (new customers/jobs/requests from
-        // the converted intake), distinct from the pull's own publish
-        // earlier in this function (which ran from the PRE-intake snapshot).
-        // Publish once more from the just-committed post-intake snapshot so
-        // notifications/cache/widget mirror see the converted data, not the
-        // stale pre-intake one. `commitScheduleBookingLocal` is synchronous,
-        // so no suspension occurred since the owner was last verified above.
+        // the converted intake), distinct from the pull's own publish (which
+        // ran from the PRE-intake snapshot). Publish once more from the
+        // just-committed post-intake snapshot so notifications/cache/widget
+        // mirror see the converted data, not the stale pre-intake one.
+        // `commitScheduleBookingLocal` is synchronous, so no suspension
+        // occurred since the caller last verified the owner.
         if let binding = derivedStatePublishBinding {
             await publishDerivedState(expectedOwnerBinding: binding)
         }

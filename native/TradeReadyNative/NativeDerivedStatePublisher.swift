@@ -10,7 +10,7 @@ import Foundation
 /// committed. There is intentionally no single call-site "funnel": `AppStore`
 /// calls `publish` from every place a canonical snapshot is durably
 /// committed (see `AppStore.pullDeltaIfPossible` and
-/// `AppStore.runBookingIntakeAfterVerifiedPull`). A logical operation that
+/// `AppStore.applyBookingIntake`). A logical operation that
 /// performs two separate commits (e.g. `prepareBookingReschedule`'s
 /// `syncNowAndWait` pull followed by its own direct `pullDeltaIfPossible`)
 /// legitimately publishes twice — once per commit — and the generation guard

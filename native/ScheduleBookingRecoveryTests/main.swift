@@ -2019,7 +2019,7 @@ struct ScheduleBookingRecoveryTests {
         let d = Device(tag)
         let store = d.launch()
         await d.signIn(store)
-        await d.sync()
+        await syncAndWait(d)
         await customerBooks(d)
         return (d, store)
     }
@@ -2080,6 +2080,15 @@ struct ScheduleBookingRecoveryTests {
         for _ in 0..<20 { try? await Task.sleep(nanoseconds: 5_000_000) }
     }
 
+    /// A push-and-pull pass (a pull to refresh) that also waits out a pass
+    /// already running, such as the one a local commit starts, so the queue
+    /// has drained when it returns.
+    @MainActor
+    static func syncAndWait(_ d: Device) async {
+        await d.sync()
+        _ = await d.coordinator?.waitUntilIdle()
+    }
+
     /// K1: a cold launch. The initial sync's pull brings the booking, then the
     /// signed-in gate opens: the booking becomes a lead job and a customer
     /// there, before any scene activation (RN converts once bootstrapping ends,
@@ -2094,7 +2103,7 @@ struct ScheduleBookingRecoveryTests {
         defer { d.cleanup() }
         let first = d.launch()
         await d.signIn(first)
-        await d.sync()
+        await syncAndWait(d)
         await customerBooks(d)
         let relaunched = d.launch()
         await d.signIn(relaunched)
@@ -2120,7 +2129,7 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(d.queued("customers"), 1, "\(id) [P12-016]: …and the customer")
         expectEqual(d.queued("bookingRequests"), 1, "\(id) [P12-016]: …and the linked request")
         d.reach.online = true
-        await d.sync()
+        await syncAndWait(d)
         expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead",
                     "\(id) [P12-016]: the cloud has the lead job")
         expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
@@ -2149,7 +2158,7 @@ struct ScheduleBookingRecoveryTests {
             let (d, store) = await intakeDevice(localBeforeActivation ? "k2b" : "k2a")
             defer { d.cleanup() }
             if localBeforeActivation {
-                await d.sync()
+                await syncAndWait(d)
                 expect(bookingRequest(d) != nil && leadJob(d) == nil,
                        "\(id): sanity: a pull-to-refresh brought the booking and converted nothing")
             }
@@ -2173,7 +2182,7 @@ struct ScheduleBookingRecoveryTests {
             }
             expectConverted(d, id)
             d.pullLoader.readsFail = false
-            await d.sync()
+            await syncAndWait(d)
             expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead",
                         "\(id) [P12-016]: after the push the cloud has the lead job")
         }
@@ -2195,7 +2204,7 @@ struct ScheduleBookingRecoveryTests {
             if partial {
                 d.data.injectStatusOnce = (method: "GET", table: "jobs", status: 500)
             } else {
-                await d.sync()
+                await syncAndWait(d)
                 expect(bookingRequest(d) != nil, "\(id): sanity: the booking is on the device")
                 d.reach.online = false
             }
@@ -2205,7 +2214,7 @@ struct ScheduleBookingRecoveryTests {
             let convertedAfterFailedRefresh = leadJob(d) != nil || !bookedCustomers(d).isEmpty
                 || bookingRequest(d)?.convertedJobId != nil
             d.reach.online = true
-            await d.sync()
+            await syncAndWait(d)
             let convertedByPullToRefresh = leadJob(d) != nil
             await store.performForegroundRefresh()
             observed(id, "after the refresh: \(afterFailedRefresh); after the next activation: \(intakeState(d))")
@@ -2225,7 +2234,7 @@ struct ScheduleBookingRecoveryTests {
         let (d, store) = await intakeDevice("k4")
         defer { d.cleanup() }
         await store.performForegroundRefresh()
-        await d.sync()
+        await syncAndWait(d)
         expectConverted(d, id)
         let jobs = d.disk?.payload.jobs?.count
         let customers = (d.disk?.payload.customers ?? []).map(\.id)
@@ -2248,7 +2257,7 @@ struct ScheduleBookingRecoveryTests {
         async let firstRefresh: Void = store2.performForegroundRefresh()
         async let secondRefresh: Void = store2.performForegroundRefresh()
         _ = await (firstRefresh, secondRefresh)
-        await d2.sync()
+        await syncAndWait(d2)
         observed(overlapID, intakeState(d2))
         expectConverted(d2, overlapID)
         expectEqual(d2.data.liveRowCount(table: "customers", userID: d2.subject), 1,
@@ -2271,12 +2280,15 @@ struct ScheduleBookingRecoveryTests {
 
     /// K5: the Expo build on the owner's other device converted the booking
     /// first. Its lead job `jbk_req-1` (since scheduled and priced there) and
-    /// its customer reached the cloud; its request stamp has not. Native
-    /// links the request to that job and customer and never replaces the job:
-    /// nothing is queued for it, and after the push the cloud job is still
-    /// the other device's. Both clients use the same deterministic job ID
-    /// (D-B3-2).
-    /// Characterized at 9a4d845: the request is never linked.
+    /// its customer reached the cloud; its request stamp has not yet. The
+    /// activation's intake never replaces that job and writes nothing: the
+    /// job's presence means another device converted the booking, and plan
+    /// 8.08's recheck leaves the request to that device's stamp (contract §8;
+    /// `NativeScheduleBookingPolicy.recheckedIntakePlan`). No job, customer or
+    /// request is queued and no second customer is made. Once the other
+    /// device's stamp arrives, both clients link the booking to the same job
+    /// ID (D-B3-2), native converts nothing more, and the cloud job is still
+    /// the other device's.
     @MainActor
     static func anExistingLeadJobIsNeverOverwritten() async {
         let id = "K5 existing lead job"
@@ -2287,8 +2299,8 @@ struct ScheduleBookingRecoveryTests {
             "address": "9 Oak Ave", "notes": "", "createdAt": "2026-09-10T00:00:05.000Z",
         ])
         await d.links.upsert(table: "jobs", id: leadJobID, record: otherDevicesLeadJob())
-        // Offline once the refresh's pull has committed, so what intake
-        // queues stays in the queue to be read.
+        // Offline once the refresh's pull has committed, so anything intake
+        // queued would stay in the queue to be read.
         var pulled = false
         store.notificationSynchronizeHook = { _ in
             guard !pulled else { return }
@@ -2297,23 +2309,33 @@ struct ScheduleBookingRecoveryTests {
         }
         await store.performForegroundRefresh()
         let job = leadJob(d)
-        observed(id, intakeState(d) + " customer=\(bookingRequest(d)?.convertedCustomerId ?? "none")")
+        observed(id, "after the refresh: \(intakeState(d))")
+        expect(pulled, "\(id): sanity: the refresh's pull committed")
         expectEqual(job?.status, "scheduled", "\(id) [D-B3-2]: the other device's job is kept")
         expectEqual(job?.notes, "Priced on the other device", "\(id) [D-B3-2]: …with its notes")
         expectEqual(job?.estimateTotal, Decimal(350), "\(id) [D-B3-2]: …and its price")
-        expectEqual(bookingRequest(d)?.convertedJobId, leadJobID, "\(id) [P12-016]: the request links that job")
-        expectEqual(bookingRequest(d)?.convertedCustomerId, "c-other-1",
-                    "\(id) [P12-016]: …and its customer (found by name: no duplicate)")
-        expectEqual(bookedCustomers(d).count, 1, "\(id): one customer on the device")
-        expectEqual(d.queued("jobs"), 0, "\(id) [D-B3-2]: nothing is queued for the job")
-        expectEqual(d.queued("customers"), 0, "\(id): …or the customer")
-        expectEqual(d.queued("bookingRequests"), 1, "\(id) [P12-016]: the linked request is queued")
+        expectEqual(bookedCustomers(d).count, 1, "\(id): no second customer is made")
+        expectEqual(d.queued("jobs") + d.queued("customers") + d.queued("bookingRequests"), 0,
+                    "\(id) [D-B3-2]: nothing is queued, so the job is never replaced")
+        expectEqual(bookingRequest(d)?.convertedJobId, nil, "\(id): the request is left to the device that made the job")
+        // The other device's request stamp reaches the cloud.
+        if var row = d.links.requestRow("req-1") {
+            row["convertedJobId"] = leadJobID
+            row["convertedCustomerId"] = "c-other-1"
+            await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
+        }
         d.reach.online = true
-        await d.sync()
+        await store.performForegroundRefresh()
+        await syncAndWait(d)
+        observed(id, "after the other device's stamp: \(intakeState(d))")
+        expectEqual(bookingRequest(d)?.convertedJobId, leadJobID, "\(id) [D-B3-2]: both clients link the booking to the same job")
+        expectEqual(bookingRequest(d)?.convertedCustomerId, "c-other-1", "\(id) [D-B3-2]: …and the same customer")
+        expectEqual(leadJob(d)?.status, "scheduled", "\(id) [D-B3-2]: the job is still the other device's")
+        expectEqual(bookedCustomers(d).count, 1, "\(id): one customer")
         expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "scheduled",
-                    "\(id) [D-B3-2]: after the push the cloud job is still the other device's")
-        expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
-                    "\(id) [P12-016]: …and the cloud request links it")
+                    "\(id) [D-B3-2]: the cloud job is still the other device's")
+        expectEqual(d.data.liveRowCount(table: "jobs", userID: d.subject), 1, "\(id): …and the only job")
+        expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id): …with one customer")
     }
 
     /// K6: the account changes while the foreground refresh's pull is in its
@@ -2323,8 +2345,9 @@ struct ScheduleBookingRecoveryTests {
     /// the account generation tells them apart). Nothing is converted into
     /// either account's snapshot or queue. In the last case the pull still
     /// commits (the subject is the same) but began before the boundary, so
-    /// it does not count; the owner's next launch and activation convert the
-    /// booking.
+    /// it does not count (no pull starts after the boundary: the rerun the
+    /// re-seeding coalesces into the pass cannot reach the server); the
+    /// owner's next launch and activation convert the booking.
     @MainActor
     static func accountChangeDuringTheIntakePull() async {
         let subjectB = "99999999-8888-7777-6666-555555555555"
@@ -2351,6 +2374,11 @@ struct ScheduleBookingRecoveryTests {
                     store.testApplyCompletedSignOutState()
                     store.testSeedNativeSignedInOwner(subject: d.subject, binding: d.binding)
                     store.testMarkInitialSyncCompleted(subject: d.subject)
+                    // The sync that re-seeding starts is coalesced into a
+                    // rerun of the pass in flight; a pull in that rerun would
+                    // start after the boundary and count. Offline, it cannot
+                    // run, so the pull in flight is the only one.
+                    d.reach.online = false
                 }
             })
             await store.performForegroundRefresh()
@@ -2366,6 +2394,7 @@ struct ScheduleBookingRecoveryTests {
                         "\(id) [P12-016]: …and nothing is queued")
             if boundary == "boundary then the same owner" {
                 expect(bookingRequest(d) != nil, "\(id): sanity: the same owner's pull committed the booking")
+                d.reach.online = true
                 let next = d.launch()
                 await d.signIn(next)
                 await next.performForegroundRefresh()
@@ -2488,7 +2517,7 @@ struct ScheduleBookingRecoveryTests {
         let (d, store) = await intakeDevice("k9")
         defer { d.cleanup() }
         await store.performForegroundRefresh()
-        await d.sync()
+        await syncAndWait(d)
         if var row = d.links.requestRow("req-1") {
             row["status"] = "reschedule_requested"
             await d.links.upsert(table: "bookingRequests", id: "req-1", record: row)
