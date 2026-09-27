@@ -291,10 +291,16 @@ half of the pending-work requirement was missing. Work was staged, but
 a staged link mirror or cleared a reschedule proof. It now runs for the verified owner at
 launch (the signed-in gate-open points, after the initial sync) and on every activation
 (`performForegroundRefresh`). It re-checks the account generation and owner after every
-await. A mirror is applied only after a fresh `status` read proves it current
-(contract §6) and is dropped when the server no longer backs it. It never sends a
-mutation. A reschedule proof is kept only while its resolve can still succeed (contract
-§7); recovery never resolves. Host evidence: `native/run-schedule-booking-recovery-tests.sh`.
+await. A mirror is read and merged only after a pull has committed in that launch or
+activation (the initial sync on a cold launch; on a warm activation the foreground
+refresh's own pull, since the gate-open points fire before it), because the merge queues
+the whole settings or customer record and the push runs before the pull; until then, or
+when that pull fails, it waits (review fix round 1). It is applied only when a fresh
+`status` read (contract §6) says the token it writes back is current: the staged token
+after a Create or Rotate, the local link's token after an Enable or Disable. Otherwise it
+is dropped without a write. It never sends a mutation. A reschedule proof is kept only
+while its resolve can still succeed (contract §7); recovery never resolves. Host evidence:
+`native/run-schedule-booking-recovery-tests.sh`.
 
 ### 8.09 — Calendar UI
 

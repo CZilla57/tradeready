@@ -141,8 +141,10 @@ own record counts, which TH-1 compares exactly, and carry no content:
   a change the server already made, and a reschedule proof guards a server resolve whose
   job change is in the ordinary queue. Launch and every activation finish or clear
   them (2026-09-26, 12.00b.2-I, defect `P12-013`), so a count that stays is a mirror
-  whose status read has not succeeded yet (for example offline), or a reschedule proof
-  waiting for the owner's resolve.
+  waiting for a committed pull and a successful status read (for example offline), or
+  a reschedule proof waiting for the owner's resolve. Each recovery pass that finds
+  items prints one counts-only console line,
+  `TradeReadyScheduleBookingRecovery stage=pass` (playbook §5.1).
 
 **Code rule.** A code keeps only `A–Z a–z 0–9 . _ / -`, at most 96 bytes, with no run of
 6 or more digits, no run of 12 or more hex characters containing a digit, and nothing

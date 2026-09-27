@@ -294,20 +294,37 @@ no native-only business data, so "Ready" does not depend on it:
 
 The check counts this account's items only and never removes one. Launch and every
 activation recover them (2026-09-26, 12.00b.2-I, defect `P12-013`):
-`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10310`) runs for the
+`AppStore.recoverScheduleBookingPendingWork` (`N/AppStore.swift:10367`) runs for the
 verified owner after the initial sync, from the signed-in gate and from
-`performForegroundRefresh` after its sync (`N/AppStore.swift:7891`).
+`performForegroundRefresh` after its sync (`N/AppStore.swift:7919`).
 
-- A mirror is applied only after a fresh status read proves it current. One the server no
-  longer backs is removed without a write. Recovery never sends a change to the server.
+- A mirror waits for a pull (review fix round 1, 2026-09-26). It is read and merged only
+  after a pull has committed the settings and customer rows since the identity was
+  applied or the foreground refresh began: the merge queues the whole settings or
+  customer record, and the push runs before the pull. On a cold launch the initial sync
+  is that pull, so the gate-open pass finishes mirrors. On a warm activation the gate
+  sites fire before the pull, so their pass leaves mirrors to the pass that follows
+  `performForegroundRefresh`'s own pull. If that pull fails, mirrors wait for a later
+  activation.
+- What the status read proves. A Create or Rotate mirror is applied only if the read of
+  its staged token says `tokenValid`. An Enable or Disable mirror carries no token: its
+  read carries the local link's token, because the merge writes that token back with the
+  server's flag, and it is applied only on `tokenValid`. Either kind is removed without a
+  write when the token is not current, or when there is nothing to merge into. Recovery
+  never sends a change to the server.
 - A proof stays only while its resolve can still succeed: the request still asks for a
   reschedule and the job still has the proven schedule. Recovery never resolves; the
-  owner does. A failed or unknown resolve keeps its proof (`N/AppStore.swift:9824-9829`
+  owner does. A failed or unknown resolve keeps its proof (`N/AppStore.swift:9852-9857`
   removes it only after success) until the owner resolves again or the request moves on.
+  Proofs are checked in every pass, before or after the pull: the check reads local
+  state only, writes no record and queues nothing, so it cannot push a pre-pull copy.
 
 An item also leaves when the flow that staged it succeeds on a later try, or at the
-account's sign-out scrub. A count that stays is a mirror whose status read has not
-succeeded yet (for example offline), or a proof waiting for the owner.
+account's sign-out scrub. A count that stays is a mirror waiting for a committed pull
+and a successful status read (for example offline), or a proof waiting for the owner.
+Each pass that finds items prints one counts-only console line,
+`TradeReadyScheduleBookingRecovery stage=pass applied=… dropped=… kept=… stopped=…`
+(`stopped` counts items left because the account changed during the pass).
 
 **Not ready, fail-closed: nothing was sent.** The drain outcome is `skipped`.
 

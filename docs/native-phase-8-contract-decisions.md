@@ -301,7 +301,11 @@ Chosen invariant (8.06 implements; current code characterized in G4-02):
   first read `status` with the staged token. `tokenValid:true` adopts it into the
   display copy (the §6 rule; no mutation, no new `operationId`).
   `tokenValid:false` or a 404 drops the staged item. The explicit rotate above
-  stays the path when nothing was staged.
+  stays the path when nothing was staged. A staged `set_enabled` result has no
+  token: its `status` read carries the local display token, which the merge
+  writes back with the server's flag, and `tokenValid:false` drops it without a
+  write. Both reads wait until a pull has committed in that launch or activation
+  (review fix round 1, 2026-09-26).
 - Unknown-token fallback restricted to **unadopted** customers: post-adoption
   (≥1 `portal_tokens` row for the customer), an unknown hash fails closed
   (404) even if a stale enabled blob token exists — pinned residual G4-05
