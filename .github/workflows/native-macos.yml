@@ -1,8 +1,8 @@
 # SwiftUI migration gate on a macOS runner. The Linux gate (gate.yml) cannot
 # build or test any Swift, so nothing under native/ was compiled automatically.
 # Two legs, both unsigned (no secrets, no signing, no uploads):
-#   host-tests     - `native/run-all-domain-tests.sh` (every focused Swift host
-#                    runner, the fixture-manifest check, backend-workers tests)
+#   host-tests     - every focused Swift host runner (all failures reported in
+#                    one pass), the fixture-manifest check, backend-workers tests
 #   release-build  - the generic-iOS Release build from CLAUDE.md
 # Runs on PRs and pushes that touch the native app, the Worker, or the manifest
 # tooling. macOS minutes cost more than Linux, so path filters keep it narrow and
@@ -40,7 +40,7 @@ env:
 jobs:
   host-tests:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
@@ -62,8 +62,31 @@ jobs:
           xcodebuild -version
           swiftc --version
 
-      - name: Host tests
-        run: sh native/run-all-domain-tests.sh
+      - name: Fixture manifest and doc references
+        run: |
+          sh native/run-fixture-manifest-check.sh
+          sh native/run-doc-reference-check.sh
+
+      - name: Worker tests
+        working-directory: backend-workers
+        run: npm test
+
+      # Runs every focused runner and reports all failures in one pass, unlike
+      # native/run-all-domain-tests.sh, which stops at the first (and also owns
+      # the registration guard; run it locally for that).
+      - name: Swift host runners
+        run: |
+          failed=""
+          for r in native/run-*-tests.sh; do
+            case "$r" in native/run-all-domain-tests.sh) continue ;; esac
+            echo "::group::$r"
+            if sh "$r"; then echo "PASS $r"; else failed="$failed $r"; echo "FAIL $r"; fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            for f in $failed; do echo "::error::runner failed: $f"; done
+            exit 1
+          fi
 
   release-build:
     runs-on: macos-latest
