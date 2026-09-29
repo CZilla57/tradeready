@@ -1420,7 +1420,7 @@
    "testSources": [
     {
      "path": "native/ScheduleBookingRecoveryTests",
-     "sha256": "3bafffc16cc42e78a44e4ac15cf42f247f281a7472780658210831239f0749e2"
+     "sha256": "fbd8c8845d36e27958424ac3acf5803c0d8abf3c21167fa3dd1601df6022eae9"
     }
    ],
    "fixtures": []
@@ -1651,7 +1651,7 @@
    "testSources": [
     {
      "path": "native/SyncCoordinatorTests",
-     "sha256": "2640e172867c14beb1f1a98008b3da27e5425527a15c6c00519e067e66fbf987"
+     "sha256": "794d70d105b3d2b6739416f29b5ca09b7233c5fb91c8fbffed77d82c0e32b50e"
     }
    ],
    "fixtures": []

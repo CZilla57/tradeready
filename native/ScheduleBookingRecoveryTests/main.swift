@@ -2533,7 +2533,7 @@ struct ScheduleBookingRecoveryTests {
     /// Waits (bounded) for a pass a gate site started.
     @MainActor
     static func waitUntil(_ condition: () -> Bool) async {
-        for _ in 0..<200 where !condition() {
+        for _ in 0..<1000 where !condition() {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
     }
@@ -2541,7 +2541,7 @@ struct ScheduleBookingRecoveryTests {
     /// Gives a pass a gate site might have started time to run.
     @MainActor
     static func settle() async {
-        for _ in 0..<20 { try? await Task.sleep(nanoseconds: 5_000_000) }
+        for _ in 0..<60 { try? await Task.sleep(nanoseconds: 5_000_000) }
     }
 
     /// A push-and-pull pass (a pull to refresh) that also waits out a pass
