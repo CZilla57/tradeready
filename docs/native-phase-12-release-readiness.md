@@ -49,7 +49,9 @@ machine either) and does not touch accounts, profiles or signing.
 release, so no `aps-environment` entitlement addition and no push-capability
 confirmation are needed here (see §7 below for the waiver's read-only condition).
 
-## 2. VER-1 — version numbering (blocked on an owner confirmation)
+## 2. VER-1 — version numbering (partly decided 2026-09-29; live version unconfirmed)
+
+**Update 2026-09-29:** the owner set the native release version N to 2.0. `MARKETING_VERSION` is now `2.0.0` on both targets (decision-log row 10), matching the proposed scheme below. `CURRENT_PROJECT_VERSION` stays `1` in the project; every upload's build number is set by the archive command (playbook §3.1) above every earlier upload. Still open: the owner confirms the live version L in App Store Connect. R must be 2.0.1 or higher, and N2 above R; a native hotfix must stay below R, so pick R with headroom (for example 2.1.0).
 
 - Native `MARKETING_VERSION` = `1.0`, `CURRENT_PROJECT_VERSION` = `1` — every build
   configuration of the `TradeReadyNative` target
@@ -271,7 +273,9 @@ to `native/Info.plist`, matching RN. **Owner approval needed** for the `Info.pli
   microphone, location, contacts, motion or other sensitive-API usage description
   exists or is needed (no matching API usage found in `N/`).
 
-## 5. OI-1 — App Store privacy-label declarations (decision, not entered)
+## 5. OI-1 — App Store privacy-label declarations (approved 2026-09-29; labels not yet entered)
+
+**Update 2026-09-29:** the owner approved this proposal as written (decision-log row 9). The `NSPrivacyCollectedDataTypes` entries were added to `N/PrivacyInfo.xcprivacy` and pinned in the manifest test. The proposal's last row maps to `NSPrivacyCollectedDataTypeOtherUserContent` only; the manifest has no Customer Support entry because the app does not collect support messages. Still the owner's: entering the labels in App Store Connect before Stage C entry.
 
 **Proposal** (first-party backend data the app sends/syncs, per contract decisions §8.3's
 carried-forward concern, §4.2 above):

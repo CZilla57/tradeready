@@ -1227,7 +1227,13 @@ struct ErrorRedactionTests {
             "CrashData": "linked=true tracking=false AppFunctionality",
             "PerformanceData": "linked=true tracking=false AppFunctionality",
             "OtherDiagnosticData": "linked=true tracking=false AppFunctionality",
-        ], "manifest: collected-data types (§8.2 + §8.3 decisions; no Device ID)")
+            "EmailAddress": "linked=true tracking=false AppFunctionality",
+            "Name": "linked=true tracking=false AppFunctionality",
+            "PhoneNumber": "linked=true tracking=false AppFunctionality",
+            "PhysicalAddress": "linked=true tracking=false AppFunctionality",
+            "PhotosorVideos": "linked=true tracking=false AppFunctionality",
+            "OtherUserContent": "linked=true tracking=false AppFunctionality",
+        ], "manifest: collected-data types (§8.2 + §8.3 decisions + OI-1 first-party data; no Device ID)")
         let widget = plist("native/TradeReadyWidgets/PrivacyInfo.xcprivacy")
         expectEqual((widget["NSPrivacyCollectedDataTypes"] as? [Any])?.count, 0, "widget manifest: still no collected data")
     }

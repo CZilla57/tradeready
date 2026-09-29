@@ -1,9 +1,8 @@
 # Native Phase 12 — cutover charter (12.00)
 
-**Status: DRAFT — not owner-approved.** Written 2026-09-25 on branch native/phase-12.
-Every threshold in this document is **provisional**. No stage gate may cite this charter
-until the owner approves it and records the approval in the
-[decision log](#9-decision-log). Until then it is a proposal.
+**Status: Owner-approved 2026-09-29** ([decision log](#9-decision-log) row 8). Written 2026-09-25 on branch native/phase-12.
+Every threshold in this document stays **provisional** until the Stage B re-ratification (§0, §3).
+Stage gates may cite this charter.
 
 This charter is the single source for defect severity, thresholds, roles, stage gates,
 the rollback data decision, the exposure-control rule and the defect list. Later tasks
@@ -157,9 +156,9 @@ generic builds never substitute for device, TestFlight or store evidence.
 | ID | What is open | Blocks | Who clears it |
 |---|---|---|---|
 | SIGN-1 | The signed Release build cannot be provisioned: no signed-in Xcode account, and the wildcard profile lacks the App Group for `TradeReadyWidgets` | Stage A entry (every signed, device, TestFlight and archive row) | Owner signs in at Xcode › Settings › Accounts; 12.01 re-runs the signed build. An agent never touches accounts, profiles or signing |
-| VER-1 | Native `MARKETING_VERSION = 1.0` is below the Expo `app.json` version `1.2.1` | Stage A upload; 12.06 version numbering | Owner confirms the live store version; 12.01 sets the scheme under a recorded ruling |
-| OI-1 | The privacy labels omit first-party backend data (email, business records, job photos) | the decision: Stage A entry (12.01); the labels entered: Stage C entry | 12.01 decides; the owner enters the labels |
-| OI-2 | Sentry project `tradeready-ios` in org `tradeready-3r` does not exist | Stage A entry (TH-8's source; rows CR-1 to CR-9) | Owner creates it; an agent never does |
+| VER-1 | **Partly cleared 2026-09-29 (row 10):** native N is now 2.0.0. Still open: the owner confirms the live store version L. Was: native `MARKETING_VERSION = 1.0` below the Expo `app.json` version `1.2.1` | Stage A upload; 12.06 version numbering | Owner confirms the live store version; 12.01 sets the scheme under a recorded ruling |
+| OI-1 | **Decided 2026-09-29 (row 9); manifest edit applied.** Open only: the owner enters the labels in App Store Connect (Stage C entry). Was: the privacy labels omit first-party backend data (email, business records, job photos) | the decision: Stage A entry (12.01); the labels entered: Stage C entry | 12.01 decides; the owner enters the labels |
+| OI-2 | **Reported cleared 2026-09-29 (row 11), unverified by agents.** Was: Sentry project `tradeready-ios` in org `tradeready-3r` does not exist | Stage A entry (TH-8's source; rows CR-1 to CR-9) | Owner creates it; an agent never does |
 | D4 | No trusted isolated staging. `https://staging.invalid` stays and production is never substituted | every STG row; SA3; Stage A exit | Owner provisions staging |
 | AGG-1 | `native/run-all-domain-tests.sh` ends with a `backend-workers` `npm test` that has no `test` script in committed code | the aggregate's exit code; SA3's full regression, so Stage A exit; 12.08 | Owner or the backend agent. Phase 12 does not edit `backend-workers/` |
 
@@ -496,8 +495,13 @@ Format (append-only; newest last):
 | 5 | 2026-09-25 | pre-A | D5: the owner holds every role (§1) | plan §1.3 | owner | n/a |
 | 6 | 2026-09-27 | pre-A | Bookkeeping (not an owner decision): defect-list state refreshed at `2bcfc07` — Status reconciled against `git log 6d573a7..2bcfc07`; `12.02-F4` renumbered `P12-009`; `P12-010` and `P12-014` added; §10 intro's "Open S1/S2 needing code" list corrected to name `P12-012` as the sole open blocker | §10 (`6f6159b`) | task 14 (agent) | n/a (bookkeeping) |
 | 7 | 2026-09-27 | pre-A | Bookkeeping (not an owner decision): records the ruling grammar the offline stage preflight enforces (controller rulings R65 and R67). A defect-list ruling counts only as a row here whose Decider is exactly owner and whose Decision cell is exactly the defect ID, one space, ruled:, one space and the ruling token, with nothing else in the cell. A later row here that names the same ID and contains the revoking word re-blocks that defect, whoever decides; a later row in the exact ruling form clears it again. The production-configuration line (R59) in the release-readiness doc follows the same two rules. The wording is set out under this table | §9 below this table; `native/run-phase-12-stage-preflight.sh` (`ruling_is_recorded`, section 5); `native/run-phase-12-stage-preflight-tests.sh` | controller (agent) | n/a (bookkeeping) |
+| 8 | 2026-09-29 | pre-A | Charter approved as written; thresholds stay provisional for Stage A and are re-ratified at Stage B entry (§0) | Owner instruction in the Claude Code session of 2026-09-29 (approved the charter in chat) | owner | n/a (no release) |
+| 9 | 2026-09-29 | pre-A | OI-1 decided: the release-readiness §5 privacy-label proposal is approved as written, and the matching `NSPrivacyCollectedDataTypes` edit to `N/PrivacyInfo.xcprivacy` is authorized and applied (EmailAddress, Name, PhoneNumber, PhysicalAddress, PhotosorVideos, OtherUserContent, all App Functionality, linked, not tracking). The owner still enters the labels in App Store Connect before Stage C entry | Owner instruction in the Claude Code session of 2026-09-29; `N/PrivacyInfo.xcprivacy`; `native/ErrorRedactionTests/main.swift` manifest pin | owner | n/a |
+| 10 | 2026-09-29 | pre-A | VER-1 partly decided: the native release version N is 2.0 (`MARKETING_VERSION = 2.0.0` on both targets). The live Expo version L is not yet confirmed in App Store Connect. R must exceed N, and N2 must exceed R (playbook §3.2) | Owner instruction in the Claude Code session of 2026-09-29 ("App Store version should be 2.0"); `project.pbxproj` | owner | n/a |
+| 11 | 2026-09-29 | pre-A | OI-2 reported cleared: the owner says the Sentry project `tradeready-ios` (org `tradeready-3r`) now exists. Not verifiable from the repository | Owner instruction in the Claude Code session of 2026-09-29 | owner | n/a |
+| 12 | 2026-09-29 | pre-A | P12-012: the owner chose to fix the defect on the Expo side (playbook §5.3 E-1 to E-4) instead of accepting the risk. Branch `expo/e1-native-run-guard`. The defect stays Open until that change is reviewed, merged into the Expo release branch and built into the rollback candidate R | Owner instruction in the Claude Code session of 2026-09-29 ("make the fix on the expo side") | owner | n/a |
 
-The next row is the owner's approval (or amendment) of this draft. A go/no-go row names
+Row 8 is the owner's approval of this charter. A go/no-go row names
 the checklist (§4.x) and links the evidence-index rows; "Rollback trigger considered"
 names each §4.8 trigger checked and its state.
 
