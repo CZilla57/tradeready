@@ -482,7 +482,6 @@ describe('8.05 route-level auth and errors (POST /api/booking/admin)', () => {
 
   test('mint via route returns the frozen shape; operationId echoes', async () => {
     const freshUser = 'route-user-4';
-    const stored = { ok: true, enabled: true, token: NEW_TOKEN, revision: 1, operationId: OP1 };
     // Route generates its own server token; script the envelope around it by
     // echoing whatever template the core sent.
     global.fetch = jest.fn(async (url, init = {}) => {

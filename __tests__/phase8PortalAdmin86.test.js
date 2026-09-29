@@ -611,7 +611,6 @@ describe('8.06 route-level auth and errors (POST /api/estimate/portal-manage)', 
 
   test('mint via route returns the frozen payload + operationId echo; already_exists preserved', async () => {
     const freshUser = 'route-user-4';
-    const stored = { ok: true, token: NEW_HEX, enabled: true, adopted: true };
     global.fetch = jest.fn(async (url, init = {}) => {
       const u = String(url);
       if (u.includes('/auth/v1/user')) return jsonRes({ id: freshUser });
