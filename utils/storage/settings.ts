@@ -11,6 +11,8 @@ import { syncNotifications } from "../notifications";
 import { KEYS, SECURE_FIELDS } from "./keys";
 import { defaultSettings } from "./defaults";
 import { isSquarePaymentLink } from "../invoiceHelpers";
+import { isNativeRunPending, readHeldSettings, NATIVE_RUN_HELD_SETTINGS_KEY } from "../nativeRunRuntime";
+import { diffSettingsLeaves, mergeHeldEntries } from "../nativeRunGuard";
 import type { Settings } from "../../types/models";
 
 // SECURE_FIELDS lives in ./keys (dependency-free) so utils/sync.ts can strip
@@ -67,17 +69,44 @@ export async function loadSettings(): Promise<Settings> {
   }
 }
 
-export async function saveSettings(settings: Settings): Promise<void> {
+export interface SaveSettingsOptions {
+  /** Only the native-run completion sets this: it saves the pulled settings
+   *  plus the held leaf paths while the run is still pending, and queues them
+   *  instead of recording leaf paths (E-1, completion step 1). */
+  releaseHold?: boolean;
+}
+
+export async function saveSettings(settings: Settings, options?: SaveSettingsOptions): Promise<void> {
   const publicSettings: Partial<Settings> = { ...settings };
   for (const field of SECURE_FIELDS) {
     delete publicSettings[field];
+  }
+  // E-1: while a native run is pending, settings are the one pre-native copy R
+  // keeps. Do not queue them; record each changed leaf path instead. The
+  // comparison MUST run before the write below (final review I2): afterwards
+  // the stored settings equal the new ones and the diff would be empty.
+  const hold = !options?.releaseHold && (await isNativeRunPending());
+  if (hold) {
+    try {
+      const storedRaw = await AsyncStorage.getItem(KEYS.settings);
+      // No stored blob: loadSettings served the defaults, so diff against those.
+      const stored = storedRaw ? JSON.parse(storedRaw) : defaultSettings();
+      const changed = diffSettingsLeaves(stored, publicSettings);
+      if (changed.length) {
+        const merged = mergeHeldEntries(await readHeldSettings(), changed);
+        await AsyncStorage.setItem(NATIVE_RUN_HELD_SETTINGS_KEY, JSON.stringify(merged));
+      }
+    } catch {
+      // A failed hold write must not lose the edit itself; the save below
+      // still lands locally.
+    }
   }
   await Promise.all([
     AsyncStorage.setItem(KEYS.settings, JSON.stringify(publicSettings)),
     saveSecureFields(settings),
   ]);
-  await enqueue("settings", "upsert", "settings", publicSettings);
-  trySync();
+  if (!hold) await enqueue("settings", "upsert", "settings", publicSettings);
+  if (!options?.releaseHold) trySync();
   syncNotifications();
 }
 

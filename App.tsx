@@ -29,6 +29,8 @@ import {
 // module scope (TaskManager.defineTask must run before the OS can invoke it —
 // see utils/backgroundRefresh.ts). AuthContext calls registerBackgroundRefresh().
 import "./utils/backgroundRefresh";
+import { ensureNativeRunChecked } from "./utils/nativeRunRuntime";
+import { NativeRunNotice } from "./components/NativeRunNotice";
 import type {
   RootStackParamList,
   MainTabParamList,
@@ -99,6 +101,12 @@ import * as Sentry from "@sentry/react-native";
 import { PostHogProvider, usePostHog, useNavigationTracker } from "posthog-react-native";
 import Constants from "expo-constants";
 import { posthogRef, track, reportError } from "./utils/analytics";
+
+// E-1 (P12-012): detect a native run as soon as this JS starts, before any
+// screen renders and before anything reads or writes a collection. The
+// NativeRunGate below holds the whole tree until it settles; utils/sync,
+// backgroundRefresh and widgetActions await it too.
+void ensureNativeRunChecked();
 
 const SENTRY_DSN = Constants.expoConfig?.extra?.sentryDsn ?? "";
 const POSTHOG_API_KEY = Constants.expoConfig?.extra?.posthogApiKey ?? "";
@@ -763,6 +771,26 @@ function ScreenTracker() {
   return null;
 }
 
+// Holds every screen and provider (AuthProvider's initialSync, the launch
+// migrations, push-token save, replays) until the native-run check has run.
+function NativeRunGate({ children }: { children: React.ReactNode }) {
+  const { colors } = useThemeContext();
+  const [checked, setChecked] = useState(false);
+  useEffect(() => {
+    let live = true;
+    ensureNativeRunChecked().finally(() => { if (live) setChecked(true); });
+    return () => { live = false; };
+  }, []);
+  if (!checked) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background }}>
+        <ActivityIndicator color={colors.accent} size="large" />
+      </View>
+    );
+  }
+  return <>{children}</>;
+}
+
 // Gates first paint on the custom typeface set loading. Sits inside
 // ThemeProvider (not above it) so the loading spinner itself can use the
 // live background/accent tokens instead of a hardcoded fallback.
@@ -800,6 +828,7 @@ function AppRoot() {
       <ErrorBoundary>
         <ThemeProvider>
           <FontGate>
+            <NativeRunGate>
             <SyncStatusProvider>
               <UndoProvider>
                 <AuthProvider>
@@ -809,8 +838,10 @@ function AppRoot() {
                 </AuthProvider>
               </UndoProvider>
               <SyncBanner />
+              <NativeRunNotice />
               <FontScaleWatcher />
             </SyncStatusProvider>
+            </NativeRunGate>
           </FontGate>
         </ThemeProvider>
       </ErrorBoundary>

@@ -38,6 +38,7 @@ import {
 import { isSampleId } from "../utils/sampleData";
 import { reportError } from "../utils/analytics";
 import { getTodayDateString } from "../utils/dateHelpers";
+import { isInvoiceCreationBlocked, INVOICE_BLOCKED_TITLE, INVOICE_BLOCKED_MESSAGE } from "../utils/nativeRunRuntime";
 import type { TodayStackScreenProps } from "../types/navigation";
 
 type Stage = "idle" | "mapping" | "preview" | "report";
@@ -211,6 +212,12 @@ export default function SettingsImportScreen({ navigation }: TodayStackScreenPro
   }
 
   async function commit() {
+    // E-1: an invoice import numbers invoices from the device's own list, which
+    // is empty until the first pull after a native run. Other entities are fine.
+    if (entity === "invoices" && (await isInvoiceCreationBlocked())) {
+      Alert.alert(INVOICE_BLOCKED_TITLE, INVOICE_BLOCKED_MESSAGE);
+      return;
+    }
     let batchId = "";
     let resultCounts: ImportCounts;
     let resultOutcomes: RowOutcome[];
