@@ -46,6 +46,7 @@ import type * as BackgroundTaskModule from "expo-background-task";
 import { supabase } from "./supabase";
 import { syncIfOnline } from "./sync";
 import { replayWidgetActions } from "./widgetActions";
+import { ensureNativeRunChecked } from "./nativeRunRuntime";
 
 export const BACKGROUND_REFRESH_TASK = "tradeready-background-refresh";
 
@@ -85,6 +86,10 @@ try {
  * file forever.
  */
 export async function runBackgroundRefresh(): Promise<void> {
+  // E-1: the native-run check comes before the background sync (headless wakes
+  // never render App.tsx). Never rejects. Held widget/Siri replay is enforced
+  // inside replayWidgetActions.
+  await ensureNativeRunChecked();
   let userId: string | undefined;
   try {
     const {

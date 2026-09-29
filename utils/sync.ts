@@ -5,11 +5,12 @@ import { reportError } from './analytics';
 import { mergeRemoteRecord } from './syncMerge';
 import type { SyncRecord } from './syncMerge';
 import { REVIEW_REQUESTS_STORAGE_KEY } from './reviewRequest';
-import { SECURE_FIELDS } from './storage/keys';
+import { SECURE_FIELDS, SYNC_QUEUE_KEY, SYNC_LAST_SYNCED_KEY, SYNC_CURSOR_VERSION, SYNCED_COLLECTION_TABLES } from './storage/keys';
+import { ensureNativeRunChecked, completeNativeRunAfterPull, isNativeRunWriteFailed, NATIVE_RUN_HELD_SETTINGS_KEY } from './nativeRunRuntime';
 import type { Settings, CustomerNotes } from '../types/models';
 
-const QUEUE_KEY       = '__syncQueue';
-const LAST_SYNCED_KEY = '__lastSyncedAt';
+const QUEUE_KEY       = SYNC_QUEUE_KEY;
+const LAST_SYNCED_KEY = SYNC_LAST_SYNCED_KEY;
 const INIT_DONE_KEY   = '__initDone_';
 const DATA_OWNER_KEY  = '__dataOwner';
 
@@ -17,7 +18,6 @@ const DATA_OWNER_KEY  = '__dataOwner';
 // device clock. Versioning is load-bearing: v1 stored `new Date()` from the
 // phone, so an ahead-of-time device may already have a poisoned future cursor.
 // Treat every pre-v2 value as empty and perform one safe full pull after upgrade.
-const SYNC_CURSOR_VERSION = 2 as const;
 const PULL_PAGE_SIZE = 500;
 const PULL_OVERLAP_MS = 5 * 60 * 1000;
 const EPOCH = '1970-01-01T00:00:00.000Z';
@@ -74,7 +74,7 @@ function laterTimestamp(current: string | undefined, candidate: string): string 
   return current;
 }
 
-const COLLECTION_TABLES = ['jobs', 'invoices', 'customers', 'expenses', 'pricebook', 'recurringJobs', 'recurringInvoices', 'trips', 'bookingRequests', 'jobPhotos'] as const;
+const COLLECTION_TABLES = SYNCED_COLLECTION_TABLES;
 
 // Tables added to COLLECTION_TABLES after their collections already existed
 // on devices (2026-08-03 durability work). Existing installs hold local
@@ -97,6 +97,8 @@ interface QueueItem {
 }
 
 export async function enqueue(table: string, op: SyncOp, recordId: string, payload: unknown): Promise<void> {
+  // E-1: nothing queues before the native-run check has run (P12-012).
+  await ensureNativeRunChecked();
   const queue = await getQueue();
   const filtered = queue.filter(
     item => !(item.table === table && item.recordId === recordId)
@@ -213,7 +215,11 @@ async function pushQueue(userId: string): Promise<void> {
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(failed));
 }
 
-async function pullRemote(userId: string): Promise<void> {
+// Resolves true only when the pull read every table, the settings and the
+// customer notes without an error (E-1: that is what completes a pending
+// native run). Failures are still swallowed and reported, as before.
+async function pullRemote(userId: string): Promise<boolean> {
+  let allOk = true;
   try {
     const lastRaw = await AsyncStorage.getItem(LAST_SYNCED_KEY);
     const cursor = parseSyncCursor(lastRaw);
@@ -280,26 +286,29 @@ async function pullRemote(userId: string): Promise<void> {
 
       // A later-page error must not leave a partial local apply paired with an
       // advanced cursor. Discard the in-memory pages and retry the table in full.
+      if (failed) allOk = false;
       if (failed || local === null) continue;
       await AsyncStorage.setItem(table, JSON.stringify(local));
       if (tableWatermark) cursor.tables[table] = tableWatermark;
     }
 
-    const { data: settingsRow } = await supabase
+    const { data: settingsRow, error: settingsError } = await supabase
       .from('settings')
       .select('data')
       .eq('user_id', userId)
       .maybeSingle();
 
+    if (settingsError) allOk = false;
     if (settingsRow?.data) {
       await AsyncStorage.setItem('settings', JSON.stringify(settingsRow.data));
     }
 
-    const { data: notesData } = await supabase
+    const { data: notesData, error: notesError } = await supabase
       .from('customer_notes')
       .select('customer_key, note')
       .eq('user_id', userId);
 
+    if (notesError) allOk = false;
     if (notesData) {
       const map: Record<string, string> = {};
       notesData.forEach((n: { customer_key: string; note: string }) => { map[n.customer_key] = n.note; });
@@ -308,13 +317,24 @@ async function pullRemote(userId: string): Promise<void> {
 
     await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify(cursor));
   } catch (e: unknown) {
+    allOk = false;
     console.warn('Sync pull failed:', (e as Error).message);
     reportError(e, { context: 'pullRemote' });
   }
+  if (allOk) {
+    // E-1: a complete pull ends a pending native run (held settings applied,
+    // run marked seen, widget/Siri replay). Never throws.
+    await completeNativeRunAfterPull();
+  }
+  return allOk;
 }
 
 export async function syncIfOnline(userId: string): Promise<void> {
   try {
+    // E-1: no push before the native-run check; a failed reset write blocks
+    // the push for this process so a stale queue can never go out.
+    await ensureNativeRunChecked();
+    if (isNativeRunWriteFailed()) return;
     const net = await Network.getNetworkStateAsync();
     if (!net.isConnected) return;
     await pushQueue(userId);
@@ -362,6 +382,7 @@ async function backfillLocalOnlyCollections(userId: string): Promise<void> {
 
 export async function initialSync(userId: string): Promise<void> {
   try {
+    await ensureNativeRunChecked();
     const done = await AsyncStorage.getItem(INIT_DONE_KEY + userId);
     if (done) {
       await backfillLocalOnlyCollections(userId);
@@ -391,7 +412,8 @@ export async function initialSync(userId: string): Promise<void> {
       if (localDataBelongsToOtherUser) {
         // recurringJobs / recurringInvoices / trips joined COLLECTION_TABLES
         // 2026-08-03, so the spread now covers them.
-        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', REVIEW_REQUESTS_STORAGE_KEY]);
+        // E-1: held settings paths belong to the outgoing account too.
+        await AsyncStorage.multiRemove([...COLLECTION_TABLES, 'customerNotes', REVIEW_REQUESTS_STORAGE_KEY, NATIVE_RUN_HELD_SETTINGS_KEY]);
         await AsyncStorage.removeItem(QUEUE_KEY);
       }
       await AsyncStorage.setItem(LAST_SYNCED_KEY, JSON.stringify(emptySyncCursor()));

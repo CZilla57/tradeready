@@ -25,6 +25,7 @@ import { approvedChangeOrderTotal, changeOrderStatus } from "./changeOrders";
 import { computeTimeTracking, applyClockOut } from "./timeTracking";
 import type { DirectCostLine } from "../types/models";
 import { nextInvoiceNumber } from "./invoiceNumber";
+import { isInvoiceCreationBlocked } from "./nativeRunRuntime";
 import { roundToCents } from "./invoicePayments";
 import { jobChangesAfterInvoiceSave } from "./jobStatus";
 import { formatQuote } from "./format";
@@ -273,6 +274,9 @@ const BACKEND_URL_IS_PLACEHOLDER: boolean =
  *    jobChangesAfterInvoiceSave.
  */
 export async function createAutoInvoiceForJob(jobId: string): Promise<AutoInvoiceResult | null> {
+  // E-1: no invoice numbering against the cleared list while a native run is
+  // pending. The job stays complete; the user invoices it after the pull.
+  if (await isInvoiceCreationBlocked()) return null;
   const [jobs, invoices, customers, settings] = await Promise.all([
     loadJobs(),
     loadInvoices(),
