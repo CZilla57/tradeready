@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-20
 
-**Status:** Ready for contract characterization; no implementation tasks completed.
+**Status (reconciled 2026-09-29):** Tasks 8.00–8.13 implemented and host-tested; 8.14 (concurrency harness) exists only as a DB-dependent shell script and 8.15 closeout is partial. Device and live-backend evidence is deferred to Phase 12.
 
 **Spec:** [Calendar, booking, routes and portals](native-phase-8-calendar-booking-routes-portals-spec.md).
 
@@ -496,7 +496,7 @@ transaction invariants. Do not invoke a deploy command to validate a build.
 
 ## 6. Initial execution ledger
 
-All tasks **8.00–8.15 are pending**. The source review used to write this plan is
+Tasks **8.00–8.13 are implemented and host-tested; 8.14 and 8.15 are partial** (reconciled 2026-09-29). The source review used to write this plan is
 not test execution or an implementation completion. When work starts, maintain
 one row per task: status, owner/session, dependency evidence, files, commands,
 actual results, blockers and handoff. Separate **implementation blocked** from

@@ -24,6 +24,10 @@ if [ -n "$UNREGISTERED" ]; then
   exit 1
 fi
 
+# Parity matrix owner/test columns and the golden-fixture manifest must be
+# current (regenerate with: node scripts/parity-manifest.mjs --write).
+sh "$ROOT_DIR/native/run-fixture-manifest-check.sh"
+
 "$ROOT_DIR/native/run-domain-tests.sh"
 sh "$ROOT_DIR/native/run-canonical-tests.sh"
 "$ROOT_DIR/native/run-snapshot-tests.sh"
