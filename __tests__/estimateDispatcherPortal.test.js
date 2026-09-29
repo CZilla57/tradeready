@@ -4,6 +4,7 @@
 // original routes must keep routing untouched.
 
 jest.mock('../backend/lib/estimate/createLink', () => jest.fn((q, r) => r.status(200).json({ route: 'create-link' })));
+jest.mock('../backend/lib/estimate/reviseDeclined', () => jest.fn((q, r) => r.status(200).json({ route: 'revise-declined' })));
 jest.mock('../backend/lib/estimate/respond', () => jest.fn((q, r) => r.status(200).json({ route: 'respond' })));
 jest.mock('../backend/lib/estimate/view', () => jest.fn((q, r) => r.status(200).json({ route: 'view' })));
 jest.mock('../backend/lib/estimate/portalView', () => jest.fn((q, r) => r.status(200).json({ route: 'portal-view' })));
@@ -20,7 +21,7 @@ function mockRes() {
 }
 
 describe('estimate dispatcher with portal-view', () => {
-  it.each(['create-link', 'respond', 'view', 'portal-view', 'change-view', 'change-respond'])('routes %s', async (action) => {
+  it.each(['create-link', 'revise-declined', 'respond', 'view', 'portal-view', 'change-view', 'change-respond'])('routes %s', async (action) => {
     const res = mockRes();
     await handler({ query: { action } }, res);
     expect(res.body).toEqual({ route: action });

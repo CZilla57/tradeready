@@ -132,8 +132,13 @@ describe("respondCore", () => {
 
   test("illegal transitions and unknown actions rejected", async () => {
     const calls = mockBackend({ requestRows: [{ id: "bk1_aa", user_id: "u1", data: data({ status: "declined" }) }] });
-    expect((await respondCore(ENV, { userId: "u1", requestId: "bk1_aa", action: "decline", nowMs: NOW_MS })).status).toBe(409);
-    expect((await respondCore(ENV, { userId: "u1", requestId: "bk1_aa", action: "resolve_reschedule", nowMs: NOW_MS })).status).toBe(409);
+    // 8.04 §2.2: 409 echoes the authoritative current status (additive).
+    const d = await respondCore(ENV, { userId: "u1", requestId: "bk1_aa", action: "decline", nowMs: NOW_MS });
+    expect(d.status).toBe(409);
+    expect(d.body).toEqual({ error: "invalid_state", status: "declined" });
+    const r = await respondCore(ENV, { userId: "u1", requestId: "bk1_aa", action: "resolve_reschedule", nowMs: NOW_MS });
+    expect(r.status).toBe(409);
+    expect(r.body).toEqual({ error: "invalid_state", status: "declined" });
     expect((await respondCore(ENV, { userId: "u1", requestId: "bk1_aa", action: "nuke", nowMs: NOW_MS })).status).toBe(400);
     expect(calls.requestPatches).toHaveLength(0);
   });

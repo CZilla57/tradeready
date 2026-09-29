@@ -17,7 +17,7 @@ function headers() {
 // Returns { user_id, data } or null.
 async function fetchJob(jobId) {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&deleted=eq.false&select=user_id,data`,
+    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&deleted=eq.false&select=user_id,data,updated_at`,
     { headers: headers() }
   );
   if (!res.ok) throw new Error(`Supabase fetch ${res.status}: ${await res.text()}`);
@@ -28,7 +28,7 @@ async function fetchJob(jobId) {
 // Returns { user_id, data } only if the row belongs to userId; else null.
 async function fetchJobForUser(jobId, userId) {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&user_id=eq.${encodeURIComponent(userId)}&deleted=eq.false&select=user_id,data`,
+    `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(jobId)}&user_id=eq.${encodeURIComponent(userId)}&deleted=eq.false&select=user_id,data,updated_at`,
     { headers: headers() }
   );
   if (!res.ok) throw new Error(`Supabase fetch ${res.status}: ${await res.text()}`);
@@ -49,6 +49,25 @@ async function upsertJob(id, userId, data) {
     }),
   });
   if (!res.ok) throw new Error(`Supabase upsert ${res.status}: ${await res.text()}`);
+}
+
+// Replaces one owner-scoped Job blob only when its database version is still
+// the exact version the operation inspected. The database trigger remains the
+// sole updated_at authority. A null result is an optimistic-write conflict.
+async function updateJobIfUnchanged(id, userId, updatedAt, data) {
+  const url = `${SUPABASE_URL}/rest/v1/jobs?id=eq.${encodeURIComponent(id)}&user_id=eq.${encodeURIComponent(userId)}&deleted=eq.false&updated_at=eq.${encodeURIComponent(updatedAt)}&select=data,updated_at`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      ...headers(),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) throw new Error(`Supabase conditional update ${res.status}: ${await res.text()}`);
+  const rows = await res.json();
+  return rows.length ? rows[0] : null;
 }
 
 // constantTimeEqual moved to ./constantTime.js (shared with the RevenueCat
@@ -72,4 +91,11 @@ function planApprovalWrite(existing, snapshot, sentAt, mintToken) {
   };
 }
 
-module.exports = { fetchJob, fetchJobForUser, upsertJob, constantTimeEqual, planApprovalWrite };
+module.exports = {
+  fetchJob,
+  fetchJobForUser,
+  upsertJob,
+  updateJobIfUnchanged,
+  constantTimeEqual,
+  planApprovalWrite,
+};

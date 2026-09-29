@@ -84,6 +84,45 @@ async function setCustomerTokenEnabled(env, userId, customerId, enabled) {
   if (!res.ok) throw new Error(`Supabase patch ${res.status}: ${await res.text()}`);
 }
 
+// ── Phase 8 task 8.06 (G4): transactional RPC ─────────────────────────────
+// Same envelope discipline as the booking lane (store.js callBookingRpc): the
+// RPC RETURNS jsonb {ok:true,...}/{ok:false,error,...} with HTTP 200, so a
+// transport 404 on /rpc/admin_portal_token unambiguously means "function not
+// deployed" → {unavailable:true} and the caller keeps the legacy split path
+// byte-identically (adoption-gated dual writes, §10 step 3). A 200 body that
+// is not an {ok:boolean} envelope is treated the same way.
+
+async function callPortalRpc(env, fn, args) {
+  let res;
+  try {
+    res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: { ...headers(env), 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+  } catch (err) {
+    throw new Error(`Portal RPC ${fn} transport failed: ${err.message}`);
+  }
+  if (res.status === 404) return { unavailable: true };
+  if (!res.ok) throw new Error(`Portal RPC ${fn} ${res.status}: ${await res.text()}`);
+  let out;
+  try {
+    out = await res.json();
+  } catch (err) {
+    throw new Error(`Portal RPC ${fn} undecodable: ${err.message}`);
+  }
+  if (!out || typeof out.ok !== 'boolean') return { unavailable: true };
+  return { unavailable: false, out };
+}
+
+// Canonical request hash (contract §1.3 as applied to §4): sha256 over the
+// mutating intent only, scoped per customer. A retried POST carries the same
+// intent; same operationId + different hash is a client bug →
+// 409 operation_conflict.
+function portalRequestHash(action, customerId, enabled) {
+  return sha256Hex(JSON.stringify({ action, customerId, enabled: action === 'set_enabled' ? enabled : null }));
+}
+
 // The customer record by id — both-key scoped like every portal read.
 async function fetchCustomerById(env, userId, customerId) {
   const res = await fetch(
@@ -105,12 +144,31 @@ async function resolvePortalCustomer(env, token) {
     if (!row.enabled || row.revoked_at) return null;
     return fetchCustomerById(env, row.user_id, row.customer_id);
   }
+  // Unknown hash: legacy blob lookup, ADOPTION-GATED (contract §4). The blob
+  // is authority only for customers the table never adopted (zero rows). A
+  // customer with ≥1 portal_tokens row is adopted: an unknown hash fails
+  // closed (null) even when a stale enabled blob token exists — that is the
+  // G4-05 fix, and a conflicting/failed backfill must never authorize it.
   const legacy = await lookupCustomerByPortalToken(env, String(token));
   if (!legacy) return null;
+  const existing = await fetchCustomerTokenRows(env, legacy.user_id, legacy.id);
+  if (existing.length > 0) return null;
   try {
     await insertTokenRow(env, { tokenHash: hash, userId: legacy.user_id, customerId: legacy.id, enabled: true });
   } catch (err) {
+    // Conflicting backfill (a rotation won the race and the single-active
+    // index rejected us) authorizes nothing: re-read authority and fail
+    // closed when rows now exist. A transient error with still-zero rows
+    // keeps the pre-adoption blob authority (legacy behavior preserved).
     console.error('[portal-tokens] backfill failed:', err.message);
+    let recheck = null;
+    try {
+      recheck = await fetchCustomerTokenRows(env, legacy.user_id, legacy.id);
+    } catch (readErr) {
+      console.error('[portal-tokens] backfill recheck failed:', readErr.message);
+      return null;
+    }
+    if (recheck.length > 0) return null;
   }
   return legacy;
 }
@@ -124,4 +182,6 @@ module.exports = {
   setCustomerTokenEnabled,
   fetchCustomerById,
   resolvePortalCustomer,
+  callPortalRpc,
+  portalRequestHash,
 };

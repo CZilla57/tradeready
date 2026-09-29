@@ -47,7 +47,10 @@ function buildAppointments(jobRows, requestRows, { token, apiOrigin, nowMs }) {
   return jobRows
     .filter((r) => {
       const d = r && r.data;
-      if (!d || d.archived || d.status === 'declined') return false;
+      // Archive check (contract C12, task 8.06): canonical archive marker is
+      // archivedAt (utils/archive.ts) but RN never sets d.archived — check
+      // both so an archived job stops serving. Additive, compat-safe.
+      if (!d || d.archived || d.archivedAt || d.status === 'declined') return false;
       const date = d.scheduledDate;
       if (typeof date !== 'string' || !DATE_RE.test(date)) return false;
       // Owner-naive string comparison on purpose (FA-039) — never Date-parse.

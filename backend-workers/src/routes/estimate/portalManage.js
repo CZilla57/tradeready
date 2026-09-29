@@ -1,8 +1,12 @@
-// POST /api/estimate/portal-manage  { action: mint | set_enabled | rotate,
-// customerId, enabled? } — owner-side portal token management (Phase 12D).
+// POST /api/estimate/portal-manage  { action: mint | set_enabled | rotate |
+// status, customerId, enabled?, operationId?, token? } — owner-side portal
+// token management (Phase 12D + Phase 8 task 8.06: transactional G4 core,
+// optional operation replay, authoritative status read).
 // JWT-authed (the caller is the APP, not a portal page — hence appCors, which
 // allows the Authorization header, NOT the browser-facing estimate CORS).
 // Thin shell; the invariants live in lib/estimate/portalManage.js (tested).
+// Server-side RNG for mint/rotate capabilities (the booking-admin precedent)
+// keeps raw tokens out of client payloads; status/set_enabled ignore it.
 
 import { randomBytes } from 'node:crypto';
 import { createRateLimiter } from '../../../lib/guards.js';

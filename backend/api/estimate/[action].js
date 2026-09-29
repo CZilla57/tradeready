@@ -14,6 +14,7 @@
  * auth and rate limiting.
  */
 const createLink = require('../../lib/estimate/createLink');
+const reviseDeclined = require('../../lib/estimate/reviseDeclined');
 const respond = require('../../lib/estimate/respond');
 const view = require('../../lib/estimate/view');
 const portalView = require('../../lib/estimate/portalView');
@@ -22,6 +23,7 @@ const changeRespond = require('../../lib/estimate/changeRespond');
 
 const ROUTES = {
   'create-link': createLink,
+  'revise-declined': reviseDeclined,
   'respond': respond,
   'view': view,
   'portal-view': portalView,

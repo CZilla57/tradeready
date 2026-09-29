@@ -9,6 +9,7 @@
 // Stub the route handlers so requiring the dispatchers pulls in no env or
 // vendor SDKs (connectStatus/createConnectAccount require('stripe') at top).
 jest.mock('../backend/lib/estimate/createLink', () => jest.fn());
+jest.mock('../backend/lib/estimate/reviseDeclined', () => jest.fn());
 jest.mock('../backend/lib/estimate/respond', () => jest.fn());
 jest.mock('../backend/lib/estimate/view', () => jest.fn());
 jest.mock('../backend/lib/stripe/connectStatus', () => jest.fn());
@@ -21,6 +22,7 @@ const stripeDispatcher = require('../backend/api/stripe/connect.js');
 
 const ESTIMATE_ROUTES = {
   'create-link': require('../backend/lib/estimate/createLink'),
+  'revise-declined': require('../backend/lib/estimate/reviseDeclined'),
   'respond': require('../backend/lib/estimate/respond'),
   'view': require('../backend/lib/estimate/view'),
 };

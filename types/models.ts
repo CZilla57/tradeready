@@ -317,6 +317,12 @@ export interface Job {
   estimateSentAt?: DateString;
   approval?: EstimateApproval;
   /**
+   * Append-only owner-visible archive of prior approval artifacts. Declined
+   * revisions move the exact active approval here before clearing `approval`,
+   * so the old token is invalidated without erasing customer consent history.
+   */
+  approvalHistory?: EstimateApproval[];
+  /**
    * Scope changes (2026-08-05 spec). OPTIONAL and additive — ABSENT on every
    * pre-feature job, deliberate; utils/changeOrders.ts treats absent as [].
    */
