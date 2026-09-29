@@ -23,12 +23,17 @@ function jsonRes(body, status = 200) {
 afterEach(() => { delete global.fetch; jest.restoreAllMocks(); });
 
 // url-keyed fetch mock; records every call for order/body assertions.
+// The 8.06 `admin_portal_token` RPC answers 404 here on purpose: this suite
+// pins the PRE-DEPLOY legacy split path byte-identically (dual-path
+// discipline, §10 step 3). Post-deploy behavior (single atomic RPC call,
+// replay, C6 409) is pinned in __tests__/phase8PortalAdmin86.test.js.
 function mockBackend({ tokenRows = [], customerRows = [], blobRows = [] } = {}) {
   const calls = { all: [], tokenInserts: [], tokenPatches: [] };
   global.fetch = jest.fn(async (url, init = {}) => {
     const u = String(url);
     const method = init.method || "GET";
     calls.all.push({ u, method, body: init.body ? JSON.parse(init.body) : null });
+    if (u.includes("/rest/v1/rpc/")) return jsonRes({ message: "not found" }, 404);
     if (u.includes("/rest/v1/portal_tokens")) {
       if (method === "POST") { calls.tokenInserts.push(JSON.parse(init.body)); return jsonRes([], 201); }
       if (method === "PATCH") { calls.tokenPatches.push({ u, body: JSON.parse(init.body) }); return jsonRes([], 204); }
@@ -118,7 +123,16 @@ describe("portalManageCore", () => {
     expect(out).toEqual({ status: 200, json: { ok: true, token: NEW_HEX } });
     expect(calls.tokenInserts).toHaveLength(1);
     expect(calls.tokenInserts[0].token_hash).toBe(store.sha256Hex(NEW_HEX));
-    expect(JSON.stringify(calls.all.map((c) => c.body))).not.toContain(NEW_HEX);
+    // Table writes carry the HASH only. The 8.06 RPC attempt (answered 404
+    // by this mock) carries the raw token solely inside its p_result replay
+    // template — the documented §1.3/§4 exception also used by booking admin
+    // (8.05): the ONLY server copy lives in the 30-day replay response row
+    // so a lost response replays the SAME capability. No table row does.
+    const nonRpcBodies = calls.all.filter((c) => !c.u.includes("/rest/v1/rpc/")).map((c) => c.body);
+    expect(JSON.stringify(nonRpcBodies)).not.toContain(NEW_HEX);
+    const rpcBody = calls.all.find((c) => c.u.includes("/rest/v1/rpc/")).body;
+    expect(rpcBody.p_token_hash).toBe(store.sha256Hex(NEW_HEX));
+    expect(rpcBody.p_request_hash).not.toContain(NEW_HEX);
   });
 
   test("mint with an ACTIVE row → 409 already_exists (stale-paint guard), no revoke, no insert", async () => {

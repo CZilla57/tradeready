@@ -13,150 +13,20 @@
 //   SUPABASE_SERVICE_ROLE_KEY — secret service role key (for admin deletes)
 
 import { appCors, clientIp } from '../appCors.js';
+import { createAccountDeletionService } from '../../lib/accountDeletion.js';
 
-// Keep in step with the client's synced tables (COLLECTION_TABLES in
-// utils/sync.ts + settings/customer_notes). Belt-and-braces: every table
-// added since launch also carries an auth.users ON DELETE CASCADE FK, so the
-// auth-user delete below covers a miss here — but the explicit list keeps the
-// data-before-user ordering meaningful. Missing tables 404 and are tolerated.
-const DATA_TABLES = [
-  'invoices',
-  'jobs',
-  'customers',
-  'expenses',
-  'settings',
-  'customer_notes',
-  'pricebook',
-  'recurringJobs',
-  'recurringInvoices',
-  'trips',
-  'jobPhotos',
-];
-
-// Best-effort purge of a user's job photos from R2 (2026-08-06 job-photo sync).
-// Keys are `${userId}/${photoId}.jpg`; list+delete in batches of ≤1000 until
-// the prefix is drained. Never throws: an orphaned R2 object is pennies and is
-// far less bad than aborting the account deletion. PHOTOS may be absent on an
-// older deploy — the caller guards for that.
-async function purgeUserPhotos(PHOTOS, userId) {
-  const prefix = `${userId}/`;
-  let cursor;
-  try {
-    do {
-      const listing = await PHOTOS.list({ prefix, cursor });
-      if (listing.objects.length) {
-        await PHOTOS.delete(listing.objects.map((o) => o.key));
-      }
-      cursor = listing.truncated ? listing.cursor : undefined;
-    } while (cursor);
-  } catch (err) {
-    console.error('delete-account: R2 photo purge failed (orphans tolerated):', err.message);
-  }
-}
-
-// Tight rate limit for a destructive action: 5 requests per IP per 5 minutes.
-const rateLimitMap = new Map();
-const RATE_LIMIT = 5;
-const WINDOW_MS = 5 * 60_000;
-
-function isRateLimited(ip) {
-  const now = Date.now();
-  const timestamps = (rateLimitMap.get(ip) || []).filter(t => now - t < WINDOW_MS);
-  if (timestamps.length >= RATE_LIMIT) {
-    rateLimitMap.set(ip, timestamps);
-    return true;
-  }
-  timestamps.push(now);
-  rateLimitMap.set(ip, timestamps);
-  return false;
-}
+const accountDeletionService = createAccountDeletionService();
 
 export async function deleteAccountHandler(c) {
   appCors(c, 'POST, OPTIONS');
 
-  if (c.req.method === 'OPTIONS') return c.body(null, 200);
-  if (c.req.method !== 'POST') return c.json({ error: 'Method not allowed' }, 405);
-
-  const ip = clientIp(c);
-  if (isRateLimited(ip)) {
-    return c.json({ error: 'Too many requests. Please wait a moment.' }, 429);
-  }
-
-  const { SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY } = c.env;
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
-    return c.json({
-      error: 'Server misconfiguration: SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY must be set in the server environment.',
-    }, 500);
-  }
-
-  const auth = c.req.header('authorization');
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-  const userJwt = auth.slice(7);
-
-  // Verify the user JWT and retrieve user_id.
-  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      Authorization: `Bearer ${userJwt}`,
-      apikey: SUPABASE_ANON_KEY,
-    },
+  const result = await accountDeletionService.handle({
+    method: c.req.method,
+    ip: clientIp(c),
+    authorization: c.req.header('authorization'),
+    env: c.env,
   });
 
-  if (!userRes.ok) {
-    return c.json({ error: 'Invalid or expired session. Please sign in again.' }, 401);
-  }
-
-  const user = await userRes.json();
-  const userId = user?.id;
-  if (!userId) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-
-  try {
-    // Delete all data rows for this user. Run in parallel for speed.
-    // Data is deleted before the auth user so a partial failure leaves an
-    // orphaned user record (recoverable) rather than orphaned data (not recoverable).
-    const deleteResults = await Promise.all(
-      DATA_TABLES.map(table =>
-        fetch(`${SUPABASE_URL}/rest/v1/${table}?user_id=eq.${encodeURIComponent(userId)}`, {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-            apikey: SUPABASE_SERVICE_ROLE_KEY,
-            Prefer: 'return=minimal',
-          },
-        })
-      )
-    );
-
-    const failedTable = deleteResults.find(r => !r.ok && r.status !== 404);
-    if (failedTable) {
-      throw new Error(`Data delete failed: HTTP ${failedTable.status}`);
-    }
-
-    // Best-effort R2 photo purge (never blocks the account deletion).
-    if (c.env.PHOTOS) {
-      await purgeUserPhotos(c.env.PHOTOS, userId);
-    }
-
-    // Delete the auth user last — requires service role admin access.
-    const deleteUserRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-      },
-    });
-
-    if (!deleteUserRes.ok) {
-      const errBody = await deleteUserRes.json().catch(() => ({}));
-      throw new Error(errBody.message || `Auth user delete failed: HTTP ${deleteUserRes.status}`);
-    }
-
-    return c.json({ success: true }, 200);
-  } catch (err) {
-    console.error('delete-account error:', err.message);
-    return c.json({ error: 'Failed to delete account. Please try again or contact support.' }, 500);
-  }
+  if (result.body === null) return c.body(null, result.status);
+  return c.json(result.body, result.status);
 }

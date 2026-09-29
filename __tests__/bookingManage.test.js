@@ -166,12 +166,13 @@ describe("manageActionCore state machine", () => {
     expect(calls.reservationPatches[0].body).toEqual({ status: "cancelled" });
   });
 
-  test("illegal transitions → 409 invalid_state, nothing written", async () => {
+  test("illegal transitions → 409 invalid_state with echoed status, nothing written", async () => {
     const calls = mockBackend({ requestRows: requestRow(bookedData({ status: "cancelled" })), settingsRows: ownerSettings });
     for (const action of ["confirm", "request_reschedule", "cancel"]) {
       const r = await manageActionCore(ENV, { token: MANAGE, action, nowMs: NOW_MS });
       expect(r.status).toBe(409);
-      expect(r.body).toEqual({ error: "invalid_state" });
+      // 8.04 §2.2: 409 echoes the authoritative current status (additive).
+      expect(r.body).toEqual({ error: "invalid_state", status: "cancelled" });
     }
     expect(calls.requestPatches).toHaveLength(0);
   });

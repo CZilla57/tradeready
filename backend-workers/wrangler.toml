@@ -53,3 +53,26 @@ bucket_name = "tradeready-photos"
 # (set via `wrangler secret put PORTAL_URL_SIGNING_SECRET` — never in this
 # file). Missing secret = portal photos section stays empty and the
 # photos-public route 404s (fail-soft).
+
+# Phase 3 staging remains deliberately inert until a separate Supabase project
+# or branch exists. Wrangler vars and bindings are not inherited by named
+# environments, so repeat every staging value explicitly. Do not replace this
+# placeholder with the production Supabase URL.
+[env.staging]
+name = "tradeready-backend-staging"
+workers_dev = true
+
+[env.staging.triggers]
+crons = []
+
+[env.staging.vars]
+SUPABASE_URL = "https://staging.invalid"
+ESTIMATE_PUBLIC_BASE = "https://gettradereadyapp.com/estimate.html"
+
+[[env.staging.r2_buckets]]
+binding = "INVOICE_PDFS"
+bucket_name = "tradeready-invoice-pdfs-staging"
+
+[[env.staging.r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "tradeready-photos-staging"

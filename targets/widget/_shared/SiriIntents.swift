@@ -1,4 +1,5 @@
 import AppIntents
+import Darwin
 import Foundation
 import WidgetKit
 
@@ -50,6 +51,23 @@ private let siriSnapshotKey = "widgetSnapshot"
 private let siriActionsKey = "widgetActions"
 private let siriActiveTripKey = "activeTrip"
 private let siriPendingOpenUrlKey = "pendingOpenUrl"
+private let siriActionsLockFile = ".tradeready-widget-actions.lock"
+
+private func withSiriActionQueueLock<T>(_ body: () -> T) -> T? {
+  guard let container = FileManager.default.containerURL(
+    forSecurityApplicationGroupIdentifier: siriAppGroupId
+  ) else { return nil }
+  let descriptor = open(
+    container.appendingPathComponent(siriActionsLockFile).path,
+    O_CREAT | O_RDWR,
+    S_IRUSR | S_IWUSR
+  )
+  guard descriptor >= 0 else { return nil }
+  defer { close(descriptor) }
+  guard flock(descriptor, LOCK_EX) == 0 else { return nil }
+  defer { flock(descriptor, LOCK_UN) }
+  return body()
+}
 
 // MARK: - Snapshot read
 
@@ -140,7 +158,7 @@ private func siriWhenLabel(_ job: SiriSnapshot.NextJob) -> String {
 
 // MARK: - Pending action queue
 
-/// Append one PendingAction to the shared `widgetActions` queue. Same
+/// Append one PendingAction to the shared `widgetActions` queue. Same locked
 /// read-append-write as appendPendingAction(_:) in JobTimer.swift — duplicated
 /// rather than shared because that one is widget-target-only (see header).
 /// A malformed/absent queue is treated as empty, exactly like the JS parser.
@@ -149,8 +167,18 @@ private func siriWhenLabel(_ job: SiriSnapshot.NextJob) -> String {
 /// the trip's starting odometer with no way for the user to get it back. The
 /// other callers ignore the result on purpose; each says why at the call site.
 private func siriAppendPendingAction(_ action: [String: Any]) -> Bool {
-  guard let defaults = UserDefaults(suiteName: siriAppGroupId) else { return false }
+  withSiriActionQueueLock {
+    guard let defaults = UserDefaults(suiteName: siriAppGroupId) else { return false }
+    return siriAppendPendingActionLocked(action, defaults: defaults)
+  } ?? false
+}
 
+/// Caller must hold `withSiriActionQueueLock`. Reusing the same action ID is
+/// idempotent only when every field is identical; a collision fails closed.
+private func siriAppendPendingActionLocked(
+  _ action: [String: Any],
+  defaults: UserDefaults
+) -> Bool {
   var queue: [[String: Any]] = []
   if let raw = defaults.string(forKey: siriActionsKey),
      let data = raw.data(using: .utf8),
@@ -158,14 +186,19 @@ private func siriAppendPendingAction(_ action: [String: Any]) -> Bool {
      let existing = parsed as? [[String: Any]] {
     queue = existing
   }
+  if let id = action["id"] as? String,
+     let existing = queue.first(where: { $0["id"] as? String == id }) {
+    let old = try? JSONSerialization.data(withJSONObject: existing, options: [.sortedKeys])
+    let new = try? JSONSerialization.data(withJSONObject: action, options: [.sortedKeys])
+    return old != nil && old == new
+  }
   queue.append(action)
-
   guard
     let encoded = try? JSONSerialization.data(withJSONObject: queue, options: []),
     let json = String(data: encoded, encoding: .utf8)
   else { return false }
-
   defaults.set(json, forKey: siriActionsKey)
+  guard defaults.string(forKey: siriActionsKey) == json else { return false }
   WidgetCenter.shared.reloadAllTimelines()
   return true
 }
@@ -211,13 +244,15 @@ private func siriIsOnTheClock(snapshot: SiriSnapshot?, pending: String?) -> Bool
 // MARK: - Active trip (Siri's private session state)
 
 private struct SiriActiveTrip {
+  var id: String?
   var startedAt: String
   var odometerStart: Double
+  var stopAt: String?
+  var odometerEnd: Double?
 }
 
-private func siriLoadActiveTrip() -> SiriActiveTrip? {
+private func siriLoadActiveTrip(defaults: UserDefaults) -> SiriActiveTrip? {
   guard
-    let defaults = UserDefaults(suiteName: siriAppGroupId),
     let raw = defaults.string(forKey: siriActiveTripKey),
     let data = raw.data(using: .utf8),
     let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
@@ -225,24 +260,28 @@ private func siriLoadActiveTrip() -> SiriActiveTrip? {
     let startedAt = dict["startedAt"] as? String,
     let odometerStart = dict["odometerStart"] as? Double
   else { return nil }
-  return SiriActiveTrip(startedAt: startedAt, odometerStart: odometerStart)
+  return SiriActiveTrip(
+    id: dict["id"] as? String,
+    startedAt: startedAt,
+    odometerStart: odometerStart,
+    stopAt: dict["stopAt"] as? String,
+    odometerEnd: dict["odometerEnd"] as? Double
+  )
 }
 
 /// Returns false when the container is unavailable or the payload won't
 /// encode, so the caller can tell the user instead of silently losing the trip.
-private func siriSaveActiveTrip(startedAt: String, odometerStart: Double) -> Bool {
-  guard let defaults = UserDefaults(suiteName: siriAppGroupId) else { return false }
-  let payload: [String: Any] = ["startedAt": startedAt, "odometerStart": odometerStart]
+private func siriSaveActiveTrip(_ trip: SiriActiveTrip, defaults: UserDefaults) -> Bool {
+  var payload: [String: Any] = ["startedAt": trip.startedAt, "odometerStart": trip.odometerStart]
+  if let id = trip.id { payload["id"] = id }
+  if let stopAt = trip.stopAt { payload["stopAt"] = stopAt }
+  if let odometerEnd = trip.odometerEnd { payload["odometerEnd"] = odometerEnd }
   guard
     let encoded = try? JSONSerialization.data(withJSONObject: payload, options: []),
     let json = String(data: encoded, encoding: .utf8)
   else { return false }
   defaults.set(json, forKey: siriActiveTripKey)
-  return true
-}
-
-private func siriClearActiveTrip() {
-  UserDefaults(suiteName: siriAppGroupId)?.removeObject(forKey: siriActiveTripKey)
+  return defaults.string(forKey: siriActiveTripKey) == json
 }
 
 /// How long an unfinished trip may sit before StartTripIntent is allowed to
@@ -256,6 +295,76 @@ private let siriStaleActiveTripInterval: TimeInterval = 24 * 60 * 60
 private func siriIsStaleActiveTrip(_ trip: SiriActiveTrip) -> Bool {
   guard let started = siriParseISODate(trip.startedAt) else { return true }
   return Date().timeIntervalSince(started) > siriStaleActiveTripInterval
+}
+
+private enum SiriStartTripStorageResult {
+  case started(replacedStale: Bool)
+  case alreadyRunning
+  case invalidOdometer
+  case failed
+}
+
+private func siriStartTrip(odometerStart: Double) -> SiriStartTripStorageResult {
+  guard siriIsValidOdometer(odometerStart) else { return .invalidOdometer }
+  return withSiriActionQueueLock {
+    guard let defaults = UserDefaults(suiteName: siriAppGroupId) else { return .failed }
+    var replaced = false
+    if let existing = siriLoadActiveTrip(defaults: defaults) {
+      guard siriIsStaleActiveTrip(existing) else { return .alreadyRunning }
+      replaced = true
+    }
+    let trip = SiriActiveTrip(
+      id: UUID().uuidString,
+      startedAt: siriISONow(),
+      odometerStart: odometerStart,
+      stopAt: nil,
+      odometerEnd: nil
+    )
+    return siriSaveActiveTrip(trip, defaults: defaults)
+      ? .started(replacedStale: replaced)
+      : .failed
+  } ?? .failed
+}
+
+private enum SiriStopTripStorageResult {
+  case logged(miles: Double)
+  case noTrip
+  case invalidOdometer
+  case failed
+}
+
+/// Persists a stable completion payload before enqueueing it. Retrying after a
+/// crash therefore reuses the same action ID, stop time, and odometer value;
+/// the locked queue append recognizes that exact duplicate before clearing the
+/// active trip.
+private func siriStopTrip(odometerEnd: Double) -> SiriStopTripStorageResult {
+  return withSiriActionQueueLock {
+    guard let defaults = UserDefaults(suiteName: siriAppGroupId),
+          var trip = siriLoadActiveTrip(defaults: defaults)
+    else { return .noTrip }
+    guard siriIsValidOdometer(odometerEnd), siriIsValidOdometer(trip.odometerStart) else {
+      return .invalidOdometer
+    }
+    if trip.id == nil { trip.id = UUID().uuidString }
+    if trip.stopAt == nil { trip.stopAt = siriISONow() }
+    if trip.odometerEnd == nil { trip.odometerEnd = odometerEnd }
+    guard let id = trip.id, let stopAt = trip.stopAt, let stableEnd = trip.odometerEnd,
+          siriSaveActiveTrip(trip, defaults: defaults)
+    else { return .failed }
+
+    let action: [String: Any] = [
+      "id": id,
+      "type": "trip_log",
+      "at": stopAt,
+      "date": siriLocalDateString(fromISO: trip.startedAt),
+      "odometerStart": trip.odometerStart,
+      "odometerEnd": stableEnd,
+    ]
+    guard siriAppendPendingActionLocked(action, defaults: defaults) else { return .failed }
+    defaults.removeObject(forKey: siriActiveTripKey)
+    guard defaults.string(forKey: siriActiveTripKey) == nil else { return .failed }
+    return .logged(miles: max(0, stableEnd - trip.odometerStart))
+  } ?? .failed
 }
 
 // MARK: - Pending open-url stash (cold-launch handoff)
@@ -393,30 +502,18 @@ struct StartTripIntent: AppIntent {
   init() {}
 
   func perform() async throws -> some IntentResult & ProvidesDialog {
-    // One trip at a time: overwriting would silently lose the first drive.
-    // The exception is a session nobody ever stopped — see
-    // siriIsStaleActiveTrip. Its odometer reading is discarded with it; a drive
-    // that was never finished has no end reading to log, and holding it any
-    // longer only blocks the trip the user is asking for now.
-    var replacedStaleTrip = false
-    if let existing = siriLoadActiveTrip() {
-      if !siriIsStaleActiveTrip(existing) {
-        return .result(dialog: "A trip is already running. Say 'stop my trip' to finish it.")
-      }
-      replacedStaleTrip = true
-    }
-    guard siriIsValidOdometer(odometerStart) else {
+    switch siriStartTrip(odometerStart: odometerStart) {
+    case .alreadyRunning:
+      return .result(dialog: "A trip is already running. Say 'stop my trip' to finish it.")
+    case .invalidOdometer:
       return .result(dialog: "\(siriBadOdometerDialog)")
-    }
-    // Overwrites a stale session in place, so there is nothing to clear first
-    // and no window where the user has neither trip.
-    guard siriSaveActiveTrip(startedAt: siriISONow(), odometerStart: odometerStart) else {
+    case .failed:
       return .result(dialog: "I couldn't start the trip. Open TradeReady and try again.")
-    }
-    if replacedStaleTrip {
+    case .started(replacedStale: true):
       return .result(dialog: "Your previous trip was never finished \u{2014} starting a new one.")
+    case .started(replacedStale: false):
+      return .result(dialog: "Trip started at \(siriFormatMiles(odometerStart)) miles.")
     }
-    return .result(dialog: "Trip started at \(siriFormatMiles(odometerStart)) miles.")
   }
 }
 
@@ -430,38 +527,16 @@ struct StopTripIntent: AppIntent {
   init() {}
 
   func perform() async throws -> some IntentResult & ProvidesDialog {
-    guard let trip = siriLoadActiveTrip() else {
+    switch siriStopTrip(odometerEnd: odometerEnd) {
+    case .noTrip:
       return .result(dialog: "No trip is running.")
-    }
-    // Leave the trip running on a bad reading so the user can just try again.
-    guard siriIsValidOdometer(odometerEnd), siriIsValidOdometer(trip.odometerStart) else {
+    case .invalidOdometer:
       return .result(dialog: "\(siriBadOdometerDialog)")
-    }
-
-    // A COMPLETE trip — the app never sees a half-finished one. Keys are the
-    // trip_log contract in utils/widgetActions.ts (tripFromAction); the
-    // odometer values must serialize as JSON numbers, which the guard above
-    // guarantees (JSONSerialization refuses NaN/infinity outright).
-    let action: [String: Any] = [
-      "id": UUID().uuidString,
-      "type": "trip_log",
-      "at": siriISONow(),
-      "date": siriLocalDateString(fromISO: trip.startedAt),
-      "odometerStart": trip.odometerStart,
-      "odometerEnd": odometerEnd,
-    ]
-    // The one caller that gates on the write: this intent is the ONLY moment
-    // the trip becomes real, and clearing the session after a failed append
-    // would take the starting odometer with it — unrecoverable, since the user
-    // has long since driven past it.
-    guard siriAppendPendingAction(action) else {
+    case .failed:
       return .result(dialog: "Something went wrong saving the trip \u{2014} try again.")
+    case .logged(let miles):
+      return .result(dialog: "Logged \(siriFormatMiles(miles)) miles.")
     }
-    // Only now: the trip is queued, so the session state has done its job.
-    siriClearActiveTrip()
-
-    let miles = max(0, odometerEnd - trip.odometerStart)
-    return .result(dialog: "Logged \(siriFormatMiles(miles)) miles.")
   }
 }
 

@@ -20,7 +20,9 @@ async function portalIcsCore(env, { token, jobId, stampUtc, ip }) {
   const jobs = await fetchCustomerJobs(env, row.user_id, row.id);
   const job = jobs.find((r) => r.id === String(jobId));
   const d = job && job.data;
-  if (!d || d.archived || typeof d.scheduledDate !== 'string' || !DATE_RE.test(d.scheduledDate)) {
+  // Archive check (contract C12, task 8.06): match portalAssemble — an
+  // archivedAt-archived job serves 404 like an archived-flagged one.
+  if (!d || d.archived || d.archivedAt || typeof d.scheduledDate !== 'string' || !DATE_RE.test(d.scheduledDate)) {
     return INVALID;
   }
   const businessName = await fetchBusinessName(env, row.user_id);

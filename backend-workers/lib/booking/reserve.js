@@ -23,6 +23,7 @@ const {
   fetchActiveReservations,
   insertReservation,
   deleteReservation,
+  claimBookingSlot,
 } = require('./store.js');
 const { validateBookingPayload } = require('./validate.js');
 const { notifyOwner } = require('./notifyOwner.js');
@@ -102,24 +103,6 @@ async function reserveCore(env, { body, nowMs, randHex, manageToken }) {
   const requestId = newRequestId(nowMs, randHex);
   const reservationId = newReservationId(nowMs, randHex);
 
-  try {
-    const { conflict } = await insertReservation(env, {
-      id: reservationId,
-      user_id: row.user_id,
-      request_id: requestId,
-      slot_date: offer.date,
-      slot_start: offer.start,
-      slot_end: offer.end,
-      slot_start_utc: offer.startUtc,
-      slot_end_utc: offer.endUtc,
-      status: 'booked',
-    });
-    if (conflict) return { status: 409, body: { error: 'slot_taken' } };
-  } catch (err) {
-    console.error('[booking/reserve] reservation insert failed:', err.message);
-    return { status: 500, body: { error: 'Database error' } };
-  }
-
   const request = {
     id: requestId,
     status: 'booked',
@@ -137,6 +120,64 @@ async function reserveCore(env, { body, nowMs, randHex, manageToken }) {
     history: [{ at: new Date(nowMs).toISOString(), actor: 'customer', event: 'booked' }],
     createdAt: new Date(nowMs).toISOString(),
   };
+  const reservation = {
+    id: reservationId,
+    user_id: row.user_id,
+    request_id: requestId,
+    slot_date: offer.date,
+    slot_start: offer.start,
+    slot_end: offer.end,
+    slot_start_utc: offer.startUtc,
+    slot_end_utc: offer.endUtc,
+    status: 'booked',
+  };
+
+  // G1 atomic claim (8.04, §2.1): revalidation + dual insert in ONE server
+  // transaction. On conflict nothing is held and no request row exists — no
+  // compensation delete, no orphan hold. Response-loss model for the PUBLIC
+  // path (explicit): reserve carries no idempotency key (RN-compat
+  // constraint), so a retried POST after a committed claim is a NEW booking
+  // with its own ids; each committed call notifies exactly once, keyed to its
+  // own request id, and notify failures never fail the submission
+  // (fire-and-forget) so a notify retry cannot duplicate either.
+  try {
+    const claimed = await claimBookingSlot(env, {
+      user_id: row.user_id,
+      token,
+      slot_date: offer.date,
+      slot_start: offer.start,
+      slot_end: offer.end,
+      slot_start_utc: offer.startUtc,
+      slot_end_utc: offer.endUtc,
+      duration_minutes: schedule.defaultDurationMinutes,
+      buffer_minutes: schedule.bufferMinutes,
+      request,
+      reservation,
+    });
+    if (!claimed.unavailable) {
+      if (!claimed.out.ok) {
+        // slot_taken (conflict/stale/disabled) or slot_changed (config moved
+        // between offer and claim, §2.5). Same page remedy — refresh offers.
+        const code = claimed.out.error === 'slot_changed' ? 'slot_changed' : 'slot_taken';
+        return { status: 409, body: { error: code } };
+      }
+      await finishClaim(env, { userId: row.user_id, settingsData: row.data, request });
+      return { status: 200, body: { ok: true, manageToken, slot: request.slot } };
+    }
+    // Function not deployed yet: legacy split path below, byte-identical to
+    // the pre-8.04 behavior (dual-read compat, §10 step 3).
+  } catch (err) {
+    console.error('[booking/reserve] claim RPC failed:', err.message);
+    return { status: 500, body: { error: 'Database error' } };
+  }
+
+  try {
+    const { conflict } = await insertReservation(env, reservation);
+    if (conflict) return { status: 409, body: { error: 'slot_taken' } };
+  } catch (err) {
+    console.error('[booking/reserve] reservation insert failed:', err.message);
+    return { status: 500, body: { error: 'Database error' } };
+  }
 
   try {
     await insertBookingRequest(env, row.user_id, request);
@@ -152,13 +193,20 @@ async function reserveCore(env, { body, nowMs, randHex, manageToken }) {
     return { status: 500, body: { error: 'Database error' } };
   }
 
+  await finishClaim(env, { userId: row.user_id, settingsData: row.data, request });
+
+  return { status: 200, body: { ok: true, manageToken, slot: request.slot } };
+}
+
+// Exactly-once owner notification per committed claim, keyed to the claim's
+// own request id. Fire-and-forget by contract: a lost alert never fails the
+// customer's submission and never re-runs (no duplicate pushes).
+async function finishClaim(env, { userId, settingsData, request }) {
   try {
-    await notifyOwner(env, { userId: row.user_id, settingsData: row.data, request });
+    await notifyOwner(env, { userId, settingsData, request });
   } catch (err) {
     console.error('[booking/reserve] notify failed:', err.message);
   }
-
-  return { status: 200, body: { ok: true, manageToken, slot: request.slot } };
 }
 
 module.exports = { reserveCore };

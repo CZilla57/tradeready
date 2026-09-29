@@ -1,4 +1,5 @@
 import AppIntents
+import Darwin
 import Foundation
 import SwiftUI
 import WidgetKit
@@ -21,10 +22,28 @@ import WidgetKit
 // utils/widgetBridge.ts (WIDGET_ACTIONS_KEY).
 private let timerAppGroupId = "group.com.gettradereadyapp.tradeready"
 private let widgetActionsKey = "widgetActions"
+private let widgetActionsLockFile = ".tradeready-widget-actions.lock"
+
+private func withWidgetActionQueueLock<T>(_ body: () -> T) -> T? {
+  guard let container = FileManager.default.containerURL(
+    forSecurityApplicationGroupIdentifier: timerAppGroupId
+  ) else { return nil }
+  let descriptor = open(
+    container.appendingPathComponent(widgetActionsLockFile).path,
+    O_CREAT | O_RDWR,
+    S_IRUSR | S_IWUSR
+  )
+  guard descriptor >= 0 else { return nil }
+  defer { close(descriptor) }
+  guard flock(descriptor, LOCK_EX) == 0 else { return nil }
+  defer { flock(descriptor, LOCK_UN) }
+  return body()
+}
 
 // MARK: - Pending action queue
 
-/// Append one PendingAction dict to the shared `widgetActions` queue.
+/// Append one PendingAction dict to the shared `widgetActions` queue while
+/// holding the same advisory lock used by the native app's WAL claim.
 /// Shape (docs/widget-plan.md Phase 3-4 contract):
 /// `{ id, type, at, jobId? }` — JS drops anything missing id/type/at.
 /// A malformed/absent queue is treated as empty, exactly like the JS parser.
@@ -35,24 +54,26 @@ private let widgetActionsKey = "widgetActions"
 /// it keeps its own private siriAppendPendingAction (and its own private copy
 /// of lastPendingTimerType/parseISODate below) with identical bodies instead.
 func appendPendingAction(_ action: [String: Any]) {
-  guard let defaults = UserDefaults(suiteName: timerAppGroupId) else { return }
+  _ = withWidgetActionQueueLock {
+    guard let defaults = UserDefaults(suiteName: timerAppGroupId) else { return }
 
-  var queue: [[String: Any]] = []
-  if let raw = defaults.string(forKey: widgetActionsKey),
-     let data = raw.data(using: .utf8),
-     let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
-     let existing = parsed as? [[String: Any]] {
-    queue = existing
+    var queue: [[String: Any]] = []
+    if let raw = defaults.string(forKey: widgetActionsKey),
+       let data = raw.data(using: .utf8),
+       let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+       let existing = parsed as? [[String: Any]] {
+      queue = existing
+    }
+    queue.append(action)
+
+    guard
+      let encoded = try? JSONSerialization.data(withJSONObject: queue, options: []),
+      let json = String(data: encoded, encoding: .utf8)
+    else { return }
+
+    defaults.set(json, forKey: widgetActionsKey)
+    WidgetCenter.shared.reloadAllTimelines()
   }
-  queue.append(action)
-
-  guard
-    let encoded = try? JSONSerialization.data(withJSONObject: queue, options: []),
-    let json = String(data: encoded, encoding: .utf8)
-  else { return }
-
-  defaults.set(json, forKey: widgetActionsKey)
-  WidgetCenter.shared.reloadAllTimelines()
 }
 
 /// The type of the most recent queued timer action, or nil when none is
