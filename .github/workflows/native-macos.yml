@@ -84,14 +84,28 @@ jobs:
       - name: Swift host runners
         run: |
           failed=""
+          mkdir -p "$RUNNER_TEMP/runner-logs"
           for r in native/run-*-tests.sh; do
             case "$r" in native/run-all-domain-tests.sh) continue ;; esac
-            echo "::group::$r"
-            if sh "$r"; then echo "PASS $r"; else failed="$failed $r"; echo "FAIL $r"; fi
-            echo "::endgroup::"
+            log="$RUNNER_TEMP/runner-logs/$(basename "$r").log"
+            if sh "$r" >"$log" 2>&1; then
+              echo "PASS $r"
+            else
+              echo "FAIL $r"
+              failed="$failed $r"
+            fi
           done
           if [ -n "$failed" ]; then
-            for f in $failed; do echo "::error::runner failed: $f"; done
+            # A compact digest per failing runner: the assertion/error lines, then the tail.
+            for f in $failed; do
+              log="$RUNNER_TEMP/runner-logs/$(basename "$f").log"
+              echo "::error::runner failed: $f"
+              echo "::group::digest: $f"
+              grep -n -E "FAIL|FAILED|error:|Fatal error|Assertion|assert|Expected|expected|not ok" "$log" | grep -v "warning:" | head -60
+              echo "--- last 40 lines ---"
+              tail -n 40 "$log"
+              echo "::endgroup::"
+            done
             exit 1
           fi
 
