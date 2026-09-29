@@ -1182,7 +1182,13 @@ struct ErrorRedactionTests {
         expect(info.contains("<key>TradeReadySentryDSN</key><string>$(TRADEREADY_SENTRY_DSN)</string>"),
                "no DSN: Info.plist reads the build setting only")
         expect(!info.contains("sentry.io"), "no DSN: Info.plist holds no DSN")
-        expect(pbx.contains("https://staging.invalid"), "staging stays https://staging.invalid")
+        // R59 (2026-09-29): there is no staging. Release is the production
+        // configuration; Debug stays development and can never write.
+        expect(!pbx.contains("https://staging.invalid"), "no staging placeholder remains in the project")
+        expectEqual(pbx.components(separatedBy: "TRADEREADY_ENVIRONMENT = production;").count - 1, 1, "R59: exactly one production configuration (Release)")
+        expectEqual(pbx.components(separatedBy: "TRADEREADY_ALLOW_PRODUCTION_WRITES = YES;").count - 1, 1, "R59: only Release enables production writes")
+        expect(pbx.contains("TRADEREADY_BACKEND_URL = \"https://tradeready-backend.tradeready.workers.dev\";"), "R59: Release targets the production Worker")
+        expect(pbx.contains("TRADEREADY_ENVIRONMENT = development;") && pbx.contains("TRADEREADY_BACKEND_URL = \"http://127.0.0.1:8787\";"), "R59: Debug stays development against localhost")
 
         let script = read(root, "native/scripts/upload-sentry-dsyms.sh")
         expect(script.contains("tradeready-3r") && script.contains("tradeready-ios"), "dSYM: org and native project slug")

@@ -589,7 +589,7 @@
    "testSources": [
     {
      "path": "native/ErrorRedactionTests",
-     "sha256": "87f3d6d183de5874f7b50b168e3a2eaadd32a1d2f615d154846fdfdbef3f550f"
+     "sha256": "c63cf2a8fac5ec7c10df28415c4fa887c462830e5c61619df4a30c7975891a33"
     }
    ],
    "fixtures": []
@@ -2333,6 +2333,14 @@
    "path": "__tests__/motion.test.js",
    "sha256": "552bb92cf5ec92d2d2fd7d6de0b71039b1f8eb09096a543efeedd75b0e423ed1"
   },
+  "nativeRunGuard": {
+   "path": "__tests__/nativeRunGuard.test.ts",
+   "sha256": "08ab147ad9840b1b695a279d7e62e41ccd515bf0cfa9d0fd9fa044d818d99022"
+  },
+  "nativeRunRuntime": {
+   "path": "__tests__/nativeRunRuntime.test.ts",
+   "sha256": "1a86cad580919929ad67044b8aec117f93b82cff8dbadd50b9d64bcb13046c71"
+  },
   "notifications": {
    "path": "__tests__/notifications.test.js",
    "sha256": "a7b83860ef87997e611a91d9e247627ad92811df44fcc25a784f6645e784705c"
@@ -2695,7 +2703,7 @@
   },
   "widgetActions": {
    "path": "__tests__/widgetActions.test.js",
-   "sha256": "85e7f731b8a355a537d3c097dd00b7b9360ae083eabdd534873df96714f16ca7"
+   "sha256": "fea4329ebd57c8815646f677821e31078965ea1479e09b09b025875d7275b247"
   },
   "widgetBridge": {
    "path": "__tests__/widgetBridge.test.js",

@@ -51,7 +51,7 @@ confirmation are needed here (see §7 below for the waiver's read-only condition
 
 ## 2. VER-1 — version numbering (partly decided 2026-09-29; live version unconfirmed)
 
-**Update 2026-09-29:** the owner set the native release version N to 2.0. `MARKETING_VERSION` is now `2.0.0` on both targets (decision-log row 10), matching the proposed scheme below. `CURRENT_PROJECT_VERSION` stays `1` in the project; every upload's build number is set by the archive command (playbook §3.1) above every earlier upload. Still open: the owner confirms the live version L in App Store Connect. R must be 2.0.1 or higher, and N2 above R; a native hotfix must stay below R, so pick R with headroom (for example 2.1.0).
+**Update 2026-09-29:** the owner confirmed the live version L is 1.2.1 (decision-log row 13), so VER-1 is cleared. The owner set the native release version N to 2.0. `MARKETING_VERSION` is now `2.0.0` on both targets (decision-log row 10), matching the proposed scheme below. `CURRENT_PROJECT_VERSION` stays `1` in the project; every upload's build number is set by the archive command (playbook §3.1) above every earlier upload. Still open: the owner confirms the live version L in App Store Connect. R must be 2.0.1 or higher, and N2 above R; a native hotfix must stay below R, so pick R with headroom (for example 2.1.0).
 
 - Native `MARKETING_VERSION` = `1.0`, `CURRENT_PROJECT_VERSION` = `1` — every build
   configuration of the `TradeReadyNative` target
@@ -83,6 +83,11 @@ targets (kept equal, per the current pattern) — not done by this task (R8).
 ## 3. Step 1 — production configuration parity
 
 ### 3.1 What the build configurations actually are
+
+**Update 2026-09-29 (R59, decision-log row 14): the owner decided there will be no staging build; Release is the production configuration.** The Release block in `project.pbxproj` now sets `TRADEREADY_ENVIRONMENT = production`, `TRADEREADY_BACKEND_URL` to the production Worker origin, and `TRADEREADY_ALLOW_PRODUCTION_WRITES = YES`. Debug is unchanged (development, localhost, writes off). The paragraphs below describe the state before this change. `ErrorRedactionTests` now pins the new arrangement.
+
+Production configuration decision: Release is the production configuration with the production Worker and Supabase and production writes enabled; no staging build exists ruled: R59
+
 
 The project has **two** build configurations for the `TradeReadyNative` app target, not
 three: Debug (`project.pbxproj:376-413`) is wired to `TRADEREADY_ENVIRONMENT =
