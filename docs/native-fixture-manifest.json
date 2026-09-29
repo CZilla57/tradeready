@@ -589,7 +589,7 @@
    "testSources": [
     {
      "path": "native/ErrorRedactionTests",
-     "sha256": "c63cf2a8fac5ec7c10df28415c4fa887c462830e5c61619df4a30c7975891a33"
+     "sha256": "3e3fc4091390b58e2135c3fb7db50dae0731e8ce585f256d5b4ef621100d57e5"
     }
    ],
    "fixtures": []
