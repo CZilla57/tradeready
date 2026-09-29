@@ -48,34 +48,20 @@ expect_status 2 "A second physical iPhone is required" \
   --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
   --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
 
-expect_status 2 "Configure the trusted HTTPS staging backend" \
+expect_status 2 "Configure the production HTTPS backend" \
   --device-list "$FIXTURES/two-iphones.json" \
   --build-settings "$FIXTURES/invalid-backend-build-settings.txt" \
   --worker-config "$FIXTURES/ready-worker.toml" \
   --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
   --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
 
-expect_status 2 "Provision a distinct, non-placeholder Supabase project" \
-  --device-list "$FIXTURES/two-iphones.json" \
-  --build-settings "$FIXTURES/ready-build-settings.txt" \
-  --worker-config "$FIXTURES/placeholder-worker.toml" \
-  --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
-  --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
-
-expect_status 2 "Release Supabase URL or publishable key still matches production" \
-  --device-list "$FIXTURES/two-iphones.json" \
-  --build-settings "$FIXTURES/production-supabase-build-settings.txt" \
-  --worker-config "$FIXTURES/placeholder-worker.toml" \
-  --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
-  --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
-
-expect_status 2 "Record the trusted-staging database-clock SQL verification output" \
+expect_status 2 "Record the production database-clock SQL verification output" \
   --device-list "$FIXTURES/two-iphones.json" \
   --build-settings "$FIXTURES/ready-build-settings.txt" \
   --worker-config "$FIXTURES/ready-worker.toml" \
   --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
 
-expect_status 1 "Release Supabase does not match" \
+expect_status 1 "Release Supabase project and key must match the production guard" \
   --device-list "$FIXTURES/two-iphones.json" \
   --build-settings "$FIXTURES/mismatched-supabase-build-settings.txt" \
   --worker-config "$FIXTURES/ready-worker.toml" \
@@ -96,11 +82,21 @@ expect_status 1 "Release production publishable-key guard must match" \
   --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
   --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
 
-expect_status 1 "Release Supabase URL and publishable key must not match production" \
+expect_status 1 "Release must use the production configuration" \
   --device-list "$FIXTURES/two-iphones.json" \
-  --build-settings "$FIXTURES/production-supabase-build-settings.txt" \
+  --build-settings "$FIXTURES/staging-environment-build-settings.txt" \
   --worker-config "$FIXTURES/ready-worker.toml" \
   --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
   --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
+
+expect_status 1 "Release must enable production writes under R59" \
+  --device-list "$FIXTURES/two-iphones.json" \
+  --build-settings "$FIXTURES/staging-environment-build-settings.txt" \
+  --worker-config "$FIXTURES/ready-worker.toml" \
+  --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
+  --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
+
+# shellcheck disable=SC2046
+expect_status 0 "NOTE: R59 (no staging): Release writes to the production backend" $(ready_args)
 
 echo "Phase 4 device preflight tests passed."

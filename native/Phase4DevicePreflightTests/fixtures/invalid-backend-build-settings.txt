@@ -1,7 +1,7 @@
-    TRADEREADY_ALLOW_PRODUCTION_WRITES = NO
+    TRADEREADY_ALLOW_PRODUCTION_WRITES = YES
     TRADEREADY_BACKEND_URL = https://staging.invalid
-    TRADEREADY_ENVIRONMENT = staging
+    TRADEREADY_ENVIRONMENT = production
     TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF
     TRADEREADY_PRODUCTION_SUPABASE_URL = https://production.supabase.co
-    TRADEREADY_SUPABASE_PUBLISHABLE_KEY = sb_publishable_staging_fixture
-    TRADEREADY_SUPABASE_URL = https://isolated-staging.supabase.co
+    TRADEREADY_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF
+    TRADEREADY_SUPABASE_URL = https://production.supabase.co

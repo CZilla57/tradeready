@@ -127,15 +127,16 @@ if [ "$build_settings_available" -eq 1 ]; then
   revenuecat_key=$(configured_value TRADEREADY_REVENUECAT_API_KEY)
   revenuecat_entitlement=$(configured_value TRADEREADY_REVENUECAT_ENTITLEMENT_ID)
 
-  if [ "$environment" = staging ]; then
-    pass "Release is isolated to the staging environment."
+  printf 'NOTE: R59 (no staging): Release writes to the production backend. Use disposable accounts for every device row.\n'
+  if [ "$environment" = production ]; then
+    pass "Release is the production configuration (R59: no staging environment exists)."
   else
-    fail "Release must use the staging environment while Phase 3 is under verification."
+    fail "Release must use the production configuration (R59: no staging environment exists)."
   fi
 
   case "$backend_url" in
     https://staging.invalid|*://*.invalid|*://localhost*|*://127.0.0.1*)
-      block "Configure the trusted HTTPS staging backend before exercising account deletion."
+      block "Configure the production HTTPS backend before exercising account deletion."
       ;;
     https://*)
       pass "Release has a non-placeholder HTTPS backend."
@@ -145,10 +146,10 @@ if [ "$build_settings_available" -eq 1 ]; then
       ;;
   esac
 
-  if [ "$production_writes" = NO ]; then
-    pass "Production writes remain disabled in the staging build."
+  if [ "$production_writes" = YES ]; then
+    pass "Release enables production writes (R59)."
   else
-    fail "Production writes must remain disabled during staging verification."
+    fail "Release must enable production writes under R59."
   fi
 
   if [ "$bundle_id" = com.gettradereadyapp.tradeready ]; then

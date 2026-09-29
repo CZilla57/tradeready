@@ -13,6 +13,15 @@ contracts remain in:
 No host test, simulator, generic-iPhone build, or modeled client may mark a row
 below `Pass`.
 
+> **R59 update (2026-09-29):** no staging environment will exist, and the checked-in
+> Release build is the production configuration. Run these rows against production
+> with disposable accounts only. `native/run-phase-4-device-preflight.sh` now
+> requires the production configuration, requires the Release Supabase project and
+> key to match the production guard, and expects the SQL verification output to be
+> recorded against the production database. It no longer checks Worker staging
+> isolation. Rows that name an isolated or staging environment still read as
+> written; the owner must amend or waive each in the charter decision log.
+
 ## Latest preflight checkpoint
 
 On 2026-09-13, the privacy-safe live preflight recognized one available physical

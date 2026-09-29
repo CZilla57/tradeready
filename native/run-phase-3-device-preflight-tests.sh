@@ -37,9 +37,22 @@ expect_status 2 "Connect and trust a physical iPhone" \
   --device-list "$FIXTURES/no-iphone.json" \
   --build-settings "$FIXTURES/ready-build-settings.txt"
 
-expect_status 2 "Configure the trusted HTTPS staging backend" \
+expect_status 2 "Configure the production HTTPS backend" \
   --device-list "$FIXTURES/ready-device.json" \
   --build-settings "$FIXTURES/invalid-backend-build-settings.txt"
+
+expect_status 0 "NOTE: R59 (no staging): Release writes to the production backend" \
+  --device-list "$FIXTURES/ready-device.json" \
+  --build-settings "$FIXTURES/ready-build-settings.txt"
+
+# A build still configured as staging (writes off) is no longer the R59 Release.
+expect_status 1 "Release must use the production configuration" \
+  --device-list "$FIXTURES/ready-device.json" \
+  --build-settings "$FIXTURES/staging-environment-build-settings.txt"
+
+expect_status 1 "Release must enable production writes under R59" \
+  --device-list "$FIXTURES/ready-device.json" \
+  --build-settings "$FIXTURES/staging-environment-build-settings.txt"
 
 echo "Phase 3 device preflight tests passed."
 

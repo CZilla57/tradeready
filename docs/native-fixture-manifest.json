@@ -1171,22 +1171,22 @@
   },
   "phase-3-device-preflight": {
    "script": "native/run-phase-3-device-preflight-tests.sh",
-   "scriptSha256": "39061567ddb894d31e69ff54a6355502f5a9662155ad631a5f34729a4fd38594",
+   "scriptSha256": "9b29293781f5ffe32e24e65099979f712645ee4430881e461f6215820cf8b941",
    "testSources": [
     {
      "path": "native/Phase3DevicePreflightTests",
-     "sha256": "d514a1751572fb8f32c100a6bbbbac348e0a65319c863e10f037b6c245a63c74"
+     "sha256": "506e6252adfc017efc8d4b263edc8d82afa081b0f71b42674355816c713598fe"
     }
    ],
    "fixtures": []
   },
   "phase-4-device-preflight": {
    "script": "native/run-phase-4-device-preflight-tests.sh",
-   "scriptSha256": "5ef73798858928a500fe60e6e91b3e1197ab9a4f4d9752932f1aa9567824fb7c",
+   "scriptSha256": "44e8242e998550fe4ae3f51f8a98794b59ec914eb27e29ee9cc64957bec8982e",
    "testSources": [
     {
      "path": "native/Phase4DevicePreflightTests",
-     "sha256": "70e16dcbc89f4db9ffe88759518cabbaacbf2a1d2ffad9bf875d3128ba62e187"
+     "sha256": "45067f933ad8e88bc9445d95c2168f9b2062daa80ca455188bcdb0d5babfdda5"
     }
    ],
    "fixtures": []
