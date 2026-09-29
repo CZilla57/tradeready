@@ -1,0 +1,7 @@
+{
+  "expo": {
+    "extra": {
+      "backendUrl": "https://fixture-prod-backend.example.test"
+    }
+  }
+}

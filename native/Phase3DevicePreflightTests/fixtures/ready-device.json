@@ -1,0 +1,10 @@
+[
+  {
+    "ignored" : false,
+    "simulator" : false,
+    "platform" : "com.apple.platform.iphoneos",
+    "available" : true,
+    "name" : "Fixture iPhone"
+  }
+]
+

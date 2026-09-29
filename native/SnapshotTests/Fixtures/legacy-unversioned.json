@@ -1,0 +1,15 @@
+{
+  "invoices": [],
+  "jobs": [],
+  "customers": [],
+  "settings": null,
+  "expenses": [],
+  "customerNotes": {"customer-a": "Call before arrival"},
+  "recurringJobs": [],
+  "recurringInvoices": [],
+  "trips": [],
+  "pricebook": [],
+  "bookingRequests": [],
+  "jobPhotos": [],
+  "legacyExtension": {"enabled": true}
+}

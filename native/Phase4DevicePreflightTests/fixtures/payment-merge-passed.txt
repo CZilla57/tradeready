@@ -1,0 +1,2 @@
+NOTICE: CHECK 8 ok: an object-shaped payments push preserved the ledger
+NOTICE: ALL CHECKS PASSED

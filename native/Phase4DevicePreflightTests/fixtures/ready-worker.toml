@@ -1,0 +1,19 @@
+[vars]
+SUPABASE_URL = "https://production.supabase.co"
+
+[env.staging]
+name = "tradeready-backend-staging"
+
+[env.staging.triggers]
+crons = []
+
+[env.staging.vars]
+SUPABASE_URL = "https://isolated-staging.supabase.co"
+
+[[env.staging.r2_buckets]]
+binding = "INVOICE_PDFS"
+bucket_name = "tradeready-invoice-pdfs-staging"
+
+[[env.staging.r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "tradeready-photos-staging"
