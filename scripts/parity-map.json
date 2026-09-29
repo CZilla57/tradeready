@@ -1,0 +1,907 @@
+{
+ "Auth": {
+  "phase": 3,
+  "runners": [
+   "supabase-auth",
+   "authenticated-identity",
+   "phase-3-device-preflight"
+  ],
+  "oracles": [
+   "authErrors",
+   "socialAuth",
+   "socialAuthCryptoUnavailable",
+   "socialAuthUnavailable",
+   "AuthScreen"
+  ]
+ },
+ "Onboarding": {
+  "phase": 3,
+  "runners": [
+   "typed-account-state"
+  ],
+  "oracles": [
+   "onboardingFlow",
+   "OnboardingScreen"
+  ]
+ },
+ "Paywall": {
+  "phase": 3,
+  "runners": [
+   "subscription"
+  ],
+  "oracles": [
+   "paywallCopy",
+   "subscriptionPlan",
+   "configurePurchases",
+   "manageSubscriptions"
+  ]
+ },
+ "Starting point": {
+  "phase": 3,
+  "runners": [
+   "typed-account-state"
+  ],
+  "oracles": [
+   "sampleData",
+   "sampleMigration"
+  ]
+ },
+ "Root gate": {
+  "phase": 3,
+  "runners": [
+   "initial-sync",
+   "authenticated-identity"
+  ],
+  "oracles": [
+   "rootGate"
+  ]
+ },
+ "Account lifecycle": {
+  "phase": 3,
+  "runners": [
+   "account-deletion"
+  ],
+  "oracles": [
+   "settingsAccountScreen",
+   "settingsScrub"
+  ]
+ },
+ "Today": {
+  "phase": 10,
+  "runners": [
+   "today-briefing"
+  ],
+  "oracles": [
+   "TodayScreenSettingsGear",
+   "useRefresh"
+  ]
+ },
+ "Calendar": {
+  "phase": 8,
+  "runners": [
+   "calendar",
+   "calendar-editor",
+   "availability",
+   "schedule"
+  ],
+  "oracles": [
+   "calendar",
+   "calendarScreen",
+   "availability",
+   "availabilityParity",
+   "scheduleConfig",
+   "scheduleSmarts"
+  ]
+ },
+ "Route": {
+  "phase": 8,
+  "runners": [
+   "route-planning"
+  ],
+  "oracles": [
+   "routeDispatcherGuard"
+  ]
+ },
+ "Global search": {
+  "phase": 5,
+  "runners": [
+   "global-search"
+  ],
+  "oracles": [
+   "globalSearch",
+   "crossTabNavigation"
+  ]
+ },
+ "Setup checklist": {
+  "phase": 10,
+  "runners": [
+   "setup-checklist"
+  ],
+  "oracles": [
+   "setupChecklist"
+  ]
+ },
+ "Proactive insights": {
+  "phase": 10,
+  "runners": [
+   "today-insights",
+   "insight-mute",
+   "business-snapshot",
+   "phase10-qualification"
+  ],
+  "oracles": [
+   "todayInsights",
+   "insightMutes",
+   "businessSnapshot",
+   "phase10QualificationOracle"
+  ]
+ },
+ "Jobs list": {
+  "phase": 6,
+  "runners": [
+   "job-list"
+  ],
+  "oracles": [
+   "jobsQuotesFilter",
+   "jobStatus",
+   "jobStatusDisplay",
+   "archive"
+  ]
+ },
+ "Job detail": {
+  "phase": 6,
+  "runners": [
+   "job-list",
+   "store-integration"
+  ],
+  "oracles": [
+   "jobStatus",
+   "jobStatusDisplay",
+   "deleteConfirm"
+  ]
+ },
+ "Add/edit/duplicate job": {
+  "phase": 6,
+  "runners": [
+   "store-integration",
+   "canonical"
+  ],
+  "oracles": [
+   "duplicateJob"
+  ]
+ },
+ "Pricing calculator": {
+  "phase": 6,
+  "runners": [
+   "domain"
+  ],
+  "oracles": [
+   "pricingEngine",
+   "pricingEngineDirectCosts",
+   "decimalInputs"
+  ]
+ },
+ "Send estimate": {
+  "phase": 6,
+  "runners": [
+   "estimate-delivery",
+   "estimate-pdf",
+   "estimate-message-draft",
+   "estimate-approval-link"
+  ],
+  "oracles": [
+   "estimateApprovals",
+   "estimateCreateLink",
+   "estimateDocument",
+   "estimateSnapshot",
+   "estimateRespond",
+   "estimateDispatcherPortal"
+  ]
+ },
+ "Estimate follow-up": {
+  "phase": 6,
+  "runners": [
+   "estimate-follow-up",
+   "estimate-follow-up-notification"
+  ],
+  "oracles": [
+   "estimateFollowUps"
+  ]
+ },
+ "Change orders": {
+  "phase": 6,
+  "runners": [
+   "change-order",
+   "change-order-approval-link"
+  ],
+  "oracles": [
+   "changeOrderMath",
+   "changeOrderParity",
+   "changeOrders",
+   "changeOrderLink",
+   "changeRespond",
+   "changeView"
+  ]
+ },
+ "Create invoice from job": {
+  "phase": 6,
+  "runners": [
+   "invoice-from-job"
+  ],
+  "oracles": [
+   "autoInvoice",
+   "directCostRendering"
+  ]
+ },
+ "Recurring jobs": {
+  "phase": 6,
+  "runners": [
+   "recurring-job"
+  ],
+  "oracles": [
+   "recurringJobs",
+   "recurrence"
+  ]
+ },
+ "Time tracking": {
+  "phase": 6,
+  "runners": [
+   "time-tracking",
+   "job-timer-widget"
+  ],
+  "oracles": [
+   "timeTracking",
+   "timeAndTrip"
+  ]
+ },
+ "Job profitability": {
+  "phase": 6,
+  "runners": [
+   "job-profitability"
+  ],
+  "oracles": [
+   "jobProfitability",
+   "jobProfitabilityDirectCosts",
+   "profitabilityDisplay",
+   "profitabilityAggregate"
+  ]
+ },
+ "Job photos": {
+  "phase": 6,
+  "runners": [
+   "job-photo-transfer",
+   "job-photo-mutation"
+  ],
+  "oracles": [
+   "jobPhotosStorage",
+   "jobPhotoVisibilityToggle",
+   "photoStorage",
+   "photoSync",
+   "photoUpload",
+   "photoSignWorkers"
+  ]
+ },
+ "Appointment messages": {
+  "phase": 6,
+  "runners": [
+   "appointment-messaging",
+   "appointment-notification"
+  ],
+  "oracles": [
+   "appointmentMessages",
+   "appointmentSend"
+  ]
+ },
+ "Review request action": {
+  "phase": 6,
+  "runners": [
+   "review-request"
+  ],
+  "oracles": [
+   "reviewRequest",
+   "ReviewRequestScreen"
+  ]
+ },
+ "Invoice list": {
+  "phase": 7,
+  "runners": [
+   "invoice-list"
+  ],
+  "oracles": [
+   "invoiceStats",
+   "invoiceHelpers",
+   "invoiceAging"
+  ]
+ },
+ "Invoice detail": {
+  "phase": 7,
+  "runners": [
+   "invoice-editing"
+  ],
+  "oracles": [
+   "invoiceHelpers",
+   "PaymentHistoryList"
+  ]
+ },
+ "Add/edit invoice": {
+  "phase": 7,
+  "runners": [
+   "invoice-editing"
+  ],
+  "oracles": [
+   "invoiceNumber",
+   "decimalInputs"
+  ]
+ },
+ "Payment ledger": {
+  "phase": 7,
+  "runners": [
+   "invoice-editing"
+  ],
+  "oracles": [
+   "invoicePayments",
+   "invoicePaymentsLegacyEquivalence",
+   "paymentMathParity",
+   "RecordPaymentSheet"
+  ]
+ },
+ "Outreach": {
+  "phase": 7,
+  "runners": [
+   "outreach",
+   "bulk-invoice",
+   "invoice-delivery"
+  ],
+  "oracles": [
+   "bulkInvoiceActions",
+   "invoiceEmailHardening",
+   "reminderEmailHardening",
+   "reminderLogic",
+   "selectInvoicesToRemind",
+   "jobDunningParity"
+  ]
+ },
+ "PDF generation": {
+  "phase": 7,
+  "runners": [
+   "invoice-pdf"
+  ],
+  "oracles": [
+   "pdfTemplates",
+   "pdfBizHeader",
+   "invoicePdfAttach",
+   "invoicePdfFile",
+   "invoicePdfIssueDate",
+   "invoicePdfUpload",
+   "emailHtml"
+  ]
+ },
+ "Stripe payment links": {
+  "phase": 7,
+  "runners": [
+   "stripe-connect",
+   "payment-link"
+  ],
+  "oracles": [
+   "paymentLink",
+   "portalLink"
+  ]
+ },
+ "Recurring invoices": {
+  "phase": 7,
+  "runners": [
+   "recurring-invoice"
+  ],
+  "oracles": [
+   "recurringInvoices",
+   "recurringInvoicesStorage",
+   "recurringAutoSend"
+  ]
+ },
+ "Auto invoice": {
+  "phase": 7,
+  "runners": [
+   "invoice-from-job"
+  ],
+  "oracles": [
+   "autoInvoice",
+   "autoEmailPlausibilityParity",
+   "selectInvoicesToAutoEmail",
+   "uploadAutoInvoicePdf"
+  ]
+ },
+ "Customer list": {
+  "phase": 5,
+  "runners": [
+   "customer-identity"
+  ],
+  "oracles": [
+   "customerList",
+   "customerIdentity",
+   "duplicateCustomers"
+  ]
+ },
+ "Customer detail": {
+  "phase": 5,
+  "runners": [
+   "customer-identity",
+   "customer-contact-action"
+  ],
+  "oracles": [
+   "customerIdentity",
+   "invoiceContactBackfill",
+   "portalLinkCustomerDetail"
+  ]
+ },
+ "Add/edit customer": {
+  "phase": 5,
+  "runners": [
+   "customer-identity",
+   "address-lookup"
+  ],
+  "oracles": [
+   "customerIdentity",
+   "regionFromAddress"
+  ]
+ },
+ "Customer merge": {
+  "phase": 5,
+  "runners": [
+   "customer-identity",
+   "record-deletion"
+  ],
+  "oracles": [
+   "customerMerge",
+   "UndoContext",
+   "deleteConfirm"
+  ]
+ },
+ "Customer portal": {
+  "phase": 8,
+  "runners": [
+   "portal-administration"
+  ],
+  "oracles": [
+   "phase8PortalAdmin86",
+   "phase8PortalConcurrencyCharacterization",
+   "portalTokensWorkers",
+   "portalStoreWorkers"
+  ]
+ },
+ "Portal content": {
+  "phase": 8,
+  "runners": [],
+  "oracles": [
+   "portalAssembleWorkers",
+   "portalIcsWorkers",
+   "portalView",
+   "portalStore"
+  ]
+ },
+ "Portal requests": {
+  "phase": 8,
+  "runners": [
+   "booking-intake",
+   "booking-attention"
+  ],
+  "oracles": [
+   "portalRequestWorkers",
+   "bookingAttention"
+  ]
+ },
+ "Money overview": {
+  "phase": 9,
+  "runners": [
+   "money-report",
+   "money-card"
+  ],
+  "oracles": [
+   "moneyUtils",
+   "invoiceStats",
+   "revenueByType",
+   "revenueForecast",
+   "seasonalTrends",
+   "expenseTrends",
+   "customerMix",
+   "avgJobValue",
+   "conversionFunnel"
+  ]
+ },
+ "Expenses": {
+  "phase": 9,
+  "runners": [
+   "expense-editor"
+  ],
+  "oracles": [
+   "AddExpenseModal",
+   "expenseTrends"
+  ]
+ },
+ "Mileage log/add trip": {
+  "phase": 9,
+  "runners": [
+   "mileage-log",
+   "mileage"
+  ],
+  "oracles": [
+   "mileageUtils",
+   "timeAndTrip"
+  ]
+ },
+ "Pricebook": {
+  "phase": 9,
+  "runners": [
+   "pricebook",
+   "pricebook-ui",
+   "pricebook-ai"
+  ],
+  "oracles": [
+   "pricebook-storage",
+   "oneShotAI"
+  ]
+ },
+ "Tax set-aside": {
+  "phase": 9,
+  "runners": [
+   "money-card",
+   "tax-settings"
+  ],
+  "oracles": [
+   "taxEstimate",
+   "TaxSetAsideCard",
+   "TaxSettingsModal"
+  ]
+ },
+ "CSV import": {
+  "phase": 9,
+  "runners": [
+   "csv-import",
+   "import-engine",
+   "import-mapping",
+   "import-history"
+  ],
+  "oracles": [
+   "csvImport",
+   "importEngine",
+   "importEngine.expenses",
+   "importEngine.invoices",
+   "importEngine.jobs",
+   "importMapping",
+   "importHistory"
+  ]
+ },
+ "CSV export": {
+  "phase": 9,
+  "runners": [
+   "csv-export"
+  ],
+  "oracles": [
+   "csvExport"
+  ]
+ },
+ "Accountant package": {
+  "phase": 9,
+  "runners": [
+   "accounting-package",
+   "zip-archive"
+  ],
+  "oracles": [
+   "accountingPackage.assemble",
+   "accountingPackage.builders",
+   "accountingPackage.readme",
+   "accountingPackage.summary",
+   "accountingPackage.warnings",
+   "zipStore"
+  ]
+ },
+ "Receipt OCR": {
+  "phase": 9,
+  "runners": [
+   "receipt-ocr"
+  ],
+  "oracles": [
+   "receiptOCR"
+  ]
+ },
+ "AI coach": {
+  "phase": 10,
+  "runners": [
+   "coach-transport",
+   "coach-prompt"
+  ],
+  "oracles": [
+   "anthropicMessage",
+   "aiUsageCap",
+   "oneShotAI"
+  ]
+ },
+ "Quick prompts": {
+  "phase": 10,
+  "runners": [
+   "coach-prompt"
+  ],
+  "oracles": [
+   "chatMarkdown"
+  ]
+ },
+ "Insight handoff": {
+  "phase": 10,
+  "runners": [
+   "today-insights"
+  ],
+  "oracles": [
+   "todayInsights"
+  ]
+ },
+ "Settings hub": {
+  "phase": null,
+  "runners": [],
+  "oracles": [
+   "settingsHubScreen"
+  ]
+ },
+ "Business profile": {
+  "phase": null,
+  "runners": [],
+  "oracles": [
+   "settingsBusinessScreen",
+   "logoLifecycle",
+   "logoPicker"
+  ]
+ },
+ "Schedule": {
+  "phase": 8,
+  "runners": [
+   "schedule-booking-settings"
+  ],
+  "oracles": [
+   "settingsScheduleScreen",
+   "scheduleConfig"
+  ]
+ },
+ "Pricing defaults": {
+  "phase": 7,
+  "runners": [],
+  "oracles": [
+   "settingsPricingScreen"
+  ]
+ },
+ "Invoice numbering": {
+  "phase": 7,
+  "runners": [
+   "invoice-editing"
+  ],
+  "oracles": [
+   "invoiceNumber"
+  ]
+ },
+ "Import data": {
+  "phase": 9,
+  "runners": [
+   "csv-import"
+  ],
+  "oracles": [
+   "csvImport"
+  ]
+ },
+ "Payments": {
+  "phase": 7,
+  "runners": [
+   "stripe-connect"
+  ],
+  "oracles": [
+   "settingsPaymentsScreen"
+  ]
+ },
+ "Booking link": {
+  "phase": 8,
+  "runners": [
+   "booking-administration"
+  ],
+  "oracles": [
+   "bookingLinkSettings",
+   "bookingLink",
+   "bookingMint",
+   "phase8BookingAdmin85",
+   "phase8BookingAdminContract"
+  ]
+ },
+ "Appearance": {
+  "phase": null,
+  "runners": [],
+  "oracles": [
+   "settingsAppearanceScreen",
+   "fontScaleRestart"
+  ]
+ },
+ "AI Assistant": {
+  "phase": 10,
+  "runners": [
+   "ai-provider-key"
+  ],
+  "oracles": [
+   "oneShotAI",
+   "aiUsageCap"
+  ]
+ },
+ "Review requests": {
+  "phase": 6,
+  "runners": [
+   "review-request"
+  ],
+  "oracles": [
+   "reviewRequest",
+   "ReviewRequestScreen"
+  ]
+ },
+ "Subscription": {
+  "phase": 3,
+  "runners": [
+   "subscription"
+  ],
+  "oracles": [
+   "settingsSubscriptionScreen",
+   "subscriptionPlan"
+  ]
+ },
+ "Account": {
+  "phase": 3,
+  "runners": [
+   "account-deletion"
+  ],
+  "oracles": [
+   "settingsAccountScreen"
+  ]
+ },
+ "Local persistence": {
+  "phase": 2,
+  "runners": [
+   "repository",
+   "canonical",
+   "save-rollback"
+  ],
+  "oracles": [
+   "storage",
+   "secureStoreAdapter"
+  ]
+ },
+ "AsyncStorage upgrade": {
+  "phase": 2,
+  "runners": [
+   "legacy-import",
+   "legacy-migration-retention",
+   "legacy-reimport",
+   "migration-coordinator"
+  ],
+  "oracles": [
+   "sampleMigration"
+  ]
+ },
+ "Supabase sync": {
+  "phase": 4,
+  "runners": [
+   "mutation-queue",
+   "sync-coordinator",
+   "delta-sync",
+   "two-device-convergence",
+   "sync-backfill",
+   "initial-sync"
+  ],
+  "oracles": [
+   "sync",
+   "syncMerge",
+   "SyncBanner",
+   "useSyncStatus"
+  ]
+ },
+ "Background refresh": {
+  "phase": 4,
+  "runners": [
+   "background-refresh"
+  ],
+  "oracles": [
+   "backgroundRefresh"
+  ]
+ },
+ "Deep links": {
+  "phase": 11,
+  "runners": [
+   "deep-link-routing",
+   "app-group-pending-open-url"
+  ],
+  "oracles": [
+   "deepLinks"
+  ]
+ },
+ "WidgetKit": {
+  "phase": 11,
+  "runners": [
+   "next-job-widget",
+   "job-timer-widget",
+   "widget-owner-gating"
+  ],
+  "oracles": [
+   "widgetBridge"
+  ]
+ },
+ "App Intents/Siri": {
+  "phase": 11,
+  "runners": [
+   "app-intent-queue",
+   "widget-action-replay"
+  ],
+  "oracles": [
+   "widgetActions"
+  ]
+ },
+ "Analytics": {
+  "phase": 11,
+  "runners": [
+   "analytics-event",
+   "analytics-transport"
+  ],
+  "oracles": [
+   "analytics"
+  ]
+ },
+ "Crash reporting": {
+  "phase": 11,
+  "runners": [
+   "error-redaction"
+  ],
+  "oracles": []
+ },
+ "Accessibility": {
+  "phase": 11,
+  "runners": [
+   "accessibility-audit",
+   "layout-metrics"
+  ],
+  "oracles": [
+   "layout",
+   "motion"
+  ]
+ },
+ "Privacy manifests": {
+  "phase": 11,
+  "runners": [],
+  "oracles": []
+ },
+ "Release migration": {
+  "phase": 12,
+  "runners": [
+   "phase-12-stage-preflight",
+   "rollback-readiness"
+  ],
+  "oracles": []
+ },
+ "Platform and operations/Notifications": {
+  "phase": 10,
+  "runners": [
+   "notification-coordinator"
+  ],
+  "oracles": [
+   "notifications"
+  ]
+ },
+ "Settings/Notifications": {
+  "phase": 10,
+  "runners": [
+   "notification-coordinator",
+   "notification-permission"
+  ],
+  "oracles": [
+   "notifications",
+   "settingsNotificationsScreen"
+  ]
+ },
+ "iPad layout and multitasking": {
+  "phase": 11,
+  "runners": [
+   "layout-metrics"
+  ],
+  "oracles": [
+   "layout"
+  ]
+ }
+}
