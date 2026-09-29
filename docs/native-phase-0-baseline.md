@@ -87,3 +87,26 @@ input hash, and expected-output hash.
 Phase 1 domain-model work may begin in parallel with resolving these operational
 blockers, but production integrations must not begin until a real staging
 environment exists.
+
+## Status refresh (2026-09-29)
+
+This file predates Phases 4-12. Current state of the Phase 0 deliverables:
+
+- Inventory, parity matrix, and the native build-environment flag are done
+  (`native-contract-inventory.md`, `native-parity-matrix.md`,
+  `N/BuildEnvironment.swift`; Debug is development, Release is the
+  `staging.invalid` placeholder, production writes need
+  `TRADEREADY_ALLOW_PRODUCTION_WRITES=YES`).
+- The matrix uses `Not started / Prototype / In progress / Blocked / Verified`,
+  not the roadmap's `Tested / Parity verified`. Treat `In progress` with a
+  "code complete" note as roadmap `Tested` and `Verified` as `Parity verified`.
+- Golden fixtures are covered by the host and React Native oracle suites cited
+  per row in the parity matrix. No single fixture manifest (JS test, Swift test,
+  input hash, output hash) exists yet.
+- Reference screenshots/recordings: not captured. Checklist and naming scheme:
+  [native-reference/README.md](native-reference/README.md). Needs a simulator or
+  device session.
+- Rollback: documented in the baseline and
+  [native-phase-12-rollback-playbook.md](native-phase-12-rollback-playbook.md)
+  (draft, not rehearsed). Rollback ownership, migration/sync/crash thresholds and
+  the real staging environment (D4) need owner decisions.

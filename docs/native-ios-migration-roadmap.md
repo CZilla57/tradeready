@@ -43,7 +43,10 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
 
 - Phase 0: **In progress** — inventories and code-level safety controls are in
   place; reference captures, a real staging environment, and operational
-  threshold approval remain.
+  threshold approval remain. Refreshed 2026-09-29 in
+  [native-phase-0-baseline.md](native-phase-0-baseline.md): the remaining items
+  are device/simulator captures, a fixture manifest, and owner decisions, not
+  in-repo code.
 - Phase 1: **Complete** — the complete TypeScript model inventory has
   loss-preserving Swift wire models, a versioned canonical snapshot used as the
   app store's source of truth, and baseline-merge adapters for screen
@@ -373,7 +376,7 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   phone/email similarities remain allowed for merge review. All planned Phase 5
   code deliverables are now implemented and host-tested. The phase remains open
   only for physical-device interaction evidence and trusted-staging sync proof;
-  customer portal administration remains a separate Phase 8 deliverable.
+  customer portal administration was delivered in Phase 8.
 - Phase 7: **Code complete; verification pending** — every planned code
   deliverable is implemented and host-tested (see the Phase 7 evidence table
   in [native-phase-7-implementation-plan.md](native-phase-7-implementation-plan.md)
@@ -466,7 +469,7 @@ scheduled against Phase 12 rather than blocking Phases 2–3.
   defect `P12-012` (S1) open pending the owner's R43 ruling; Stages A, the rehearsal, B
   and C owner-gated. See [native-phase-12-stage-runbook.md](native-phase-12-stage-runbook.md)
   and the charter's defect list.
-- Phases 8–9: **Not started** (tracking note: Phase 8's contract
+- Phases 8–9: **Code complete; device+staging evidence deferred to Phase 12** (Phase 9 is recorded under its own section; Phase 8 was reconciled 2026-09-29, see its section. Earlier tracking note: Phase 8's contract
   decisions and Phase 9's implementation plan/device runsheet already exist as
   in-flight artifacts from earlier work on this branch; their roadmap status
   lines were not reconciled by this Phase 10 closeout task and remain as
@@ -669,7 +672,7 @@ A feature is migrated only when all five conditions are true:
 
 **Goal:** Port the complete lead-to-completion workflow.
 
-**Status: In progress.** The first dependency-gated job-list slice now ports
+**Status (reconciled 2026-09-29): code complete; device + staging evidence deferred to Phase 12.** A docs-vs-code audit found every deliverable implemented and covered by a registered host runner; the paragraphs below are the historical slice-by-slice record, so wording such as "remain hidden" or "gated" describes the state at that slice, not today. Small remaining code items: a dedicated test for the pricing labor-breakdown buckets and advisory warnings, and withdrawal of an undecided live approval link. The first dependency-gated job-list slice now ports
 React Native's Active, Quotes, Complete, Paid, Declined, All, and Archived
 groups, including exact archive boundaries, counts, rare-chip fallback, search,
 newest-first ordering, and the three top-line stats. Billable display values add
@@ -984,6 +987,8 @@ slice above.
 ## Phase 8 — Calendar, booking, routes, and portals
 
 **Goal:** Port scheduling and customer self-service.
+
+**Status (reconciled 2026-09-29): code complete; device + live-backend evidence deferred to Phase 12.** Native calendar, route, booking administration, booking intake/response/attention, and portal administration are implemented with 12 registered host runners; the backend lifecycle, admin and portal-token work landed in `d5eff92`. Its migrations are not applied anywhere, so the no-double-reservation and link-invalidation exit criteria have only mocked and host proof until `supabase/verify/booking_lifecycle_concurrency.sh` and `portal_token_admin.sql` run (row P8-15). Portal content is rendered server-side; there is no native content view.
 
 ### Deliverables
 
