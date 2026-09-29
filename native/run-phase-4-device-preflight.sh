@@ -6,6 +6,7 @@ PROJECT_PATH="$ROOT_DIR/native/TradeReadyNative.xcodeproj"
 INFO_PLIST_PATH="$ROOT_DIR/native/Info.plist"
 WORKER_CONFIG="$ROOT_DIR/backend-workers/wrangler.toml"
 RN_SUPABASE_SOURCE="$ROOT_DIR/utils/supabase.ts"
+RN_APP_CONFIG="$ROOT_DIR/app.json"
 
 DEVICE_LIST_FILE=
 BUILD_SETTINGS_FILE=
@@ -116,6 +117,10 @@ verify_sql_evidence() {
     block "Record the production $label SQL verification output."
   elif [ ! -r "$path" ]; then
     fail "The supplied $label SQL verification output is unreadable."
+  elif [ -z "$worker_production_supabase" ]; then
+    fail "The $label SQL verification cannot be tied to the production project: the Worker production Supabase URL is unavailable."
+  elif ! grep -F -x -q "TARGET_SUPABASE_URL=$worker_production_supabase" "$path"; then
+    fail "The $label SQL verification output must record its target: add a line TARGET_SUPABASE_URL=<production Supabase URL> naming the production project."
   elif grep -F -q "ALL CHECKS PASSED" "$path" && ! grep -F -q "FAILED" "$path"; then
     pass "Recorded $label SQL verification against the production database."
   else
@@ -198,10 +203,13 @@ if [ "$build_settings_available" -eq 1 ]; then
 
   case "$backend_url" in
     https://*)
+      rn_backend_url=$(sed -n 's/.*"backendUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RN_APP_CONFIG" 2>/dev/null | head -n 1)
       if is_placeholder_https "$backend_url"; then
         block "Configure the production HTTPS backend before Phase 4 device tests."
+      elif [ -n "$rn_backend_url" ] && [ "$backend_url" = "$rn_backend_url" ]; then
+        pass "Release targets the production Worker (the origin the React Native app ships against)."
       else
-        pass "Release has a non-placeholder HTTPS backend."
+        fail "Release backend must be the production Worker origin from app.json under R59."
       fi
       ;;
     *) fail "Release requires a non-placeholder HTTPS backend." ;;

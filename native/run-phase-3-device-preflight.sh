@@ -6,6 +6,9 @@ PROJECT_PATH="$ROOT_DIR/native/TradeReadyNative.xcodeproj"
 ENTITLEMENTS_PATH="$ROOT_DIR/native/TradeReadyNative/TradeReadyNative.entitlements"
 INFO_PLIST_PATH="$ROOT_DIR/native/Info.plist"
 PROJECT_FILE_PATH="$PROJECT_PATH/project.pbxproj"
+WORKER_CONFIG="$ROOT_DIR/backend-workers/wrangler.toml"
+RN_SUPABASE_SOURCE="$ROOT_DIR/utils/supabase.ts"
+RN_APP_CONFIG="$ROOT_DIR/app.json"
 
 DEVICE_LIST_FILE=
 BUILD_SETTINGS_FILE=
@@ -67,6 +70,22 @@ configured_value() {
   sed -n "s/^[[:space:]]*$key = //p" "$BUILD_SETTINGS_FILE" | tail -n 1
 }
 
+toml_value() {
+  section=$1
+  key=$2
+  awk -v section="[$section]" -v key="$key" '
+    $0 == section { active = 1; next }
+    active && /^\[/ { exit }
+    active && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      value = $0
+      sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", value)
+      gsub(/^\"|\"$/, "", value)
+      print value
+      exit
+    }
+  ' "$WORKER_CONFIG"
+}
+
 is_missing_or_unresolved() {
   value=$1
   case "$value" in
@@ -122,6 +141,9 @@ if [ "$build_settings_available" -eq 1 ]; then
   confirmation_url=$(configured_value TRADEREADY_EMAIL_CONFIRMATION_URL)
   supabase_url=$(configured_value TRADEREADY_SUPABASE_URL)
   supabase_key=$(configured_value TRADEREADY_SUPABASE_PUBLISHABLE_KEY)
+  production_supabase_url=$(configured_value TRADEREADY_PRODUCTION_SUPABASE_URL)
+  production_supabase_key=$(configured_value TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY)
+  rn_backend_url=$(sed -n 's/.*"backendUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RN_APP_CONFIG" 2>/dev/null | head -n 1)
   google_ios_client_id=$(configured_value TRADEREADY_GOOGLE_IOS_CLIENT_ID)
   google_server_client_id=$(configured_value TRADEREADY_GOOGLE_SERVER_CLIENT_ID)
   revenuecat_key=$(configured_value TRADEREADY_REVENUECAT_API_KEY)
@@ -139,7 +161,11 @@ if [ "$build_settings_available" -eq 1 ]; then
       block "Configure the production HTTPS backend before exercising account deletion."
       ;;
     https://*)
-      pass "Release has a non-placeholder HTTPS backend."
+      if [ -n "$rn_backend_url" ] && [ "$backend_url" = "$rn_backend_url" ]; then
+        pass "Release targets the production Worker (the origin the React Native app ships against)."
+      else
+        fail "Release backend must be the production Worker origin from app.json under R59."
+      fi
       ;;
     *)
       fail "Release requires a non-placeholder HTTPS backend."
@@ -185,6 +211,25 @@ if [ "$build_settings_available" -eq 1 ]; then
     fail "The Supabase publishable key is unresolved."
   else
     pass "The Supabase publishable key is resolved."
+  fi
+
+  # R59: Release is production, so the project and key must be THE production
+  # ones: equal to the runtime guard, the Worker's production project, and the
+  # React Native production client's key.
+  rn_production_key=
+  if [ -r "$RN_SUPABASE_SOURCE" ]; then
+    rn_production_key=$(sed -n "s/^const SUPABASE_ANON_KEY = '\([^']*\)';$/\1/p" "$RN_SUPABASE_SOURCE" | head -n 1)
+  fi
+  worker_production_supabase=
+  [ -r "$WORKER_CONFIG" ] && worker_production_supabase=$(toml_value vars SUPABASE_URL)
+  if [ -n "$production_supabase_url" ] && [ -n "$production_supabase_key" ] &&
+     [ "$supabase_url" = "$production_supabase_url" ] &&
+     [ "$supabase_key" = "$production_supabase_key" ] &&
+     [ "$production_supabase_url" = "$worker_production_supabase" ] &&
+     [ -n "$rn_production_key" ] && [ "$production_supabase_key" = "$rn_production_key" ]; then
+    pass "Release Supabase project and key are the production project (R59)."
+  else
+    fail "Release Supabase project and key must be the production project under R59."
   fi
 
   if is_missing_or_unresolved "$google_ios_client_id" || is_missing_or_unresolved "$google_server_client_id"; then

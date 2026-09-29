@@ -96,6 +96,28 @@ expect_status 1 "Release must enable production writes under R59" \
   --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
   --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
 
+expect_status 1 "Release backend must be the production Worker origin" \
+  --device-list "$FIXTURES/two-iphones.json" \
+  --build-settings "$FIXTURES/wrong-backend-build-settings.txt" \
+  --worker-config "$FIXTURES/ready-worker.toml" \
+  --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
+  --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
+
+# SQL evidence must name the production project it ran against.
+expect_status 1 "database-clock SQL verification output must record its target" \
+  --device-list "$FIXTURES/two-iphones.json" \
+  --build-settings "$FIXTURES/ready-build-settings.txt" \
+  --worker-config "$FIXTURES/ready-worker.toml" \
+  --updated-at-verification "$FIXTURES/updated-at-wrong-target.txt" \
+  --payment-merge-verification "$FIXTURES/payment-merge-passed.txt"
+
+expect_status 1 "invoice-ledger SQL verification output must record its target" \
+  --device-list "$FIXTURES/two-iphones.json" \
+  --build-settings "$FIXTURES/ready-build-settings.txt" \
+  --worker-config "$FIXTURES/ready-worker.toml" \
+  --updated-at-verification "$FIXTURES/updated-at-passed.txt" \
+  --payment-merge-verification "$FIXTURES/payment-merge-no-target.txt"
+
 # shellcheck disable=SC2046
 expect_status 0 "NOTE: R59 (no staging): Release writes to the production backend" $(ready_args)
 

@@ -54,5 +54,13 @@ expect_status 1 "Release must enable production writes under R59" \
   --device-list "$FIXTURES/ready-device.json" \
   --build-settings "$FIXTURES/staging-environment-build-settings.txt"
 
+expect_status 1 "Release backend must be the production Worker origin" \
+  --device-list "$FIXTURES/ready-device.json" \
+  --build-settings "$FIXTURES/wrong-backend-build-settings.txt"
+
+expect_status 1 "Release Supabase project and key must be the production project" \
+  --device-list "$FIXTURES/ready-device.json" \
+  --build-settings "$FIXTURES/wrong-supabase-build-settings.txt"
+
 echo "Phase 3 device preflight tests passed."
 
