@@ -94,3 +94,18 @@ fc5bd58e05644bdebdf071cb0e010491d711f08e:native/ErrorRedactionTests/main.swift:s
 # (Supabase publishable key, public by design), so the fixtures repeat it on line 6.
 32af315a50514f896e927ed5be873317c3c15cbe:native/Phase4DevicePreflightTests/fixtures/invalid-backend-build-settings.txt:generic-api-key:6
 32af315a50514f896e927ed5be873317c3c15cbe:native/Phase4DevicePreflightTests/fixtures/ready-build-settings.txt:generic-api-key:6
+
+# Phase 3/4 preflight fixtures (2026-09-29): the production Supabase publishable key
+# (public by design) and URL appear in the R59 fixtures so the preflights can pin to it.
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/invalid-backend-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/invalid-backend-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/ready-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/ready-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/staging-environment-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/staging-environment-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-supabase-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-supabase-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase4DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:4
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase4DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:6
