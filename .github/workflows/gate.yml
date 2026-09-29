@@ -47,7 +47,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Some oracles (phase10QualificationOracle) assert TZ=America/Phoenix: a
+      # west-of-UTC zone exposes the FA-039 local-date bugs (CLAUDE.md).
       - name: Tests
+        env:
+          TZ: America/Phoenix
         run: npm test -- --ci
 
       - name: Lint
