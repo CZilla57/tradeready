@@ -1,7 +1,7 @@
     DEVELOPMENT_TEAM = FIXTURETEAM
     PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready
     TRADEREADY_ALLOW_PRODUCTION_WRITES = YES
-    TRADEREADY_BACKEND_URL = https://staging.invalid
+    TRADEREADY_BACKEND_URL = https://backend.example.com
     TRADEREADY_EMAIL_CONFIRMATION_URL = https://gettradereadyapp.com/confirmed.html
     TRADEREADY_ENVIRONMENT = production
     TRADEREADY_GOOGLE_IOS_CLIENT_ID = 246232122952-b2trko1uog7593a3sg8n25tklifc85nn.apps.googleusercontent.com

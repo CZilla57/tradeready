@@ -48,3 +48,64 @@ ea1913b6461e2bb20a31a51cb1a05396fbd41a85:__tests__/paymentLink.test.js:square-ac
 # in a unit test. Renamed to a low-entropy form in the very next commit, so no
 # new fingerprints can accrue (same pattern as the Square fixture above).
 b9719669d4561adf46699920254b864b64c3251c:__tests__/portalRequestWorkers.test.js:generic-api-key:82
+
+# Native migration (audit 2026-09-29): 37 findings from commits of 2026-09-23..26,
+# each verified as a fake fixture or the public Supabase publishable key.
+# CI ran gitleaks over full history and was red on master because of them.
+
+# Fake redaction-test fixtures in native host tests (sk_live_/rk_live_/sk-proj-/gsk_/phc_ prefixes, a Square docs sample token, and a non-signing JWT); none is a live credential
+2525c243e6f8007c3d6df08c231a8ac561ab0045:native/AIProviderKeyTests/main.swift:generic-api-key:39
+2525c243e6f8007c3d6df08c231a8ac561ab0045:native/AIProviderKeyTests/main.swift:stripe-access-token:442
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:generic-api-key:868
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:stripe-access-token:1204
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:stripe-access-token:744
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:stripe-access-token:779
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:stripe-access-token:865
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:stripe-access-token:876
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:stripe-access-token:890
+762bac8137bbe20249f2aadbe68d18bca04ae118:native/SupportDiagnosticsTests/main.swift:stripe-access-token:896
+81759033b37cfa4612510d998ed6e1c7167aa1d9:native/StoreIntegrationTests/main.swift:square-access-token:4672
+81759033b37cfa4612510d998ed6e1c7167aa1d9:native/StoreIntegrationTests/main.swift:square-access-token:4692
+9b32481ff24900a0975d7c66628e4cea6ac121b0:native/Phase11QualificationTests/main.swift:generic-api-key:722
+9b32481ff24900a0975d7c66628e4cea6ac121b0:native/Phase11QualificationTests/main.swift:stripe-access-token:722
+e5d3940f5d3f4dd799697a09e0fe791c966bec5b:native/AnalyticsTransportTests/main.swift:stripe-access-token:362
+e5d3940f5d3f4dd799697a09e0fe791c966bec5b:native/AnalyticsTransportTests/main.swift:stripe-access-token:363
+e5d3940f5d3f4dd799697a09e0fe791c966bec5b:native/AnalyticsTransportTests/main.swift:stripe-access-token:364
+f7a2e1336474d2202eb3b975db3b6f332b567916:native/ErrorRedactionTests/main.swift:square-access-token:177
+f7a2e1336474d2202eb3b975db3b6f332b567916:native/ErrorRedactionTests/main.swift:square-access-token:178
+f7a2e1336474d2202eb3b975db3b6f332b567916:native/Phase11QualificationTests/main.swift:square-access-token:1123
+fc5bd58e05644bdebdf071cb0e010491d711f08e:native/ErrorRedactionTests/main.swift:generic-api-key:162
+fc5bd58e05644bdebdf071cb0e010491d711f08e:native/ErrorRedactionTests/main.swift:generic-api-key:163
+fc5bd58e05644bdebdf071cb0e010491d711f08e:native/ErrorRedactionTests/main.swift:stripe-access-token:161
+
+# Supabase publishable key (public by design) in native build settings and preflight fixtures
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/Phase4DevicePreflightTests/fixtures/invalid-backend-build-settings.txt:generic-api-key:4
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/Phase4DevicePreflightTests/fixtures/mismatched-production-guard-build-settings.txt:generic-api-key:4
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/Phase4DevicePreflightTests/fixtures/mismatched-supabase-build-settings.txt:generic-api-key:4
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/Phase4DevicePreflightTests/fixtures/production-supabase-build-settings.txt:generic-api-key:4
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/Phase4DevicePreflightTests/fixtures/production-supabase-build-settings.txt:generic-api-key:6
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/Phase4DevicePreflightTests/fixtures/ready-build-settings.txt:generic-api-key:4
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/TradeReadyNative.xcodeproj/project.pbxproj:generic-api-key:303
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/TradeReadyNative.xcodeproj/project.pbxproj:generic-api-key:307
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/TradeReadyNative.xcodeproj/project.pbxproj:generic-api-key:340
+2bb8dd56d789a6d1cdcf6ee8957e7cc9fb9ce97f:native/TradeReadyNative.xcodeproj/project.pbxproj:generic-api-key:344
+
+# R59 preflight fixtures (2026-09-29): the Release Supabase key now equals the public production key
+# (Supabase publishable key, public by design), so the fixtures repeat it on line 6.
+32af315a50514f896e927ed5be873317c3c15cbe:native/Phase4DevicePreflightTests/fixtures/invalid-backend-build-settings.txt:generic-api-key:6
+32af315a50514f896e927ed5be873317c3c15cbe:native/Phase4DevicePreflightTests/fixtures/ready-build-settings.txt:generic-api-key:6
+
+# Phase 3/4 preflight fixtures (2026-09-29): the production Supabase publishable key
+# (public by design) and URL appear in the R59 fixtures so the preflights can pin to it.
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/invalid-backend-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/invalid-backend-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/ready-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/ready-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/staging-environment-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/staging-environment-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-supabase-build-settings.txt:generic-api-key:12
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-supabase-build-settings.txt:generic-api-key:14
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase4DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:4
+68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase4DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:6

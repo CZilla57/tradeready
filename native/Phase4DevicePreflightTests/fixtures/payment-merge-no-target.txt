@@ -1,3 +1,2 @@
-TARGET_SUPABASE_URL=https://production.supabase.co
 NOTICE: CHECK 8 ok: an object-shaped payments push preserved the ledger
 NOTICE: ALL CHECKS PASSED

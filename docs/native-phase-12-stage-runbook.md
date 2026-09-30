@@ -55,6 +55,8 @@ for `Verified`").
 These blockers recur across every stage's entry-gate checklist below; they are
 recorded once here and cited by ID.
 
+**Update 2026-09-29 (decision-log rows 13 to 15, later than the note below).** `VER-1` is fully cleared (live version 1.2.1). `R59` is decided: no staging, Release is production. `D4` is superseded, but the STG-gated rows are not yet amended by the owner. `AGG-1` is cleared: the `backend-workers` test script exists and passes (26 tests).
+
 **Update 2026-09-29 (decision-log rows 8 to 12).** `CH-DRAFT` is cleared (charter approved). `OI-1` is decided and the manifest edit is applied; only entering the labels in App Store Connect remains, at Stage C entry. `OI-2` is reported cleared by the owner and unverified here. `VER-1` is half cleared: native N is 2.0.0, and the live version L is still unconfirmed. `P12-012` is being fixed on the Expo side (branch `expo/e1-native-run-guard`) and stays open until that fix is built into R. The rows and the "Blocking IDs" lists below predate these decisions; read them with this note.
 
 | ID | What is open | Blocks | Who clears it | Source |
