@@ -738,6 +738,18 @@ private func settle() async {
     for _ in 0..<5 { await Task.yield() }
 }
 
+/// Polls until `condition` holds (or `timeout` passes), then settles. The scheduled
+/// mirror retries each spend part of a 100 ms lock budget, so on a slow CI runner a
+/// fixed sleep can end before they finish; waiting on the outcome cannot.
+@MainActor
+private func settle(until condition: () -> Bool, timeout: TimeInterval = 10) async {
+    let deadline = uptime() + timeout
+    while !condition(), uptime() < deadline {
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    await settle()
+}
+
 @MainActor
 private func makeStore(
     _ label: String,
@@ -1239,15 +1251,18 @@ private func testAppStoreRetriesBusyMirror() async throws {
     expectEqual(group.stored?.timer?.jobId, "future", "the clock-in the busy write missed is now mirrored")
 
     // (b) The scheduled retry lands after the release with no new trigger.
-    store.widgetMirrorBusyRetryDelays = [0.15]
+    // The delay must outlast this test's own gap before `holder.release()`: each busy
+    // retry consumes one delay, so a one-entry schedule whose retry fires while the lock
+    // is still held is spent, and the mirror stays dirty however long the test waits
+    // (a 150 ms delay failed on a slow CI runner). One second leaves that gap room.
+    store.widgetMirrorBusyRetryDelays = [1.0]
     holder = LockHolder(at: group.lockFile, releaseAfter: 2)
     expect(store.clockOut(jobID: "future", on: now.addingTimeInterval(600)), "sanity: the clock-out commits")
     await settle()
     expect(store.isWidgetMirrorDirty, "the clock-out mirror write went busy")
     expectEqual(group.stored?.timer?.jobId, "future", "the busy write left the old timer in place")
     holder.release()
-    try await Task.sleep(nanoseconds: 500_000_000)
-    await settle()
+    await settle(until: { !store.isWidgetMirrorDirty })
     expect(!store.isWidgetMirrorDirty, "the scheduled retry cleared the dirty flag")
     expect(group.stored != nil && group.stored?.timer == nil, "the scheduled retry mirrored the clock-out")
     expectEqual(store.widgetMirrorLockBusyCount, 2, "one more busy event")
@@ -1260,8 +1275,7 @@ private func testAppStoreRetriesBusyMirror() async throws {
     let busyBefore = store.widgetMirrorLockBusyCount
     let reportsBefore = reporter.widgetLockReports.count
     expectEqual(store.refreshWidgetMirror(force: false), .busy, "a direct refresh behind a held lock → busy")
-    try await Task.sleep(nanoseconds: 600_000_000)
-    await settle()
+    await settle(until: { store.widgetMirrorLockBusyCount >= busyBefore + 3 })
     expectEqual(store.widgetMirrorLockBusyCount, busyBefore + 3, "the trigger and both scheduled retries went busy")
     try await Task.sleep(nanoseconds: 300_000_000)
     await settle()
@@ -1297,7 +1311,8 @@ private func testAppStoreRetriesBusyMirror() async throws {
     // would end `.skippedOwnerChanged` and stay dirty. The retry must go
     // through `refreshWidgetMirror` and end `.skippedNoOwner`: nothing
     // written or reloaded, and the dirty flag settled.
-    store.widgetMirrorBusyRetryDelays = [0.3]
+    // Same reasoning as (b): the retry must not fire before the assertions below run.
+    store.widgetMirrorBusyRetryDelays = [1.0]
     holder = LockHolder(at: group.lockFile, releaseAfter: 2)
     expect(store.clockIn(jobID: "future", on: now.addingTimeInterval(1200)), "sanity: a new clock-in commits")
     await settle()
@@ -1311,8 +1326,7 @@ private func testAppStoreRetriesBusyMirror() async throws {
     await settle()
     expect(store.isWidgetMirrorDirty,
            "closing the gate this way runs no refresh: the mirror is still dirty until the retry fires")
-    try await Task.sleep(nanoseconds: 600_000_000)
-    await settle()
+    await settle(until: { !store.isWidgetMirrorDirty })
     expect(!store.isWidgetMirrorDirty,
            "the retry itself ran through the owner gate and ended .skippedNoOwner (the only outcome that settles without writing changed content)")
     expectEqual(group.storedJSON, ownerSnapshot, "the gated-off retry never writes the new clock-in")
