@@ -7,7 +7,7 @@
    "testSources": [
     {
      "path": "native/AccessibilityAuditTests",
-     "sha256": "b18c59d4a07dc0c3284d2286e7363c0beb5dd0e0f989a8933d393d11bc7574e6"
+     "sha256": "c088acc7e0782d8091d16b3b4fd1696a66d4872279e7b530a301969cb59955ae"
     }
    ],
    "fixtures": []
@@ -40,7 +40,7 @@
    "testSources": [
     {
      "path": "native/AdapterTests",
-     "sha256": "cc355b8864043cf66d553055cafbb8c0ea520300772cabbe516e34d318b5e165"
+     "sha256": "9ef474f441ac45e6e330f2f749628d653e6cf5025fb14ff56f2ae4e1ab23a6e8"
     },
     {
      "path": "native/CanonicalTests",
@@ -980,6 +980,17 @@
     {
      "path": "native/LegacyReimportTests",
      "sha256": "4f98f45e08bcc85ea98327b0c680f463ba6ed086c85b8c481e2b8efb37fc417c"
+    }
+   ],
+   "fixtures": []
+  },
+  "logo-media": {
+   "script": "native/run-logo-media-tests.sh",
+   "scriptSha256": "fcad93ced8a67b94a87f0f7e0ba3267c513c4b0e8c7ea59e6018cc89fcf0ad78",
+   "testSources": [
+    {
+     "path": "native/LogoMediaTests",
+     "sha256": "76ed65cc949982f138d0807e6a65b4ca81e602fef92b6b2de6b11dd79ad01e9d"
     }
    ],
    "fixtures": []
