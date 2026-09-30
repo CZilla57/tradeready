@@ -332,6 +332,9 @@ struct BusinessSettings: Codable, Hashable {
     var email = ""
     var address = ""
     var region = ""
+    /// Local file URL of the business logo (`logos/logo_<id>.png`), "" when none. Only
+    /// the reference syncs with the settings blob; the bytes stay on the device, as in RN.
+    var logoPhoto = ""
     var trade = "Plumbing"
     var paymentNotes = "Payment due upon completion. We accept check, card, or bank transfer."
     var paymentProvider = "stripe"
@@ -394,6 +397,7 @@ struct BusinessSettings: Codable, Hashable {
             region: try c.decodeIfPresent(String.self, forKey: .region) ?? "",
             trade: try c.decodeIfPresent(String.self, forKey: .trade) ?? "Plumbing"
         )
+        logoPhoto = try c.decodeIfPresent(String.self, forKey: .logoPhoto) ?? ""
         paymentNotes = try c.decodeIfPresent(String.self, forKey: .paymentNotes) ?? paymentNotes
         laborRate = try c.decodeIfPresent(Double.self, forKey: .laborRate) ?? laborRate
         materialMarkup = try c.decodeIfPresent(Double.self, forKey: .materialMarkup) ?? materialMarkup
