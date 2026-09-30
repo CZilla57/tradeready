@@ -66,6 +66,29 @@ run("customer edits preserve canonical-only fields") {
     expect(encoded["archivedAt"] == nil, "customer archive can be cleared without touching siblings")
 }
 
+run("settings logo reference projects, edits and clears without touching siblings") {
+    let source: Canonical.Settings = try field("settings", rich)
+    var edit = try CanonicalUIAdapters.edit(source)
+    expect(edit.value.logoPhoto == "file:///logo.jpg", "logo reference projects into the UI model")
+
+    edit.value.logoPhoto = "file:///media/logos/logo_0123456789abcdef0123456789abcdef.png"
+    let replaced = try CanonicalUIAdapters.canonical(from: edit)
+    expect(replaced.logoPhoto == "file:///media/logos/logo_0123456789abcdef0123456789abcdef.png", "new logo reference saved")
+    expect(replaced.businessName == source.businessName && replaced.region == source.region, "siblings untouched by a logo edit")
+
+    edit.value.logoPhoto = ""
+    let cleared = try CanonicalUIAdapters.canonical(from: edit)
+    expect(cleared.logoPhoto == nil, "removing the logo clears the canonical reference")
+    let clearedFields = try object(cleared)
+    expect(clearedFields["logoPhoto"] == nil, "cleared logo leaves no stale key")
+
+    let blank = try CanonicalUIAdapters.canonical(from: BusinessSettings())
+    expect(blank.logoPhoto == nil, "a settings object with no logo has none")
+    var withLogo = BusinessSettings(); withLogo.logoPhoto = "file:///x/logos/logo_a.png"
+    let fresh = try CanonicalUIAdapters.canonical(from: withLogo)
+    expect(fresh.logoPhoto == "file:///x/logos/logo_a.png", "fresh settings carry the logo")
+}
+
 run("job edits preserve rich and unknown fields") {
     let source: Canonical.Job = try field("job", rich)
     var edit = try CanonicalUIAdapters.edit(source)
