@@ -1251,7 +1251,11 @@ private func testAppStoreRetriesBusyMirror() async throws {
     expectEqual(group.stored?.timer?.jobId, "future", "the clock-in the busy write missed is now mirrored")
 
     // (b) The scheduled retry lands after the release with no new trigger.
-    store.widgetMirrorBusyRetryDelays = [0.15]
+    // The delay must outlast this test's own gap before `holder.release()`: each busy
+    // retry consumes one delay, so a one-entry schedule whose retry fires while the lock
+    // is still held is spent, and the mirror stays dirty however long the test waits
+    // (a 150 ms delay failed on a slow CI runner). One second leaves that gap room.
+    store.widgetMirrorBusyRetryDelays = [1.0]
     holder = LockHolder(at: group.lockFile, releaseAfter: 2)
     expect(store.clockOut(jobID: "future", on: now.addingTimeInterval(600)), "sanity: the clock-out commits")
     await settle()
@@ -1307,7 +1311,8 @@ private func testAppStoreRetriesBusyMirror() async throws {
     // would end `.skippedOwnerChanged` and stay dirty. The retry must go
     // through `refreshWidgetMirror` and end `.skippedNoOwner`: nothing
     // written or reloaded, and the dirty flag settled.
-    store.widgetMirrorBusyRetryDelays = [0.3]
+    // Same reasoning as (b): the retry must not fire before the assertions below run.
+    store.widgetMirrorBusyRetryDelays = [1.0]
     holder = LockHolder(at: group.lockFile, releaseAfter: 2)
     expect(store.clockIn(jobID: "future", on: now.addingTimeInterval(1200)), "sanity: a new clock-in commits")
     await settle()
