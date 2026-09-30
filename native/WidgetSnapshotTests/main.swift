@@ -738,6 +738,18 @@ private func settle() async {
     for _ in 0..<5 { await Task.yield() }
 }
 
+/// Polls until `condition` holds (or `timeout` passes), then settles. The scheduled
+/// mirror retries each spend part of a 100 ms lock budget, so on a slow CI runner a
+/// fixed sleep can end before they finish; waiting on the outcome cannot.
+@MainActor
+private func settle(until condition: () -> Bool, timeout: TimeInterval = 10) async {
+    let deadline = uptime() + timeout
+    while !condition(), uptime() < deadline {
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    await settle()
+}
+
 @MainActor
 private func makeStore(
     _ label: String,
@@ -1246,8 +1258,7 @@ private func testAppStoreRetriesBusyMirror() async throws {
     expect(store.isWidgetMirrorDirty, "the clock-out mirror write went busy")
     expectEqual(group.stored?.timer?.jobId, "future", "the busy write left the old timer in place")
     holder.release()
-    try await Task.sleep(nanoseconds: 500_000_000)
-    await settle()
+    await settle(until: { !store.isWidgetMirrorDirty })
     expect(!store.isWidgetMirrorDirty, "the scheduled retry cleared the dirty flag")
     expect(group.stored != nil && group.stored?.timer == nil, "the scheduled retry mirrored the clock-out")
     expectEqual(store.widgetMirrorLockBusyCount, 2, "one more busy event")
@@ -1260,8 +1271,7 @@ private func testAppStoreRetriesBusyMirror() async throws {
     let busyBefore = store.widgetMirrorLockBusyCount
     let reportsBefore = reporter.widgetLockReports.count
     expectEqual(store.refreshWidgetMirror(force: false), .busy, "a direct refresh behind a held lock → busy")
-    try await Task.sleep(nanoseconds: 600_000_000)
-    await settle()
+    await settle(until: { store.widgetMirrorLockBusyCount >= busyBefore + 3 })
     expectEqual(store.widgetMirrorLockBusyCount, busyBefore + 3, "the trigger and both scheduled retries went busy")
     try await Task.sleep(nanoseconds: 300_000_000)
     await settle()
@@ -1311,8 +1321,7 @@ private func testAppStoreRetriesBusyMirror() async throws {
     await settle()
     expect(store.isWidgetMirrorDirty,
            "closing the gate this way runs no refresh: the mirror is still dirty until the retry fires")
-    try await Task.sleep(nanoseconds: 600_000_000)
-    await settle()
+    await settle(until: { !store.isWidgetMirrorDirty })
     expect(!store.isWidgetMirrorDirty,
            "the retry itself ran through the owner gate and ended .skippedNoOwner (the only outcome that settles without writing changed content)")
     expectEqual(group.storedJSON, ownerSnapshot, "the gated-off retry never writes the new clock-in")

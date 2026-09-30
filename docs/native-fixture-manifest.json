@@ -1797,7 +1797,7 @@
    "testSources": [
     {
      "path": "native/WidgetSnapshotTests",
-     "sha256": "5f223768c11e44dee15966cb0550cf1ff717807623491bf4c2669751077dd61c"
+     "sha256": "67066f77b7b83006902e4607080cdcfbcd121ce73aa9c0ea11062ac1a0d85791"
     },
     {
      "path": "native/CanonicalTests",
