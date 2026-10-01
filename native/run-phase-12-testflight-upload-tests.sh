@@ -139,4 +139,41 @@ if [ "$status" -ne 64 ]; then
 fi
 assert_no_invocation "missing --build"
 
+# 5. Sentry DSN pass-through. The real path is never run here, so this checks
+#    the dry-run note (variable name only, never the value) and, by source
+#    check, that the archive command forwards the setting.
+reset_log
+set +e
+env TRADEREADY_SENTRY_DSN=https://fixture-key@example.invalid/1 \
+  sh -c 'PATH="'"$SHIM_DIR"':$PATH" "'"$UPLOAD"'" --version 2.0.0 --build 42' \
+  >"$OUTPUT_PATH" 2>&1
+status=$?
+set -e
+if [ "$status" -ne 0 ] || ! grep -F -q "variable is set; value not shown" "$OUTPUT_PATH"; then
+  sed -n '1,200p' "$OUTPUT_PATH" >&2
+  echo "Expected the dry run to note that TRADEREADY_SENTRY_DSN is set" >&2
+  exit 1
+fi
+if grep -F -q "fixture-key@example.invalid" "$OUTPUT_PATH"; then
+  echo "The dry run must never echo the DSN value" >&2
+  exit 1
+fi
+assert_no_invocation "dry run with DSN"
+
+reset_log
+env -u TRADEREADY_SENTRY_DSN \
+  sh -c 'PATH="'"$SHIM_DIR"':$PATH" "'"$UPLOAD"'" --version 2.0.0 --build 42' \
+  >"$OUTPUT_PATH" 2>&1
+if ! grep -F -q "TRADEREADY_SENTRY_DSN is NOT set" "$OUTPUT_PATH"; then
+  sed -n '1,200p' "$OUTPUT_PATH" >&2
+  echo "Expected the dry run to warn that TRADEREADY_SENTRY_DSN is not set" >&2
+  exit 1
+fi
+assert_no_invocation "dry run without DSN"
+
+if ! grep -F -q 'set -- "$@" TRADEREADY_SENTRY_DSN="$TRADEREADY_SENTRY_DSN"' "$UPLOAD"; then
+  echo "Expected the --execute archive command to forward TRADEREADY_SENTRY_DSN" >&2
+  exit 1
+fi
+
 echo "Phase 12 TestFlight upload helper tests passed."
