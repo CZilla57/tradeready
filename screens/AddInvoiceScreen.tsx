@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { loadInvoices, saveInvoices, getOrCreateCustomer, loadSettings } from "../utils/storage";
 import { syncNotifications, promptForInvoiceReminders } from "../utils/notifications";
 import { nextInvoiceNumber } from "../utils/invoiceNumber";
+import { isInvoiceCreationBlocked, INVOICE_BLOCKED_TITLE, INVOICE_BLOCKED_MESSAGE } from "../utils/nativeRunRuntime";
 import { Button } from "../components/UI";
 import Field from "../components/Field";
 import { spacing, layout } from "../utils/theme";
@@ -71,6 +72,11 @@ export default function AddInvoiceScreen({ route, navigation }: InvoiceStackScre
     const parsedAmount = parseFloat(amount);
     if (!amount.trim() || isNaN(parsedAmount) || parsedAmount <= 0) {
       Alert.alert("Missing info", "Please enter a valid invoice amount.");
+      return;
+    }
+    // E-1: no new invoice until the first pull after a native run (editing is fine).
+    if (!isEditing && (await isInvoiceCreationBlocked())) {
+      Alert.alert(INVOICE_BLOCKED_TITLE, INVOICE_BLOCKED_MESSAGE);
       return;
     }
     setSaving(true);

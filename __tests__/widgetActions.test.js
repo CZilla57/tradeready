@@ -30,6 +30,17 @@ jest.mock("../utils/notifications", () => ({
   syncNotifications: jest.fn(),
 }));
 
+// E-1 (P12-012): replayWidgetActions consults the native-run hold. These tests
+// are about the replay itself, so the run is never pending here; the hold has
+// its own coverage in nativeRunGuard.test.ts.
+jest.mock("../utils/nativeRunRuntime", () => ({
+  isNativeRunPending: jest.fn().mockResolvedValue(false),
+  ensureNativeRunChecked: jest.fn().mockResolvedValue(undefined),
+  isNativeRunWriteFailed: jest.fn().mockReturnValue(false),
+  readHeldSettings: jest.fn().mockResolvedValue([]),
+  NATIVE_RUN_HELD_SETTINGS_KEY: "__nativeRunHeldSettings",
+}));
+
 // widgetActions.ts talks to the bridge directly, and saveJobs (via the
 // storage barrel) also calls refreshWidgetSnapshot internally — mocking the
 // module covers both call sites with the same jest.fn() instances.

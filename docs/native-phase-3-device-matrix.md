@@ -8,6 +8,14 @@ rows in TestFlight. On 2026-09-09 the owner approved using production with
 disposable accounts because the app has no real users; that exception applies
 only to this recorded run and does not change the checked-in fail-closed build.
 
+> **R59 update (2026-09-29):** no staging environment will exist, and the checked-in
+> Release build is now the production configuration. The 2026-09-09 exception
+> therefore becomes the standing rule: run every row on a signed device against
+> production with disposable accounts only. `native/run-phase-3-device-preflight.sh`
+> now requires the production configuration and prints a reminder. Rows that name an
+> isolated or staging environment (for example D4 and D5) still read as written; the
+> owner must amend or waive each in the charter decision log.
+
 ## Preflight
 
 From the repository root, run:

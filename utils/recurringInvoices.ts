@@ -21,6 +21,7 @@ import {
 } from './storage';
 import { calculateNextDate, isEndConditionMet } from './recurrence';
 import { nextInvoiceNumber } from './invoiceNumber';
+import { isInvoiceCreationBlocked } from './nativeRunRuntime';
 import { syncNotifications } from './notifications';
 import { selectRecurringInvoiceToAutoSend } from './recurringAutoSend';
 import { mintAutoInvoicePaymentLink, uploadAutoInvoicePdf } from './autoInvoice';
@@ -81,6 +82,9 @@ export async function checkAndGenerateRecurringInvoices(): Promise<void> {
   if (generating) return;
   generating = true;
   try {
+    // E-1: numbering needs the whole invoice list; wait for the pull. Rules are
+    // not advanced, so the next foreground after the pull generates them.
+    if (await isInvoiceCreationBlocked()) return;
     const today = new Date().toISOString().split('T')[0];
     const [rules, invoices, customers, settings] = await Promise.all([
       loadRecurringInvoices(),

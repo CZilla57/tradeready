@@ -1,7 +1,7 @@
-    TRADEREADY_ALLOW_PRODUCTION_WRITES = NO
-    TRADEREADY_BACKEND_URL = https://staging.gettradereadyapp.com
-    TRADEREADY_ENVIRONMENT = staging
+    TRADEREADY_ALLOW_PRODUCTION_WRITES = YES
+    TRADEREADY_BACKEND_URL = https://tradeready-backend.tradeready.workers.dev
+    TRADEREADY_ENVIRONMENT = production
     TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF
     TRADEREADY_PRODUCTION_SUPABASE_URL = https://wrong-production.supabase.co
     TRADEREADY_SUPABASE_PUBLISHABLE_KEY = sb_publishable_staging_fixture
-    TRADEREADY_SUPABASE_URL = https://isolated-staging.supabase.co
+    TRADEREADY_SUPABASE_URL = https://wrong-production.supabase.co

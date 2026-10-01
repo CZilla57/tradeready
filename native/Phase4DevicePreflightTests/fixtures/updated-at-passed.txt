@@ -1,2 +1,3 @@
+TARGET_SUPABASE_URL=https://production.supabase.co
 NOTICE: CHECK 5 ok: updated_at stamped AND payment-merge trigger still preserved the ledger
 NOTICE: ALL CHECKS PASSED

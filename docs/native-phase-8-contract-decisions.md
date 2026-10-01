@@ -1,7 +1,7 @@
 # Phase 8 — Contract Decisions (Task 8.00)
 
 **Date:** 2026-09-20
-**Status:** Contract frozen for independent native work; backend implementation pending (tasks 8.04–8.06).
+**Status:** Contract frozen for independent native work; backend implemented in `d5eff92` (tasks 8.04–8.06); migrations not yet applied.
 **Spec:** [Calendar, booking, routes and portals](native-phase-8-calendar-booking-routes-portals-spec.md)
 **Plan:** [native-phase-8-implementation-plan.md](native-phase-8-implementation-plan.md) (task 8.00 only)
 

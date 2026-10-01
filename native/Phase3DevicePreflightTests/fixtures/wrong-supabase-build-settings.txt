@@ -1,0 +1,15 @@
+    DEVELOPMENT_TEAM = FIXTURETEAM
+    PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready
+    TRADEREADY_ALLOW_PRODUCTION_WRITES = YES
+    TRADEREADY_BACKEND_URL = https://tradeready-backend.tradeready.workers.dev
+    TRADEREADY_EMAIL_CONFIRMATION_URL = https://gettradereadyapp.com/confirmed.html
+    TRADEREADY_ENVIRONMENT = production
+    TRADEREADY_GOOGLE_IOS_CLIENT_ID = 246232122952-b2trko1uog7593a3sg8n25tklifc85nn.apps.googleusercontent.com
+    TRADEREADY_GOOGLE_SERVER_CLIENT_ID = 246232122952-37tucdttgsrkjs59l46oo29eggalvn92.apps.googleusercontent.com
+    TRADEREADY_PASSWORD_RESET_URL = tradeready://reset-password
+    TRADEREADY_REVENUECAT_API_KEY = fixture-public-client-key
+    TRADEREADY_REVENUECAT_ENTITLEMENT_ID = TradeReady Pro
+    TRADEREADY_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF
+    TRADEREADY_SUPABASE_URL = https://fixture.supabase.co
+    TRADEREADY_PRODUCTION_SUPABASE_PUBLISHABLE_KEY = sb_publishable_eTyJedvrw47RtZ0waCj8Bw_SDOllgvF
+    TRADEREADY_PRODUCTION_SUPABASE_URL = https://ncbqswfdvckmdocbawaa.supabase.co

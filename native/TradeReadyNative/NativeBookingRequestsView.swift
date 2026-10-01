@@ -306,9 +306,10 @@ private struct RequestRowView: View {
                 Text("Linked job not found")
                     .font(.caption)
                     .foregroundStyle(Color.tradeDangerText)
-                Button("Reconcile") { /* TODO: reconciliation flow */ }
-                    .buttonStyle(.bordered)
-                    .disabled(true)
+                Text("The job may have been deleted on another device.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                contactButtons
 
             case .unconvertedActive:
                 Text("Needs conversion")

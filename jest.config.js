@@ -1,6 +1,8 @@
 module.exports = {
   preset: "jest-expo",
   setupFiles: ["./jest.setup.js"],
+  // Pins TZ=America/Phoenix for every worker (see the file for why).
+  globalSetup: "./jest.globalSetup.js",
   // A component suite's first render pays the one-time Babel transform of the
   // graph's lazily-required RN modules inside that test's timeout budget. On a
   // cold cache (CI always; locally after --no-cache) that exceeds Jest's 5s

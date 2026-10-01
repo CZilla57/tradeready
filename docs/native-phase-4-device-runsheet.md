@@ -13,6 +13,15 @@ contracts remain in:
 No host test, simulator, generic-iPhone build, or modeled client may mark a row
 below `Pass`.
 
+> **R59 update (2026-09-29):** no staging environment will exist, and the checked-in
+> Release build is the production configuration. Run these rows against production
+> with disposable accounts only. `native/run-phase-4-device-preflight.sh` now
+> requires the production configuration, requires the Release Supabase project and
+> key to match the production guard, and expects the SQL verification output to be
+> recorded against the production database. It no longer checks Worker staging
+> isolation. Rows that name an isolated or staging environment still read as
+> written; the owner must amend or waive each in the charter decision log.
+
 ## Latest preflight checkpoint
 
 On 2026-09-13, the privacy-safe live preflight recognized one available physical
@@ -25,7 +34,11 @@ successfully. The matrix remains blocked, and no row below has been marked
 - an owner-approved, non-placeholder HTTPS staging backend;
 - a distinct non-production Supabase staging project configured consistently in
   the Worker and Release app;
-- successful trusted-staging output from both required SQL verification scripts.
+- successful output from both required SQL verification scripts, run against the
+  production database (R59). Save each output with a first line
+  `TARGET_SUPABASE_URL=<the production Supabase URL>`; the preflight requires that line to
+  match the Worker's production `SUPABASE_URL`. It is a recorded attestation of the target,
+  not proof of it, because the scripts print no project identity themselves.
 
 The same-day read-only cloud inventory found no TradeReady Supabase staging
 project or branch, no staging R2 buckets, and no deployed

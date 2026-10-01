@@ -1182,7 +1182,27 @@ struct ErrorRedactionTests {
         expect(info.contains("<key>TradeReadySentryDSN</key><string>$(TRADEREADY_SENTRY_DSN)</string>"),
                "no DSN: Info.plist reads the build setting only")
         expect(!info.contains("sentry.io"), "no DSN: Info.plist holds no DSN")
-        expect(pbx.contains("https://staging.invalid"), "staging stays https://staging.invalid")
+        // R59 (2026-09-29): there is no staging. Release is the production
+        // configuration; Debug stays development and can never write. Each
+        // setting is asserted inside its own named build configuration, so a
+        // swap of Debug and Release cannot pass.
+        expect(!pbx.contains("https://staging.invalid"), "no staging placeholder remains in the project")
+        let appConfigurations = pbx.components(separatedBy: "isa = XCBuildConfiguration;")
+            .filter { $0.contains("TRADEREADY_ENVIRONMENT") }
+        let releaseApp = appConfigurations.filter { $0.contains("name = Release;") }
+        let debugApp = appConfigurations.filter { $0.contains("name = Debug;") }
+        expectEqual(releaseApp.count, 1, "R59: one app Release configuration")
+        expectEqual(debugApp.count, 1, "R59: one app Debug configuration")
+        if let release = releaseApp.first {
+            expect(release.contains("TRADEREADY_ENVIRONMENT = production;"), "R59: Release is production")
+            expect(release.contains("TRADEREADY_ALLOW_PRODUCTION_WRITES = YES;"), "R59: Release enables production writes")
+            expect(release.contains("TRADEREADY_BACKEND_URL = \"https://tradeready-backend.tradeready.workers.dev\";"), "R59: Release targets the production Worker")
+        }
+        if let debug = debugApp.first {
+            expect(debug.contains("TRADEREADY_ENVIRONMENT = development;"), "R59: Debug is development")
+            expect(debug.contains("TRADEREADY_ALLOW_PRODUCTION_WRITES = NO;"), "R59: Debug can never write to production")
+            expect(debug.contains("TRADEREADY_BACKEND_URL = \"http://127.0.0.1:8787\";"), "R59: Debug targets localhost")
+        }
 
         let script = read(root, "native/scripts/upload-sentry-dsyms.sh")
         expect(script.contains("tradeready-3r") && script.contains("tradeready-ios"), "dSYM: org and native project slug")
@@ -1227,7 +1247,13 @@ struct ErrorRedactionTests {
             "CrashData": "linked=true tracking=false AppFunctionality",
             "PerformanceData": "linked=true tracking=false AppFunctionality",
             "OtherDiagnosticData": "linked=true tracking=false AppFunctionality",
-        ], "manifest: collected-data types (§8.2 + §8.3 decisions; no Device ID)")
+            "EmailAddress": "linked=true tracking=false AppFunctionality",
+            "Name": "linked=true tracking=false AppFunctionality",
+            "PhoneNumber": "linked=true tracking=false AppFunctionality",
+            "PhysicalAddress": "linked=true tracking=false AppFunctionality",
+            "PhotosorVideos": "linked=true tracking=false AppFunctionality",
+            "OtherUserContent": "linked=true tracking=false AppFunctionality",
+        ], "manifest: collected-data types (§8.2 + §8.3 decisions + OI-1 first-party data; no Device ID)")
         let widget = plist("native/TradeReadyWidgets/PrivacyInfo.xcprivacy")
         expectEqual((widget["NSPrivacyCollectedDataTypes"] as? [Any])?.count, 0, "widget manifest: still no collected data")
     }

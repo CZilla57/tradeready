@@ -835,6 +835,11 @@ let viewFileInventory: Set<String> = [
     // Dynamic Type size, a text-titled Save that reads "Save tax settings", and
     // text alerts for a refused rate or a failed save.
     "N/NativeTaxSettingsView.swift",
+    // Business logo picker on Business Profile: a text-titled Add/Change and Remove
+    // (the destructive one through `.nativeDestructiveText()`), a confirmation dialog
+    // for Remove, a preview that scales with Dynamic Type and is labeled for VoiceOver
+    // ("Business logo" / "No logo yet"), and a text alert for a failed pick.
+    "N/NativeBusinessLogoSection.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -1603,8 +1608,8 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
         }
     }
     // 13: Phase 12 (12.00b.1, D3) adds the Discard button of each entry in
-    // `NativeRejectedChangesView`.
-    expectEqual(inRowDestructive, 13, "in-row destructive buttons audited")
+    // `NativeRejectedChangesView`. 14: the Remove logo button on Business Profile.
+    expectEqual(inRowDestructive, 14, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

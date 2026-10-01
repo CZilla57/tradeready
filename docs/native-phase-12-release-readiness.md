@@ -49,7 +49,11 @@ machine either) and does not touch accounts, profiles or signing.
 release, so no `aps-environment` entitlement addition and no push-capability
 confirmation are needed here (see §7 below for the waiver's read-only condition).
 
-## 2. VER-1 — version numbering (blocked on an owner confirmation)
+## 2. VER-1 — version numbering (cleared 2026-09-29)
+
+**Update 2026-09-29:** the owner confirmed the live version L is 1.2.1 (decision-log row 13), so VER-1 is cleared. The owner set the native release version N to 2.0. `MARKETING_VERSION` is now `2.0.0` on both targets (decision-log row 10), matching the proposed scheme below. `CURRENT_PROJECT_VERSION` stays `1` in the project; every upload's build number is set by the archive command (playbook §3.1) above every earlier upload. R must be 2.0.1 or higher, and N2 above R; a native hotfix must stay below R, so pick R with headroom (for example 2.1.0).
+
+*Historical record (state before 2026-09-29):*
 
 - Native `MARKETING_VERSION` = `1.0`, `CURRENT_PROJECT_VERSION` = `1` — every build
   configuration of the `TradeReadyNative` target
@@ -58,29 +62,33 @@ confirmation are needed here (see §7 below for the waiver's read-only condition
   other.
 - RN `app.json` `expo.version` = `1.2.1` (`app.json:6`), `expo.ios.buildNumber` = `1`
   (`app.json:19`).
-- Native's marketing version (1.0) is **below** the RN version (1.2.1). The owner has not
-  yet confirmed the live App Store version in App Store Connect (VER-1's first
-  requirement); this task cannot substitute a guess.
+- Native's marketing version (1.0) was **below** the RN version (1.2.1). The live App
+  Store version was not yet confirmed at that time; the owner has since confirmed it as
+  1.2.1 (decision-log row 13).
 
-**Proposed scheme** (leaves room for the 12.06 rollback candidate and the re-upgrade
-above it, per plan §12.01 and charter §4.4/§4.5): once the owner confirms the live
-version L (expected `1.2.1` unless a newer Expo build has since shipped),
+**Scheme** (adopted 2026-09-29; leaves room for the 12.06 rollback candidate and the
+re-upgrade above it, per plan §12.01 and charter §4.4/§4.5), with the live version L
+confirmed as `1.2.1`:
 
 | Release | MARKETING_VERSION | Purpose |
 |---|---|---|
-| L | (owner-confirmed, expected 1.2.1) | Current live Expo build |
+| L | 1.2.1 (owner-confirmed) | Current live Expo build |
 | N (native cutover) | **2.0.0**, build above every prior upload | The native Stage A/B/C release |
 | R (Expo rollback candidate) | **2.0.1** or higher | 12.06's processed-not-submitted rollback candidate (must stay above N) |
 | N2 (re-upgrade) | **2.0.2** or higher | The native re-upgrade above R |
 
-**Owner action:** confirm the live App Store version in App Store Connect; if it
-disagrees with `1.2.1`, adjust the scheme above accordingly. Then a `project.pbxproj`
-edit under a dated ruling sets `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` on both
-targets (kept equal, per the current pattern) — not done by this task (R8).
+**Done 2026-09-29:** `MARKETING_VERSION` is `2.0.0` on both targets (decision-log
+rows 10 and 13). `CURRENT_PROJECT_VERSION` stays `1` in the project; the archive command
+sets each upload's build number above every earlier upload (playbook §3.1).
 
 ## 3. Step 1 — production configuration parity
 
 ### 3.1 What the build configurations actually are
+
+**Update 2026-09-29 (R59, decision-log row 14): the owner decided there will be no staging build; Release is the production configuration.** The Release block in `project.pbxproj` now sets `TRADEREADY_ENVIRONMENT = production`, `TRADEREADY_BACKEND_URL` to the production Worker origin, and `TRADEREADY_ALLOW_PRODUCTION_WRITES = YES`. Debug is unchanged (development, localhost, writes off). The paragraphs below describe the state before this change. `ErrorRedactionTests` now pins the new arrangement.
+
+Production configuration decision: Release is the production configuration with the production Worker and Supabase and production writes enabled; no staging build exists ruled: R59
+
 
 The project has **two** build configurations for the `TradeReadyNative` app target, not
 three: Debug (`project.pbxproj:376-413`) is wired to `TRADEREADY_ENVIRONMENT =
@@ -271,7 +279,9 @@ to `native/Info.plist`, matching RN. **Owner approval needed** for the `Info.pli
   microphone, location, contacts, motion or other sensitive-API usage description
   exists or is needed (no matching API usage found in `N/`).
 
-## 5. OI-1 — App Store privacy-label declarations (decision, not entered)
+## 5. OI-1 — App Store privacy-label declarations (approved 2026-09-29; labels not yet entered)
+
+**Update 2026-09-29:** the owner approved this proposal as written (decision-log row 9). The `NSPrivacyCollectedDataTypes` entries were added to `N/PrivacyInfo.xcprivacy` and pinned in the manifest test. The proposal's last row maps to `NSPrivacyCollectedDataTypeOtherUserContent` only; the manifest has no Customer Support entry because the app does not collect support messages. Still the owner's: entering the labels in App Store Connect before Stage C entry.
 
 **Proposal** (first-party backend data the app sends/syncs, per contract decisions §8.3's
 carried-forward concern, §4.2 above):

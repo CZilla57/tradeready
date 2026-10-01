@@ -386,7 +386,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -423,7 +423,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -432,10 +432,10 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TRADEREADY_ALLOW_PRODUCTION_WRITES = NO;
-				TRADEREADY_BACKEND_URL = "https://staging.invalid";
+				TRADEREADY_ALLOW_PRODUCTION_WRITES = YES;
+				TRADEREADY_BACKEND_URL = "https://tradeready-backend.tradeready.workers.dev";
 				TRADEREADY_EMAIL_CONFIRMATION_URL = "https://gettradereadyapp.com/confirmed.html";
-				TRADEREADY_ENVIRONMENT = staging;
+				TRADEREADY_ENVIRONMENT = production;
 				TRADEREADY_GOOGLE_IOS_CLIENT_ID = "246232122952-b2trko1uog7593a3sg8n25tklifc85nn.apps.googleusercontent.com";
 				TRADEREADY_GOOGLE_SERVER_CLIENT_ID = "246232122952-37tucdttgsrkjs59l46oo29eggalvn92.apps.googleusercontent.com";
 				TRADEREADY_PASSWORD_RESET_URL = "tradeready://reset-password";
@@ -498,7 +498,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -529,7 +529,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gettradereadyapp.tradeready.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

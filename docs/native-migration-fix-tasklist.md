@@ -26,7 +26,7 @@ written on 2026-09-20; this table is the current state.
 | P1 link reconciliation owner recheck (F9) | Open; no reachable leak (RootView teardown) | P12-031 (S3) |
 | P1 snapshot-then-queue recovery (F10) | Fixed 2026-09-30 (host tests) | P12-028 (S2) |
 | P2 Reconcile dead control (F11) | Open, in the unused requests view | P12-033 with P12-018 |
-| Phase 7 simultaneous-offline recurring generation | Accepted permanent limitation 2026-09-30 (charter §9 row 10); P7-25 reconciled | P12-029 (S3, Closed) |
+| Phase 7 simultaneous-offline recurring generation | Accepted permanent limitation 2026-09-30 (charter §9 row 18); P7-25 reconciled | P12-029 (S3, Closed) |
 | Phase 6 and 7 verification pending | Device rows in `native-phase-12-evidence-index.md` (P6, P7) | Evidence index |
 | Phase 6 scoped-out sub-features | Not defects | — |
 | P3 process gates (F12) | Open | P12-034 (S3) |

@@ -102,6 +102,7 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeImportEngine.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeMileage.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeExpenseComposer.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeReceiptMedia.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeLogoMedia.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativePricebook.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTaxSettings.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeBusinessSnapshot.swift

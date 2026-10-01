@@ -3,26 +3,14 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
-# Registration guard (Phase 10 final review I3): every native/run-*-tests.sh
-# runner must be invoked below, or this aggregate fails before running
-# anything. A runner only counts when an uncommented line invokes it.
-# Helpers that are not runners (run-appstore-sources-common.sh,
-# run-import-tests-common.sh, run-doc-reference-check.sh and the
-# run-phase-N-device-preflight.sh wrappers) do not match *-tests.sh.
-AGGREGATE="$ROOT_DIR/native/run-all-domain-tests.sh"
-UNREGISTERED=""
-for RUNNER in "$ROOT_DIR"/native/run-*-tests.sh; do
-  NAME=$(basename "$RUNNER")
-  [ "$NAME" = "run-all-domain-tests.sh" ] && continue
-  if ! grep -Eq "^[[:space:]]*(sh[[:space:]]+)?\"\\\$ROOT_DIR/native/$NAME\"" "$AGGREGATE"; then
-    UNREGISTERED="$UNREGISTERED $NAME"
-  fi
-done
-if [ -n "$UNREGISTERED" ]; then
-  echo "run-all-domain-tests.sh: unregistered runner(s):$UNREGISTERED" >&2
-  echo "Register each one below (or rename a non-runner helper so it does not end in -tests.sh)." >&2
-  exit 1
-fi
+# Registration guard (Phase 10 final review I3): every native/run-*-tests.sh runner
+# must be invoked below, or this aggregate fails before running anything. The
+# check lives in native/check-runner-registration.sh so CI can run it alone.
+sh "$ROOT_DIR/native/check-runner-registration.sh"
+
+# Parity matrix owner/test columns and the golden-fixture manifest must be
+# current (regenerate with: node scripts/parity-manifest.mjs --write).
+sh "$ROOT_DIR/native/run-fixture-manifest-check.sh"
 
 "$ROOT_DIR/native/run-domain-tests.sh"
 sh "$ROOT_DIR/native/run-canonical-tests.sh"
@@ -151,6 +139,7 @@ sh "$ROOT_DIR/native/run-import-engine-tests.sh"
 sh "$ROOT_DIR/native/run-import-history-tests.sh"
 sh "$ROOT_DIR/native/run-import-mapping-tests.sh"
 sh "$ROOT_DIR/native/run-job-photo-mutation-tests.sh"
+sh "$ROOT_DIR/native/run-logo-media-tests.sh"
 sh "$ROOT_DIR/native/run-mileage-tests.sh"
 sh "$ROOT_DIR/native/run-money-report-tests.sh"
 sh "$ROOT_DIR/native/run-portal-administration-tests.sh"

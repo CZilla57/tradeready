@@ -34,3 +34,16 @@ export const SECURE_FIELDS = ["providerKey", "anthropicKey", "groqKey"] as const
 // notifications module (which tests routinely partial-mock; importing the
 // constant from there would silently turn the wiped key into undefined).
 export const REMINDER_PROMPT_KEY = "invoiceReminderPromptShown";
+
+// Sync-layer constants shared with the native-run guard (utils/nativeRunGuard,
+// utils/nativeRunRuntime). They live in this dependency-free module so the
+// guard can name them without importing utils/sync (which imports the guard).
+export const SYNC_QUEUE_KEY = "__syncQueue";
+export const SYNC_LAST_SYNCED_KEY = "__lastSyncedAt";
+export const SYNC_CURSOR_VERSION = 2 as const;
+
+// Every collection the pull replaces, in pull order (was private to sync.ts).
+export const SYNCED_COLLECTION_TABLES = [
+  "jobs", "invoices", "customers", "expenses", "pricebook",
+  "recurringJobs", "recurringInvoices", "trips", "bookingRequests", "jobPhotos",
+] as const;

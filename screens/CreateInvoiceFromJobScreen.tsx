@@ -40,6 +40,7 @@ import { amountPaid, reconcilePaidFields } from "../utils/invoicePayments";
 import { formatQuote } from "../utils/format";
 import Field from "../components/Field";
 import { nextInvoiceNumber } from "../utils/invoiceNumber";
+import { isInvoiceCreationBlocked, INVOICE_BLOCKED_TITLE, INVOICE_BLOCKED_MESSAGE } from "../utils/nativeRunRuntime";
 import { spacing, radius, fontSize, fonts, layout } from "../utils/theme";
 import type { ColorScheme, ShadowScheme } from "../utils/theme";
 import { useTheme } from '../hooks/useTheme';
@@ -177,6 +178,12 @@ export default function CreateInvoiceFromJobScreen({ route, navigation }: JobSta
       return;
     }
 
+    // E-1: creating (or requesting a deposit) numbers a new invoice, so it waits
+    // for the first pull after a native run. Finalizing an existing invoice does not.
+    if (!(mode === "finalize" && existingInvoice) && (await isInvoiceCreationBlocked())) {
+      Alert.alert(INVOICE_BLOCKED_TITLE, INVOICE_BLOCKED_MESSAGE);
+      return;
+    }
     setSaving(true);
     try {
       const [jobs, invoices, settings] = await Promise.all([loadJobs(), loadInvoices(), loadSettings()]);

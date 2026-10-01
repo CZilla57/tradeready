@@ -160,8 +160,18 @@ struct RepositoryTests {
             let healedOutcome = reprotectRepository.reprotectPublishedLegacyDirectory(
                 migration: .legacyNativeSnapshot, name: "AsyncStorage"
             )
-            expect(healedOutcome == .completed(protected: 2, failed: 0),
-                   "L267.a re-protecting an already-published copy protects every file with zero failures")
+            // Some hosts (a virtualized macOS CI runner) cannot set a file
+            // protection class at all. Probe the host, so the assertion still
+            // proves every file was attempted and counted correctly there,
+            // instead of assuming the OS honours `.protectionKey`.
+            let protectionProbe = root.appendingPathComponent("protection-probe.bin")
+            try Data("probe".utf8).write(to: protectionProbe, options: .atomic)
+            let hostSupportsFileProtection =
+                (try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete],
+                                                        ofItemAtPath: protectionProbe.path)) != nil
+            expect(healedOutcome == .completed(protected: hostSupportsFileProtection ? 2 : 0,
+                                               failed: hostSupportsFileProtection ? 0 : 2),
+                   "L267.a re-protecting an already-published copy attempts every file (host file protection: \(hostSupportsFileProtection))")
 
             // Nothing published yet: no directory to re-protect, and the hook
             // must not claim work was done.

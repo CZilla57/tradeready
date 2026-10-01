@@ -1,5 +1,14 @@
 import Foundation
 
+/// Waits (up to 5 s) for a background retry to land, instead of a fixed sleep
+/// that a loaded CI runner can outrun. Returns as soon as `condition` holds.
+func pollUntil(seconds: Double = 5, _ condition: () -> Bool) async {
+    let deadline = Date().addingTimeInterval(seconds)
+    while !condition() && Date() < deadline {
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+}
+
 private final class FakePushService: NativeMutationPushing {
     var callCount = 0
     var lastSubject: String?
@@ -893,7 +902,7 @@ struct SyncCoordinatorTests {
             baseBackoff: 0.01, maxBackoff: 0.01
         )
         _ = await automatic.sync(trigger: .foreground)
-        try await Task.sleep(nanoseconds: 80_000_000)
+        await pollUntil { automaticPush.callCount == 2 && automaticQueue.load().isEmpty }
         expect(automaticPush.callCount == 2 && automaticQueue.load().isEmpty,
                "a failed push retries automatically after backoff")
 
@@ -914,7 +923,7 @@ struct SyncCoordinatorTests {
         _ = await pullFailure.sync(trigger: .foreground)
         expect(pullFailure.status().diagnosticCode == "transport/jobs",
                "a pull failure reaches the privacy-safe status surface")
-        try await Task.sleep(nanoseconds: 80_000_000)
+        await pollUntil { pullFailureCount == 2 && pullFailure.status().diagnosticCode == nil }
         expect(pullFailureCount == 2
                && pullFailure.status().diagnosticCode == nil
                && pullFailure.status().consecutiveFailures == 0

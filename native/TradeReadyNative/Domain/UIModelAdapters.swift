@@ -496,7 +496,8 @@ enum CanonicalUIAdapters {
         let fields: [String: Canonical.JSONValue] = [
             "businessName": .string(value.businessName), "contactName": .string(value.contactName),
             "phone": .string(value.phone), "email": .string(value.email), "address": .string(value.address),
-            "region": value.region.isEmpty ? .null : .string(value.region), "trade": .string(value.trade),
+            "region": value.region.isEmpty ? .null : .string(value.region),
+            "logoPhoto": value.logoPhoto.isEmpty ? .null : .string(value.logoPhoto), "trade": .string(value.trade),
             "laborRate": number(value.laborRate), "laborCostRate": number(value.ownerLaborCostRate),
             "materialMarkup": number(value.materialMarkup), "overheadPercent": number(value.overheadPercent),
             "marginPercent": number(value.marginPercent), "minimumJobFee": number(value.minimumJobFee),
@@ -667,6 +668,7 @@ enum CanonicalUIAdapters {
         update(&fields, "email", edit.value.email, original.email)
         update(&fields, "address", edit.value.address, original.address)
         updateOptional(&fields, "region", optional(edit.value.region), optional(original.region))
+        updateOptional(&fields, "logoPhoto", optional(edit.value.logoPhoto), optional(original.logoPhoto))
         update(&fields, "trade", edit.value.trade, original.trade)
         update(&fields, "paymentNotes", edit.value.paymentNotes, original.paymentNotes)
         update(&fields, "provider", edit.value.paymentProvider, original.paymentProvider)
@@ -775,6 +777,7 @@ enum CanonicalUIAdapters {
         var result = BusinessSettings(businessName: value.businessName, contactName: value.contactName,
                                       phone: value.phone, email: value.email, address: value.address,
                                       region: value.region ?? "", trade: value.trade)
+        result.logoPhoto = value.logoPhoto ?? ""
         result.paymentNotes = value.paymentNotes
         result.paymentProvider = value.provider
         result.paymentProviderKey = value.providerKey

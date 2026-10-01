@@ -280,3 +280,13 @@ that cross-table authorization change directly to production.
    sample/fresh selection, StoreKit sandbox,
    TestFlight, expiry, account-deletion staging, and cross-account
    evidence.
+2. Device-matrix rows still Pending: A2-A6, A8, O2-O5, S1-S3, S5-S7, D2-D5
+   (A2, A8, D3, S3 and S7 have partial observations recorded but are not
+   promoted). Every remaining row needs a signed iPhone, StoreKit sandbox or
+   TestFlight, or staging; none is in-repo code work.
+3. Account-deletion staging proof: an isolated Supabase project or branch, the
+   `supabase/verify/account_deletion_cascade.sql` run, and the choice of a
+   residual access-token control (short JWT lifetime or session-aware RLS).
+   Owner-gated (D4).
+4. The `tradeready://reset-password` redirect allow-list is owner-reported and
+   unproven until the A5/A6 device rows pass.

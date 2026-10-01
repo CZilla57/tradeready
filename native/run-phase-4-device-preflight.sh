@@ -6,6 +6,7 @@ PROJECT_PATH="$ROOT_DIR/native/TradeReadyNative.xcodeproj"
 INFO_PLIST_PATH="$ROOT_DIR/native/Info.plist"
 WORKER_CONFIG="$ROOT_DIR/backend-workers/wrangler.toml"
 RN_SUPABASE_SOURCE="$ROOT_DIR/utils/supabase.ts"
+RN_APP_CONFIG="$ROOT_DIR/app.json"
 
 DEVICE_LIST_FILE=
 BUILD_SETTINGS_FILE=
@@ -113,11 +114,15 @@ verify_sql_evidence() {
   path=$1
   label=$2
   if [ -z "$path" ]; then
-    block "Record the trusted-staging $label SQL verification output."
+    block "Record the production $label SQL verification output."
   elif [ ! -r "$path" ]; then
     fail "The supplied $label SQL verification output is unreadable."
+  elif [ -z "$worker_production_supabase" ]; then
+    fail "The $label SQL verification cannot be tied to the production project: the Worker production Supabase URL is unavailable."
+  elif ! grep -F -x -q "TARGET_SUPABASE_URL=$worker_production_supabase" "$path"; then
+    fail "The $label SQL verification output must record its target: add a line TARGET_SUPABASE_URL=<production Supabase URL> naming the production project."
   elif grep -F -q "ALL CHECKS PASSED" "$path" && ! grep -F -q "FAILED" "$path"; then
-    pass "Trusted staging has recorded $label SQL verification."
+    pass "Recorded $label SQL verification against the production database."
   else
     fail "The supplied $label SQL verification did not pass cleanly."
   fi
@@ -189,33 +194,37 @@ if [ "$build_settings_available" -eq 1 ]; then
   release_production_supabase_url=$(configured_value TRADEREADY_PRODUCTION_SUPABASE_URL)
   release_supabase_url=$(configured_value TRADEREADY_SUPABASE_URL)
 
-  if [ "$environment" = staging ]; then
-    pass "Release is isolated to the staging environment."
+  printf 'NOTE: R59 (no staging): Release writes to the production backend. Use disposable accounts for every device row.\n'
+  if [ "$environment" = production ]; then
+    pass "Release is the production configuration (R59: no staging environment exists)."
   else
-    fail "Release must use the staging environment during Phase 4 verification."
+    fail "Release must use the production configuration (R59: no staging environment exists)."
   fi
 
   case "$backend_url" in
     https://*)
+      rn_backend_url=$(sed -n 's/.*"backendUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RN_APP_CONFIG" 2>/dev/null | head -n 1)
       if is_placeholder_https "$backend_url"; then
-        block "Configure the trusted HTTPS staging backend before Phase 4 device tests."
+        block "Configure the production HTTPS backend before Phase 4 device tests."
+      elif [ -n "$rn_backend_url" ] && [ "$backend_url" = "$rn_backend_url" ]; then
+        pass "Release targets the production Worker (the origin the React Native app ships against)."
       else
-        pass "Release has a non-placeholder HTTPS backend."
+        fail "Release backend must be the production Worker origin from app.json under R59."
       fi
       ;;
     *) fail "Release requires a non-placeholder HTTPS backend." ;;
   esac
 
-  if [ "$production_writes" = NO ]; then
-    pass "The production backend-write flag remains disabled in the staging build."
+  if [ "$production_writes" = YES ]; then
+    pass "Release enables production writes (R59)."
   else
-    fail "The production backend-write flag must remain disabled during staging verification."
+    fail "Release must enable production writes under R59."
   fi
 
   case "$release_supabase_url" in
     https://*)
       if is_placeholder_https "$release_supabase_url"; then
-        block "Configure the isolated Release Supabase project before Phase 4 device tests."
+        block "Configure the Release Supabase project before Phase 4 device tests."
       else
         pass "Release has a resolved HTTPS Supabase project."
       fi
@@ -238,6 +247,13 @@ if [ "$build_settings_available" -eq 1 ]; then
     *) fail "Release requires the production publishable-key guard." ;;
   esac
 
+  if [ "$release_supabase_url" = "$release_production_supabase_url" ] &&
+     [ "$release_supabase_key" = "$release_production_supabase_key" ]; then
+    pass "Release Supabase project and key match the production guard (R59: no staging)."
+  else
+    fail "Release Supabase project and key must match the production guard under R59."
+  fi
+
   rn_production_key=
   if [ -r "$RN_SUPABASE_SOURCE" ]; then
     rn_production_key=$(sed -n "s/^const SUPABASE_ANON_KEY = '\([^']*\)';$/\1/p" "$RN_SUPABASE_SOURCE" | head -n 1)
@@ -250,12 +266,8 @@ if [ "$build_settings_available" -eq 1 ]; then
   fi
 fi
 
-worker_staging_supabase=
 worker_production_supabase=
 if [ "$worker_config_available" -eq 1 ]; then
-  worker_name=$(toml_value env.staging name)
-  worker_crons=$(toml_value env.staging.triggers crons)
-  worker_staging_supabase=$(toml_value env.staging.vars SUPABASE_URL)
   worker_production_supabase=$(toml_value vars SUPABASE_URL)
 
   if [ "$build_settings_available" -eq 1 ]; then
@@ -264,45 +276,6 @@ if [ "$worker_config_available" -eq 1 ]; then
       pass "Release runtime guard matches the Worker production Supabase project."
     else
       fail "Release production Supabase guard must match the Worker production project."
-    fi
-  fi
-
-  if [ "$worker_name" = tradeready-backend-staging ] && [ "$worker_crons" = "[]" ]; then
-    pass "Worker staging name and no-cron isolation are explicit."
-  else
-    fail "Worker staging must use the isolated name and have no cron triggers."
-  fi
-
-  if awk '/^\[env\.staging\]/{active=1} active{print}' "$WORKER_CONFIG" |
-       grep -F -q 'bucket_name = "tradeready-photos-staging"' &&
-     awk '/^\[env\.staging\]/{active=1} active{print}' "$WORKER_CONFIG" |
-       grep -F -q 'bucket_name = "tradeready-invoice-pdfs-staging"'; then
-    pass "Worker staging uses isolated photo and invoice R2 buckets."
-  else
-    fail "Worker staging requires both isolated R2 buckets."
-  fi
-
-  if [ -z "$worker_staging_supabase" ] || is_placeholder_https "$worker_staging_supabase" ||
-     [ "$worker_staging_supabase" = "$worker_production_supabase" ]; then
-    block "Provision a distinct, non-placeholder Supabase project for Worker staging."
-    if [ "$build_settings_available" -eq 1 ] &&
-       [ -n "$worker_production_supabase" ] &&
-       { [ "$release_supabase_url" = "$worker_production_supabase" ] ||
-         [ "$release_supabase_key" = "$release_production_supabase_key" ]; }; then
-      block "Release Supabase URL or publishable key still matches production; move both with the isolated staging Worker."
-    fi
-  else
-    pass "Worker staging points to a distinct Supabase project."
-    if [ "$build_settings_available" -eq 1 ]; then
-      if [ -n "$worker_production_supabase" ] &&
-         { [ "$release_supabase_url" = "$worker_production_supabase" ] ||
-           [ "$release_supabase_key" = "$release_production_supabase_key" ]; }; then
-        fail "Release Supabase URL and publishable key must not match production during Phase 4 verification."
-      elif [ "$release_supabase_url" = "$worker_staging_supabase" ]; then
-        pass "Release and Worker staging use the same isolated project, with a non-production app key."
-      else
-        fail "Release Supabase does not match the isolated Worker staging project."
-      fi
     fi
   fi
 fi
@@ -354,4 +327,4 @@ if [ "$blockers" -gt 0 ]; then
   exit 2
 fi
 
-echo "READY: run docs/native-phase-4-device-runsheet.md on trusted staging."
+echo "READY: run docs/native-phase-4-device-runsheet.md with disposable production accounts (R59: no staging)."

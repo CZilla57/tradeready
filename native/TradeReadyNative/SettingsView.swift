@@ -202,6 +202,7 @@ private struct SettingsPage<Content: View>: View {
 struct BusinessProfileSettings: View {
     @EnvironmentObject private var store: AppStore
     var body: some View { SettingsPage(title: "Business Profile", content: Group {
+        NativeBusinessLogoSection()
         Section("BUSINESS") {
             LabeledField(label: "Business name") { TextField("Demo Plumbing Co", text: $store.settings.businessName) }
             LabeledField(label: "Your name") { TextField("Owner or contact name", text: $store.settings.contactName) }

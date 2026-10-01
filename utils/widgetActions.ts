@@ -24,6 +24,7 @@ import {
   DONE_STATUSES,
 } from "./widgetBridge";
 import { loadJobs, saveJobs, loadTrips, saveTrips, loadExpenses, saveExpenses } from "./storage";
+import { isNativeRunPending } from "./nativeRunRuntime";
 import { HOME_LABEL } from "./mileageUtils";
 import { EXPENSE_CATEGORIES } from "./moneyUtils";
 import type { Job, Trip, Expense, ExpenseCategoryId } from "../types/models";
@@ -246,6 +247,11 @@ export function expenseFromAction(
  */
 export async function replayWidgetActions(): Promise<void> {
   try {
+    // E-1/R49: while a native run is pending the jobs are cleared, and the
+    // replay removes the queue before applying it, so it would drop every
+    // timer action. Leave the App Group queue untouched; the pull's
+    // completion replays it once.
+    if (await isNativeRunPending()) return;
     const raw = await getWidgetSharedItem(WIDGET_ACTIONS_KEY);
     if (raw) {
       await removeWidgetSharedItem(WIDGET_ACTIONS_KEY);

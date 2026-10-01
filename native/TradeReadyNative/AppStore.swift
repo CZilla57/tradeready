@@ -11636,6 +11636,50 @@ extension AppStore {
         }
     }
 
+    // MARK: Business logo
+
+    /// Stores a picked or captured image as the business logo, like RN's
+    /// `promptForLogo`: capped at 512px, written as PNG under `logos/`, and the
+    /// local reference saved in `settings.logoPhoto` (which syncs as part of the
+    /// settings blob; the bytes stay on this device). The previous logo file is
+    /// removed only after the new reference is saved, and the new file is removed
+    /// again if the save fails, so a failed pick changes nothing.
+    @discardableResult
+    func setBusinessLogo(sourceData: Data) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        guard let png = NativeLogoMedia.normalizedPNGBytes(from: sourceData) else {
+            migrationMessage = "That image couldn't be used as a logo."
+            return false
+        }
+        let root = repository.liveMediaDirectoryURL
+        let reference: String
+        do {
+            let logoID = NativeLogoMedia.makeLogoID()
+            _ = try NativeLogoMedia.installBytes(png, root: root, logoID: logoID)
+            reference = try NativeLogoMedia.logoURL(root: root, logoID: logoID).absoluteString
+        } catch {
+            migrationMessage = "The logo could not be saved."
+            return false
+        }
+        let previous = settings.logoPhoto
+        settings.logoPhoto = reference
+        guard settingsSaveFailure == nil, settings.logoPhoto == reference else {
+            NativeLogoMedia.removeFile(reference: reference, root: root)
+            return false
+        }
+        NativeLogoMedia.removeFile(reference: previous, root: root)
+        return true
+    }
+
+    /// Clears the logo reference and, once that is saved, the file it named.
+    func removeBusinessLogo() {
+        let previous = settings.logoPhoto
+        guard !previous.isEmpty else { return }
+        settings.logoPhoto = ""
+        guard settingsSaveFailure == nil, settings.logoPhoto.isEmpty else { return }
+        NativeLogoMedia.removeFile(reference: previous, root: repository.liveMediaDirectoryURL)
+    }
+
     /// The `data:` URI for an already-stored receipt. Accepts both the native
     /// `file://` reference and a bare path (a legacy record can carry either) and
     /// returns nil when the bytes are unreadable — the scan then says so instead
