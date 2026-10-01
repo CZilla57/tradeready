@@ -1079,7 +1079,7 @@ row moved from Stage A to Stage B with the owner's log entry (charter §4.3).
 ```
 Run 1, 2026-10-01
 Build: 2.0.0 (2)   Profile: TestFlight internal. Build 2.0.0 (1) was uploaded first and stalled on "Data migration paused" (stale native keychain session, fixed in 2.0.0 (2); charter rows 25 and 26)
-Devices/OS: not recorded (the owner's report named no model or iOS version)
+Devices/OS: iPhone 16 Pro Max (512 GB) / iOS 27.2 beta (one device; owner report 2026-10-01). Rows that list two device classes (STD18 and SE17) ran on this one device only; the SE17 class was not covered
 Accounts (aliases only): not recorded
 Environment: REL+KEYS, production-configured (R59); no staging exists, so no STG row ran
 Rows run (ID: result), as reported by the owner in chat on 2026-10-01 and not individually verified by an agent:
@@ -1088,7 +1088,7 @@ Rows run (ID: result), as reported by the owner in chat on 2026-10-01 and not in
   P12-3B-2: pass
   not run: P2-P5, P2-P8, CR-1, CR-2, CR-3, CR-4, CR-5, CR-6, CR-7, CR-8, CR-9, P12-3B-1 part 3
   blocked, not waived: OWN-1, OWN-2 (STG rows; the owner ran them against production and left them blocked on 2026-10-01, EI section 2 rule 5)
-Evidence cells: every row's cell stays "[ ]". The device model, iOS version, account alias and an evidence link outside the repository were not supplied, so no row is closed (EI section 2 rules 1 and 2). P12-RB-2 and P12-RB-3 in particular stay "[ ]" so the Stage B rehearsal check does not read as recorded.
+Evidence cells: every row's cell stays "[ ]". The account alias and an evidence link outside the repository were not supplied (the device and iOS version were, 2026-10-01), so no row is closed (EI section 2 rules 1 and 2). P12-RB-2 and P12-RB-3 in particular stay "[ ]" so the Stage B rehearsal check does not read as recorded.
 Rollback rows (P12-RB-2, P12-RB-3, P12-RB-5, P12-RB-7): the rollback target was the plain App Store 1.2.1 build, not the Expo rollback candidate R (prerequisite EXPO-RB was not built). The owner reports these rows passed against 1.2.1; that is not the rehearsal the rows describe.
 Native baselines: not recorded (launch, crash-free sessions, sync error rate and migration timing were not supplied)
 Defects raised: none raised in this run. The build 1 migration stall is recorded in charter rows 25 and 26 and was fixed in commit 4fe8a10
