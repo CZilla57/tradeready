@@ -12,6 +12,9 @@
 -- byte-identically (the JS treats a missing table as "not adopted").
 -- Idempotent — safe to re-run.
 --
+-- pgcrypto: Supabase installs it in the `extensions` schema, so `digest` is
+-- schema-qualified (the function search_path omits `extensions`).
+--
 -- Ordering: this filename sorts AFTER 20260920_booking_lifecycle_rpcs.sql so
 -- the G1/G2 functions exist first. The admin RPC does NOT call them; it
 -- inlines the same per-owner advisory-lock key (`booking-owner:<user_id>`)
@@ -37,6 +40,8 @@
 -- Phase 12 hardware if no local PG is available — never label a mocked 409
 -- as race proof).
 
+create extension if not exists pgcrypto with schema extensions;
+
 create table if not exists public.booking_link_state (
   user_id uuid primary key references auth.users(id) on delete cascade,
   token_hash text,                       -- sha256 hex; null when never minted
@@ -60,26 +65,25 @@ create table if not exists public.booking_operations (
 create index if not exists booking_operations_owner_created
   on public.booking_operations (user_id, created_at);
 
--- Multi-tenant floor (same posture as booking_reservations): owner-scoped
--- policy on every new table holding user data. Public/anon traffic reaches
--- these rows only through the service-role RPC; the device never reads them
--- directly (8.07 uses POST /api/booking/admin).
+-- Server-authority tables (P12-023, fix plan F3): NO client-facing policy and
+-- NO client grants. Devices never read or write these rows — 8.07 uses
+-- POST /api/booking/admin, which reaches them only through the service-role
+-- RPC. `booking_operations.response` holds a raw token for 30 days, so an
+-- owner-scoped SELECT policy would be a reveal endpoint, and an owner FOR ALL
+-- policy would let a device edit its own authority row and bypass the
+-- server-first contract. RLS stays enabled with no policy (deny by default);
+-- service_role bypasses RLS but still needs table privileges (Worker REST
+-- reads), and projects without automatic grants give it none.
 alter table public.booking_link_state enable row level security;
 alter table public.booking_operations enable row level security;
 
 drop policy if exists "users own booking_link_state" on public.booking_link_state;
-create policy "users own booking_link_state"
-  on public.booking_link_state
-  for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
 drop policy if exists "users own booking_operations" on public.booking_operations;
-create policy "users own booking_operations"
-  on public.booking_operations
-  for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+
+revoke all on table public.booking_link_state from public, anon, authenticated;
+revoke all on table public.booking_operations from public, anon, authenticated;
+grant select, insert, update, delete on table public.booking_link_state to service_role;
+grant select, insert, update, delete on table public.booking_operations to service_role;
 
 -- ── backfill (deployment step 2; re-runnable) ─────────────────────────────
 -- One row per settings blob carrying bookingLink.token, adopted_at=NULL.
@@ -88,7 +92,7 @@ create policy "users own booking_operations"
 
 insert into public.booking_link_state (user_id, token_hash, enabled, revision, adopted_at)
 select s.user_id,
-       encode(digest(s.data -> 'bookingLink' ->> 'token', 'sha256'), 'hex'),
+       encode(extensions.digest(s.data -> 'bookingLink' ->> 'token', 'sha256'), 'hex'),
        (s.data -> 'bookingLink' ->> 'enabled') is distinct from 'false',
        1,
        NULL
@@ -141,6 +145,10 @@ declare
   v_new_rev integer;
   v_response jsonb;
 begin
+  if public.booking_is_client_caller() then
+    return jsonb_build_object('ok', false, 'error', 'forbidden');
+  end if;
+
   if p_action not in ('mint', 'set_enabled', 'rotate') then
     return jsonb_build_object('ok', false, 'error', 'invalid_action');
   end if;
@@ -265,5 +273,5 @@ begin
 end;
 $$;
 
-revoke all on function public.admin_booking_link(uuid, text, uuid, text, boolean, integer, text, jsonb) from public;
+revoke all on function public.admin_booking_link(uuid, text, uuid, text, boolean, integer, text, jsonb) from public, anon, authenticated;
 grant execute on function public.admin_booking_link(uuid, text, uuid, text, boolean, integer, text, jsonb) to service_role;

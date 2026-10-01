@@ -232,12 +232,26 @@ Touching endpoints are legal (strict inequality preserved).
 ### 2.5 Job / settings concurrent-write semantics
 
 Jobs and settings stay blob tables (no schema rewrite). The RPC reads them
-inside its snapshot under the owner lock, so a concurrent device job/settings
-save serializes behind the claim; the loser retries against the new snapshot
-and gets `slot_taken`/`slot_changed` rather than silently overbooking.
+inside its snapshot under the owner lock. Plain PostgREST upserts from devices
+(native and RN sync) do not call the RPC, so the owner lock alone does **not**
+serialize them: a write could commit around a claim. The protocol that closes
+this (P12-025, fix plan F2) is a database-enforced write fence in
+`20260920_booking_lifecycle_rpcs.sql`: `BEFORE INSERT OR UPDATE` triggers on
+`jobs` and `settings` take the same owner advisory lock (a statement trigger
+for `auth.uid()` before any row lock, plus a row trigger for writers without
+one, such as `service_role`). A write and a claim therefore serialize in either
+order: the claim sees every committed write, and a write that arrives during a
+claim waits for it to commit, then lands after the new booking. The fence does
+not stop an owner from later scheduling over a booked slot; it guarantees only
+that a claim never commits against a stale view. `bookingRequests` is not
+fenced (its row lock precedes any trigger, so fencing it would reverse the lock
+order); `transition_booking` takes the owner lock before its row lock.
+
 Buffer/duration edits between offer and claim are therefore always honored
 at claim time (stale hosted pages can never book an invalid slot — the
-current membership check, moved in-txn).
+current membership check, moved in-txn). Evidence: host proof on a local
+PostgreSQL (`supabase/verify/local/run.sh`, real concurrent sessions); the
+hosted-project proof remains a Stage A row.
 
 ### 2.6 Request / hold rollback; legacy Data API field protection
 

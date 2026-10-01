@@ -37,6 +37,8 @@
 -- one. Rotation (new operationId) is the recovery path for a lost display
 -- copy — there is no reveal endpoint by design (§1.4, portal precedent).
 
+create extension if not exists pgcrypto with schema extensions;
+
 create table if not exists public.portal_operations (
   operation_id uuid primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -50,14 +52,14 @@ create table if not exists public.portal_operations (
 create index if not exists portal_operations_owner_customer_created
   on public.portal_operations (user_id, customer_id, created_at);
 
+-- Server-authority table: no client policy, no client grants (P12-023, see the
+-- same note in 20260921_booking_admin_state.sql). `response` holds a raw token.
 alter table public.portal_operations enable row level security;
 
 drop policy if exists "users own portal_operations" on public.portal_operations;
-create policy "users own portal_operations"
-  on public.portal_operations
-  for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+
+revoke all on table public.portal_operations from public, anon, authenticated;
+grant select, insert, update, delete on table public.portal_operations to service_role;
 
 -- ── consolidation (deployment step 2; re-runnable) ─────────────────────────
 -- The new index rejects tables that already hold two live rows for one
@@ -73,13 +75,13 @@ update public.portal_tokens t
    and c.id::text = t.customer_id
    and t.revoked_at is null
    and (c.data -> 'portal' ->> 'token') is not null
-   and t.token_hash <> encode(digest(c.data -> 'portal' ->> 'token', 'sha256'), 'hex')
+   and t.token_hash <> encode(extensions.digest(c.data -> 'portal' ->> 'token', 'sha256'), 'hex')
    and exists (
      select 1 from public.portal_tokens keeper
       where keeper.user_id = t.user_id
         and keeper.customer_id = t.customer_id
         and keeper.revoked_at is null
-        and keeper.token_hash = encode(digest(c.data -> 'portal' ->> 'token', 'sha256'), 'hex')
+        and keeper.token_hash = encode(extensions.digest(c.data -> 'portal' ->> 'token', 'sha256'), 'hex')
    );
 
 update public.portal_tokens t
@@ -149,6 +151,10 @@ declare
   v_new_enabled boolean;
   v_response jsonb;
 begin
+  if public.booking_is_client_caller() then
+    return jsonb_build_object('ok', false, 'error', 'forbidden');
+  end if;
+
   if p_action not in ('mint', 'set_enabled', 'rotate') then
     return jsonb_build_object('ok', false, 'error', 'invalid_action');
   end if;
@@ -203,17 +209,24 @@ begin
   -- token. Materialize it first so every action below operates purely on
   -- server state. ON CONFLICT DO NOTHING: a racing resolver backfill or a
   -- concurrent admin call may have won — the re-read below then governs.
-  select count(*) into v_live_count
+  -- Lock the live rows, then count them: FOR UPDATE is not allowed together
+  -- with an aggregate, so the two steps are separate statements.
+  perform 1
     from public.portal_tokens t
    where t.user_id = p_user_id
      and t.customer_id = p_customer_id
      and t.revoked_at is null
      for update;
+  select count(*) into v_live_count
+    from public.portal_tokens t
+   where t.user_id = p_user_id
+     and t.customer_id = p_customer_id
+     and t.revoked_at is null;
   v_blob_token := v_customer.data -> 'portal' ->> 'token';
   if v_live_count = 0 and v_blob_token is not null then
     v_blob_enabled := coalesce((v_customer.data -> 'portal' ->> 'enabled') is distinct from 'false', true);
     insert into public.portal_tokens (token_hash, user_id, customer_id, enabled)
-    values (encode(digest(v_blob_token, 'sha256'), 'hex'), p_user_id, p_customer_id, v_blob_enabled)
+    values (encode(extensions.digest(v_blob_token, 'sha256'), 'hex'), p_user_id, p_customer_id, v_blob_enabled)
     on conflict do nothing;
     select count(*) into v_live_count
       from public.portal_tokens t
@@ -304,5 +317,5 @@ begin
 end;
 $$;
 
-revoke all on function public.admin_portal_token(uuid, text, text, uuid, text, boolean, text, jsonb) from public;
+revoke all on function public.admin_portal_token(uuid, text, text, uuid, text, boolean, text, jsonb) from public, anon, authenticated;
 grant execute on function public.admin_portal_token(uuid, text, text, uuid, text, boolean, text, jsonb) to service_role;

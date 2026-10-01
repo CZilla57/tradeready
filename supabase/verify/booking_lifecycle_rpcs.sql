@@ -15,12 +15,22 @@ select p.proname,
                      'booking_take_lock', 'booking_to_minutes');
 -- Expect 4 rows. claim_booking_slot: 11 args; transition_booking: 8 args.
 
--- 2. Execute is locked down: service_role only, no public/anon/anons.
-select p.proname, grantee, privilege_type
-  from information_schema.routine_privileges
- where routine_schema = 'public'
-   and routine_name in ('claim_booking_slot', 'transition_booking');
--- Expect only {grantee: service_role, privilege: EXECUTE} rows.
+-- 2. Execute is locked down (P12-023). Supabase grants EXECUTE on new public
+-- functions straight to anon/authenticated, which `revoke ... from public`
+-- does not remove, so test the ROLES, not the ACL text. Expect ZERO rows.
+select p.oid::regprocedure as function, r.rolname as role_that_can_execute
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  cross join (select rolname from pg_roles where rolname in ('anon', 'authenticated')) r
+ where n.nspname = 'public'
+   and p.proname in ('claim_booking_slot', 'transition_booking', 'booking_take_lock', 'booking_to_minutes', 'booking_is_client_caller')
+   and has_function_privilege(r.rolname, p.oid, 'execute');
+-- And service_role must keep it. Expect one row per function, all true.
+select p.oid::regprocedure as function, has_function_privilege('service_role', p.oid, 'execute') as service_role_can_execute
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.proname in ('claim_booking_slot', 'transition_booking', 'booking_take_lock', 'booking_to_minutes', 'booking_is_client_caller');
 
 -- 3. Backstop index still present (identical-start serialization until and
 -- beyond the RPC deploy — §10 step 1: keep it).
@@ -32,8 +42,8 @@ select indexname, indexdef
 -- Expect 1 row: UNIQUE (user_id, slot_start_utc) WHERE status = 'booked'.
 
 -- 4. pgcrypto present (adopted-branch token-hash comparison; §5).
-select extname from pg_extension where extname = 'pgcrypto';
--- Expect 1 row on Supabase (standard extension). If absent, the adopted
+select e.extname, n.nspname as schema from pg_extension e join pg_namespace n on n.oid = e.extnamespace where e.extname = 'pgcrypto';
+-- Expect 1 row, schema = extensions on Supabase (the migrations call extensions.digest). If absent, the adopted
 -- branch fails at execution — do NOT deploy Workers until resolved.
 
 -- 5. set_updated_at trigger still stamps bookingRequests (scheduleProof

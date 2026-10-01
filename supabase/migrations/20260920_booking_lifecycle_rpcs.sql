@@ -1,14 +1,16 @@
 -- 20260920_booking_lifecycle_rpcs.sql
 --
 -- Task 8.04 — Atomic reservations and booking lifecycle (contract decisions
--- §2 verbatim: G1/G2). ADDITIVE ONLY: two `security definer` RPCs plus
--- helpers. No table rewrites, no column changes, no RLS changes. The existing
+-- §2 verbatim: G1/G2). Two `security definer` RPCs plus helpers, and (P12-025)
+-- write-fence triggers on `jobs` and `settings` that take the same owner lock.
+-- No table rewrites, no column changes, no RLS changes. The existing
 -- partial unique index `booking_reservations_active_slot` is KEPT as the
 -- identical-start backstop (§10 step 1); the RPCs add the interval/buffer
 -- serialization the index cannot express.
 --
 -- Lock ordering (§2.3): every function takes the per-owner serialization lock
--- FIRST (`pg_advisory_xact_lock` on `booking-owner:<user_id>`), then touches
+-- FIRST (`pg_advisory_xact_lock` on `booking-owner:<user_id>`), before any row
+-- lock (transition_booking looks the owner up without locking the row), then touches
 -- `booking_reservations` → `"bookingRequests"` → `settings`/`jobs` blob reads,
 -- never in reverse. Advisory-lock rationale (ownership): the §2.1 sentinel
 -- row lives in `booking_link_state`, which task 8.05 owns. Until 8.05 lands,
@@ -21,8 +23,8 @@
 -- ADOPTED `booking_link_state` row when that table exists (adoption-gated
 -- dual read, §10 step 3): `to_regclass` guard, so this file deploys cleanly
 -- before 8.05. The adopted branch compares
--- `encode(digest(p_token,'sha256'),'hex')` (pgcrypto — Supabase standard
--- extension; the verify script asserts its presence) and requires
+-- `encode(extensions.digest(p_token,'sha256'),'hex')` (pgcrypto — Supabase
+-- installs it in the `extensions` schema, so the call is schema-qualified; the verify script asserts its presence) and requires
 -- `enabled`. Post-adoption blob writes stay auth-inert by construction: the
 -- adopted branch never reads the blob token.
 --
@@ -77,6 +79,85 @@ begin
 end;
 $$;
 
+-- Defense in depth behind the grants below (P12-023): these functions take the
+-- owner id as a parameter and trust it, so they must only ever run for the
+-- server (Worker, service_role key) or a direct admin session. If a grant ever
+-- regressed and an API client reached one, PostgREST would carry that client's
+-- JWT role here; refuse it. The revokes are the real control, not this check.
+create or replace function public.booking_is_client_caller()
+returns boolean
+language sql stable
+set search_path = pg_catalog, public
+as $$
+  select coalesce(
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role',
+    nullif(current_setting('request.jwt.claim.role', true), ''),
+    ''
+  ) in ('anon', 'authenticated');
+$$;
+
+-- ── writer fence (P12-025, fix plan F2) ────────────────────────────────────
+-- claim_booking_slot reads `settings` and `jobs` under the owner lock, but
+-- device sync writes those tables with plain PostgREST upserts that never took
+-- it, so a schedule or availability change could commit around a claim. These
+-- triggers make every write to either table take the SAME owner lock, so a
+-- write and a claim serialize in either order: the claim sees every committed
+-- write, and a write that arrives mid-claim waits for the claim to commit.
+--
+-- Statement trigger: takes the lock for auth.uid() (every device write) BEFORE
+-- any row lock, so two writers touching overlapping rows cannot deadlock on
+-- (row lock, owner lock) vs (owner lock, row lock).
+-- Row trigger: backstop for writers with no auth.uid() (service_role: webhooks,
+-- server stores). It is a no-op re-lock when the statement trigger already
+-- took the same lock (advisory xact locks are re-entrant).
+-- Both are `security definer` because the writer is `authenticated`, which has
+-- no EXECUTE on booking_take_lock. `bookingRequests` is deliberately NOT fenced:
+-- its row lock precedes any trigger, so fencing it would reverse the order.
+
+create or replace function public.booking_fence_statement()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  if auth.uid() is not null then
+    perform public.booking_take_lock(auth.uid());
+  end if;
+  return null;
+end;
+$$;
+
+create or replace function public.booking_fence_row()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  perform public.booking_take_lock(new.user_id);
+  return new;
+end;
+$$;
+
+drop trigger if exists booking_fence_statement_trg on public.settings;
+create trigger booking_fence_statement_trg
+  before insert or update on public.settings
+  for each statement execute function public.booking_fence_statement();
+drop trigger if exists booking_fence_row_trg on public.settings;
+create trigger booking_fence_row_trg
+  before insert or update on public.settings
+  for each row execute function public.booking_fence_row();
+
+drop trigger if exists booking_fence_statement_trg on public.jobs;
+create trigger booking_fence_statement_trg
+  before insert or update on public.jobs
+  for each statement execute function public.booking_fence_statement();
+drop trigger if exists booking_fence_row_trg on public.jobs;
+create trigger booking_fence_row_trg
+  before insert or update on public.jobs
+  for each row execute function public.booking_fence_row();
+
 -- ── G1: atomic claim ───────────────────────────────────────────────────────
 
 create or replace function public.claim_booking_slot(
@@ -116,8 +197,12 @@ declare
   v_rec record;
   v_busy_start integer;
   v_busy_end integer;
-  v adopted_exists boolean := false;
+  v_adopted_exists boolean := false;
 begin
+  if public.booking_is_client_caller() then
+    return jsonb_build_object('ok', false, 'error', 'forbidden');
+  end if;
+
   perform public.booking_take_lock(p_user_id);
 
   -- Settings blob read INSIDE the snapshot, under the owner lock (§2.5): a
@@ -144,7 +229,7 @@ begin
         from public.booking_link_state b
        where b.user_id = p_user_id
          and b.enabled = true
-         and b.token_hash = encode(digest(p_token, 'sha256'), 'hex');
+         and b.token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex');
       if not found then
         return jsonb_build_object('ok', false, 'error', 'slot_taken');
       end if;
@@ -295,7 +380,7 @@ begin
 end;
 $$;
 
-revoke all on function public.claim_booking_slot(uuid, text, text, text, text, timestamptz, timestamptz, integer, integer, jsonb, jsonb) from public;
+revoke all on function public.claim_booking_slot(uuid, text, text, text, text, timestamptz, timestamptz, integer, integer, jsonb, jsonb) from public, anon, authenticated;
 grant execute on function public.claim_booking_slot(uuid, text, text, text, text, timestamptz, timestamptz, integer, integer, jsonb, jsonb) to service_role;
 
 -- ── G2: atomic lifecycle transition ────────────────────────────────────────
@@ -317,42 +402,42 @@ set search_path = pg_catalog, public
 as $$
 declare
   v_row record;
+  v_owner uuid;
   v_current text;
   v_data jsonb;
   v_hist jsonb;
   v_job record;
 begin
+  if public.booking_is_client_caller() then
+    return jsonb_build_object('ok', false, 'error', 'forbidden');
+  end if;
+
   if (p_owner_id is null) = (p_manage_token is null) then
     return jsonb_build_object('ok', false, 'error', 'invalid_args');
   end if;
 
-  -- Owner-lock ordering root first (§2.3). Customer path locks on the
-  -- request owner's id AFTER resolving it — see below: the request row lock
-  -- is taken in the same order relative to other booking writers because all
-  -- writers serialize on the owner advisory lock; here we take the row lock
-  -- first to learn the owner, then the owner lock, then RE-CHECK the row.
-  -- (Two-phase: cheap lookup, serialize, authoritative re-read. No lock is
-  -- ever held across the JS boundary — the whole function is one txn.)
-  select r.id, r.user_id, r.data into v_row
+  -- Owner lock BEFORE any row lock (§2.3, P12-025). The customer path only has
+  -- the request id, so learn the owner with a plain read (no row lock), take
+  -- the owner lock, then re-read the row FOR UPDATE under it. No lock is ever
+  -- held across the JS boundary — the whole function is one txn.
+  select r.user_id into v_owner
     from public."bookingRequests" r
    where r.id = p_request_id
-     and coalesce(r.deleted, false) = false
-     for update;
-
-  if v_row.id is null then
+     and coalesce(r.deleted, false) = false;
+  if v_owner is null then
     return jsonb_build_object('ok', false, 'error', 'not_found');
   end if;
 
-  perform public.booking_take_lock(v_row.user_id);
+  perform public.booking_take_lock(v_owner);
 
-  -- Authoritative re-read under the owner lock (covers a writer that committed
-  -- between our first read and the lock grant).
+  -- Authoritative read under the owner lock (covers a writer that committed
+  -- between the lookup and the lock grant).
   select r.user_id, r.data into v_row
     from public."bookingRequests" r
    where r.id = p_request_id
      and coalesce(r.deleted, false) = false
      for update;
-  if v_row.user_id is null then
+  if v_row.user_id is null or v_row.user_id is distinct from v_owner then
     return jsonb_build_object('ok', false, 'error', 'not_found');
   end if;
 
@@ -406,7 +491,9 @@ begin
   -- Server-authored patch: status flip + exactly ONE appended history entry.
   -- Unknown/concurrent blob fields survive (merge, never whole-doc replace).
   v_hist := v_row.data -> 'history';
-  if jsonb_typeof(coalesce(v_hist, '[]'::jsonb)) <> 'array' then
+  -- A request without a history field (NULL here) starts a fresh array; NULL ||
+  -- entry would otherwise write `history: null`.
+  if v_hist is null or jsonb_typeof(v_hist) <> 'array' then
     v_hist := '[]'::jsonb;
   end if;
   v_data := v_row.data || jsonb_build_object(
@@ -421,5 +508,18 @@ begin
 end;
 $$;
 
-revoke all on function public.transition_booking(text, uuid, text, text[], text, jsonb, boolean, jsonb) from public;
+revoke all on function public.transition_booking(text, uuid, text, text[], text, jsonb, boolean, jsonb) from public, anon, authenticated;
 grant execute on function public.transition_booking(text, uuid, text, text[], text, jsonb, boolean, jsonb) to service_role;
+
+-- Helpers and fences: never callable through the API. booking_take_lock would
+-- let any caller hold an arbitrary owner's advisory lock (P12-023). Supabase
+-- grants EXECUTE on new public functions directly to anon/authenticated, which
+-- `revoke ... from public` does not remove, so name the roles.
+revoke all on function public.booking_take_lock(uuid) from public, anon, authenticated;
+grant execute on function public.booking_take_lock(uuid) to service_role;
+revoke all on function public.booking_to_minutes(text) from public, anon, authenticated;
+grant execute on function public.booking_to_minutes(text) to service_role;
+revoke all on function public.booking_is_client_caller() from public, anon, authenticated;
+grant execute on function public.booking_is_client_caller() to service_role;
+revoke all on function public.booking_fence_statement() from public, anon, authenticated;
+revoke all on function public.booking_fence_row() from public, anon, authenticated;
