@@ -29,6 +29,7 @@
     <key>GIDServerClientID</key><string>$(TRADEREADY_GOOGLE_SERVER_CLIENT_ID)</string>
     <key>NSCameraUsageDescription</key><string>TradeReady uses the camera to add job photos.</string>
     <key>LSRequiresIPhoneOS</key><true/>
+    <key>ITSAppUsesNonExemptEncryption</key><false/>
     <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
     <key>UIBackgroundModes</key><array><string>fetch</string></array>
     <key>UILaunchScreen</key><dict><key>UIColorName</key><string>LaunchBackground</string></dict>
