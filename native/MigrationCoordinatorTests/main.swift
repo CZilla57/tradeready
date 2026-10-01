@@ -389,6 +389,88 @@ struct MigrationCoordinatorTests {
                && migratedSecureSession == source.secureSettings.supabaseSession,
                "opaque Supabase bytes migrate once through the secure checkpoint")
 
+        // Phase 12 Stage A: a stale native session already in the keychain
+        // (an earlier development build signed in; iOS keeps keychain items
+        // across app deletion) must not leave the owner blocked on "Data
+        // migration paused". Observed on a device 2026-10-01 as
+        // NativeSecureSettingsStoreError/3 with nothing imported.
+        let staleRoot = root.appendingPathComponent("StaleNativeSession", isDirectory: true)
+        let stalePrimary = staleRoot.appendingPathComponent("Native/store.json")
+        let staleBackend = MemorySecureKeyValueBackend()
+        let staleNativeSession = Data("{\"access_token\":\"stale-native\"}".utf8)
+        try NativeGenerationSecureValueStore(
+            backend: staleBackend,
+            pointerKey: pointerKey,
+            makeGeneration: { generationTwo }
+        ).publish(staleNativeSession)
+        let staleSecureStore = NativeKeychainSecureSettingsStore(backend: staleBackend)
+        let staleCoordinator = LegacyMigrationCoordinator(
+            repository: Canonical.SnapshotRepository(primaryURL: stalePrimary),
+            journal: Canonical.MigrationJournal(
+                fileURL: stalePrimary.deletingLastPathComponent()
+                    .appendingPathComponent("migration-journal.json")
+            ),
+            secureStore: staleSecureStore
+        )
+        var staleOutcome: LegacyMigrationOutcome?
+        var staleError: Error?
+        do { staleOutcome = try staleCoordinator.migrate(currentSettings: BusinessSettings(), source: source) }
+        catch { staleError = error }
+        expect(staleError == nil,
+               "a stale native session must not block the migration (got \(String(describing: staleError)))")
+        expect(staleOutcome?.status == .migrated,
+               "migration completes when a different native session already exists")
+        let staleSessionAfter = try staleSecureStore.readSupabaseSession()
+        expect(staleSessionAfter == source.secureSettings.supabaseSession,
+               "the migrated session replaces the stale native one, so the account and its data stay one pair")
+        expect(staleBackend.values["providerKey"] == Data("provider-secret".utf8),
+               "provider credentials are still stored after the session is replaced")
+        let staleStored = try Canonical.SnapshotCodec.decode(Data(contentsOf: stalePrimary))
+        expect(staleStored.payload.customers?.count == 1,
+               "the migrated records are saved when the stale session is replaced")
+
+        // Different account: the stale session belongs to another account
+        // (the opaque bytes differ and no identity is read here). The
+        // migrated records must not end up paired with that other account's
+        // session, and that account must not be able to open them.
+        let otherRoot = root.appendingPathComponent("OtherAccountSession", isDirectory: true)
+        let otherPrimary = otherRoot.appendingPathComponent("Native/store.json")
+        let otherBackend = MemorySecureKeyValueBackend()
+        let otherAccountSession = Data("{\"access_token\":\"other-account\"}".utf8)
+        try NativeGenerationSecureValueStore(
+            backend: otherBackend,
+            pointerKey: pointerKey,
+            makeGeneration: { generationThree }
+        ).publish(otherAccountSession)
+        let otherStore = NativeKeychainSecureSettingsStore(backend: otherBackend)
+        let otherCoordinator = LegacyMigrationCoordinator(
+            repository: Canonical.SnapshotRepository(primaryURL: otherPrimary),
+            journal: Canonical.MigrationJournal(
+                fileURL: otherPrimary.deletingLastPathComponent()
+                    .appendingPathComponent("migration-journal.json")
+            ),
+            secureStore: otherStore
+        )
+        _ = try otherCoordinator.migrate(currentSettings: BusinessSettings(), source: source)
+        let otherSessionAfter = try otherStore.readSupabaseSession()
+        expect(otherSessionAfter != otherAccountSession,
+               "the other account's session no longer opens the migrated records")
+        expect(otherSessionAfter == source.secureSettings.supabaseSession,
+               "only the migrated account's own session is left paired with its records")
+        let otherAuxiliary = try NativeAuxiliaryStateStore(snapshotURL: otherPrimary).load()
+        expect(otherAuxiliary.entries.contains { $0.scope == .account },
+               "account-scoped owner state is kept for the identity check, never activated early")
+
+        // A stale session identical to the migrated one stays an idempotent no-op.
+        let sameBackend = MemorySecureKeyValueBackend()
+        try NativeGenerationSecureValueStore(
+            backend: sameBackend, pointerKey: pointerKey, makeGeneration: { generationOne }
+        ).publish(source.secureSettings.supabaseSession!)
+        let sameStore = NativeKeychainSecureSettingsStore(backend: sameBackend)
+        try sameStore.persistReplacingConflictingSession(source.secureSettings)
+        expect(sameBackend.writeKeys.filter { $0 == pointerKey }.count == 1,
+               "replacing with an identical session writes nothing new")
+
         let storedBytes = try Data(contentsOf: primary)
         let stored = try Canonical.SnapshotCodec.decode(storedBytes)
         expect(stored.payload.customers?.count == 1, "retry replaces snapshot without duplicate records")

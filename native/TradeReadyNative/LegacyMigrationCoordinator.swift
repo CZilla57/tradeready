@@ -6,6 +6,11 @@ import Security
 
 protocol NativeSecureSettingsStoring {
     func persist(_ settings: LegacySecureSettings) throws
+    /// Like `persist`, but a different session already in the keychain is
+    /// replaced by the migrated one instead of failing. Only the migration
+    /// coordinator calls this, after `persist` reported
+    /// `conflictingNativeSession`.
+    func persistReplacingConflictingSession(_ settings: LegacySecureSettings) throws
 }
 
 enum NativeSecureSettingsStoreError: LocalizedError {
@@ -282,14 +287,30 @@ struct NativeKeychainSecureSettingsStore: NativeSecureSettingsStoring {
     }
 
     func persist(_ settings: LegacySecureSettings) throws {
+        try persist(settings, replacingConflictingSession: false)
+    }
+
+    func persistReplacingConflictingSession(_ settings: LegacySecureSettings) throws {
+        try persist(settings, replacingConflictingSession: true)
+    }
+
+    private func persist(
+        _ settings: LegacySecureSettings,
+        replacingConflictingSession: Bool
+    ) throws {
         let sessionStore = makeSessionStore()
         let sessionNeedsPublication: Bool
         if let session = settings.supabaseSession, !session.isEmpty {
             if let existing = try sessionStore.read() {
-                guard existing == session else {
+                if existing == session {
+                    sessionNeedsPublication = false
+                } else if replacingConflictingSession {
+                    // Generation publication keeps the old session active
+                    // until every chunk of the new one is verified.
+                    sessionNeedsPublication = true
+                } else {
                     throw NativeSecureSettingsStoreError.conflictingNativeSession
                 }
-                sessionNeedsPublication = false
             } else {
                 sessionNeedsPublication = true
             }
@@ -1004,7 +1025,20 @@ struct LegacyMigrationCoordinator {
             try auxiliaryStore.persist(result.auxiliaryValues)
             try checkpoint(.auxiliaryPersisted)
 
-            try secureStore.persist(result.secureSettings)
+            do {
+                try secureStore.persist(result.secureSettings)
+            } catch NativeSecureSettingsStoreError.conflictingNativeSession {
+                // Stage A (2026-10-01): a session left in the keychain by an
+                // earlier native build (keychain items outlive app deletion)
+                // blocked the upgrade for good. The migration only reaches
+                // this point with no native snapshot to protect (a primary
+                // snapshot short-circuits to a conflict above), so the stale
+                // session guards no native data. The migrated session owns
+                // the migrated records, so adopt it: the account and its
+                // data stay one coherent pair, and any other account must
+                // sign in and meets the owner-mismatch gate.
+                try secureStore.persistReplacingConflictingSession(result.secureSettings)
+            }
             try checkpoint(.secretsPersisted)
 
             try repository.save(adoption.snapshot)
