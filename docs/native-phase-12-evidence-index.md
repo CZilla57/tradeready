@@ -1079,8 +1079,8 @@ row moved from Stage A to Stage B with the owner's log entry (charter §4.3).
 ```
 Run 1, 2026-10-01
 Build: 2.0.0 (2)   Profile: TestFlight internal. Build 2.0.0 (1) was uploaded first and stalled on "Data migration paused" (stale native keychain session, fixed in 2.0.0 (2); charter rows 25 and 26)
-Devices/OS: iPhone 16 Pro Max (512 GB) / iOS 27.2 beta (one device; owner report 2026-10-01). Rows that list two device classes (STD18 and SE17) ran on this one device only; the SE17 class was not covered
-Accounts (aliases only): not recorded
+Devices/OS: iPhone 16 Pro Max (512 GB) / iOS 27.2 beta (one device, PM27 class but on 27.2 beta, not the 27.0 baseline; owner report 2026-10-01). Rows that list the STD18 and SE17 classes (JT, SIRI, NJ, EXT, OWN-3) did not run on either class
+Accounts (aliases only): demo, swift demo
 Environment: REL+KEYS, production-configured (R59); no staging exists, so no STG row ran
 Rows run (ID: result), as reported by the owner in chat on 2026-10-01 and not individually verified by an agent:
   pass: P2-P1, P2-P2, P2-P3, P2-P4, P2-P6, P2-P7, P2-RB, JT-1, JT-2, JT-3, JT-4, JT-5, SIRI-1, SIRI-2, SIRI-3, SIRI-4, SIRI-5, SIRI-6, NJ-1, NJ-2, NJ-3, EXT-1, EXT-2, EXT-3, EXT-4, OWN-3, P12-RB-2, P12-RB-3, P12-RB-4, P12-RB-5, P12-RB-7
@@ -1088,7 +1088,7 @@ Rows run (ID: result), as reported by the owner in chat on 2026-10-01 and not in
   P12-3B-2: pass
   not run: P2-P5, P2-P8, CR-1, CR-2, CR-3, CR-4, CR-5, CR-6, CR-7, CR-8, CR-9, P12-3B-1 part 3
   blocked, not waived: OWN-1, OWN-2 (STG rows; the owner ran them against production and left them blocked on 2026-10-01, EI section 2 rule 5)
-Evidence cells: every row's cell stays "[ ]". The account alias and an evidence link outside the repository were not supplied (the device and iOS version were, 2026-10-01), so no row is closed (EI section 2 rules 1 and 2). P12-RB-2 and P12-RB-3 in particular stay "[ ]" so the Stage B rehearsal check does not read as recorded.
+Evidence cells: every row's cell stays "[ ]". No evidence files were available to link: the owner's evidence folder (iCloud Drive, TradeReady Beta, Beta 2.0.0) was empty when checked on 2026-10-01, and the owner chose to skip the evidence for now. The device, iOS version and account aliases were supplied, so no row is closed (EI section 2 rules 1 and 2). P12-RB-2 and P12-RB-3 in particular stay "[ ]" so the Stage B rehearsal check does not read as recorded.
 Rollback rows (P12-RB-2, P12-RB-3, P12-RB-5, P12-RB-7): the rollback target was the plain App Store 1.2.1 build, not the Expo rollback candidate R (prerequisite EXPO-RB was not built). The owner reports these rows passed against 1.2.1; that is not the rehearsal the rows describe.
 Native baselines: not recorded (launch, crash-free sessions, sync error rate and migration timing were not supplied)
 Defects raised: none raised in this run. The build 1 migration stall is recorded in charter rows 25 and 26 and was fixed in commit 4fe8a10
